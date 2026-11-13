@@ -234,7 +234,7 @@ internal sealed class RunRecorder : IFeatureCallHook
             Status = IoCall.OutcomeName(outcome),
             Error = error,
             Threw = thrown is not null,
-            ErrorType = thrown?.FullName,
+            ErrorType = thrown is null ? null : ReplayedExceptions.Identity(thrown),
             DurationMs = duration.TotalMilliseconds,
             Keys = begun.Keys,
             InputDigests = begun.InputDigests,

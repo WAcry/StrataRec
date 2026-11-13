@@ -661,7 +661,10 @@ public sealed class PipelineExecutor
     {
         if (ex is ReplayedCallException { OriginalType: { } original })
         {
-            return original[(original.LastIndexOfAny(TypeNameSeparators) + 1)..];
+            // What Type.Name would be: the last segment of the name, without generic arguments.
+            var arguments = original.IndexOf('[');
+            var name = arguments < 0 ? original : original[..arguments];
+            return name[(name.LastIndexOfAny(TypeNameSeparators) + 1)..];
         }
 
         return ex.GetType().Name;

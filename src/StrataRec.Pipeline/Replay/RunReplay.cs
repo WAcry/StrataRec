@@ -48,89 +48,12 @@ public sealed record ReplayFieldStats(string Source, string Field, long Requeste
 }
 
 /// <summary>
-/// An exception a recorded call threw whose type the replay could not create again (the replaying process lacks the type,
-/// or it has no <c>(string message)</c> constructor): thrown with the original message and type name.
-/// </summary>
-public sealed class ReplayedCallException(string message, string? originalType = null) : Exception(message)
-{
-    /// <summary>Full name of the exception type the client threw in the recording; null when the bundle did not record it.</summary>
-    public string? OriginalType { get; } = originalType;
-}
-
-/// <summary>
 /// Thrown by a replayed run where its recording was aborted (design 13.4): at the first timeline position the recorded
 /// run did not finish, or before its result. The recording holds no decisions past that point, so the replay stops there
 /// and reports the run as aborted, as recorded, instead of inventing the rest.
 /// </summary>
 /// <param name="reason">Why the recorded run was aborted, as recorded.</param>
 public sealed class ReplayAbortedException(string reason) : Exception(reason);
-
-/// <summary>The exceptions a replay throws for recorded calls that threw (the contract of <see cref="Operators.OperatorContext.InvokeModelAsync"/>).</summary>
-internal static class ReplayedExceptions
-{
-    /// <summary>
-    /// The exception to throw for a call recorded as throwing <paramref name="typeName"/>: a <see cref="TimeoutException"/>
-    /// stays a <see cref="TimeoutException"/> and cancellation an <see cref="OperationCanceledException"/>; any other type
-    /// is created again through its public <c>(string message)</c> constructor when it resolves in this process and derives
-    /// from <see cref="Exception"/>; otherwise a <see cref="ReplayedCallException"/> carries the type name.
-    /// </summary>
-    /// <param name="timedOut">The recorded outcome was a timeout: without a type name, it is replayed as cancellation.</param>
-    public static Exception Create(string? typeName, string? message, bool timedOut, string fallbackMessage)
-    {
-        var text = message ?? fallbackMessage;
-        switch (typeName)
-        {
-            case null when timedOut:
-                return new OperationCanceledException(text);
-            case null:
-                return new ReplayedCallException(text);
-            case "System.TimeoutException":
-                return new TimeoutException(text);
-            case "System.OperationCanceledException":
-                return new OperationCanceledException(text);
-        }
-
-        if (Resolve(typeName) is { } type && typeof(Exception).IsAssignableFrom(type) && !type.IsAbstract
-            && type.GetConstructor(new[] { typeof(string) }) is { } constructor)
-        {
-            try
-            {
-                return (Exception)constructor.Invoke(new object[] { text });
-            }
-            catch (System.Reflection.TargetInvocationException)
-            {
-                // The constructor itself threw: fall back to the type name.
-            }
-        }
-
-        return new ReplayedCallException(text, typeName);
-    }
-
-    private static Type? Resolve(string typeName)
-    {
-        // Only types of assemblies already loaded: a recording stores Type.FullName, never an assembly-qualified name, and
-        // a bundle must not make the replaying process load an assembly.
-        if (typeName.Contains(',') || typeName.Contains('['))
-        {
-            return null;
-        }
-
-        if (Type.GetType(typeName, throwOnError: false) is { } type)
-        {
-            return type; // the core library
-        }
-
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            if (assembly.GetType(typeName, throwOnError: false) is { } found)
-            {
-                return found;
-            }
-        }
-
-        return null;
-    }
-}
 
 /// <summary>
 /// Replays one recorded pipeline run (design 13.4): answers feature, candidate and model calls from the recording and
@@ -1043,7 +966,7 @@ public sealed class RunReplay : IFeatureCallHook
     }
 
     private sealed class ModelEntry(
-        int seq, string model, int batchSize, IoOutcome outcome, string? error, bool threw, string? errorType, EntityKey[]? keys, string[] digests,
+        int seq, string model, int batchSize, IoOutcome outcome, string? error, bool threw, ReplayTypeIdentity? errorType, EntityKey[]? keys, string[] digests,
         Dictionary<string, float[]> outputs, Dictionary<string, string> texts)
     {
         public int Seq { get; } = seq;
@@ -1058,7 +981,7 @@ public sealed class RunReplay : IFeatureCallHook
 
         public bool Threw { get; } = threw;
 
-        public string? ErrorType { get; } = errorType;
+        public ReplayTypeIdentity? ErrorType { get; } = errorType;
 
         public EntityKey[]? Keys { get; } = keys;
 
