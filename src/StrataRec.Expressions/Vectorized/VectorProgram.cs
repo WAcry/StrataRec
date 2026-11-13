@@ -232,7 +232,7 @@ internal sealed class VectorProgram
                     return new HasInstr(t, Visit(a[0]));
                 case IrOp.Size:
                     return new SizeInstr(a[0].Type.Kind, t, Visit(a[0]));
-                case IrOp.Contains when a[0].IsInvariant && IsDictColumn(a[1]):
+                case IrOp.Contains when a[0].Type.Kind == TypeKind.ListString && a[0].IsInvariant && IsDictColumn(a[1]):
                     return new DictPredicateInstr(IrOp.Contains, a[1].Symbol, a[1].Type, t, null, new[] { Visit(a[0]) });
                 case IrOp.Contains:
                     return new ContainsInstr(a[0].Type.Kind, t, Visit(a[0]), Visit(a[1]));
