@@ -56,11 +56,14 @@ internal sealed class VectorProgram
     {
         var table = context.Table ?? throw new InvalidOperationException("A row-level expression needs EvalContext.Table.");
         var physical = table.PhysicalRowCount;
-        foreach (var r in rows)
+        if (!LoadKernels.AllInRange(rows, physical))
         {
-            if ((uint)r >= (uint)physical)
+            foreach (var r in rows)
             {
-                throw new ArgumentOutOfRangeException(nameof(rows), $"Row {r} is outside the table's physical rows [0, {physical}).");
+                if ((uint)r >= (uint)physical)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(rows), $"Row {r} is outside the table's physical rows [0, {physical}).");
+                }
             }
         }
 
@@ -91,6 +94,7 @@ internal sealed class VectorProgram
             var frame = new Frame
             {
                 N = n,
+                Physical = physical,
                 Words = words,
                 Identity = identity,
                 Map = identity ? default : rows,
@@ -388,17 +392,8 @@ internal static class DestinationWriter
         switch (destination)
         {
             case ScalarColumn<double> d when type.Kind == TypeKind.Float:
-            {
-                var src = f.GetF(root);
-                var dst = d.Values;
-                for (var k = 0; k < rows.Length; k++)
-                {
-                    var row = rows[k];
-                    dst[row] = src[identity ? row : k];
-                }
-
+                Scatter(f.GetF(root), d.Values, rows, identity);
                 break;
-            }
 
             case ScalarColumn<float> d when type.Kind == TypeKind.Float:
             {
@@ -440,17 +435,8 @@ internal static class DestinationWriter
             }
 
             case ScalarColumn<long> d:
-            {
-                var src = f.GetI(root);
-                var dst = d.Values;
-                for (var k = 0; k < rows.Length; k++)
-                {
-                    var row = rows[k];
-                    dst[row] = src[identity ? row : k];
-                }
-
+                Scatter(f.GetI(root), d.Values, rows, identity);
                 break;
-            }
 
             case ScalarColumn<int> d:
             {
@@ -481,6 +467,25 @@ internal static class DestinationWriter
             default:
                 WriteReferenceKinds(ref f, root, valid, allValid, rows, destination);
                 break;
+        }
+    }
+
+    /// <summary>Copies lane values to the listed rows: lane = row in the identity domain, lane = k otherwise.</summary>
+    private static void Scatter<T>(ReadOnlySpan<T> source, T[] destination, ReadOnlySpan<int> rows, bool identity)
+    {
+        if (identity)
+        {
+            foreach (var row in rows)
+            {
+                destination[row] = source[row];
+            }
+        }
+        else
+        {
+            for (var k = 0; k < rows.Length; k++)
+            {
+                destination[rows[k]] = source[k];
+            }
         }
     }
 

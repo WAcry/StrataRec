@@ -255,14 +255,43 @@ internal static class MathKernels
             var logU = logBuffer.AsSpan(0, n);
             TensorPrimitives.Add(x, 1.0, u);
             TensorPrimitives.Log(u, logU);
-            for (var i = 0; i < n; i++)
-            {
-                u[i] = Log1pFinish(x[i], u[i], logU[i]);
-            }
+            Log1pFinish(x, u, logU);
         }
         finally
         {
             ArrayPool<double>.Shared.Return(logBuffer);
+        }
+    }
+
+    /// <summary>
+    /// <c>u[i] = Log1pFinish(x[i], u[i], logU[i])</c>, 4 lanes at a time. The same IEEE operations (no fused
+    /// multiply-add) give the same bits as the scalar form.
+    /// </summary>
+    private static void Log1pFinish(ReadOnlySpan<double> x, Span<double> u, ReadOnlySpan<double> logU)
+    {
+        var n = x.Length;
+        var i = 0;
+        if (Vector256.IsHardwareAccelerated)
+        {
+            var one = Vector256.Create(1.0);
+            var infinity = Vector256.Create(double.PositiveInfinity);
+            ref var rx = ref MemoryMarshal.GetReference(x);
+            ref var ru = ref MemoryMarshal.GetReference(u[..n]);
+            ref var rl = ref MemoryMarshal.GetReference(logU[..n]);
+            for (; i + 4 <= n; i += 4)
+            {
+                var vx = Vector256.LoadUnsafe(ref rx, (nuint)i);
+                var vu = Vector256.LoadUnsafe(ref ru, (nuint)i);
+                var result = Vector256.LoadUnsafe(ref rl, (nuint)i) * (vx / (vu - one));
+                result = Vector256.ConditionalSelect(Vector256.Equals(vu, one), vx, result);
+                result = Vector256.ConditionalSelect(Vector256.Equals(vu, infinity), vu, result);
+                result.StoreUnsafe(ref ru, (nuint)i);
+            }
+        }
+
+        for (; i < n; i++)
+        {
+            u[i] = Log1pFinish(x[i], u[i], logU[i]);
         }
     }
 }

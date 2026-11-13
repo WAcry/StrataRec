@@ -55,6 +55,9 @@ internal struct Loc
 internal ref struct Frame
 {
     public int N;
+
+    /// <summary>The table's physical row count; every <see cref="Map"/> entry is below it (checked on entry).</summary>
+    public int Physical;
     public int Words;
     public bool Identity;
     public ReadOnlySpan<int> Map;

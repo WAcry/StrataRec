@@ -269,24 +269,6 @@ internal static class BitKernels
         }
     }
 
-    /// <summary><c>dst bit i = source bit map[i]</c>.</summary>
-    public static void Gather(ReadOnlySpan<ulong> source, ReadOnlySpan<int> map, Span<ulong> dst)
-    {
-        var n = map.Length;
-        for (var i = 0; i < n; i += 64)
-        {
-            ulong w = 0;
-            var count = Math.Min(64, n - i);
-            for (var j = 0; j < count; j++)
-            {
-                var row = map[i + j];
-                w |= ((source[row >> 6] >> row) & 1) << j;
-            }
-
-            dst[i >> 6] = w;
-        }
-    }
-
     /// <summary>Builds a bitmap from a per-lane predicate result array.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void SetBit(Span<ulong> dst, int lane, bool value)

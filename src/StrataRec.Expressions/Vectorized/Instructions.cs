@@ -201,7 +201,7 @@ internal abstract class Instr
         }
         else
         {
-            BitKernels.Gather(v, f.Map, OutValid(ref f));
+            LoadKernels.GatherBits(v, f.Map, f.Physical, OutValid(ref f));
         }
     }
 
@@ -331,32 +331,21 @@ internal sealed class ColumnInstr(Symbol symbol, ExprType type) : Instr(type)
                 }
                 else
                 {
-                    Gather(c.Values, f.Map, OutF(ref f));
+                    LoadKernels.Gather<double>(c.Values, f.Map, f.Physical, OutF(ref f));
                 }
 
                 break;
             case (TypeKind.Float, ScalarColumn<float> c):
-            {
-                var dst = OutF(ref f);
-                var src = c.Values;
                 if (f.Identity)
                 {
-                    for (var i = 0; i < n; i++)
-                    {
-                        dst[i] = src[i];
-                    }
+                    LoadKernels.Widen(c.Values.AsSpan(0, n), OutF(ref f));
                 }
                 else
                 {
-                    var map = f.Map;
-                    for (var i = 0; i < n; i++)
-                    {
-                        dst[i] = src[map[i]];
-                    }
+                    LoadKernels.GatherWiden(c.Values, f.Map, f.Physical, OutF(ref f));
                 }
 
                 break;
-            }
 
             case (TypeKind.Int, ScalarColumn<long> c):
                 if (f.Identity)
@@ -366,32 +355,21 @@ internal sealed class ColumnInstr(Symbol symbol, ExprType type) : Instr(type)
                 }
                 else
                 {
-                    Gather(c.Values, f.Map, OutI(ref f));
+                    LoadKernels.Gather<long>(c.Values, f.Map, f.Physical, OutI(ref f));
                 }
 
                 break;
             case (TypeKind.Int, ScalarColumn<int> c):
-            {
-                var dst = OutI(ref f);
-                var src = c.Values;
                 if (f.Identity)
                 {
-                    for (var i = 0; i < n; i++)
-                    {
-                        dst[i] = src[i];
-                    }
+                    LoadKernels.Widen(c.Values.AsSpan(0, n), OutI(ref f));
                 }
                 else
                 {
-                    var map = f.Map;
-                    for (var i = 0; i < n; i++)
-                    {
-                        dst[i] = src[map[i]];
-                    }
+                    LoadKernels.GatherWiden(c.Values, f.Map, f.Physical, OutI(ref f));
                 }
 
                 break;
-            }
 
             case (TypeKind.Bool, ScalarColumn<bool> c):
             {
@@ -482,13 +460,6 @@ internal sealed class ColumnInstr(Symbol symbol, ExprType type) : Instr(type)
         ClearValid(ref f);
     }
 
-    private static void Gather<T>(T[] source, ReadOnlySpan<int> map, Span<T> dst)
-    {
-        for (var i = 0; i < map.Length; i++)
-        {
-            dst[i] = source[map[i]];
-        }
-    }
 }
 
 internal sealed class FloatBinaryInstr(IrOp op, ExprType type, Opnd left, Opnd right) : Instr(type, left, right)
