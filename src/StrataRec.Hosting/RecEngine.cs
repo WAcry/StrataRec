@@ -168,6 +168,11 @@ public sealed record PlanLoadResult(
 /// <para>Local feature tables (design 6.6) belong to <see cref="LocalTables"/>: a plan is served only once every table it
 /// reads has completed its first load, and tables whose identity a new plan shares are taken over, not loaded again.
 /// Disposing the engine stops their update sources.</para>
+/// <para><b>Lifecycle.</b> One lock orders loads, publishing and disposal. A load registers itself (with its table
+/// lease) under it, and publishes under it; a disposal marks the engine disposed under it and takes every registered
+/// load and every served plan. So nothing is published after a disposal, a disposal cancels the loads still running,
+/// and each lease the engine opened is returned exactly by its owner at that moment: the load until it publishes (in
+/// its <c>finally</c> when it does not), the served plan afterwards (when it is replaced, or by the disposal).</para>
 /// <para>Observability (design 13): each request gets one span (<see cref="StrataRecTracing.StartRequest"/>) and
 /// request-level metrics per pipeline and per assigned arm; plan loads are metrics and event logs. Everything is
 /// optional: without listeners or a logger factory the engine records nothing and allocates nothing for it.</para>
@@ -175,13 +180,14 @@ public sealed record PlanLoadResult(
 public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposable
 {
     private readonly ConcurrentDictionary<string, LoadedPipeline> _pipelines = new(StringComparer.Ordinal);
-    private readonly object _publishGate = new();
+    private readonly object _publishGate = new(); // the lifecycle lock: _loads, _disposed and every change of _pipelines
+    private readonly HashSet<PendingLoad> _loads = new();
     private long _loadTicket;
     private readonly PipelineExecutor _executor;
     private readonly IAssignmentProvider? _assignmentProvider;
     private readonly ILogger _logger;
     private readonly bool _ownsLocalTables;
-    private int _disposed;
+    private bool _disposed;
 
     /// <param name="executor">Runs the plans; defaults to one sharing <paramref name="loggerFactory"/>.</param>
     /// <param name="loggerFactory">Receives plan load events (design 13.2); null logs nothing.</param>
@@ -238,33 +244,82 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// sequence, so a slow load of an older release cannot overwrite a newer one that finished first. When omitted,
     /// a ticket taken at the start of the call orders local loads; do not mix the two schemes for one pipeline.
     /// </param>
-    /// <param name="cancellationToken">Stops waiting for tables (the plan is not applied); the tables of other plans load on.</param>
+    /// <param name="cancellationToken">Cancels the load until the plan is applied: checked when the call starts, while it
+    /// waits for tables (the tables of other plans load on), and when it is about to publish.</param>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled before the plan was
+    /// applied; the current plan is unchanged.</exception>
+    /// <exception cref="ObjectDisposedException">The engine is disposed, or was disposed before the plan was applied.</exception>
     public async Task<PlanLoadResult> LoadAsync(
         PlanCompileRequest request,
         IReadOnlyDictionary<string, IReadOnlyDictionary<string, int[]>>? armRanges = null,
         long? sequence = null,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var order = sequence ?? Interlocked.Increment(ref _loadTicket);
-        var lease = LocalTables.OpenLease();
-        PlanLoadResult? result = null;
+        var load = BeginLoad(cancellationToken);
         try
         {
-            return result = await LoadWithTablesAsync(request, armRanges, order, lease, cancellationToken).ConfigureAwait(false);
+            return await LoadWithTablesAsync(request, armRanges, order, load, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (load.Cancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            // Only the engine's disposal cancels a load other than through the caller's token (see DisposeAsync); the
+            // load stopped wherever it was: waiting for tables, or compiling against its released lease.
+            throw Disposed(ex);
         }
         finally
         {
-            if (result is not { Applied: true })
-            {
-                lease.Dispose(); // the plan is not served: its new tables stop, shared ones lose a reference
-            }
+            EndLoad(load);
         }
     }
 
+    /// <summary>Registers a load and opens its lease; a disposed engine takes no load.</summary>
+    private PendingLoad BeginLoad(CancellationToken cancellationToken)
+    {
+        lock (_publishGate)
+        {
+            if (_disposed)
+            {
+                throw Disposed(null);
+            }
+
+            var load = new PendingLoad(LocalTables.OpenLease(), CancellationTokenSource.CreateLinkedTokenSource(cancellationToken));
+            _loads.Add(load);
+            return load;
+        }
+    }
+
+    /// <summary>Every load ends here: a plan that was not published returns its lease (its new tables stop, shared ones
+    /// lose a reference); a published one's lease belongs to the served plan.</summary>
+    private void EndLoad(PendingLoad load)
+    {
+        bool published;
+        lock (_publishGate)
+        {
+            _loads.Remove(load);
+            published = load.Published;
+        }
+
+        load.Cancellation.Dispose(); // no disposal can cancel it any more: it is no longer registered
+        if (!published)
+        {
+            load.Lease.Dispose(); // also when a disposal released it already: a lease is returned once
+        }
+    }
+
+    private static ObjectDisposedException Disposed(Exception? cause) =>
+        new("The engine was disposed before the plan was applied (or before the load started).", cause);
+
+    /// <summary>Called by a load right before it takes the publish lock, its tables loaded: tests land a cancellation or a
+    /// disposal in that window.</summary>
+    internal Action? Publishing { get; set; }
+
     private async Task<PlanLoadResult> LoadWithTablesAsync(
-        PlanCompileRequest request, IReadOnlyDictionary<string, IReadOnlyDictionary<string, int[]>>? armRanges, long order, LocalTableLease lease,
+        PlanCompileRequest request, IReadOnlyDictionary<string, IReadOnlyDictionary<string, int[]>>? armRanges, long order, PendingLoad load,
         CancellationToken cancellationToken)
     {
+        var lease = load.Lease;
         var compilation = PlanCompiler.Compile(request, Environment, lease);
         var diagnostics = new DiagnosticBag();
         diagnostics.AddRange(compilation.Diagnostics);
@@ -286,8 +341,10 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             }
         }
 
-        // Readiness (design 6.6 local item 6): the plan is served only once its tables hold a complete load.
-        var failures = await lease.WaitLoadedAsync(cancellationToken).ConfigureAwait(false);
+        // Readiness (design 6.6 local item 6): the plan is served only once its tables hold a complete load. A disposal
+        // during the wait also stops the tables (their loads end as failures): the cancellation decides, not those.
+        var failures = await lease.WaitLoadedAsync(load.Cancellation.Token).ConfigureAwait(false);
+        load.Cancellation.Token.ThrowIfCancellationRequested();
         if (failures.Count > 0)
         {
             foreach (var failure in failures)
@@ -310,22 +367,38 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             LocalTables = lease,
         };
         _ = loaded.Telemetry; // request metric tags are built with the plan, not on its first request
+        Publishing?.Invoke();
         long? served = null;
         LoadedPipeline? replaced = null;
+        bool disposed, cancelled;
         lock (_publishGate)
         {
-            if (_pipelines.TryGetValue(pipelineId, out var current) && current.Sequence >= order)
+            // Checked under the lock that disposal takes, right before the current plan changes: a disposed engine never
+            // publishes again, and a cancelled load never replaces a plan.
+            disposed = _disposed;
+            cancelled = cancellationToken.IsCancellationRequested;
+            if (!disposed && !cancelled)
             {
-                served = current.Sequence;
-                diagnostics.Info("PLAN_STALE", "engine", string.Empty,
-                    $"Not applied: pipeline '{pipelineId}' already serves sequence {current.Sequence} (this load is {order}).");
+                if (_pipelines.TryGetValue(pipelineId, out var current) && current.Sequence >= order)
+                {
+                    served = current.Sequence;
+                    diagnostics.Info("PLAN_STALE", "engine", string.Empty,
+                        $"Not applied: pipeline '{pipelineId}' already serves sequence {current.Sequence} (this load is {order}).");
+                }
+                else
+                {
+                    replaced = current;
+                    _pipelines[pipelineId] = loaded;
+                    load.Published = true; // the lease is the served plan's now
+                    PlanLoadTelemetry.Applied(plan, order); // gauges stay ordered with the swaps
+                }
             }
-            else
-            {
-                replaced = current;
-                _pipelines[pipelineId] = loaded;
-                PlanLoadTelemetry.Applied(plan, order); // gauges stay ordered with the swaps
-            }
+        }
+
+        if (disposed || cancelled)
+        {
+            // The disposal cancelled this load under the same lock: LoadAsync reports which of the two it was.
+            throw new OperationCanceledException(disposed ? load.Cancellation.Token : cancellationToken);
         }
 
         // Logged outside the lock: a slow logger must not delay other loads.
@@ -342,24 +415,61 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         return new PlanLoadResult(pipelineId, true, request.ManifestId, plan.CompileTime, diagnostics.Items, compilation.Report);
     }
 
-    /// <summary>Stops the update sources of the served plans' local tables (and the table host, when the engine created it).
-    /// Requests running meanwhile keep the versions they pinned.</summary>
+    /// <summary>
+    /// Cancels the loads still running (they throw <see cref="ObjectDisposedException"/>) and returns the table leases of
+    /// those loads and of the served plans, so the tables no other user holds stop their update sources. A table host
+    /// passed to the constructor keeps serving its other engines; one the engine created is disposed. Requests running
+    /// meanwhile keep the versions they pinned; the served plans stay readable, and no load is taken any more.
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        var leases = new List<LocalTableLease>();
+        lock (_publishGate)
         {
-            return;
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            foreach (var load in _loads)
+            {
+                // The load's waits complete on the thread pool, never on this thread under the lock; it ends with
+                // ObjectDisposedException (see LoadAsync) and its EndLoad waits for this lock.
+                _ = load.Cancellation.CancelAsync();
+                leases.Add(load.Lease);
+            }
+
+            foreach (var (_, pipeline) in _pipelines)
+            {
+                if (pipeline.LocalTables is { } served)
+                {
+                    leases.Add(served);
+                }
+            }
         }
 
-        foreach (var (_, pipeline) in _pipelines)
+        foreach (var lease in leases)
         {
-            pipeline.LocalTables?.Dispose();
+            lease.Dispose(); // stopping a source runs none of its code here (LocalTableHost)
         }
 
         if (_ownsLocalTables)
         {
             await LocalTables.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    /// <summary>A load between its start and its end (see the lifecycle remarks): its lease, and the cancellation a disposal uses.</summary>
+    private sealed class PendingLoad(LocalTableLease lease, CancellationTokenSource cancellation)
+    {
+        public LocalTableLease Lease { get; } = lease;
+
+        /// <summary>Linked to the caller's token; cancelled on its own only by a disposal.</summary>
+        public CancellationTokenSource Cancellation { get; } = cancellation;
+
+        /// <summary>Set under the lifecycle lock when the plan is published: the served plan owns the lease from then on.</summary>
+        public bool Published { get; set; }
     }
 
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
