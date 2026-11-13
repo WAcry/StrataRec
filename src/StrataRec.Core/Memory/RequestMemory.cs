@@ -30,15 +30,19 @@ public sealed class SharedArrayBufferPool : IBufferPool
 /// returned at once when the request and every external I/O it started have finished (design 4.8).
 /// </summary>
 /// <remarks>
-/// The holder count starts at 1 (the request itself). Each external I/O calls <see cref="Hold"/> when it starts and
-/// <see cref="Release"/> when it completes or acknowledges cancellation; the request calls <see cref="Release"/>
-/// after it has produced its result. The last release returns all buffers.
+/// <para>The holder count starts at 1 (the request itself). Each external I/O calls <see cref="Hold"/> when it starts
+/// and <see cref="Release"/> when it completes or acknowledges cancellation; the request calls <see cref="Release"/>
+/// after it has produced its result. The last release returns all buffers.</para>
+/// <para>The ledger is itself a pooled array of struct entries, so renting allocates nothing per buffer.</para>
 /// </remarks>
 public sealed class RequestMemory
 {
+    private const int InitialLedgerLength = 64;
+
     private readonly IBufferPool _pool;
-    private readonly List<IRented> _rented = new();
     private readonly object _gate = new();
+    private Lease[] _leases = Array.Empty<Lease>(); // guarded by _gate until the last Release
+    private int _leaseCount;
     private int _holders = 1;
     private bool _returned;
 
@@ -73,7 +77,12 @@ public sealed class RequestMemory
                 throw new ObjectDisposedException(nameof(RequestMemory));
             }
 
-            _rented.Add(new Rented<T>(array));
+            if (_leaseCount == _leases.Length)
+            {
+                GrowLedger();
+            }
+
+            _leases[_leaseCount++] = new Lease(array, Returner<T>.Instance);
             if (!RuntimeHelpers.IsReferenceOrContainsReferences<T>())
             {
                 RentedBytes += (long)array.Length * Unsafe.SizeOf<T>();
@@ -104,7 +113,6 @@ public sealed class RequestMemory
     /// <summary>Releases one holder; the last release returns every rented buffer to the pool.</summary>
     public void Release()
     {
-        List<IRented>? toReturn = null;
         lock (_gate)
         {
             if (_holders <= 0)
@@ -113,22 +121,44 @@ public sealed class RequestMemory
             }
 
             _holders--;
-            if (_holders == 0)
+            if (_holders > 0)
             {
-                _returned = true;
-                toReturn = new List<IRented>(_rented);
-                _rented.Clear();
-                RentedBytes = 0;
+                return;
             }
+
+            _returned = true;
+            RentedBytes = 0;
         }
 
-        if (toReturn is not null)
+        // Once _returned is set no Rent touches the ledger (it checks under the lock and gives a late lease straight
+        // back), so the ledger can be walked outside the lock without copying it.
+        var clear = ClearOnReturn;
+        var leases = _leases;
+        var count = _leaseCount;
+        _leases = Array.Empty<Lease>();
+        _leaseCount = 0;
+        for (var i = 0; i < count; i++)
         {
-            foreach (var r in toReturn)
-            {
-                r.Return(_pool, ClearOnReturn);
-            }
+            leases[i].Returner.Return(_pool, leases[i].Array, clear);
         }
+
+        if (leases.Length > 0)
+        {
+            ArrayPool<Lease>.Shared.Return(leases, clearArray: true);
+        }
+    }
+
+    /// <summary>Doubles the ledger. The ledger comes from the shared pool, not from <see cref="IBufferPool"/>: it is bookkeeping.</summary>
+    private void GrowLedger()
+    {
+        var next = ArrayPool<Lease>.Shared.Rent(Math.Max(InitialLedgerLength, _leases.Length * 2));
+        _leases.AsSpan(0, _leaseCount).CopyTo(next);
+        if (_leases.Length > 0)
+        {
+            ArrayPool<Lease>.Shared.Return(_leases, clearArray: true);
+        }
+
+        _leases = next;
     }
 
     public bool IsReturned
@@ -142,24 +172,30 @@ public sealed class RequestMemory
         }
     }
 
-    private interface IRented
+    /// <summary>One ledger entry. A struct plus a per-type singleton returner, so renting allocates no wrapper object.</summary>
+    private readonly record struct Lease(Array Array, ArrayReturner Returner);
+
+    private abstract class ArrayReturner
     {
-        void Return(IBufferPool pool, bool clear);
+        public abstract void Return(IBufferPool pool, Array array, bool clear);
     }
 
-    private sealed class Rented<T>(T[] array) : IRented
+    private sealed class Returner<T> : ArrayReturner
     {
-        public void Return(IBufferPool pool, bool clear)
+        public static readonly Returner<T> Instance = new();
+
+        public override void Return(IBufferPool pool, Array array, bool clear)
         {
+            var typed = (T[])array;
             var containsRefs = RuntimeHelpers.IsReferenceOrContainsReferences<T>();
 #if STRATAREC_POISON_BUFFERS
             if (!containsRefs && !clear)
             {
                 // Debug/test builds fill returned buffers with a fixed pattern so use-after-return surfaces quickly.
-                Poison(array);
+                Poison(typed);
             }
 #endif
-            pool.Return(array, clear || containsRefs);
+            pool.Return(typed, clear || containsRefs);
         }
 
 #if STRATAREC_POISON_BUFFERS

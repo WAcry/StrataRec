@@ -17,22 +17,26 @@ namespace StrataRec.Features.Runtime;
 /// chunks never share bitmaps, string dictionaries or list arenas. A buffer is read only after its call completed
 /// within the time budget; a timed-out call may keep writing into it, but it is never read and stays rented until
 /// the call really finishes.</para>
+/// <para>The "written" bitmaps of all fields share one rented block, field f starting at bit f × <c>_bitsPerField</c>:
+/// a fetch with a small <c>max_batch</c> creates a buffer per chunk, and a rent per field per chunk adds up.</para>
 /// </remarks>
 internal sealed class StagingBuffer : IFeatureBatchWriter
 {
     private readonly ColumnBuffer[] _fields;
-    private readonly ulong[][] _written;
+    private readonly ulong[] _written;
+    private readonly int _bitsPerField;
 
     public StagingBuffer(ReadOnlySpan<CompiledFieldBinding> fields, int keyCount, RequestMemory memory)
     {
         KeyCount = keyCount;
         var rows = Math.Max(1, keyCount);
+        var words = Bits.WordCount(rows);
+        _bitsPerField = words * 64;
         _fields = new ColumnBuffer[fields.Length];
-        _written = new ulong[fields.Length][];
+        _written = memory.RentCleared<ulong>(Math.Max(1, fields.Length * words));
         for (var i = 0; i < fields.Length; i++)
         {
             _fields[i] = ColumnBuffer.Create(fields[i].Type.AsNonNullable(), rows, memory);
-            _written[i] = memory.RentCleared<ulong>(Bits.WordCount(rows));
         }
     }
 
@@ -41,7 +45,7 @@ internal sealed class StagingBuffer : IFeatureBatchWriter
     public ColumnBuffer Field(int fieldIndex) => _fields[fieldIndex];
 
     /// <summary>True when the connector wrote a value for this field and key (and did not withdraw it).</summary>
-    public bool HasValue(int fieldIndex, int keyIndex) => Bits.Get(_written[fieldIndex], keyIndex);
+    public bool HasValue(int fieldIndex, int keyIndex) => Bits.Get(_written, WrittenBit(fieldIndex, keyIndex));
 
     public Memory<T> GetValues<T>(int fieldIndex)
         where T : unmanaged => _fields[fieldIndex] switch
@@ -55,13 +59,13 @@ internal sealed class StagingBuffer : IFeatureBatchWriter
     public void SetValid(int fieldIndex, int keyIndex)
     {
         CheckKey(keyIndex);
-        Bits.Set(_written[fieldIndex], keyIndex);
+        Bits.Set(_written, WrittenBit(fieldIndex, keyIndex));
     }
 
     public void SetMissing(int fieldIndex, int keyIndex)
     {
         CheckKey(keyIndex);
-        Bits.Clear(_written[fieldIndex], keyIndex);
+        Bits.Clear(_written, WrittenBit(fieldIndex, keyIndex));
     }
 
     public void SetString(int fieldIndex, int keyIndex, string value)
@@ -74,21 +78,32 @@ internal sealed class StagingBuffer : IFeatureBatchWriter
             default: throw new InvalidOperationException($"Field {fieldIndex} is not a string or text field.");
         }
 
-        Bits.Set(_written[fieldIndex], keyIndex);
+        Bits.Set(_written, WrittenBit(fieldIndex, keyIndex));
     }
 
     public void SetInt64List(int fieldIndex, int keyIndex, ReadOnlySpan<long> value)
     {
         CheckKey(keyIndex);
         ((ListColumn<long>)_fields[fieldIndex]).Set(keyIndex, value);
-        Bits.Set(_written[fieldIndex], keyIndex);
+        Bits.Set(_written, WrittenBit(fieldIndex, keyIndex));
     }
 
     public void SetStringList(int fieldIndex, int keyIndex, ReadOnlySpan<string> value)
     {
         CheckKey(keyIndex);
         ((ListColumn<string>)_fields[fieldIndex]).Set(keyIndex, value);
-        Bits.Set(_written[fieldIndex], keyIndex);
+        Bits.Set(_written, WrittenBit(fieldIndex, keyIndex));
+    }
+
+    /// <summary>Bit of (field, key) in the shared block. The field is checked here: it would otherwise address another field's bits.</summary>
+    private int WrittenBit(int fieldIndex, int keyIndex)
+    {
+        if ((uint)fieldIndex >= (uint)_fields.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(fieldIndex), fieldIndex, $"The batch has {_fields.Length} fields.");
+        }
+
+        return (fieldIndex * _bitsPerField) + keyIndex;
     }
 
     private void CheckKey(int keyIndex)

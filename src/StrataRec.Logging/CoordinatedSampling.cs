@@ -1,3 +1,4 @@
+using System.Buffers;
 using StrataRec.Core.Hashing;
 using StrataRec.Core.Values;
 
@@ -68,10 +69,22 @@ public static class CoordinatedSampling
             return count;
         }
 
-        // τ = (k+1)-th smallest priority: keep rows with priority < τ (exactly k rows; ties have probability ~0).
-        var sorted = priorities[..count].ToArray();
-        Array.Sort(sorted);
-        var tau = sorted[k];
+        // τ = (k+1)-th smallest priority: keep rows with priority < τ (exactly k rows; ties have probability ~0). The
+        // sorted copy is pooled scratch: a tap over the rows a stage dropped can see thousands of candidates.
+        var sorted = ArrayPool<double>.Shared.Rent(count);
+        double tau;
+        try
+        {
+            var copy = sorted.AsSpan(0, count);
+            priorities[..count].CopyTo(copy);
+            copy.Sort();
+            tau = copy[k];
+        }
+        finally
+        {
+            ArrayPool<double>.Shared.Return(sorted);
+        }
+
         var kept = 0;
         for (var i = 0; i < count && kept < k; i++)
         {

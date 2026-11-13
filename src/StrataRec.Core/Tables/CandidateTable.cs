@@ -54,8 +54,8 @@ public sealed class CandidateTable
     private readonly ColumnBuffer?[] _slots;
     private readonly ulong[]?[] _filled;
     private int _totalAppended;
-    private Dictionary<long, int>? _int64Index;
-    private Dictionary<string, int>? _stringIndex;
+    private EntityKeyIndex? _keyIndex; // key → first physical row, for rows [0, _indexedRows); built on first FindRow
+    private int _indexedRows;
 
     public CandidateTable(TableSchema schema, int capacity, RequestMemory memory)
     {
@@ -162,7 +162,6 @@ public sealed class CandidateTable
         for (var i = 0; i < keys.Length; i++)
         {
             ids[first + i] = keys[i];
-            _int64Index?.TryAdd(keys[i], first + i);
         }
 
         PublishAppended(first, keys.Length);
@@ -178,42 +177,54 @@ public sealed class CandidateTable
         for (var i = 0; i < keys.Count; i++)
         {
             ids.Set(first + i, keys[i]);
-            _stringIndex?.TryAdd(keys[i], first + i);
         }
 
         PublishAppended(first, keys.Count);
         return first;
     }
 
-    /// <summary>Finds the physical row of a key (live or dropped) or returns -1.</summary>
+    /// <summary>Finds the physical row of a key (live or dropped) or returns -1. The first row wins for a repeated key.</summary>
+    /// <remarks>
+    /// The index is built on the first call and rented from the request memory, sized to <see cref="StorageCapacity"/>
+    /// so it never grows; rows appended later are indexed on the next call, so appends cost nothing when nobody looks
+    /// keys up again. A key of the other key type is never found.
+    /// </remarks>
     public int FindRow(in EntityKey key)
     {
+        if (PhysicalRowCount == 0)
+        {
+            return -1;
+        }
+
+        if (_indexedRows < PhysicalRowCount)
+        {
+            IndexAppendedRows();
+        }
+
+        return _keyIndex!.TryGetValue(key, out var row) ? row : -1;
+    }
+
+    private void IndexAppendedRows()
+    {
+        var index = _keyIndex ??= new EntityKeyIndex(KeyType, StorageCapacity, Memory);
         if (KeyType == EntityKeyType.Int64)
         {
-            if (_int64Index is null)
+            var ids = Int64Ids;
+            for (var r = _indexedRows; r < PhysicalRowCount; r++)
             {
-                _int64Index = new Dictionary<long, int>(PhysicalRowCount);
-                var ids = Int64Ids;
-                for (var r = 0; r < PhysicalRowCount; r++)
-                {
-                    _int64Index.TryAdd(ids[r], r);
-                }
+                index.TryAdd(ids[r], r);
             }
-
-            return _int64Index.TryGetValue(key.Int64Value, out var row) ? row : -1;
         }
-
-        if (_stringIndex is null)
+        else
         {
-            _stringIndex = new Dictionary<string, int>(PhysicalRowCount, StringComparer.Ordinal);
             var ids = StringIds;
-            for (var r = 0; r < PhysicalRowCount; r++)
+            for (var r = _indexedRows; r < PhysicalRowCount; r++)
             {
-                _stringIndex.TryAdd(ids.Get(r), r);
+                index.TryAdd(ids.Get(r), r);
             }
         }
 
-        return key.StringValue is not null && _stringIndex.TryGetValue(key.StringValue, out var srow) ? srow : -1;
+        _indexedRows = PhysicalRowCount;
     }
 
     /// <summary>
@@ -249,8 +260,10 @@ public sealed class CandidateTable
 
         PhysicalRowCount = count;
         Rows.ResetIdentity(count);
-        _int64Index = null;
-        _stringIndex = null;
+
+        // Rows moved: re-index lazily. Compact never raises StorageCapacity, so the index's arrays still fit.
+        _keyIndex?.Clear();
+        _indexedRows = 0;
     }
 
     private int ReserveRows(int count)

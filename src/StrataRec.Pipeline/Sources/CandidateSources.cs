@@ -19,6 +19,10 @@ public sealed class CandidateQuery
 }
 
 /// <summary>Receives retrieved candidates in rank order.</summary>
+/// <remarks>
+/// A sink is valid only until the <see cref="ICandidateSource.RetrieveAsync"/> call it was passed to completes: its
+/// buffers belong to the request, and candidates added afterwards are ignored. Sources must not keep it.
+/// </remarks>
 public interface ICandidateSink
 {
     void Add(long entityId, double score);

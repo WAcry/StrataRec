@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
@@ -15,10 +16,13 @@ namespace StrataRec.Features.Connectors;
 /// { "123":   { "10042": { "ui_eng_30d": 3.0 } } }                  // Cross: context key → candidate key → fields
 /// </code>
 /// Keys are JSON property names (int64 keys in decimal). Absent keys or fields are reported as missing.
+/// <para>Names that are canonical int64 decimals are also indexed by <c>long</c> when the data is loaded (top-level
+/// keys, and the candidate keys of a <c>Cross</c> record), so int64 lookups format no strings per key.</para>
 /// </remarks>
 public sealed class MemoryFeatureConnector : IFeatureSourceConnector
 {
-    private readonly Dictionary<string, JsonElement> _rows;
+    private readonly Dictionary<string, Record> _rows;
+    private readonly Dictionary<long, Record> _int64Rows;
     private readonly int _latencyMs;
     private readonly bool _fail;
 
@@ -29,10 +33,18 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
             throw new FormatException("memory@1 data must be a JSON object keyed by entity key.");
         }
 
-        _rows = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        // Later duplicates win, as JsonElement.TryGetProperty resolves them (the nested Cross index does the same).
+        _rows = new Dictionary<string, Record>(StringComparer.Ordinal);
+        _int64Rows = new Dictionary<long, Record>();
         foreach (var property in data.EnumerateObject())
         {
-            _rows[property.Name] = property.Value.Clone();
+            var value = property.Value.Clone();
+            var record = new Record(value, IndexInt64Properties(value));
+            _rows[property.Name] = record;
+            if (TryParseCanonicalInt64(property.Name, out var id))
+            {
+                _int64Rows[id] = record;
+            }
         }
 
         _latencyMs = latencyMs;
@@ -65,9 +77,9 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
         switch (keys.Shape)
         {
             case KeyShape.Single:
-                if (_rows.TryGetValue(keys.ContextKey.ToString(), out var single))
+                if (TryGetRecord(keys.ContextKey, out var single))
                 {
-                    WriteRecord(single, 0, fields.Span, writer);
+                    WriteRecord(single.Value, 0, fields.Span, writer);
                 }
 
                 break;
@@ -75,20 +87,23 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
                 var many = keys.CandidateKeys.Span;
                 for (var i = 0; i < many.Length; i++)
                 {
-                    if (_rows.TryGetValue(many[i].ToString(), out var record))
+                    if (TryGetRecord(many[i], out var record))
                     {
-                        WriteRecord(record, i, fields.Span, writer);
+                        WriteRecord(record.Value, i, fields.Span, writer);
                     }
                 }
 
                 break;
             case KeyShape.Cross:
-                if (_rows.TryGetValue(keys.ContextKey.ToString(), out var byCandidate) && byCandidate.ValueKind == JsonValueKind.Object)
+                if (TryGetRecord(keys.ContextKey, out var byCandidate) && byCandidate.Value.ValueKind == JsonValueKind.Object)
                 {
                     var cand = keys.CandidateKeys.Span;
                     for (var i = 0; i < cand.Length; i++)
                     {
-                        if (byCandidate.TryGetProperty(cand[i].ToString(), out var record))
+                        var found = cand[i].StringValue is { } name
+                            ? byCandidate.Value.TryGetProperty(name, out var record)
+                            : TryGetNested(byCandidate, cand[i].Int64Value, out record);
+                        if (found)
                         {
                             WriteRecord(record, i, fields.Span, writer);
                         }
@@ -101,6 +116,58 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
         }
 
         return FetchStatus.Ok;
+    }
+
+    private bool TryGetRecord(in EntityKey key, out Record record) => key.StringValue is { } name
+        ? _rows.TryGetValue(name, out record)
+        : _int64Rows.TryGetValue(key.Int64Value, out record);
+
+    private static bool TryGetNested(in Record record, long key, out JsonElement value)
+    {
+        if (record.NestedByInt64 is { } nested)
+        {
+            return nested.TryGetValue(key, out value);
+        }
+
+        value = default;
+        return false;
+    }
+
+    /// <summary>The properties of an object whose names are canonical int64 decimals (the candidate keys of Cross data).</summary>
+    private static Dictionary<long, JsonElement>? IndexInt64Properties(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        Dictionary<long, JsonElement>? index = null;
+        foreach (var property in value.EnumerateObject())
+        {
+            if (TryParseCanonicalInt64(property.Name, out var id))
+            {
+                (index ??= new Dictionary<long, JsonElement>())[id] = property.Value;
+            }
+        }
+
+        return index;
+    }
+
+    /// <summary>
+    /// True when <paramref name="name"/> is exactly how an int64 key formats (no '+', leading zeros, "-0" or
+    /// whitespace), so a long lookup finds exactly the records a lookup by the key's decimal string would.
+    /// </summary>
+    private static bool TryParseCanonicalInt64(string name, out long value)
+    {
+        if (name.Length is 0 or > 20 || !long.TryParse(name, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out value))
+        {
+            value = 0;
+            return false;
+        }
+
+        Span<char> formatted = stackalloc char[20];
+        return value.TryFormat(formatted, out var written, default, CultureInfo.InvariantCulture)
+            && formatted[..written].SequenceEqual(name);
     }
 
     private static void WriteRecord(JsonElement record, int keyIndex, ReadOnlySpan<CompiledFieldBinding> fields, IFeatureBatchWriter writer)
@@ -185,6 +252,9 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
             }
         }
     }
+
+    /// <summary>A top-level entry; for Cross data its properties are candidate keys, indexed by int64 when canonical.</summary>
+    private readonly record struct Record(JsonElement Value, Dictionary<long, JsonElement>? NestedByInt64);
 }
 
 /// <summary>Factory for <c>memory@1</c>.</summary>

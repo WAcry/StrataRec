@@ -372,9 +372,15 @@ public sealed class FeatureFetcher
         var fields = FieldBindings(group, features);
         ClearOnReturnIfPersonal(features);
 
-        // Collect distinct keys of live rows that still miss any of the fetched features.
-        var keys = new List<EntityKey>();
-        var index = new Dictionary<EntityKey, int>();
+        // Collect distinct keys of live rows that still miss any of the fetched features. The index, the key array and
+        // the per-chunk arrays are rented from the request memory (design 4.8), so a fetch allocates nothing per key.
+        // Lifetimes: the index and the chunk arrays are read only on the request's thread (Backfill, CompleteAsync),
+        // before the request releases the memory. The key array is read by connector calls, which may outlive the
+        // request, but each call holds the memory from before FetchAsync until the connector really completes
+        // (CallAsync/IoLease), so the keys cannot return to the pool while a connector can still read them.
+        EntityKeyIndex? index = null;
+        EntityKey[]? keys = null;
+        var keyCount = 0;
         var contextKey = default(EntityKey);
         var noContextKey = false;
         if (group.ContextKeyId >= 0)
@@ -392,11 +398,23 @@ public sealed class FeatureFetcher
 
         if (!noContextKey)
         {
-            foreach (var row in _table.Rows.Order)
+            var live = _table.Rows.Order;
+            foreach (var row in live)
             {
-                if (NeedsFill(features, row) && TryCandidateKey(group, row, out var key) == KeyLookup.Found && index.TryAdd(key, keys.Count))
+                if (NeedsFill(features, row) && TryCandidateKey(group, row, out var key) == KeyLookup.Found)
                 {
-                    keys.Add(key);
+                    if (index is null)
+                    {
+                        // Sized to the live rows, an upper bound on the distinct keys: the index never grows. All keys
+                        // of a group have one type (the key column's).
+                        index = new EntityKeyIndex(key.IsString ? EntityKeyType.String : EntityKeyType.Int64, live.Length, _memory);
+                        keys = _memory.Rent<EntityKey>(live.Length);
+                    }
+
+                    if (index.TryAdd(key, keyCount))
+                    {
+                        keys![keyCount++] = key;
+                    }
                 }
             }
         }
@@ -404,31 +422,35 @@ public sealed class FeatureFetcher
         // Each max_batch chunk is an independent call with its own staging buffer: chunks run concurrently, and a
         // buffer's bitmaps, string dictionary and list arena are not safe for concurrent writers.
         var chunkSize = group.MaxBatch;
-        var chunkCount = (keys.Count + chunkSize - 1) / chunkSize;
-        var chunks = new StagingBuffer?[chunkCount];
-        var calls = new Task<FetchStatus>[chunkCount];
-        if (chunkCount > 0)
+        var chunkCount = (keyCount + chunkSize - 1) / chunkSize;
+        if (chunkCount == 0)
         {
-            var all = keys.ToArray();
-            var budget = BudgetMs(group);
-            for (var c = 0; c < chunkCount; c++)
-            {
-                if (budget <= 0)
-                {
-                    calls[c] = NoTimeLeft;
-                    continue;
-                }
-
-                var offset = c * chunkSize;
-                var count = Math.Min(chunkSize, all.Length - offset);
-                var staging = new StagingBuffer(fields, count, _memory);
-                chunks[c] = staging;
-                var batch = new EntityKeyBatch { Shape = group.Shape, ContextKey = contextKey, CandidateKeys = all.AsMemory(offset, count) };
-                calls[c] = CallAsync(group, batch, fields, staging, budget, cancellationToken);
-            }
+            return new PendingFetch(group, features, index, chunkSize, 0, Array.Empty<StagingBuffer?>(), Array.Empty<Task<FetchStatus>>(), Array.Empty<bool>(), noContextKey);
         }
 
-        return new PendingFetch(group, features, index, chunkSize, chunks, calls, noContextKey);
+        var all = keys!;
+        var chunks = _memory.Rent<StagingBuffer?>(chunkCount);
+        var calls = _memory.Rent<Task<FetchStatus>>(chunkCount);
+        var chunkFailed = _memory.RentCleared<bool>(chunkCount);
+        var budget = BudgetMs(group);
+        for (var c = 0; c < chunkCount; c++)
+        {
+            if (budget <= 0)
+            {
+                chunks[c] = null;
+                calls[c] = NoTimeLeft;
+                continue;
+            }
+
+            var offset = c * chunkSize;
+            var count = Math.Min(chunkSize, keyCount - offset);
+            var staging = new StagingBuffer(fields, count, _memory);
+            chunks[c] = staging;
+            var batch = new EntityKeyBatch { Shape = group.Shape, ContextKey = contextKey, CandidateKeys = all.AsMemory(offset, count) };
+            calls[c] = CallAsync(group, batch, fields, staging, budget, cancellationToken);
+        }
+
+        return new PendingFetch(group, features, index, chunkSize, chunkCount, chunks, calls, chunkFailed, noContextKey);
     }
 
     /// <summary>
@@ -518,7 +540,7 @@ public sealed class FeatureFetcher
         var failedChunks = 0;
         var partial = false;
         string? error = null;
-        for (var c = 0; c < pending.Calls.Length; c++)
+        for (var c = 0; c < pending.ChunkCount; c++)
         {
             var status = await pending.Calls[c].ConfigureAwait(false);
             if (status.Outcome == FetchOutcome.Failed)
@@ -537,7 +559,7 @@ public sealed class FeatureFetcher
             error ??= _errors[group.KeyFeatureIndex] ?? $"key feature '{_plan.Features[group.KeyFeatureIndex].Definition.Name}' is {keyState}";
         }
 
-        if ((failedChunks > 0 && failedChunks == pending.Calls.Length) || keyState == FeatureState.Failed)
+        if ((failedChunks > 0 && failedChunks == pending.ChunkCount) || keyState == FeatureState.Failed)
         {
             foreach (var f in pending.Features)
             {
@@ -600,7 +622,7 @@ public sealed class FeatureFetcher
                     continue; // the key itself is not available for this row yet; a later fetch fills it
                 }
 
-                if (lookup == KeyLookup.Found && !pending.Index.TryGetValue(key, out keyIndex))
+                if (lookup == KeyLookup.Found && (pending.Index is null || !pending.Index.TryGetValue(key, out keyIndex)))
                 {
                     continue; // row appended after this fetch started; a later fetch fills it
                 }
@@ -997,13 +1019,19 @@ public sealed class FeatureFetcher
     }
 
     /// <summary>One candidate fetch: a subset of a group's members for the keys of the rows that missed them.</summary>
+    /// <remarks>
+    /// The index and the per-chunk arrays are rented from the request memory and may be longer than
+    /// <see cref="ChunkCount"/>; they are read only on the request's thread while the request holds the memory.
+    /// </remarks>
     private sealed class PendingFetch(
         FetchGroup group,
         int[] features,
-        Dictionary<EntityKey, int> index,
+        EntityKeyIndex? index,
         int chunkSize,
+        int chunkCount,
         StagingBuffer?[] chunks,
         Task<FetchStatus>[] calls,
+        bool[] chunkFailed,
         bool noContextKey)
     {
         public FetchGroup Group { get; } = group;
@@ -1011,10 +1039,15 @@ public sealed class FeatureFetcher
         /// <summary>Fetched features; staging field i holds <c>Features[i]</c>.</summary>
         public int[] Features { get; } = features;
 
-        /// <summary>Key → key index; key index k is row k % ChunkSize of chunk k / ChunkSize.</summary>
-        public Dictionary<EntityKey, int> Index { get; } = index;
+        /// <summary>
+        /// Key → key index; key index k is row k % ChunkSize of chunk k / ChunkSize. Null when no live row had a key.
+        /// </summary>
+        public EntityKeyIndex? Index { get; } = index;
 
         public int ChunkSize { get; } = chunkSize;
+
+        /// <summary>Number of chunks; the chunk arrays below are valid up to this length.</summary>
+        public int ChunkCount { get; } = chunkCount;
 
         /// <summary>Staging per chunk; null when the chunk was never sent (no time left).</summary>
         public StagingBuffer?[] Chunks { get; } = chunks;
@@ -1022,7 +1055,7 @@ public sealed class FeatureFetcher
         public Task<FetchStatus>[] Calls { get; } = calls;
 
         /// <summary>Set on completion: chunks whose staging must not be read.</summary>
-        public bool[] ChunkFailed { get; } = new bool[calls.Length];
+        public bool[] ChunkFailed { get; } = chunkFailed;
 
         public bool NoContextKey { get; } = noContextKey;
     }

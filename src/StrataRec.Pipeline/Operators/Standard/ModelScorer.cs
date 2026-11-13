@@ -201,15 +201,17 @@ public sealed class ModelScorerFactory : IOperatorFactory
 
         public override async ValueTask ExecuteAsync(OperatorContext context)
         {
-            var rows = context.LiveRows.ToArray();
-            var n = rows.Length;
+            var n = context.LiveRows.Length;
             if (n == 0)
             {
                 return;
             }
 
+            // The live rows as of the call, kept across the await; rented, and never handed to the model client.
             var memory = context.Memory;
-            var tensors = GatherInputs(context, rows);
+            var rows = memory.Rent<int>(n);
+            context.LiveRows.CopyTo(rows);
+            var tensors = GatherInputs(context, rows.AsSpan(0, n));
             var resolvedVersion = versionParam is { } p ? context.Param(p).AsString() : version;
             var batches = (n + batchSize - 1) / batchSize;
             var writers = new OutputWriter[batches];
@@ -252,11 +254,11 @@ public sealed class ModelScorerFactory : IOperatorFactory
                 }
             }
 
-            WriteOutputs(context, rows, writers);
+            WriteOutputs(context, rows.AsSpan(0, n), writers);
         }
 
         /// <summary>Evaluates every input into a dense float32 tensor ordered like <paramref name="rows"/>.</summary>
-        private float[][] GatherInputs(OperatorContext context, int[] rows)
+        private float[][] GatherInputs(OperatorContext context, ReadOnlySpan<int> rows)
         {
             var memory = context.Memory;
             var capacity = Math.Max(1, context.Table.StorageCapacity);
@@ -278,7 +280,7 @@ public sealed class ModelScorerFactory : IOperatorFactory
             return tensors;
         }
 
-        private void WriteOutputs(OperatorContext context, int[] rows, OutputWriter[] writers)
+        private void WriteOutputs(OperatorContext context, ReadOnlySpan<int> rows, OutputWriter[] writers)
         {
             foreach (var (name, column) in outputs)
             {
