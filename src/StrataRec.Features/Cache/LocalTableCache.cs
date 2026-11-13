@@ -125,6 +125,12 @@ internal sealed class CacheWriteBatch(EntityKey[] keys, ReadOnlyMemory<byte>[] r
 /// </remarks>
 public sealed class LocalTableCache
 {
+    /// <summary>
+    /// The longest time to live a distributed tier is given, in milliseconds: what a <see cref="TimeSpan"/> holds (about
+    /// 29,000 years). A binding with a distributed tier whose <see cref="RetentionMs"/> exceeds it is rejected.
+    /// </summary>
+    internal const long MaxRetentionMs = long.MaxValue / TimeSpan.TicksPerMillisecond;
+
     private const double Jitter = 0.1;
 
     private readonly LocalFeatureTable _table;
@@ -146,7 +152,7 @@ public sealed class LocalTableCache
         Layout = new CacheRecordLayout(table.Schema);
         Keyspace = new CacheKeyspace(table.Schema.Source, table.Schema.Entity, table.Schema.KeyType);
         _queueLimit = options.WriteQueueBytes > 0 ? options.WriteQueueBytes : Math.Clamp(table.Options.MaxBytes / 16, 1L << 20, 64L << 20);
-        MaxLifetimeMs = (long)Math.Ceiling(options.TtlMs * (1 + Jitter));
+        MaxLifetimeMs = MaxLifetime(options.TtlMs);
         var tags = table.MetricTags.ToArray();
         _keyTags = TagMatrix(tags, Enum.GetValues<CacheKeyOutcome>().Length, static o => OutcomeName((CacheKeyOutcome)o));
         _writeTags = TagMatrix(tags, Enum.GetValues<CacheWriteOutcome>().Length, static o => OutcomeName((CacheWriteOutcome)o));
@@ -170,6 +176,12 @@ public sealed class LocalTableCache
 
     /// <summary>The fingerprint the table's records carry.</summary>
     internal ulong Fingerprint => Layout.Fingerprint;
+
+    /// <summary>The longest lifetime of any key of a table with TTL <paramref name="ttlMs"/>: the TTL plus the most jitter.</summary>
+    internal static long MaxLifetime(long ttlMs) => (long)Math.Ceiling(ttlMs * (1 + Jitter));
+
+    /// <summary>The longest a distributed tier keeps a record: until no reader could use it, even stale.</summary>
+    internal static long RetentionMs(long ttlMs, long staleIfErrorMs) => MaxLifetime(ttlMs) + staleIfErrorMs;
 
     /// <summary>Now, in Unix milliseconds: the version of a record a fetch starting now writes.</summary>
     internal long NowMs() => Clock.GetUtcNow().ToUnixTimeMilliseconds();
@@ -204,8 +216,10 @@ public sealed class LocalTableCache
 
     /// <summary>How long the distributed tier should keep a record written at <paramref name="writtenMs"/>: until no reader
     /// could use it, even stale.</summary>
+    /// <remarks>At most <see cref="RetentionMs"/>, which the binding checked against <see cref="MaxRetentionMs"/>; in ticks, so
+    /// no floating-point rounding takes the boundary past what a <see cref="TimeSpan"/> holds.</remarks>
     internal TimeSpan StoreTimeToLive(long writtenMs, long nowMs) =>
-        TimeSpan.FromMilliseconds(Math.Max(1, writtenMs + MaxLifetimeMs + Options.StaleIfErrorMs - nowMs));
+        TimeSpan.FromTicks(Math.Max(1, writtenMs + MaxLifetimeMs + Options.StaleIfErrorMs - nowMs) * TimeSpan.TicksPerMillisecond);
 
     /// <summary>Hands records to the writer without waiting; false (and counted) when the queue is full.</summary>
     internal bool TryWriteBack(CacheWriteBatch batch)
