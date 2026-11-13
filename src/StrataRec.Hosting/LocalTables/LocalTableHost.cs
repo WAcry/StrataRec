@@ -22,7 +22,10 @@ public sealed class LocalTableHostOptions
     /// <summary>The longest delay between restarts.</summary>
     public TimeSpan MaxRestartDelay { get; init; } = TimeSpan.FromMinutes(5);
 
-    /// <summary>How long <see cref="LocalTableHost.DisposeAsync"/> waits for cancelled update sources to return.</summary>
+    /// <summary>
+    /// How long <see cref="LocalTableHost.DisposeAsync"/> waits for cancelled update sources to return: their runs and
+    /// the callbacks they registered on the cancellation token, together.
+    /// </summary>
     public TimeSpan ShutdownTimeout { get; init; } = TimeSpan.FromSeconds(10);
 }
 
@@ -44,6 +47,12 @@ public sealed class LocalTableHostOptions
 /// progress), up to <see cref="LocalTableHostOptions.MaxRestartDelay"/>.</para>
 /// <para><b>Release.</b> A table no lease holds has its source cancelled. Requests of an older plan may still read it:
 /// they pinned a version, which stays valid, so stopping a source never needs to wait for requests.</para>
+/// <para><b>Stopping never runs source code on the caller's thread.</b> A source is cancelled with
+/// <see cref="CancellationTokenSource.CancelAsync"/>: the callbacks it registered on its token run on the thread pool,
+/// not on the thread that releases a lease (a plan swap) or disposes the host. Their task and the source's run make up
+/// the entry's <see cref="Entry.Completion"/>, which shutdown waits for within one
+/// <see cref="LocalTableHostOptions.ShutdownTimeout"/>; past it, the entry stays alive until both end, and a callback's
+/// exception is logged, never thrown at the caller.</para>
 /// <para>Thread-safe. Sources run off the request path, each on its own long-running task until its first await.</para>
 /// </remarks>
 public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
@@ -91,7 +100,10 @@ public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
         return new LocalTableLease(this);
     }
 
-    /// <summary>Cancels every update source and waits for them to return, at most <see cref="LocalTableHostOptions.ShutdownTimeout"/>.</summary>
+    /// <summary>
+    /// Cancels every update source and waits for them to return, also those of tables released earlier that are still
+    /// stopping, at most <see cref="LocalTableHostOptions.ShutdownTimeout"/> for all of them.
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
         List<Entry> entries;
@@ -107,23 +119,23 @@ public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
             _byIdentity.Clear();
         }
 
-        var runs = new List<Task>(entries.Count);
+        var stopping = new List<Task>(entries.Count);
         foreach (var entry in entries)
         {
             entry.Stop();
-            runs.Add(entry.Completion);
+            stopping.Add(entry.Completion); // never faults: see Entry.StoppedAsync
         }
 
         try
         {
-            await Task.WhenAll(runs).WaitAsync(Options.ShutdownTimeout).ConfigureAwait(false);
+            await Task.WhenAll(stopping).WaitAsync(Options.ShutdownTimeout).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
             var running = 0;
-            foreach (var run in runs)
+            foreach (var completion in stopping)
             {
-                running += run.IsCompleted ? 0 : 1;
+                running += completion.IsCompleted ? 0 : 1;
             }
 
             LogShutdownTimeout(_logger, running, Options.ShutdownTimeout.TotalMilliseconds);
@@ -190,8 +202,9 @@ public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
         private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly CancellationTokenSource _stop = new();
         private readonly object _gate = new();
+        private readonly TaskCompletionSource _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private Task? _run;
-        private bool _stopped;
+        private bool _stopping;
 
         public Entry(LocalTableHost host, LocalTableSpec spec, LocalFeatureTable table)
         {
@@ -213,24 +226,18 @@ public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
 
         public bool FirstLoadFailed => _ready.Task.IsFaulted || _ready.Task.IsCanceled;
 
-        /// <summary>The source's run; completed when it never started.</summary>
-        public Task Completion
-        {
-            get
-            {
-                lock (_gate)
-                {
-                    return _run ?? Task.CompletedTask;
-                }
-            }
-        }
+        /// <summary>
+        /// Completes once the entry is stopped (<see cref="Stop"/>), its source's run has returned and the callbacks the
+        /// source registered on its token have run. Never faults.
+        /// </summary>
+        public Task Completion => _stopped.Task;
 
         /// <summary>Starts the source unless it runs already (or was stopped).</summary>
         public void Start()
         {
             lock (_gate)
             {
-                if (_run is not null || _stopped)
+                if (_run is not null || _stopping)
                 {
                     return;
                 }
@@ -238,35 +245,63 @@ public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
                 _ = Table.WhenLoaded.ContinueWith(
                     static (_, state) => ((Entry)state!).Loaded(), this, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                 _run = RunAsync();
-                _ = _run.ContinueWith(
-                    static (_, state) => { var entry = (Entry)state!; entry._host.Finished(entry); },
-                    this, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             }
         }
 
-        /// <summary>Cancels the source; true when it was running.</summary>
+        /// <summary>
+        /// Cancels the source without running any of its code here (see the host's remarks); true when it was running.
+        /// <see cref="Completion"/> tells when it has stopped.
+        /// </summary>
         public bool Stop()
         {
-            bool running;
+            Task? run;
             lock (_gate)
             {
-                if (_stopped)
+                if (_stopping)
                 {
                     return false;
                 }
 
-                _stopped = true;
-                running = _run is not null;
+                _stopping = true;
+                run = _run;
             }
 
-            _stop.Cancel();
+            // The token observes the cancellation now; the callbacks registered on it run on the thread pool.
+            var callbacks = _stop.CancelAsync();
             _ready.TrySetCanceled();
-            if (!running)
+            _ = StoppedAsync(run ?? Task.CompletedTask, callbacks);
+            return run is not null;
+        }
+
+        /// <summary>
+        /// Waits for the run and the cancellation callbacks, then leaves the host's set of entries. The entry (and its
+        /// token source, never disposed) stays alive while either runs, past a shutdown that gave up waiting. A callback's
+        /// exception is logged; the run handles its own failures, so anything escaping it is only observed.
+        /// </summary>
+        private async Task StoppedAsync(Task run, Task callbacks)
+        {
+            try
+            {
+                try
+                {
+                    await callbacks.ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    LogCancellationCallbacksFailed(_host._logger, callbacks.Exception ?? ex, Spec.Name);
+                }
+
+                await run.ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // RunAsync catches what the source throws; this is a failing logger, which cannot report itself.
+            }
+            finally
             {
                 _host.Finished(this);
+                _stopped.TrySetResult();
             }
-
-            return running;
         }
 
         /// <summary>The first load completed: logged before the plans waiting for it are released, so the event precedes theirs.</summary>
@@ -367,8 +402,12 @@ public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
     private static partial void LogStopped(ILogger logger, string table);
 
     [LoggerMessage(EventId = 1205, Level = LogLevel.Warning,
-        Message = "{Running} local table update source(s) did not return within {TimeoutMs} ms of shutdown")]
+        Message = "{Running} local table update source(s) did not return (or their cancellation callbacks did not finish) within {TimeoutMs} ms of shutdown")]
     private static partial void LogShutdownTimeout(ILogger logger, int running, double timeoutMs);
+
+    [LoggerMessage(EventId = 1206, Level = LogLevel.Warning,
+        Message = "A cancellation callback of the update source of local table {Table} threw; the source is stopped regardless")]
+    private static partial void LogCancellationCallbacksFailed(ILogger logger, Exception exception, string table);
 }
 
 /// <summary>
@@ -418,7 +457,8 @@ public sealed class LocalTableLease : ILocalTableProvider, IDisposable
     /// its first load, or one of them has failed. Returns the failures, each naming its binding and the bad file; empty
     /// when every table is loaded (at once when the lease holds none, or the host does not load tables).
     /// </summary>
-    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled; the loads go on.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled, also before the call
+    /// when there is nothing to wait for; the loads go on.</exception>
     public async Task<IReadOnlyList<LocalTableLoadException>> WaitLoadedAsync(CancellationToken cancellationToken = default)
     {
         List<LocalTableHost.Entry> entries;
@@ -427,6 +467,8 @@ public sealed class LocalTableLease : ILocalTableProvider, IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             entries = new List<LocalTableHost.Entry>(_entries);
         }
+
+        cancellationToken.ThrowIfCancellationRequested(); // whether or not there is anything to wait for
 
         if (entries.Count == 0 || !_host.Options.LoadTables)
         {

@@ -183,6 +183,109 @@ public class LocalTableHostTests
         Assert.Throws<ObjectDisposedException>(() => host.OpenLease());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ACancellationCallbackThatBlocks_HoldsUpNeitherTheRelease_NorShutdownPastItsTimeout(bool releasedFirst)
+    {
+        var logs = new ListLoggerFactory();
+        var host = new LocalTableHost(new LocalTableHostOptions { ShutdownTimeout = TimeSpan.FromMilliseconds(50) }, logs);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var returned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var gate = new ManualResetEventSlim();
+        var source = new ScriptedSource(async (_, writer, token) =>
+        {
+            await Load(1)(UpdatePosition.Empty, writer, token);
+            token.Register(() =>
+            {
+                entered.TrySetResult();
+                gate.Wait(); // a source's cleanup that hangs
+            });
+            await WaitForCancellation(token, returned);
+        });
+        var lease = host.OpenLease();
+        lease.Acquire(Spec(source));
+        Assert.Empty(await lease.WaitLoadedAsync());
+        try
+        {
+            // Called off the test thread, so a call that blocks fails the test instead of hanging it.
+            if (releasedFirst)
+            {
+                // What a plan swap does with the tables only the replaced plan read: it returns, the callback runs elsewhere.
+                await Task.Run(lease.Dispose).WaitAsync(Wait);
+                await entered.Task.WaitAsync(Wait);
+            }
+
+            // Shutdown waits for the released table too, and gives up after its timeout.
+            await Task.Run(() => host.DisposeAsync().AsTask()).WaitAsync(Wait);
+
+            await entered.Task.WaitAsync(Wait);
+            Assert.False(gate.IsSet);
+            Assert.Equal(1, Assert.Single(logs.Entries, e => e.EventId == 1205).Values["Running"]);
+        }
+        finally
+        {
+            gate.Set();
+        }
+
+        await returned.Task.WaitAsync(Wait); // the source still ends once its callback does
+        lease.Dispose();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ACancellationCallbackThatThrows_IsLogged_AndFailsNeitherTheReleaseNorShutdown(bool releasedFirst)
+    {
+        var logs = new ListLoggerFactory();
+        var host = new LocalTableHost(loggerFactory: logs);
+        var returned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new ScriptedSource(async (_, writer, token) =>
+        {
+            await Load(1)(UpdatePosition.Empty, writer, token);
+            token.Register(() => throw new InvalidOperationException("cleanup failed"));
+            await WaitForCancellation(token, returned);
+        });
+        var lease = host.OpenLease();
+        lease.Acquire(Spec(source));
+        Assert.Empty(await lease.WaitLoadedAsync());
+
+        if (releasedFirst)
+        {
+            lease.Dispose();
+            await returned.Task.WaitAsync(Wait);
+        }
+
+        await host.DisposeAsync().AsTask().WaitAsync(Wait);
+
+        await returned.Task.WaitAsync(Wait);
+        var failed = Assert.Single(logs.Entries, e => e.EventId == 1206);
+        Assert.Contains("cleanup failed", failed.Exception!.ToString());
+        Assert.DoesNotContain(logs.Entries, e => e.EventId == 1205);
+        lease.Dispose();
+    }
+
+    [Fact]
+    public async Task WaitLoaded_HonoursItsToken_AlsoWhenThereIsNothingToWaitFor()
+    {
+        using var host = new LocalTableHost();
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        using var empty = host.OpenLease();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => empty.WaitLoadedAsync(cancelled.Token));
+
+        using var lease = host.OpenLease();
+        var table = lease.Acquire(Spec(new ScriptedSource(Load(1))));
+        Assert.Empty(await lease.WaitLoadedAsync());
+        Assert.True(table.IsLoaded);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => lease.WaitLoadedAsync(cancelled.Token)); // ready already
+
+        using var unloaded = new LocalTableHost(new LocalTableHostOptions { LoadTables = false });
+        using var never = unloaded.OpenLease();
+        never.Acquire(Spec(new ScriptedSource(Load(1))));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => never.WaitLoadedAsync(cancelled.Token));
+    }
+
     [Fact]
     public async Task AHostThatDoesNotLoadTables_NeverRunsASource()
     {
@@ -298,10 +401,10 @@ public class LocalTableHostTests
                     }
                 }
 
-                entries.Enqueue(new LogEntry(eventId.Id, formatter(state, exception), values));
+                entries.Enqueue(new LogEntry(eventId.Id, formatter(state, exception), values, exception));
             }
         }
     }
 
-    private sealed record LogEntry(int EventId, string Message, Dictionary<string, object?> Values);
+    private sealed record LogEntry(int EventId, string Message, Dictionary<string, object?> Values, Exception? Exception);
 }
