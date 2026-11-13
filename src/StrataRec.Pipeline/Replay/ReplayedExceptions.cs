@@ -91,7 +91,9 @@ internal static class ReplayedExceptions
             return timedOut ? new OperationCanceledException(text) : new ReplayedCallException(text);
         }
 
-        if (type.Args is not { Count: > 0 })
+        // The core library's own types need no search: it is loaded once and its name is unique. A namesake defined in
+        // another assembly goes through the identity lookup like any other type.
+        if (type.Args is not { Count: > 0 } && type.Assembly == CoreLibrary)
         {
             switch (type.Name)
             {
@@ -117,6 +119,8 @@ internal static class ReplayedExceptions
 
         return new ReplayedCallException(text, Readable(type));
     }
+
+    private static readonly string CoreLibrary = typeof(object).Assembly.GetName().Name!;
 
     private static Type? Resolve(ReplayTypeIdentity identity)
     {

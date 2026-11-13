@@ -185,6 +185,8 @@ public sealed class RunReplayTests
     [InlineData("No.Such.Exception", Tests, "error", typeof(ReplayedCallException))]
     [InlineData("System.String", CoreLib, "error", typeof(ReplayedCallException))] // not an exception
     [InlineData("System.InvalidOperationException", Tests, "error", typeof(ReplayedCallException))] // the name, but not of that assembly
+    [InlineData("System.TimeoutException", Tests, "timeout", typeof(ReplayedCallException))] // core names too
+    [InlineData("System.OperationCanceledException", "No.Such.Assembly", "timeout", typeof(ReplayedCallException))]
     [InlineData("System.InvalidOperationException, System.Private.CoreLib", CoreLib, "error", typeof(ReplayedCallException))] // a name, never a type spec
     [InlineData("StrataRec.UnitTests.Pipeline.RunReplayTests+BackendException`1", Tests, "error", typeof(ReplayedCallException))] // open generic
     public void AThrownModelCall_IsThrownAgain_AsItsRecordedType(string name, string assembly, string status, Type expected)
@@ -224,6 +226,13 @@ public sealed class RunReplayTests
         var second = DefineException("ReplayNamesakeSecond", "Backend.TransientException");
         Assert.IsType(second, Replayed(ReplayedExceptions.Identity(second)));
         Assert.IsType(first, Replayed(ReplayedExceptions.Identity(first)));
+
+        // A namesake of a core exception is that namesake, not the core type (which would take the cancellation path).
+        foreach (var core in new[] { "System.TimeoutException", "System.OperationCanceledException" })
+        {
+            var namesake = DefineException("ReplayCoreNamesake" + core.Length, core);
+            Assert.IsType(namesake, Replayed(ReplayedExceptions.Identity(namesake), "timeout"));
+        }
 
         // The same assembly name loaded twice, both with the type: which one the client threw cannot be told, so neither.
         DefineException("ReplayNamesakeTwice", "Backend.TransientException");

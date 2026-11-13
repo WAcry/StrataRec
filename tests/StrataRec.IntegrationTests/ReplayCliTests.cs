@@ -1,4 +1,5 @@
 using System.Text.Json;
+using StrataRec.Artifacts.Model;
 using StrataRec.Cli.Commands;
 
 namespace StrataRec.IntegrationTests;
@@ -74,7 +75,7 @@ public sealed class ReplayCliTests
     public async Task MalformedBundle_IsAUsageError_NamingThePointer()
     {
         var bundle = Path.Combine(Directory.CreateTempSubdirectory("stratarec-bundles-").FullName, "bad.json");
-        File.WriteAllText(bundle, """{ "format": "stratarec.replay_bundle/0", "request": {} }""");
+        File.WriteAllText(bundle, $$"""{ "format": "{{ReplayBundle.CurrentFormat}}", "request": {} }""");
 
         var output = new StringWriter();
         var exit = await ReplayCommand.RunAsync(Samples.HomeFeed, "local", bundle, Array.Empty<string>(), "json", false, output, CancellationToken.None);

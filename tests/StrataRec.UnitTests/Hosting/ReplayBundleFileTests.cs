@@ -10,7 +10,7 @@ public sealed class ReplayBundleFileTests
 {
     private const string Minimal = """
         {
-          "format": "stratarec.replay_bundle/2",
+          "format": "stratarec.replay_bundle/3",
           "request": { "pipeline_id": "p", "request_id": "r", "seed": 1, "time_ms": 0, "deadline_ms": 100, "assignment": { "source": "none" } },
           "manifest": { "id": "m" },
           "runs": [
@@ -120,6 +120,24 @@ public sealed class ReplayBundleFileTests
         var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(Edit(b => b["format"] = "stratarec.replay_bundle/9")));
 
         Assert.Equal("/format", error.Pointer);
+        Assert.Contains("record the request again", error.Hint);
+    }
+
+    [Fact]
+    public void AnOlderFormat_IsRejectedAtFormat_BeforeItsLayoutIsReadAsThisOne()
+    {
+        // A version 2 bundle recorded a thrown exception type as a string; version 3 reads an object there.
+        var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(Edit(b =>
+        {
+            b["format"] = "stratarec.replay_bundle/2";
+            b["runs"]![0]!["model_calls"] = JsonNode.Parse("""
+                [{ "seq": 1, "node": "rank", "model": "m", "batch_size": 1, "status": "error", "threw": true,
+                   "error_type": "System.InvalidOperationException", "input_digests": ["00"] }]
+                """);
+        })));
+
+        Assert.Equal("/format", error.Pointer);
+        Assert.Contains("stratarec.replay_bundle/2", error.Message);
         Assert.Contains("record the request again", error.Hint);
     }
 

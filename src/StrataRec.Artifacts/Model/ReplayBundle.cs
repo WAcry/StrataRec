@@ -23,12 +23,13 @@ public sealed class ReplayBundle
 {
     /// <summary>The format this build reads and writes.</summary>
     /// <remarks>
-    /// Version 2 keeps non-finite values (version 1 wrote them as null), digests model inputs with their element type and
-    /// shape, and records thrown exception types by identity (version 1 by full name).
+    /// Version 2 keeps non-finite values (version 1 wrote them as null) and digests model inputs with their element type
+    /// and shape. Version 3 records a thrown exception type as an identity (name, defining assembly, type arguments);
+    /// version 2 had its full name only.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2";
+    public const string CurrentFormat = "stratarec.replay_bundle/3";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2\".")]
+    [Description("Format and version: \"stratarec.replay_bundle/3\".")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }

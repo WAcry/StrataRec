@@ -31,6 +31,13 @@ public static class ReplayBundleFile
     /// <exception cref="ReplayBundleException">The bundle is malformed or of another format.</exception>
     public static ReplayBundle Parse(string json, string? sourceName = null)
     {
+        // The format is checked before the structure: another version's layout would otherwise be reported as a schema
+        // error of this one, although the file is valid in the version it names.
+        if (DeclaredFormat(json) is { } declared && declared != ReplayBundle.CurrentFormat)
+        {
+            throw UnsupportedFormat(declared);
+        }
+
         ReplayBundle bundle;
         try
         {
@@ -44,12 +51,49 @@ public static class ReplayBundleFile
 
         if (bundle.Format != ReplayBundle.CurrentFormat)
         {
-            throw new ReplayBundleException("/format", $"unsupported format '{bundle.Format}'",
-                $"this build reads {ReplayBundle.CurrentFormat}; record the request again with this build");
+            throw UnsupportedFormat(bundle.Format);
         }
 
         RequiredValues.Check(bundle);
         return bundle;
+    }
+
+    private static ReplayBundleException UnsupportedFormat(string format) =>
+        new("/format", $"unsupported format '{format}'", $"this build reads {ReplayBundle.CurrentFormat}; record the request again with this build");
+
+    /// <summary>The top-level <c>format</c> string, or null when the document has none or cannot be read that far.</summary>
+    private static string? DeclaredFormat(string json)
+    {
+        try
+        {
+            var reader = new Utf8JsonReader(Encoding.UTF8.GetBytes(json), new JsonReaderOptions
+            {
+                CommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true,
+            });
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+            {
+                return null;
+            }
+
+            while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+            {
+                var isFormat = reader.ValueTextEquals("format");
+                reader.Read();
+                if (isFormat)
+                {
+                    return reader.TokenType == JsonTokenType.String ? reader.GetString() : null;
+                }
+
+                reader.Skip();
+            }
+        }
+        catch (JsonException)
+        {
+            // Malformed JSON: the full parse reports it with its position.
+        }
+
+        return null;
     }
 
     /// <exception cref="ReplayBundleException">The bundle is malformed or of another format.</exception>
