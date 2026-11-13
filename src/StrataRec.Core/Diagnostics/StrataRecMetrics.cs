@@ -43,6 +43,13 @@ public static class StrataRecMetrics
         public const string SourceDuration = "stratarec.source.duration";
         public const string SourceErrors = "stratarec.source.errors";
         public const string SourceKeys = "stratarec.source.keys";
+        public const string LocalKeys = "stratarec.local.keys";
+        public const string LocalBytes = "stratarec.local.bytes";
+        public const string LocalRecords = "stratarec.local.records";
+        public const string LocalCompactions = "stratarec.local.compactions";
+        public const string LocalLoadDuration = "stratarec.local.load.duration";
+        public const string LocalLoadFailures = "stratarec.local.load.failures";
+        public const string LocalLoadLastSuccess = "stratarec.local.load.last_success";
         public const string ModelDuration = "stratarec.model.duration";
         public const string ModelErrors = "stratarec.model.errors";
         public const string ModelFallbacks = "stratarec.model.fallbacks";
@@ -166,6 +173,46 @@ public static class StrataRecMetrics
     public static readonly Histogram<long> SourceKeys = Meter.CreateHistogram<long>(Names.SourceKeys, "{key}",
         "Keys per feature source call.", null, new InstrumentAdvice<long> { HistogramBucketBoundaries = CountBuckets });
 
+    // Local feature tables (design 6.6): one per source and entity, tagged stratarec.source and stratarec.entity.
+
+    /// <summary>
+    /// Keys a request looked up in a local table, by whether the table had them: the read hit ratio is
+    /// <c>hit / (hit + miss)</c>. A miss is a key the table does not hold, which serves the feature's default or missing
+    /// (design 6.7 layer 3). Tags: <c>stratarec.source</c>, <c>stratarec.entity</c>, <c>stratarec.outcome</c> =
+    /// <c>hit</c> | <c>miss</c>.
+    /// </summary>
+    public static readonly Counter<long> LocalKeys = Meter.CreateCounter<long>(Names.LocalKeys, "{key}", "Keys looked up in local feature tables, by hit or miss.");
+
+    /// <summary>
+    /// Bytes of a local table's current version (pages, index, dictionary; what <c>max_bytes</c> limits), recorded when
+    /// a load completes and at every checkpoint. Tags: <c>stratarec.source</c>, <c>stratarec.entity</c>.
+    /// </summary>
+    public static readonly Gauge<long> LocalBytes = Meter.CreateGauge<long>(Names.LocalBytes, "By", "Bytes of local feature tables.");
+
+    /// <summary>Records (entities with a value) of a local table, recorded with <see cref="LocalBytes"/>. Tags:
+    /// <c>stratarec.source</c>, <c>stratarec.entity</c>.</summary>
+    public static readonly Gauge<long> LocalRecords = Meter.CreateGauge<long>(Names.LocalRecords, "{record}", "Records of local feature tables.");
+
+    /// <summary>Compactions of a local table (design 6.6 local item 4). Tags: <c>stratarec.source</c>, <c>stratarec.entity</c>.</summary>
+    public static readonly Counter<long> LocalCompactions = Meter.CreateCounter<long>(Names.LocalCompactions, "{compaction}", "Compactions of local feature tables.");
+
+    /// <summary>Time to load a local table completely (one snapshot load). Tags: <c>stratarec.source</c>, <c>stratarec.entity</c>.</summary>
+    public static readonly Histogram<double> LocalLoadDuration = Seconds(Names.LocalLoadDuration, "Time to load a local feature table.");
+
+    /// <summary>
+    /// Failed runs of a local table's update source: a first load that failed (the plan needing it is not served), or a
+    /// running source that failed and is restarted. Tags: <c>stratarec.source</c>, <c>stratarec.entity</c>.
+    /// </summary>
+    public static readonly Counter<long> LocalLoadFailures = Meter.CreateCounter<long>(Names.LocalLoadFailures, "{failure}", "Failed loads of local feature tables.");
+
+    /// <summary>
+    /// When a local table last reached a complete position (a snapshot load or a stream checkpoint), in Unix seconds:
+    /// the age of its data is the current time minus this (<c>time() - stratarec_local_load_last_success</c>), which
+    /// keeps growing while a source fails or a snapshot job stops publishing. Tags: <c>stratarec.source</c>,
+    /// <c>stratarec.entity</c>.
+    /// </summary>
+    public static readonly Gauge<double> LocalLoadLastSuccess = Meter.CreateGauge<double>(Names.LocalLoadLastSuccess, "s", "Unix time of the last complete load or checkpoint of local feature tables.");
+
     // Model calls: one per batch.
 
     /// <summary>Latency of one model call (batch). Tags: <c>stratarec.model</c>.</summary>
@@ -190,7 +237,8 @@ public static class StrataRecMetrics
 
     /// <summary>
     /// Plan loads (design 10.3). Tags: <c>stratarec.pipeline</c>, <c>stratarec.outcome</c> = <c>applied</c> |
-    /// <c>compile_failed</c> | <c>rejected</c> | <c>stale</c>.
+    /// <c>compile_failed</c> | <c>rejected</c> | <c>tables_failed</c> (a local table it reads failed its first load) |
+    /// <c>stale</c>.
     /// </summary>
     public static readonly Counter<long> PlanLoads = Meter.CreateCounter<long>(Names.PlanLoads, "{load}", "Plan loads by outcome.");
 

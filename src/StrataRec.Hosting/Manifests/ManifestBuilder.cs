@@ -229,22 +229,9 @@ public static class ManifestBuilder
             }
         }
 
-        foreach (var (_, source) in request.Bindings.Sources)
+        foreach (var type in request.Bindings.RequiredTypes())
         {
-            if (source.Connector is { } connector)
-            {
-                required.Add(connector);
-            }
-        }
-
-        foreach (var (_, model) in request.Bindings.Models)
-        {
-            required.Add(model.Client);
-        }
-
-        foreach (var (_, source) in request.Bindings.CandidateSources)
-        {
-            required.Add(source.Client);
+            required.Add(type);
         }
 
         required.Add(Expressions.ExpressionCompiler.FunctionSetCapability);

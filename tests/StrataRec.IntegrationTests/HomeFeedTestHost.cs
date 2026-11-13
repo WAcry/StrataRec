@@ -1,6 +1,7 @@
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
+using StrataRec.Hosting.LocalTables;
 using StrataRec.Hosting.Workspace;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
@@ -26,6 +27,12 @@ internal sealed class HomeFeedTestHost
 
     public PlanEnvironment Environment { get; }
 
+    /// <summary>
+    /// The local tables of the plans this host compiles (the sample binds <c>author_store</c> locally). Plans compiled by
+    /// <see cref="Compile"/> keep their tables loaded for the life of the test.
+    /// </summary>
+    public LocalTableHost Tables { get; } = new();
+
     public static HomeFeedTestHost Load(string? root = null)
     {
         root ??= Samples.HomeFeed;
@@ -45,7 +52,25 @@ internal sealed class HomeFeedTestHost
         return Load(root);
     }
 
-    public PlanCompilation Compile() => PlanCompiler.Compile(Request, Environment);
+    /// <summary>Compiles the plan and loads its local tables, as the engine does before serving it.</summary>
+    public PlanCompilation Compile()
+    {
+        var lease = Tables.OpenLease();
+        var compilation = PlanCompiler.Compile(Request, Environment, lease);
+        var failures = lease.WaitLoadedAsync().GetAwaiter().GetResult();
+        Assert.True(failures.Count == 0, string.Join("\n", failures.Select(f => f.Message)));
+        return compilation;
+    }
+
+    /// <summary><see cref="PlanCompiler.CompileMerged"/> with the local tables loaded, like <see cref="Compile"/>.</summary>
+    public PlanCompilation CompileMerged(IReadOnlyList<string> arms)
+    {
+        var lease = Tables.OpenLease();
+        var compilation = PlanCompiler.CompileMerged(Request, arms, Environment, lease);
+        var failures = lease.WaitLoadedAsync().GetAwaiter().GetResult();
+        Assert.True(failures.Count == 0, string.Join("\n", failures.Select(f => f.Message)));
+        return compilation;
+    }
 
     public ExecutionPlan Plan()
     {

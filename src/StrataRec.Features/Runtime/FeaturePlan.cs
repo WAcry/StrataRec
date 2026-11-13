@@ -5,6 +5,7 @@ using StrataRec.Core.Types;
 using StrataRec.Expressions;
 using StrataRec.Features.Catalog;
 using StrataRec.Features.Connectors;
+using StrataRec.Features.Local;
 
 namespace StrataRec.Features.Runtime;
 
@@ -64,11 +65,12 @@ public sealed class FeatureRuntimeInfo
 }
 
 /// <summary>
-/// Features that can be fetched together: one source × one entity (design 6.8: same source within a wave is merged).
+/// Features that are supplied together: one source × one entity (design 6.8: same source within a wave is merged).
+/// A fetched group calls its <see cref="Connector"/>; a local group reads its <see cref="Local"/> table (design 6.6).
 /// </summary>
 /// <remarks>
-/// A group is the unit of merging, not of fetching: each fetch carries only the members the request needs at that
-/// point (late materialization), so other members can be fetched later, for other rows, or never.
+/// A group is the unit of merging, not of fetching: each fetch or read carries only the members the request needs at
+/// that point (late materialization), so other members can be supplied later, for other rows, or never.
 /// </remarks>
 public sealed class FetchGroup
 {
@@ -78,7 +80,13 @@ public sealed class FetchGroup
 
     public required EntityDefinition Entity { get; init; }
 
-    public required IFeatureSourceConnector Connector { get; init; }
+    /// <summary>The connector of a <see cref="SupplyMode.Fetch"/> group; null for a local group.</summary>
+    public IFeatureSourceConnector? Connector { get; init; }
+
+    /// <summary>The table of a <see cref="SupplyMode.Local"/> group; null for a fetched group.</summary>
+    public LocalGroupTable? Local { get; init; }
+
+    public SupplyMode Mode => Local is null ? SupplyMode.Fetch : SupplyMode.Local;
 
     public required KeyShape Shape { get; init; }
 
@@ -133,16 +141,22 @@ public sealed class FeaturePlan
     public int MaxWave { get; }
 
     /// <summary>
-    /// Builds the plan: groups physical features by (source, entity), creates connectors from the bindings and
-    /// computes fetch waves. Problems (unbound sources, unsupported key shapes) are reported to <paramref name="diagnostics"/>.
+    /// Builds the plan: groups physical features by (source, entity), resolves each group's supply from the bindings
+    /// (<see cref="FeatureSourceResolver"/>: a connector, or a local table from <paramref name="localTables"/>) and
+    /// computes fetch waves. Problems (unbound sources, wrong settings, unsupported key shapes) are reported to
+    /// <paramref name="diagnostics"/>.
     /// </summary>
+    /// <param name="updateSources">Update-source factories for local bindings; null has the built-in ones.</param>
+    /// <param name="localTables">Where local tables come from; null gives tables that are never loaded (compiling without serving).</param>
     public static FeaturePlan Create(
         IReadOnlyList<FeatureRuntimeInfo> features,
         SourceBindingArtifact bindings,
         FeatureConnectorRegistry connectors,
         Func<string, int> contextIdOfRequestInput,
         DiagnosticBag diagnostics,
-        string? baseDirectory)
+        string? baseDirectory,
+        FeatureUpdateSourceRegistry? updateSources = null,
+        ILocalTableProvider? localTables = null)
     {
         var byName = new Dictionary<string, FeatureRuntimeInfo>(StringComparer.Ordinal);
         var grouped = new SortedDictionary<(string Source, string Entity), List<FeatureRuntimeInfo>>(GroupKeyComparer.Instance);
@@ -165,7 +179,9 @@ public sealed class FeaturePlan
         }
 
         var groups = new List<FetchGroup>();
-        var connectorCache = new Dictionary<string, IFeatureSourceConnector>(StringComparer.Ordinal);
+        var resolver = new FeatureSourceResolver(
+            bindings, connectors, updateSources ?? FeatureUpdateSourceRegistry.CreateDefault(), localTables ?? UnloadedLocalTables.Instance,
+            baseDirectory, diagnostics);
 
         foreach (var (groupKey, memberList) in grouped)
         {
@@ -173,44 +189,9 @@ public sealed class FeaturePlan
             memberList.Sort(static (a, b) => string.CompareOrdinal(a.Definition.Name, b.Definition.Name));
             var members = memberList.ToArray();
             var entity = members[0].Definition.Entity;
-            var pointer = members[0].Definition.Pointer + "/source";
-            if (!bindings.Sources.TryGetValue(sourceName, out var binding))
+            if (resolver.Source(sourceName, members[0].Definition.Pointer + "/source") is not { } supply)
             {
-                diagnostics.Error("SOURCE_UNBOUND", "catalog", pointer,
-                    $"Feature source '{sourceName}' has no binding in environment '{bindings.Environment}'.",
-                    NameSuggestions.DidYouMean(sourceName, bindings.Sources.Keys) ?? "add it under 'sources' in the bindings artifact");
                 continue;
-            }
-
-            if (binding.Mode is not (null or "fetch"))
-            {
-                diagnostics.Error("SOURCE_MODE_UNSUPPORTED", $"bindings:{bindings.Environment}", "/sources/" + sourceName + "/mode",
-                    $"Supply mode '{binding.Mode}' is not available in this build yet.", "use mode 'fetch'");
-                continue;
-            }
-
-            if (!connectorCache.TryGetValue(sourceName, out var connector))
-            {
-                var type = binding.Connector ?? string.Empty;
-                if (!connectors.TryGet(type, out var factory))
-                {
-                    diagnostics.Error("CONNECTOR_UNKNOWN", $"bindings:{bindings.Environment}", "/sources/" + sourceName + "/connector",
-                        $"Connector type '{type}' is not registered in this binary.",
-                        NameSuggestions.DidYouMean(type, connectors.Types) ?? $"registered: {string.Join(", ", connectors.Types)}");
-                    continue;
-                }
-
-                try
-                {
-                    connector = factory.Create(sourceName, binding.Settings, baseDirectory);
-                }
-                catch (Exception ex) when (ex is FormatException or IOException or System.Text.Json.JsonException or InvalidOperationException)
-                {
-                    diagnostics.Error("CONNECTOR_CONFIG", $"bindings:{bindings.Environment}", "/sources/" + sourceName, ex.Message);
-                    continue;
-                }
-
-                connectorCache[sourceName] = connector;
             }
 
             var shape = entity.Kind switch
@@ -219,10 +200,18 @@ public sealed class FeaturePlan
                 EntityKind.Cross => KeyShape.Cross,
                 _ => KeyShape.Many,
             };
-            if (!connector.Supports(shape))
+            LocalGroupTable? local = null;
+            if (supply.Mode == SupplyMode.Local)
             {
-                diagnostics.Error("CONNECTOR_SHAPE", $"bindings:{bindings.Environment}", "/sources/" + sourceName,
-                    $"Connector '{connector.ConnectorType}' does not support {shape} lookups needed by entity '{entity.Name}'.");
+                if ((local = resolver.LocalTable(supply, entity, members)) is null)
+                {
+                    continue;
+                }
+            }
+            else if (!supply.Connector!.Supports(shape))
+            {
+                diagnostics.Error("CONNECTOR_SHAPE", $"bindings:{bindings.Environment}", supply.Pointer,
+                    $"Connector '{supply.Connector.ConnectorType}' does not support {shape} lookups needed by entity '{entity.Name}'.");
                 continue;
             }
 
@@ -251,10 +240,11 @@ public sealed class FeaturePlan
                 Index = groups.Count,
                 SourceName = sourceName,
                 Entity = entity,
-                Connector = connector,
+                Connector = supply.Connector,
+                Local = local,
                 Shape = shape,
-                TimeoutMs = binding.TimeoutMs ?? 50,
-                MaxBatch = binding.MaxBatch is > 0 ? binding.MaxBatch.Value : 1000,
+                TimeoutMs = supply.TimeoutMs,
+                MaxBatch = supply.MaxBatch,
                 KeyFeatureIndex = keyFeature,
                 ContextKeyId = entity.ContextKeyInput is null ? -1 : contextIdOfRequestInput(entity.ContextKeyInput),
                 FeatureIndices = featureIndices,

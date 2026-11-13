@@ -67,6 +67,14 @@ public sealed class FeatureDefinition
 
     public ScalarValue Default { get; init; }
 
+    /// <summary>
+    /// What a row or request gets when the feature has no value (design 6.7 layer 3): the default, or missing. The one
+    /// definition every supply path applies — a key a connector did not answer, a key a local table does not hold, a
+    /// record without the field, a missing context or foreign key, a non-finite or out-of-range value — so a feature means
+    /// the same whether it is fetched, read locally or replayed.
+    /// </summary>
+    public ScalarValue Absent => HasDefault ? Default : ScalarValue.Missing;
+
     /// <summary>ColumnExpr source for derived features.</summary>
     public string? Expr { get; init; }
 

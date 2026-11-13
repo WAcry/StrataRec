@@ -22,7 +22,7 @@ public sealed class MetricsTests
     private static readonly HashSet<string> BoundedTagKeys = new(StringComparer.Ordinal)
     {
         StrataRecTags.Pipeline, StrataRecTags.Node, StrataRecTags.Source, StrataRecTags.SourceKind, StrataRecTags.Model,
-        StrataRecTags.Outcome, StrataRecTags.Arm, StrataRecTags.Column, StrataRecTags.Tap, StrataRecTags.LogDelivery,
+        StrataRecTags.Outcome, StrataRecTags.Arm, StrataRecTags.Column, StrataRecTags.Tap, StrataRecTags.LogDelivery, StrataRecTags.Entity,
     };
 
     [Fact]
@@ -66,14 +66,26 @@ public sealed class MetricsTests
             Assert.Equal(node.RowsOut, Assert.Single(capture.Of(StrataRecMetrics.Names.NodeRowsOut), m => TagsEqual(m, tags)).Value);
         }
 
-        // Data sources: both candidate sources and the feature sources the request reads; key counts respect max_batch.
+        // Data sources: both candidate sources and the fetched feature sources the request reads; key counts respect
+        // max_batch. The local author_store makes no source calls.
         var sources = capture.Of(StrataRecMetrics.Names.SourceDuration)
             .Select(m => (Tag(m, StrataRecTags.SourceKind), Tag(m, StrataRecTags.Source))).ToHashSet();
-        Assert.Superset(new HashSet<(string?, string?)> { ("candidate", "two_tower"), ("candidate", "popular"), ("feature", "item_store"), ("feature", "author_store") }, sources);
+        Assert.Superset(new HashSet<(string?, string?)> { ("candidate", "two_tower"), ("candidate", "popular"), ("feature", "item_store") }, sources);
+        Assert.DoesNotContain(("feature", "author_store"), sources);
         var itemKeys = capture.Of(StrataRecMetrics.Names.SourceKeys).Where(m => Tag(m, StrataRecTags.Source) == "item_store").ToList();
         Assert.NotEmpty(itemKeys);
         Assert.All(itemKeys, m => Assert.InRange(m.Value, 1, 25));
         Assert.Empty(capture.Of(StrataRecMetrics.Names.SourceErrors));
+
+        // Local table: the load the engine waited for (11 authors in the snapshot) and the keys the request looked up.
+        var author = new Dictionary<string, object?> { [StrataRecTags.Source] = "author_store", [StrataRecTags.Entity] = "author" };
+        Assert.Contains(capture.Of(StrataRecMetrics.Names.LocalRecords), m => TagsEqual(m, author) && m.Value == 11);
+        Assert.Contains(capture.Of(StrataRecMetrics.Names.LocalBytes), m => TagsEqual(m, author) && m.Value > 0);
+        Assert.Contains(capture.Of(StrataRecMetrics.Names.LocalLoadDuration), m => TagsEqual(m, author) && m.Value > 0);
+        Assert.Contains(capture.Of(StrataRecMetrics.Names.LocalLoadLastSuccess), m => TagsEqual(m, author) && m.Value > 1.7e9);
+        var authorKeys = capture.Of(StrataRecMetrics.Names.LocalKeys).Where(m => Tag(m, StrataRecTags.Source) == "author_store").ToList();
+        Assert.Contains(authorKeys, m => Tag(m, StrataRecTags.Outcome) == "hit" && m.Value > 0);
+        Assert.All(authorKeys, m => Assert.Contains(Tag(m, StrataRecTags.Outcome), new[] { "hit", "miss" }));
 
         // Model calls: the 30 coarse survivors fit one batch.
         Assert.Single(capture.Of(StrataRecMetrics.Names.ModelDuration), m => Tag(m, StrataRecTags.Model) == "ctr_model");
@@ -299,14 +311,8 @@ public sealed class MetricsTests
         File.WriteAllText(bindings, edited);
     }
 
-    internal static void FailAuthorStore(string root)
-    {
-        var bindings = Path.Combine(root, "bindings", "local.jsonc");
-        var text = File.ReadAllText(bindings);
-        var edited = text.Replace("\"data_file\": \"fixtures/authors.json\" }", "\"data_file\": \"fixtures/authors.json\", \"fail\": true }", StringComparison.Ordinal);
-        Assert.NotEqual(text, edited);
-        File.WriteAllText(bindings, edited);
-    }
+    /// <summary>Binds <c>author_store</c> (local in the sample) to a fetched source that fails every call.</summary>
+    internal static void FailAuthorStore(string root) => SampleBindings.Rebind(root, "author_store", """{ "connector": "memory@1", "data": {}, "fail": true }""");
 
     /// <summary>Design 13.1 label rules: bounded string tags only; durations never carry outcomes; arms only on request-level instruments.</summary>
     private static void AssertTagRules(IEnumerable<Measured> measurements)
@@ -544,10 +550,11 @@ public sealed class EventLogTests
         });
         Assert.False(engine.Load(broken.Request).Applied);
 
+        // The sample's local author table is loaded once, before the first plan is applied; the second load takes it over.
         var entries = logging.Entries.ToList();
-        Assert.Equal(new[] { 1001, 1004, 1002 }, entries.Select(e => e.EventId.Id));
-        Assert.Equal(LogLevel.Error, entries[2].Level);
-        Assert.Contains("no_such_feature", (string)entries[2].State["FirstError"]!);
+        Assert.Equal(new[] { 1201, 1001, 1004, 1002 }, entries.Select(e => e.EventId.Id));
+        Assert.Equal(LogLevel.Error, entries[3].Level);
+        Assert.Contains("no_such_feature", (string)entries[3].State["FirstError"]!);
     }
 
     private static string? Event(LogEntry entry) => entry.State.TryGetValue("Event", out var value) ? value?.ToString() : null;

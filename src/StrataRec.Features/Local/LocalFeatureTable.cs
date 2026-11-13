@@ -1,6 +1,10 @@
+using StrataRec.Core.Diagnostics;
+
 namespace StrataRec.Features.Local;
 
-/// <summary>Limits and tuning of one <see cref="LocalFeatureTable"/>.</summary>
+/// <summary>Limits and tuning of one <see cref="LocalFeatureTable"/>. A served table takes its options from its binding
+/// (<c>max_bytes</c>) and the engine's defaults, so the binding decides them, and <see cref="LocalTableSpec.Identity"/>
+/// covers them by covering the binding.</summary>
 public sealed class LocalFeatureTableOptions
 {
     public static LocalFeatureTableOptions Default { get; } = new();
@@ -80,9 +84,12 @@ public sealed class LocalFeatureTableOptions
 /// </remarks>
 public sealed class LocalFeatureTable
 {
+    private readonly TaskCompletionSource _loaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly KeyValuePair<string, object?>[] _tags;
     private TableVersion _current;
     private UpdatePosition _position = UpdatePosition.Empty;
     private long _compactions;
+    private long _completions;
 
     public LocalFeatureTable(LocalTableSchema schema, LocalFeatureTableOptions? options = null)
     {
@@ -108,6 +115,9 @@ public sealed class LocalFeatureTable
         }
 
         Writer = new LocalTableWriter(this, layout, Options, _current);
+        _tags = [new(StrataRecTags.Source, schema.Source), new(StrataRecTags.Entity, schema.Entity)];
+        HitTags = [_tags[0], _tags[1], new(StrataRecTags.Outcome, "hit")];
+        MissTags = [_tags[0], _tags[1], new(StrataRecTags.Outcome, "miss")];
     }
 
     public LocalTableSchema Schema { get; }
@@ -120,8 +130,33 @@ public sealed class LocalFeatureTable
     /// <summary>The position of the last checkpoint or completed reload: every update before it is in the table.</summary>
     public UpdatePosition Position => Volatile.Read(ref _position);
 
+    /// <summary>
+    /// Checkpoints and completed reloads so far: grows whenever the source makes progress, even when the position stays
+    /// the same (a snapshot source without a stream completes every reload at <see cref="UpdatePosition.Empty"/>).
+    /// </summary>
+    public long Completions => Volatile.Read(ref _completions);
+
     /// <summary>Compactions so far (including those of versions a reload was building).</summary>
     public long Compactions => Volatile.Read(ref _compactions);
+
+    /// <summary>
+    /// True once the table holds a complete load: its first reload completed or its first checkpoint was written.
+    /// Before that it is empty, and a request that reads it fails the features it needs instead of serving them as
+    /// missing (an empty table would answer "no value" for every key).
+    /// </summary>
+    public bool IsLoaded => _loaded.Task.IsCompleted;
+
+    /// <summary>Completes when <see cref="IsLoaded"/> becomes true (never faults; a failed load is the source's error).</summary>
+    public Task WhenLoaded => _loaded.Task;
+
+    /// <summary>Metric tags of the table (design 13.1): <c>stratarec.source</c>, <c>stratarec.entity</c>; built once with the
+    /// table, so recording a measurement allocates nothing. Also for whoever runs the table's source (its failures).</summary>
+    public ReadOnlySpan<KeyValuePair<string, object?>> MetricTags => _tags;
+
+    /// <summary><see cref="MetricTags"/> with <c>stratarec.outcome</c> <c>hit</c> or <c>miss</c>, for <see cref="StrataRecMetrics.LocalKeys"/>.</summary>
+    internal KeyValuePair<string, object?>[] HitTags { get; }
+
+    internal KeyValuePair<string, object?>[] MissTags { get; }
 
     /// <summary>
     /// The current version. A request pins it once per table and does all its lookups against it, so the arrays it
@@ -132,7 +167,28 @@ public sealed class LocalFeatureTable
     /// <summary>Makes a fully built version current (release: its arrays are complete before a reader can pin it).</summary>
     internal void Publish(TableVersion version) => Volatile.Write(ref _current, version);
 
-    internal void SetPosition(UpdatePosition position) => Volatile.Write(ref _position, position);
+    /// <summary>
+    /// A checkpoint or a completed reload: every update before <paramref name="position"/> is visible. The table counts
+    /// as loaded from the first one; its size and the time are recorded at each (design 13.1), so the age of the data is
+    /// the time since the last one.
+    /// </summary>
+    internal void SetPosition(UpdatePosition position)
+    {
+        Volatile.Write(ref _position, position);
+        Volatile.Write(ref _completions, _completions + 1);
+        var version = Pin();
+        StrataRecMetrics.LocalBytes.Record(version.Bytes, _tags);
+        StrataRecMetrics.LocalRecords.Record(version.RecordCount, _tags);
+        StrataRecMetrics.LocalLoadLastSuccess.Record(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0, _tags);
+        _loaded.TrySetResult();
+    }
 
-    internal void CountCompaction() => Volatile.Write(ref _compactions, _compactions + 1);
+    /// <summary>A reload completed and was published after <paramref name="duration"/>.</summary>
+    internal void CountLoad(TimeSpan duration) => StrataRecMetrics.LocalLoadDuration.Record(duration.TotalSeconds, _tags);
+
+    internal void CountCompaction()
+    {
+        Volatile.Write(ref _compactions, _compactions + 1);
+        StrataRecMetrics.LocalCompactions.Add(1, _tags);
+    }
 }
