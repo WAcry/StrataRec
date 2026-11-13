@@ -27,6 +27,7 @@
     <ProjectReference Include="..\..\src\StrataRec.Experiments\StrataRec.Experiments.csproj" />
     <ProjectReference Include="..\..\src\StrataRec.Hosting\StrataRec.Hosting.csproj" />
     <ProjectReference Include="..\..\src\StrataRec.Cli\StrataRec.Cli.csproj" />
+    <ProjectReference Include="..\..\src\StrataRec.Redis\StrataRec.Redis.csproj" />
   </ItemGroup>
 
   <ItemGroup>

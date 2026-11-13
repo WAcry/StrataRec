@@ -577,10 +577,7 @@ internal sealed class FeatureSourceResolver
         {
             _diagnostics.Error("DISTRIBUTED_CACHE_UNKNOWN", _artifact, pointer + (shared.Store is null ? string.Empty : "/store"),
                 shared.Store is null ? "The distributed cache names no 'store'." : $"Distributed cache store type '{type}' is not registered in this binary.",
-                NameSuggestions.DidYouMean(type, _cacheStores.Types)
-                    ?? (_cacheStores.Types.GetEnumerator().MoveNext()
-                        ? $"registered: {string.Join(", ", _cacheStores.Types)}"
-                        : "this binary registers no distributed cache store: add StrataRec.Redis (redis@1) to the host's PlanEnvironment.CacheStores, or remove 'distributed'"));
+                NameSuggestions.DidYouMean(type, _cacheStores.Types) ?? StoreHint(type));
             return false;
         }
 
@@ -596,6 +593,16 @@ internal sealed class FeatureSourceResolver
         }
 
         return ok;
+    }
+
+    /// <summary>What to do about a store type the binary does not have: what it has, and where <c>redis@1</c> comes from.</summary>
+    private string StoreHint(string type)
+    {
+        var registered = string.Join(", ", _cacheStores.Types);
+        return (registered.Length == 0 ? "this binary registers no distributed cache store" : "registered: " + registered)
+            + (type.StartsWith("redis@", StringComparison.Ordinal)
+                ? "; redis@1 is in the package StrataRec.Redis: the host adds it with PlanEnvironment.CacheStores.AddRedis()"
+                : "; or remove 'distributed' to cache in process only");
     }
 
     /// <summary>The binding's <c>max_bytes</c> (required in modes local and cache); false (diagnosed) when missing or not a positive size.</summary>

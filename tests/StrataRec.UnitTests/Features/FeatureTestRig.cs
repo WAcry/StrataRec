@@ -51,6 +51,14 @@ internal sealed class FeatureTestRig
     private readonly Dictionary<string, IFeatureSourceConnector> _connectors = new(StringComparer.Ordinal);
     private readonly TestLocalTables _localTables = new();
     private readonly Dictionary<string, IFeatureCacheStore> _cacheStores = new(StringComparer.Ordinal);
+
+    public FeatureTestRig()
+    {
+        CacheStores = new FeatureCacheStoreRegistry().Add(new TestCacheStoreFactory(_cacheStores));
+    }
+
+    /// <summary>The distributed cache stores the plan's cache bindings may name: <c>test_cache@1</c>, and what a test adds.</summary>
+    public FeatureCacheStoreRegistry CacheStores { get; }
     private int _contextCount = 1; // context id 0 is the request input user_id
 
     public FeaturePlan Plan { get; private set; } = null!;
@@ -236,7 +244,7 @@ internal sealed class FeatureTestRig
             baseDirectory,
             updateSources,
             _localTables,
-            cacheStores: new FeatureCacheStoreRegistry().Add(new TestCacheStoreFactory(_cacheStores)),
+            cacheStores: CacheStores,
             clock: Clock);
         return diagnostics;
     }

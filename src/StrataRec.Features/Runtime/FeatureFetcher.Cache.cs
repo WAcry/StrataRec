@@ -532,7 +532,7 @@ public sealed partial class FeatureFetcher
             }
         }
 
-        var records = new CacheRecordWriter(read.Cache.Layout, count * 64);
+        var records = new CacheRecordWriter(read.Cache.Layout, count * read.Cache.Layout.TypicalSize);
         var spans = _memory.Rent<(int Offset, int Length)>(count);
         for (var c = 0; c < chunks; c++)
         {

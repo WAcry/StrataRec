@@ -361,7 +361,25 @@ internal sealed class CacheRecordLayout
         }
 
         Fingerprint = CacheRecord.Fingerprint(schema);
+        var size = CacheRecord.PrefixSize(FieldCount);
+        for (var f = 0; f < FieldCount; f++)
+        {
+            size += Kinds[f] switch
+            {
+                StorageKind.Bool => 1,
+                StorageKind.Int32 or StorageKind.Float32 => 4,
+                StorageKind.Int64 or StorageKind.Float64 => 8,
+                StorageKind.Vector => 4 * Dimensions[f],
+                _ => 4 + 16, // a length and a short value
+            };
+        }
+
+        TypicalSize = size;
     }
+
+    /// <summary>The size of a record with every field present and short variable-length values: what a batch of records
+    /// is sized by up front, so that encoding it rarely grows the array.</summary>
+    public int TypicalSize { get; }
 
     public int FieldCount { get; }
 
