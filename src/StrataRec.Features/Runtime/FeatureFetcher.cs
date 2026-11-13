@@ -757,6 +757,27 @@ public sealed class FeatureFetcher
                 }
             }
         }
+        else if (!feature.Type.Nullable && column.Validity is not null)
+        {
+            // A non-nullable expression leaves a row missing only where an out-of-range int32 value was replaced at the
+            // write. With no default to take, the feature cannot be served as typed: readers compiled against a
+            // non-nullable type skip validity checks (same rule as a node output, design 4.6).
+            var missing = 0;
+            foreach (var row in span)
+            {
+                if (!column.IsValid(row))
+                {
+                    missing++;
+                }
+            }
+
+            if (missing > 0)
+            {
+                _state[feature.Index] = FeatureState.Failed;
+                _errors[feature.Index] = $"derived feature '{definition.Name}' produced {missing} value(s) outside the int32 range of its " +
+                    $"{feature.Type} type but is non-nullable and declares no default; declare a default or make the expression nullable";
+            }
+        }
 
         if (ColumnValues.IsFloat(column))
         {

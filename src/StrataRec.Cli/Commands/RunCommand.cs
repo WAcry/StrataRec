@@ -74,7 +74,7 @@ internal static class RunCommand
                     continue;
                 }
 
-                if (!ConfigValues.TryToScalar(value, field.Type, out var scalar, out var error))
+                if (!ConfigValues.TryToScalar(value, field.InputType, out var scalar, out var error))
                 {
                     Console.Error.WriteLine($"{requestPath}: /inputs/{name}: {error}");
                     return 2;

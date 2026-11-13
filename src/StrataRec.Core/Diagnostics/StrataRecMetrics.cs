@@ -129,7 +129,7 @@ public static class StrataRecMetrics
     /// <summary>
     /// Node outcomes (design 5.6). Tags: <c>stratarec.pipeline</c>, <c>stratarec.node</c>, <c>stratarec.outcome</c> =
     /// <c>succeeded</c> | <c>degraded</c> | <c>fallback</c> | <c>skipped_when</c> | <c>skipped_deadline</c> |
-    /// <c>skipped_input</c> | <c>failed</c>.
+    /// <c>skipped_input</c> | <c>failed</c> | <c>aborted</c> (the caller cancelled the request while the node ran).
     /// </summary>
     public static readonly Counter<long> NodeOutcomes = Meter.CreateCounter<long>(Names.NodeOutcomes, "{node}", "Node outcomes by category.");
 

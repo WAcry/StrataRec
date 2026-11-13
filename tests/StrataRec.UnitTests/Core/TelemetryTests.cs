@@ -116,6 +116,41 @@ public sealed class RequestEventLogTests
         StrataRecMetrics.NodeOutcomes.Add(1, tags);
     }
 
+    [Fact]
+    public async Task AllFailedCalls_RecordedWhileFlushing_NeverReadAsRecovery()
+    {
+        // Review 6 #3: a call and its failure counted separately could land in different windows, so a window of only
+        // failed calls looked healthy ("recovered") or held more failures than calls.
+        var logger = new ListLogger();
+        using var events = new RequestEventLog(logger, autoFlush: false);
+        var target = new IoTarget(IoKind.FeatureSource, "store");
+        using var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+
+        var producers = new Task[Math.Max(2, Environment.ProcessorCount - 1)];
+        for (var p = 0; p < producers.Length; p++)
+        {
+            producers[p] = Task.Run(() =>
+            {
+                while (!stop.IsCancellationRequested)
+                {
+                    events.RecordIo(target, IoOutcome.Error, "req", "down");
+                }
+            });
+        }
+
+        while (!stop.IsCancellationRequested)
+        {
+            events.Flush();
+        }
+
+        await Task.WhenAll(producers);
+        events.Flush();
+
+        Assert.DoesNotContain(logger.Entries, e => e.EventId.Id == 2003); // recovered
+        var failing = Assert.Single(logger.Entries, e => e.EventId.Id == 2002);
+        Assert.Equal(failing.State["Calls"], failing.State["Failures"]);
+    }
+
     private static void Calls(RequestEventLog events, IoTarget target, int ok, int failed)
     {
         for (var i = 0; i < ok; i++)

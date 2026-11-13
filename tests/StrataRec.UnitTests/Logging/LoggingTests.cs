@@ -309,6 +309,24 @@ public sealed class LogPipelineTests
         stuck.SetResult();
     }
 
+    [Fact]
+    public async Task DrainTimeout_SettlesUnreadBatchesAsDropped()
+    {
+        // Review 6 #4: batches still queued when the drain timeout cancels the loop were never settled, so pending (and
+        // the queue-depth series) stayed up and FlushAsync waited forever.
+        var sink = new BlockingSink(); // honors cancellation
+        var pipeline = new LogPipeline(sink, new LogPipelineOptions { MaxBatchesPerWrite = 1, DrainTimeout = TimeSpan.FromMilliseconds(20) });
+        for (var i = 0; i < 3; i++)
+        {
+            Assert.Equal(LogAdmission.Queued, pipeline.Submit(Batch("served", LogDelivery.Durable)));
+        }
+
+        await pipeline.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        await pipeline.FlushAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains(pipeline.Stats(), s => s is { TapId: "served", Delivered: 0, Dropped: 3 });
+    }
+
     private sealed class StuckSink(Task release) : ILogSink
     {
         private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);

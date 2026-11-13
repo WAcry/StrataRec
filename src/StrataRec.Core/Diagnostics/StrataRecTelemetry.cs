@@ -73,6 +73,9 @@ public static class StrataRecTags
 
     public const string Fallback = "stratarec.node.fallback";
 
+    /// <summary>Content hash of the fallback node variant that served (design 12.3).</summary>
+    public const string FallbackVariant = "stratarec.node.fallback.variant";
+
     public const string ArmsAssigned = "stratarec.arms.assigned";
 
     public const string ExperimentsTriggered = "stratarec.experiments.triggered";

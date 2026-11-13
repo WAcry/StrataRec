@@ -225,6 +225,11 @@ public sealed partial class RequestEventLog : IDisposable
     }
 
     /// <summary>Calls and failures of one dependency in the current window, and the verdict of the last window with calls.</summary>
+    /// <remarks>
+    /// A call and its failure are added and taken under one lock: counted separately, a flush between the two increments
+    /// moves the failure into the next window without its call, and the verdicts of both windows go wrong (review 6).
+    /// The lock is per dependency and held for a few instructions.
+    /// </remarks>
     private sealed class HealthWindow
     {
         private long _calls;
@@ -236,19 +241,29 @@ public sealed partial class RequestEventLog : IDisposable
 
         public void Add(bool failed, string? error)
         {
-            Interlocked.Increment(ref _calls);
-            if (failed)
+            lock (this)
             {
-                Interlocked.Increment(ref _failures);
-                _error ??= error;
+                _calls++;
+                if (failed)
+                {
+                    _failures++;
+                    _error ??= error;
+                }
             }
         }
 
         public long Take(out long failures, out string? error)
         {
-            failures = Interlocked.Exchange(ref _failures, 0);
-            error = Interlocked.Exchange(ref _error, null);
-            return Interlocked.Exchange(ref _calls, 0);
+            lock (this)
+            {
+                var calls = _calls;
+                failures = _failures;
+                error = _error;
+                _calls = 0;
+                _failures = 0;
+                _error = null;
+                return calls;
+            }
         }
     }
 }

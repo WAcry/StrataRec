@@ -66,6 +66,19 @@ public sealed class ContextField
 
     public required ColumnType Type { get; init; }
 
+    /// <summary>
+    /// For request inputs, the type as declared in <c>request_schema</c>. <see cref="Type"/> is its promoted form, which
+    /// expressions see; incoming values are validated against the declared type, so an <c>int32</c> or
+    /// <c>list&lt;int32&gt;</c> input outside the int32 range is rejected rather than passed through.
+    /// </summary>
+    public ColumnType InputType
+    {
+        get => _inputType ?? Type;
+        init => _inputType = value;
+    }
+
+    private readonly ColumnType? _inputType;
+
     public required ContextFieldKind Kind { get; init; }
 
     public int FeatureIndex { get; init; } = -1;
@@ -219,7 +232,9 @@ public sealed class PlanSchema
         return leaves;
     }
 
-    public ContextField AddRequestInput(string name, ColumnType type) => AddContext("request." + name, type, ContextFieldKind.RequestInput);
+    /// <param name="declared">The type as declared; expressions see its promoted form.</param>
+    public ContextField AddRequestInput(string name, ColumnType declared) =>
+        AddContext("request." + name, declared.Promoted(), ContextFieldKind.RequestInput, inputType: declared);
 
     public ContextField AddContextFeature(string featureName, ColumnType type, int featureIndex) =>
         AddContext(featureName, type, ContextFieldKind.Feature, featureIndex);
@@ -314,9 +329,12 @@ public sealed class PlanSchema
         return column;
     }
 
-    private ContextField AddContext(string name, ColumnType type, ContextFieldKind kind, int featureIndex = -1)
+    private ContextField AddContext(string name, ColumnType type, ContextFieldKind kind, int featureIndex = -1, ColumnType? inputType = null)
     {
-        var field = new ContextField { Id = _contextList.Count, Name = name, Type = type, Kind = kind, FeatureIndex = featureIndex };
+        var field = new ContextField
+        {
+            Id = _contextList.Count, Name = name, Type = type, InputType = inputType ?? type, Kind = kind, FeatureIndex = featureIndex,
+        };
         _context.Add(name, field);
         _contextList.Add(field);
         return field;

@@ -23,6 +23,9 @@ internal enum NodeOutcomeCategory : byte
 
     /// <summary>The node failed (and was skipped, or failed the request).</summary>
     Failed,
+
+    /// <summary>The request was cancelled by its caller (or hit a defect) while the node was running.</summary>
+    Aborted,
 }
 
 /// <summary>
@@ -32,7 +35,7 @@ internal enum NodeOutcomeCategory : byte
 internal sealed class PlanTelemetry
 {
     private static readonly string[] CategoryNames =
-        { "succeeded", "degraded", "fallback", "skipped_when", "skipped_deadline", "skipped_input", "failed" };
+        { "succeeded", "degraded", "fallback", "skipped_when", "skipped_deadline", "skipped_input", "failed", "aborted" };
 
     private PlanTelemetry(KeyValuePair<string, object?>[] pipeline, NodeTelemetry[] nodes)
     {

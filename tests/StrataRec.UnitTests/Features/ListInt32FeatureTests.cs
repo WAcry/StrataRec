@@ -147,6 +147,26 @@ public class ListInt32FeatureTests
         Assert.Equal(0, request.Fetcher.NonFiniteReplaced);
     }
 
+    [Theory]
+    [InlineData("col.entity_id * 1500000000", "int32")]
+    [InlineData("col.entity_id > 1 ? [3000000000] : [7]", "list<int32>")]
+    public async Task DerivedInt32_OutOfRange_WithoutDefaultOrNullability_FailsTheFeature(string expr, string type)
+    {
+        // Review 6 #1: the replacement "missing" cannot live in a non-nullable feature; readers would skip validity and
+        // read whatever the storage holds.
+        var rig = new FeatureTestRig();
+        var feature = rig.Derived("item.narrow", FeatureTestRig.Item, ColumnType.Parse(type), Compile(expr), Array.Empty<int>());
+        rig.Build();
+        var request = rig.NewRequest(ThreeItems);
+
+        var result = await request.EnsureAsync(feature);
+
+        Assert.Equal(FeatureState.Failed, result.State);
+        Assert.Contains("outside the int32 range", result.Error);
+        Assert.Contains("declare a default", result.Error);
+        Assert.Equal(2, request.Fetcher.Counters.OutOfRange);
+    }
+
     [Fact]
     public async Task DerivedListInt32_WithAnOutOfRangeElement_IsReplacedAsAWhole()
     {

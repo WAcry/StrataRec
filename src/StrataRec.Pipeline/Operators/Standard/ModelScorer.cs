@@ -352,6 +352,8 @@ public sealed class ModelScorerFactory : IOperatorFactory
             }
             catch (Exception ex)
             {
+                // A client's own transport timeout is a timeout, as for feature sources.
+                outcome = ex is TimeoutException ? IoOutcome.Timeout : IoOutcome.Error;
                 error = ex.Message;
                 throw;
             }

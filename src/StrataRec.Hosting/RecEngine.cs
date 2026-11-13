@@ -309,7 +309,7 @@ public sealed class RecEngine : IRecEngine
             (pipeline?.Telemetry ?? RequestTelemetry.Unknown).Record(Stopwatch.GetElapsedTime(started).TotalSeconds, arms, failed, empty, degraded && !failed);
             if (activity is not null)
             {
-                RequestTelemetry.EndSpan(activity, result, degraded && !failed);
+                RequestTelemetry.EndSpan(activity, result, degraded && !failed, pipeline?.Plan, arms);
             }
         }
     }

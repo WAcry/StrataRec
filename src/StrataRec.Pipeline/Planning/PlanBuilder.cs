@@ -135,7 +135,7 @@ public sealed class PlanBuilder
                 continue;
             }
 
-            var field = schema.AddRequestInput(name, type.Promoted());
+            var field = schema.AddRequestInput(name, type);
             _requestInputs[name] = field;
             inputTypes[name] = type;
         }

@@ -272,24 +272,46 @@ public sealed partial class LogPipeline : IAsyncDisposable
     {
         var buffer = new List<LogBatch>(_options.MaxBatchesPerWrite);
         var token = _stop.Token;
-        while (await reader.WaitToReadAsync(token).ConfigureAwait(false))
+        var depthTags = durable ? DurableTags : BestEffortTags;
+        try
         {
-            buffer.Clear();
-            while (buffer.Count < _options.MaxBatchesPerWrite && reader.TryRead(out var batch))
+            while (await reader.WaitToReadAsync(token).ConfigureAwait(false))
             {
-                buffer.Add(batch);
+                buffer.Clear();
+                while (buffer.Count < _options.MaxBatchesPerWrite && reader.TryRead(out var batch))
+                {
+                    buffer.Add(batch);
+                }
+
+                var rejected = new HashSet<LogBatch>(ReferenceEqualityComparer.Instance);
+                var delivered = await WriteAsync(buffer, durable, rejected, token).ConfigureAwait(false);
+                foreach (var batch in buffer)
+                {
+                    var ok = delivered && !rejected.Contains(batch);
+                    Count(batch.TapId, ok ? 1 : 0, ok ? 0 : 1);
+                }
+
+                Interlocked.Add(ref _pending, -buffer.Count);
+                StrataRecMetrics.LogQueueDepth.Add(-buffer.Count, depthTags);
+            }
+        }
+        finally
+        {
+            // The drain timeout cut shutdown short: batches still queued will never be written. Settle them as dropped,
+            // or pending, flush waiters and the process-wide queue-depth series would wait for them forever. Only this
+            // loop reads its queue, so nothing is settled twice.
+            var abandoned = 0;
+            while (reader.TryRead(out var batch))
+            {
+                Count(batch.TapId, 0, 1);
+                abandoned++;
             }
 
-            var rejected = new HashSet<LogBatch>(ReferenceEqualityComparer.Instance);
-            var delivered = await WriteAsync(buffer, durable, rejected, token).ConfigureAwait(false);
-            foreach (var batch in buffer)
+            if (abandoned > 0)
             {
-                var ok = delivered && !rejected.Contains(batch);
-                Count(batch.TapId, ok ? 1 : 0, ok ? 0 : 1);
+                Interlocked.Add(ref _pending, -abandoned);
+                StrataRecMetrics.LogQueueDepth.Add(-abandoned, depthTags);
             }
-
-            Interlocked.Add(ref _pending, -buffer.Count);
-            StrataRecMetrics.LogQueueDepth.Add(-buffer.Count, durable ? DurableTags : BestEffortTags);
         }
     }
 

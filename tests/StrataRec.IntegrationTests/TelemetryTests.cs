@@ -1,11 +1,14 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Hosting;
 using StrataRec.Logging;
+using StrataRec.Models;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Pipeline.Sources;
 
 namespace StrataRec.IntegrationTests;
 
@@ -122,6 +125,12 @@ public sealed class MetricsTests
             }
 
             Assert.Single(capture.Of(StrataRecMetrics.Names.RequestErrors)); // the request itself failed
+
+            // Review 6 #5: the node the caller cut off still has its outcome, duration and rows.
+            var node = slow == "model" ? "ctr_ranker" : "recall";
+            Assert.Single(capture.Of(StrataRecMetrics.Names.NodeOutcomes), m => Tag(m, StrataRecTags.Node) == node && Tag(m, StrataRecTags.Outcome) == "aborted");
+            Assert.InRange(Assert.Single(capture.Of(StrataRecMetrics.Names.NodeDuration), m => Tag(m, StrataRecTags.Node) == node).Value, 0.2, 5);
+            Assert.Single(capture.Of(StrataRecMetrics.Names.NodeRowsIn), m => Tag(m, StrataRecTags.Node) == node);
         }
 
         // The same dependency cut off by its own timeout (model binding / node budget, source binding) is a timeout.
@@ -139,8 +148,69 @@ public sealed class MetricsTests
         }
     }
 
+    [Theory]
+    [InlineData("model")]
+    [InlineData("recall")]
+    public async Task ClientTimeoutExceptions_AreTimeouts(string client)
+    {
+        // Review 6 #6: a client's own transport timeout is a timeout, as it already was for feature sources.
+        using var capture = new MetricCapture();
+        var host = HomeFeedTestHost.Load();
+        var environment = new PlanEnvironment
+        {
+            BaseDirectory = host.Environment.BaseDirectory,
+            Models = client == "model" ? new ModelClientRegistry().Add(new TimingOutModels(new LinearModelClientFactory())) : ModelClientRegistry.CreateDefault(),
+            CandidateSources = client == "recall"
+                ? new CandidateSourceRegistry().Add(new TimingOutSources(new MemoryListCandidateSourceFactory()))
+                : CandidateSourceRegistry.CreateDefault(),
+        };
+        var engine = new RecEngine(environment);
+        Assert.True(engine.Load(host.Request, host.Workspace.ArmRanges("home_feed", "local")).Applied);
+
+        await engine.ExecuteAsync(Request("req-client-timeout"));
+
+        var errors = client == "model"
+            ? capture.Of(StrataRecMetrics.Names.ModelErrors)
+            : capture.Of(StrataRecMetrics.Names.SourceErrors).Where(m => Tag(m, StrataRecTags.SourceKind) == "candidate").ToList();
+        Assert.Equal(client == "model" ? 1 : 2, errors.Count);
+        Assert.All(errors, m => Assert.Equal("timeout", Tag(m, StrataRecTags.Outcome)));
+    }
+
+    private sealed class TimingOutModels(IModelClientFactory inner) : IModelClientFactory
+    {
+        public string ClientType => inner.ClientType;
+
+        public IModelClient Create(string modelName, IReadOnlyDictionary<string, JsonElement> settings) => new Client(inner.Create(modelName, settings));
+
+        private sealed class Client(IModelClient inner) : IModelClient
+        {
+            public string ClientType => inner.ClientType;
+
+            public ModelSignature GetSignature(string model, string? version) => inner.GetSignature(model, version);
+
+            public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
+                throw new TimeoutException("backend timed out");
+        }
+    }
+
+    private sealed class TimingOutSources(ICandidateSourceFactory inner) : ICandidateSourceFactory
+    {
+        public string ClientType => inner.ClientType;
+
+        public ICandidateSource Create(string sourceName, IReadOnlyDictionary<string, JsonElement> settings, string? baseDirectory) =>
+            new Source(inner.Create(sourceName, settings, baseDirectory));
+
+        private sealed class Source(ICandidateSource inner) : ICandidateSource
+        {
+            public string ClientType => inner.ClientType;
+
+            public ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken) =>
+                throw new TimeoutException("backend timed out");
+        }
+    }
+
     /// <summary>Makes the model or both candidate sources take 5 s; with a 50 ms timeout, or with none shorter than the request.</summary>
-    private static void SlowDown(string root, string what, bool tightTimeout)
+    internal static void SlowDown(string root, string what, bool tightTimeout)
     {
         var bindings = Path.Combine(root, "bindings", "local.jsonc");
         var text = File.ReadAllText(bindings);
@@ -219,6 +289,15 @@ public sealed class MetricsTests
         TimeMs = 1_767_225_600_000,
         Debug = new DebugOptions { Trace = true },
     };
+
+    internal static void FailModel(string root)
+    {
+        var bindings = Path.Combine(root, "bindings", "local.jsonc");
+        var text = File.ReadAllText(bindings);
+        var edited = text.Replace("\"client\": \"linear@1\",", "\"client\": \"linear@1\", \"fail\": true,", StringComparison.Ordinal);
+        Assert.NotEqual(text, edited);
+        File.WriteAllText(bindings, edited);
+    }
 
     internal static void FailAuthorStore(string root)
     {
@@ -326,7 +405,76 @@ public sealed class TracingTests
         Assert.False(only.Recorded);
     }
 
+    [Fact]
+    public async Task FallbackOnlyArm_IsAttributedOnThePositionSpan_WithTheFallbackVariant()
+    {
+        // Review 6 #7: an arm that changes only the fallback triggers when the fallback runs; the span must say so.
+        using var spans = new SpanCapture();
+        var host = HomeFeedTestHost.LoadModified(root =>
+        {
+            MetricsTests.FailModel(root);
+            var experiment = Path.Combine(root, "experiments", "exp_quality_weight.jsonc");
+            var text = File.ReadAllText(experiment);
+            var edited = text.Replace("\"strong\": { \"params\": { \"quality_weight\": 0.8, \"final_top_k\": 8 } }",
+                "\"strong\": { \"nodes\": { \"ctr_backup\": { \"config\": { \"expr\": \"col.item.smoothed_ctr * 0.5\" } } } }", StringComparison.Ordinal);
+            Assert.NotEqual(text, edited);
+            File.WriteAllText(experiment, edited);
+        });
+        var (engine, plan) = MetricsTests.LoadEngine(host);
+
+        var result = await engine.ExecuteAsync(MetricsTests.Request("req-fallback-arm"));
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Contains("exp_quality_weight", result.Experiments.Triggered);
+        var ranker = Assert.Single(spans.Stopped, s => s.OperationName == "ctr_ranker");
+        Assert.Equal("fallback", ranker.GetTagItem(StrataRecTags.Outcome));
+        Assert.Equal("ctr_backup", ranker.GetTagItem(StrataRecTags.Fallback));
+        Assert.Contains("exp_quality_weight", Triggered(ranker));
+        var backup = plan.SelectFallback(plan.Timeline.Single(t => t.NodeId == "ctr_ranker").Select(plan.ArmsFromIds(MetricsTests.Arms))!, plan.ArmsFromIds(MetricsTests.Arms))!;
+        Assert.Equal(backup.DefinitionHash, ranker.GetTagItem(StrataRecTags.FallbackVariant));
+        Assert.NotEqual(plan.SelectFallback(plan.Timeline.Single(t => t.NodeId == "ctr_ranker").Select(RequestArms.None)!, RequestArms.None)!.DefinitionHash, backup.DefinitionHash);
+    }
+
+    [Fact]
+    public async Task AbortedRequest_RootSpanKeepsTheManifestAndAssignedArms()
+    {
+        // Review 6 #8: the release and the arms are known before execution; an abort must not erase them.
+        using var spans = new SpanCapture();
+        var (engine, plan) = MetricsTests.LoadEngine(HomeFeedTestHost.LoadModified(root => MetricsTests.SlowDown(root, "model", tightTimeout: false)));
+        using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await engine.ExecuteAsync(MetricsTests.Request("req-aborted"), cancel.Token));
+
+        var root = Assert.Single(spans.Stopped, s => s.OperationName == StrataRecTracing.RequestSpanName);
+        Assert.Equal(ActivityStatusCode.Error, root.Status);
+        Assert.Equal(plan.ManifestId, root.GetTagItem(StrataRecTags.ManifestId));
+        Assert.Equal(MetricsTests.Arms.Order(), ((string[])root.GetTagItem(StrataRecTags.ArmsAssigned)!).Order());
+        var ranker = Assert.Single(spans.Stopped, s => s.OperationName == "ctr_ranker");
+        Assert.Equal("aborted", ranker.GetTagItem(StrataRecTags.Outcome));
+    }
+
     private static string[] Triggered(Activity span) => span.GetTagItem(StrataRecTags.ExperimentsTriggered) as string[] ?? Array.Empty<string>();
+
+    /// <summary>Records every StrataRec span while alive.</summary>
+    private sealed class SpanCapture : IDisposable
+    {
+        private readonly ActivityListener _listener;
+
+        public SpanCapture()
+        {
+            _listener = new ActivityListener
+            {
+                ShouldListenTo = source => source.Name == StrataRecTelemetry.Name,
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+                ActivityStopped = Stopped.Enqueue,
+            };
+            ActivitySource.AddActivityListener(_listener);
+        }
+
+        public ConcurrentQueue<Activity> Stopped { get; } = new();
+
+        public void Dispose() => _listener.Dispose();
+    }
 }
 
 /// <summary>Event logs (design 13.2): request-level failures become one summary per (event, subject) and window.</summary>

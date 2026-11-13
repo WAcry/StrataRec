@@ -55,6 +55,30 @@ public class ListInt32EndToEndTests
         Assert.Equal(plan.PipelineId, Assert.Single(metric.Tags, t => t.Key == StrataRecTags.Pipeline).Value);
     }
 
+    [Theory]
+    [InlineData("n32", 3_000_000_000L, null)]
+    [InlineData("tags32", null, 3_000_000_000L)]
+    public async Task RequestInputOutsideItsDeclaredInt32Type_IsRejected(string input, long? scalar, long? element)
+    {
+        // Review 6 #2: inputs are held promoted (int64) but validated against the declared int32 width.
+        var plan = Compile(Workspace());
+        var value = scalar is { } s ? ScalarValue.FromInt64(s) : ScalarValue.FromInt64List(new long[] { 7, element!.Value });
+
+        var rejected = await new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
+        {
+            RequestId = "r", Inputs = new RequestInputs().Set(input, value), Deadline = TimeSpan.FromSeconds(5),
+        });
+        var accepted = await new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
+        {
+            RequestId = "r", Inputs = new RequestInputs().Set(input, scalar is null ? ScalarValue.FromInt64List(new long[] { 7, 8 }) : ScalarValue.FromInt64(7)),
+            Deadline = TimeSpan.FromSeconds(5),
+        });
+
+        Assert.False(rejected.Succeeded);
+        Assert.Contains($"request input '{input}' must be {(scalar is null ? "list<int32>?" : "int32?")}", rejected.Error);
+        Assert.True(accepted.Succeeded, accepted.Error);
+    }
+
     [Fact]
     public void ConstantOutOfRange_ForAnInt32Column_IsAConfigurationError_AtItsPointer()
     {
@@ -110,6 +134,7 @@ public class ListInt32EndToEndTests
             """);
         File.WriteAllText(Path.Combine(root, "pipelines", "p.jsonc"), $$"""
             { "pipeline_id": "p",
+              "request_schema": { "n32": { "type": "int32?" }, "tags32": { "type": "list<int32>?" } },
               "param_schema": { "recall_quotas": { "type": "map<string,int64>" }, "k": { "type": "int64" } },
               "params": { "recall_quotas": { "pool": 10 }, "k": 5 },
               "columns": {

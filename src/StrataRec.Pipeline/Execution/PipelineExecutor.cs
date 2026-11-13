@@ -168,6 +168,19 @@ internal sealed class RequestState
     /// <summary>Span of the position being run, when <see cref="TraceNodes"/>.</summary>
     public Activity? NodeSpan { get; set; }
 
+    /// <summary>
+    /// The position being run has started and not yet recorded its outcome. An abort (caller cancellation, defect) records
+    /// it then, so slow attempts the caller gave up on stay in node latency and outcome metrics.
+    /// </summary>
+    public bool PositionOpen { get; set; }
+
+    public long PositionStarted { get; set; }
+
+    public int PositionRowsIn { get; set; }
+
+    /// <summary>The fallback node run for the current position, for its span's variant and experiment attribution.</summary>
+    public CompiledNode? PositionFallback { get; set; }
+
     public TimeSpan Remaining => Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), DeadlineTimestamp);
 
     public EvalContext Eval => new(Table, Bindings, Context, Params, Counters);
@@ -293,6 +306,11 @@ public sealed class PipelineExecutor
             // been exposed, and may have captured taps. Dropping those records would remove slow or failing requests
             // from experiment analysis, biased by arm (design 8.8, 12.6). Request memory is still held here.
             var reason = ex is OperationCanceledException ? "cancelled by the caller" : "aborted: " + ex.Message;
+            if (state.PositionOpen && position < state.Variants.Length && state.Variants[position] is { } open)
+            {
+                Record(state, open, NodeOutcomeCategory.Aborted, reason, null, state.PositionStarted, state.PositionRowsIn);
+            }
+
             EndNodeSpan(state, position, reason);
             try
             {
@@ -345,6 +363,10 @@ public sealed class PipelineExecutor
 
         var started = Stopwatch.GetTimestamp();
         var rowsIn = state.Table.Rows.Count;
+        state.PositionOpen = true;
+        state.PositionStarted = started;
+        state.PositionRowsIn = rowsIn;
+        state.PositionFallback = null;
         if (!await EvaluateWhenAsync(state, position, node, cancellationToken).ConfigureAwait(false))
         {
             Record(state, node, NodeOutcomeCategory.SkippedWhen, "when is false", null, started, rowsIn);
@@ -393,6 +415,7 @@ public sealed class PipelineExecutor
                 return null;
             case FailurePolicy.Fallback when state.Plan.SelectFallback(node, state.Arms) is { } fallback:
                 // A fallback site triggers only when the fallback is invoked, which is independent of the arm (design 12.6).
+                state.PositionFallback = fallback;
                 if (state.Plan.Fallbacks.TryGetValue(fallback.NodeId, out var fallbackSlot))
                 {
                     await RecordSiteTriggersAsync(state, fallbackSlot, cancellationToken).ConfigureAwait(false);
@@ -698,13 +721,14 @@ public sealed class PipelineExecutor
     /// </summary>
     private static void Record(RequestState state, CompiledNode node, NodeOutcomeCategory category, string? detail, string? producedBy, long started, int rowsIn)
     {
+        state.PositionOpen = false;
         var elapsed = Stopwatch.GetElapsedTime(started);
         var rowsOut = state.Table.Rows.Count;
         var kind = category switch
         {
             NodeOutcomeCategory.Succeeded => NodeOutcomeKind.Succeeded,
             NodeOutcomeCategory.Degraded or NodeOutcomeCategory.Fallback => NodeOutcomeKind.Degraded,
-            NodeOutcomeCategory.Failed => NodeOutcomeKind.Failed,
+            NodeOutcomeCategory.Failed or NodeOutcomeCategory.Aborted => NodeOutcomeKind.Failed,
             _ => NodeOutcomeKind.Skipped,
         };
         state.Outcomes.Add(new NodeOutcome(node.NodeId, kind, detail, producedBy, elapsed.TotalMilliseconds, rowsIn, rowsOut));
@@ -783,21 +807,20 @@ public sealed class PipelineExecutor
             }
 
             List<string>? triggered = null;
-            foreach (var experiment in slot.SiteExperiments)
-            {
-                if (state.Triggered[experiment])
-                {
-                    (triggered ??= new List<string>()).Add(state.Plan.Experiments[experiment].Id);
-                }
-            }
+            AddTriggered(state, slot.SiteExperiments, ref triggered);
+            AddTriggered(state, node.ParamExperiments, ref triggered);
 
-            foreach (var experiment in node.ParamExperiments)
+            // A fallback that served (or was tried) carries its own variant and experiments: an arm may change only the
+            // fallback's definition, and its trigger must show on the position that ran it (design 12.6).
+            if (state.PositionFallback is { } fallback)
             {
-                var id = state.Plan.Experiments[experiment].Id;
-                if (state.Triggered[experiment] && (triggered is null || !triggered.Contains(id)))
+                span.SetTag(StrataRecTags.FallbackVariant, fallback.DefinitionHash);
+                if (state.Plan.Fallbacks.TryGetValue(fallback.NodeId, out var fallbackSlot))
                 {
-                    (triggered ??= new List<string>()).Add(id);
+                    AddTriggered(state, fallbackSlot.SiteExperiments, ref triggered);
                 }
+
+                AddTriggered(state, fallback.ParamExperiments, ref triggered);
             }
 
             if (triggered is not null)
@@ -807,6 +830,18 @@ public sealed class PipelineExecutor
         }
 
         span.Dispose();
+
+        static void AddTriggered(RequestState state, int[] experiments, ref List<string>? triggered)
+        {
+            foreach (var experiment in experiments)
+            {
+                var id = state.Plan.Experiments[experiment].Id;
+                if (state.Triggered[experiment] && (triggered is null || !triggered.Contains(id)))
+                {
+                    (triggered ??= new List<string>()).Add(id);
+                }
+            }
+        }
     }
 
     private static async ValueTask<PipelineResult> BuildResultAsync(RequestState state, long start, CancellationToken cancellationToken)
@@ -1043,16 +1078,17 @@ public sealed class PipelineExecutor
             {
                 if (!field.Type.Nullable)
                 {
-                    return $"request input '{name}' ({field.Type}) is required";
+                    return $"request input '{name}' ({field.InputType}) is required";
                 }
 
                 context[field.Id] = ScalarValue.Missing;
                 continue;
             }
 
-            if (!value.TryConvert(field.Type, out var converted))
+            // Validated against the declared type (an int32 must fit), held in its promoted form.
+            if (!value.TryConvert(field.InputType, out var converted))
             {
-                return $"request input '{name}' must be {field.Type}, got {value}";
+                return $"request input '{name}' must be {field.InputType}, got {value}";
             }
 
             context[field.Id] = converted;
