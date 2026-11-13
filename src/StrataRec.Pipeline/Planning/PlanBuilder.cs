@@ -8,6 +8,7 @@ using StrataRec.Core.Values;
 using StrataRec.Expressions;
 using StrataRec.Features.Catalog;
 using StrataRec.Features.Connectors;
+using StrataRec.Features.Local;
 using StrataRec.Features.Runtime;
 using StrataRec.Pipeline.Operators;
 
@@ -19,6 +20,9 @@ public sealed class PlanEnvironment
     public OperatorRegistry Operators { get; init; } = OperatorRegistry.CreateDefault();
 
     public FeatureConnectorRegistry Connectors { get; init; } = FeatureConnectorRegistry.CreateDefault();
+
+    /// <summary>Update sources that load <c>local</c> feature tables (design 6.6), keyed by type like <see cref="Connectors"/>.</summary>
+    public FeatureUpdateSourceRegistry UpdateSources { get; init; } = FeatureUpdateSourceRegistry.CreateDefault();
 
     public ModelClientRegistry Models { get; init; } = ModelClientRegistry.CreateDefault();
 
@@ -32,6 +36,7 @@ public sealed class PlanEnvironment
     {
         var caps = new List<string>(Operators.Ids);
         caps.AddRange(Connectors.Types);
+        caps.AddRange(UpdateSources.Types);
         caps.AddRange(Models.Types);
         caps.AddRange(CandidateSources.Types);
         caps.Add(ExpressionCompiler.FunctionSetCapability);
@@ -75,6 +80,7 @@ public sealed class SchemaSources
 public sealed class PlanBuilder
 {
     private readonly PlanEnvironment _environment;
+    private readonly ILocalTableProvider _localTables;
     private readonly DiagnosticBag _diagnostics;
     private readonly List<CompiledNode> _nodes = new();
     private readonly List<FeatureRuntimeInfo> _features = new();
@@ -86,10 +92,13 @@ public sealed class PlanBuilder
     private SchemaSources? _sources;
     private Dictionary<string, ContextField>? _requestInputs;
 
-    public PlanBuilder(PlanEnvironment environment, DiagnosticBag diagnostics)
+    /// <param name="localTables">Where the plan's local tables come from (design 6.6); null gives tables that are never
+    /// loaded, for compiling without serving.</param>
+    public PlanBuilder(PlanEnvironment environment, DiagnosticBag diagnostics, ILocalTableProvider? localTables = null)
     {
         _environment = environment;
         _diagnostics = diagnostics;
+        _localTables = localTables ?? UnloadedLocalTables.Instance;
     }
 
     public DiagnosticBag Diagnostics => _diagnostics;
@@ -990,7 +999,9 @@ public sealed class PlanBuilder
             _environment.Connectors,
             name => inputs.TryGetValue(name, out var f) ? f.Id : -1,
             _diagnostics,
-            _environment.BaseDirectory);
+            _environment.BaseDirectory,
+            _environment.UpdateSources,
+            _localTables);
     }
 
     /// <summary>Assembles the final plan. Call after every node, the output and the feature plan are compiled.</summary>

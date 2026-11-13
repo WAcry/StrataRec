@@ -112,40 +112,77 @@ public sealed class LocalTableSchema
         if (definition.Kind == EntityKind.Cross)
         {
             // A cross entity is keyed by a context key and a candidate key; a local table record has one key.
-            throw new ArgumentException(
-                $"Entity '{entity}' is a cross entity (context key × candidate key); local tables hold one key per record. " +
-                "Bind its source with mode 'fetch' (with \"lookup\": \"context\" for per-user data).", nameof(entity));
+            throw new ArgumentException(CrossEntityMessage(entity), nameof(entity));
         }
 
-        var keyType = definition.Kind == EntityKind.Context ? definition.ContextKeyType : definition.CandidateKeyType;
-        var fields = new List<LocalTableField>();
-        var byName = new Dictionary<string, int>(StringComparer.Ordinal);
+        var features = new List<FeatureDefinition>();
         foreach (var feature in catalog.Features)
         {
-            if (feature.IsDerived || feature.Entity.Name != entity || !string.Equals(feature.Source, source, StringComparison.Ordinal))
+            if (!feature.IsDerived && feature.Entity.Name == entity && string.Equals(feature.Source, source, StringComparison.Ordinal))
             {
-                continue;
+                features.Add(feature);
             }
+        }
 
-            var name = feature.Field ?? throw new ArgumentException($"Feature '{feature.Name}' declares no physical field.", nameof(catalog));
+        if (!TryFromFeatures(source, definition, mode, features, out var schema, out var conflict))
+        {
+            throw new ArgumentException(conflict, nameof(catalog));
+        }
+
+        return schema;
+    }
+
+    /// <summary>
+    /// The schema of the table holding <paramref name="features"/> (physical features of <paramref name="entity"/> bound
+    /// to <paramref name="source"/>): one field per distinct physical field, in field-name order. The one place that
+    /// decides a table's fields: one physical field has one storage type, so two features reading it with different
+    /// types are a configuration error, returned in <paramref name="conflict"/> (and false) with the second feature.
+    /// </summary>
+    public static bool TryFromFeatures(
+        string source,
+        EntityDefinition entity,
+        LocalTableMode mode,
+        IReadOnlyList<FeatureDefinition> features,
+        out LocalTableSchema schema,
+        out string? conflict)
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        ArgumentNullException.ThrowIfNull(features);
+        schema = null!;
+        conflict = null;
+        var keyType = entity.Kind == EntityKind.Context ? entity.ContextKeyType : entity.CandidateKeyType;
+        var types = new SortedDictionary<string, ColumnType>(StringComparer.Ordinal);
+        foreach (var feature in features)
+        {
+            var name = feature.Field ?? throw new ArgumentException($"Feature '{feature.Name}' declares no physical field.", nameof(features));
             var type = feature.Type.AsNonNullable();
-            if (byName.TryGetValue(name, out var existing))
+            if (types.TryGetValue(name, out var existing))
             {
-                if (fields[existing].Type != type)
+                if (existing != type)
                 {
-                    throw new ArgumentException(
-                        $"Feature '{feature.Name}' reads field '{name}' of source '{source}' as {type}, but another feature reads it as " +
-                        $"{fields[existing].Type}. One physical field has one storage type; declare both features with the same type.",
-                        nameof(catalog));
+                    conflict = $"Feature '{feature.Name}' reads field '{name}' of source '{source}' as {type}, but another feature reads it as " +
+                        $"{existing}. One physical field has one storage type in a local table; declare both features with the same type.";
+                    return false;
                 }
 
                 continue;
             }
 
-            byName[name] = fields.Count;
+            types[name] = type;
+        }
+
+        var fields = new List<LocalTableField>(types.Count);
+        foreach (var (name, type) in types)
+        {
             fields.Add(new LocalTableField(name, type));
         }
 
-        return new LocalTableSchema(source, entity, keyType ?? EntityKeyType.Int64, mode, fields);
+        schema = new LocalTableSchema(source, entity.Name, keyType ?? EntityKeyType.Int64, mode, fields);
+        return true;
     }
+
+    /// <summary>Why a cross entity cannot be held in a local table, and what to do instead.</summary>
+    internal static string CrossEntityMessage(string entity) =>
+        $"Entity '{entity}' is a cross entity (context key × candidate key); local tables hold one key per record. " +
+        "Bind its source with mode 'fetch' (with \"lookup\": \"context\" for per-user data).";
 }

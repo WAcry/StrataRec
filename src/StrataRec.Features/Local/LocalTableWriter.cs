@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -33,6 +34,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     private readonly LocalFeatureTableOptions _options;
     private TableVersion _version; // where writes go: the table's current version, or the one a reload is building
     private bool _reloading;
+    private long _reloadStarted; // Stopwatch timestamp of BeginReload, for the load duration
     private long _generation;          // of the newest version installed; a version built and discarded does not count
     private long _autoCompactionDeclined; // superseded bytes when an automatic compaction did not fit, see MaybeCompact
 
@@ -135,6 +137,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         _generation = _version.Generation;
         _autoCompactionDeclined = 0;
         _reloading = true;
+        _reloadStarted = Stopwatch.GetTimestamp();
     }
 
     public void CompleteReload(UpdatePosition position)
@@ -150,6 +153,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         _table.Publish(_version);
         _table.SetPosition(position);
         _reloading = false;
+        _table.CountLoad(Stopwatch.GetElapsedTime(_reloadStarted));
     }
 
     public void AbortReload()

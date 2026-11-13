@@ -34,7 +34,8 @@ public readonly record struct FeatureFillResult(FeatureState State, string? Erro
 /// <summary>
 /// Request-scoped feature enrichment (design 4.5, 5.4, 6.5–6.8). Fetch results land in key-ordered staging buffers and
 /// are backfilled into whatever rows are live <em>when a reader needs them</em>, so filters and Compact during in-flight
-/// I/O never misplace values.
+/// I/O never misplace values. Local groups (design 6.6) are read synchronously from their tables when a reader needs
+/// them (<c>FeatureFetcher.Local.cs</c>).
 /// </summary>
 /// <remarks>
 /// <para>Not thread-safe; driven by the request's executor. Connectors and the context prefetch run concurrently
@@ -48,7 +49,7 @@ public readonly record struct FeatureFillResult(FeatureState State, string? Erro
 /// fetch's <see cref="StagingArea"/> seen through a reused view, its cancellation is the fetch's, and its status comes
 /// back in a <see cref="ValueTask{TResult}"/>. Only a call that really goes asynchronous allocates what waiting needs.</para>
 /// </remarks>
-public sealed class FeatureFetcher
+public sealed partial class FeatureFetcher
 {
     private static readonly FetchStatus NoTimeLeft = FetchStatus.Failed("no time left before the request deadline");
 
@@ -164,6 +165,11 @@ public sealed class FeatureFetcher
             // A group keyed by a feature that is not available yet (e.g. a derived key computed by EnsureAsync) would
             // find no keys now; EnsureAsync fetches it once the key exists.
             var group = _plan.Groups[groups.Items[i]];
+            if (group.Local is not null)
+            {
+                continue; // read synchronously by the node that needs it (design 6.6): never prefetched, never behind a barrier
+            }
+
             if (group.KeyFeatureIndex >= 0 && !_table.IsFilledForLiveRows(_plan.Features[group.KeyFeatureIndex].Slot))
             {
                 continue;
@@ -210,18 +216,29 @@ public sealed class FeatureFetcher
                 }
             }
 
-            // Then anything still unfilled (rows appended since, fields not prefetched, or never prefetched).
+            // Then anything still unfilled (rows appended since, fields not prefetched, or never prefetched): fetches
+            // first, then the local reads, which run while the fetches are in flight.
             var groups = GroupsOf(closure, wave);
             PendingFetch[]? started = null;
             var startedCount = 0;
+            var locals = false;
             for (var g = 0; g < groups.Count; g++)
             {
                 var group = _plan.Groups[groups.Items[g]];
-                if (FeaturesToFetch(group, member, skipInFlight: false) is { } fetch && !FailIfKeyFailed(group, fetch))
+                if (ReadsLocally(group))
+                {
+                    locals = true;
+                }
+                else if (FeaturesToFetch(group, member, skipInFlight: false) is { } fetch && !FailIfKeyFailed(group, fetch))
                 {
                     started ??= _memory.Rent<PendingFetch>(groups.Count);
                     started[startedCount++] = Start(group, fetch, cancellationToken);
                 }
+            }
+
+            if (locals)
+            {
+                ReadLocalGroups(groups, member);
             }
 
             for (var s = 0; s < startedCount; s++)
@@ -317,8 +334,24 @@ public sealed class FeatureFetcher
     {
         var members = group.FeatureIndices;
         Span<int> selected = members.Length <= 128 ? stackalloc int[members.Length] : _memory.Rent<int>(members.Length);
+        var count = SelectNeeded(group, member, skipInFlight, selected);
+        if (count == 0)
+        {
+            return null;
+        }
+
+        return count == members.Length ? members : selected[..count].ToArray();
+    }
+
+    /// <summary>
+    /// Writes the members of <paramref name="group"/> this request needs now and does not have yet into
+    /// <paramref name="selected"/> (at least as long as the group), in group order; returns how many. The one rule of
+    /// what a fetch or a local read supplies (late materialization, design 5.4/6.8).
+    /// </summary>
+    private int SelectNeeded(FetchGroup group, bool[] member, bool skipInFlight, Span<int> selected)
+    {
         var count = 0;
-        foreach (var f in members)
+        foreach (var f in group.FeatureIndices)
         {
             if (member[f] && _state[f] != FeatureState.Failed && !_table.IsFilledForLiveRows(_plan.Features[f].Slot)
                 && !(skipInFlight && InFlight(group, f)))
@@ -327,12 +360,7 @@ public sealed class FeatureFetcher
             }
         }
 
-        if (count == 0)
-        {
-            return null;
-        }
-
-        return count == members.Length ? members : selected[..count].ToArray();
+        return count;
     }
 
     private bool InFlight(FetchGroup group, int feature)
@@ -369,7 +397,7 @@ public sealed class FeatureFetcher
     /// A group keyed by a failed feature cannot be fetched; its features fail too (design 6.7: a dependency failure
     /// never degrades into legitimate missing values).
     /// </summary>
-    private bool FailIfKeyFailed(FetchGroup group, int[] features)
+    private bool FailIfKeyFailed(FetchGroup group, ReadOnlySpan<int> features)
     {
         if (group.KeyFeatureIndex < 0 || _state[group.KeyFeatureIndex] != FeatureState.Failed)
         {
@@ -551,7 +579,7 @@ public sealed class FeatureFetcher
         ValueTask<FetchStatus> call;
         try
         {
-            call = group.Connector.FetchAsync(batch, fields, writer, cancellation.Token);
+            call = group.Connector!.FetchAsync(batch, fields, writer, cancellation.Token);
         }
         catch (Exception ex)
         {
@@ -779,13 +807,9 @@ public sealed class FeatureFetcher
                 column.SetValid(row);
                 copied[copiedCount++] = row;
             }
-            else if (definition.HasDefault)
-            {
-                ColumnValues.Set(column, row, definition.Default);
-            }
             else
             {
-                column.SetMissing(row);
+                ColumnValues.Set(column, row, definition.Absent);
             }
 
             Bits.Set(filled, row);
@@ -793,7 +817,7 @@ public sealed class FeatureFetcher
 
         if (copiedCount > 0 && ColumnValues.IsFloat(column))
         {
-            AddNonFinite(feature, ColumnValues.SanitizeNonFinite(column, copied.AsSpan(0, copiedCount), DefaultOrMissing(definition)));
+            AddNonFinite(feature, ColumnValues.SanitizeNonFinite(column, copied.AsSpan(0, copiedCount), definition.Absent));
         }
     }
 
@@ -850,7 +874,7 @@ public sealed class FeatureFetcher
         {
             // A value that does not fit int32 storage takes the default (or becomes missing) at the write and is
             // counted there (design 4.3): unlike NaN, it cannot be stored and sanitized afterwards.
-            feature.Expression!.Evaluate(new EvalContext(_table, _bindings, _context, _params, _counters), span, column, DefaultOrMissing(definition));
+            feature.Expression!.Evaluate(new EvalContext(_table, _bindings, _context, _params, _counters), span, column, definition.Absent);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -897,7 +921,7 @@ public sealed class FeatureFetcher
         if (ColumnValues.IsFloat(column))
         {
             // The expression backend writes NaN/±∞ as-is and leaves sanitizing to the engine (design 4.3).
-            var replaced = ColumnValues.SanitizeNonFinite(column, span, DefaultOrMissing(definition));
+            var replaced = ColumnValues.SanitizeNonFinite(column, span, definition.Absent);
             AddNonFinite(feature, replaced);
             if (replaced > 0 && !definition.HasDefault && !feature.Type.Nullable)
             {
@@ -940,6 +964,7 @@ public sealed class FeatureFetcher
             var seenGroup = _memory.RentCleared<bool>(groupCount);
             var fetches = _memory.Rent<ContextFetch>(groupCount);
             var fetchCount = 0;
+            var locals = false;
             for (var c = 0; c < closure.Count; c++)
             {
                 var info = _plan.Features[closure.Items[c]];
@@ -948,8 +973,14 @@ public sealed class FeatureFetcher
                     continue;
                 }
 
-                seenGroup[info.GroupIndex] = true;
                 var group = _plan.Groups[info.GroupIndex];
+                if (ReadsLocally(group))
+                {
+                    locals = true; // read below, while the fetches are in flight
+                    continue;
+                }
+
+                seenGroup[info.GroupIndex] = true;
                 var features = RequestedMembers(group, member);
                 var v = group.ContextKeyId >= 0 ? _context[group.ContextKeyId] : ScalarValue.Missing;
                 if (v.IsMissing)
@@ -981,6 +1012,11 @@ public sealed class FeatureFetcher
                 }
 
                 fetches[fetchCount++] = new ContextFetch(features, staging, call);
+            }
+
+            if (locals)
+            {
+                ReadLocalContext(closure, member);
             }
 
             for (var n = 0; n < fetchCount; n++)
@@ -1108,16 +1144,8 @@ public sealed class FeatureFetcher
             value = ScalarValue.Missing;
         }
 
-        if (value.IsMissing && definition.HasDefault)
-        {
-            value = definition.Default;
-        }
-
-        _context[info.ContextId] = value;
+        _context[info.ContextId] = value.IsMissing ? definition.Absent : value;
     }
-
-    private static ScalarValue DefaultOrMissing(FeatureDefinition definition) =>
-        definition.HasDefault ? definition.Default : ScalarValue.Missing;
 
     private void AddNonFinite(FeatureRuntimeInfo feature, int count)
     {
@@ -1132,7 +1160,7 @@ public sealed class FeatureFetcher
         }
     }
 
-    private bool NeedsFill(int[] features, int row)
+    private bool NeedsFill(ReadOnlySpan<int> features, int row)
     {
         foreach (var f in features)
         {

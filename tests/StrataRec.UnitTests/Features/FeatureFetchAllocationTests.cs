@@ -47,6 +47,86 @@ public class FeatureFetchAllocationTests
         Assert.True(more - fewer < 100 * 8, $"100 chunks: {fewer} B, 200 chunks: {more} B");
     }
 
+    [Fact]
+    public void LocalRead_AllocatesNothing_AtAnyKeyCount()
+    {
+        // A local read (design 6.6) is one lookup and one multi-field fill into the request's columns, with every buffer
+        // rented from the request memory: neither the read nor its key count may cost an object. Measured against a
+        // second ensure of the same features, which has nothing to read, so the ensure's own cost (in Debug, its async
+        // state machine) cancels out. Foreign-key and int64 / float32 / float64 / bool fields, with misses and defaults.
+        const int Items = 4_000;
+        var rig = new FeatureTestRig().LocalSource("item_store", writer =>
+        {
+            for (var id = 1; id <= Items; id += 2) // odd items only: half the keys miss
+            {
+                var builder = writer.Begin(id, 1);
+                builder.Set(writer.Schema.FieldIndex("score"), ScalarValue.FromFloat64(id * 0.5));
+                builder.Set(writer.Schema.FieldIndex("clicks"), ScalarValue.FromFloat64(id));
+                builder.Set(writer.Schema.FieldIndex("author_id"), ScalarValue.FromInt64(id % 100));
+                builder.Set(writer.Schema.FieldIndex("safe"), ScalarValue.FromBool(id % 3 != 0));
+                builder.Commit();
+            }
+        }).LocalSource("author_store", writer =>
+        {
+            for (var id = 0; id < 50; id++)
+            {
+                var builder = writer.Begin(id, 1);
+                builder.Set(writer.Schema.FieldIndex("followers"), ScalarValue.FromFloat64(id * 10.0));
+                builder.Commit();
+            }
+        });
+        var features = new[]
+        {
+            rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store"),
+            rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float32, "item_store", ScalarValue.FromFloat64(0)),
+            rig.Physical("item.author_id", FeatureTestRig.Item, ColumnType.Int64, "item_store"),
+            rig.Physical("item.safe", FeatureTestRig.Item, ColumnType.Bool, "item_store", ScalarValue.FromBool(false)),
+            rig.Physical("author.followers", FeatureTestRig.ForeignKey("author", "item.author_id"), ColumnType.Float64, "author_store", ScalarValue.FromFloat64(-1)),
+        };
+        rig.Build();
+
+        var small = MeasureLocalRead(rig, features, 100);
+        var large = MeasureLocalRead(rig, features, Items);
+
+        Assert.True(small <= 0 && large <= 0, $"100 keys: {small} B, {Items} keys: {large} B beyond an ensure with nothing to read");
+    }
+
+    /// <summary>Bytes the first ensure of <paramref name="features"/> allocates beyond a second one: best of three after a warm-up.</summary>
+    private static long MeasureLocalRead(FeatureTestRig rig, int[] features, int keys)
+    {
+        var candidates = Enumerable.Range(1, keys).Select(i => (long)i).ToArray();
+        var best = long.MaxValue;
+        for (var round = 0; round < 4; round++)
+        {
+            var request = rig.NewRequest(candidates);
+            foreach (var feature in features)
+            {
+                request.Table.GetOrCreateSlot(rig.SlotOf(feature)); // the columns exist before any read, as after a fetch
+            }
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var read = request.Fetcher.EnsureAsync(features, CancellationToken.None);
+            var readBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            before = GC.GetAllocatedBytesForCurrentThread();
+            var again = request.Fetcher.EnsureAsync(features, CancellationToken.None);
+            var againBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.True(read.IsCompletedSuccessfully && again.IsCompletedSuccessfully);
+            Assert.Equal(FeatureState.Ok, read.Result.State);
+            Assert.Equal(0.5, request.Value(features[0], 0).AsFloat64());
+            Assert.True(request.Value(features[0], 1).IsMissing); // item 2 has no record
+            Assert.Equal(-1.0, request.Value(features[4], 1).AsFloat64()); // item 2 has no record, so no author
+            Assert.Equal(10.0, request.Value(features[4], 0).AsFloat64()); // item 1: author 1
+            request.Memory.Release();
+            if (round > 0)
+            {
+                best = Math.Min(best, readBytes - againBytes);
+            }
+        }
+
+        return best;
+    }
+
     private static (FeatureTestRig Rig, int[] Features) SynchronousRig(int maxBatch)
     {
         var rig = new FeatureTestRig().Source("item_store", new SynchronousConnector(), maxBatch: maxBatch);

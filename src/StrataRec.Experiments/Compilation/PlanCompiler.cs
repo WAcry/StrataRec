@@ -8,6 +8,7 @@ using StrataRec.Artifacts.Model;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
+using StrataRec.Features.Local;
 using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Experiments.Compilation;
@@ -23,11 +24,16 @@ namespace StrataRec.Experiments.Compilation;
 /// </remarks>
 public static class PlanCompiler
 {
-    public static PlanCompilation Compile(PlanCompileRequest request, PlanEnvironment? environment = null)
+    /// <param name="localTables">
+    /// Where the plan's local feature tables come from (design 6.6): the engine passes a lease of its table host, which
+    /// shares and loads them. Null gives tables that are never loaded, for compiling without serving (validate, build,
+    /// explain); requests reading them fail the features.
+    /// </param>
+    public static PlanCompilation Compile(PlanCompileRequest request, PlanEnvironment? environment = null, ILocalTableProvider? localTables = null)
     {
         var started = Stopwatch.GetTimestamp();
         var view = PatchableView.Create(request.Pipeline, request.Catalog);
-        var compilation = new UnifiedCompilation(request, environment ?? new PlanEnvironment(), view, new DiagnosticBag(), buildPlan: true).Run();
+        var compilation = new UnifiedCompilation(request, environment ?? new PlanEnvironment(), view, new DiagnosticBag(), buildPlan: true, localTables).Run();
         StrataRecMetrics.PlanCompileDuration.Record(
             Stopwatch.GetElapsedTime(started).TotalSeconds, new KeyValuePair<string, object?>(StrataRecTags.Pipeline, request.Pipeline.PipelineId));
         return compilation;
@@ -37,7 +43,8 @@ public static class PlanCompiler
     /// Compiles the baseline with the patches of <paramref name="armIds"/> (<c>experiment/arm</c>) applied in layer
     /// order, as a plain pipeline without experiments. Running it equals running the unified plan with those arms.
     /// </summary>
-    public static PlanCompilation CompileMerged(PlanCompileRequest request, IReadOnlyList<string> armIds, PlanEnvironment? environment = null)
+    public static PlanCompilation CompileMerged(
+        PlanCompileRequest request, IReadOnlyList<string> armIds, PlanEnvironment? environment = null, ILocalTableProvider? localTables = null)
     {
         var diagnostics = new DiagnosticBag();
         var view = PatchableView.Create(request.Pipeline, request.Catalog);
@@ -76,7 +83,7 @@ public static class PlanCompiler
         }
 
         var plain = UnifiedCompilation.WithoutExperiments(request);
-        return new UnifiedCompilation(plain, environment ?? new PlanEnvironment(), view, diagnostics, buildPlan: true).Run();
+        return new UnifiedCompilation(plain, environment ?? new PlanEnvironment(), view, diagnostics, buildPlan: true, localTables).Run();
     }
 }
 
@@ -104,14 +111,17 @@ internal sealed partial class UnifiedCompilation
     /// <summary>Union of add-only additions: section → name → (value, first arm).</summary>
     private readonly Dictionary<string, SortedDictionary<string, (JsonNode Value, ArmPatch Arm)>> _additions = new(StringComparer.Ordinal);
 
-    public UnifiedCompilation(PlanCompileRequest request, PlanEnvironment environment, PatchableView view, DiagnosticBag diagnostics, bool buildPlan)
+    /// <param name="localTables">Only a compilation that builds the plan acquires tables; validation passes never do.</param>
+    public UnifiedCompilation(
+        PlanCompileRequest request, PlanEnvironment environment, PatchableView view, DiagnosticBag diagnostics, bool buildPlan,
+        ILocalTableProvider? localTables = null)
     {
         _request = request;
         _environment = environment;
         _view = view;
         _diagnostics = diagnostics;
         _buildPlan = buildPlan;
-        _builder = new PlanBuilder(environment, diagnostics);
+        _builder = new PlanBuilder(environment, diagnostics, buildPlan ? localTables : null);
         _pipelineLabel = "pipeline:" + request.Pipeline.PipelineId;
     }
 

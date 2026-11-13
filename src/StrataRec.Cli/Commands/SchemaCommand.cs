@@ -1,5 +1,6 @@
 using System.CommandLine;
 using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
 using System.Reflection;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
@@ -96,23 +97,101 @@ internal static class SchemaCommand
         return 0;
     }
 
-    /// <summary>Adds a type's or property's <see cref="DescriptionAttribute"/> as the schema's <c>description</c>.</summary>
+    /// <summary>
+    /// Adds a type's or property's <see cref="DescriptionAttribute"/> as the schema's <c>description</c>, and a
+    /// property's <see cref="AllowedValuesAttribute"/> and <see cref="RegularExpressionAttribute"/> as <c>enum</c> and
+    /// <c>pattern</c>, so the schema says what the engine accepts without a hand-written copy.
+    /// </summary>
     private static JsonNode Describe(JsonSchemaExporterContext context, JsonNode schema)
     {
-        ICustomAttributeProvider? provider = context.PropertyInfo is { } property ? property.AttributeProvider : context.TypeInfo.Type;
-        string? description = null;
-        foreach (var attribute in provider?.GetCustomAttributes(typeof(DescriptionAttribute), inherit: true) ?? Array.Empty<object>())
+        // A type with [JsonExtensionData] takes members it does not declare (a connector's or update source's own
+        // settings): the exporter marks it closed because unknown members are otherwise rejected.
+        if (schema is JsonObject open && HasExtensionData(context.TypeInfo.Type))
         {
-            description = ((DescriptionAttribute)attribute).Description;
+            open.Remove("additionalProperties");
         }
 
-        if (description is null)
+        ICustomAttributeProvider? provider = context.PropertyInfo is { } property ? property.AttributeProvider : context.TypeInfo.Type;
+        string? description = null;
+        object?[]? allowed = null;
+        string? pattern = null;
+        foreach (var attribute in provider?.GetCustomAttributes(inherit: true) ?? Array.Empty<object>())
+        {
+            switch (attribute)
+            {
+                case DescriptionAttribute d:
+                    description = d.Description;
+                    break;
+                case AllowedValuesAttribute a when context.PropertyInfo is not null:
+                    allowed = a.Values;
+                    break;
+                case RegularExpressionAttribute r when context.PropertyInfo is not null:
+                    pattern = r.Pattern;
+                    break;
+            }
+        }
+
+        if (description is null && allowed is null && pattern is null)
         {
             return schema;
         }
 
         var described = schema as JsonObject ?? new JsonObject(); // `true` (any value) becomes {} with a description
-        described.Insert(0, "description", description);
+        if (allowed is not null)
+        {
+            var values = new JsonArray();
+            foreach (var value in allowed)
+            {
+                values.Add(JsonValue.Create(value?.ToString()));
+            }
+
+            if (AllowsNull(described))
+            {
+                values.Add(null); // an optional setting may be written as null, which the engine reads as absent
+            }
+
+            described["enum"] = values;
+        }
+
+        if (pattern is not null)
+        {
+            described["pattern"] = pattern;
+        }
+
+        if (description is not null)
+        {
+            described.Insert(0, "description", description);
+        }
+
         return described;
+    }
+
+    private static bool AllowsNull(JsonObject schema)
+    {
+        if (schema["type"] is JsonArray types)
+        {
+            foreach (var type in types)
+            {
+                if (type?.GetValue<string>() == "null")
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasExtensionData(Type type)
+    {
+        foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (property.IsDefined(typeof(System.Text.Json.Serialization.JsonExtensionDataAttribute), inherit: true))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

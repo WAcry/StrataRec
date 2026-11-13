@@ -44,6 +44,9 @@ public static class StrataRecTags
     /// <summary><c>feature</c> or <c>candidate</c>: the two source namespaces of the bindings.</summary>
     public const string SourceKind = "stratarec.source.kind";
 
+    /// <summary>Entity of a local feature table (with <see cref="Source"/>: one table per source and entity).</summary>
+    public const string Entity = "stratarec.entity";
+
     public const string Model = "stratarec.model";
 
     /// <summary>Outcome category; only on counters, never on durations (design 13.1 rule 2).</summary>

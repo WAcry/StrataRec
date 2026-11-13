@@ -13,6 +13,7 @@ using StrataRec.Core.Values;
 using StrataRec.Expressions;
 using StrataRec.Features.Catalog;
 using StrataRec.Features.Connectors;
+using StrataRec.Features.Local;
 using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features;
@@ -39,9 +40,13 @@ internal sealed class FeatureTestRig
     private readonly List<ColumnType> _slots = new() { ColumnType.Int64 };
     private readonly Dictionary<string, FeatureSourceBinding> _sources = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IFeatureSourceConnector> _connectors = new(StringComparer.Ordinal);
+    private readonly TestLocalTables _localTables = new();
     private int _contextCount = 1; // context id 0 is the request input user_id
 
     public FeaturePlan Plan { get; private set; } = null!;
+
+    /// <summary>The local tables the plan reads, by source name (one entity per source in these tests).</summary>
+    public IReadOnlyDictionary<string, LocalFeatureTable> Tables => _localTables.Tables;
 
     public static EntityDefinition ForeignKey(string name, string keyFeature) => new()
     {
@@ -70,7 +75,28 @@ internal sealed class FeatureTestRig
         return this;
     }
 
-    public int Physical(string name, EntityDefinition entity, ColumnType type, string source, ScalarValue? defaultValue = null)
+    /// <summary>
+    /// Binds a source with mode <c>local</c>. Its table is loaded with <paramref name="load"/> (one complete reload) when
+    /// the plan is built; with no <paramref name="load"/> it is never loaded.
+    /// </summary>
+    public FeatureTestRig LocalSource(string name, Action<IFeatureTableWriter>? load, string maxBytes = "64MiB")
+    {
+        _sources[name] = new FeatureSourceBinding
+        {
+            Mode = "local", MaxBytes = maxBytes, Bootstrap = new UpdateSourceBinding { Source = TestUpdateSourceFactory.Type },
+        };
+        _localTables.Loads[name] = load;
+        return this;
+    }
+
+    /// <summary>Binds a source as written, for tests of the binding checks.</summary>
+    public FeatureTestRig Bind(string name, FeatureSourceBinding binding)
+    {
+        _sources[name] = binding;
+        return this;
+    }
+
+    public int Physical(string name, EntityDefinition entity, ColumnType type, string source, ScalarValue? defaultValue = null, string? field = null)
     {
         var hasDefault = defaultValue is not null;
         var finalType = hasDefault ? type.AsNonNullable() : type.AsNullable();
@@ -80,7 +106,7 @@ internal sealed class FeatureTestRig
             Entity = entity,
             Type = finalType,
             Source = source,
-            Field = name[(name.IndexOf('.') + 1)..],
+            Field = field ?? name[(name.IndexOf('.') + 1)..],
             HasDefault = hasDefault,
             Default = defaultValue ?? ScalarValue.Missing,
             Pointer = "/features/" + name,
@@ -113,7 +139,16 @@ internal sealed class FeatureTestRig
 
     public FeaturePlan Build()
     {
+        var diagnostics = TryBuild();
+        Assert.False(diagnostics.HasErrors, string.Join("; ", diagnostics.Items.Select(d => d.ToString())));
+        return Plan;
+    }
+
+    /// <summary>Builds the plan and returns the diagnostics instead of asserting there are none.</summary>
+    public DiagnosticBag TryBuild(string? baseDirectory = null)
+    {
         var registry = FeatureConnectorRegistry.CreateDefault().Add(new TestConnectorFactory(_connectors));
+        var updateSources = FeatureUpdateSourceRegistry.CreateDefault().Add(new TestUpdateSourceFactory());
         var diagnostics = new DiagnosticBag();
         Plan = FeaturePlan.Create(
             _features,
@@ -121,15 +156,18 @@ internal sealed class FeatureTestRig
             registry,
             input => input == "user_id" ? UserIdContext : -1,
             diagnostics,
-            baseDirectory: null);
-        Assert.False(diagnostics.HasErrors, string.Join("; ", diagnostics.Items.Select(d => d.ToString())));
-        return Plan;
+            baseDirectory,
+            updateSources,
+            _localTables);
+        return diagnostics;
     }
 
-    public TestRequest NewRequest(long[] candidates, long? userId = null, IBufferPool? pool = null, int deadlineMs = 10_000, IFeatureCallHook? hook = null)
+    /// <param name="capacity">Rows the candidate table can hold, for tests that append rows later.</param>
+    public TestRequest NewRequest(
+        long[] candidates, long? userId = null, IBufferPool? pool = null, int deadlineMs = 10_000, IFeatureCallHook? hook = null, int capacity = 0)
     {
         var memory = new RequestMemory(pool);
-        var table = new CandidateTable(new TableSchema(EntityKeyType.Int64, _slots), Math.Max(1, candidates.Length), memory);
+        var table = new CandidateTable(new TableSchema(EntityKeyType.Int64, _slots), Math.Max(Math.Max(1, capacity), candidates.Length), memory);
         if (candidates.Length > 0)
         {
             table.AppendRows(candidates);
@@ -189,6 +227,39 @@ internal sealed record TestRequest(FeaturePlan Plan, FeatureFetcher Fetcher, Can
     }
 
     public ScalarValue ContextValue(int feature) => Context[Plan.Features[feature].ContextId];
+}
+
+/// <summary>Gives each local spec a new table, loaded at once by the rig's load action for the source.</summary>
+internal sealed class TestLocalTables : ILocalTableProvider
+{
+    public Dictionary<string, Action<IFeatureTableWriter>?> Loads { get; } = new(StringComparer.Ordinal);
+
+    public Dictionary<string, LocalFeatureTable> Tables { get; } = new(StringComparer.Ordinal);
+
+    public LocalFeatureTable Acquire(LocalTableSpec spec)
+    {
+        var table = new LocalFeatureTable(spec.Schema, spec.Options);
+        Tables[spec.Schema.Source] = table;
+        if (Loads.TryGetValue(spec.Schema.Source, out var load) && load is not null)
+        {
+            table.Writer.BeginReload();
+            load(table.Writer);
+            table.Writer.CompleteReload(UpdatePosition.Empty);
+        }
+
+        return table;
+    }
+}
+
+/// <summary><c>test_updates@1</c>: an update source with nothing to load (the rig loads its tables directly).</summary>
+internal sealed class TestUpdateSourceFactory : IFeatureUpdateSourceFactory
+{
+    public const string Type = "test_updates@1";
+
+    public string SourceType => Type;
+
+    public IFeatureUpdateSource Create(string sourceName, IReadOnlyDictionary<string, JsonElement> settings, string? baseDirectory) =>
+        new MemoryFeatureUpdateSource();
 }
 
 /// <summary>Serves connectors registered by source name under the connector type <c>test@1</c>.</summary>
