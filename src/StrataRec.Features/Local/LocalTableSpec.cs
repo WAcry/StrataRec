@@ -12,16 +12,38 @@ namespace StrataRec.Features.Local;
 /// </summary>
 public sealed class LocalTableSpec
 {
-    /// <param name="binding">The source's binding as written (mode <c>local</c>); part of the identity.</param>
-    /// <param name="bootstrap">The source created from the binding's <c>bootstrap</c>, which loads the table.</param>
+    private LocalTableSpec(
+        LocalTableSchema schema, LocalFeatureTableOptions options, FeatureSourceBinding binding, IFeatureUpdateSource bootstrap, string artifact,
+        string pointer, string baseDirectory)
+    {
+        Schema = schema;
+        Options = options;
+        Bootstrap = bootstrap;
+        Artifact = artifact;
+        Pointer = pointer;
+        BaseDirectory = baseDirectory;
+        Identity = ComputeIdentity(schema, binding, baseDirectory);
+    }
+
+    /// <summary>
+    /// Creates the spec and its bootstrap source with one base directory, pinned now (<see cref="PinBaseDirectory"/>):
+    /// the source resolves its relative paths against the same absolute directory the <see cref="Identity"/> names, so a
+    /// later change of the process's current directory changes neither what the source reads nor which table is shared.
+    /// </summary>
+    /// <param name="binding">The source's binding as written (mode <c>local</c>, with a <c>bootstrap</c>); part of the identity.</param>
+    /// <param name="bootstrapFactory">The factory of the binding's <c>bootstrap</c> source, which loads the table.</param>
+    /// <param name="sourceName">The feature source's name, for the bootstrap source.</param>
     /// <param name="artifact">The bindings artifact, e.g. <c>bindings:local</c>, for load errors.</param>
     /// <param name="pointer">The binding's pointer, e.g. <c>/sources/item_store</c>, for load errors.</param>
-    /// <param name="baseDirectory">Directory relative paths in the settings resolve against; part of the identity.</param>
-    public LocalTableSpec(
+    /// <param name="baseDirectory">Directory relative paths in the settings resolve against (relative: against the current
+    /// directory; null: the current directory); pinned, it is part of the identity.</param>
+    /// <exception cref="FeatureUpdateException">The bootstrap settings are wrong; the pointer is within <c>bootstrap</c>.</exception>
+    public static LocalTableSpec Create(
         LocalTableSchema schema,
         LocalFeatureTableOptions options,
         FeatureSourceBinding binding,
-        IFeatureUpdateSource bootstrap,
+        IFeatureUpdateSourceFactory bootstrapFactory,
+        string sourceName,
         string artifact,
         string pointer,
         string? baseDirectory)
@@ -29,14 +51,23 @@ public sealed class LocalTableSpec
         ArgumentNullException.ThrowIfNull(schema);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(binding);
-        ArgumentNullException.ThrowIfNull(bootstrap);
-        Schema = schema;
-        Options = options;
-        Bootstrap = bootstrap;
-        Artifact = artifact;
-        Pointer = pointer;
-        Identity = ComputeIdentity(schema, binding, baseDirectory);
+        ArgumentNullException.ThrowIfNull(bootstrapFactory);
+        if (binding.Bootstrap is not { } bootstrap)
+        {
+            throw new ArgumentException("A local binding names its bootstrap source.", nameof(binding));
+        }
+
+        var directory = PinBaseDirectory(baseDirectory);
+        var source = bootstrapFactory.Create(sourceName, bootstrap.Settings, directory);
+        return new LocalTableSpec(schema, options, binding, source, artifact, pointer, directory);
     }
+
+    /// <summary>
+    /// The absolute directory a local table's relative paths resolve against: <paramref name="baseDirectory"/> made
+    /// absolute against the current directory as it is now, or the current directory when it is null or empty.
+    /// </summary>
+    public static string PinBaseDirectory(string? baseDirectory) =>
+        string.IsNullOrEmpty(baseDirectory) ? Directory.GetCurrentDirectory() : Path.GetFullPath(baseDirectory);
 
     public LocalTableSchema Schema { get; }
 
@@ -55,12 +86,15 @@ public sealed class LocalTableSpec
     /// <summary><c>source/entity</c>, how messages and logs name the table.</summary>
     public string Name => Schema.Source + "/" + Schema.Entity;
 
+    /// <summary>The absolute directory the source's relative paths resolve against, pinned when the spec was created.</summary>
+    public string BaseDirectory { get; }
+
     /// <summary>
     /// The one rule for reusing a table across plans: two specs with the same identity are served by one table, so a new
     /// plan takes over a loaded table instead of loading it again. The identity is the RFC 8785 canonical JSON of what
     /// decides the table's contents: the source and entity, the key type, the physical fields with their storage types
     /// (in field-name order, so renaming the features that read them, or changing their defaults, changes nothing), the
-    /// source's binding as written, and the directory relative paths resolve against. Nothing else in the configuration
+    /// source's binding as written, and the absolute <see cref="BaseDirectory"/>. Nothing else in the configuration
     /// is part of it: other sources, pipelines and experiments never cause a reload.
     /// </summary>
     /// <remarks>
@@ -70,7 +104,7 @@ public sealed class LocalTableSpec
     /// </remarks>
     public string Identity { get; }
 
-    private static string ComputeIdentity(LocalTableSchema schema, FeatureSourceBinding binding, string? baseDirectory)
+    private static string ComputeIdentity(LocalTableSchema schema, FeatureSourceBinding binding, string baseDirectory)
     {
         var fields = new List<LocalTableField>(schema.Fields);
         fields.Sort(static (a, b) => string.CompareOrdinal(a.Name, b.Name));

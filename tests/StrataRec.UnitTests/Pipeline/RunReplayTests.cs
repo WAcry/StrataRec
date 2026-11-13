@@ -384,7 +384,7 @@ public sealed class RunReplayTests
             Index = 0,
             SourceName = "s",
             Entity = FeatureTestRig.Item,
-            Connector = ScriptedConnector.Values((_, _) => throw new InvalidOperationException("a replay never calls the connector")),
+            Supply = GroupSupply.Fetch(ScriptedConnector.Values((_, _) => throw new InvalidOperationException("a replay never calls the connector")), 50, 1000),
             Shape = KeyShape.Many,
             FeatureIndices = new int[fields.Length],
             Fields = bindings,

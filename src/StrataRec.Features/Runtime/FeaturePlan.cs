@@ -66,7 +66,7 @@ public sealed class FeatureRuntimeInfo
 
 /// <summary>
 /// Features that are supplied together: one source × one entity (design 6.8: same source within a wave is merged).
-/// A fetched group calls its <see cref="Connector"/>; a local group reads its <see cref="Local"/> table (design 6.6).
+/// How is the group's <see cref="Supply"/>: a fetched group calls its connector, a local group reads its table (design 6.6).
 /// </summary>
 /// <remarks>
 /// A group is the unit of merging, not of fetching: each fetch or read carries only the members the request needs at
@@ -80,19 +80,10 @@ public sealed class FetchGroup
 
     public required EntityDefinition Entity { get; init; }
 
-    /// <summary>The connector of a <see cref="SupplyMode.Fetch"/> group; null for a local group.</summary>
-    public IFeatureSourceConnector? Connector { get; init; }
-
-    /// <summary>The table of a <see cref="SupplyMode.Local"/> group; null for a fetched group.</summary>
-    public LocalGroupTable? Local { get; init; }
-
-    public SupplyMode Mode => Local is null ? SupplyMode.Fetch : SupplyMode.Local;
+    /// <summary>The mode and what it holds (a connector, a table), as the bindings resolved it.</summary>
+    public required GroupSupply Supply { get; init; }
 
     public required KeyShape Shape { get; init; }
-
-    public int TimeoutMs { get; init; } = 50;
-
-    public int MaxBatch { get; init; } = 1000;
 
     /// <summary>Feature providing the candidate key (foreign keys), or -1 for <c>entity_id</c>.</summary>
     public int KeyFeatureIndex { get; init; } = -1;
@@ -126,6 +117,7 @@ public sealed class FeaturePlan
         foreach (var g in groups)
         {
             MaxWave = Math.Max(MaxWave, g.Wave);
+            HasTables |= g.Supply.Table is not null;
             _ = g.Io; // build the source's metric tags with the plan, not on its first request
         }
     }
@@ -139,6 +131,9 @@ public sealed class FeaturePlan
 
     /// <summary>Highest fetch wave of any group (0 when nothing is keyed by a feature).</summary>
     public int MaxWave { get; }
+
+    /// <summary>Whether a group holds a table, which a request may read: it then readies the buffers of its reads up front.</summary>
+    public bool HasTables { get; }
 
     /// <summary>
     /// Builds the plan: groups physical features by (source, entity), resolves each group's supply from the bindings
@@ -200,18 +195,8 @@ public sealed class FeaturePlan
                 EntityKind.Cross => KeyShape.Cross,
                 _ => KeyShape.Many,
             };
-            LocalGroupTable? local = null;
-            if (supply.Mode == SupplyMode.Local)
+            if (resolver.Group(supply, entity, members, shape) is not { } groupSupply)
             {
-                if ((local = resolver.LocalTable(supply, entity, members)) is null)
-                {
-                    continue;
-                }
-            }
-            else if (!supply.Connector!.Supports(shape))
-            {
-                diagnostics.Error("CONNECTOR_SHAPE", $"bindings:{bindings.Environment}", supply.Pointer,
-                    $"Connector '{supply.Connector.ConnectorType}' does not support {shape} lookups needed by entity '{entity.Name}'.");
                 continue;
             }
 
@@ -240,11 +225,8 @@ public sealed class FeaturePlan
                 Index = groups.Count,
                 SourceName = sourceName,
                 Entity = entity,
-                Connector = supply.Connector,
-                Local = local,
+                Supply = groupSupply,
                 Shape = shape,
-                TimeoutMs = supply.TimeoutMs,
-                MaxBatch = supply.MaxBatch,
                 KeyFeatureIndex = keyFeature,
                 ContextKeyId = entity.ContextKeyInput is null ? -1 : contextIdOfRequestInput(entity.ContextKeyInput),
                 FeatureIndices = featureIndices,

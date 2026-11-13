@@ -102,6 +102,10 @@ public sealed partial class FeatureFetcher
         _hook = hook;
         _state = new FeatureState[plan.Features.Count];
         _errors = new string?[plan.Features.Count];
+        if (plan.HasTables && hook is not { Replays: true })
+        {
+            _localKeys = new EntityKeyIndex(EntityKeyType.Int64, 0, memory); // reset by each local read, so no read costs an object
+        }
     }
 
     /// <summary>
@@ -165,9 +169,9 @@ public sealed partial class FeatureFetcher
             // A group keyed by a feature that is not available yet (e.g. a derived key computed by EnsureAsync) would
             // find no keys now; EnsureAsync fetches it once the key exists.
             var group = _plan.Groups[groups.Items[i]];
-            if (group.Local is not null)
+            if (!Prefetches(group))
             {
-                continue; // read synchronously by the node that needs it (design 6.6): never prefetched, never behind a barrier
+                continue;
             }
 
             if (group.KeyFeatureIndex >= 0 && !_table.IsFilledForLiveRows(_plan.Features[group.KeyFeatureIndex].Slot))
@@ -467,7 +471,7 @@ public sealed partial class FeatureFetcher
 
         // Each max_batch chunk is an independent call, and chunks run concurrently. They share the fetch's staging area
         // (each writes only its own region of it, see StagingArea), its time budget and its cancellation source.
-        var chunkSize = group.MaxBatch;
+        var chunkSize = group.Supply.MaxBatch;
         var chunkCount = (keyCount + chunkSize - 1) / chunkSize;
         if (chunkCount == 0)
         {
@@ -579,7 +583,7 @@ public sealed partial class FeatureFetcher
         ValueTask<FetchStatus> call;
         try
         {
-            call = group.Connector!.FetchAsync(batch, fields, writer, cancellation.Token);
+            call = group.Supply.Connector!.FetchAsync(batch, fields, writer, cancellation.Token);
         }
         catch (Exception ex)
         {
@@ -1246,7 +1250,7 @@ public sealed partial class FeatureFetcher
     private static EntityKey ToKey(in ScalarValue value) =>
         value.Kind == StorageKind.Int64 ? EntityKey.FromInt64(value.AsInt64()) : EntityKey.FromString(value.AsString());
 
-    private int BudgetMs(FetchGroup group) => Math.Min(group.TimeoutMs, RemainingMs());
+    private int BudgetMs(FetchGroup group) => Math.Min(group.Supply.TimeoutMs, RemainingMs());
 
     private int RemainingMs()
     {

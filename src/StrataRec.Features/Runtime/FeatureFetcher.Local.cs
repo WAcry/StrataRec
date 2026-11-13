@@ -16,10 +16,15 @@ namespace StrataRec.Features.Runtime;
 /// reader needs its features, for the rows live then: never prefetched, never held by a fetch barrier, never staged.
 /// Within a wave, fetches are started first and local reads run while they are in flight.</para>
 /// <para><b>How.</b> The table is pinned once per request (<see cref="Pin"/>): every read of the request uses that
-/// version. For the features a node needs: one <see cref="TableVersion.Lookup(ReadOnlySpan{long}, Span{LocalRecordRef})"/>
-/// for the rows' keys and one multi-field <see cref="TableVersion.Fill(ReadOnlySpan{LocalRecordRef}, ReadOnlySpan{int}, ReadOnlySpan{LocalFieldRead}, Span{int})"/>
-/// into the slots, then one bitmap of the rows OR-ed into each slot's fill bits. Buffers are rented from the request
-/// memory, so the read allocates nothing (a <c>text</c> value becomes a string).</para>
+/// version. For the features a node needs, one <see cref="LocalReadBatch"/>: the rows' distinct keys, one
+/// <see cref="TableVersion.Lookup(ReadOnlySpan{long}, Span{LocalRecordRef})"/> of them, and each row's record taken from
+/// it; then one multi-field <see cref="TableVersion.Fill(ReadOnlySpan{LocalRecordRef}, ReadOnlySpan{int}, ReadOnlySpan{LocalFieldRead}, Span{int})"/>
+/// into the slots and one bitmap of the rows OR-ed into each slot's fill bits. Buffers are rented from the request
+/// memory and the key index is the fetcher's, so the read allocates nothing (a <c>text</c> value becomes a string).</para>
+/// <para><b>One batch, one answer per key.</b> A pinned version still sees an update its writer makes in place (the
+/// index slot is re-pointed to the new record), so looking a key up twice can give two records. Every consumer of a
+/// read takes the records of its single lookup: rows that share a key (a foreign key) get the same record, and the
+/// recording holds exactly the records the fill used, never a later lookup's.</para>
 /// <para><b>Semantics</b> are the fetched features' (design 6.7): a key the table does not hold, a record without the
 /// field, a missing foreign or context key, and a non-finite value all give <see cref="Catalog.FeatureDefinition.Absent"/>;
 /// a failed key fails the group's features and a degraded one degrades them. A table that is not loaded fails the
@@ -27,21 +32,39 @@ namespace StrataRec.Features.Runtime;
 /// <para><b>Replay</b> (design 13.4). A recording request records each read as a feature call through the
 /// <see cref="IFeatureCallHook"/>, with the keys and the values it read; a replaying request answers local groups like
 /// fetched ones, from the recording through the staging path, so a replay never reads the table. Both sides take the
-/// keys of the same rows, in live-row order and deduplicated, so a replay on the same configuration matches the recorded
-/// call exactly.</para>
+/// keys of the same rows, in live-row order and deduplicated by an <see cref="EntityKeyIndex"/> (first-seen order), so a
+/// replay on the same configuration matches the recorded call exactly.</para>
 /// </remarks>
 public sealed partial class FeatureFetcher
 {
     private TableVersion?[]? _pins; // by group index, rented on the first local read
+    private readonly EntityKeyIndex? _localKeys; // the distinct keys of the current local read; null if no group is read locally
 
-    /// <summary>A local group read from its table; under replay, local groups are answered by the fetch path instead.</summary>
-    private bool ReadsLocally(FetchGroup group) => group.Local is not null && _hook is not { Replays: true };
+    /// <summary>
+    /// Whether this request reads the group from its table. A replay answers a local group through the fetch path instead,
+    /// from the recording (which it never prefetches either: see <see cref="Prefetches"/>).
+    /// </summary>
+    private bool ReadsLocally(FetchGroup group) => group.Supply.Mode switch
+    {
+        SupplyMode.Fetch => false,
+        SupplyMode.Local => _hook is not { Replays: true },
+    };
+
+    /// <summary>
+    /// Whether a prefetch (design 5.4) may start the group. A local group is read synchronously by the node that needs
+    /// it, for the rows live then, so it is never prefetched; nor under replay, whose answer must take the same rows' keys.
+    /// </summary>
+    private static bool Prefetches(FetchGroup group) => group.Supply.Mode switch
+    {
+        SupplyMode.Fetch => true,
+        SupplyMode.Local => false,
+    };
 
     /// <summary>The group's table version for this request, pinned on its first read.</summary>
     private TableVersion Pin(FetchGroup group)
     {
         var pins = _pins ??= _memory.RentCleared<TableVersion?>(Math.Max(1, _plan.Groups.Count));
-        return pins[group.Index] ??= group.Local!.Table.Pin();
+        return pins[group.Index] ??= group.Supply.Table!.Table.Pin();
     }
 
     /// <summary>Reads every local group of <paramref name="groups"/> for the members of <paramref name="member"/> still unfilled.</summary>
@@ -67,7 +90,7 @@ public sealed partial class FeatureFetcher
     /// <summary>One read of a candidate (or foreign-key) group: the live rows that miss any of <paramref name="features"/>.</summary>
     private void ReadLocal(FetchGroup group, ReadOnlySpan<int> features)
     {
-        var local = group.Local!;
+        var local = group.Supply.Table!;
         if (!local.Table.IsLoaded)
         {
             FailNotLoaded(local, features);
@@ -76,20 +99,39 @@ public sealed partial class FeatureFetcher
 
         var started = _hook is null ? 0 : Stopwatch.GetTimestamp();
         var version = Pin(group);
+        var batch = LookUp(group, features, version);
+        if (batch.Rows.Length > 0)
+        {
+            Fill(group, features, version, batch.Rows, batch.RowRecords);
+            if (batch.KeyRecords.Length > 0)
+            {
+                CountKeys(local.Table, batch.Found, batch.KeyRecords.Length - batch.Found);
+                if (_hook is { Replays: false } recorder)
+                {
+                    RecordRead(recorder, group, features, version, batch, started);
+                }
+            }
+        }
 
-        // The rows to fill and their keys. Rows with a key are written from the front, in live order; rows without one
-        // (a missing foreign key, or a key of the other type) from the back, and then moved behind the keyed ones: they
-        // get no record, so every field takes its absent value. A row whose key is not computed yet is left for a later
-        // read, as with a fetch.
+        SetReadState(group, features);
+    }
+
+    /// <summary>
+    /// The batch of one read: the live rows that miss any of <paramref name="features"/> and whose key is computed, their
+    /// distinct keys in first-seen order, one lookup of those keys, and each row's record from that lookup. A row without
+    /// a key (a missing foreign key) gets no record, so every field takes its absent value; a key of the other type than
+    /// the table's is looked up and not found. A row whose key is not computed yet is left for a later read, as with a
+    /// fetch.
+    /// </summary>
+    private LocalReadBatch LookUp(FetchGroup group, ReadOnlySpan<int> features, TableVersion version)
+    {
         var live = _table.Rows.Order;
         var capacity = Math.Max(1, live.Length);
         var rows = _memory.Rent<int>(capacity);
-        var records = _memory.Rent<LocalRecordRef>(capacity);
-        var stringKeys = local.Table.Schema.KeyType == EntityKeyType.String;
-        var int64Keys = stringKeys ? null : _memory.Rent<long>(capacity);
-        var textKeys = stringKeys ? _memory.Rent<string?>(capacity) : null;
-        var keyed = 0;
-        var unkeyed = 0;
+        var entries = _memory.Rent<int>(capacity); // per row: its key's entry in the index, or -1 without a key
+        var keys = _localKeys!;
+        var indexed = false;
+        var count = 0;
         foreach (var row in live)
         {
             if (!NeedsFill(features, row))
@@ -103,47 +145,36 @@ public sealed partial class FeatureFetcher
                 continue;
             }
 
-            if (lookup == KeyLookup.Found && key.IsString == stringKeys)
+            var entry = -1;
+            if (lookup == KeyLookup.Found)
             {
-                rows[keyed] = row;
-                if (stringKeys)
+                if (!indexed)
                 {
-                    textKeys![keyed] = key.StringValue;
-                }
-                else
-                {
-                    int64Keys![keyed] = key.Int64Value;
+                    // Sized to the live rows, an upper bound on the distinct keys: the index never grows. All keys of a
+                    // group have one type (the key column's).
+                    keys.Reset(key.IsString ? EntityKeyType.String : EntityKeyType.Int64, live.Length);
+                    indexed = true;
                 }
 
-                keyed++;
+                entry = keys.GetOrAdd(key, keys.Count, out _);
             }
-            else
-            {
-                rows[capacity - 1 - unkeyed++] = row;
-            }
+
+            rows[count] = row;
+            entries[count++] = entry;
         }
 
-        var count = keyed + unkeyed;
-        if (count > 0)
+        var keyCount = indexed ? keys.Count : 0;
+        var keyRecords = _memory.Rent<LocalRecordRef>(Math.Max(1, keyCount)).AsSpan(0, keyCount);
+        var found = keyCount == 0 ? 0
+            : keys.KeyType == EntityKeyType.String ? version.Lookup(keys.StringKeys!, keyRecords) // non-null keys where nullable ones are accepted
+            : version.Lookup(keys.Int64Keys, keyRecords);
+        var rowRecords = _memory.Rent<LocalRecordRef>(capacity).AsSpan(0, count);
+        for (var i = 0; i < count; i++)
         {
-            rows.AsSpan(capacity - unkeyed, unkeyed).CopyTo(rows.AsSpan(keyed));
-            var found = stringKeys
-                ? version.Lookup(textKeys.AsSpan(0, keyed), records.AsSpan(0, keyed))
-                : version.Lookup(int64Keys.AsSpan(0, keyed), records.AsSpan(0, keyed));
-            records.AsSpan(keyed, unkeyed).Clear();
-            Fill(group, features, version, rows.AsSpan(0, count), records.AsSpan(0, count), out var rowBits);
-            if (keyed > 0)
-            {
-                CountKeys(local.Table, found, keyed - found);
-            }
-
-            if (_hook is { Replays: false } recorder && keyed > 0)
-            {
-                RecordRead(recorder, group, features, version, rowBits, started);
-            }
+            rowRecords[i] = entries[i] < 0 ? default : keyRecords[entries[i]];
         }
 
-        SetReadState(group, features);
+        return new LocalReadBatch(rows.AsSpan(0, count), rowRecords, indexed ? keys : null, keyRecords, found);
     }
 
     /// <summary>
@@ -152,14 +183,12 @@ public sealed partial class FeatureFetcher
     /// fill; a feature already filled on some of the rows (an earlier read of it, before rows were appended) is filled on
     /// the others only, so a value a node has already read never changes within the request.
     /// </summary>
-    /// <param name="rowBits">The rows as a bitmap of the slots' fill-bitmap length.</param>
     private void Fill(
-        FetchGroup group, ReadOnlySpan<int> features, TableVersion version, ReadOnlySpan<int> rows, ReadOnlySpan<LocalRecordRef> records,
-        out ulong[] rowBits)
+        FetchGroup group, ReadOnlySpan<int> features, TableVersion version, ReadOnlySpan<int> rows, ReadOnlySpan<LocalRecordRef> records)
     {
-        var local = group.Local!;
+        var local = group.Supply.Table!;
         var words = _table.GetFilled(_plan.Features[features[0]].Slot).Length;
-        rowBits = _memory.RentCleared<ulong>(words);
+        var rowBits = _memory.RentCleared<ulong>(words);
         foreach (var row in rows)
         {
             Bits.Set(rowBits, row);
@@ -293,7 +322,7 @@ public sealed partial class FeatureFetcher
 
     private void ReadLocalContext(FetchGroup group, ReadOnlySpan<int> features)
     {
-        var local = group.Local!;
+        var local = group.Supply.Table!;
         if (!local.Table.IsLoaded)
         {
             FailNotLoaded(local, features);
@@ -360,30 +389,22 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>
-    /// Records a candidate read as one feature call: the distinct keys of the read rows in live-row order (the keys a
-    /// replay's fetch of the same rows takes), and every read feature's stored value for each key.
+    /// Records a candidate read as one feature call: the batch's distinct keys in first-seen order (the keys a replay's
+    /// fetch of the same rows takes), and every read feature's stored value in the record the batch's lookup returned for
+    /// each key. The recording outlives the read, and the next read resets the key index: the keys and records are copied.
     /// </summary>
-    private void RecordRead(IFeatureCallHook recorder, FetchGroup group, ReadOnlySpan<int> features, TableVersion version, ulong[] rowBits, long started)
+    private void RecordRead(
+        IFeatureCallHook recorder, FetchGroup group, ReadOnlySpan<int> features, TableVersion version, in LocalReadBatch batch, long started)
     {
-        var keys = new List<EntityKey>();
-        var distinct = new HashSet<EntityKey>();
-        foreach (var row in _table.Rows.Order)
+        var keys = new EntityKey[batch.KeyRecords.Length];
+        for (var k = 0; k < keys.Length; k++)
         {
-            if (Bits.Get(rowBits, row) && TryCandidateKey(group, row, out var key) == KeyLookup.Found && distinct.Add(key))
-            {
-                keys.Add(key);
-            }
-        }
-
-        var records = new LocalRecordRef[keys.Count];
-        for (var k = 0; k < records.Length; k++)
-        {
-            records[k] = version.Find(keys[k]);
+            keys[k] = batch.Keys!.KeyAt(k);
         }
 
         var array = features.ToArray();
-        var batch = new EntityKeyBatch { Shape = group.Shape, CandidateKeys = keys.ToArray() };
-        Record(recorder, group, batch, FieldBindings(group, array), new LocalReadValues(version, records, TableFields(group, array)), started);
+        var call = new EntityKeyBatch { Shape = group.Shape, CandidateKeys = keys };
+        Record(recorder, group, call, FieldBindings(group, array), new LocalReadValues(version, batch.KeyRecords.ToArray(), TableFields(group, array)), started);
     }
 
     private static void Record(
@@ -400,7 +421,7 @@ public sealed partial class FeatureFetcher
         var fields = new int[features.Length];
         for (var i = 0; i < features.Length; i++)
         {
-            fields[i] = group.Local!.TableFields[_plan.Features[features[i]].FieldIndex];
+            fields[i] = group.Supply.Table!.TableFields[_plan.Features[features[i]].FieldIndex];
         }
 
         return fields;
@@ -417,6 +438,34 @@ public sealed partial class FeatureFetcher
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// One local read (see the type's remarks): the rows to fill and the record of each, the distinct keys
+    /// (<see cref="Keys"/>, null when no row has a key; entry <c>k</c> is the key of <see cref="KeyRecords"/>[k]) and what
+    /// their single lookup returned, <see cref="Found"/> of them held by the table.
+    /// </summary>
+    private readonly ref struct LocalReadBatch
+    {
+        public LocalReadBatch(
+            ReadOnlySpan<int> rows, ReadOnlySpan<LocalRecordRef> rowRecords, EntityKeyIndex? keys, ReadOnlySpan<LocalRecordRef> keyRecords, int found)
+        {
+            Rows = rows;
+            RowRecords = rowRecords;
+            Keys = keys;
+            KeyRecords = keyRecords;
+            Found = found;
+        }
+
+        public ReadOnlySpan<int> Rows { get; }
+
+        public ReadOnlySpan<LocalRecordRef> RowRecords { get; }
+
+        public EntityKeyIndex? Keys { get; }
+
+        public ReadOnlySpan<LocalRecordRef> KeyRecords { get; }
+
+        public int Found { get; }
     }
 
     /// <summary>What a recorded local read returned: the stored values (non-finite ones as stored, like a connector's).</summary>

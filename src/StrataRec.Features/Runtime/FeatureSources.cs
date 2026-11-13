@@ -1,6 +1,7 @@
 using System.Text.Json;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Keys;
 using StrataRec.Features.Catalog;
 using StrataRec.Features.Connectors;
 using StrataRec.Features.Local;
@@ -15,6 +16,44 @@ public enum SupplyMode : byte
 
     /// <summary>Read from an in-process table that an update source loads in the background: no I/O on the request path.</summary>
     Local,
+}
+
+/// <summary>
+/// How one (source, entity) group is supplied: its mode and everything the mode holds. Built only by
+/// <see cref="FeatureSourceResolver"/>; plan building, the read path and the fetch path take the mode from
+/// <see cref="Mode"/> (with switches over every mode, so a new mode fails to compile where it must be handled) and never
+/// re-derive it from which members are set.
+/// </summary>
+public sealed class GroupSupply
+{
+    private GroupSupply(SupplyMode mode, IFeatureSourceConnector? connector, LocalGroupTable? table, int timeoutMs, int maxBatch)
+    {
+        Mode = mode;
+        Connector = connector;
+        Table = table;
+        TimeoutMs = timeoutMs;
+        MaxBatch = maxBatch;
+    }
+
+    public SupplyMode Mode { get; }
+
+    /// <summary>The connector a fetch calls: set for <see cref="SupplyMode.Fetch"/>, null otherwise.</summary>
+    public IFeatureSourceConnector? Connector { get; }
+
+    /// <summary>The table a read reads: set for <see cref="SupplyMode.Local"/>, null otherwise.</summary>
+    public LocalGroupTable? Table { get; }
+
+    /// <summary>Time limit of one call through the fetch path (also a replay's answer to a local read, which takes no time).</summary>
+    public int TimeoutMs { get; }
+
+    /// <summary>Keys per call through the fetch path; a local group is answered by a replay in one call, as it was recorded.</summary>
+    public int MaxBatch { get; }
+
+    internal static GroupSupply Fetch(IFeatureSourceConnector connector, int timeoutMs, int maxBatch) =>
+        new(SupplyMode.Fetch, connector, null, timeoutMs, maxBatch);
+
+    internal static GroupSupply Local(LocalGroupTable table) =>
+        new(SupplyMode.Local, null, table, FeatureSourceResolver.DefaultTimeoutMs, FeatureSourceResolver.LocalMaxBatch);
 }
 
 /// <summary>The local table a <see cref="FetchGroup"/> reads (design 6.6), and where each of the group's fields is in it.</summary>
@@ -37,11 +76,13 @@ public sealed class LocalGroupTable
 }
 
 /// <summary>
-/// Turns the bindings of a plan's feature sources into how each (source, entity) group is supplied (design 6.4, 6.6).
-/// The one place that knows the supply modes: which binding settings belong to which mode, what each mode requires, and
-/// what it needs from the binary (a connector; an update source and a local table). Adding a mode means adding it here
-/// and to the fetcher's read path; plan building, the engine's table host and replay take groups as they come.
+/// Turns the bindings of a plan's feature sources into how each (source, entity) group is supplied (design 6.4, 6.6):
+/// one <see cref="GroupSupply"/> per group. The one place that knows what each supply mode needs: which binding settings
+/// belong to it, what it requires, and what it takes from the binary (a connector; an update source and a local table).
 /// </summary>
+/// <remarks>Every decision by mode is a switch over all <see cref="SupplyMode"/> values without a default arm (here and
+/// in the fetcher), so adding a mode fails to compile (CS8509) at each place that has to handle it; a test checks that
+/// every mode has a name the binding parses back.</remarks>
 /// <remarks>Only bindings the plan's features use are resolved, so a pipeline is never rejected for another
 /// pipeline's source. Every problem is a diagnostic with the binding's pointer and a hint.</remarks>
 internal sealed class FeatureSourceResolver
@@ -62,11 +103,11 @@ internal sealed class FeatureSourceResolver
         ("bootstrap", SupplyMode.Local, static b => b.Bootstrap is not null),
     };
 
-    private const int DefaultTimeoutMs = 50;
+    internal const int DefaultTimeoutMs = 50;
     private const int DefaultMaxBatch = 1000;
 
     /// <summary>A local group's chunk size when a replay answers its reads through the fetch path: one chunk, as recorded.</summary>
-    private const int LocalMaxBatch = 1 << 30;
+    internal const int LocalMaxBatch = 1 << 30;
 
     private readonly SourceBindingArtifact _bindings;
     private readonly FeatureConnectorRegistry _connectors;
@@ -108,10 +149,33 @@ internal sealed class FeatureSourceResolver
     }
 
     /// <summary>
+    /// The supply of one (source, entity) group of <paramref name="supply"/>'s source; null (diagnosed) when the group
+    /// cannot be supplied that way: a connector without the group's key shape, an entity a local table cannot hold.
+    /// </summary>
+    public GroupSupply? Group(SourceSupply supply, EntityDefinition entity, FeatureRuntimeInfo[] members, KeyShape shape) => supply.Mode switch
+    {
+        SupplyMode.Fetch => FetchGroup(supply, entity, shape),
+        SupplyMode.Local => LocalTable(supply, entity, members) is { } table ? GroupSupply.Local(table) : null,
+    };
+
+    private GroupSupply? FetchGroup(SourceSupply supply, EntityDefinition entity, KeyShape shape)
+    {
+        var connector = supply.Connector!;
+        if (!connector.Supports(shape))
+        {
+            _diagnostics.Error("CONNECTOR_SHAPE", _artifact, supply.Pointer,
+                $"Connector '{connector.ConnectorType}' does not support {shape} lookups needed by entity '{entity.Name}'.");
+            return null;
+        }
+
+        return GroupSupply.Fetch(connector, supply.TimeoutMs, supply.MaxBatch);
+    }
+
+    /// <summary>
     /// The local table of one (source, entity) group and the table field of each member; null (diagnosed) when the
     /// entity cannot be held locally or the features disagree on a field's type.
     /// </summary>
-    public LocalGroupTable? LocalTable(SourceSupply supply, EntityDefinition entity, FeatureRuntimeInfo[] members)
+    private LocalGroupTable? LocalTable(SourceSupply supply, EntityDefinition entity, FeatureRuntimeInfo[] members)
     {
         var pointer = supply.Pointer;
         if (entity.Kind == EntityKind.Cross)
@@ -135,11 +199,12 @@ internal sealed class FeatureSourceResolver
             return null;
         }
 
-        // One update source per table: a source may be stateful (a stream consumer), so tables never share one.
-        IFeatureUpdateSource bootstrap;
+        // One update source per table: a source may be stateful (a stream consumer), so tables never share one. The spec
+        // creates it, with the base directory it pins for the identity too.
+        LocalTableSpec spec;
         try
         {
-            bootstrap = supply.BootstrapFactory!.Create(supply.Name, supply.Binding.Bootstrap!.Settings, _baseDirectory);
+            spec = LocalTableSpec.Create(schema, supply.Options!, supply.Binding, supply.BootstrapFactory!, supply.Name, _artifact, pointer, _baseDirectory);
         }
         catch (FeatureUpdateException ex)
         {
@@ -147,7 +212,6 @@ internal sealed class FeatureSourceResolver
             return null;
         }
 
-        var spec = new LocalTableSpec(schema, supply.Options!, supply.Binding, bootstrap, _artifact, pointer, _baseDirectory);
         LocalFeatureTable table;
         try
         {
@@ -180,26 +244,61 @@ internal sealed class FeatureSourceResolver
         }
 
         var pointer = "/sources/" + JsonPointer.Escape(sourceName);
-        SupplyMode mode;
-        switch (binding.Mode)
+        if (!TryParseMode(binding.Mode, out var mode))
         {
-            case null or "fetch":
-                mode = SupplyMode.Fetch;
-                break;
-            case "local":
-                mode = SupplyMode.Local;
-                break;
-            default:
-                _diagnostics.Error("SOURCE_MODE_UNSUPPORTED", _artifact, pointer + "/mode",
-                    $"Supply mode '{binding.Mode}' is not available in this build.", "use mode 'fetch' or 'local'");
-                return null;
+            _diagnostics.Error("SOURCE_MODE_UNSUPPORTED", _artifact, pointer + "/mode",
+                $"Supply mode '{binding.Mode}' is not available in this build.", "use mode " + ModeNames());
+            return null;
         }
 
         // Every problem of the binding at once: settings of the other mode, and what the mode itself requires.
         var settingsOk = CheckModeSettings(sourceName, binding, mode, pointer);
-        var supply = mode == SupplyMode.Fetch ? ResolveFetch(sourceName, binding, pointer) : ResolveLocal(sourceName, binding, pointer);
+        var supply = mode switch
+        {
+            SupplyMode.Fetch => ResolveFetch(sourceName, binding, pointer),
+            SupplyMode.Local => ResolveLocal(sourceName, binding, pointer),
+        };
         return settingsOk ? supply : null;
     }
+
+    /// <summary>The mode a binding's <c>mode</c> names; no mode is <see cref="SupplyMode.Fetch"/>. The inverse of <see cref="ModeName"/>.</summary>
+    internal static bool TryParseMode(string? name, out SupplyMode mode)
+    {
+        mode = SupplyMode.Fetch;
+        if (name is null)
+        {
+            return true;
+        }
+
+        foreach (var candidate in Enum.GetValues<SupplyMode>())
+        {
+            if (string.Equals(ModeName(candidate), name, StringComparison.Ordinal))
+            {
+                mode = candidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string ModeNames()
+    {
+        var names = new List<string>();
+        foreach (var mode in Enum.GetValues<SupplyMode>())
+        {
+            names.Add("'" + ModeName(mode) + "'");
+        }
+
+        return string.Join(" or ", names);
+    }
+
+    /// <summary>Whether the binding's undeclared members (connector settings) belong to the mode.</summary>
+    private static bool TakesConnectorSettings(SupplyMode mode) => mode switch
+    {
+        SupplyMode.Fetch => true,
+        SupplyMode.Local => false,
+    };
 
     /// <summary>Reports every setting of the other mode; true when there is none.</summary>
     private bool CheckModeSettings(string sourceName, FeatureSourceBinding binding, SupplyMode mode, string pointer)
@@ -216,14 +315,14 @@ internal sealed class FeatureSourceResolver
             }
         }
 
-        if (mode == SupplyMode.Local)
+        if (!TakesConnectorSettings(mode))
         {
             foreach (var (name, _) in binding.Settings)
             {
                 ok = false;
                 _diagnostics.Error("SOURCE_SETTING_WRONG_MODE", _artifact, pointer + "/" + JsonPointer.Escape(name),
-                    $"'{name}' is not a setting of mode 'local' (connector settings belong to mode 'fetch'); source '{sourceName}' is bound with mode 'local'.",
-                    "a local binding takes 'max_bytes' and 'bootstrap'; settings of the update source go inside 'bootstrap'");
+                    $"'{name}' is not a setting of mode '{ModeName(mode)}' (connector settings belong to mode 'fetch'); source '{sourceName}' is bound with mode '{ModeName(mode)}'.",
+                    $"a {ModeName(mode)} binding takes {SettingsOf(mode)}; settings of the update source go inside 'bootstrap'");
             }
         }
 
@@ -299,7 +398,7 @@ internal sealed class FeatureSourceResolver
         {
             try
             {
-                _ = factory.Create(sourceName, binding.Bootstrap!.Settings, _baseDirectory);
+                _ = factory.Create(sourceName, binding.Bootstrap!.Settings, LocalTableSpec.PinBaseDirectory(_baseDirectory));
             }
             catch (FeatureUpdateException ex)
             {
@@ -347,7 +446,27 @@ internal sealed class FeatureSourceResolver
         return parameter < 0 ? line : line[..parameter];
     }
 
-    internal static string ModeName(SupplyMode mode) => mode == SupplyMode.Local ? "local" : "fetch";
+    /// <summary>The mode's name in a binding (<c>"mode"</c>); <see cref="TryParseMode"/> reads it back.</summary>
+    internal static string ModeName(SupplyMode mode) => mode switch
+    {
+        SupplyMode.Fetch => "fetch",
+        SupplyMode.Local => "local",
+    };
+
+    /// <summary>The declared settings of <paramref name="mode"/>, quoted, from <see cref="ModeSettings"/>.</summary>
+    private static string SettingsOf(SupplyMode mode)
+    {
+        var names = new List<string>();
+        foreach (var (name, settingMode, _) in ModeSettings)
+        {
+            if (settingMode == mode)
+            {
+                names.Add("'" + name + "'");
+            }
+        }
+
+        return string.Join(" and ", names);
+    }
 }
 
 /// <summary>A resolved feature source binding: its mode and what that mode needs.</summary>

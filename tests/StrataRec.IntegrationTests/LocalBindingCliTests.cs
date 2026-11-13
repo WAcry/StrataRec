@@ -34,6 +34,40 @@ public sealed class LocalBindingCliTests
     }
 
     [Fact]
+    public async Task Validate_WithAMalformedBootstrapUri_WritesJsonWithThePointerAndAHint()
+    {
+        // The real command line, in its own process: a malformed URI used to escape as an unhandled exception, leaving
+        // no JSON on stdout. The snapshot is deleted: validate still reads no snapshot file.
+        var root = HomeFeedTestHost.LoadModified(root =>
+        {
+            Directory.Delete(Path.Combine(root, "fixtures", "author_snapshot"), recursive: true);
+            SampleBindings.Rebind(root, "author_store", """{ "mode": "local", "max_bytes": "16MiB", "bootstrap": { "source": "snapshot_files@1", "uri": "file://%" } }""");
+        }).Root;
+        var start = new System.Diagnostics.ProcessStartInfo(System.Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var argument in new[] { Path.Combine(AppContext.BaseDirectory, "stratarec.dll"), "validate", "-c", root, "-e", "local", "--format", "json" })
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        using var process = System.Diagnostics.Process.Start(start)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
+
+        Assert.True(process.ExitCode == 1, $"exit {process.ExitCode}; stderr: {await stderr}");
+        using var report = JsonDocument.Parse(await stdout);
+        var error = Assert.Single(report.RootElement.GetProperty("diagnostics").EnumerateArray(), d => d.GetProperty("severity").GetString() == "error");
+        Assert.Equal("UPDATE_SOURCE_CONFIG", error.GetProperty("code").GetString());
+        Assert.Equal("bindings:local", error.GetProperty("artifact").GetString());
+        Assert.Equal("/sources/author_store/bootstrap/uri", error.GetProperty("pointer").GetString());
+        Assert.Contains("file://", error.GetProperty("hint").GetString());
+    }
+
+    [Fact]
     public void Validate_DoesNotLoadTables_SoTheSampleValidatesWithoutReadingItsSnapshot()
     {
         var root = HomeFeedTestHost.LoadModified(root => Directory.Delete(Path.Combine(root, "fixtures", "author_snapshot"), recursive: true)).Root;

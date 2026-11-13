@@ -31,7 +31,7 @@ public sealed class EntityKeyIndex
     private const ulong Fibonacci = 0x9E3779B97F4A7C15UL;
 
     private readonly RequestMemory _memory;
-    private readonly bool _stringKeys;
+    private bool _stringKeys;
     private int[] _slots = Array.Empty<int>();
     private int _slotMask;
     private int _shift;
@@ -48,20 +48,11 @@ public sealed class EntityKeyIndex
     public EntityKeyIndex(EntityKeyType keyType, int capacity, RequestMemory memory)
     {
         ArgumentNullException.ThrowIfNull(memory);
-        ArgumentOutOfRangeException.ThrowIfNegative(capacity);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(capacity, MaxCapacity);
-        if (keyType is not (EntityKeyType.Int64 or EntityKeyType.String))
-        {
-            throw new ArgumentOutOfRangeException(nameof(keyType), keyType, "Entity keys are int64 or string.");
-        }
-
-        KeyType = keyType;
         _memory = memory;
-        _stringKeys = keyType == EntityKeyType.String;
-        Allocate(capacity <= MinSlots / 2 ? MinSlots : (int)BitOperations.RoundUpToPowerOf2((uint)capacity * 2));
+        Reset(keyType, capacity);
     }
 
-    public EntityKeyType KeyType { get; }
+    public EntityKeyType KeyType { get; private set; }
 
     /// <summary>Number of distinct keys.</summary>
     public int Count => _count;
@@ -252,6 +243,38 @@ public sealed class EntityKeyIndex
         return value;
     }
 
+    /// <summary>
+    /// Empties the index and readies it for <paramref name="capacity"/> keys of <paramref name="keyType"/> without growing.
+    /// A caller that indexes one batch after another (the local read, design 6.6) keeps one index and costs no object per
+    /// batch; arrays are rented again only when the capacity or the key type needs more than the index holds.
+    /// </summary>
+    public void Reset(EntityKeyType keyType, int capacity)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(capacity);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(capacity, MaxCapacity);
+        if (keyType is not (EntityKeyType.Int64 or EntityKeyType.String))
+        {
+            throw new ArgumentOutOfRangeException(nameof(keyType), keyType, "Entity keys are int64 or string.");
+        }
+
+        if (_count > 0)
+        {
+            Clear(); // with the old key type: it drops the string references
+        }
+
+        KeyType = keyType;
+        _stringKeys = keyType == EntityKeyType.String;
+        var slotCount = capacity <= MinSlots / 2 ? MinSlots : (int)BitOperations.RoundUpToPowerOf2((uint)capacity * 2);
+        if (_maxCount == 0 || slotCount > _slotMask + 1)
+        {
+            Allocate(slotCount);
+        }
+        else if ((_stringKeys ? _strings.Length : _int64Keys.Length) < _maxCount)
+        {
+            RentKeys(); // the slot table is large enough, but this key type's arrays were rented smaller (or not at all)
+        }
+    }
+
     /// <summary>Removes every key, keeping the rented arrays for reuse.</summary>
     public void Clear()
     {
@@ -286,6 +309,11 @@ public sealed class EntityKeyIndex
         _shift = 64 - BitOperations.Log2((uint)slotCount);
         _maxCount = slotCount / 2;
         _values = _memory.Rent<int>(_maxCount);
+        RentKeys();
+    }
+
+    private void RentKeys()
+    {
         if (_stringKeys)
         {
             _strings = _memory.Rent<string>(_maxCount);
