@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Features.Connectors;
@@ -287,6 +289,52 @@ public sealed class BindingLifetimeTests
         Assert.All(all.Where(i => i is not CountingConnectors.Connector { Name: "user_store" }), // the baseline reads no user feature
             i => Assert.True(i.Calls > 0, "every instance served a request"));
         Assert.Equal(1, models.Created[0].Loads);
+    }
+
+    [Fact]
+    public async Task AMetricCallbackThatThrowsAfterTheSwap_StillRetiresTheReplacedPlansLease()
+    {
+        // Only this test's second load reports this sequence, so tests running alongside are not affected.
+        const long Throwing = 7_160_002;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Meter == StrataRecTelemetry.Meter && instrument.Name == StrataRecMetrics.Names.PlanSequence)
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, value, _, _) =>
+        {
+            if (value == Throwing)
+            {
+                throw new InvalidOperationException("metric callback failed");
+            }
+        });
+        listener.Start();
+        var models = new ScriptedModels();
+        var connectors = new CountingConnectors();
+        var sources = new CountingSources();
+        var root = Workspace(generation: 1);
+        BindCounting(root, latencyMs: null);
+        var engine = new RecEngine(Environment(root, models, connectors, sources));
+        Assert.True((await engine.LoadAsync(Compile(root), sequence: Throwing - 1)).Applied);
+        var old = Assert.Single(models.Created);
+
+        Rebind(root, generation: 2);
+        BindCounting(root, latencyMs: 0);
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => engine.LoadAsync(Compile(root), sequence: Throwing));
+        Assert.Equal("metric callback failed", failure.Message);
+
+        // The swap happened before the callback threw: the new plan serves, and the replaced plan's lease is retired.
+        await old.Disposed.Task.WaitAsync(Wait);
+        Assert.True((await engine.ExecuteAsync(Request("req-after-the-metric-failure"))).Succeeded);
+        await engine.DisposeAsync().AsTask().WaitAsync(Wait);
+        var all = models.Created.Cast<Counted>().Concat(connectors.Created).Concat(sources.Created).ToList();
+        Assert.Equal(8, all.Count);
+        await Task.WhenAll(all.Select(i => i.Disposed.Task)).WaitAsync(Wait);
+        Assert.All(all, i => Assert.Equal((1, 0), (i.Disposals, i.LateCalls)));
+        Assert.Equal(0, engine.Bindings.InstanceCount);
     }
 
     [Fact]
