@@ -211,10 +211,11 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
     }
 
     /// <summary>
-    /// Compiles a plan with this lease as an engine load does: once, and once more when the first compile asked for model
-    /// signatures, after waiting for them (concurrently, within <see cref="BindingHostOptions.LoadTimeout"/>). Every
-    /// lookup runs off the compile's thread, so a plan that checks model signatures compiles twice; the second compile has
-    /// every answer (or a timeout error) and is the one returned. A plan without any compiles once.
+    /// Compiles a plan with this lease as an engine load does: once, and once more when a check of the first compile was
+    /// answered <see cref="SignatureStatus.Pending"/>, after waiting for the lookups (concurrently, within
+    /// <see cref="BindingHostOptions.LoadTimeout"/>); the second compile has every answer (or a timeout error) and is the
+    /// one returned. Every lookup runs off the compile's thread, so a plan that checks model signatures normally compiles
+    /// twice; it compiles once only when every answer was already in when its check asked, and then every check ran.
     /// </summary>
     /// <param name="compile">Compiles the plan with the bindings it is given (this lease).</param>
     /// <param name="cancellationToken">Cancels the wait and the lookups; the instances' loads go on.</param>
