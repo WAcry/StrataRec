@@ -285,6 +285,37 @@ public sealed class BindingHostClientTests
     }
 
     [Fact]
+    public async Task ASignatureLookupStillRunningWhenItsLeaseRetires_KeepsTheInstanceUntilTheClientAnswers()
+    {
+        await using var host = new BindingHost(new BindingHostOptions { LoadTimeout = TimeSpan.FromMilliseconds(50) });
+        var factory = new Factory();
+        var lease = host.OpenLease();
+        var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Instance? client = null;
+
+        var lookup = await lease.CompileAsync(bindings =>
+        {
+            client = bindings.Acquire(Spec(factory), factory.Create);
+            client.SignatureGate = answer.Task; // a model server that ignores the cancellation
+            var lookup = bindings.Signature(client, "ctr_model", null);
+            client.FinishLoad();
+            return lookup;
+        }).WaitAsync(Wait);
+        Assert.Equal(SignatureStatus.Failed, lookup.Status);
+        Assert.True(SpinWait.SpinUntil(() => client!.SignatureCalls == 1, Wait));
+
+        lease.Dispose(); // the plan is rejected
+        Assert.True(SpinWait.SpinUntil(() => client!.SignatureToken.IsCancellationRequested, Wait)); // the lookup is cancelled...
+        await Task.Delay(50);
+        Assert.False(client!.Disposed.Task.IsCompleted); // ...and the client is not disposed under it
+
+        answer.SetResult();
+        await client.Disposed.Task.WaitAsync(Wait);
+        Assert.Equal((1, 0), (client.DisposeCount, client.CallsAtOrAfterDispose));
+        Assert.Equal(0, host.InstanceCount);
+    }
+
+    [Fact]
     public async Task TheSignatureOfAClientWhoseLoadFailed_IsUnchecked_TheLoadFailureIsTheError()
     {
         await using var host = new BindingHost();
@@ -376,8 +407,18 @@ public sealed class BindingHostClientTests
         private int _loads;
         private int _signatureCalls;
         private int _disposeCount;
+        private int _inFlight;
+        private int _callsAtOrAfterDispose;
 
         public BindingContext Context { get; } = context;
+
+        /// <summary>When set, a signature lookup answers once this completes, whatever its token says.</summary>
+        public Task? SignatureGate { get; set; }
+
+        public CancellationToken SignatureToken { get; private set; }
+
+        /// <summary>Signature lookups that were running when the disposal began, or started after it: always 0.</summary>
+        public int CallsAtOrAfterDispose => Volatile.Read(ref _callsAtOrAfterDispose);
 
         public string ClientType => "test@1";
 
@@ -417,12 +458,34 @@ public sealed class BindingHostClientTests
             }
         }
 
-        public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken)
+        public async ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken)
         {
-            Interlocked.Increment(ref _signatureCalls);
-            return signatureNeverAnswers
-                ? new ValueTask<ModelSignature>(Task.Delay(Timeout.Infinite, cancellationToken).ContinueWith(_ => Signature(), TaskScheduler.Default))
-                : ValueTask.FromResult(Signature());
+            Interlocked.Increment(ref _inFlight);
+            try
+            {
+                if (DisposeCount > 0)
+                {
+                    Interlocked.Increment(ref _callsAtOrAfterDispose);
+                }
+
+                SignatureToken = cancellationToken;
+                Interlocked.Increment(ref _signatureCalls);
+                if (signatureNeverAnswers)
+                {
+                    await Task.Delay(Timeout.Infinite, cancellationToken);
+                }
+
+                if (SignatureGate is not null)
+                {
+                    await SignatureGate; // ignores the cancellation
+                }
+
+                return Signature();
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _inFlight);
+            }
         }
 
         public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
@@ -430,6 +493,11 @@ public sealed class BindingHostClientTests
 
         public ValueTask DisposeAsync()
         {
+            if (Volatile.Read(ref _inFlight) > 0)
+            {
+                Interlocked.Increment(ref _callsAtOrAfterDispose);
+            }
+
             Interlocked.Increment(ref _disposeCount);
             Disposed.TrySetResult();
             return ThrowOnDispose ? ValueTask.FromException(new InvalidOperationException("dispose failed")) : ValueTask.CompletedTask;

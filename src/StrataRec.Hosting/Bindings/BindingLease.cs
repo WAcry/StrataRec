@@ -26,7 +26,9 @@ public sealed record BindingLoadFailure(string Code, string Artifact, string Poi
 /// Its instances are released once the lease is retired and its last user has left: a request enters with
 /// <see cref="TryEnter"/> and leaves with <see cref="RequestEnded"/>; each run of it joins, and its request memory leaves
 /// once the run and every call it started have ended, so a call abandoned at a timeout keeps its client alive until it
-/// returns. One count holds them all, so no order of these events releases an instance a user still holds.</para>
+/// returns. A signature lookup is a user too, from the moment it is asked until the client answered, so retiring the
+/// lease (which cancels the lookup) never disposes a client inside its <see cref="IModelClient.GetSignatureAsync"/>. One
+/// count holds them all, so no order of these events releases an instance a user still holds.</para>
 /// <para><b>Model signatures</b> (design 6.9). <see cref="Signature"/> asks a client once per (model, version) and keeps
 /// the answer for the lease's compiles. An answer that needs the client loaded or I/O is pending during the first compile;
 /// <see cref="CompileAsync{T}"/> then waits for every pending answer, concurrently and within
@@ -175,7 +177,14 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
 
         if (answer is null)
         {
-            // Asked outside the lock (the client's code runs here until its first await); one compile at a time asks.
+            // A lookup is a user of the lease, as a run is: retiring the lease cancels it, but the instance is disposed
+            // only after the client returned. Asked outside the lock (the client's code runs here until its first await);
+            // one compile at a time asks.
+            if (!TryEnter())
+            {
+                throw new ObjectDisposedException(nameof(BindingLease));
+            }
+
             answer = LookupAsync(entry, client, model, version, LookupToken());
             lock (_gate)
             {
@@ -355,7 +364,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
         return this;
     }
 
-    /// <summary>An entry or a run has ended: the last one of a retired lease releases its instances.</summary>
+    /// <summary>An entry, a run or a signature lookup has ended: the last one of a retired lease releases its instances.</summary>
     public void RequestEnded()
     {
         var state = Interlocked.Decrement(ref _state);
@@ -453,26 +462,41 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
         return pending;
     }
 
-    /// <summary>The client's answer once it can give one: after its load; never faults.</summary>
-    private static async Task<SignatureLookup> LookupAsync(BindingHost.ClientEntry entry, IModelClient client, string model, string? version, CancellationToken token)
+    /// <summary>
+    /// The client's answer once it can give one: after its load; never faults. The caller entered the lease for it, and
+    /// this ends that entry once the client returned.
+    /// </summary>
+    private async Task<SignatureLookup> LookupAsync(BindingHost.ClientEntry entry, IModelClient client, string model, string? version, CancellationToken token)
     {
         try
         {
-            await entry.Ready().ConfigureAwait(false);
-        }
-        catch (Exception)
-        {
-            return SignatureLookup.Unchecked; // the load failed: the plan is rejected with that failure, at the binding
-        }
+            try
+            {
+                await entry.Ready().ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                return SignatureLookup.Unchecked; // the load failed: the plan is rejected with that failure, at the binding
+            }
 
-        try
-        {
-            var signature = await client.GetSignatureAsync(model, version, token).ConfigureAwait(false);
-            return new SignatureLookup(SignatureStatus.Known, signature);
+            if (token.IsCancellationRequested)
+            {
+                return SignatureLookup.Failure(new OperationCanceledException(token)); // the lease retired: nobody asks any more
+            }
+
+            try
+            {
+                var signature = await client.GetSignatureAsync(model, version, token).ConfigureAwait(false);
+                return new SignatureLookup(SignatureStatus.Known, signature);
+            }
+            catch (Exception ex)
+            {
+                return SignatureLookup.Failure(ex);
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            return SignatureLookup.Failure(ex);
+            RequestEnded();
         }
     }
 }
