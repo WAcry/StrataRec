@@ -279,6 +279,191 @@ public class SnapshotFilesUpdateSourceTests
         Assert.Contains(hint, error.Hint, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// JSON string contents (as written in the file) and the value they decode to. The decode buffer starts at 256
+    /// chars and grows when a value's escaped UTF-8 form is longer, so the cases sit on both sides of that size, and
+    /// include values whose bytes pass it while their chars do not (multi-byte UTF-8, escapes).
+    /// </summary>
+    public static IEnumerable<object[]> LongStrings() => new[]
+    {
+        new object[] { new string('a', 256), new string('a', 256) },
+        new object[] { new string('a', 257), new string('a', 257) },
+        new object[] { new string('汉', 100), new string('汉', 100) },
+        new object[] { string.Concat(Enumerable.Repeat("\\u0041", 60)) + "\\n\\\"\\\\", new string('A', 60) + "\n\"\\" },
+        new object[] { string.Concat(Enumerable.Repeat("\\ud83d\\ude00", 30)), string.Concat(Enumerable.Repeat("😀", 30)) },
+    };
+
+    [Theory]
+    [MemberData(nameof(LongStrings))]
+    public void Load_StringsThatGrowTheDecodeBuffer_ReadBackExactly(string json, string value)
+    {
+        // Each value is a key, a string, a text and list items. The line before has short values; the line after has
+        // the value twice and three times over, so the buffers grow again and are reused at every size.
+        using var dir = new TempDirectory();
+        dir.Write("a.jsonl",
+            "{\"key\": \"short\", \"version\": 1, \"fields\": {\"s\": \"x\", \"t\": \"y\", \"ls\": [\"z\"]}}\n" +
+            "{\"key\": \"" + json + "\", \"version\": 1, \"fields\": {\"s\": \"" + json + "\", \"t\": \"" + json + "\", \"ls\": [\"" + json + "\", \"q\", \"" + json + "\"]}}\n" +
+            "{\"key\": \"after\", \"version\": 1, \"fields\": {\"s\": \"" + json + json + "\", \"t\": \"" + json + json + json + "\", \"ls\": [\"" + json + json + json + "\"]}}");
+        dir.Write("snapshot.json", """{"files": ["a.jsonl"]}""");
+        var table = Table(EntityKeyType.String);
+        new SnapshotFilesUpdateSource(Path.Combine(dir.Path, "snapshot.json")).Load(table.Writer);
+
+        var version = table.Pin();
+        Assert.Equal(3, version.RecordCount);
+        var shortRecord = ReadRecord(version, table.Schema, EntityKey.FromString("short"))!;
+        Assert.Equal("x", shortRecord["s"].AsString());
+        Assert.Equal(new[] { "z" }, shortRecord["ls"].AsStringList().ToArray());
+
+        var record = ReadRecord(version, table.Schema, EntityKey.FromString(value));
+        Assert.NotNull(record);
+        Assert.Equal(value, record["s"].AsString());
+        Assert.Equal(value, record["t"].AsString());
+        Assert.Equal(new[] { value, "q", value }, record["ls"].AsStringList().ToArray());
+
+        var after = ReadRecord(version, table.Schema, EntityKey.FromString("after"))!;
+        Assert.Equal(value + value, after["s"].AsString());
+        Assert.Equal(value + value + value, after["t"].AsString());
+        Assert.Equal(new[] { value + value + value }, after["ls"].AsStringList().ToArray());
+    }
+
+    [Fact]
+    public void Load_WithACancelledToken_ChangesNothing()
+    {
+        using var dir = new TempDirectory();
+        var (table, source, loaded) = LoadFirstGeneration(dir);
+        using var cancel = new CancellationTokenSource();
+        cancel.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => source.Load(table.Writer, cancel.Token));
+        AssertUnchanged(table, loaded, source);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void Load_CancelledWhileLoading_AbortsTheReload(int cancelAtLine)
+    {
+        // A two-line snapshot: far fewer lines than the hot loop's periodic check, so only the checks at the file
+        // boundary and before the swap can see the cancellation.
+        using var dir = new TempDirectory();
+        var (table, source, loaded) = LoadFirstGeneration(dir);
+        using var cancel = new CancellationTokenSource();
+        var writer = new CancellingWriter(table.Writer, cancel, cancelAtLine);
+
+        Assert.Throws<OperationCanceledException>(() => source.Load(writer, cancel.Token));
+        AssertUnchanged(table, loaded, source);
+    }
+
+    [Fact]
+    public void Load_CancelledInOneFile_DoesNotReadTheNext()
+    {
+        using var dir = new TempDirectory();
+        var (table, source, loaded) = LoadFirstGeneration(dir);
+        dir.Write("b.jsonl", Lines(10, 11, version: 1));
+        dir.Write("c.jsonl", Lines(12, 13, version: 1));
+        dir.Write("snapshot.json", """{"position": {"0": 13}, "files": ["b.jsonl", "c.jsonl"]}""");
+        using var cancel = new CancellationTokenSource();
+        var writer = new CancellingWriter(table.Writer, cancel, cancelAtBegin: 1);
+
+        Assert.Throws<OperationCanceledException>(() => source.Load(writer, cancel.Token));
+        Assert.Equal(2, writer.Begins); // b.jsonl finished; c.jsonl never opened
+        AssertUnchanged(table, loaded, source);
+    }
+
+    [Fact]
+    public async Task RunAsync_CancelledDuringTheFirstLoad_PublishesNothing()
+    {
+        using var dir = new TempDirectory();
+        dir.Write("a.jsonl", Lines(1, 2, version: 1));
+        dir.Write("snapshot.json", """{"position": {"0": 2}, "files": ["a.jsonl"]}""");
+        var table = Table();
+        var empty = table.Pin();
+        using var cancel = new CancellationTokenSource();
+        var writer = new CancellingWriter(table.Writer, cancel, cancelAtBegin: 1);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => new SnapshotFilesUpdateSource(Path.Combine(dir.Path, "snapshot.json")).RunAsync(UpdatePosition.Empty, writer, cancel.Token));
+        Assert.Same(empty, table.Pin());
+        Assert.Equal(UpdatePosition.Empty, table.Position);
+        Assert.False(table.Writer.IsReloading);
+    }
+
+    /// <summary>Loads a first generation (keys 1-3, position 3), then publishes a second two-line one to be cancelled.</summary>
+    private static (LocalFeatureTable Table, SnapshotFilesUpdateSource Source, TableVersion Loaded) LoadFirstGeneration(TempDirectory dir)
+    {
+        dir.Write("gen-1.jsonl", Lines(1, 3, version: 1));
+        dir.Write("snapshot.json", """{"position": {"0": 3}, "files": ["gen-1.jsonl"]}""");
+        var table = Table();
+        var source = new SnapshotFilesUpdateSource(Path.Combine(dir.Path, "snapshot.json"));
+        source.Load(table.Writer);
+        dir.Write("gen-2.jsonl", Lines(4, 5, version: 1));
+        dir.Write("snapshot.json", """{"position": {"0": 5}, "files": ["gen-2.jsonl"]}""");
+        return (table, source, table.Pin());
+    }
+
+    /// <summary>The first generation is still current and complete; then the same snapshot loads without cancellation.</summary>
+    private static void AssertUnchanged(LocalFeatureTable table, TableVersion loaded, SnapshotFilesUpdateSource source)
+    {
+        Assert.Same(loaded, table.Pin());
+        Assert.Equal(UpdatePosition.Single(3), table.Position);
+        Assert.False(table.Writer.IsReloading);
+        Assert.Equal(3, table.Pin().RecordCount);
+        Assert.Equal(3L, table.Pin().Read(table.Schema.FieldIndex("i64"), table.Pin().Find(3L)).AsInt64());
+
+        var position = source.Load(table.Writer);
+        Assert.Equal(position, table.Position);
+        Assert.NotSame(loaded, table.Pin());
+        Assert.False(table.Pin().Find(1L).Found);
+    }
+
+    /// <summary>Passes every call to the table's writer and cancels the token at the n-th <c>Begin</c>.</summary>
+    private sealed class CancellingWriter(IFeatureTableWriter inner, CancellationTokenSource cancel, int cancelAtBegin) : IFeatureTableWriter
+    {
+        public int Begins { get; private set; }
+
+        public LocalTableSchema Schema => inner.Schema;
+
+        public RecordBuilder Begin(long key, long version)
+        {
+            Count();
+            return inner.Begin(key, version);
+        }
+
+        public RecordBuilder Begin(ReadOnlySpan<char> key, long version)
+        {
+            Count();
+            return inner.Begin(key, version);
+        }
+
+        public RecordBuilder Begin(in EntityKey key, long version)
+        {
+            Count();
+            return inner.Begin(key, version);
+        }
+
+        public bool Delete(long key, long version) => inner.Delete(key, version);
+
+        public bool Delete(ReadOnlySpan<char> key, long version) => inner.Delete(key, version);
+
+        public bool Delete(in EntityKey key, long version) => inner.Delete(key, version);
+
+        public void Checkpoint(UpdatePosition position) => inner.Checkpoint(position);
+
+        public void BeginReload() => inner.BeginReload();
+
+        public void CompleteReload(UpdatePosition position) => inner.CompleteReload(position);
+
+        public void AbortReload() => inner.AbortReload();
+
+        private void Count()
+        {
+            if (++Begins == cancelAtBegin)
+            {
+                cancel.Cancel();
+            }
+        }
+    }
+
     private static string Lines(int from, int to, long version)
     {
         var lines = new List<string>();

@@ -84,13 +84,21 @@ internal sealed class RecordLayout
         FixedSize = Align(cursor, 8);
         VarFieldCount = varCount;
         VarFields = new int[varCount];
+        var dictionaryFields = new List<int>();
         for (var f = 0; f < count; f++)
         {
             if (VarSlots[f] >= 0)
             {
                 VarFields[VarSlots[f]] = f;
             }
+
+            if (Kinds[f] is StorageKind.String or StorageKind.ListString)
+            {
+                dictionaryFields.Add(f);
+            }
         }
+
+        DictionaryFields = dictionaryFields.ToArray();
     }
 
     public LocalTableSchema Schema { get; }
@@ -127,6 +135,9 @@ internal sealed class RecordLayout
 
     /// <summary>The field index of each variable-length field.</summary>
     public int[] VarFields { get; }
+
+    /// <summary>The fields whose values are codes into the table's string dictionary (<c>string</c>, <c>list&lt;string&gt;</c>).</summary>
+    public int[] DictionaryFields { get; }
 
     public static bool IsVariable(StorageKind kind) => kind is StorageKind.Text or StorageKind.ListInt32 or StorageKind.ListInt64 or StorageKind.ListString;
 

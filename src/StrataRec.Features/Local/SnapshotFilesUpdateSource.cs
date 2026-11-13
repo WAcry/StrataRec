@@ -94,22 +94,32 @@ public sealed class SnapshotFilesUpdateSource : IFeatureUpdateSource
     /// <summary>Loads the current snapshot once, as one reload of the table, and returns the position it covers.</summary>
     public UpdatePosition Load(IFeatureTableWriter writer, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        cancellationToken.ThrowIfCancellationRequested();
         var manifest = SnapshotManifest.Read(ManifestPath);
         Load(manifest, writer, cancellationToken);
         return manifest.Position;
     }
 
+    /// <remarks>
+    /// Cancellation is checked before the reload starts, before every file and right before the swap, as well as every
+    /// few thousand lines while reading: a cancelled load aborts its reload and never publishes, however small the
+    /// snapshot, so the table keeps its version and its position.
+    /// </remarks>
     private static void Load(SnapshotManifest manifest, IFeatureTableWriter writer, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var reader = new JsonLinesSnapshotReader(writer);
         writer.BeginReload();
         try
         {
             for (var i = 0; i < manifest.Files.Length; i++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 reader.Load(manifest.Files[i], cancellationToken);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             writer.CompleteReload(manifest.Position);
         }
         catch
@@ -701,7 +711,7 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
                     throw Mismatch(ref reader, field, -1, type);
                 }
 
-                builder.SetString(field, _chars.AsSpan(0, CopyString(ref reader, ref _chars)));
+                builder.SetString(field, Chars(ref reader));
                 break;
             case StorageKind.Vector:
             {
@@ -752,7 +762,7 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
                                 throw Error(Pointer(field, n), $"A list<string> item must be a string, got {Raw(ref reader)}.", "list items cannot be null");
                             }
 
-                            builder.AddStringItem(field, _chars.AsSpan(0, CopyString(ref reader, ref _chars)));
+                            builder.AddStringItem(field, Chars(ref reader));
                             break;
                     }
 
@@ -860,6 +870,15 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
 
         throw Error(Pointer(field, element), $"Expected a {type} number, got {Raw(ref reader)}.",
             "the only strings a float field accepts are \"NaN\", \"Infinity\" and \"-Infinity\"");
+    }
+
+    /// <summary>The current string token's chars, decoded into the reused buffer (valid until the next decode).</summary>
+    private ReadOnlySpan<char> Chars(ref Utf8JsonReader reader)
+    {
+        // Decode first, then take the span: CopyString may replace _chars, and a span taken from the field before the
+        // call (as in `_chars.AsSpan(0, CopyString(...))`) would point into the old, smaller buffer.
+        var length = CopyString(ref reader, ref _chars);
+        return _chars.AsSpan(0, length);
     }
 
     private static int CopyString(ref Utf8JsonReader reader, ref char[] buffer)

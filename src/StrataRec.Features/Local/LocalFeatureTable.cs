@@ -98,6 +98,15 @@ public sealed class LocalFeatureTable
 
         _current = new TableVersion(
             layout, Options.StringKeyHasher ?? StringKeyHashes.Default, Options.PageSize, generation: 0, Options.InitialCapacity, expectedBytes: 0);
+        if (_current.Bytes > Options.MaxBytes)
+        {
+            // Every write checks the limit, so the empty table must be within it too.
+            throw new ArgumentOutOfRangeException(
+                nameof(options), Options.MaxBytes,
+                $"max_bytes of {schema.Source}/{schema.Entity} is {Options.MaxBytes} B, but the empty table already takes {_current.Bytes} B " +
+                $"(an index for {Options.InitialCapacity} keys, the page directory and the string dictionary): raise max_bytes, or lower the initial capacity.");
+        }
+
         Writer = new LocalTableWriter(this, layout, Options, _current);
     }
 
