@@ -4,6 +4,7 @@ using StrataRec.Core.Diagnostics;
 
 namespace StrataRec.UnitTests.Core;
 
+[Collection(AllocationMeasurement.Name)]
 public sealed class RequestEventLogTests
 {
     [Fact]
