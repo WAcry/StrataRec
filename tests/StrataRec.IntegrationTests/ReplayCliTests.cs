@@ -85,6 +85,35 @@ public sealed class ReplayCliTests
     }
 
     [Fact]
+    public async Task BundleWithANullRun_IsReportedWithItsPointer_AndTheOtherBundlesStillReplay()
+    {
+        var directory = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
+        File.WriteAllText(Path.Combine(directory, "a-null-run.json"), MinimalBundle("[null]"));
+        File.WriteAllText(Path.Combine(directory, "b-valid.json"), MinimalBundle("[]"));
+
+        var output = new StringWriter();
+        var exit = await ReplayCommand.RunAsync(Samples.HomeFeed, "local", directory, Array.Empty<string>(), "json", false, output, CancellationToken.None);
+
+        Assert.Equal(2, exit);
+        using var report = JsonDocument.Parse(output.ToString());
+        var bundles = report.RootElement.GetProperty("bundles");
+        Assert.Equal(2, bundles.GetArrayLength());
+        Assert.Contains("/runs/0: must not be null", bundles[0].GetProperty("error").GetString());
+        Assert.True(bundles[1].TryGetProperty("diff", out _));
+    }
+
+    /// <summary>A bundle of the home_feed pipeline that ran nothing (its recorded result failed), with the given runs.</summary>
+    internal static string MinimalBundle(string runs) => $$"""
+        {
+          "format": "{{StrataRec.Artifacts.Model.ReplayBundle.CurrentFormat}}",
+          "request": { "pipeline_id": "home_feed", "request_id": "r", "seed": 1, "time_ms": 0, "deadline_ms": 100, "assignment": { "source": "none" } },
+          "manifest": { "id": "m" },
+          "runs": {{runs}},
+          "result": { "served_by": "home_feed", "succeeded": false, "error": "request input 'surface' (string) is required" }
+        }
+        """;
+
+    [Fact]
     public void Schema_DescribesTheReplayBundle()
     {
         var output = new StringWriter();
