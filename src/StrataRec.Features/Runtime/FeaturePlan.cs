@@ -126,6 +126,7 @@ public sealed class FeaturePlan
         foreach (var g in groups)
         {
             MaxWave = Math.Max(MaxWave, g.Wave);
+            HasLocalGroups |= g.Local is not null;
             _ = g.Io; // build the source's metric tags with the plan, not on its first request
         }
     }
@@ -139,6 +140,9 @@ public sealed class FeaturePlan
 
     /// <summary>Highest fetch wave of any group (0 when nothing is keyed by a feature).</summary>
     public int MaxWave { get; }
+
+    /// <summary>Whether a request may read a local table: it then readies the buffers of its local reads up front.</summary>
+    public bool HasLocalGroups { get; }
 
     /// <summary>
     /// Builds the plan: groups physical features by (source, entity), resolves each group's supply from the bindings

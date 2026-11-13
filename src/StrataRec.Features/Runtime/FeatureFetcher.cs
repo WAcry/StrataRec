@@ -102,6 +102,10 @@ public sealed partial class FeatureFetcher
         _hook = hook;
         _state = new FeatureState[plan.Features.Count];
         _errors = new string?[plan.Features.Count];
+        if (plan.HasLocalGroups && hook is not { Replays: true })
+        {
+            _localKeys = new EntityKeyIndex(EntityKeyType.Int64, 0, memory); // reset by each local read, so no read costs an object
+        }
     }
 
     /// <summary>

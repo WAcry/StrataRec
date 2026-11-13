@@ -266,6 +266,43 @@ public class EntityKeyIndexTests
     }
 
     [Fact]
+    public void Reset_EmptiesTheIndex_ForEitherKeyType_AndAnyCapacity()
+    {
+        var index = new EntityKeyIndex(EntityKeyType.Int64, 4, new RequestMemory());
+        index.TryAdd(7L, 0);
+
+        // To strings, larger than the slot table: every string lands without growing past the asked capacity.
+        index.Reset(EntityKeyType.String, 100);
+        Assert.Equal(EntityKeyType.String, index.KeyType);
+        Assert.Equal(0, index.Count);
+        for (var i = 0; i < 100; i++)
+        {
+            Assert.True(index.TryAdd("k" + i, i));
+        }
+
+        Assert.Equal(Enumerable.Range(0, 100).Select(i => "k" + i), index.StringKeys.ToArray());
+
+        // Back to int64 within the same slot table: the int64 arrays were rented for 4 keys only, so they are rented again.
+        index.Reset(EntityKeyType.Int64, 50);
+        Assert.False(index.TryGetValue(7L, out _));
+        for (var i = 0; i < 50; i++)
+        {
+            Assert.True(index.TryAdd(i * 1000L, i));
+        }
+
+        Assert.True(index.TryGetValue(49_000L, out var value));
+        Assert.Equal(49, value);
+        Assert.Equal(Enumerable.Range(0, 50).Select(i => i * 1000L), index.Int64Keys.ToArray());
+
+        // Smaller again: the larger table is kept, and it is empty.
+        index.Reset(EntityKeyType.String, 1);
+        Assert.False(index.TryGetValue("k3", out _));
+        Assert.True(index.TryAdd("k3", 3));
+        Assert.Throws<ArgumentOutOfRangeException>(() => index.Reset(EntityKeyType.Int64, -1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => index.Reset((EntityKeyType)0, 1));
+    }
+
+    [Fact]
     public void ArgumentsAreValidated()
     {
         var memory = new RequestMemory();

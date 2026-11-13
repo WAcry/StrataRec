@@ -1,8 +1,11 @@
+using System.Diagnostics.Metrics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
+using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Features.Local;
 using StrataRec.Hosting;
@@ -280,5 +283,86 @@ public sealed class LocalTableEngineTests
             Assert.True(DateTime.UtcNow < deadline, "timed out waiting for " + what);
             await Task.Delay(5);
         }
+    }
+}
+
+/// <summary>
+/// A local read's recording holds the records the read used (design 13.4), also when the table's writer updates them in
+/// place while the request runs: a pinned version sees such an update on its next lookup.
+/// </summary>
+[Collection(ProcessWideListenersCollection.Name)]
+public sealed class LocalReadRecordingTests
+{
+    private const double Updated = 9876543; // exact in the float32 field
+
+    [Fact]
+    public async Task AnUpdateBetweenTheFillAndTheRecording_IsNotRecorded_AndTheReplayIsIdentical()
+    {
+        var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
+        await using var owned = engine;
+        Assert.True(engine.TryGetPipeline("home_feed", out var pipeline));
+        var table = Assert.Single(pipeline.LocalTables!.Tables, t => t.Schema.Source == "author_store");
+        var followers = table.Schema.FieldIndex("a_followers");
+
+        // The read counts its keys after the fill and before it records: the update lands in that window, on the request's
+        // thread, while the snapshot source (finished loading) leaves the writer idle.
+        var updates = 0;
+        using (var listener = new MeterListener())
+        {
+            listener.InstrumentPublished = (instrument, l) =>
+            {
+                if (instrument.Name == StrataRecMetrics.Names.LocalKeys)
+                {
+                    l.EnableMeasurementEvents(instrument);
+                }
+            };
+            listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+            {
+                if (!IsAuthorStore(tags) || Interlocked.Increment(ref updates) != 1)
+                {
+                    return;
+                }
+
+                for (var author = 100L; author <= 110; author++)
+                {
+                    var builder = table.Writer.Begin(author, 2);
+                    builder.Set(followers, ScalarValue.FromFloat64(Updated));
+                    builder.Commit();
+                }
+            });
+            listener.Start();
+
+            var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-update-window", 1001, "home", ReplayTests.ControlArms));
+
+            Assert.True(recorded.Succeeded, recorded.Error);
+            Assert.True(updates >= 1, "the read counted no keys");
+            var call = Assert.Single(recorded.Recording!.Runs[0].FeatureCalls, c => c.Source == "author_store");
+            Assert.True(call.Keys!.Value.GetArrayLength() > 1, "the items' authors, several of them");
+            var recordedFollowers = call.Values!["a_followers"].GetRawText();
+            Assert.DoesNotContain("9876543", recordedFollowers, StringComparison.Ordinal);
+            listener.Dispose();
+
+            var replayed = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording)));
+
+            Assert.True(replayed.Report.Diff.Identical, ReplayTests.Describe(replayed.Report));
+            Assert.Empty(replayed.Report.Gaps);
+        }
+
+        // The update did land: a later read sees it.
+        var version = table.Pin();
+        Assert.Equal(Updated, version.Read(followers, version.Find(EntityKey.FromInt64(100))).AsFloat64());
+    }
+
+    private static bool IsAuthorStore(ReadOnlySpan<KeyValuePair<string, object?>> tags)
+    {
+        foreach (var (key, value) in tags)
+        {
+            if (key == StrataRecTags.Source)
+            {
+                return value as string == "author_store";
+            }
+        }
+
+        return false;
     }
 }
