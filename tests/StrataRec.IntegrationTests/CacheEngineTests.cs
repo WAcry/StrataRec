@@ -144,7 +144,7 @@ public sealed class CacheEngineTests
         }
         """);
 
-    internal static async Task<RecEngine> Load(string root, SharedStores stores)
+    internal static async Task<RecEngine> Load(string root, IFeatureCacheStoreFactory stores)
     {
         var engine = new RecEngine(new PlanEnvironment { BaseDirectory = root, CacheStores = new FeatureCacheStoreRegistry().Add(stores) });
         var load = await engine.LoadAsync(Compile(root));
@@ -184,7 +184,7 @@ public sealed class CacheEngineTests
         }
     }
 
-    private static async Task Eventually(Func<bool> condition, Func<string> what)
+    internal static async Task Eventually(Func<bool> condition, Func<string> what)
     {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
         while (!condition())
@@ -194,11 +194,11 @@ public sealed class CacheEngineTests
         }
     }
 
-    private static List<(long, int, string)> Items(RecResult result) =>
+    internal static List<(long, int, string)> Items(RecResult result) =>
         result.Items.Select(i => (i.Id.Int64Value, i.Rank, string.Join(";", i.Columns.OrderBy(c => c.Key).Select(c => $"{c.Key}={c.Value}")))).ToList();
 
     /// <summary>What <see cref="Source"/> read so far: keys by cache tier and outcome, and keys asked of its connector.</summary>
-    private sealed record Snapshot(Dictionary<(string Tier, string Outcome), long> Counts, long ConnectorKeys)
+    internal sealed record Snapshot(Dictionary<(string Tier, string Outcome), long> Counts, long ConnectorKeys)
     {
         public static Snapshot Of(MetricCapture metrics)
         {

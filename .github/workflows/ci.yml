@@ -28,6 +28,17 @@ jobs:
           - { sdk: "8.0", pin: true }
           # The newest SDK (still targeting net8.0, so the .NET 8 runtime runs the tests).
           - { sdk: "10.0", pin: false }
+    services:
+      # The Redis of the redis@1 integration tests (STRATAREC_REDIS below); without it they would be skipped.
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
     steps:
       - uses: actions/checkout@v5
 
@@ -52,6 +63,8 @@ jobs:
         run: dotnet build StrataRec.sln -c Release --no-restore
 
       - name: Test
+        env:
+          STRATAREC_REDIS: localhost:6379
         run: dotnet test StrataRec.sln -c Release --no-build --logger "trx;LogFilePrefix=results" --results-directory TestResults
 
       - name: Upload test results
