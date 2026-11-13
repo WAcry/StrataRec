@@ -28,7 +28,7 @@ dotnet run --project src/StrataRec.Cli -- --help
 | `StrataRec.Models` | `IModelClient` 契约与内置客户端 |
 | `StrataRec.Logging` | 漏斗组、探针、协调采样、异步日志管道 |
 | `StrataRec.Pipeline` | 节点模型、效果、算子、执行器 |
-| `StrataRec.Experiments` | 流量分配、补丁校验、足迹、联合计划、触发 |
+| `StrataRec.Experiments` | 外部分配的映射、补丁校验、足迹、联合计划、触发 |
 | `StrataRec.Hosting` | `IRecEngine`、计划加载与切换、DI |
 | `StrataRec.Cli` | `stratarec` 命令行工具 |
 
