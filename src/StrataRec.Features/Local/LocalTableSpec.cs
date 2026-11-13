@@ -63,12 +63,33 @@ public sealed class LocalTableSpec
         return new LocalTableSpec(schema, options, binding, source, artifact, pointer, directory);
     }
 
+    /// <summary>
+    /// The spec of a <c>cache</c> table (design 6.6): fed by the requests that miss it, through its writer, which the
+    /// table host runs as the table's source (<see cref="Cache.CacheWriterSource"/>). The identity is built by the same rule
+    /// as a local table's, so a change of the connector, of the cache settings or of the field set starts a new, empty table.
+    /// </summary>
+    /// <param name="options">With <see cref="LocalFeatureTableOptions.Cache"/> set.</param>
+    public static LocalTableSpec CreateCache(
+        LocalTableSchema schema, LocalFeatureTableOptions options, FeatureSourceBinding binding, string artifact, string pointer, string? baseDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(schema);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(binding);
+        if (schema.Mode != LocalTableMode.Cache || options.Cache is null)
+        {
+            throw new ArgumentException("A cache spec has a cache schema and cache options.", nameof(options));
+        }
+
+        return new LocalTableSpec(
+            schema, options, binding, Cache.CacheWriterSource.Instance, artifact, pointer, BindingContext.PinBaseDirectory(baseDirectory));
+    }
+
     public LocalTableSchema Schema { get; }
 
     public LocalFeatureTableOptions Options { get; }
 
-    /// <summary>Loads the table. A table reused from an earlier plan keeps the source it was loaded by, which has the
-    /// same identity and therefore the same settings.</summary>
+    /// <summary>Loads the table (for a <c>cache</c> table, its writer). A table reused from an earlier plan keeps the source
+    /// it was loaded by, which has the same identity and therefore the same settings.</summary>
     public IFeatureUpdateSource Bootstrap { get; }
 
     /// <summary>The bindings artifact, e.g. <c>bindings:local</c>.</summary>

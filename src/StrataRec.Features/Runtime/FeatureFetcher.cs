@@ -221,7 +221,7 @@ public sealed partial class FeatureFetcher
             }
 
             // Then anything still unfilled (rows appended since, fields not prefetched, or never prefetched): fetches
-            // first, then the local reads, which run while the fetches are in flight.
+            // first, then the local and cache reads, which run while the fetches are in flight.
             var groups = GroupsOf(closure, wave);
             PendingFetch[]? started = null;
             var startedCount = 0;
@@ -242,12 +242,18 @@ public sealed partial class FeatureFetcher
 
             if (locals)
             {
-                ReadLocalGroups(groups, member);
+                ReadLocalGroups(groups, member, cancellationToken);
             }
 
             for (var s = 0; s < startedCount; s++)
             {
                 await CompleteAsync(started![s]).ConfigureAwait(false);
+            }
+
+            // The cache reads that missed resolve their misses meanwhile (the distributed tier, then the connector).
+            while (TakeCacheRead() is { } read)
+            {
+                await CompleteCacheReadAsync(read).ConfigureAwait(false);
             }
 
             ComputeDerivedOfWave(wave, member);
@@ -724,9 +730,13 @@ public sealed partial class FeatureFetcher
         };
         var duration = _hook is null ? TimeSpan.Zero : io.Elapsed;
         io.Complete(result, batch.KeyCount, _requestId, status.Error, _events);
-        _hook?.Record(
-            new FeatureCallInfo(group, batch, fields, sequence, true, status, result, duration),
-            result is IoOutcome.Ok or IoOutcome.Partial ? writer : null);
+        if (sequence != NotRecorded)
+        {
+            _hook?.Record(
+                new FeatureCallInfo(group, batch, fields, sequence, true, status, result, duration),
+                result is IoOutcome.Ok or IoOutcome.Partial ? writer : null);
+        }
+
         return status;
     }
 
@@ -776,26 +786,14 @@ public sealed partial class FeatureFetcher
             error ??= status.Error;
         }
 
-        var keyState = group.KeyFeatureIndex >= 0 ? _state[group.KeyFeatureIndex] : FeatureState.Ok;
-        if (keyState is FeatureState.Failed or FeatureState.Degraded)
+        // Some chunks failed: the source partially failed (design 6.7) and readers become Degraded. The failed chunks'
+        // keys are treated like keys absent from the response; their staging is never read.
+        var degraded = failedChunks > 0 || partial;
+        if (!SettleKey(group, pending.Features, failedChunks > 0 && failedChunks == pending.ChunkCount, ref degraded, ref error))
         {
-            error ??= _errors[group.KeyFeatureIndex] ?? $"key feature '{_plan.Features[group.KeyFeatureIndex].Definition.Name}' is {keyState}";
-        }
-
-        if ((failedChunks > 0 && failedChunks == pending.ChunkCount) || keyState == FeatureState.Failed)
-        {
-            foreach (var f in pending.Features)
-            {
-                _state[f] = FeatureState.Failed;
-                _errors[f] = error;
-            }
-
             return;
         }
 
-        // Some chunks failed: the source partially failed (design 6.7) and readers become Degraded. The failed chunks'
-        // keys are treated like keys absent from the response; their staging is never read.
-        var degraded = failedChunks > 0 || partial || keyState == FeatureState.Degraded;
         for (var i = 0; i < pending.Features.Length; i++)
         {
             var f = pending.Features[i];
@@ -805,15 +803,49 @@ public sealed partial class FeatureFetcher
             }
 
             Backfill(pending, _plan.Features[f], i);
-            if (degraded)
+            SetFetchedState(f, degraded, error);
+        }
+    }
+
+    /// <summary>
+    /// The first half of the state rule of a fetch or a cache read (design 6.7): a failed source or a failed key fails
+    /// every feature (set here; returns false, nothing to fill), and a degraded key degrades them. One rule for both,
+    /// so a replay, which answers a cache read through the fetch path, ends in the states the live read did.
+    /// </summary>
+    private bool SettleKey(FetchGroup group, int[] features, bool failed, ref bool degraded, ref string? error)
+    {
+        var keyState = group.KeyFeatureIndex >= 0 ? _state[group.KeyFeatureIndex] : FeatureState.Ok;
+        if (keyState is FeatureState.Failed or FeatureState.Degraded)
+        {
+            error ??= _errors[group.KeyFeatureIndex] ?? $"key feature '{_plan.Features[group.KeyFeatureIndex].Definition.Name}' is {keyState}";
+        }
+
+        if (failed || keyState == FeatureState.Failed)
+        {
+            foreach (var f in features)
             {
-                _state[f] = FeatureState.Degraded;
+                _state[f] = FeatureState.Failed;
                 _errors[f] = error;
             }
-            else if (_state[f] == FeatureState.Unrequested)
-            {
-                _state[f] = FeatureState.Ok;
-            }
+
+            return false;
+        }
+
+        degraded |= keyState == FeatureState.Degraded;
+        return true;
+    }
+
+    /// <summary>The second half: a filled feature that has not failed is degraded or ok.</summary>
+    private void SetFetchedState(int feature, bool degraded, string? error)
+    {
+        if (degraded)
+        {
+            _state[feature] = FeatureState.Degraded;
+            _errors[feature] = error;
+        }
+        else if (_state[feature] == FeatureState.Unrequested)
+        {
+            _state[feature] = FeatureState.Ok;
         }
     }
 
@@ -1065,11 +1097,7 @@ public sealed partial class FeatureFetcher
                 fetches[fetchCount++] = new ContextFetch(features, staging, call);
             }
 
-            if (locals)
-            {
-                ReadLocalContext(closure, member);
-            }
-
+            var cached = locals ? ReadLocalContext(closure, member, cancellationToken) : null;
             for (var n = 0; n < fetchCount; n++)
             {
                 var fetch = fetches[n];
@@ -1090,6 +1118,11 @@ public sealed partial class FeatureFetcher
                     _errors[f] = partial ? status.Error : null;
                     StoreContext(_plan.Features[f], value);
                 }
+            }
+
+            for (var read = cached; read is not null; read = read.Next)
+            {
+                await CompleteCachedContextAsync(read).ConfigureAwait(false);
             }
 
             var order = _plan.DerivedOrder;

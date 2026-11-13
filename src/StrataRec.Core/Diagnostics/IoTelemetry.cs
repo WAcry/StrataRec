@@ -9,6 +9,9 @@ public enum IoKind : byte
     FeatureSource = 1,
     CandidateSource,
     Model,
+
+    /// <summary>The distributed cache of a feature source bound with mode <c>cache</c> (design 6.6), read before its connector.</summary>
+    FeatureCache,
 }
 
 /// <summary>How one external call ended, as seen by the request.</summary>
@@ -29,8 +32,9 @@ public enum IoOutcome : byte
 }
 
 /// <summary>
-/// One external dependency (a feature source, candidate source or model) with its metric tags and span name built once,
-/// when the plan or operator is compiled, so recording a call allocates nothing (design 13.1 rule 5).
+/// One external dependency (a feature source, candidate source, model or a feature source's distributed cache) with its
+/// metric tags and span name built once, when the plan or operator is compiled, so recording a call allocates nothing
+/// (design 13.1 rule 5).
 /// </summary>
 public sealed class IoTarget
 {
@@ -38,17 +42,28 @@ public sealed class IoTarget
     {
         Kind = kind;
         Name = name;
-        Tags = kind == IoKind.Model
-            ? [new(StrataRecTags.Model, name)]
-            : [new(StrataRecTags.Source, name), new(StrataRecTags.SourceKind, kind == IoKind.FeatureSource ? "feature" : "candidate")];
+        Tags = kind switch
+        {
+            IoKind.Model => [new(StrataRecTags.Model, name)],
+            IoKind.FeatureSource => [new(StrataRecTags.Source, name), new(StrataRecTags.SourceKind, "feature")],
+            IoKind.CandidateSource => [new(StrataRecTags.Source, name), new(StrataRecTags.SourceKind, "candidate")],
+            IoKind.FeatureCache => [new(StrataRecTags.Source, name), new(StrataRecTags.SourceKind, "feature_cache")],
+        };
         TimeoutTags = WithOutcome(Tags, "timeout");
         ErrorTags = WithOutcome(Tags, "error");
-        SpanName = (kind switch { IoKind.FeatureSource => "fetch ", IoKind.CandidateSource => "recall ", _ => "model " }) + name;
+        SpanName = kind switch
+        {
+            IoKind.FeatureSource => "fetch ",
+            IoKind.CandidateSource => "recall ",
+            IoKind.Model => "model ",
+            IoKind.FeatureCache => "cache ",
+        } + name;
         (TimeoutEvent, FailedEvent) = kind switch
         {
             IoKind.FeatureSource => (RequestEvent.FeatureSourceTimeout, RequestEvent.FeatureSourceFailed),
             IoKind.CandidateSource => (RequestEvent.CandidateSourceTimeout, RequestEvent.CandidateSourceFailed),
-            _ => (RequestEvent.ModelTimeout, RequestEvent.ModelFailed),
+            IoKind.Model => (RequestEvent.ModelTimeout, RequestEvent.ModelFailed),
+            IoKind.FeatureCache => (RequestEvent.FeatureCacheTimeout, RequestEvent.FeatureCacheFailed),
         };
     }
 
@@ -94,7 +109,7 @@ public sealed class IoTarget
     internal void Record(double seconds, IoOutcome outcome, int keys)
     {
         Duration.Record(seconds, Tags);
-        if (keys >= 0 && Kind == IoKind.FeatureSource)
+        if (keys >= 0 && Kind is IoKind.FeatureSource or IoKind.FeatureCache)
         {
             StrataRecMetrics.SourceKeys.Record(keys, Tags);
         }

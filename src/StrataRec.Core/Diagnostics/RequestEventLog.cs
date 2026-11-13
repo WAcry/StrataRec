@@ -14,6 +14,12 @@ public enum RequestEvent : byte
     ModelTimeout,
     ModelFailed,
 
+    /// <summary>A read of a cache source's distributed cache timed out; its keys went to the connector.</summary>
+    FeatureCacheTimeout,
+
+    /// <summary>A read of a cache source's distributed cache failed; its keys went to the connector.</summary>
+    FeatureCacheFailed,
+
     /// <summary>A node failed and its fallback node served.</summary>
     NodeFallback,
 

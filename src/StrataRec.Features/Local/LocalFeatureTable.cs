@@ -25,6 +25,9 @@ public sealed class LocalFeatureTableOptions
     /// <summary>String-key hash; tests inject a weak one to force collisions. Defaults to XXH3-64 of the UTF-16 key.</summary>
     internal StringKeyHasher? StringKeyHasher { get; init; }
 
+    /// <summary>The cache policy of a table in mode <see cref="LocalTableMode.Cache"/> (required there, and only there).</summary>
+    public Cache.CacheTableOptions? Cache { get; init; }
+
     internal void Validate()
     {
         if (MaxBytes <= 0)
@@ -118,11 +121,22 @@ public sealed class LocalFeatureTable
         _tags = [new(StrataRecTags.Source, schema.Source), new(StrataRecTags.Entity, schema.Entity)];
         HitTags = [_tags[0], _tags[1], new(StrataRecTags.Outcome, "hit")];
         MissTags = [_tags[0], _tags[1], new(StrataRecTags.Outcome, "miss")];
+        if ((schema.Mode == LocalTableMode.Cache) != (Options.Cache is not null))
+        {
+            throw new ArgumentException(
+                $"Local table {schema.Source}/{schema.Entity} is in mode {schema.Mode}: cache options belong to cache tables, and every cache table has them.",
+                nameof(options));
+        }
+
+        Cache = Options.Cache is { } cache ? new Cache.LocalTableCache(this, cache) : null;
     }
 
     public LocalTableSchema Schema { get; }
 
     public LocalFeatureTableOptions Options { get; }
+
+    /// <summary>The cache policy and the write-back queue of a table in mode <see cref="LocalTableMode.Cache"/>; null otherwise.</summary>
+    public Cache.LocalTableCache? Cache { get; }
 
     /// <summary>The table's single writer. Hand it to exactly one update source (or the cache writer) at a time.</summary>
     public LocalTableWriter Writer { get; }
@@ -176,11 +190,17 @@ public sealed class LocalFeatureTable
     {
         Volatile.Write(ref _position, position);
         Volatile.Write(ref _completions, _completions + 1);
+        RecordSize();
+        StrataRecMetrics.LocalLoadLastSuccess.Record(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0, _tags);
+        _loaded.TrySetResult();
+    }
+
+    /// <summary>Records the current version's bytes and records (design 13.1): at each checkpoint, and after a cache's writes.</summary>
+    internal void RecordSize()
+    {
         var version = Pin();
         StrataRecMetrics.LocalBytes.Record(version.Bytes, _tags);
         StrataRecMetrics.LocalRecords.Record(version.RecordCount, _tags);
-        StrataRecMetrics.LocalLoadLastSuccess.Record(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0, _tags);
-        _loaded.TrySetResult();
     }
 
     /// <summary>A reload completed and was published after <paramref name="duration"/>.</summary>

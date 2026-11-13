@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\StrataRec.Hosting\StrataRec.Hosting.csproj" />
+    <ProjectReference Include="..\StrataRec.Redis\StrataRec.Redis.csproj" />
   </ItemGroup>
 
   <ItemGroup>

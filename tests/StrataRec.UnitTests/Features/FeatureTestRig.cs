@@ -12,6 +12,7 @@ using StrataRec.Core.Tables;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
+using StrataRec.Features.Cache;
 using StrataRec.Features.Catalog;
 using StrataRec.Features.Connectors;
 using StrataRec.Features.Local;
@@ -49,12 +50,16 @@ internal sealed class FeatureTestRig
     private readonly Dictionary<string, FeatureSourceBinding> _sources = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IFeatureSourceConnector> _connectors = new(StringComparer.Ordinal);
     private readonly TestLocalTables _localTables = new();
+    private readonly Dictionary<string, IFeatureCacheStore> _cacheStores = new(StringComparer.Ordinal);
     private int _contextCount = 1; // context id 0 is the request input user_id
 
     public FeaturePlan Plan { get; private set; } = null!;
 
     /// <summary>The local tables the plan reads, by source name (one entity per source in these tests).</summary>
     public IReadOnlyDictionary<string, LocalFeatureTable> Tables => _localTables.Tables;
+
+    /// <summary>The clock of the plan's cache tables: it moves only when a test moves it.</summary>
+    public ManualClock Clock { get; } = new();
 
     public static EntityDefinition ForeignKey(string name, string keyFeature) => new()
     {
@@ -95,6 +100,70 @@ internal sealed class FeatureTestRig
         };
         _localTables.Loads[name] = load;
         return this;
+    }
+
+    /// <summary>
+    /// Binds a source with mode <c>cache</c> in front of a test connector, with <paramref name="distributed"/> as its
+    /// distributed tier when given. Its table's writer does not run: <see cref="WriteBack"/> applies what reads handed it.
+    /// </summary>
+    public FeatureTestRig CacheSource(
+        string name, IFeatureSourceConnector connector, long ttlMs = 60_000, long staleIfErrorMs = 0, IFeatureCacheStore? distributed = null,
+        int? distributedTimeoutMs = null, int timeoutMs = UntimedMs, int? maxBatch = null, string maxBytes = "64MiB")
+    {
+        _connectors[name] = connector;
+        if (distributed is not null)
+        {
+            _cacheStores[name] = distributed;
+        }
+
+        _sources[name] = new FeatureSourceBinding
+        {
+            Mode = "cache",
+            Connector = TestConnectorFactory.Type,
+            TimeoutMs = timeoutMs,
+            MaxBatch = maxBatch,
+            MaxBytes = maxBytes,
+            Cache = new CacheBinding
+            {
+                TtlMs = ttlMs,
+                StaleIfErrorMs = staleIfErrorMs,
+                Distributed = distributed is null ? null : new DistributedCacheBinding { Store = TestCacheStoreFactory.Type, TimeoutMs = distributedTimeoutMs },
+            },
+        };
+        return this;
+    }
+
+    /// <summary>Binds a source with mode <c>cache</c> in front of <c>memory@1</c> with inline data.</summary>
+    public FeatureTestRig MemoryCacheSource(string name, string json, long ttlMs = 60_000, IFeatureCacheStore? distributed = null)
+    {
+        MemorySource(name, json);
+        var fetched = _sources[name];
+        if (distributed is not null)
+        {
+            _cacheStores[name] = distributed;
+        }
+
+        _sources[name] = new FeatureSourceBinding
+        {
+            Mode = "cache",
+            Connector = fetched.Connector,
+            TimeoutMs = fetched.TimeoutMs,
+            Settings = fetched.Settings,
+            MaxBytes = "64MiB",
+            Cache = new CacheBinding
+            {
+                TtlMs = ttlMs,
+                Distributed = distributed is null ? null : new DistributedCacheBinding { Store = TestCacheStoreFactory.Type },
+            },
+        };
+        return this;
+    }
+
+    /// <summary>Applies what reads handed the cache table of <paramref name="source"/>, as its writer would; returns the batches.</summary>
+    public int WriteBack(string source)
+    {
+        var table = Tables[source];
+        return table.Cache!.WriteQueued(table.Writer);
     }
 
     /// <summary>Binds a source as written, for tests of the binding checks.</summary>
@@ -166,7 +235,9 @@ internal sealed class FeatureTestRig
             diagnostics,
             baseDirectory,
             updateSources,
-            _localTables);
+            _localTables,
+            cacheStores: new FeatureCacheStoreRegistry().Add(new TestCacheStoreFactory(_cacheStores)),
+            clock: Clock);
         return diagnostics;
     }
 
@@ -257,6 +328,131 @@ internal sealed class TestLocalTables : ILocalTableProvider
 
         return table;
     }
+}
+
+/// <summary>A clock a test moves by hand (cache write times and expiry); starts at 2026-01-01.</summary>
+internal sealed class ManualClock : TimeProvider
+{
+    private long _ticks = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero).UtcTicks;
+
+    public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref _ticks), TimeSpan.Zero);
+
+    public long NowMs => GetUtcNow().ToUnixTimeMilliseconds();
+
+    public void AdvanceMs(long milliseconds) => Interlocked.Add(ref _ticks, milliseconds * TimeSpan.TicksPerMillisecond);
+}
+
+/// <summary><c>test_cache@1</c>: serves distributed cache stores registered by source name.</summary>
+internal sealed class TestCacheStoreFactory(IReadOnlyDictionary<string, IFeatureCacheStore> stores) : IFeatureCacheStoreFactory
+{
+    public const string Type = "test_cache@1";
+
+    public string StoreType => Type;
+
+    public IFeatureCacheStore Create(BindingContext context) => stores[context.Name];
+}
+
+/// <summary>
+/// An in-memory distributed cache store: records by (keyspace, key), what each call asked, and a hook that can fail or
+/// hold a read. Writes can be awaited (<see cref="WhenWrittenAsync"/>), since the tier writes in the background.
+/// </summary>
+internal sealed class FakeCacheStore : IFeatureCacheStore
+{
+    private readonly ConcurrentDictionary<string, (byte[] Record, TimeSpan TimeToLive)> _records = new(StringComparer.Ordinal);
+    private readonly object _gate = new();
+    private readonly List<(int Records, TaskCompletionSource Done)> _waiters = new();
+    private int _written;
+
+    public string StoreType => TestCacheStoreFactory.Type;
+
+    /// <summary>Runs before a read answers: throw to fail it, or wait to hold it.</summary>
+    public Func<CancellationToken, ValueTask>? BeforeGet { get; set; }
+
+    /// <summary>The keys of each read, as written to the store (<c>{source}:{entity}:{key}</c>).</summary>
+    public ConcurrentQueue<string[]> Gets { get; } = new();
+
+    public int Written => Volatile.Read(ref _written);
+
+    public async ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<EntityKey> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
+    {
+        var names = Names(keyspace, keys.Span);
+        Gets.Enqueue(names);
+        if (BeforeGet is { } before)
+        {
+            await before(cancellationToken);
+        }
+
+        for (var i = 0; i < names.Length; i++)
+        {
+            if (_records.TryGetValue(names[i], out var record))
+            {
+                records.Span[i] = record.Record;
+            }
+        }
+    }
+
+    public ValueTask SetAsync(CacheKeyspace keyspace, ReadOnlyMemory<CacheStoreEntry> entries, CancellationToken cancellationToken)
+    {
+        foreach (var entry in entries.Span)
+        {
+            _records[keyspace.Prefix + Text(entry.Key)] = (entry.Record.ToArray(), entry.TimeToLive);
+        }
+
+        lock (_gate)
+        {
+            _written += entries.Length;
+            _waiters.RemoveAll(w =>
+            {
+                if (w.Records > _written)
+                {
+                    return false;
+                }
+
+                w.Done.TrySetResult();
+                return true;
+            });
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    /// <summary>Completes once <paramref name="records"/> records have been written in all.</summary>
+    public Task WhenWrittenAsync(int records)
+    {
+        lock (_gate)
+        {
+            if (_written >= records)
+            {
+                return Task.CompletedTask;
+            }
+
+            var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _waiters.Add((records, done));
+            return done.Task;
+        }
+    }
+
+    public bool TryGet(string name, out byte[] record, out TimeSpan timeToLive)
+    {
+        var found = _records.TryGetValue(name, out var entry);
+        (record, timeToLive) = entry;
+        return found;
+    }
+
+    public void Put(string name, byte[] record) => _records[name] = (record, TimeSpan.FromMinutes(1));
+
+    private static string[] Names(CacheKeyspace keyspace, ReadOnlySpan<EntityKey> keys)
+    {
+        var names = new string[keys.Length];
+        for (var i = 0; i < keys.Length; i++)
+        {
+            names[i] = keyspace.Prefix + Text(keys[i]);
+        }
+
+        return names;
+    }
+
+    private static string Text(in EntityKey key) => key.StringValue ?? key.Int64Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
 }
 
 /// <summary><c>test_updates@1</c>: an update source with nothing to load (the rig loads its tables directly).</summary>

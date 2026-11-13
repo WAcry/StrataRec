@@ -14,8 +14,11 @@ public enum BindingSection : byte
     /// <summary><c>candidate_sources</c>: candidate sources.</summary>
     CandidateSources,
 
-    /// <summary><c>sources</c> bound with mode <c>fetch</c>: feature connectors.</summary>
+    /// <summary><c>sources</c> bound with mode <c>fetch</c> or <c>cache</c>: feature connectors.</summary>
     Sources,
+
+    /// <summary><c>cache.distributed</c> of <c>sources</c> bound with mode <c>cache</c>: distributed cache stores.</summary>
+    SourceCaches,
 }
 
 /// <summary>
@@ -36,7 +39,7 @@ public sealed class BindingSpec
         BaseDirectory = baseDirectory;
         Factory = factory;
         Artifact = artifact;
-        Pointer = "/" + SectionName(section) + "/" + JsonPointer.Escape(name);
+        Pointer = "/" + SectionName(section) + "/" + JsonPointer.Escape(name) + MemberPointer(section);
         Identity = ComputeIdentity(section, name, type, settings, baseDirectory);
     }
 
@@ -82,6 +85,7 @@ public sealed class BindingSpec
         BindingSection.Models => "model",
         BindingSection.CandidateSources => "candidate source",
         BindingSection.Sources => "feature source",
+        BindingSection.SourceCaches => "distributed cache of feature source",
     } + $" '{Name}' ({Type})";
 
     /// <summary>
@@ -102,7 +106,14 @@ public sealed class BindingSpec
     {
         BindingSection.Models => "models",
         BindingSection.CandidateSources => "candidate_sources",
-        BindingSection.Sources => "sources",
+        BindingSection.Sources or BindingSection.SourceCaches => "sources",
+    };
+
+    /// <summary>Where the instance's settings are within its entry of the section: the entry itself, or a member of it.</summary>
+    public static string MemberPointer(BindingSection section) => section switch
+    {
+        BindingSection.Models or BindingSection.CandidateSources or BindingSection.Sources => string.Empty,
+        BindingSection.SourceCaches => "/cache/distributed",
     };
 
     /// <summary>The context the factory gets.</summary>
@@ -120,7 +131,7 @@ public sealed class BindingSpec
 
         var identity = new JsonObject
         {
-            ["section"] = SectionName(section),
+            ["section"] = SectionName(section) + MemberPointer(section),
             ["name"] = name,
             ["type"] = type,
             ["settings"] = members,
