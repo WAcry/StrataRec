@@ -26,6 +26,7 @@
 | 12.6 / 8.8 取消 | 调用方取消或请求异常中止时，仍然发布 `$experiments` 记录和已经捕获的探针批次 | 慢请求更容易被取消，而慢往往与臂相关；丢掉这些记录会让实验分析产生偏差（评审 4 #6） | `PipelineExecutor.cs` |
 | 5.x 节点 id | 节点 id 只能是标识符（字母、数字、`_`） | 版本引用 `col.x@node` 必须能写出每一个节点；如果 id 中含 `.` 或 `-`，会被解析成字段访问或减法（评审 4 #14） | `ArmPatch.cs` `IsValidNodeId` |
 | 5.7 规范编码 | `float64` 除了 −0.0 按 0.0 编码，所有 NaN（任意符号和载荷）一律按静默 NaN `0x7FF8000000000000` 编码。离线任务复算哈希时也要这样规范化 | IEEE 754 不规定定义域错误（`sqrt(-1)`、`0/0`）产生的 NaN 的符号和载荷，优化器把取负移进不变量、SIMD 交换操作数都会改变它，`hash01` 的结果不能随之变化 | `Core/Hashing/StableHash.cs` `CanonicalFloat64Bits` |
+| 7.4 缺失值提升 | 带显式默认值的 `lookup(table, key, default)` 在 key 缺失时返回 `default`，不返回缺失；其他内置函数只要有参数缺失，结果就是缺失 | 第三个参数本身就是调用方给出的缺失处理，作用相当于 `lookup(table, key) ?? default`；如果改成缺失，现有打分表达式会变成可空类型而无法编译 | `Expressions/Vectorized/Instructions.cs` `LookupInstr` |
 | 9.x 输出 | 输出段在所有节点之后编译 | 算子会声明隐式列（例如 `recall.primary_source`），输出需要能读到它们 | `PlanCompiler.cs` `Run` |
 | 6.9 模型输入 | 模型输入必须是列或特征的直接引用。需要变换的输入先声明成衍生特征（示例里的 `author.log_followers`） | 这是设计 6.9 训练与服务一致性的要求。实现中给出了带修复提示的错误 `MODEL_INPUT_NOT_REFERENCE` | `samples/home_feed/catalog/home_feed.jsonc` |
 
