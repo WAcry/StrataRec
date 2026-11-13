@@ -97,6 +97,32 @@ public sealed class ReplayTests
     }
 
     [Fact]
+    public async Task ExternalAssignment_UnknownArms_AreReplayedAsRecorded()
+    {
+        var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
+        var recorded = await engine.ExecuteAsync(new RecRequest
+        {
+            PipelineId = "home_feed",
+            RequestId = "req-unknown-arms",
+            Inputs = HomeFeedTestHost.Inputs(1001, "home"),
+            Assignment = new[] { "exp_quality_weight/strong", "not_real/unknown" },
+            Deadline = TimeSpan.FromSeconds(30),
+            TimeMs = 1_767_225_600_000,
+            Debug = new DebugOptions { Record = true },
+        });
+        Assert.Equal(1, recorded.Experiments.UnknownArms);
+        Assert.Equal(1, recorded.Recording!.Request.Assignment.UnknownArms);
+
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording)));
+        var withArms = await engine.ReplayAsync(recorded.Recording, new ReplayOptions { Arms = new[] { "exp_quality_weight/strong" } });
+
+        Assert.True(outcome.Report.Diff.Identical, Describe(outcome.Report));
+        Assert.Equal(recorded.Experiments.Assigned, outcome.Result.Experiments.Assigned);
+        Assert.Equal(1, outcome.Result.Experiments.UnknownArms);
+        Assert.Equal(0, withArms.Result.Experiments.UnknownArms); // arms given to the replay replace the external assignment
+    }
+
+    [Fact]
     public async Task RecordingIsOptIn()
     {
         var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());

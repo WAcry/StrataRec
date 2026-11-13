@@ -51,8 +51,8 @@ public sealed partial class RecEngine
         var recordedArms = primaryRecord?.Arms ?? recordedRequest.Assignment.Arms;
         if (!_pipelines.TryGetValue(recordedRequest.PipelineId, out var pipeline))
         {
-            var unknown = Rejected(request, $"Unknown pipeline '{recordedRequest.PipelineId}'.");
-            return Outcome(bundle, unknown, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null, notes, 0, "<none>");
+            var rejected = Rejected(request, $"Unknown pipeline '{recordedRequest.PipelineId}'.");
+            return Outcome(bundle, rejected, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null, notes, 0, "<none>");
         }
 
         var plan = pipeline.Plan;
@@ -92,6 +92,9 @@ public sealed partial class RecEngine
                 plan.ManifestId);
         }
 
+        // The external arms the recorded request ignored as unknown are part of its assignment record; arms passed to
+        // the replay replace that assignment, so it then has none.
+        var unknown = options?.Arms is null ? recordedRequest.Assignment.UnknownArms : 0;
         var started = Stopwatch.GetTimestamp();
         var executed = await _executor.ExecuteAsync(plan, ReplayRequest(request, arms, primaryReplay), cancellationToken).ConfigureAwait(false);
         RecResult result;
@@ -99,13 +102,13 @@ public sealed partial class RecEngine
         if (executed.Succeeded || pipeline.FallbackPipeline is not { } fallbackId || fallbackId == request.PipelineId
             || !_pipelines.TryGetValue(fallbackId, out var fallback))
         {
-            result = ToResult(request, pipeline, executed, 0, request.PipelineId);
+            result = ToResult(request, pipeline, executed, unknown, request.PipelineId);
         }
         else if (fallbackRecord is null && primaryRecord is { Result.Succeeded: false })
         {
             // The recorded request failed too and did not run its fallback pipeline: no time was left (design 5.6).
             notes.Add($"the recording did not run fallback pipeline '{fallbackId}' (no time was left); neither does the replay");
-            result = ToResult(request, pipeline, executed, 0, request.PipelineId);
+            result = ToResult(request, pipeline, executed, unknown, request.PipelineId);
         }
         else
         {
@@ -116,7 +119,7 @@ public sealed partial class RecEngine
             }
 
             served = await _executor.ExecuteAsync(fallback.Plan, ReplayRequest(request, RequestArms.None, fallbackReplay), cancellationToken).ConfigureAwait(false);
-            result = Combine(request, executed, ToResult(request, fallback, served, 0, fallbackId), served, 0, fallbackId);
+            result = Combine(request, executed, ToResult(request, fallback, served, unknown, fallbackId), served, unknown, fallbackId);
         }
 
         var elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
