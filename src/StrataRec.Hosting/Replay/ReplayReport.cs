@@ -20,8 +20,20 @@ public sealed class ReplayOutcome
 {
     public required ReplayBundle Bundle { get; init; }
 
-    /// <summary>The replayed result, with every node's outcome in <see cref="RecResult.Trace"/>.</summary>
+    /// <summary>
+    /// The replayed result, with every node's outcome in <see cref="RecResult.Trace"/>. When the replay was aborted (see
+    /// <see cref="AbortReason"/>) there is no result: this is a failure with the reason and no items, and the node
+    /// decisions up to the abort are in <see cref="ReplayReport.Nodes"/>.
+    /// </summary>
     public required RecResult Result { get; init; }
+
+    /// <summary>
+    /// Why the replay was aborted, as recorded; null when it returned a result. A recording of an aborted request replays
+    /// its decisions up to the point of the abort and stops there (design 13.4).
+    /// </summary>
+    public string? AbortReason { get; init; }
+
+    public bool Aborted => AbortReason is not null;
 
     public required ReplayReport Report { get; init; }
 }
@@ -79,12 +91,18 @@ public sealed record ItemChange(int Rank, EntityKey? RecordedId, EntityKey? Repl
 /// <summary>Difference of two results: the recorded one and the replayed one (or a baseline and a candidate).</summary>
 public sealed class ResultDiff
 {
-    /// <summary>Same success, the same items in the same order and every column value equal.</summary>
+    /// <summary>Both aborted, or neither with the same success, the same items in the same order and every column value equal.</summary>
     public required bool Identical { get; init; }
 
     public required bool LeftSucceeded { get; init; }
 
     public required bool RightSucceeded { get; init; }
+
+    /// <summary>The left (recorded) request was aborted and has no result.</summary>
+    public bool LeftAborted { get; init; }
+
+    /// <summary>The right (replayed) run stopped where its recording was aborted.</summary>
+    public bool RightAborted { get; init; }
 
     public required int LeftCount { get; init; }
 
@@ -111,11 +129,15 @@ public sealed class ComparableResult
 {
     public required bool Succeeded { get; init; }
 
+    /// <summary>The request (or replay) was aborted and returned no result.</summary>
+    public bool Aborted { get; init; }
+
     public required IReadOnlyList<EntityKey> Ids { get; init; }
 
     public required IReadOnlyList<IReadOnlyDictionary<string, ScalarValue>> Columns { get; init; }
 
-    public static ComparableResult From(RecResult result)
+    /// <param name="aborted">The replay stopped where its recording was aborted; <paramref name="result"/> is a placeholder failure.</param>
+    public static ComparableResult From(RecResult result, bool aborted = false)
     {
         var ids = new List<EntityKey>(result.Items.Count);
         var columns = new List<IReadOnlyDictionary<string, ScalarValue>>(result.Items.Count);
@@ -125,7 +147,7 @@ public sealed class ComparableResult
             columns.Add(item.Columns);
         }
 
-        return new ComparableResult { Succeeded = result.Succeeded, Ids = ids, Columns = columns };
+        return new ComparableResult { Succeeded = result.Succeeded, Aborted = aborted, Ids = ids, Columns = columns };
     }
 
     /// <summary>Decodes a recorded result with its recorded column types.</summary>
@@ -160,7 +182,7 @@ public sealed class ComparableResult
             columns.Add(values);
         }
 
-        return new ComparableResult { Succeeded = result.Succeeded, Ids = ids, Columns = columns };
+        return new ComparableResult { Succeeded = result.Succeeded, Aborted = result.Aborted, Ids = ids, Columns = columns };
     }
 }
 
@@ -208,9 +230,11 @@ public static class ResultComparison
 
         return new ResultDiff
         {
-            Identical = left.Succeeded == right.Succeeded && changes.Count == 0 && added.Count == 0 && removed.Count == 0,
+            Identical = left.Aborted == right.Aborted && left.Succeeded == right.Succeeded && changes.Count == 0 && added.Count == 0 && removed.Count == 0,
             LeftSucceeded = left.Succeeded,
             RightSucceeded = right.Succeeded,
+            LeftAborted = left.Aborted,
+            RightAborted = right.Aborted,
             LeftCount = left.Ids.Count,
             RightCount = right.Ids.Count,
             Overlap = Overlap(left.Ids, right.Ids, count),
@@ -305,16 +329,20 @@ public static class ResultComparison
         return (double)(concordant - discordant) / (concordant + discordant);
     }
 
-    /// <summary>Two-sample Kolmogorov–Smirnov statistic: the largest gap between the empirical distributions (0–1).</summary>
+    /// <summary>
+    /// Two-sample Kolmogorov–Smirnov statistic: the largest gap between the empirical distributions (0–1), over the
+    /// finite values of each sample. NaN and ±∞ have no place in a distribution of scores; they are left out (callers
+    /// count them separately), so the statistic is defined and the computation ends for any input.
+    /// </summary>
     public static double KolmogorovSmirnov(IReadOnlyList<double> a, IReadOnlyList<double> b)
     {
-        if (a.Count == 0 || b.Count == 0)
+        var left = SortedFinite(a);
+        var right = SortedFinite(b);
+        if (left.Length == 0 || right.Length == 0)
         {
-            return a.Count == b.Count ? 0.0 : 1.0;
+            return left.Length == right.Length ? 0.0 : 1.0;
         }
 
-        var left = Sorted(a);
-        var right = Sorted(b);
         var i = 0;
         var j = 0;
         var max = 0.0;
@@ -337,15 +365,18 @@ public static class ResultComparison
         return max;
     }
 
-    /// <summary>Summary of a sample: count, mean, min, p50, p90, p95, max (nearest-rank percentiles).</summary>
+    /// <summary>
+    /// Summary of a sample's finite values: count, mean, min, p50, p90, p95, max (nearest-rank percentiles). NaN and ±∞
+    /// are left out, as in <see cref="KolmogorovSmirnov"/>.
+    /// </summary>
     public static Distribution Summarize(IReadOnlyList<double> values)
     {
-        if (values.Count == 0)
+        var sorted = SortedFinite(values);
+        if (sorted.Length == 0)
         {
             return new Distribution(0, null, null, null, null, null, null);
         }
 
-        var sorted = Sorted(values);
         var sum = 0.0;
         foreach (var v in sorted)
         {
@@ -358,12 +389,23 @@ public static class ResultComparison
 
     private static double Percentile(double[] sorted, double p) => sorted[Math.Clamp((int)Math.Ceiling(p * sorted.Length) - 1, 0, sorted.Length - 1)];
 
-    private static double[] Sorted(IReadOnlyList<double> values)
+    /// <summary>The finite values, sorted; every iteration of the KS walk then advances at least one index.</summary>
+    private static double[] SortedFinite(IReadOnlyList<double> values)
     {
-        var array = new double[values.Count];
-        for (var i = 0; i < array.Length; i++)
+        var count = 0;
+        for (var i = 0; i < values.Count; i++)
         {
-            array[i] = values[i];
+            count += double.IsFinite(values[i]) ? 1 : 0;
+        }
+
+        var array = new double[count];
+        var n = 0;
+        for (var i = 0; i < values.Count; i++)
+        {
+            if (double.IsFinite(values[i]))
+            {
+                array[n++] = values[i];
+            }
         }
 
         Array.Sort(array);

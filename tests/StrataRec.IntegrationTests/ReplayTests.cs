@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Values;
@@ -94,6 +95,71 @@ public sealed class ReplayTests
         Assert.Equal(10, bundle.Result.Items.Count);
         Assert.Equal(("float64", "string"), (bundle.Result.ColumnTypes["score"], bundle.Result.ColumnTypes["category"]));
         Assert.Equal(recorded.Items[0].Id.Int64Value, bundle.Result.Items[0].Id.GetInt64());
+    }
+
+    [Fact]
+    public async Task ExternalAssignment_UnknownArms_AreReplayedAsRecorded()
+    {
+        var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
+        var recorded = await engine.ExecuteAsync(new RecRequest
+        {
+            PipelineId = "home_feed",
+            RequestId = "req-unknown-arms",
+            Inputs = HomeFeedTestHost.Inputs(1001, "home"),
+            Assignment = new[] { "exp_quality_weight/strong", "not_real/unknown" },
+            Deadline = TimeSpan.FromSeconds(30),
+            TimeMs = 1_767_225_600_000,
+            Debug = new DebugOptions { Record = true },
+        });
+        Assert.Equal(1, recorded.Experiments.UnknownArms);
+        Assert.Equal(1, recorded.Recording!.Request.Assignment.UnknownArms);
+
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording)));
+        var withArms = await engine.ReplayAsync(recorded.Recording, new ReplayOptions { Arms = new[] { "exp_quality_weight/strong" } });
+
+        Assert.True(outcome.Report.Diff.Identical, Describe(outcome.Report));
+        Assert.Equal(recorded.Experiments.Assigned, outcome.Result.Experiments.Assigned);
+        Assert.Equal(1, outcome.Result.Experiments.UnknownArms);
+        Assert.Equal(0, withArms.Result.Experiments.UnknownArms); // arms given to the replay replace the external assignment
+    }
+
+    [Fact]
+    public async Task NonFiniteValues_TheRequestObserved_AreRecorded_AndReplayExactly()
+    {
+        // Item 1's embedding has a component beyond float32: memory@1 stages it as +∞ and the raw vector stays present
+        // (has() is true). An output expression divides zero by zero. Neither is sanitized on the way to the caller, so a
+        // bundle that wrote them as null would replay other values.
+        var host = HomeFeedTestHost.LoadModified(root =>
+        {
+            var path = Path.Combine(root, "fixtures", "items.json");
+            var items = JsonNode.Parse(File.ReadAllText(path))!;
+            items["1"]!["i_emb"]![0] = 1e100;
+            File.WriteAllText(path, items.ToJsonString());
+            Edit(root, "pipelines/home_feed.jsonc", "\"score\": \"col.score.final\",",
+                "\"score\": \"col.score.final\", \"embedding_present\": \"has(col.item.embedding)\", \"undefined\": \"0.0 / 0.0\",");
+        });
+        var (engine, _) = MetricsTests.LoadEngine(host);
+        var recorded = await engine.ExecuteAsync(Request("req-non-finite", 1001, "home", ControlArms, deadlineMs: 30_000));
+        Assert.True(recorded.Succeeded, recorded.Error);
+        Assert.True(recorded.Items.Single(i => i.Id.Int64Value == 1).Columns["embedding_present"].AsBool());
+        Assert.All(recorded.Items, i => Assert.True(double.IsNaN(i.Columns["undefined"].AsFloat64())));
+
+        var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!));
+        var embedding = bundle.Runs[0].FeatureCalls.Single(c => c.Fields.Any(f => f.Name == "i_emb") && c.Keys!.Value.EnumerateArray().Any(k => k.GetInt64() == 1));
+        var row = embedding.Keys!.Value.EnumerateArray().Select(k => k.GetInt64()).ToList().IndexOf(1);
+        Assert.Equal("\"Infinity\"", embedding.Values!["i_emb"][row][0].GetRawText());
+        Assert.All(bundle.Result.Items, i => Assert.Equal("\"NaN\"", i.Columns["undefined"]!.Value.GetRawText()));
+
+        var outcome = await engine.ReplayAsync(bundle);
+
+        Assert.True(outcome.Report.Diff.Identical, Describe(outcome.Report));
+        Assert.Empty(outcome.Report.Gaps);
+        Assert.True(outcome.Result.Items.Single(i => i.Id.Int64Value == 1).Columns["embedding_present"].AsBool());
+
+        // A NaN score column: the comparison ends, leaves the NaNs out of the distributions and counts them.
+        var report = ResultComparisonBound.Run(() => ReplayComparison.Compare(new[] { new ReplayPair("a", "a", outcome, outcome) }, 10, "undefined", "base", "base"));
+        Assert.Equal((10, 0, 0.0), (report.Baseline.NonFiniteScores, report.Baseline.Scores.Count, report.ScoreKs));
+        Assert.Equal(1, report.Identical);
     }
 
     [Fact]
@@ -297,12 +363,12 @@ public sealed class ReplayTests
         Assert.Empty(same.FeatureMissing);
     }
 
-    internal static RecRequest Request(string requestId, long? userId, string surface, IReadOnlyList<string>? arms, bool captureLogs = false) => new()
+    internal static RecRequest Request(string requestId, long? userId, string surface, IReadOnlyList<string>? arms, bool captureLogs = false, int deadlineMs = 5000) => new()
     {
         PipelineId = "home_feed",
         RequestId = requestId,
         Inputs = HomeFeedTestHost.Inputs(userId, surface),
-        Deadline = TimeSpan.FromSeconds(5),
+        Deadline = TimeSpan.FromMilliseconds(deadlineMs),
         TimeMs = 1_767_225_600_000,
         Debug = new DebugOptions { Record = true, ForceArms = arms, CaptureLogs = captureLogs },
     };
@@ -327,6 +393,22 @@ public sealed class ReplayTests
 
     private static List<(long, int, string)> Items(RecResult result) =>
         result.Items.Select(i => (i.Id.Int64Value, i.Rank, string.Join(";", i.Columns.OrderBy(c => c.Key).Select(c => $"{c.Key}={c.Value}")))).ToList();
+}
+
+/// <summary>
+/// Runs a computation on a dedicated background thread with a generous bound, so a regression to an endless loop fails
+/// the test instead of hanging the run (no thread-pool timing involved).
+/// </summary>
+internal static class ResultComparisonBound
+{
+    public static T Run<T>(Func<T> compute)
+    {
+        T result = default!;
+        var thread = new Thread(() => result = compute()) { IsBackground = true };
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "the computation did not end");
+        return result;
+    }
 }
 
 /// <summary>A replay is not traffic: it leaves metrics, spans and event logs (and so dependency health) untouched.</summary>

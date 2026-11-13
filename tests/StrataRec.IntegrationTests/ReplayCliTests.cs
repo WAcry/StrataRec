@@ -55,7 +55,7 @@ public sealed class ReplayCliTests
         using (var report = JsonDocument.Parse(compare.ToString()))
         {
             var root = report.RootElement;
-            Assert.Equal(("recorded", 2), (root.GetProperty("mode").GetString(), root.GetProperty("bundles").GetInt32()));
+            Assert.Equal(("recorded", "ok", 2), (root.GetProperty("mode").GetString(), root.GetProperty("status").GetString(), root.GetProperty("bundles").GetInt32()));
             Assert.Equal(2, root.GetProperty("baseline").GetProperty("reproduced_recording").GetInt32());
             Assert.Equal(0, root.GetProperty("candidate").GetProperty("error_rate").GetDouble());
             Assert.NotEqual(0, root.GetProperty("candidate").GetProperty("gaps").GetArrayLength());
@@ -83,6 +83,78 @@ public sealed class ReplayCliTests
         using var report = JsonDocument.Parse(output.ToString());
         Assert.Contains("/request", report.RootElement.GetProperty("error").GetString());
     }
+
+    [Fact]
+    public async Task BundleWithANullRun_IsReportedWithItsPointer_AndTheOtherBundlesStillReplay()
+    {
+        var directory = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
+        File.WriteAllText(Path.Combine(directory, "a-null-run.json"), MinimalBundle("[null]"));
+        File.WriteAllText(Path.Combine(directory, "b-valid.json"), MinimalBundle("[]"));
+
+        var output = new StringWriter();
+        var exit = await ReplayCommand.RunAsync(Samples.HomeFeed, "local", directory, Array.Empty<string>(), "json", false, output, CancellationToken.None);
+
+        Assert.Equal(2, exit);
+        using var report = JsonDocument.Parse(output.ToString());
+        var bundles = report.RootElement.GetProperty("bundles");
+        Assert.Equal(2, bundles.GetArrayLength());
+        Assert.Contains("/runs/0: must not be null", bundles[0].GetProperty("error").GetString());
+        Assert.True(bundles[1].TryGetProperty("diff", out _));
+        var summary = report.RootElement.GetProperty("summary");
+        Assert.Equal(("partial", 1, 1), (summary.GetProperty("status").GetString(), summary.GetProperty("replayed").GetInt32(), summary.GetProperty("unreadable").GetInt32()));
+    }
+
+    [Fact]
+    public async Task Replay_OfADirectoryWithoutBundles_FailsAndSaysSo()
+    {
+        var empty = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
+        var output = new StringWriter();
+
+        var exit = await ReplayCommand.RunAsync(Samples.HomeFeed, "local", empty, Array.Empty<string>(), "json", false, output, CancellationToken.None);
+
+        Assert.Equal(2, exit);
+        using var report = JsonDocument.Parse(output.ToString());
+        var summary = report.RootElement.GetProperty("summary");
+        Assert.Equal(("failed", 0, 0), (summary.GetProperty("status").GetString(), summary.GetProperty("bundles").GetInt32(), summary.GetProperty("replayed").GetInt32()));
+    }
+
+    /// <summary>
+    /// <c>compare</c> passes only when every bundle was compared; otherwise it exits with 2 and still prints its report, so a
+    /// CI step cannot pass on metrics over part of the batch, or over nothing.
+    /// </summary>
+    [Theory]
+    [InlineData("", 2, "failed", 0, 0)]
+    [InlineData("null", 2, "failed", 0, 1)]
+    [InlineData("null valid", 2, "partial", 1, 1)]
+    [InlineData("valid", 0, "ok", 1, 0)]
+    public async Task Compare_ExitsNonZero_UnlessEveryBundleWasCompared(string bundles, int exitCode, string status, int compared, int unreadable)
+    {
+        var directory = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
+        foreach (var bundle in bundles.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            File.WriteAllText(Path.Combine(directory, bundle + ".json"), MinimalBundle(bundle == "null" ? "[null]" : "[]"));
+        }
+
+        var output = new StringWriter();
+        var exit = await CompareCommand.RunAsync(Samples.HomeFeed, Samples.HomeFeed, "local", directory, Array.Empty<string>(), 10, "score", "json", output,
+            CancellationToken.None);
+
+        Assert.Equal(exitCode, exit);
+        using var report = JsonDocument.Parse(output.ToString());
+        var root = report.RootElement;
+        Assert.Equal((status, compared, unreadable), (root.GetProperty("status").GetString(), root.GetProperty("compared").GetInt32(), root.GetProperty("unreadable").GetInt32()));
+    }
+
+    /// <summary>A bundle of the home_feed pipeline that ran nothing (its recorded result failed), with the given runs.</summary>
+    internal static string MinimalBundle(string runs) => $$"""
+        {
+          "format": "{{StrataRec.Artifacts.Model.ReplayBundle.CurrentFormat}}",
+          "request": { "pipeline_id": "home_feed", "request_id": "r", "seed": 1, "time_ms": 0, "deadline_ms": 100, "assignment": { "source": "none" } },
+          "manifest": { "id": "m" },
+          "runs": {{runs}},
+          "result": { "served_by": "home_feed", "succeeded": false, "error": "request input 'surface' (string) is required" }
+        }
+        """;
 
     [Fact]
     public void Schema_DescribesTheReplayBundle()

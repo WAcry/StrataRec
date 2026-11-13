@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
+using StrataRec.Artifacts.Model;
 using StrataRec.Core.Values;
 using StrataRec.Features.Catalog;
 using StrataRec.Hosting;
@@ -108,7 +109,15 @@ internal static class RunCommand
             Deadline = TimeSpan.FromMilliseconds(document["deadline_ms"]?.GetValue<double>() ?? 1000),
             TimeMs = document["time_ms"]?.GetValue<long>(),
             Seed = document["seed"]?.GetValue<long>(),
-            Debug = new DebugOptions { ForceArms = forced.Count > 0 ? forced : null, Trace = trace, CaptureLogs = logs, Record = recordPath is not null },
+            Debug = new DebugOptions
+            {
+                ForceArms = forced.Count > 0 ? forced : null,
+                Trace = trace,
+                CaptureLogs = logs,
+                Record = recordPath is not null,
+                // A request cancelled with Ctrl-C returns no result: its bundle comes through the callback.
+                OnRecording = recordPath is null ? null : bundle => SaveAborted(bundle, recordPath),
+            },
         };
 
         var result = await engine.ExecuteAsync(request, cancellationToken).ConfigureAwait(false);
@@ -197,6 +206,24 @@ internal static class RunCommand
             json.WriteEndObject();
         }));
         return result.Succeeded ? 0 : 1;
+    }
+
+    private static void SaveAborted(ReplayBundle bundle, string path)
+    {
+        if (!bundle.Result.Aborted)
+        {
+            return; // saved with the result
+        }
+
+        try
+        {
+            ReplayBundleFile.Save(bundle, path);
+            Console.Error.WriteLine($"recorded aborted request {bundle.Request.RequestId} to {path}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"{path}: {ex.Message}");
+        }
     }
 
     private static void WriteStrings(Utf8JsonWriter json, string name, IReadOnlyList<string> values)

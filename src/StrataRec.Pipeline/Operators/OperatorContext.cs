@@ -144,7 +144,7 @@ public sealed class OperatorContext
         }
 
         var recorder = _state.Recorder;
-        var sequence = recorder?.NextSequence() ?? 0;
+        var sequence = recorder?.BeginCandidateCall(NodeId, target.Name, query.Limit) ?? 0;
         var memory = _state.Memory;
         memory.Hold();
         var io = target.Start();
@@ -185,7 +185,7 @@ public sealed class OperatorContext
 
             var duration = recorder is null ? TimeSpan.Zero : io.Elapsed;
             io.Complete(outcome, -1, query.RequestId, status.Error, _state.Events);
-            recorder?.CandidateCall(sequence, NodeId, target.Name, query.Limit, outcome, status.Error, duration, buffer);
+            recorder?.CandidateCall(sequence, outcome, status.Error, duration, buffer);
             memory.Release();
         }
     }
@@ -202,6 +202,12 @@ public sealed class OperatorContext
     /// </param>
     /// <param name="cancellationToken">The node's token, or one linked to it with the model's own timeout.</param>
     /// <returns>The client's status. Exceptions, including cancellation, propagate to the operator.</returns>
+    /// <remarks>
+    /// A replay throws what the recorded client threw, so an operator that handles particular client exceptions takes the
+    /// same path: a <see cref="TimeoutException"/> as <see cref="TimeoutException"/>, cancellation as
+    /// <see cref="OperationCanceledException"/>, any other type recreated through its <c>(string message)</c> constructor
+    /// when the replaying process has the type; otherwise a <see cref="ReplayedCallException"/> naming the original type.
+    /// </remarks>
     public async Task<ModelStatus> InvokeModelAsync(
         IModelClient client, IoTarget target, ModelCall call, IModelOutputWriter outputs, ReadOnlyMemory<int> rows, CancellationToken cancellationToken)
     {
@@ -211,25 +217,25 @@ public sealed class OperatorContext
         }
 
         var recorder = _state.Recorder;
-        var sequence = recorder?.NextSequence() ?? 0;
+        var sequence = recorder?.BeginModelCall(NodeId, call, KeysOf(rows)) ?? 0;
         var recording = recorder is null ? null : new RecordingOutputWriter(outputs);
         var memory = _state.Memory;
         memory.Hold();
         var io = target.Start();
         var outcome = IoOutcome.Error;
         string? error = null;
-        var threw = false;
+        Type? thrown = null;
         try
         {
             var status = await client.InvokeAsync(call, (IModelOutputWriter?)recording ?? outputs, cancellationToken).ConfigureAwait(false);
             (outcome, error) = status.Succeeded ? (IoOutcome.Ok, null) : (IoOutcome.Error, status.Error);
             return status;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException ex)
         {
             // The model timeout or the node's budget, unless the caller gave up on the request.
             outcome = _state.CallerCancellation.IsCancellationRequested ? IoOutcome.Cancelled : IoOutcome.Timeout;
-            threw = true;
+            thrown = ex.GetType();
             throw;
         }
         catch (Exception ex)
@@ -237,14 +243,14 @@ public sealed class OperatorContext
             // A client's own transport timeout is a timeout, as for feature sources.
             outcome = ex is TimeoutException ? IoOutcome.Timeout : IoOutcome.Error;
             error = ex.Message;
-            threw = true;
+            thrown = ex.GetType();
             throw;
         }
         finally
         {
             var duration = recorder is null ? TimeSpan.Zero : io.Elapsed;
             io.Complete(outcome, -1, RequestId, error, _state.Events);
-            recorder?.ModelCall(sequence, NodeId, call, KeysOf(rows), outcome, error, threw, duration, recording!);
+            recorder?.ModelCall(sequence, outcome, error, thrown, duration, recording!);
             memory.Release();
         }
     }

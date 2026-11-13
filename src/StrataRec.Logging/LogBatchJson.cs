@@ -116,7 +116,12 @@ public static class LogBatchJson
     }
 
     /// <summary>Writes a value; missing becomes null (and is listed under <c>missing</c>).</summary>
-    public static void WriteValue(Utf8JsonWriter json, in ScalarValue value)
+    /// <param name="nonFiniteAsStrings">
+    /// False for logs: a NaN or ±∞ float, and a vector with such a component, is written as null like a missing value
+    /// (design 8.7). True for replay bundles, which must keep what the request observed: such values are written as the
+    /// strings <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c>, per component in vectors.
+    /// </param>
+    public static void WriteValue(Utf8JsonWriter json, in ScalarValue value, bool nonFiniteAsStrings = false)
     {
         switch (value.Kind)
         {
@@ -135,6 +140,10 @@ public static class LogBatchJson
                 {
                     json.WriteNumberValue(d);
                 }
+                else if (nonFiniteAsStrings)
+                {
+                    json.WriteStringValue(NonFiniteName(d));
+                }
                 else
                 {
                     json.WriteNullValue();
@@ -146,7 +155,7 @@ public static class LogBatchJson
                 break;
             case StorageKind.Vector:
                 var vector = value.AsVector();
-                if (!AllFinite(vector))
+                if (!nonFiniteAsStrings && !AllFinite(vector))
                 {
                     // Same rule as scalars: a non-finite value is logged as missing (capture already does this).
                     json.WriteNullValue();
@@ -156,7 +165,14 @@ public static class LogBatchJson
                 json.WriteStartArray();
                 foreach (var f in vector)
                 {
-                    json.WriteNumberValue(f);
+                    if (float.IsFinite(f))
+                    {
+                        json.WriteNumberValue(f);
+                    }
+                    else
+                    {
+                        json.WriteStringValue(NonFiniteName(f));
+                    }
                 }
 
                 json.WriteEndArray();
@@ -189,7 +205,11 @@ public static class LogBatchJson
     /// supplies it, as a log consumer does from the batch's schema.
     /// </summary>
     /// <remarks>Non-finite floats were written as null, so they read back as missing (design 8.7).</remarks>
-    public static bool TryReadValue(JsonElement json, ColumnType type, out ScalarValue value, out string? error)
+    /// <param name="nonFiniteAsStrings">
+    /// Accept the strings <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c> as float values and vector components, as
+    /// <see cref="WriteValue"/> writes them for replay bundles.
+    /// </param>
+    public static bool TryReadValue(JsonElement json, ColumnType type, out ScalarValue value, out string? error, bool nonFiniteAsStrings = false)
     {
         value = ScalarValue.Missing;
         error = null;
@@ -217,6 +237,9 @@ public static class LogBatchJson
             case StorageKind.Float32 or StorageKind.Float64 when json.ValueKind == JsonValueKind.Number:
                 value = ScalarValue.FromFloat64(json.GetDouble());
                 return true;
+            case StorageKind.Float32 or StorageKind.Float64 when nonFiniteAsStrings && TryNonFinite(json, out var named):
+                value = ScalarValue.FromFloat64(named);
+                return true;
             case StorageKind.String when json.ValueKind == JsonValueKind.String:
                 value = ScalarValue.FromString(json.GetString());
                 return true;
@@ -228,13 +251,19 @@ public static class LogBatchJson
                 var v = 0;
                 foreach (var element in json.EnumerateArray())
                 {
-                    if (element.ValueKind != JsonValueKind.Number)
+                    if (element.ValueKind == JsonValueKind.Number)
+                    {
+                        vector[v++] = element.GetSingle();
+                    }
+                    else if (nonFiniteAsStrings && TryNonFinite(element, out var component))
+                    {
+                        vector[v++] = (float)component;
+                    }
+                    else
                     {
                         error = $"vector element {v} is {element.ValueKind}, not a number";
                         return false;
                     }
-
-                    vector[v++] = element.GetSingle();
                 }
 
                 if (type.Dimension > 0 && vector.Length != type.Dimension)
@@ -282,6 +311,23 @@ public static class LogBatchJson
 
         error = $"{json.GetRawText()} is not a valid {type}";
         return false;
+    }
+
+    /// <summary>The spelling of a non-finite value: <c>NaN</c>, <c>Infinity</c> or <c>-Infinity</c> (as JavaScript and System.Text.Json name them).</summary>
+    public static string NonFiniteName(double value) =>
+        double.IsNaN(value) ? "NaN" : value > 0 ? "Infinity" : "-Infinity";
+
+    /// <summary>Reads a non-finite value written as its name.</summary>
+    public static bool TryNonFinite(JsonElement json, out double value)
+    {
+        value = json.ValueKind != JsonValueKind.String ? 0.0 : json.GetString() switch
+        {
+            "NaN" => double.NaN,
+            "Infinity" => double.PositiveInfinity,
+            "-Infinity" => double.NegativeInfinity,
+            _ => 0.0,
+        };
+        return !double.IsFinite(value);
     }
 
     private static bool AllFinite(ReadOnlySpan<float> values)

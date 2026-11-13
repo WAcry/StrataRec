@@ -10,7 +10,7 @@ namespace StrataRec.Features.Runtime;
 /// <param name="Group">Source and entity the call fetched from.</param>
 /// <param name="Batch">The keys; valid only during <see cref="IFeatureCallHook.Record"/> (they live in pooled buffers).</param>
 /// <param name="Fields">Requested fields; staging field i is <c>Fields[i]</c>.</param>
-/// <param name="Sequence">Start order within the request, from <see cref="IFeatureCallHook.NextSequence"/>.</param>
+/// <param name="Sequence">Start order within the request, from <see cref="IFeatureCallHook.Begin"/>.</param>
 /// <param name="Sent">False when the request had no time left to send the call at all.</param>
 /// <param name="Status">What the request did with the call (a timeout is a failed status).</param>
 /// <param name="Outcome">How the call ended, as metrics see it.</param>
@@ -46,8 +46,13 @@ public interface IFeatureCallHook
     /// <summary>True when calls are answered by <see cref="Replay"/> and no connector is called.</summary>
     bool Replays { get; }
 
-    /// <summary>Takes the start order of a call; calls start on the request's thread, so the order is deterministic.</summary>
-    int NextSequence();
+    /// <summary>
+    /// A call is about to be sent: returns its start order (calls start on the request's thread, so the order is
+    /// deterministic). Every begun call is later passed to <see cref="Record"/> with this sequence; until then a recorder
+    /// holds it as in flight, so a recording taken when the request is aborted lists it as outstanding.
+    /// </summary>
+    /// <param name="batch">The keys; valid only during the call (they live in pooled buffers).</param>
+    int Begin(FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields);
 
     /// <summary>
     /// Records a finished call. <paramref name="values"/> is non-null only when the call answered within its budget

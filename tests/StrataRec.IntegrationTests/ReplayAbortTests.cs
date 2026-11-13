@@ -1,0 +1,271 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using StrataRec.Artifacts.Model;
+using StrataRec.Core.Diagnostics;
+using StrataRec.Experiments.Compilation;
+using StrataRec.Hosting;
+using StrataRec.Hosting.Replay;
+using StrataRec.Models;
+using StrataRec.Pipeline.Operators;
+using StrataRec.Pipeline.Operators.Standard;
+using StrataRec.Pipeline.Planning;
+
+namespace StrataRec.IntegrationTests;
+
+/// <summary>
+/// Requests aborted while recorded (design 13.4): the bundle reaches the host through the recording callback while the
+/// cancellation still reaches the caller, calls in flight are outstanding, and a replay stops where the recording did.
+/// </summary>
+/// <remarks>
+/// Nothing here depends on timing: the caller cancels once the model client says it has started, and the deadlines are
+/// far longer than any run.
+/// </remarks>
+public sealed class ReplayAbortTests
+{
+    [Fact]
+    public async Task ARequestCancelledDuringAModelCall_DeliversItsBundle_AndReplaysItsDecisionsUpToTheAbort()
+    {
+        var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
+            "\"on_failure\": \"fallback:ctr_backup\", \"timeout_ms\": 50,", "\"on_failure\": \"fail_request\", \"timeout_ms\": 600000,"));
+        var models = new BlockingModels();
+        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Models = new ModelClientRegistry().Add(models) });
+        Assert.True(engine.Load(host.Request, host.Workspace.ArmRanges("home_feed", "local")).Applied);
+        ReplayBundle? delivered = null;
+        using var cancel = new CancellationTokenSource();
+
+        var running = engine.ExecuteAsync(WithCallback(ReplayTests.Request("req-cancelled", 1001, "home", ReplayTests.ControlArms, deadlineMs: 600_000),
+            bundle => delivered = bundle), cancel.Token).AsTask();
+        await models.Started.Task.WaitAsync(TimeSpan.FromSeconds(60));
+        cancel.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running); // recording does not swallow the cancellation
+        Assert.NotNull(delivered);
+        Assert.Equal((false, true, "cancelled by the caller"), (delivered.Result.Succeeded, delivered.Result.Aborted, delivered.Result.Error));
+        var run = Assert.Single(delivered.Runs);
+        Assert.True(run.Result.Aborted);
+        Assert.Equal(("ctr_ranker", "aborted"), (run.Nodes[^1].Node, run.Nodes[^1].Outcome));
+        Assert.NotEmpty(run.ModelCalls);
+        Assert.All(run.ModelCalls, call => Assert.Equal("cancelled", call.Status)); // the client honoured the cancellation
+
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(delivered)));
+
+        Assert.Equal((true, "cancelled by the caller"), (outcome.Aborted, outcome.AbortReason));
+        Assert.Empty(outcome.Result.Items);
+        Assert.True(outcome.Report.Diff.Identical);
+        Assert.True(outcome.Report.Diff.RightAborted);
+        Assert.Equal(run.Nodes.Select(n => (n.Node, (string?)n.Outcome, n.Detail)), outcome.Report.Nodes.Select(n => (n.Node, n.Replayed, n.ReplayedDetail)));
+        Assert.Equal(0, models.Calls - run.ModelCalls.Count); // the replay never called the client
+    }
+
+    [Fact]
+    public async Task ACallStillInFlightAtTheAbort_IsOutstanding_AndWhatItReturnsLaterIsNotRecorded()
+    {
+        var stuck = new StuckClient();
+        var engine = WithStuckScorer(stuck);
+        ReplayBundle? delivered = null;
+        using var cancel = new CancellationTokenSource();
+
+        var running = engine.ExecuteAsync(WithCallback(ReplayTests.Request("req-stuck", 1001, "home", arms: null, deadlineMs: 600_000),
+            bundle => delivered = bundle), cancel.Token).AsTask();
+        await stuck.Started.Task.WaitAsync(TimeSpan.FromSeconds(60));
+        cancel.Cancel();
+
+        // The operator stops waiting for a client that ignores cancellation: the request is aborted with the call in flight.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
+        var call = Assert.Single(delivered!.Runs[0].ModelCalls);
+        Assert.Equal(("outstanding", false), (call.Status, call.Threw));
+        Assert.Equal(30, call.Keys!.Value.GetArrayLength()); // the coarse top 30, known when the call began
+        Assert.Equal(30, call.InputDigests.Count);
+
+        // The client answers after the snapshot; its answer is recorded nowhere.
+        stuck.Release.SetResult();
+        await stuck.Invocation!.WaitAsync(TimeSpan.FromSeconds(60));
+        Assert.Equal("outstanding", delivered.Runs[0].ModelCalls[0].Status);
+        Assert.Empty(delivered.Runs[0].ModelCalls[0].Outputs);
+
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(delivered)));
+
+        Assert.True(outcome.Aborted);
+        Assert.True(outcome.Report.Diff.Identical);
+        Assert.DoesNotContain(outcome.Report.Nodes, n => n.Changed);
+        Assert.Equal("aborted", outcome.Report.Nodes.Single(n => n.Node == "ctr_ranker").Replayed);
+    }
+
+    [Fact]
+    public async Task ARunAbortedBetweenPositions_ReplaysThePositionsItFinished_AndStopsAtTheNextOne()
+    {
+        var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
+        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-between", 1001, "home", ReplayTests.ControlArms, deadlineMs: 30_000));
+        Assert.True(recorded.Succeeded, recorded.Error);
+
+        // The same request as if it had been aborted right after its third position (e.g. while publishing that node).
+        var bundle = JsonNode.Parse(ReplayBundleFile.Serialize(recorded.Recording!))!;
+        var nodes = bundle["runs"]![0]!["nodes"]!.AsArray();
+        var finished = nodes.Take(3).Select(n => n!["node"]!.GetValue<string>()).ToArray();
+        while (nodes.Count > 3)
+        {
+            nodes.RemoveAt(3);
+        }
+
+        foreach (var result in new[] { bundle["runs"]![0]!["result"]!, bundle["result"]! })
+        {
+            result["succeeded"] = false;
+            result["aborted"] = true;
+            result["error"] = "cancelled by the caller";
+            result["items"] = new JsonArray();
+        }
+
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(bundle.ToJsonString()));
+
+        Assert.True(outcome.Aborted);
+        Assert.True(outcome.Report.Diff.Identical);
+        Assert.Equal(finished, outcome.Report.Nodes.Select(n => n.Node)); // nothing past the abort ran, not even as aborted
+        Assert.DoesNotContain(outcome.Report.Nodes, n => n.Changed);
+    }
+
+    [Fact]
+    public async Task TheCallbackGetsTheBundleOfAReturnedRequestToo_AndOneThatThrowsChangesNothing()
+    {
+        var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
+        ReplayBundle? delivered = null;
+
+        var result = await engine.ExecuteAsync(WithCallback(ReplayTests.Request("req-returned", 1001, "home", ReplayTests.ControlArms, deadlineMs: 30_000), bundle =>
+        {
+            delivered = bundle;
+            throw new InvalidOperationException("the host's sink is down");
+        }));
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Same(result.Recording, delivered);
+        Assert.False(delivered!.Result.Aborted);
+    }
+
+    [Fact]
+    public void TheSchema_DescribesAbortedResultsAndOutstandingCalls()
+    {
+        var output = new StringWriter();
+        Assert.Equal(0, StrataRec.Cli.Commands.SchemaCommand.Run("replay_bundle", null, output, TextWriter.Null));
+
+        using var schema = JsonDocument.Parse(output.ToString());
+        var result = schema.RootElement.GetProperty("properties").GetProperty("result").GetProperty("properties");
+        Assert.Contains("snapshot", result.GetProperty("aborted").GetProperty("description").GetString());
+        Assert.Contains("outstanding", output.ToString());
+    }
+
+    private static RecRequest WithCallback(RecRequest request, Action<ReplayBundle> onRecording) => new()
+    {
+        PipelineId = request.PipelineId,
+        RequestId = request.RequestId,
+        Inputs = request.Inputs,
+        Deadline = request.Deadline,
+        TimeMs = request.TimeMs,
+        Debug = new DebugOptions { ForceArms = request.Debug?.ForceArms, OnRecording = onRecording },
+    };
+
+    /// <summary>The baseline pipeline without experiments or taps, with ctr_ranker replaced by an operator that stops waiting for a stuck client.</summary>
+    private static RecEngine WithStuckScorer(StuckClient client)
+    {
+        var host = HomeFeedTestHost.Load();
+        var pipeline = host.Request.Pipeline;
+        pipeline.LogTaps.Clear();
+        pipeline.Nodes["ctr_ranker"] = new NodeSpec
+        {
+            Order = 400, Op = "StuckScorer@1", OnFailure = "fail_request",
+            Config = new JsonObject { ["output_col"] = "score.ctr", ["expr"] = "col.item.smoothed_ctr" },
+        };
+        var engine = new RecEngine(new PlanEnvironment
+        {
+            BaseDirectory = host.Root,
+            Operators = OperatorRegistry.CreateDefault().Add(new StuckScorerFactory(client)),
+        });
+        var load = engine.Load(new PlanCompileRequest
+        {
+            Pipeline = pipeline, Catalog = host.Request.Catalog, Bindings = host.Request.Bindings, Tables = host.Request.Tables, Policy = host.Request.Policy,
+        });
+        Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
+        return engine;
+    }
+
+    /// <summary>Linear model clients that block until cancelled, honouring the cancellation.</summary>
+    private sealed class BlockingModels : IModelClientFactory
+    {
+        private readonly LinearModelClientFactory _inner = new();
+        private int _calls;
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        public string ClientType => _inner.ClientType;
+
+        public IModelClient Create(string modelName, IReadOnlyDictionary<string, JsonElement> settings) => new Client(_inner.Create(modelName, settings), this);
+
+        private sealed class Client(IModelClient inner, BlockingModels owner) : IModelClient
+        {
+            public string ClientType => inner.ClientType;
+
+            public ModelSignature GetSignature(string model, string? version) => inner.GetSignature(model, version);
+
+            public async ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
+            {
+                Interlocked.Increment(ref owner._calls);
+                owner.Started.TrySetResult();
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+                return ModelStatus.Ok;
+            }
+        }
+    }
+
+    /// <summary>A model client that ignores cancellation and answers only when released.</summary>
+    private sealed class StuckClient : IModelClient
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>The framework call the operator stopped waiting for; it completes (and tries to record) after the client answers.</summary>
+        public Task<ModelStatus>? Invocation { get; set; }
+
+        public string ClientType => "stuck";
+
+        public ModelSignature GetSignature(string model, string? version) => new(Array.Empty<TensorSpec>(), Array.Empty<TensorSpec>());
+
+        public async ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            await Release.Task;
+            outputs.GetFloat32("score", call.BatchSize).Span.Fill(0.5f);
+            return ModelStatus.Ok;
+        }
+    }
+
+    /// <summary>Calls the stuck client through the framework and waits for it only as long as its node token allows.</summary>
+    private sealed class StuckScorerFactory(StuckClient client) : IOperatorFactory
+    {
+        public OperatorDescriptor Descriptor { get; } =
+            new("StuckScorer", 1, Effects.ColumnWriter, typeof(ExpressionScorerConfig), "Scores with a model that never answers in time.");
+
+        // Compiled as an expression scorer for its output declaration; the request is aborted before anything is written.
+        public Operator? Compile(OperatorCompileContext context) => new ExpressionScorerFactory().Compile(context) is null ? null : new StuckScorer(client);
+
+        private sealed class StuckScorer(StuckClient client) : Operator
+        {
+            public override async ValueTask ExecuteAsync(OperatorContext context)
+            {
+                var rows = context.LiveRows.ToArray();
+                var call = new ModelCall { Model = "stuck", Inputs = Array.Empty<NamedInput>(), BatchSize = rows.Length };
+                client.Invocation = context.InvokeModelAsync(client, new IoTarget(IoKind.Model, "stuck"), call, new ArrayWriter(), rows, context.CancellationToken);
+                await client.Invocation.WaitAsync(context.CancellationToken);
+            }
+        }
+
+        private sealed class ArrayWriter : IModelOutputWriter
+        {
+            public Memory<float> GetFloat32(string name, int elementCount) => new float[elementCount];
+
+            public void SetText(string name, string text)
+            {
+            }
+        }
+    }
+}

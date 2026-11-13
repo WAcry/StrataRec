@@ -20,7 +20,12 @@ namespace StrataRec.Pipeline.Replay;
 /// <para>Created only for requests that ask to be recorded; it allocates freely (design 4.8 item 3: trace and replay
 /// capture are normal allocations). Calls finish on connector threads, so call records are added under a lock and
 /// ordered by their start sequence when the run is built; node records come from the request's thread.</para>
-/// <para>Values are copied out of pooled buffers when a call finishes, while the call still holds the request memory.</para>
+/// <para>A call is registered when it begins, with what is known before it is sent (keys, input digests), and replaced
+/// by its full record when it finishes. Building the run is a snapshot: a call still in flight is recorded as
+/// <c>outstanding</c> and nothing that finishes afterwards is added, so an aborted request is recorded without waiting
+/// for anything.</para>
+/// <para>Values are copied out of pooled buffers when a call begins or finishes, while the call still holds the request
+/// memory.</para>
 /// </remarks>
 internal sealed class RunRecorder : IFeatureCallHook
 {
@@ -28,74 +33,113 @@ internal sealed class RunRecorder : IFeatureCallHook
     private readonly List<ReplayCandidateCall> _candidates = new();
     private readonly List<ReplayFeatureCall> _features = new();
     private readonly List<ReplayModelCall> _models = new();
+
+    // Calls begun and not yet finished, as the outstanding records a snapshot lists them as.
+    private readonly Dictionary<int, ReplayCandidateCall> _pendingCandidates = new();
+    private readonly Dictionary<int, ReplayFeatureCall> _pendingFeatures = new();
+    private readonly Dictionary<int, ReplayModelCall> _pendingModels = new();
     private readonly List<ReplayNodeRecord> _nodes = new();
     private List<ReplayAttemptRecord>? _attempts;
     private double? _remainingMs;
     private bool?[]? _sampled;
     private CompiledTap?[]? _taps;
     private int _sequence;
+    private bool _built;
 
     public bool Replays => false;
 
-    public int NextSequence() => Interlocked.Increment(ref _sequence) - 1;
+    public int Begin(FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields)
+    {
+        var sequence = NextSequence();
+        var requested = new List<ReplayField>(fields.Length);
+        foreach (var field in fields)
+        {
+            requested.Add(new ReplayField { Name = field.Field, Type = field.Type.ToString() });
+        }
+
+        Pending(_pendingFeatures, sequence, new ReplayFeatureCall
+        {
+            Seq = sequence,
+            Source = group.SourceName,
+            Entity = group.Entity.Name,
+            Shape = ReplayJson.ShapeName(batch.Shape),
+            ContextKey = batch.Shape == KeyShape.Many ? null : ReplayJson.Key(batch.ContextKey),
+            Keys = batch.Shape == KeyShape.Single ? null : ReplayJson.Keys(batch.CandidateKeys.Span),
+            Status = ReplayJson.Outstanding,
+            Error = ReplayJson.OutstandingError,
+            Fields = requested,
+        });
+        return sequence;
+    }
 
     public void Record(in FeatureCallInfo call, IStagedFeatureValues? values)
     {
-        var batch = call.Batch;
-        var rows = batch.KeyCount;
-        var fields = new List<ReplayField>(call.Fields.Length);
+        if (Begun(_pendingFeatures, call.Sequence) is not { } begun)
+        {
+            return; // the run was built while the call was in flight: it stays outstanding there
+        }
+
         Dictionary<string, JsonElement>? recorded = null;
         if (values is not null)
         {
             recorded = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            var row = new ScalarValue[call.Batch.KeyCount];
+            for (var f = 0; f < call.Fields.Length; f++)
+            {
+                for (var k = 0; k < row.Length; k++)
+                {
+                    row[k] = values.Get(f, k);
+                }
+
+                recorded[call.Fields[f].Field] = ReplayJson.Values(row);
+            }
         }
 
-        var row = new ScalarValue[rows];
-        for (var f = 0; f < call.Fields.Length; f++)
+        Finish(_pendingFeatures, _features, call.Sequence, new ReplayFeatureCall
         {
-            var field = call.Fields[f];
-            fields.Add(new ReplayField { Name = field.Field, Type = field.Type.ToString() });
-            if (recorded is null)
-            {
-                continue;
-            }
-
-            for (var k = 0; k < rows; k++)
-            {
-                row[k] = values!.Get(f, k);
-            }
-
-            recorded[field.Field] = ReplayJson.Values(row);
-        }
-
-        var record = new ReplayFeatureCall
-        {
-            Seq = call.Sequence,
-            Source = call.Group.SourceName,
-            Entity = call.Group.Entity.Name,
-            Shape = ReplayJson.ShapeName(batch.Shape),
-            ContextKey = batch.Shape == KeyShape.Many ? null : ReplayJson.Key(batch.ContextKey),
-            Keys = batch.Shape == KeyShape.Single ? null : ReplayJson.Keys(batch.CandidateKeys.Span),
+            Seq = begun.Seq,
+            Source = begun.Source,
+            Entity = begun.Entity,
+            Shape = begun.Shape,
+            ContextKey = begun.ContextKey,
+            Keys = begun.Keys,
             Sent = call.Sent,
             Status = IoCall.OutcomeName(call.Outcome),
             Error = call.Status.Error,
             FailedKeys = call.Status.FailedKeys,
             DurationMs = call.Duration.TotalMilliseconds,
-            Fields = fields,
+            Fields = begun.Fields,
             Values = recorded,
-        };
-        lock (_gate)
-        {
-            _features.Add(record);
-        }
+        });
     }
 
     public FetchStatus Replay(FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer) =>
         throw new InvalidOperationException("A recorder does not replay calls.");
 
-    /// <summary>Records a candidate source call; <paramref name="buffer"/> is closed and still rented.</summary>
-    public void CandidateCall(int sequence, string node, string source, int limit, IoOutcome outcome, string? error, TimeSpan duration, CandidateBuffer buffer)
+    /// <summary>Registers a candidate source call about to be sent; returns its sequence for <see cref="CandidateCall"/>.</summary>
+    public int BeginCandidateCall(string node, string source, int limit)
     {
+        var sequence = NextSequence();
+        Pending(_pendingCandidates, sequence, new ReplayCandidateCall
+        {
+            Seq = sequence,
+            Node = node,
+            Source = source,
+            Limit = limit,
+            Status = ReplayJson.Outstanding,
+            Error = ReplayJson.OutstandingError,
+        });
+        return sequence;
+    }
+
+    /// <summary>Records a finished candidate source call; <paramref name="buffer"/> is closed and still rented.</summary>
+    public void CandidateCall(int sequence, IoOutcome outcome, string? error, TimeSpan duration, CandidateBuffer buffer)
+    {
+        if (Begun(_pendingCandidates, sequence) is not { } begun)
+        {
+            return;
+        }
+
         var answered = outcome == IoOutcome.Ok;
         var scores = new List<double>(answered ? buffer.Count : 0);
         if (answered)
@@ -106,28 +150,27 @@ internal sealed class RunRecorder : IFeatureCallHook
             }
         }
 
-        var record = new ReplayCandidateCall
+        Finish(_pendingCandidates, _candidates, sequence, new ReplayCandidateCall
         {
-            Seq = sequence,
-            Node = node,
-            Source = source,
-            Limit = limit,
+            Seq = begun.Seq,
+            Node = begun.Node,
+            Source = begun.Source,
+            Limit = begun.Limit,
             Status = IoCall.OutcomeName(outcome),
             Error = error,
             DurationMs = duration.TotalMilliseconds,
             Ids = answered ? ReplayJson.Keys(buffer.Keys) : null,
             Scores = scores,
-        };
-        lock (_gate)
-        {
-            _candidates.Add(record);
-        }
+        });
     }
 
-    /// <summary>Records a model call; outputs are copied only from a call that answered.</summary>
-    public void ModelCall(int sequence, string node, ModelCall call, EntityKey[]? keys, IoOutcome outcome, string? error, bool threw, TimeSpan duration,
-        RecordingOutputWriter outputs)
+    /// <summary>
+    /// Registers a model call about to be sent, with its input digests (taken now, before the client sees the inputs);
+    /// returns its sequence for <see cref="ModelCall"/>.
+    /// </summary>
+    public int BeginModelCall(string node, ModelCall call, EntityKey[]? keys)
     {
+        var sequence = NextSequence();
         var order = ModelInputDigest.NameOrder(call);
         var digests = new List<string>();
         if (keys is not null)
@@ -140,6 +183,30 @@ internal sealed class RunRecorder : IFeatureCallHook
         else
         {
             digests.Add(ReplayJson.Hex(ModelInputDigest.Call(call, order)));
+        }
+
+        Pending(_pendingModels, sequence, new ReplayModelCall
+        {
+            Seq = sequence,
+            Node = node,
+            Model = call.Model,
+            Version = call.Version,
+            BatchSize = call.BatchSize,
+            Status = ReplayJson.Outstanding,
+            Error = ReplayJson.OutstandingError,
+            Keys = keys is null ? null : ReplayJson.Keys(keys),
+            InputDigests = digests,
+        });
+        return sequence;
+    }
+
+    /// <summary>Records a finished model call; outputs are copied only from a call that answered.</summary>
+    /// <param name="thrown">The type of the exception the client threw, or null when it returned a status.</param>
+    public void ModelCall(int sequence, IoOutcome outcome, string? error, Type? thrown, TimeSpan duration, RecordingOutputWriter outputs)
+    {
+        if (Begun(_pendingModels, sequence) is not { } begun)
+        {
+            return;
         }
 
         var floats = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
@@ -157,26 +224,23 @@ internal sealed class RunRecorder : IFeatureCallHook
             }
         }
 
-        var record = new ReplayModelCall
+        Finish(_pendingModels, _models, sequence, new ReplayModelCall
         {
-            Seq = sequence,
-            Node = node,
-            Model = call.Model,
-            Version = call.Version,
-            BatchSize = call.BatchSize,
+            Seq = begun.Seq,
+            Node = begun.Node,
+            Model = begun.Model,
+            Version = begun.Version,
+            BatchSize = begun.BatchSize,
             Status = IoCall.OutcomeName(outcome),
             Error = error,
-            Threw = threw,
+            Threw = thrown is not null,
+            ErrorType = thrown?.FullName,
             DurationMs = duration.TotalMilliseconds,
-            Keys = keys is null ? null : ReplayJson.Keys(keys),
-            InputDigests = digests,
+            Keys = begun.Keys,
+            InputDigests = begun.InputDigests,
             Outputs = floats,
             Texts = texts,
-        };
-        lock (_gate)
-        {
-            _models.Add(record);
-        }
+        });
     }
 
     /// <summary>The time left when the current position passed its <c>when</c>.</summary>
@@ -212,9 +276,14 @@ internal sealed class RunRecorder : IFeatureCallHook
         _taps = taps;
     }
 
-    /// <summary>Builds the run's record once it has a result.</summary>
+    /// <summary>
+    /// Builds the run's record as a snapshot: calls still in flight are <c>outstanding</c>, and nothing that finishes
+    /// afterwards is added. Never waits for a call. Call it once, while the request still holds its memory.
+    /// </summary>
+    /// <param name="result">What the run returned; for an aborted run, the failure its logs were published with.</param>
     /// <param name="logs">none, pipeline or captured: where the run's log batches went.</param>
-    public ReplayRunRecord Build(ExecutionPlan plan, PipelineRequest request, ScalarValue[]? parameters, PipelineResult result, string logs)
+    /// <param name="aborted">The run was aborted (cancelled by its caller, or a defect) and returned no result.</param>
+    public ReplayRunRecord Build(ExecutionPlan plan, PipelineRequest request, ScalarValue[]? parameters, PipelineResult result, string logs, bool aborted = false)
     {
         var parameterValues = new Dictionary<string, ReplayTypedValue>(StringComparer.Ordinal);
         if (parameters is not null)
@@ -230,9 +299,13 @@ internal sealed class RunRecorder : IFeatureCallHook
         List<ReplayModelCall> models;
         lock (_gate)
         {
+            _built = true;
             candidates = new List<ReplayCandidateCall>(_candidates);
+            candidates.AddRange(_pendingCandidates.Values);
             features = new List<ReplayFeatureCall>(_features);
+            features.AddRange(_pendingFeatures.Values);
             models = new List<ReplayModelCall>(_models);
+            models.AddRange(_pendingModels.Values);
         }
 
         candidates.Sort(static (a, b) => a.Seq.CompareTo(b.Seq));
@@ -250,12 +323,13 @@ internal sealed class RunRecorder : IFeatureCallHook
             FeatureCalls = features,
             ModelCalls = models,
             Sampling = BuildSampling(plan, request.Arms, logs),
-            Result = Result(plan, result, null),
+            Result = Result(plan, result, null, aborted),
         };
     }
 
     /// <summary>A result record: items with the output column types needed to decode them.</summary>
-    public static ReplayResultRecord Result(ExecutionPlan plan, PipelineResult result, string? servedBy)
+    /// <param name="aborted">The run or request was aborted: <paramref name="result"/> is the failure it was logged with.</param>
+    public static ReplayResultRecord Result(ExecutionPlan plan, PipelineResult result, string? servedBy, bool aborted = false)
     {
         var types = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (name, expression) in plan.Output.Columns)
@@ -279,6 +353,7 @@ internal sealed class RunRecorder : IFeatureCallHook
         {
             ServedBy = servedBy,
             Succeeded = result.Succeeded,
+            Aborted = aborted,
             Error = result.Error,
             Degraded = result.Degraded,
             ElapsedMs = result.ElapsedMs,
@@ -287,6 +362,41 @@ internal sealed class RunRecorder : IFeatureCallHook
             TriggeredExperiments = new List<string>(result.TriggeredExperiments),
             ColumnProducers = new Dictionary<string, string>(result.ColumnProducers, StringComparer.Ordinal),
         };
+    }
+
+    private int NextSequence() => Interlocked.Increment(ref _sequence) - 1;
+
+    private void Pending<T>(Dictionary<int, T> pending, int sequence, T begun)
+    {
+        lock (_gate)
+        {
+            if (!_built)
+            {
+                pending[sequence] = begun;
+            }
+        }
+    }
+
+    /// <summary>The record of a call as it began; null once the run has been built (the call is outstanding there).</summary>
+    private T? Begun<T>(Dictionary<int, T> pending, int sequence)
+        where T : class
+    {
+        lock (_gate)
+        {
+            return !_built && pending.TryGetValue(sequence, out var begun) ? begun : null;
+        }
+    }
+
+    private void Finish<T>(Dictionary<int, T> pending, List<T> finished, int sequence, T record)
+    {
+        lock (_gate)
+        {
+            // A call that finishes after the snapshot is left out: the run's record is already out.
+            if (!_built && pending.Remove(sequence))
+            {
+                finished.Add(record);
+            }
+        }
     }
 
     private ReplaySamplingRecord BuildSampling(ExecutionPlan plan, in RequestArms arms, string logs)

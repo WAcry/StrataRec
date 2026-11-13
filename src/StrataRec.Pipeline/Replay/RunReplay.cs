@@ -47,8 +47,83 @@ public sealed record ReplayFieldStats(string Source, string Field, long Requeste
     public double MissingRate => Requested == 0 ? 0.0 : (double)Missing / Requested;
 }
 
-/// <summary>An exception a recorded call threw, thrown again by its replay with the original message.</summary>
-public sealed class ReplayedCallException(string message) : Exception(message);
+/// <summary>
+/// An exception a recorded call threw whose type the replay could not create again (the replaying process lacks the type,
+/// or it has no <c>(string message)</c> constructor): thrown with the original message and type name.
+/// </summary>
+public sealed class ReplayedCallException(string message, string? originalType = null) : Exception(message)
+{
+    /// <summary>Full name of the exception type the client threw in the recording; null when the bundle did not record it.</summary>
+    public string? OriginalType { get; } = originalType;
+}
+
+/// <summary>
+/// Thrown by a replayed run where its recording was aborted (design 13.4): at the first timeline position the recorded
+/// run did not finish, or before its result. The recording holds no decisions past that point, so the replay stops there
+/// and reports the run as aborted, as recorded, instead of inventing the rest.
+/// </summary>
+/// <param name="reason">Why the recorded run was aborted, as recorded.</param>
+public sealed class ReplayAbortedException(string reason) : Exception(reason);
+
+/// <summary>The exceptions a replay throws for recorded calls that threw (the contract of <see cref="Operators.OperatorContext.InvokeModelAsync"/>).</summary>
+internal static class ReplayedExceptions
+{
+    /// <summary>
+    /// The exception to throw for a call recorded as throwing <paramref name="typeName"/>: a <see cref="TimeoutException"/>
+    /// stays a <see cref="TimeoutException"/> and cancellation an <see cref="OperationCanceledException"/>; any other type
+    /// is created again through its public <c>(string message)</c> constructor when it resolves in this process and derives
+    /// from <see cref="Exception"/>; otherwise a <see cref="ReplayedCallException"/> carries the type name.
+    /// </summary>
+    /// <param name="timedOut">The recorded outcome was a timeout: without a type name, it is replayed as cancellation.</param>
+    public static Exception Create(string? typeName, string? message, bool timedOut, string fallbackMessage)
+    {
+        var text = message ?? fallbackMessage;
+        switch (typeName)
+        {
+            case null when timedOut:
+                return new OperationCanceledException(text);
+            case null:
+                return new ReplayedCallException(text);
+            case "System.TimeoutException":
+                return new TimeoutException(text);
+            case "System.OperationCanceledException":
+                return new OperationCanceledException(text);
+        }
+
+        if (Resolve(typeName) is { } type && typeof(Exception).IsAssignableFrom(type) && !type.IsAbstract
+            && type.GetConstructor(new[] { typeof(string) }) is { } constructor)
+        {
+            try
+            {
+                return (Exception)constructor.Invoke(new object[] { text });
+            }
+            catch (System.Reflection.TargetInvocationException)
+            {
+                // The constructor itself threw: fall back to the type name.
+            }
+        }
+
+        return new ReplayedCallException(text, typeName);
+    }
+
+    private static Type? Resolve(string typeName)
+    {
+        if (Type.GetType(typeName, throwOnError: false) is { } type)
+        {
+            return type; // the core library, or an assembly-qualified name
+        }
+
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            if (assembly.GetType(typeName, throwOnError: false) is { } found)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+}
 
 /// <summary>
 /// Replays one recorded pipeline run (design 13.4): answers feature, candidate and model calls from the recording and
@@ -71,13 +146,22 @@ public sealed class RunReplay : IFeatureCallHook
     private readonly Dictionary<(string Model, string? Version), List<ModelEntry>> _modelCalls = new();
     private readonly Dictionary<string, double> _remaining = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Queue<ReplayAttemptRecord>> _attempts = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _finished = new(StringComparer.Ordinal);
+    private string? _abortedNode;
     private readonly Dictionary<(string Kind, string Source, string? Field, string Reason), GapCounter> _gaps = new();
     private readonly Dictionary<(string Source, string Field), long[]> _stats = new();
 
-    private RunReplay(ReplayRunRecord? recorded) => Recorded = recorded;
+    private RunReplay(ReplayRunRecord? recorded)
+    {
+        Recorded = recorded;
+        AbortReason = recorded is { Result.Aborted: true } ? recorded.Result.Error ?? "aborted" : null;
+    }
 
     /// <summary>The recording being replayed; null when the bundle had no run for this pipeline.</summary>
     public ReplayRunRecord? Recorded { get; }
+
+    /// <summary>Why the recorded run was aborted; null when it returned a result.</summary>
+    public string? AbortReason { get; }
 
     /// <summary>The deadline a replayed run executes with: long enough never to decide anything; timing comes from the recording.</summary>
     public static TimeSpan Deadline => TimeSpan.FromHours(1);
@@ -144,7 +228,7 @@ public sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    public int NextSequence() => 0;
+    public int Begin(FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields) => 0;
 
     public void Record(in FeatureCallInfo call, IStagedFeatureValues? values)
     {
@@ -201,55 +285,83 @@ public sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    /// <summary>Answers a candidate source call; <paramref name="buffer"/> is filled up to its limit.</summary>
+    /// <summary>
+    /// Answers a candidate source call; <paramref name="buffer"/> is filled up to its limit. The node's own recorded call
+    /// of the source is replayed exactly, status included, and consumed. A node the recording has no (unconsumed) call
+    /// for, such as a node the configuration added, gets a copy of the longest list the source returned to any node, and
+    /// consumes nothing: another node's call stays that node's, whatever order the nodes ask in.
+    /// </summary>
     internal CandidateSourceStatus Retrieve(string node, string source, CandidateQuery query, CandidateBuffer buffer)
     {
         lock (_gate)
         {
-            CandidateEntry? entry = null;
+            CandidateEntry? exact = null;
             foreach (var candidate in _candidateCalls)
             {
-                if (!candidate.Consumed && candidate.Source == source && (candidate.Node == node || entry is null))
+                if (!candidate.Consumed && candidate.Source == source && candidate.Node == node)
                 {
-                    entry = candidate;
-                    if (candidate.Node == node)
-                    {
-                        break;
-                    }
+                    exact = candidate;
+                    break;
                 }
             }
 
-            if (entry is null)
+            if (exact is not null)
+            {
+                exact.Consumed = true;
+                if (exact.Outcome != IoOutcome.Ok)
+                {
+                    return CandidateSourceStatus.Failed(exact.Error ?? "timed out");
+                }
+
+                Copy(exact, node, query, buffer);
+                return CandidateSourceStatus.Ok;
+            }
+
+            // The data of a successful call; a failure belongs to the call that failed.
+            CandidateEntry? longest = null;
+            foreach (var candidate in _candidateCalls)
+            {
+                if (candidate.Source == source && candidate.Outcome == IoOutcome.Ok && (longest is null || candidate.Ids.Length > longest.Ids.Length))
+                {
+                    longest = candidate;
+                }
+            }
+
+            if (longest is null)
             {
                 AddGap("candidate_source", source, null, "not_recorded", 1, node);
                 return CandidateSourceStatus.Ok;
             }
 
-            entry.Consumed = true;
-            if (entry.Outcome != IoOutcome.Ok)
-            {
-                return CandidateSourceStatus.Failed(entry.Error ?? "timed out");
-            }
-
-            var count = Math.Min(entry.Ids.Length, query.Limit);
-            for (var i = 0; i < count; i++)
-            {
-                buffer.Add(entry.Ids[i], entry.Scores[i]);
-            }
-
-            if (query.Limit > entry.Limit && entry.Ids.Length >= entry.Limit)
-            {
-                AddGap("candidate_source", source, null, "limit_exceeds_recording", query.Limit - entry.Ids.Length, node);
-            }
-
+            Copy(longest, node, query, buffer);
             return CandidateSourceStatus.Ok;
         }
     }
 
     /// <summary>
-    /// Answers a model call. Keyed calls (<paramref name="keys"/>: the entity of each batch row) are matched per row, and a
-    /// recorded output is used only where the row's inputs are unchanged. A recorded failure is replayed: returned, or
-    /// thrown when the client threw (a timeout as <see cref="OperationCanceledException"/>).
+    /// Copies a recorded list up to the query's limit. Asking for more than the recording holds is a shortfall only when
+    /// the recorded call stopped at its own limit (the source might have had more); a source that returned fewer had none.
+    /// </summary>
+    private void Copy(CandidateEntry entry, string node, CandidateQuery query, CandidateBuffer buffer)
+    {
+        var count = Math.Min(entry.Ids.Length, query.Limit);
+        for (var i = 0; i < count; i++)
+        {
+            buffer.Add(entry.Ids[i], entry.Scores[i]);
+        }
+
+        if (query.Limit > entry.Ids.Length && entry.Ids.Length >= entry.Limit)
+        {
+            AddGap("candidate_source", entry.Source, null, "limit_exceeds_recording", query.Limit - entry.Ids.Length, node);
+        }
+    }
+
+    /// <summary>
+    /// Answers a model call. A call without keys is matched by the digest of its whole input. A keyed call
+    /// (<paramref name="keys"/>: the entity of each batch row) takes the next recorded call with the same keys: when that
+    /// call failed, or every row's inputs are unchanged, it is replayed as recorded; otherwise each row's output comes from
+    /// whichever successful call scored that entity with the same inputs (<see cref="Synthesize"/>). A recorded failure is
+    /// returned, or thrown again when the client threw (see <see cref="ReplayedExceptions"/>).
     /// </summary>
     internal ModelStatus InvokeModel(ModelCall call, IModelOutputWriter outputs, EntityKey[]? keys)
     {
@@ -267,7 +379,7 @@ public sealed class RunReplay : IFeatureCallHook
                     return ModelStatus.Failed($"model '{call.Model}': this call is not in the replay bundle");
                 }
 
-                return Answer(unkeyed, outputs, call.BatchSize, null);
+                return Answer(unkeyed, outputs);
             }
 
             var digests = new string[keys.Length];
@@ -276,14 +388,25 @@ public sealed class RunReplay : IFeatureCallHook
                 digests[r] = ReplayJson.Hex(ModelInputDigest.Row(call, order, r));
             }
 
-            var exact = Take(calls, entry => entry.Keys is not null && entry.Keys.AsSpan().SequenceEqual(keys));
-            if (exact is not null)
+            var positional = Take(calls, entry => entry.Keys is not null && entry.Keys.AsSpan().SequenceEqual(keys));
+            if (positional is not null && (positional.Outcome != IoOutcome.Ok || positional.Digests.AsSpan().SequenceEqual(digests)))
             {
-                return Answer(exact, outputs, call.BatchSize, digests);
+                return Answer(positional, outputs);
             }
 
             return Synthesize(call, calls, outputs, keys, digests);
         }
+    }
+
+    /// <summary>
+    /// The recorded run was aborted before it finished <paramref name="node"/>'s position: the replay must stop there.
+    /// <paramref name="running"/> tells whether the node was running at the abort (recorded as <c>aborted</c>) rather than
+    /// never reached.
+    /// </summary>
+    internal bool AbortsAt(string node, out bool running)
+    {
+        running = node == _abortedNode;
+        return AbortReason is not null && !_finished.Contains(node);
     }
 
     /// <summary>Time left when the node passed its <c>when</c> in the recording; infinite for a node the recording lacks.</summary>
@@ -345,8 +468,9 @@ public sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// The first unconsumed recorded call with the same source, entity, shape and keys; one carrying every requested
-    /// field is preferred over one that carries only some.
+    /// The first unconsumed recorded call with the same source, entity, shape and keys that carries every requested
+    /// field. A call carrying only some is not this call: its other fields may well be in other successful calls (the
+    /// configuration regrouped the fetch), so the call is synthesized value by value instead, and nothing is consumed.
     /// </summary>
     private FeatureEntry? TakeFeatureCall(string source, string entity, KeyShape shape, in EntityKey context, ReadOnlySpan<EntityKey> keys, CompiledFieldBinding[] fields)
     {
@@ -355,30 +479,19 @@ public sealed class RunReplay : IFeatureCallHook
             return null;
         }
 
-        FeatureEntry? partialMatch = null;
         foreach (var entry in candidates)
         {
             if (entry.Consumed || entry.Source != source || entry.Entity != entity || entry.Shape != shape || entry.Context != context
-                || !entry.Keys.AsSpan().SequenceEqual(keys))
+                || !entry.Keys.AsSpan().SequenceEqual(keys) || !HasFields(entry, fields))
             {
                 continue;
             }
 
-            if (HasFields(entry, fields))
-            {
-                entry.Consumed = true;
-                return entry;
-            }
-
-            partialMatch ??= entry;
+            entry.Consumed = true;
+            return entry;
         }
 
-        if (partialMatch is not null)
-        {
-            partialMatch.Consumed = true;
-        }
-
-        return partialMatch;
+        return null;
 
         static bool HasFields(FeatureEntry entry, CompiledFieldBinding[] fields)
         {
@@ -394,58 +507,23 @@ public sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    private ModelStatus Answer(ModelEntry entry, IModelOutputWriter outputs, int batchSize, string[]? digests)
+    /// <summary>Replays a recorded call as it was: its failure, or every output it returned.</summary>
+    private static ModelStatus Answer(ModelEntry entry, IModelOutputWriter outputs)
     {
         if (entry.Outcome != IoOutcome.Ok)
         {
             if (entry.Threw)
             {
-                if (entry.Outcome is IoOutcome.Timeout or IoOutcome.Cancelled)
-                {
-                    throw new OperationCanceledException($"model '{entry.Model}' timed out in the recording");
-                }
-
-                throw new ReplayedCallException(entry.Error ?? $"model '{entry.Model}' threw in the recording");
+                throw ReplayedExceptions.Create(entry.ErrorType, entry.Error, entry.Outcome is IoOutcome.Timeout or IoOutcome.Cancelled,
+                    $"model '{entry.Model}' threw in the recording");
             }
 
             return ModelStatus.Failed(entry.Error ?? $"model '{entry.Model}' failed in the recording");
         }
 
-        GapCounter? changed = null;
         foreach (var (name, values) in entry.Outputs)
         {
-            var perRow = entry.BatchSize > 0 ? values.Length / entry.BatchSize : values.Length;
-            var destination = outputs.GetFloat32(name, digests is null ? values.Length : batchSize * perRow).Span;
-            if (digests is null)
-            {
-                values.CopyTo(destination);
-                continue;
-            }
-
-            for (var r = 0; r < batchSize; r++)
-            {
-                var slice = destination.Slice(r * perRow, perRow);
-                if (digests[r] == entry.Digests[r])
-                {
-                    values.AsSpan(r * perRow, perRow).CopyTo(slice);
-                }
-                else
-                {
-                    slice.Fill(float.NaN);
-                }
-            }
-        }
-
-        if (digests is not null)
-        {
-            for (var r = 0; r < batchSize; r++)
-            {
-                if (digests[r] != entry.Digests[r])
-                {
-                    changed ??= Gap("model", entry.Model, null, "inputs_changed");
-                    changed.Add(1, entry.Keys![r].ToString());
-                }
-            }
+            values.CopyTo(outputs.GetFloat32(name, values.Length).Span);
         }
 
         foreach (var (name, text) in entry.Texts)
@@ -456,12 +534,18 @@ public sealed class RunReplay : IFeatureCallHook
         return ModelStatus.Ok;
     }
 
-    /// <summary>A keyed call the recording does not have as such: each row's output comes from whichever recorded call scored it.</summary>
+    /// <summary>
+    /// A keyed call the recording does not have as such (other batches, or changed inputs): each row's output comes from
+    /// a successful recorded call that scored the same entity with the same inputs, whichever call and row that was. An
+    /// entity scored only with other inputs is an <c>inputs_changed</c> gap; one never scored is <c>not_recorded</c>.
+    /// </summary>
     private ModelStatus Synthesize(ModelCall call, List<ModelEntry>? calls, IModelOutputWriter outputs, EntityKey[] keys, string[] digests)
     {
-        // Output layout (names and values per row) from the recorded calls of the same model and version.
+        // Output layout (names and values per row) and the rows by (entity, input digest), from the successful keyed calls
+        // of the same model and version. An entity can be scored several times with different inputs.
         var layout = new List<(string Name, int PerRow)>();
-        var rowsByKey = new Dictionary<EntityKey, (ModelEntry Entry, int Row)>();
+        var rows = new Dictionary<(EntityKey Key, string Digest), List<(ModelEntry Entry, int Row)>>();
+        var scored = new HashSet<EntityKey>();
         if (calls is not null)
         {
             foreach (var entry in calls)
@@ -473,14 +557,21 @@ public sealed class RunReplay : IFeatureCallHook
 
                 for (var r = 0; r < entry.Keys.Length; r++)
                 {
-                    rowsByKey.TryAdd(entry.Keys[r], (entry, r));
+                    if (!rows.TryGetValue((entry.Keys[r], entry.Digests[r]), out var list))
+                    {
+                        list = new List<(ModelEntry Entry, int Row)>(1);
+                        rows[(entry.Keys[r], entry.Digests[r])] = list;
+                    }
+
+                    list.Add((entry, r));
+                    scored.Add(entry.Keys[r]);
                 }
 
                 foreach (var (name, values) in entry.Outputs)
                 {
                     if (!layout.Exists(o => o.Name == name))
                     {
-                        layout.Add((name, entry.BatchSize > 0 ? values.Length / entry.BatchSize : 1));
+                        layout.Add((name, PerRow(entry, values)));
                     }
                 }
             }
@@ -497,39 +588,66 @@ public sealed class RunReplay : IFeatureCallHook
             return ModelStatus.Failed($"model '{call.Model}' has no recorded output in the replay bundle");
         }
 
-        GapCounter? missing = null;
-        GapCounter? changed = null;
+        var lacking = new bool[keys.Length];
         foreach (var (name, perRow) in layout)
         {
             var destination = outputs.GetFloat32(name, keys.Length * perRow).Span;
             for (var r = 0; r < keys.Length; r++)
             {
                 var slice = destination.Slice(r * perRow, perRow);
-                if (rowsByKey.TryGetValue(keys[r], out var recorded) && recorded.Entry.Digests[recorded.Row] == digests[r]
-                    && recorded.Entry.Outputs.TryGetValue(name, out var values) && values.Length >= (recorded.Row + 1) * perRow)
+                if (Recorded(rows, keys[r], digests[r], name, perRow) is { } values)
                 {
-                    values.AsSpan(recorded.Row * perRow, perRow).CopyTo(slice);
+                    values.Span.CopyTo(slice);
                 }
                 else
                 {
                     slice.Fill(float.NaN);
+                    lacking[r] = true;
                 }
             }
         }
 
+        GapCounter? missing = null;
+        GapCounter? changed = null;
         for (var r = 0; r < keys.Length; r++)
         {
-            if (!rowsByKey.TryGetValue(keys[r], out var recorded))
+            if (!lacking[r])
             {
-                (missing ??= Gap("model", call.Model, null, "not_recorded")).Add(1, keys[r].ToString());
+                continue;
             }
-            else if (recorded.Entry.Digests[recorded.Row] != digests[r])
+
+            if (!rows.ContainsKey((keys[r], digests[r])) && scored.Contains(keys[r]))
             {
                 (changed ??= Gap("model", call.Model, null, "inputs_changed")).Add(1, keys[r].ToString());
+            }
+            else
+            {
+                (missing ??= Gap("model", call.Model, null, "not_recorded")).Add(1, keys[r].ToString());
             }
         }
 
         return ModelStatus.Ok;
+
+        static int PerRow(ModelEntry entry, float[] values) => entry.BatchSize > 0 ? values.Length / entry.BatchSize : 1;
+
+        // The first recorded row of the entity with these inputs that has the output in the same layout.
+        static ReadOnlyMemory<float>? Recorded(Dictionary<(EntityKey, string), List<(ModelEntry Entry, int Row)>> rows, EntityKey key, string digest, string name, int perRow)
+        {
+            if (!rows.TryGetValue((key, digest), out var list))
+            {
+                return null;
+            }
+
+            foreach (var (entry, row) in list)
+            {
+                if (entry.Outputs.TryGetValue(name, out var values) && PerRow(entry, values) == perRow && values.Length >= (row + 1) * perRow)
+                {
+                    return values.AsMemory(row * perRow, perRow);
+                }
+            }
+
+            return null;
+        }
     }
 
     private static ModelEntry? Take(List<ModelEntry>? calls, Predicate<ModelEntry> match)
@@ -552,8 +670,11 @@ public sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// Writes a recorded value into a staging field. The value was decoded with its recorded type; a field whose type
-    /// changed takes it only when it converts without loss of meaning (numeric widening, string ↔ text).
+    /// Writes a recorded value into a staging field; false (nothing written) when it does not fit. The value was decoded
+    /// with its recorded type; a field whose type changed takes it only when it converts without loss of meaning: numeric
+    /// widening, rounding to float32 as the source itself would, string ↔ text. A value outside the new type's range (an
+    /// integer beyond int32, a finite number beyond float32) does not fit: storing it would publish a wrapped value or an
+    /// infinity the recording never had. Exact and synthesized calls both write through here, so they apply one rule.
     /// </summary>
     private static bool TryWrite(IFeatureBatchWriter writer, int field, int key, ColumnType type, in ScalarValue value)
     {
@@ -568,7 +689,7 @@ public sealed class RunReplay : IFeatureCallHook
             case StorageKind.Int64 when value.Kind == StorageKind.Int64:
                 writer.GetValues<long>(field).Span[key] = value.AsInt64();
                 break;
-            case StorageKind.Float32 when value.Kind is StorageKind.Float64 or StorageKind.Int64:
+            case StorageKind.Float32 when value.Kind is StorageKind.Float64 or StorageKind.Int64 && FitsFloat32(value.AsFloat64()):
                 writer.GetValues<float>(field).Span[key] = (float)value.AsFloat64();
                 break;
             case StorageKind.Float64 when value.Kind is StorageKind.Float64 or StorageKind.Int64:
@@ -603,6 +724,9 @@ public sealed class RunReplay : IFeatureCallHook
         writer.SetValid(field, key);
         return true;
     }
+
+    /// <summary>NaN and ±∞ stay what they are; a finite value must not overflow to an infinity.</summary>
+    private static bool FitsFloat32(double value) => !double.IsFinite(value) || float.IsFinite((float)value);
 
     private static RowKey RowKeyOf(KeyShape shape, in EntityKey context, ReadOnlySpan<EntityKey> keys, int row) => shape switch
     {
@@ -677,6 +801,15 @@ public sealed class RunReplay : IFeatureCallHook
         for (var i = 0; i < run.Nodes.Count; i++)
         {
             var node = run.Nodes[i];
+            if (node.Outcome == "aborted")
+            {
+                _abortedNode ??= node.Node;
+            }
+            else
+            {
+                _finished.Add(node.Node);
+            }
+
             if (node.RemainingMs is { } remaining)
             {
                 _remaining.TryAdd(node.Node, remaining);
@@ -779,7 +912,11 @@ public sealed class RunReplay : IFeatureCallHook
 
                 for (var f = 0; f < names.Length; f++)
                 {
-                    byField[names[f]] = values[f][r];
+                    // A value another call returned wins over a missing one: a partial call leaves its failed keys missing.
+                    if (!byField.TryGetValue(names[f], out var existing) || existing.IsMissing)
+                    {
+                        byField[names[f]] = values[f][r];
+                    }
                 }
             }
         }
@@ -825,7 +962,7 @@ public sealed class RunReplay : IFeatureCallHook
                 outputs[name] = ReplayJson.Floats(values, $"{at}/outputs/{JsonPointer.Escape(name)}");
             }
 
-            var entry = new ModelEntry(call.Seq, call.Model, call.BatchSize, outcome, call.Error, call.Threw, keys, call.InputDigests.ToArray(), outputs,
+            var entry = new ModelEntry(call.Seq, call.Model, call.BatchSize, outcome, call.Error, call.Threw, call.ErrorType, keys, call.InputDigests.ToArray(), outputs,
                 new Dictionary<string, string>(call.Texts, StringComparer.Ordinal));
             if (!_modelCalls.TryGetValue((call.Model, call.Version), out var list))
             {
@@ -899,7 +1036,7 @@ public sealed class RunReplay : IFeatureCallHook
     }
 
     private sealed class ModelEntry(
-        int seq, string model, int batchSize, IoOutcome outcome, string? error, bool threw, EntityKey[]? keys, string[] digests,
+        int seq, string model, int batchSize, IoOutcome outcome, string? error, bool threw, string? errorType, EntityKey[]? keys, string[] digests,
         Dictionary<string, float[]> outputs, Dictionary<string, string> texts)
     {
         public int Seq { get; } = seq;
@@ -913,6 +1050,8 @@ public sealed class RunReplay : IFeatureCallHook
         public string? Error { get; } = error;
 
         public bool Threw { get; } = threw;
+
+        public string? ErrorType { get; } = errorType;
 
         public EntityKey[]? Keys { get; } = keys;
 

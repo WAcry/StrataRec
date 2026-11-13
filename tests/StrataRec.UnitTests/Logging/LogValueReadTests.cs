@@ -42,6 +42,43 @@ public sealed class LogValueReadTests
     }
 
     [Theory]
+    [InlineData(double.NaN, "\"NaN\"")]
+    [InlineData(double.PositiveInfinity, "\"Infinity\"")]
+    [InlineData(double.NegativeInfinity, "\"-Infinity\"")]
+    public void BundleEncoding_KeepsNonFiniteFloats_AsTheirNames(double value, string json)
+    {
+        var written = Write(ScalarValue.FromFloat64(value), nonFiniteAsStrings: true);
+
+        Assert.Equal(json, written);
+        Assert.Equal(ScalarValue.FromFloat64(value), Read(written, ColumnType.Float64, nonFiniteAsStrings: true));
+        Assert.Equal(ScalarValue.FromFloat64(value), Read(written, ColumnType.Float32, nonFiniteAsStrings: true));
+        Assert.Equal("null", Write(ScalarValue.FromFloat64(value), nonFiniteAsStrings: false)); // logs are unchanged
+    }
+
+    [Fact]
+    public void BundleEncoding_KeepsNonFiniteVectorComponents()
+    {
+        var vector = ScalarValue.FromVector(new[] { float.PositiveInfinity, 0.5f, float.NaN, float.NegativeInfinity });
+
+        var written = Write(vector, nonFiniteAsStrings: true);
+
+        Assert.Equal("[\"Infinity\",0.5,\"NaN\",\"-Infinity\"]", written);
+        Assert.Equal(vector, Read(written, ColumnType.Vector(4), nonFiniteAsStrings: true));
+        Assert.Equal("null", Write(vector, nonFiniteAsStrings: false));
+    }
+
+    [Theory]
+    [InlineData("float64", "\"NaN\"")]
+    [InlineData("vec<float32,2>", "[\"Infinity\", 1]")]
+    public void LogEncoding_DoesNotAcceptNonFiniteNames(string type, string json)
+    {
+        using var document = JsonDocument.Parse(json);
+
+        Assert.False(LogBatchJson.TryReadValue(document.RootElement, ColumnType.Parse(type), out _, out _));
+        Assert.False(LogBatchJson.TryReadValue(JsonDocument.Parse("\"nan\"").RootElement, ColumnType.Float64, out _, out _, nonFiniteAsStrings: true));
+    }
+
+    [Theory]
     [InlineData("int32", "4294967296")]
     [InlineData("int64", "1.5")]
     [InlineData("bool", "2")]
@@ -55,6 +92,24 @@ public sealed class LogValueReadTests
 
         Assert.False(LogBatchJson.TryReadValue(document.RootElement, ColumnType.Parse(type), out _, out var error));
         Assert.False(string.IsNullOrEmpty(error));
+    }
+
+    private static string Write(ScalarValue value, bool nonFiniteAsStrings)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            LogBatchJson.WriteValue(writer, value, nonFiniteAsStrings);
+        }
+
+        return System.Text.Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
+    private static ScalarValue Read(string json, ColumnType type, bool nonFiniteAsStrings)
+    {
+        using var document = JsonDocument.Parse(json);
+        Assert.True(LogBatchJson.TryReadValue(document.RootElement, type, out var read, out var error, nonFiniteAsStrings), error);
+        return read;
     }
 
     private static ScalarValue RoundTrip(ScalarValue value, ColumnType type)

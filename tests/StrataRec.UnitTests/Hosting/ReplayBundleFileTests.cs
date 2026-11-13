@@ -10,7 +10,7 @@ public sealed class ReplayBundleFileTests
 {
     private const string Minimal = """
         {
-          "format": "stratarec.replay_bundle/1",
+          "format": "stratarec.replay_bundle/2",
           "request": { "pipeline_id": "p", "request_id": "r", "seed": 1, "time_ms": 0, "deadline_ms": 100, "assignment": { "source": "none" } },
           "manifest": { "id": "m" },
           "runs": [
@@ -37,6 +37,81 @@ public sealed class ReplayBundleFileTests
         var replay = RunReplay.Create(bundle.Runs[0], "/runs/0");
         Assert.Empty(replay.Gaps);
         Assert.Single(ComparableResult.From(bundle.Result, "/result").Ids);
+    }
+
+    [Fact]
+    public void NonFiniteCandidateScores_RoundTripAsTheirNames()
+    {
+        var bundle = ReplayBundleFile.Parse(Edit(b => b["runs"]![0]!["candidate_calls"] = JsonNode.Parse(
+            """[{ "seq": 1, "node": "recall", "source": "s", "limit": 3, "status": "ok", "ids": [1, 2, 3], "scores": ["NaN", "Infinity", 0.5] }]""")));
+        bundle.Runs[0].CandidateCalls[0].Scores.Add(double.NegativeInfinity);
+
+        var json = ReplayBundleFile.Serialize(bundle);
+
+        Assert.Contains("\"-Infinity\"", json);
+        Assert.Equal(new[] { double.NaN, double.PositiveInfinity, 0.5, double.NegativeInfinity }, ReplayBundleFile.Parse(json).Runs[0].CandidateCalls[0].Scores);
+    }
+
+    [Theory]
+    [InlineData("/request")]
+    [InlineData("/request/pipeline_id")]
+    [InlineData("/request/assignment/arms")]
+    [InlineData("/runs")]
+    [InlineData("/runs/0")]
+    [InlineData("/runs/0/nodes")]
+    [InlineData("/runs/0/feature_calls/0/fields")]
+    [InlineData("/runs/0/feature_calls/0/fields/0")]
+    [InlineData("/runs/0/feature_calls/0/fields/0/name")]
+    [InlineData("/result/items/0")]
+    [InlineData("/result/column_types/score")]
+    public void ANullWhereAValueIsRequired_IsRejectedAtItsPointer(string pointer)
+    {
+        var json = Edit(b =>
+        {
+            b["request"]!["assignment"]!["arms"] = new JsonArray("e/a");
+            b["runs"]![0]!["nodes"] = new JsonArray(JsonNode.Parse("""{ "node": "n", "outcome": "succeeded" }"""));
+            var parent = Locate(b, pointer[..pointer.LastIndexOf('/')]);
+            var token = pointer[(pointer.LastIndexOf('/') + 1)..];
+            if (parent is JsonArray array)
+            {
+                array[int.Parse(token)] = null;
+            }
+            else
+            {
+                parent[token] = null;
+            }
+        });
+
+        var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(json));
+
+        Assert.Equal(pointer, error.Pointer);
+        Assert.Contains("must not be null", error.Reason);
+        Assert.Contains("stratarec schema replay_bundle", error.Hint);
+    }
+
+    [Fact]
+    public void NullsWhereTheSchemaAllowsThem_AreAccepted()
+    {
+        var bundle = ReplayBundleFile.Parse(Edit(b =>
+        {
+            b["result"]!["error"] = null;
+            b["result"]!["items"]![0]!["columns"]!["score"] = null; // a missing value
+            b["request"]!["inputs"] = JsonNode.Parse("""{ "user_id": { "type": "int64?", "value": null } }""");
+            b["runs"]![0]!["feature_calls"]![0]!["error"] = null;
+        }));
+
+        Assert.True(ComparableResult.From(bundle.Result, "/result").Columns[0]["score"].IsMissing);
+    }
+
+    private static JsonNode Locate(JsonNode root, string pointer)
+    {
+        var node = root;
+        foreach (var token in pointer.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            node = node is JsonArray array ? array[int.Parse(token)]! : node[token]!;
+        }
+
+        return node;
     }
 
     [Fact]

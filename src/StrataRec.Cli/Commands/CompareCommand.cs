@@ -27,7 +27,8 @@ internal static class CompareCommand
         };
         var topK = new Option<int>("--top-k", "-k") { Description = "K of the Top-K overlap.", DefaultValueFactory = _ => 10 };
         var score = new Option<string>("--score") { Description = "Output column whose distribution is compared.", DefaultValueFactory = _ => "score" };
-        var command = new Command("compare", "Replay recorded requests on a baseline and a candidate workspace and compare the results (design 10.8).")
+        var command = new Command("compare", "Replay recorded requests on a baseline and a candidate workspace and compare the results (design 10.8). " +
+            "Exits with 2 unless every bundle was compared; the report is printed either way.")
         {
             candidate, environment, format, baseline, bundles, arms, topK, score,
         };
@@ -82,7 +83,6 @@ internal static class CompareCommand
         if (pairs.Count == 0)
         {
             Console.Error.WriteLine($"{bundlePath}: no replay bundles found.");
-            return 2;
         }
 
         var report = ReplayComparison.Compare(pairs, topK, scoreColumn, Manifest(pairs, static p => p.Baseline), Manifest(pairs, static p => p.Candidate));
@@ -95,7 +95,8 @@ internal static class CompareCommand
             WriteText(output, report, baselineConfig, candidateConfig);
         }
 
-        return 0;
+        // Metrics over part of the batch (or none of it) must not pass for a clean comparison in CI.
+        return report.Status == "ok" ? 0 : 2;
     }
 
     private static string Manifest(List<ReplayPair> pairs, Func<ReplayPair, ReplayOutcome?> side)
@@ -115,7 +116,10 @@ internal static class CompareCommand
     {
         json.WriteStartObject();
         json.WriteString("mode", "recorded");
+        json.WriteString("status", report.Status);
         json.WriteNumber("bundles", report.Bundles);
+        json.WriteNumber("compared", report.Compared);
+        json.WriteNumber("unreadable", report.Unreadable);
         json.WriteNumber("top_k", report.TopK);
         json.WriteString("score_column", report.ScoreColumn);
         WriteSide(json, "baseline", baseline, report.Baseline);
@@ -180,10 +184,12 @@ internal static class CompareCommand
         json.WriteNumber("requests", side.Requests);
         WriteDistribution(json, "latency_ms", side.LatencyMs);
         json.WriteNumber("error_rate", Math.Round(side.ErrorRate, 6));
+        json.WriteNumber("aborted", side.Aborted);
         json.WriteNumber("empty_rate", Math.Round(side.EmptyRate, 6));
         json.WriteNumber("degraded_rate", Math.Round(side.DegradedRate, 6));
         json.WriteNumber("feature_missing_rate", Math.Round(side.FeatureMissingRate, 6));
         WriteDistribution(json, "score", side.Scores);
+        json.WriteNumber("non_finite_scores", side.NonFiniteScores);
         json.WriteNumber("reproduced_recording", side.ReproducedRecording);
         ReplayCommand.WriteGaps(json, "gaps", side.Gaps);
         json.WriteEndObject();
@@ -229,6 +235,12 @@ internal static class CompareCommand
     private static void WriteText(TextWriter output, ComparisonReport report, string baseline, string candidate)
     {
         output.WriteLine($"Recorded-mode comparison of {report.Bundles} bundle(s) (design 10.8); I/O is answered from the recordings.");
+        output.WriteLine(report.Status switch
+        {
+            "ok" => $"status: ok, {report.Compared} compared",
+            "partial" => $"status: partial, {report.Compared} compared, {report.Unreadable} unreadable (the metrics cover only the compared bundles)",
+            _ => $"status: failed, nothing compared ({report.Unreadable} unreadable)",
+        });
         output.WriteLine();
         // The baseline column is as wide as its longest value (paths and manifest ids can be long).
         var width = Math.Max(22, Math.Max(baseline.Length, report.Baseline.Manifest.Length) + 2);
@@ -238,10 +250,20 @@ internal static class CompareCommand
         Row("requests", Number(report.Baseline.Requests), Number(report.Candidate.Requests));
         Row("latency p50 / p95 (ms)", Pair(report.Baseline.LatencyMs.P50, report.Baseline.LatencyMs.P95), Pair(report.Candidate.LatencyMs.P50, report.Candidate.LatencyMs.P95));
         Row("error rate", Percent(report.Baseline.ErrorRate), Percent(report.Candidate.ErrorRate));
+        if (report.Baseline.Aborted + report.Candidate.Aborted > 0)
+        {
+            Row("aborted (as recorded)", Number(report.Baseline.Aborted), Number(report.Candidate.Aborted));
+        }
+
         Row("empty rate", Percent(report.Baseline.EmptyRate), Percent(report.Candidate.EmptyRate));
         Row("degraded rate", Percent(report.Baseline.DegradedRate), Percent(report.Candidate.DegradedRate));
         Row("feature missing rate", Percent(report.Baseline.FeatureMissingRate), Percent(report.Candidate.FeatureMissingRate));
         Row($"{report.ScoreColumn} mean / p50", Pair(report.Baseline.Scores.Mean, report.Baseline.Scores.P50), Pair(report.Candidate.Scores.Mean, report.Candidate.Scores.P50));
+        if (report.Baseline.NonFiniteScores + report.Candidate.NonFiniteScores > 0)
+        {
+            Row($"non-finite {report.ScoreColumn}s", Number(report.Baseline.NonFiniteScores), Number(report.Candidate.NonFiniteScores));
+        }
+
         Row("reproduced recording", Number(report.Baseline.ReproducedRecording), Number(report.Candidate.ReproducedRecording));
         output.WriteLine();
         output.WriteLine($"identical results           {report.Identical} of {report.Bundles}");

@@ -64,6 +64,19 @@ public sealed class DebugOptions
     /// when off; when on, the recording allocates in proportion to the data the request fetched.
     /// </summary>
     public bool Record { get; init; }
+
+    /// <summary>
+    /// Receives the replay bundle of the request on every exit once a pipeline ran (design 13.4): with the result, and
+    /// before the exception propagates when the request is aborted (cancelled by the caller, or a defect), which
+    /// <see cref="RecResult.Recording"/> cannot carry. Setting it records the request. An exception it throws is logged
+    /// and does not change the request's outcome.
+    /// </summary>
+    /// <remarks>
+    /// An aborted request's bundle is a snapshot taken at the abort: calls still in flight are <c>outstanding</c>, and what
+    /// they return afterwards is not in it. Nothing waits for them, so the cancellation reaches the caller as promptly as
+    /// without recording. A request rejected or aborted before any pipeline ran has nothing to replay and no bundle.
+    /// </remarks>
+    public Action<ReplayBundle>? OnRecording { get; init; }
 }
 
 /// <summary>Assignment and trigger record of a request (design 12.6).</summary>
@@ -98,8 +111,9 @@ public sealed class RecResult
     public IReadOnlyList<Logging.LogBatch>? LogBatches { get; init; }
 
     /// <summary>
-    /// The replay bundle when <see cref="DebugOptions.Record"/> was set and the request was executed (a request rejected
-    /// before execution has nothing to replay). Save it with <see cref="Replay.ReplayBundleFile"/>.
+    /// The replay bundle when the request recorded and was executed (a request rejected before execution has nothing to
+    /// replay). Save it with <see cref="Replay.ReplayBundleFile"/>. An aborted request returns no result; its bundle goes
+    /// to <see cref="DebugOptions.OnRecording"/>.
     /// </summary>
     public ReplayBundle? Recording { get; init; }
 
@@ -272,9 +286,11 @@ public sealed partial class RecEngine : IRecEngine
 
         // A recorded request resolves its seed and time once, so both pipelines see the same values and the bundle holds
         // exactly what ran (design 5.7).
-        var record = request.Debug?.Record == true;
+        var record = request.Debug is { } debug && (debug.Record || debug.OnRecording is not null);
         var seed = record ? request.Seed ?? PipelineRequest.DefaultSeed(request.RequestId) : request.Seed;
         var timeMs = record ? request.TimeMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : request.TimeMs;
+        var runs = record ? new RunCapture() : null;
+        var unknown = 0;
         try
         {
             if (!_pipelines.TryGetValue(request.PipelineId, out pipeline))
@@ -289,29 +305,36 @@ public sealed partial class RecEngine : IRecEngine
             }
 
             arms = assignment.Arms;
-            var unknown = assignment.Unknown;
+            unknown = assignment.Unknown;
             var remaining = request.Deadline - Stopwatch.GetElapsedTime(started);
             if (remaining <= TimeSpan.Zero)
             {
                 return result = Rejected(request, "deadline exceeded before execution (assignment took the whole budget)");
             }
 
-            var executed = await Run(pipeline, request, arms, remaining, seed, timeMs, cancellationToken).ConfigureAwait(false);
+            var executed = await Run(pipeline, request, arms, remaining, seed, timeMs, runs, cancellationToken).ConfigureAwait(false);
             remaining = request.Deadline - Stopwatch.GetElapsedTime(started);
             if (executed.Succeeded || pipeline.FallbackPipeline is not { } fallbackId || fallbackId == request.PipelineId
                 || !_pipelines.TryGetValue(fallbackId, out var fallback) || remaining <= TimeSpan.Zero)
             {
                 degraded = executed.Degraded;
                 result = ToResult(request, pipeline, executed, unknown, request.PipelineId);
-                return result = record ? WithRecording(result, Bundle(request, pipeline, AssignmentSource(pipeline, request), seed!.Value, timeMs!.Value, result, executed, null)) : result;
+                return result = record ? Recorded(request, pipeline, seed!.Value, timeMs!.Value, result, executed, null) : result;
             }
 
             // The pipeline failed: serve its fallback pipeline, without experiments, within what is left (design 5.6).
             degraded = true;
-            var served = await Run(fallback, request, RequestArms.None, remaining, seed, timeMs, cancellationToken).ConfigureAwait(false);
+            var served = await Run(fallback, request, RequestArms.None, remaining, seed, timeMs, runs, cancellationToken).ConfigureAwait(false);
             var converted = ToResult(request, fallback, served, unknown, fallbackId);
             result = Combine(request, executed, converted, served, unknown, fallbackId);
-            return result = record ? WithRecording(result, Bundle(request, pipeline, AssignmentSource(pipeline, request), seed!.Value, timeMs!.Value, result, executed, served)) : result;
+            return result = record ? Recorded(request, pipeline, seed!.Value, timeMs!.Value, result, executed, served) : result;
+        }
+        catch (Exception) when (runs is { Runs.Count: > 0 } && pipeline is not null)
+        {
+            // Aborted while (or after) a pipeline ran: the caller gets the exception, the recording callback the bundle of
+            // what ran up to the abort. Nothing here waits for calls still in flight.
+            Deliver(request, AbortedBundle(request, pipeline, seed!.Value, timeMs!.Value, runs.Runs, unknown));
+            throw;
         }
         finally
         {
@@ -382,8 +405,10 @@ public sealed partial class RecEngine : IRecEngine
         return (assigned, unknownIds, null);
     }
 
+    /// <param name="runs">Collects the run's recording on every exit; null when the request does not record.</param>
     private ValueTask<PipelineResult> Run(
-        LoadedPipeline pipeline, RecRequest request, RequestArms arms, TimeSpan deadline, long? seed, long? timeMs, CancellationToken cancellationToken) =>
+        LoadedPipeline pipeline, RecRequest request, RequestArms arms, TimeSpan deadline, long? seed, long? timeMs, RunCapture? runs,
+        CancellationToken cancellationToken) =>
         _executor.ExecuteAsync(pipeline.Plan, new PipelineRequest
         {
             RequestId = request.RequestId,
@@ -393,7 +418,7 @@ public sealed partial class RecEngine : IRecEngine
             Seed = seed,
             TimeMs = timeMs,
             CaptureLogs = request.Debug?.CaptureLogs == true,
-            Record = request.Debug?.Record == true,
+            OnRecording = runs is null ? null : runs.Add,
         }, cancellationToken);
 
     /// <summary>The result of a request its fallback pipeline served: the primary's assignment and error, the fallback's items.</summary>

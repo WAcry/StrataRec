@@ -29,7 +29,8 @@ internal static class ReplayCommand
             AllowMultipleArgumentsPerToken = true,
         };
         var expectIdentical = new Option<bool>("--expect-identical") { Description = "Exit with 1 unless every replay reproduces its recorded result exactly." };
-        var command = new Command("replay", "Replay recorded requests on a workspace and diff against the recorded results.")
+        var command = new Command("replay", "Replay recorded requests on a workspace and diff against the recorded results. " +
+            "Exits with 2 unless every bundle was replayed; the report is printed either way.")
         {
             config, environment, format, bundle, arms, expectIdentical,
         };
@@ -55,6 +56,11 @@ internal static class ReplayCommand
         {
             var (outcome, error) = await ReplayFileAsync(engine, file, options, cancellationToken).ConfigureAwait(false);
             results.Add((file, outcome, error));
+        }
+
+        if (files.Count == 0)
+        {
+            Console.Error.WriteLine($"{bundlePath}: no replay bundles found.");
         }
 
         var singleFile = files.Count == 1 && !Directory.Exists(bundlePath);
@@ -89,25 +95,40 @@ internal static class ReplayCommand
 
             if (!singleFile)
             {
-                var identical = 0;
-                foreach (var (_, outcome, _) in results)
-                {
-                    identical += outcome?.Report.Diff.Identical == true ? 1 : 0;
-                }
-
-                output.WriteLine($"{results.Count} bundle(s), {identical} reproduced the recorded result exactly");
+                var (replayed, unreadable, identical) = Counts(results);
+                output.WriteLine($"{results.Count} bundle(s), {replayed} replayed, {unreadable} unreadable, {identical} reproduced the recorded result exactly; " +
+                    $"status {Status(results)}");
             }
         }
 
-        var failed = false;
         var different = false;
-        foreach (var (_, outcome, error) in results)
+        foreach (var (_, outcome, _) in results)
         {
-            failed |= error is not null;
             different |= outcome is null || !outcome.Report.Diff.Identical;
         }
 
-        return failed ? 2 : expectIdentical && different ? 1 : 0;
+        // An unreadable bundle, or nothing to replay at all, is an input error even when the rest replayed identically.
+        return Status(results) != "ok" ? 2 : expectIdentical && different ? 1 : 0;
+    }
+
+    private static (int Replayed, int Unreadable, int Identical) Counts(List<(string File, ReplayOutcome? Outcome, string? Error)> results)
+    {
+        int replayed = 0, unreadable = 0, identical = 0;
+        foreach (var (_, outcome, error) in results)
+        {
+            replayed += outcome is not null ? 1 : 0;
+            unreadable += error is not null ? 1 : 0;
+            identical += outcome?.Report.Diff.Identical == true ? 1 : 0;
+        }
+
+        return (replayed, unreadable, identical);
+    }
+
+    /// <summary><c>ok</c> (every bundle replayed), <c>partial</c> (some unreadable) or <c>failed</c> (none replayed, or no bundles).</summary>
+    private static string Status(List<(string File, ReplayOutcome? Outcome, string? Error)> results)
+    {
+        var (replayed, unreadable, _) = Counts(results);
+        return replayed == 0 ? "failed" : unreadable > 0 ? "partial" : "ok";
     }
 
     /// <summary>Loads every pipeline of a workspace into a fresh engine; prints diagnostics and returns null on errors.</summary>
@@ -148,18 +169,19 @@ internal static class ReplayCommand
 
     private static void WriteReplaySummary(Utf8JsonWriter json, List<(string File, ReplayOutcome? Outcome, string? Error)> results)
     {
-        int identical = 0, errors = 0, gaps = 0;
-        foreach (var (_, outcome, error) in results)
+        var (replayed, unreadable, identical) = Counts(results);
+        var gaps = 0;
+        foreach (var (_, outcome, _) in results)
         {
-            identical += outcome?.Report.Diff.Identical == true ? 1 : 0;
-            errors += error is not null ? 1 : 0;
             gaps += outcome?.Report.Gaps.Count ?? 0;
         }
 
         json.WriteStartObject("summary");
+        json.WriteString("status", Status(results));
         json.WriteNumber("bundles", results.Count);
+        json.WriteNumber("replayed", replayed);
         json.WriteNumber("identical", identical);
-        json.WriteNumber("unreadable", errors);
+        json.WriteNumber("unreadable", unreadable);
         json.WriteNumber("gaps", gaps);
         json.WriteEndObject();
     }
@@ -189,6 +211,7 @@ internal static class ReplayCommand
         WriteStrings(json, "replayed", report.ReplayedArms);
         json.WriteEndObject();
         json.WriteBoolean("succeeded", result.Succeeded);
+        json.WriteBoolean("aborted", outcome.Aborted); // stopped where the recording was aborted: no result, error is the reason
         if (result.Error is not null)
         {
             json.WriteString("error", result.Error);
@@ -254,6 +277,8 @@ internal static class ReplayCommand
         json.WriteStartObject(name);
         json.WriteBoolean("identical", diff.Identical);
         json.WriteBoolean("recorded_succeeded", diff.LeftSucceeded);
+        json.WriteBoolean("recorded_aborted", diff.LeftAborted);
+        json.WriteBoolean("replayed_aborted", diff.RightAborted);
         json.WriteNumber("recorded_items", diff.LeftCount);
         json.WriteNumber("replayed_items", diff.RightCount);
         json.WriteNumber("overlap", Math.Round(diff.Overlap, 6));
@@ -281,10 +306,11 @@ internal static class ReplayCommand
                 foreach (var column in change.Columns)
                 {
                     json.WriteStartObject(column.Column);
+                    // The bundle encoding: NaN and ±∞ stay distinguishable from a missing value.
                     json.WritePropertyName("recorded");
-                    Logging.LogBatchJson.WriteValue(json, column.Recorded);
+                    Logging.LogBatchJson.WriteValue(json, column.Recorded, nonFiniteAsStrings: true);
                     json.WritePropertyName("replayed");
-                    Logging.LogBatchJson.WriteValue(json, column.Replayed);
+                    Logging.LogBatchJson.WriteValue(json, column.Replayed, nonFiniteAsStrings: true);
                     json.WriteEndObject();
                 }
 
@@ -356,12 +382,19 @@ internal static class ReplayCommand
         }
 
         output.WriteLine($"  arms      {Join(report.ReplayedArms)}" + (Join(report.RecordedArms) == Join(report.ReplayedArms) ? string.Empty : $" (recorded {Join(report.RecordedArms)})"));
-        output.WriteLine($"  result    {(result.Succeeded ? "succeeded" : "failed: " + result.Error)}, {result.Items.Count} item(s), served by {result.ServedBy}, " +
-            $"{report.ElapsedMs.ToString("0.###", CultureInfo.InvariantCulture)} ms");
-        output.WriteLine(diff.Identical
-            ? "  diff      identical to the recorded result"
-            : $"  diff      differs: {diff.LeftCount} recorded vs {diff.RightCount} replayed item(s), overlap {diff.Overlap.ToString("0.###", CultureInfo.InvariantCulture)}, " +
-              $"kendall tau {(diff.KendallTau is { } tau ? tau.ToString("0.###", CultureInfo.InvariantCulture) : "n/a")}");
+        var elapsed = report.ElapsedMs.ToString("0.###", CultureInfo.InvariantCulture);
+        output.WriteLine(outcome.Aborted
+            ? $"  result    aborted where the recording was ({outcome.AbortReason}): no result, in {result.ServedBy}, {elapsed} ms"
+            : $"  result    {(result.Succeeded ? "succeeded" : "failed: " + result.Error)}, {result.Items.Count} item(s), served by {result.ServedBy}, {elapsed} ms");
+        output.WriteLine(diff switch
+        {
+            { Identical: true, LeftAborted: true } => "  diff      aborted, as recorded; node decisions up to the abort are compared below",
+            { Identical: true } => "  diff      identical to the recorded result",
+            { LeftAborted: true } => "  diff      differs: the recorded request was aborted, the replay returned a result",
+            { RightAborted: true } => "  diff      differs: the replay was aborted, the recorded request returned a result",
+            _ => $"  diff      differs: {diff.LeftCount} recorded vs {diff.RightCount} replayed item(s), overlap {diff.Overlap.ToString("0.###", CultureInfo.InvariantCulture)}, " +
+                 $"kendall tau {(diff.KendallTau is { } tau ? tau.ToString("0.###", CultureInfo.InvariantCulture) : "n/a")}",
+        });
         if (diff.AddedColumns.Count > 0 || diff.RemovedColumns.Count > 0)
         {
             output.WriteLine($"    columns added: {Join(diff.AddedColumns)}; removed: {Join(diff.RemovedColumns)}");

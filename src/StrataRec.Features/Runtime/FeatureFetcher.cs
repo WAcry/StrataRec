@@ -383,8 +383,9 @@ public sealed class FeatureFetcher
         // the per-chunk arrays are rented from the request memory (design 4.8), so a fetch allocates nothing per key.
         // Lifetimes: the index and the chunk arrays are read only on the request's thread (Backfill, CompleteAsync),
         // before the request releases the memory. The key array is read by connector calls, which may outlive the
-        // request, but each call holds the memory from before FetchAsync until the connector really completes
-        // (CallAsync/IoLease), so the keys cannot return to the pool while a connector can still read them.
+        // request, but each call holds the memory from before FetchAsync until the connector really completes and the call
+        // has been recorded (CallAsync/IoLease), so the keys cannot return to the pool while a connector or a recording can
+        // still read them.
         EntityKeyIndex? index = null;
         EntityKey[]? keys = null;
         var keyCount = 0;
@@ -467,9 +468,10 @@ public sealed class FeatureFetcher
     /// wait itself is bounded: a result arriving later is rejected as a timeout and its staging is never read.
     /// </summary>
     /// <remarks>
-    /// The request memory stays held until the connector task really completes (released by a continuation, not by
-    /// this method), because a connector that ignores cancellation may still be writing into
-    /// <paramref name="writer"/> (design 4.8). Never throws: failures become <see cref="FetchOutcome.Failed"/>.
+    /// The call's hold on the request memory (its <see cref="IoLease"/>) lasts until the connector task really completes,
+    /// because a connector that ignores cancellation may still be writing into <paramref name="writer"/> (design 4.8),
+    /// and until the call has been recorded, which reads the keys and the staging. Never throws: failures become
+    /// <see cref="FetchOutcome.Failed"/>.
     /// </remarks>
     private Task<FetchStatus> CallAsync(
         FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields, StagingBuffer writer, int budgetMs, CancellationToken cancellationToken)
@@ -482,26 +484,7 @@ public sealed class FeatureFetcher
         // A replayed call answers at once from the recording: no connector, no wait, no metrics or health (design 13.4).
         return _hook.Replays
             ? Task.FromResult(_hook.Replay(group, batch, fields, writer))
-            : RecordedCallAsync(group, batch, fields, writer, budgetMs, cancellationToken);
-    }
-
-    /// <summary>
-    /// A connector call of a recorded request. The extra hold keeps the keys and the staging buffer rented until the call
-    /// is recorded: a prefetch nobody awaits may finish after the request returned, when its lease is already released.
-    /// </summary>
-    private async Task<FetchStatus> RecordedCallAsync(
-        FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields, StagingBuffer writer, int budgetMs, CancellationToken cancellationToken)
-    {
-        var sequence = _hook!.NextSequence();
-        _memory.Hold();
-        try
-        {
-            return await ConnectorCallAsync(group, batch, fields, writer, budgetMs, sequence, cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            _memory.Release();
-        }
+            : ConnectorCallAsync(group, batch, fields, writer, budgetMs, _hook.Begin(group, batch, fields), cancellationToken);
     }
 
     /// <summary>Records a chunk the request had no time left to send, so a replay fails it the same way.</summary>
@@ -510,7 +493,7 @@ public sealed class FeatureFetcher
         if (_hook is { Replays: false } recorder)
         {
             var batch = new EntityKeyBatch { Shape = shape, ContextKey = contextKey, CandidateKeys = keys };
-            recorder.Record(new FeatureCallInfo(group, batch, fields, recorder.NextSequence(), false, NoTimeLeft.Result, IoOutcome.Timeout, TimeSpan.Zero), null);
+            recorder.Record(new FeatureCallInfo(group, batch, fields, recorder.Begin(group, batch, fields), false, NoTimeLeft.Result, IoOutcome.Timeout, TimeSpan.Zero), null);
         }
     }
 
@@ -528,8 +511,15 @@ public sealed class FeatureFetcher
         }
         catch (Exception ex)
         {
-            lease.Dispose(); // threw before returning a task: the connector is no longer writing
-            return Completed(io, group, batch, fields, writer, sequence, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken));
+            lease.ConnectorDone(); // threw before returning a task: the connector is no longer writing
+            try
+            {
+                return Completed(io, group, batch, fields, writer, sequence, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken));
+            }
+            finally
+            {
+                lease.CallSiteDone();
+            }
         }
 
         if (call.IsCompleted)
@@ -544,7 +534,8 @@ public sealed class FeatureFetcher
             }
             finally
             {
-                lease.Dispose();
+                lease.ConnectorDone();
+                lease.CallSiteDone();
             }
         }
 
@@ -553,7 +544,7 @@ public sealed class FeatureFetcher
             static (t, state) =>
             {
                 _ = t.Exception; // observe a late failure nobody awaits any more
-                ((IoLease)state!).Dispose();
+                ((IoLease)state!).ConnectorDone();
             },
             lease,
             CancellationToken.None,
@@ -568,6 +559,12 @@ public sealed class FeatureFetcher
         catch (Exception ex)
         {
             return Completed(io, group, batch, fields, writer, sequence, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken));
+        }
+        finally
+        {
+            // After Completed: a recording reads the keys and the staging there, and a prefetch nobody awaits may get here
+            // after the request has released its own hold.
+            lease.CallSiteDone();
         }
     }
 
@@ -1177,16 +1174,26 @@ public sealed class FeatureFetcher
 
     private sealed record ContextFetch(int[] Features, StagingBuffer? Staging, Task<FetchStatus> Task);
 
-    /// <summary>What a connector call holds until it really completes: the request memory and its cancellation source.</summary>
+    /// <summary>
+    /// What a connector call holds: one hold on the request memory, and its cancellation source. Released when both the
+    /// connector has really completed and the call site has finished with the call (recorded it, when the request records),
+    /// in either order. One hold per external call, so the abandoned-I/O count stays one per connector call still running.
+    /// </summary>
     private sealed class IoLease(RequestMemory memory, CancellationTokenSource cancellation)
     {
-        private int _disposed;
+        private int _parts = 2;
 
         public CancellationTokenSource Cancellation { get; } = cancellation;
 
-        public void Dispose()
+        /// <summary>The connector's task has completed (or the connector threw before returning one): it writes no more.</summary>
+        public void ConnectorDone() => Release();
+
+        /// <summary>The call site has finished reading the keys and the staging.</summary>
+        public void CallSiteDone() => Release();
+
+        private void Release()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            if (Interlocked.Decrement(ref _parts) == 0)
             {
                 Cancellation.Dispose();
                 memory.Release();

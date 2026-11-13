@@ -1,5 +1,10 @@
+using System.Collections;
+using System.Globalization;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Pipeline.Replay;
 
@@ -43,12 +48,82 @@ public static class ReplayBundleFile
                 $"this build reads {ReplayBundle.CurrentFormat}; record the request again with this build");
         }
 
+        RequiredValues.Check(bundle);
         return bundle;
     }
 
     /// <exception cref="ReplayBundleException">The bundle is malformed or of another format.</exception>
     /// <exception cref="IOException">The file cannot be read.</exception>
     public static ReplayBundle Load(string path) => Parse(File.ReadAllText(path), path);
+
+    /// <summary>
+    /// Rejects an explicit null wherever the bundle model declares a non-nullable value: an object, a string, an array or
+    /// map, or an entry of one. The deserializer checks that required properties are present, not that they are non-null
+    /// (and leaves a null where a property has a default), so without this a null surfaces as a crash deep in a replay.
+    /// </summary>
+    /// <remarks>
+    /// Walks the model by reflection with its nullable annotations, so a property added to the model is checked without
+    /// being listed here. Runs once per parsed bundle, never on a request path.
+    /// </remarks>
+    private static class RequiredValues
+    {
+        private const string Hint = "the value is required and cannot be null; run 'stratarec schema replay_bundle' for the JSON Schema of a bundle";
+
+        public static void Check(ReplayBundle bundle) => CheckObject(bundle, string.Empty, new NullabilityInfoContext());
+
+        private static void CheckObject(object value, string pointer, NullabilityInfoContext context)
+        {
+            foreach (var property in value.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (property.GetIndexParameters().Length > 0 || property.GetCustomAttribute<JsonIgnoreAttribute>() is not null)
+                {
+                    continue;
+                }
+
+                var name = property.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name ?? JsonNamingPolicy.SnakeCaseLower.ConvertName(property.Name);
+                Check(property.GetValue(value), context.Create(property), pointer + "/" + JsonPointer.Escape(name), context);
+            }
+        }
+
+        private static void Check(object? value, NullabilityInfo declared, string pointer, NullabilityInfoContext context)
+        {
+            if (value is null)
+            {
+                // Nullable<T> and annotated references may be null; everything else is required.
+                if (!declared.Type.IsValueType && declared.ReadState == NullabilityState.NotNull)
+                {
+                    throw new ReplayBundleException(pointer, "must not be null", Hint);
+                }
+
+                return;
+            }
+
+            switch (value)
+            {
+                case string or ValueType:
+                    return;
+                case IDictionary map:
+                    var valueType = declared.GenericTypeArguments[1];
+                    foreach (DictionaryEntry entry in map)
+                    {
+                        Check(entry.Value, valueType, pointer + "/" + JsonPointer.Escape((string)entry.Key), context);
+                    }
+
+                    return;
+                case IList list:
+                    var elementType = declared.GenericTypeArguments[0];
+                    for (var i = 0; i < list.Count; i++)
+                    {
+                        Check(list[i], elementType, pointer + "/" + i.ToString(CultureInfo.InvariantCulture), context);
+                    }
+
+                    return;
+                default:
+                    CheckObject(value, pointer, context);
+                    return;
+            }
+        }
+    }
 
     /// <summary>Bundle files of a path: the file itself, or every <c>*.json</c> file of a directory in ordinal order.</summary>
     public static List<string> Find(string path)

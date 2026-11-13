@@ -109,7 +109,14 @@ internal static class Output
                 json.WriteStartArray();
                 foreach (var f in value.AsVector())
                 {
-                    json.WriteNumberValue(f);
+                    if (float.IsFinite(f))
+                    {
+                        json.WriteNumberValue(f);
+                    }
+                    else
+                    {
+                        json.WriteStringValue(Logging.LogBatchJson.NonFiniteName(f)); // JSON numbers cannot be NaN or ±∞
+                    }
                 }
 
                 json.WriteEndArray();

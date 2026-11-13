@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace StrataRec.Artifacts.Model;
 
@@ -11,17 +12,20 @@ namespace StrataRec.Artifacts.Model;
 /// <remarks>
 /// <para>A plain JSON document with the same strict serializer as artifacts, so its JSON Schema comes from these types
 /// (<c>stratarec schema replay_bundle</c>) and a malformed bundle is reported with a JSON pointer.</para>
-/// <para>Values use the log encoding (design 8.7: missing and non-finite are null, bool is 0 or 1) and are decoded with
-/// the type recorded next to them, never with the type of whatever configuration replays the bundle. Bundles contain
-/// request inputs and feature values; who may read them is the environment's business (design 8.9).</para>
+/// <para>Values use the log encoding (design 8.7: missing is null, bool is 0 or 1) and are decoded with the type recorded
+/// next to them, never with the type of whatever configuration replays the bundle. Unlike logs, a bundle keeps the NaN
+/// and ±∞ the request observed, as the strings <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c> (per component in
+/// vectors): a replay must see the same values to make the same decisions. Bundles contain request inputs and feature
+/// values; who may read them is the environment's business (design 8.9).</para>
 /// </remarks>
 [Description("A recorded request for deterministic replay (StrataRec design 13.4).")]
 public sealed class ReplayBundle
 {
     /// <summary>The format this build reads and writes.</summary>
-    public const string CurrentFormat = "stratarec.replay_bundle/1";
+    /// <remarks>Version 2 keeps non-finite values (version 1 wrote them as null) and digests model inputs with their element type and shape.</remarks>
+    public const string CurrentFormat = "stratarec.replay_bundle/2";
 
-    [Description("Format and version: \"stratarec.replay_bundle/1\".")]
+    [Description("Format and version: \"stratarec.replay_bundle/2\".")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -63,7 +67,7 @@ public sealed class ReplayTypedValue
     [Description("Type spelling, e.g. \"int64?\" or \"vec<float32,4>\".")]
     public required string Type { get; init; }
 
-    [Description("Log encoding (design 8.7): null is missing, bool is 0 or 1, lists and vectors are arrays.")]
+    [Description("Log encoding (design 8.7): null is missing, bool is 0 or 1, lists and vectors are arrays; NaN and ±∞ floats (and vector components) are the strings \"NaN\", \"Infinity\" and \"-Infinity\".")]
     public JsonElement? Value { get; init; }
 }
 
@@ -128,7 +132,7 @@ public sealed class ReplayNodeRecord
 {
     public required string Node { get; init; }
 
-    [Description("succeeded, degraded, fallback, skipped_when, skipped_deadline, skipped_input or failed.")]
+    [Description("succeeded, degraded, fallback, skipped_when, skipped_deadline, skipped_input, failed, or aborted (the position running when the request was aborted).")]
     public required string Outcome { get; init; }
 
     public string? Detail { get; init; }
@@ -173,7 +177,7 @@ public sealed class ReplayCandidateCall
     [Description("Candidates requested (the source's quota).")]
     public int Limit { get; init; }
 
-    [Description("ok, timeout, error or cancelled.")]
+    [Description("ok, timeout, error, cancelled, or outstanding (still in flight when the request was aborted).")]
     public required string Status { get; init; }
 
     public string? Error { get; init; }
@@ -183,7 +187,8 @@ public sealed class ReplayCandidateCall
     [Description("Returned entity ids in rank order (int64 numbers or strings), as accepted (at most limit).")]
     public JsonElement? Ids { get; init; }
 
-    [Description("Score of each returned id.")]
+    [Description("Score of each returned id; NaN and ±∞ are the strings \"NaN\", \"Infinity\" and \"-Infinity\".")]
+    [JsonNumberHandling(JsonNumberHandling.AllowNamedFloatingPointLiterals)]
     public List<double> Scores { get; init; } = new();
 }
 
@@ -208,7 +213,7 @@ public sealed class ReplayFeatureCall
     [Description("False when the request had no time left to send the call.")]
     public bool Sent { get; init; } = true;
 
-    [Description("ok, partial, timeout, error or cancelled.")]
+    [Description("ok, partial, timeout, error, cancelled, or outstanding (still in flight when the request was aborted).")]
     public required string Status { get; init; }
 
     public string? Error { get; init; }
@@ -220,7 +225,7 @@ public sealed class ReplayFeatureCall
     [Description("Requested fields with their storage types.")]
     public required List<ReplayField> Fields { get; init; }
 
-    [Description("Field → one value per staging row (keys, or the context key); null where the source returned no value. Absent unless status is ok or partial.")]
+    [Description("Field → one value per staging row (keys, or the context key), in the encoding of request inputs; null where the source returned no value. Absent unless status is ok or partial.")]
     public Dictionary<string, JsonElement>? Values { get; init; }
 }
 
@@ -245,7 +250,7 @@ public sealed class ReplayModelCall
 
     public int BatchSize { get; init; }
 
-    [Description("ok, timeout, error or cancelled.")]
+    [Description("ok, timeout, error, cancelled, or outstanding (still in flight when the request was aborted).")]
     public required string Status { get; init; }
 
     public string? Error { get; init; }
@@ -253,15 +258,18 @@ public sealed class ReplayModelCall
     [Description("The client threw instead of returning a failed status; replay throws too.")]
     public bool Threw { get; init; }
 
+    [Description("Full name of the exception type the client threw, e.g. \"System.TimeoutException\". Replay throws the same type when it can create it (from its message), and a StrataRec.Pipeline.Replay.ReplayedCallException naming it otherwise.")]
+    public string? ErrorType { get; init; }
+
     public double DurationMs { get; init; }
 
     [Description("Entity id of each batch row, when the operator scored rows; outputs are matched by it on replay.")]
     public JsonElement? Keys { get; init; }
 
-    [Description("XXH3 of each row's inputs (one per key), or of the whole call when there are no keys; hex.")]
+    [Description("XXH3 of each row's inputs (one per key): the row's slice of inputs whose leading dimension is the batch size and every other input whole, each with its name, element type and shape (batch dimension left out); or of the whole call when there are no keys. Hex.")]
     public List<string> InputDigests { get; init; } = new();
 
-    [Description("Output → flat float32 values, batch_size × values per row; null where the value was not finite.")]
+    [Description("Output → flat float32 values, batch_size × values per row; NaN and ±∞ are the strings \"NaN\", \"Infinity\" and \"-Infinity\".")]
     public Dictionary<string, JsonElement> Outputs { get; init; } = new();
 
     public Dictionary<string, string> Texts { get; init; } = new();
@@ -317,6 +325,9 @@ public sealed class ReplayResultRecord
 
     public required bool Succeeded { get; init; }
 
+    [Description("The run, or the request, was aborted (cancelled by its caller, or stopped by a defect) and returned no result. The recording is a snapshot taken at the abort: calls still in flight are outstanding, and what they returned afterwards is not recorded.")]
+    public bool Aborted { get; init; }
+
     public string? Error { get; init; }
 
     public bool Degraded { get; init; }
@@ -342,5 +353,6 @@ public sealed class ReplayItem
 
     public required int Rank { get; init; }
 
+    [Description("Output column → value, in the encoding of request inputs (non-finite floats as \"NaN\", \"Infinity\", \"-Infinity\").")]
     public Dictionary<string, JsonElement?> Columns { get; init; } = new();
 }
