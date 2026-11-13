@@ -67,11 +67,12 @@ public sealed class BindingHostOptions
 /// different: a request of a replaced plan, or a call it abandoned at a timeout, may still be inside it, so the lease
 /// lets go of its instances only once it is retired and its last request has ended (<see cref="BindingLease"/>). An
 /// instance no lease holds then has its load cancelled and is disposed once that load returned.</para>
-/// <para><b>Stopping and disposing never run their code on the caller's thread.</b> A source is cancelled with
-/// <see cref="CancellationTokenSource.CancelAsync"/>: the callbacks it registered on its token run on the thread pool,
-/// not on the thread that releases a lease (a plan swap, or the end of a request on a client's thread) or disposes the
-/// host. Their task and the source's run make up the entry's <see cref="TableEntry.Completion"/>; an instance is
-/// disposed on the thread pool (<see cref="ClientEntry.Disposed"/>). Shutdown waits for both within one
+/// <para><b>Stopping and disposing never run their code on the caller's thread.</b> A source, or an instance's load, is
+/// cancelled with <see cref="CancellationTokenSource.CancelAsync"/>: the callbacks it registered on its token run on the
+/// thread pool, not on the thread that releases a lease (a plan swap, or the end of a request on a client's thread) or
+/// disposes the host. Their task and the source's run make up the entry's <see cref="TableEntry.Completion"/>; an
+/// instance is disposed on the thread pool once its load and those callbacks have returned
+/// (<see cref="ClientEntry.Disposed"/>), whichever of the release and the shutdown cancelled first. Shutdown waits for both within one
 /// <see cref="BindingHostOptions.ShutdownTimeout"/>; past it, the entries stay alive until they end, and an exception
 /// of a callback or a disposal is logged, never thrown at the caller. Diagnostics never change a lifecycle: a logger
 /// that throws leaves every wait in place.</para>
@@ -176,7 +177,7 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
         var disposing = new List<Task>(clients.Count);
         foreach (var client in clients)
         {
-            client.CancelLoad();
+            _ = client.CancelLoad(); // the disposal waits for its callbacks; Disposed below waits for the disposal
             disposing.Add(client.Disposed); // never faults: see ClientEntry.DisposeAsync
         }
 

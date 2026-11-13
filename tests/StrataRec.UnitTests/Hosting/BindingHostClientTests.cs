@@ -223,6 +223,64 @@ public sealed class BindingHostClientTests
         await used.Disposed.Task.WaitAsync(Wait);
     }
 
+    [Theory]
+    [InlineData(true)] // the lease is released, then the host shuts down
+    [InlineData(false)] // the host shuts down, then the lease is released
+    public async Task ALoadsCancellationCallbackStillCleaningUp_DelaysTheDisposal_AndShutdownReportsIt(bool releasedFirst)
+    {
+        var logs = new ListLoggerFactory();
+        var host = new BindingHost(new BindingHostOptions { ShutdownTimeout = TimeSpan.FromMilliseconds(100) }, logs);
+        var factory = new Factory();
+        var lease = host.OpenLease();
+        var instance = lease.Acquire(Spec(factory), factory.Create);
+        using var cleanup = new ManualResetEventSlim();
+        instance.CleanupGate = cleanup;
+        _ = lease.WaitLoadedAsync();
+        await instance.LoadStarted.Task.WaitAsync(Wait);
+
+        if (releasedFirst)
+        {
+            lease.Dispose();
+        }
+
+        var shutdown = host.DisposeAsync().AsTask();
+        await instance.CleanupStarted.Task.WaitAsync(Wait);
+        if (!releasedFirst)
+        {
+            lease.Dispose(); // a second cancellation must still wait for the first one's callbacks
+        }
+
+        await shutdown.WaitAsync(Wait); // bounded by its timeout
+        Assert.Contains(logs.Entries, e => e.EventId == 1210);
+        Assert.False(instance.Disposed.Task.IsCompleted); // the load returned, its cancellation callback has not
+
+        cleanup.Set();
+        await instance.Disposed.Task.WaitAsync(Wait);
+        Assert.Equal((1, 0), (instance.DisposeCount, instance.DisposalsDuringCleanup));
+        Assert.True(SpinWait.SpinUntil(() => host.InstanceCount == 0, Wait));
+    }
+
+    [Fact]
+    public async Task ALoadsCancellationCallbackThatThrows_IsLogged_AndTheInstanceIsStillDisposed()
+    {
+        var logs = new ListLoggerFactory();
+        await using var host = new BindingHost(loggerFactory: logs);
+        var factory = new Factory();
+        var lease = host.OpenLease();
+        var instance = lease.Acquire(Spec(factory), factory.Create);
+        using var cleanup = new ManualResetEventSlim(initialState: true);
+        instance.CleanupGate = cleanup;
+        instance.ThrowingCleanup = true;
+        _ = lease.WaitLoadedAsync();
+        await instance.LoadStarted.Task.WaitAsync(Wait);
+
+        lease.Dispose();
+
+        await instance.Disposed.Task.WaitAsync(Wait);
+        Assert.Equal((1, 0), (instance.DisposeCount, instance.DisposalsDuringCleanup));
+        Assert.Contains(logs.Entries, e => e.EventId == 1212); // logged before the disposal, which waited for the callback
+    }
+
     [Fact]
     public async Task AThrowingDisposalOrLogger_BreaksNeitherTheReleaseNorShutdown()
     {
@@ -543,6 +601,8 @@ public sealed class BindingHostClientTests
         private int _disposeCount;
         private int _inFlight;
         private int _callsAtOrAfterDispose;
+        private int _cleaningUp;
+        private int _disposalsDuringCleanup;
 
         public BindingContext Context { get; } = context;
 
@@ -580,12 +640,47 @@ public sealed class BindingHostClientTests
 
         public void FailLoad(Exception error) => _load.TrySetException(error);
 
+        /// <summary>
+        /// When set, the load registers a cancellation callback that ends the load at once and then goes on cleaning up
+        /// until this is set (and then throws when <see cref="ThrowingCleanup"/>), as a connection's cancellation would.
+        /// </summary>
+        public ManualResetEventSlim? CleanupGate { get; set; }
+
+        public bool ThrowingCleanup { get; set; }
+
+        public TaskCompletionSource CleanupStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Disposals that began while a cancellation callback was still cleaning up: always 0.</summary>
+        public int DisposalsDuringCleanup => Volatile.Read(ref _disposalsDuringCleanup);
+
         public async ValueTask LoadAsync(CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _loads);
             LoadToken = cancellationToken;
+            if (CleanupGate is { } gate)
+            {
+                cancellationToken.Register(() =>
+                {
+                    Volatile.Write(ref _cleaningUp, 1);
+                    CleanupStarted.TrySetResult();
+                    _load.TrySetCanceled(); // the load returns first...
+                    try
+                    {
+                        gate.Wait(); // ...while the cleanup goes on using the instance
+                        if (ThrowingCleanup)
+                        {
+                            throw new InvalidOperationException("cleanup failed");
+                        }
+                    }
+                    finally
+                    {
+                        Volatile.Write(ref _cleaningUp, 0);
+                    }
+                });
+            }
+
             LoadStarted.TrySetResult();
-            await (IgnoreCancellation ? _load.Task : _load.Task.WaitAsync(cancellationToken));
+            await (IgnoreCancellation || CleanupGate is not null ? _load.Task : _load.Task.WaitAsync(cancellationToken));
             if (OnLoad is not null)
             {
                 await OnLoad(cancellationToken);
@@ -625,6 +720,11 @@ public sealed class BindingHostClientTests
             if (Volatile.Read(ref _inFlight) > 0)
             {
                 Interlocked.Increment(ref _callsAtOrAfterDispose);
+            }
+
+            if (Volatile.Read(ref _cleaningUp) != 0)
+            {
+                Interlocked.Increment(ref _disposalsDuringCleanup);
             }
 
             Interlocked.Increment(ref _disposeCount);

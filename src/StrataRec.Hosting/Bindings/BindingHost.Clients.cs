@@ -98,6 +98,7 @@ public sealed partial class BindingHost
         private readonly TaskCompletionSource _disposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private Task? _run;
         private Task? _ready;
+        private TaskCompletionSource? _cancelled; // the callbacks of the load's one cancellation
         private bool _released;
 
         public ClientEntry(BindingHost host, BindingSpec spec, object instance)
@@ -126,7 +127,10 @@ public sealed partial class BindingHost
             }
         }
 
-        /// <summary>Completes once the instance is disposed (after its load returned), or was not disposable. Never faults.</summary>
+        /// <summary>
+        /// Completes once the instance is disposed (after its load and the callbacks of its cancellation returned), or was
+        /// not disposable. Never faults.
+        /// </summary>
         public Task Disposed => _disposed.Task;
 
         /// <summary>
@@ -160,10 +164,35 @@ public sealed partial class BindingHost
             }
         }
 
-        /// <summary>Cancels the load (shutdown); the instance stays with the leases that hold it.</summary>
-        public void CancelLoad() => _ = _stop.CancelAsync(); // callbacks on the pool, not here
+        /// <summary>
+        /// Cancels the load (shutdown, or the release): the first call cancels, and every call returns that cancellation's
+        /// callbacks, which complete once they have run (never faulting; an exception of one is logged). A second
+        /// <see cref="CancellationTokenSource.CancelAsync"/> would return at once, so only the first one's task tells when
+        /// the instance's callbacks are done with it. The instance stays with the leases that hold it.
+        /// </summary>
+        public Task CancelLoad()
+        {
+            TaskCompletionSource first;
+            lock (_gate)
+            {
+                if (_cancelled is not null)
+                {
+                    return _cancelled.Task;
+                }
 
-        /// <summary>No lease holds the instance any more: cancels its load and disposes it once that returned, on the pool.</summary>
+                first = _cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+
+            // Outside the lock: the callbacks run on the pool, none of their code here, and a callback's failure is logged
+            // without holding the entry.
+            _ = ObserveCallbacksAsync(_stop.CancelAsync(), first);
+            return first.Task;
+        }
+
+        /// <summary>
+        /// No lease holds the instance any more: cancels its load and disposes it, on the pool, once the load and the
+        /// callbacks of its cancellation have returned.
+        /// </summary>
         public void Release()
         {
             Task? run;
@@ -178,8 +207,32 @@ public sealed partial class BindingHost
                 run = _run;
             }
 
-            CancelLoad();
-            _ = Task.Run(() => DisposeAsync(run), CancellationToken.None);
+            var callbacks = CancelLoad();
+            _ = Task.Run(() => DisposeAsync(run, callbacks), CancellationToken.None);
+        }
+
+        /// <summary>Completes <paramref name="done"/> once the cancellation's callbacks have run, after logging a failure of theirs.</summary>
+        private async Task ObserveCallbacksAsync(Task callbacks, TaskCompletionSource done)
+        {
+            try
+            {
+                await callbacks.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    LogLoadCancellationCallbacksFailed(_host._logger, callbacks.Exception ?? ex, Spec.Label, Spec.Artifact);
+                }
+                catch (Exception)
+                {
+                    // A failing logger cannot report itself, and does not end the wait for the callbacks.
+                }
+            }
+            finally
+            {
+                done.TrySetResult();
+            }
         }
 
         private async Task BoundAsync(Task run)
@@ -231,14 +284,16 @@ public sealed partial class BindingHost
         }
 
         /// <summary>
-        /// Waits for the load to return, then disposes the instance: never under a load still running, and never on the
-        /// caller's thread. An instance whose load never returns is never disposed, which shutdown reports. A disposal's
-        /// exception is logged.
+        /// Waits for the callbacks of the load's cancellation and for the load to return, then disposes the instance:
+        /// never under a load or a cancellation callback still running (a callback may end the load and go on cleaning up
+        /// with the instance), and never on the caller's thread. An instance whose load or callback never returns is never
+        /// disposed, which shutdown reports. A disposal's exception is logged.
         /// </summary>
-        private async Task DisposeAsync(Task? run)
+        private async Task DisposeAsync(Task? run, Task callbacks)
         {
             try
             {
+                await callbacks.ConfigureAwait(false); // never faults: see CancelLoad
                 if (run is not null)
                 {
                     try
@@ -313,11 +368,15 @@ public sealed partial class BindingHost
     private static partial void LogInstanceDisposed(ILogger logger, string instance, string artifact);
 
     [LoggerMessage(EventId = 1210, Level = LogLevel.Warning,
-        Message = "{Held} instance(s) were not disposed within {TimeoutMs} ms of shutdown: a request or an abandoned call still uses them, or their load or disposal did not return")]
+        Message = "{Held} instance(s) were not disposed within {TimeoutMs} ms of shutdown: a request or an abandoned call still uses them, or their load, a callback of its cancellation or their disposal did not return")]
     private static partial void LogInstancesShutdownTimeout(ILogger logger, int held, double timeoutMs);
 
     [LoggerMessage(EventId = 1211, Level = LogLevel.Warning, Message = "Disposing the {Instance} of {Artifact} threw")]
     private static partial void LogInstanceDisposeFailed(ILogger logger, Exception exception, string instance, string artifact);
+
+    [LoggerMessage(EventId = 1212, Level = LogLevel.Warning,
+        Message = "A cancellation callback of the load of the {Instance} of {Artifact} threw; the instance is disposed regardless")]
+    private static partial void LogLoadCancellationCallbacksFailed(ILogger logger, Exception exception, string instance, string artifact);
 }
 
 /// <summary>

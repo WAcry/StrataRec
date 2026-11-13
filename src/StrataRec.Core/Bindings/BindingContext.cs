@@ -11,7 +11,9 @@ namespace StrataRec.Core.Bindings;
 /// <para><b>Create.</b> The factory's <c>Create</c> is called when a plan is compiled and nothing holds a usable instance
 /// of the binding yet: when an engine loads the first plan with this binding, when a plan follows one whose instance
 /// failed its load, and by every compile that does not serve (<c>stratarec validate</c>, <c>build</c>,
-/// <c>explain-plan</c>), whose instances are never loaded, never called and never disposed. Two plans loading at once
+/// <c>explain-plan</c>), whose instances are never loaded, get no request call and are never disposed (one without a load
+/// may be asked for a model signature, on the compile's thread, and the answer is used only if it is immediate; see
+/// <c>IModelClient.GetSignatureAsync</c>). Two plans loading at once
 /// may both create one; the extra one is disposed without being loaded or called. So <c>Create</c> only reads and checks
 /// the settings: no I/O, no connections, threads or anything else that needs releasing. It may run on several threads at
 /// once. Throw <see cref="BindingException"/> with the setting's pointer and a hint for a wrong setting.</para>
@@ -33,9 +35,10 @@ namespace StrataRec.Core.Bindings;
 /// <see cref="IDisposable"/>. The engine disposes it exactly once, on the thread pool, when no served plan uses it any
 /// more (its plans were replaced or rejected, or the engine is disposed) and nothing can call it: no request of those
 /// plans runs, no call they abandoned and no signature lookup is still inside the instance, and its load (if started)
-/// has returned. No call starts after the disposal begins. It may come without a load (the engine loads nothing, as
-/// for replay, or the instance was the extra one) or after a failed load, so it must release whatever was acquired so
-/// far. An instance whose load or call never returns is never disposed, which engine shutdown reports after its
+/// and the callbacks it registered on the load's token (when the engine cancelled it) have returned. No call starts
+/// after the disposal begins. It may come without a load (the engine loads nothing, as for replay, or the instance was
+/// the extra one) or after a failed load, so it must release whatever was acquired so far. An instance whose load,
+/// cancellation callback or call never returns is never disposed, which engine shutdown reports after its
 /// timeout.</para>
 /// <para><b>Errors and secrets.</b> Errors are configuration diagnostics at the binding; a <see cref="BindingException"/>
 /// points at the setting and carries a hint. Never put a secret's value in a message, an exception or a log:
