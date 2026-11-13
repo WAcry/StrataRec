@@ -10,9 +10,15 @@ public sealed class ReplayCliTests
     public async Task RecordReplayAndCompare_FromTheCommandLine()
     {
         var bundles = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
+        var requests = Directory.CreateTempSubdirectory("stratarec-requests-").FullName;
         foreach (var name in new[] { "user_1001", "anonymous" })
         {
-            var request = Path.Combine(Samples.HomeFeed, "requests", name + ".json");
+            // The sample requests allow 200 ms. A cold run on a busy two-core CI runner can exceed that, the request fails
+            // and `run` exits 1; this test is about the commands, not the deadline.
+            var request = Path.Combine(requests, name + ".json");
+            var sample = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(Samples.HomeFeed, "requests", name + ".json")))!;
+            sample["deadline_ms"] = 30_000;
+            File.WriteAllText(request, sample.ToJsonString());
             Assert.Equal(0, await RunCommand.RunAsync(Samples.HomeFeed, "local", request, Array.Empty<string>(), false, TextWriter.Null, CancellationToken.None,
                 recordPath: Path.Combine(bundles, name + ".json")));
         }
