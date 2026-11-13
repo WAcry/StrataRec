@@ -156,6 +156,9 @@ public sealed class ExecutionPlan
 
     public required OutputPlan Output { get; init; }
 
+    /// <summary>Funnel groups and log taps (design 8).</summary>
+    public LogPlan Log { get; init; } = LogPlan.Empty;
+
     public required ParamTable Params { get; init; }
 
     public required LayerInfo[] Layers { get; init; }

@@ -23,6 +23,11 @@ public sealed class StrataRecOptions
     /// paths resolved against <see cref="ConfigRoot"/>.
     /// </summary>
     public PlanEnvironment? PlanEnvironment { get; set; }
+
+    /// <summary>Where tap batches and trigger records go (design 8.6); null disables persistent logging.</summary>
+    public Logging.ILogSink? LogSink { get; set; }
+
+    public Logging.LogPipelineOptions LogPipeline { get; set; } = new();
 }
 
 /// <summary>Registers the engine in a host's service container.</summary>
@@ -38,10 +43,17 @@ public static class ServiceCollectionExtensions
     {
         var options = new StrataRecOptions();
         configure(options);
+        if (options.LogSink is { } sink)
+        {
+            // Disposed by the container on shutdown, which drains durable batches (design 8.6 item 4).
+            services.AddSingleton(_ => new Logging.LogPipeline(sink, options.LogPipeline));
+        }
+
         services.AddSingleton(provider =>
         {
             var environment = options.PlanEnvironment ?? new PlanEnvironment { BaseDirectory = Path.GetFullPath(options.ConfigRoot) };
-            var engine = new RecEngine(environment, provider.GetService<IAssignmentProvider>());
+            var executor = new Pipeline.Execution.PipelineExecutor(logs: provider.GetService<Logging.LogPipeline>());
+            var engine = new RecEngine(environment, provider.GetService<IAssignmentProvider>(), executor);
             LoadWorkspace(engine, options.ConfigRoot, options.Environment, options.Pipelines).ThrowIfErrors("Loading StrataRec configuration");
             return engine;
         });

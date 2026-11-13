@@ -70,6 +70,32 @@
       "config": { "group_col": "item.category", "window": 3, "max_per_window": 1 }
     }
   },
+  // Request-level sampling shared by taps (design 8.2); 100% locally so every run shows its logs.
+  "funnel_groups": {
+    "all":        { "key": ["ctx.request.id"], "rate": 1.0 },
+    "deep_trace": { "key": ["ctx.request.user_id", "ctx.request.session_id"], "rate": 1.0 }
+  },
+  // Declarative capture points (design 8.3). Nothing is logged that is not declared here.
+  "log_taps": {
+    "coarse_dropped": {
+      "group": "deep_trace",
+      "attach": { "after": "coarse_top_k" },
+      "rows": { "scope": "dropped", "max_rows": 5 },
+      "columns": { "coarse": "col.score.coarse" }
+    },
+    "ranker_inputs": {
+      "group": "all", "delivery": "durable", "purpose": "model_training",
+      "attach": { "after": "ctr_ranker" },
+      "columns_from": "ctr_ranker.inputs",
+      "columns": { "p_click": "col.score.ctr" }
+    },
+    "served": {
+      "group": "all", "delivery": "durable",
+      "attach": { "output": true },
+      "context": { "user_id": "ctx.request.user_id", "surface": "ctx.request.surface" },
+      "columns": { "final": "col.score.final", "category": "col.item.category" }
+    }
+  },
   "output": {
     "limit_param": "final_top_k",
     "columns": {

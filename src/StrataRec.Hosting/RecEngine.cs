@@ -50,6 +50,9 @@ public sealed class DebugOptions
 
     /// <summary>Include per-node outcomes in <see cref="RecResult.Trace"/>.</summary>
     public bool Trace { get; init; }
+
+    /// <summary>Return log batches in <see cref="RecResult.LogBatches"/> instead of writing them (design 8.6 item 6).</summary>
+    public bool CaptureLogs { get; init; }
 }
 
 /// <summary>Assignment and trigger record of a request (design 12.6).</summary>
@@ -79,6 +82,9 @@ public sealed class RecResult
     public IReadOnlyDictionary<string, string>? ColumnProducers { get; init; }
 
     public IReadOnlyList<NodeOutcome>? Trace { get; init; }
+
+    /// <summary>Captured log batches when <see cref="DebugOptions.CaptureLogs"/> was set.</summary>
+    public IReadOnlyList<Logging.LogBatch>? LogBatches { get; init; }
 
     public double ElapsedMs { get; init; }
 }
@@ -227,6 +233,7 @@ public sealed class RecEngine : IRecEngine
             ServedBy = fallbackId,
             ColumnProducers = converted.ColumnProducers,
             Trace = converted.Trace,
+            LogBatches = converted.LogBatches,
             ElapsedMs = result.ElapsedMs + served.ElapsedMs,
         };
     }
@@ -240,6 +247,7 @@ public sealed class RecEngine : IRecEngine
             Deadline = request.Deadline,
             Seed = request.Seed,
             TimeMs = request.TimeMs,
+            CaptureLogs = request.Debug?.CaptureLogs == true,
         }, cancellationToken);
 
     /// <summary>Maps external arm ids; unknown ids and second arms in one layer are ignored and counted (design 11.1).</summary>
@@ -272,6 +280,7 @@ public sealed class RecEngine : IRecEngine
         ServedBy = servedBy,
         ColumnProducers = result.ColumnProducers,
         Trace = request.Debug?.Trace == true ? result.Outcomes : null,
+        LogBatches = request.Debug?.CaptureLogs == true ? result.LogBatches : null,
         ElapsedMs = result.ElapsedMs,
     };
 

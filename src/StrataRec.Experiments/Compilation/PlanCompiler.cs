@@ -95,6 +95,7 @@ internal sealed partial class UnifiedCompilation
     private readonly List<(string Id, int Layer, int[] Arms)> _experiments = new();
     private readonly List<ArmPatch> _arms = new();
     private readonly SortedDictionary<string, NodeVariants> _variants = new(StringComparer.Ordinal);
+    private readonly SortedDictionary<string, TapVariants> _taps = new(StringComparer.Ordinal);
 
     /// <summary>Union of add-only additions: section → name → (value, first arm).</summary>
     private readonly Dictionary<string, SortedDictionary<string, (JsonNode Value, ArmPatch Arm)>> _additions = new(StringComparer.Ordinal);
@@ -142,6 +143,7 @@ internal sealed partial class UnifiedCompilation
         Settle(start, Array.Empty<ArmPatch>());
 
         CompileVariants();
+        CompileTapVariants();
         var (timeline, fallbacks) = BuildSlots();
 
         var report = new CombinationReport();
@@ -168,7 +170,7 @@ internal sealed partial class UnifiedCompilation
             SettleAdditions(start);
             if (!_diagnostics.HasErrors && output is not null)
             {
-                plan = _builder.Build(_request.ManifestId, features, timeline, fallbacks, output, parameters, LayerInfos(), ExperimentInfos(), ArmInfos());
+                plan = _builder.Build(_request.ManifestId, features, timeline, fallbacks, output, parameters, LayerInfos(), ExperimentInfos(), ArmInfos(), BuildLogPlan());
                 plan = _diagnostics.HasErrors ? null : plan;
             }
         }
@@ -340,7 +342,7 @@ internal sealed partial class UnifiedCompilation
             derived[name] = spec;
         }
 
-        ReadAdditions<FunnelGroupSpec>("funnel_groups");
+        var funnelGroups = ReadAdditions<FunnelGroupSpec>("funnel_groups");
 
         // Baseline node ids appear in pointers and expressions (col.x@node); keep them well-formed.
         foreach (var (id, _) in _view.Nodes)
@@ -368,6 +370,7 @@ internal sealed partial class UnifiedCompilation
             ExtraColumns = columns,
             ExtraParamSchema = paramSchema,
             ExtraParamLeaves = extraLeaves,
+            ExtraFunnelGroups = funnelGroups,
         };
     }
 
@@ -436,29 +439,21 @@ internal sealed partial class UnifiedCompilation
 
     // ------------------------------------------------------------------ node variants (design 12.3)
 
-    /// <summary>All arm combinations of the layers that touch one node id, and the variant compiled for each.</summary>
-    internal sealed class NodeVariants
+    /// <summary>
+    /// The arm combinations of the layers that touch one node or tap (design 12.3): per touching layer, "not
+    /// modified" plus each arm that modifies it, indexed mixed-radix exactly like <see cref="TimelineSlot.Select"/>.
+    /// </summary>
+    internal class VariantSpace
     {
-        public required string NodeId { get; init; }
-
         /// <summary>Touching layers L(n), ascending (patches apply in this order).</summary>
         public required int[] Layers { get; init; }
 
-        /// <summary>Per touching layer: the arms modifying the node; local index = position + 1.</summary>
+        /// <summary>Per touching layer: the arms modifying the item; local index = position + 1.</summary>
         public required int[][] LocalArms { get; init; }
 
         public required Dictionary<int, int>[] LocalIndex { get; init; }
 
         public required int[] Radix { get; init; }
-
-        public required JsonObject?[] Definitions { get; init; }
-
-        public required CompiledNode?[] Variants { get; init; }
-
-        /// <summary>Combinations whose definition failed to compile (errors were reported).</summary>
-        public required bool[] Failed { get; init; }
-
-        public bool IsFallback { get; set; }
 
         public int IndexOf(in RequestArms arms)
         {
@@ -473,7 +468,7 @@ internal sealed partial class UnifiedCompilation
             return index;
         }
 
-        /// <summary>The arms (global indices) a combination index assigns.</summary>
+        /// <summary>The arms (global indices) a combination index assigns, in layer order.</summary>
         public List<int> ArmsOf(int combination)
         {
             var arms = new List<int>();
@@ -492,35 +487,40 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    private void CompileVariants()
+    /// <summary>All arm combinations of the layers that touch one node id, and the variant compiled for each.</summary>
+    internal sealed class NodeVariants : VariantSpace
     {
-        var ids = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (var (id, _) in _view.Nodes)
-        {
-            ids.Add(id);
-        }
+        public required string NodeId { get; init; }
 
-        foreach (var arm in _arms)
-        {
-            if (arm.Valid)
-            {
-                ids.UnionWith(arm.AddedNodes);
-            }
-        }
+        public required JsonObject?[] Definitions { get; init; }
 
-        foreach (var id in ids)
-        {
-            CompileNodeVariants(id);
-        }
+        public required CompiledNode?[] Variants { get; init; }
+
+        /// <summary>Combinations whose definition failed to compile (errors were reported).</summary>
+        public required bool[] Failed { get; init; }
+
+        public bool IsFallback { get; set; }
     }
 
-    private void CompileNodeVariants(string nodeId)
+    /// <summary>Variants of one log tap; taps vary independently of the node they attach to (design 12.3).</summary>
+    internal sealed class TapVariants : VariantSpace
     {
-        // L(n) and the arms of each layer that modify n.
+        public required string TapId { get; init; }
+
+        public required CompiledTap?[] Variants { get; init; }
+
+        public required bool[] Failed { get; init; }
+    }
+
+    private readonly record struct Space(int[] Layers, int[][] LocalArms, Dictionary<int, int>[] LocalIndex, int[] Radix, int Count);
+
+    /// <summary>L(x) and its arms for the arms that touch an item; null (after an error) when C(x) exceeds the limit.</summary>
+    private Space? BuildSpace(Func<ArmPatch, bool> touches, string what, string pointer)
+    {
         var byLayer = new SortedDictionary<int, List<int>>();
         foreach (var arm in _arms)
         {
-            if (arm.Valid && arm.TouchedNodes.Contains(nodeId))
+            if (arm.Valid && touches(arm))
             {
                 if (!byLayer.TryGetValue(arm.LayerIndex, out var list))
                 {
@@ -553,7 +553,6 @@ internal sealed partial class UnifiedCompilation
             li++;
         }
 
-        var pointer = "/nodes/" + JsonPointer.Escape(nodeId);
         if (combinations > _request.MaxCombinationsPerNode)
         {
             var names = new List<string>();
@@ -563,38 +562,79 @@ internal sealed partial class UnifiedCompilation
             }
 
             _diagnostics.Error("NODE_TOO_MANY_COMBINATIONS", _pipelineLabel, pointer,
-                $"Node '{nodeId}' is modified by arms in layers {string.Join(", ", names)}: {combinations} combinations exceed the limit of {_request.MaxCombinationsPerNode}.",
+                $"{what} is modified by arms in layers {string.Join(", ", names)}: {combinations} combinations exceed the limit of {_request.MaxCombinationsPerNode}.",
                 "move some of these experiments into the same layer (their arms then exclude each other), or graduate one");
+            return null;
+        }
+
+        return new Space(layers, localArms, localIndex, radix, (int)combinations);
+    }
+
+    /// <summary>Baseline definition with each assigned arm's <c>/section/id</c> patch applied in layer order.</summary>
+    private static JsonNode? Merge(JsonNode? baseline, List<ArmPatch> arms, string section, string id)
+    {
+        var definition = baseline;
+        foreach (var arm in arms)
+        {
+            if (arm.Patch[section] is JsonObject entries && entries.TryGetPropertyValue(id, out var part))
+            {
+                definition = JsonMergePatch.Apply(definition, part);
+            }
+        }
+
+        return definition;
+    }
+
+    private void CompileVariants()
+    {
+        var ids = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var (id, _) in _view.Nodes)
+        {
+            ids.Add(id);
+        }
+
+        foreach (var arm in _arms)
+        {
+            if (arm.Valid)
+            {
+                ids.UnionWith(arm.AddedNodes);
+            }
+        }
+
+        foreach (var id in ids)
+        {
+            CompileNodeVariants(id);
+        }
+    }
+
+    private void CompileNodeVariants(string nodeId)
+    {
+        var pointer = "/nodes/" + JsonPointer.Escape(nodeId);
+        if (BuildSpace(arm => arm.TouchedNodes.Contains(nodeId), $"Node '{nodeId}'", pointer) is not { } space)
+        {
             return;
         }
 
-        var count = (int)combinations;
         var variants = new NodeVariants
         {
             NodeId = nodeId,
-            Layers = layers,
-            LocalArms = localArms,
-            LocalIndex = localIndex,
-            Radix = radix,
-            Definitions = new JsonObject?[count],
-            Variants = new CompiledNode?[count],
-            Failed = new bool[count],
+            Layers = space.Layers,
+            LocalArms = space.LocalArms,
+            LocalIndex = space.LocalIndex,
+            Radix = space.Radix,
+            Definitions = new JsonObject?[space.Count],
+            Variants = new CompiledNode?[space.Count],
+            Failed = new bool[space.Count],
         };
         _variants[nodeId] = variants;
 
-        var baseline = _view.Nodes[nodeId]?.DeepClone() as JsonObject;
+        var baseline = _view.Nodes[nodeId]?.DeepClone();
         var byHash = new Dictionary<string, (CompiledNode? Node, bool Failed)>(StringComparer.Ordinal);
         bool? fallbackRole = null;
-        for (var c = 0; c < count; c++)
+        for (var c = 0; c < space.Count; c++)
         {
             var armsInCombination = ArmPatches(variants.ArmsOf(c));
-            JsonNode? definition = baseline;
-            foreach (var arm in armsInCombination)
-            {
-                var part = ((JsonObject)arm.Patch["nodes"]!)[nodeId];
-                definition = JsonMergePatch.Apply(definition, part);
-            }
-
+            var definition = Merge(baseline, armsInCombination, "nodes", nodeId);
             if (definition is null)
             {
                 continue; // the node does not exist in this combination
@@ -635,6 +675,109 @@ internal sealed partial class UnifiedCompilation
         }
 
         variants.IsFallback = fallbackRole == true;
+    }
+
+    /// <summary>Compiles every tap variant (design 8.3, 12.3). Runs after the nodes: <c>columns_from</c> needs them.</summary>
+    private void CompileTapVariants()
+    {
+        var taps = (JsonObject)_view.Document["log_taps"]!;
+        var ids = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var (id, _) in taps)
+        {
+            ids.Add(id);
+        }
+
+        foreach (var arm in _arms)
+        {
+            if (arm.Valid)
+            {
+                ids.UnionWith(arm.TouchedTaps);
+            }
+        }
+
+        foreach (var tapId in ids)
+        {
+            var pointer = "/log_taps/" + JsonPointer.Escape(tapId);
+            if (BuildSpace(arm => arm.TouchedTaps.Contains(tapId), $"Tap '{tapId}'", pointer) is not { } space)
+            {
+                continue;
+            }
+
+            var variants = new TapVariants
+            {
+                TapId = tapId,
+                Layers = space.Layers,
+                LocalArms = space.LocalArms,
+                LocalIndex = space.LocalIndex,
+                Radix = space.Radix,
+                Variants = new CompiledTap?[space.Count],
+                Failed = new bool[space.Count],
+            };
+            _taps[tapId] = variants;
+            var baseline = taps[tapId]?.DeepClone();
+            var byHash = new Dictionary<string, (CompiledTap? Tap, bool Failed)>(StringComparer.Ordinal);
+            for (var c = 0; c < space.Count; c++)
+            {
+                var armsInCombination = ArmPatches(variants.ArmsOf(c));
+                var definition = Merge(baseline, armsInCombination, "log_taps", tapId);
+                if (definition is null)
+                {
+                    continue;
+                }
+
+                var start = _diagnostics.Count;
+                if (definition is not JsonObject tap)
+                {
+                    _diagnostics.Error("TAP_INVALID", _pipelineLabel, pointer, "A tap must be an object.");
+                    variants.Failed[c] = true;
+                    Settle(start, armsInCombination);
+                    continue;
+                }
+
+                var hash = ContentHash.Compute(tap);
+                if (!byHash.TryGetValue(hash, out var compiled))
+                {
+                    var result = _builder.CompileTap(tapId, tap, _pipelineLabel);
+                    if (result?.AttachAfter is { } after && !_variants.ContainsKey(after))
+                    {
+                        _diagnostics.Error("TAP_UNKNOWN_NODE", _pipelineLabel, pointer + "/attach/after", $"Tap '{tapId}' attaches after unknown node '{after}'.",
+                            NameSuggestions.DidYouMean(after, _variants.Keys) ?? "attach after a node id from /nodes, or use {\"output\": true}");
+                        result = null;
+                    }
+
+                    compiled = (result, result is null);
+                    byHash[hash] = compiled;
+                }
+
+                variants.Variants[c] = compiled.Tap;
+                variants.Failed[c] = compiled.Failed;
+                Settle(start, armsInCombination);
+            }
+        }
+    }
+
+    private LogPlan BuildLogPlan()
+    {
+        var slots = new List<TapSlot>();
+        foreach (var (tapId, v) in _taps)
+        {
+            slots.Add(new TapSlot
+            {
+                TapId = tapId,
+                TouchingLayers = v.Layers,
+                LocalIndex = v.LocalIndex,
+                Radix = v.Radix,
+                Variants = v.Variants,
+            });
+        }
+
+        var groups = new CompiledFunnelGroup[_builder.FunnelGroups.Count];
+        for (var i = 0; i < groups.Length; i++)
+        {
+            groups[i] = _builder.FunnelGroups[i];
+        }
+
+        return new LogPlan { Groups = groups, Taps = slots.ToArray() };
     }
 
     private (TimelineSlot[] Timeline, Dictionary<string, TimelineSlot> Fallbacks) BuildSlots()

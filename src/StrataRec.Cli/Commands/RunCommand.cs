@@ -23,13 +23,14 @@ internal static class RunCommand
         var request = new Option<string>("--request", "-r") { Description = "Request JSON: pipeline_id, request_id, inputs, deadline_ms, time_ms, force_arms.", Required = true };
         var arms = new Option<string[]>("--arms", "-a") { Description = "Force these arms (experiment/arm).", AllowMultipleArgumentsPerToken = true };
         var trace = new Option<bool>("--trace", "-t") { Description = "Include every node's outcome." };
-        var command = new Command("run", "Execute a request locally and print the result as JSON.") { config, environment, request, arms, trace };
+        var logs = new Option<bool>("--logs", "-l") { Description = "Include the log batches the request's taps captured (nothing is written)." };
+        var command = new Command("run", "Execute a request locally and print the result as JSON.") { config, environment, request, arms, trace, logs };
         command.SetAction((parse, cancellationToken) => RunAsync(parse.GetValue(config)!, parse.GetValue(environment)!, parse.GetValue(request)!,
-            parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(trace), Console.Out, cancellationToken));
+            parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(trace), Console.Out, cancellationToken, parse.GetValue(logs)));
         return command;
     }
 
-    internal static async Task<int> RunAsync(string config, string environment, string requestPath, string[] arms, bool trace, TextWriter output, CancellationToken cancellationToken)
+    internal static async Task<int> RunAsync(string config, string environment, string requestPath, string[] arms, bool trace, TextWriter output, CancellationToken cancellationToken, bool logs = false)
     {
         JsonObject document;
         try
@@ -100,7 +101,7 @@ internal static class RunCommand
             Deadline = TimeSpan.FromMilliseconds(document["deadline_ms"]?.GetValue<double>() ?? 1000),
             TimeMs = document["time_ms"]?.GetValue<long>(),
             Seed = document["seed"]?.GetValue<long>(),
-            Debug = new DebugOptions { ForceArms = forced.Count > 0 ? forced : null, Trace = trace },
+            Debug = new DebugOptions { ForceArms = forced.Count > 0 ? forced : null, Trace = trace, CaptureLogs = logs },
         };
 
         var result = await engine.ExecuteAsync(request, cancellationToken).ConfigureAwait(false);
@@ -157,6 +158,17 @@ internal static class RunCommand
                     json.WriteNumber("rows_in", outcome.RowsIn);
                     json.WriteNumber("rows_out", outcome.RowsOut);
                     json.WriteEndObject();
+                }
+
+                json.WriteEndArray();
+            }
+
+            if (result.LogBatches is { } batches)
+            {
+                json.WriteStartArray("logs");
+                foreach (var batch in batches)
+                {
+                    Logging.LogBatchJson.Write(json, batch);
                 }
 
                 json.WriteEndArray();

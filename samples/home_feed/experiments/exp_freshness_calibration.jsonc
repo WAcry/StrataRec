@@ -13,6 +13,10 @@
           "order": 470, "op": "ExpressionScorer@1",
           "config": { "output_col": "score.final", "expr": "col.score.final * (1.0 + 0.5 * exp(-(col.item.age_hours ?? 240.0) / 48.0))" }
         }
+      },
+      // Log the pre-calibration score and the age for this arm's traffic only (a tap variant, design 8.3).
+      "log_taps": {
+        "served": { "columns": { "pre_calibration": "col.score.final@fusion", "age_hours": "col.item.age_hours" } }
       }
     }
   }

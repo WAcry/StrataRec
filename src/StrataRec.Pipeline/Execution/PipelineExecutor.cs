@@ -29,6 +29,12 @@ public sealed class PipelineRequest
 
     /// <summary>Request time in Unix milliseconds; defaults to now.</summary>
     public long? TimeMs { get; init; }
+
+    /// <summary>
+    /// Return log batches in <see cref="PipelineResult.LogBatches"/> instead of sending them to the log pipeline: draft
+    /// previews, replays and local runs never write persistent logs (design 8.6 item 6).
+    /// </summary>
+    public bool CaptureLogs { get; init; }
 }
 
 public enum NodeOutcomeKind : byte
@@ -76,6 +82,9 @@ public sealed class PipelineResult
 
     /// <summary>Number of non-finite values replaced or masked at commit (metric <c>column_nonfinite_total</c>).</summary>
     public int NonFiniteValues { get; init; }
+
+    /// <summary>Log batches of the request when <see cref="PipelineRequest.CaptureLogs"/> was set.</summary>
+    public IReadOnlyList<Logging.LogBatch> LogBatches { get; set; } = Array.Empty<Logging.LogBatch>();
 }
 
 /// <summary>Mutable per-request state shared by the executor and operator contexts.</summary>
@@ -113,6 +122,15 @@ internal sealed class RequestState
 
     public bool?[] WhenResults { get; init; } = Array.Empty<bool?>();
 
+    /// <summary>Selected tap variant per tap slot; null when absent or its group did not sample the request.</summary>
+    public CompiledTap?[] Taps { get; set; } = Array.Empty<CompiledTap?>();
+
+    /// <summary>Batches captured so far; null when no tap is active for the request.</summary>
+    public List<Logging.LogBatch>? Batches { get; set; }
+
+    /// <summary>Request hash shared by all row priorities (design 8.4).</summary>
+    public long RequestHash => Logging.CoordinatedSampling.RequestHash(RequestId);
+
     public List<NodeOutcome> Outcomes { get; } = new();
 
     public int NonFinite { get; set; }
@@ -130,8 +148,15 @@ internal sealed class RequestState
 public sealed class PipelineExecutor
 {
     private readonly IBufferPool _pool;
+    private readonly Logging.LogPipeline? _logs;
 
-    public PipelineExecutor(IBufferPool? pool = null) => _pool = pool ?? SharedArrayBufferPool.Instance;
+    /// <param name="pool">Buffer pool for request memory.</param>
+    /// <param name="logs">Where tap batches and trigger records go; null disables persistent logging.</param>
+    public PipelineExecutor(IBufferPool? pool = null, Logging.LogPipeline? logs = null)
+    {
+        _pool = pool ?? SharedArrayBufferPool.Instance;
+        _logs = logs;
+    }
 
     public async ValueTask<PipelineResult> ExecuteAsync(ExecutionPlan plan, PipelineRequest request, CancellationToken cancellationToken = default)
     {
@@ -185,17 +210,21 @@ public sealed class PipelineExecutor
             };
 
             fetcher.StartContextFetch(plan.ContextFeatures, cancellationToken);
+            await TapCapture.SelectAsync(state, cancellationToken).ConfigureAwait(false);
 
-            for (var i = 0; i < plan.Timeline.Length; i++)
+            PipelineResult? result = null;
+            for (var i = 0; i < plan.Timeline.Length && result is null; i++)
             {
                 var error = await RunPositionAsync(state, i, cancellationToken).ConfigureAwait(false);
                 if (error is not null)
                 {
-                    return Failed(plan, request, error, start, state.Outcomes, state.Triggered, state.NonFinite);
+                    result = Failed(plan, request, error, start, state.Outcomes, state.Triggered, state.NonFinite);
                 }
             }
 
-            return await BuildResultAsync(state, start, cancellationToken).ConfigureAwait(false);
+            result ??= await BuildResultAsync(state, start, cancellationToken).ConfigureAwait(false);
+            PublishLogs(state, request, result);
+            return result;
         }
         finally
         {
@@ -229,12 +258,24 @@ public sealed class PipelineExecutor
             return null;
         }
 
+        int[]? entered = null;
+        if (state.Batches is not null && TapCapture.NeedsEnteredRows(state, node.NodeId))
+        {
+            entered = state.Memory.Rent<int>(Math.Max(1, rowsIn));
+            state.Table.Rows.Capture(entered);
+        }
+
         var reserve = node.OnFailure == FailurePolicy.Fallback ? node.FallbackReserveMs : 0;
         var attempt = await RunNodeAsync(state, node, reserve, cancellationToken).ConfigureAwait(false);
         if (attempt.Kind is NodeOutcomeKind.Succeeded or NodeOutcomeKind.Degraded)
         {
             Record(state, node.NodeId, attempt.Kind, attempt.Detail, node.NodeId, started, rowsIn);
             MarkParamTriggers(state, node);
+            if (state.Batches is not null)
+            {
+                await TapCapture.AfterNodeAsync(state, node.NodeId, entered, rowsIn, cancellationToken).ConfigureAwait(false);
+            }
+
             await AfterNodeAsync(state, position, node, cancellationToken).ConfigureAwait(false);
             return null;
         }
@@ -263,6 +304,11 @@ public sealed class PipelineExecutor
                 {
                     Record(state, node.NodeId, NodeOutcomeKind.Degraded, $"{attempt.Detail}; served by fallback '{fallback.NodeId}'", fallback.NodeId, started, rowsIn);
                     MarkParamTriggers(state, fallback);
+                    if (state.Batches is not null)
+                    {
+                        await TapCapture.AfterNodeAsync(state, node.NodeId, entered, rowsIn, cancellationToken).ConfigureAwait(false);
+                    }
+
                     await AfterNodeAsync(state, position, fallback, cancellationToken).ConfigureAwait(false);
                     return null;
                 }
@@ -608,6 +654,11 @@ public sealed class PipelineExecutor
             }
         }
 
+        if (state.Batches is not null)
+        {
+            await TapCapture.OutputAsync(state, rows, cancellationToken).ConfigureAwait(false);
+        }
+
         var items = new RankedItem[count];
         for (var i = 0; i < count; i++)
         {
@@ -631,6 +682,75 @@ public sealed class PipelineExecutor
             ElapsedMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds,
             NonFiniteValues = state.NonFinite + state.Features.NonFiniteReplaced,
         };
+    }
+
+    /// <summary>
+    /// Completes every batch with the request's final record (assignment, triggers, node outcomes) and either returns
+    /// them with the result or hands them to the log pipeline. Experiment requests also emit a durable trigger record
+    /// (design 8.8, 12.6).
+    /// </summary>
+    private void PublishLogs(RequestState state, PipelineRequest request, PipelineResult result)
+    {
+        if (state.Batches is null && (state.Plan.Experiments.Length == 0 || (_logs is null && !request.CaptureLogs)))
+        {
+            return;
+        }
+
+        var batches = state.Batches ?? new List<Logging.LogBatch>();
+        if (state.Plan.Experiments.Length > 0)
+        {
+            batches.Add(new Logging.LogBatch
+            {
+                TapId = "$experiments",
+                RequestId = state.RequestId,
+                PipelineId = state.Plan.PipelineId,
+                ManifestId = state.Plan.ManifestId,
+                SchemaId = "$experiments",
+                TimeMs = state.Context[PlanSchema.RequestTimeContext].AsInt64(),
+                Delivery = Logging.LogDelivery.Durable,
+                RequestProbability = 1.0,
+                Int64EntityIds = Array.Empty<long>(),
+                Ranks = Array.Empty<int>(),
+                RowProbabilities = Array.Empty<double>(),
+                Columns = Array.Empty<Logging.LogColumn>(),
+                Context = Array.Empty<(string, ScalarValue)>(),
+            });
+        }
+
+        var outcomes = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var outcome in result.Outcomes)
+        {
+            if (outcome.ProducedBy is { } producer && producer != outcome.NodeId)
+            {
+                // Served by the fallback: the primary failed (design 8.7 envelope example).
+                outcomes[outcome.NodeId] = nameof(NodeOutcomeKind.Failed);
+                outcomes[producer] = nameof(NodeOutcomeKind.Succeeded);
+                continue;
+            }
+
+            outcomes[outcome.NodeId] = outcome.Kind.ToString();
+        }
+
+        foreach (var batch in batches)
+        {
+            batch.AssignedArms = result.AssignedArms;
+            batch.TriggeredExperiments = result.TriggeredExperiments;
+            batch.NodeOutcomes = outcomes;
+        }
+
+        if (request.CaptureLogs)
+        {
+            result.LogBatches = batches;
+            return;
+        }
+
+        if (_logs is not null)
+        {
+            foreach (var batch in batches)
+            {
+                _logs.Submit(batch);
+            }
+        }
     }
 
     private static int[] FirstRows(CandidateTable table, int limit)

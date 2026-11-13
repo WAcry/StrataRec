@@ -62,6 +62,9 @@ public sealed class SchemaSources
 
     /// <summary>Leaves only some arm sets (new keys of map parameters, arm-declared parameters): leaf → map/param name.</summary>
     public IReadOnlyCollection<string> ExtraParamLeaves { get; init; } = Array.Empty<string>();
+
+    /// <summary>Funnel groups declared by arms (add-only, design 8.3).</summary>
+    public IReadOnlyDictionary<string, FunnelGroupSpec> ExtraFunnelGroups { get; init; } = new Dictionary<string, FunnelGroupSpec>();
 }
 
 /// <summary>
@@ -75,6 +78,7 @@ public sealed class PlanBuilder
     private readonly DiagnosticBag _diagnostics;
     private readonly List<CompiledNode> _nodes = new();
     private readonly List<FeatureRuntimeInfo> _features = new();
+    private readonly List<CompiledFunnelGroup> _groups = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private PlanSchema? _schema;
     private IExpressionScope? _scope;
@@ -93,6 +97,8 @@ public sealed class PlanBuilder
     public PlanSchema Schema => _schema ?? throw new InvalidOperationException("Call DefineSchema first.");
 
     public IReadOnlyList<CompiledNode> Nodes => _nodes;
+
+    public IReadOnlyList<CompiledFunnelGroup> FunnelGroups => _groups;
 
     private string PipelineLabel => "pipeline:" + _sources!.Pipeline.PipelineId;
 
@@ -138,6 +144,9 @@ public sealed class PlanBuilder
         DefineColumns(pipeline.Columns, "/columns/", PipelineLabel);
         DefineColumns(sources.ExtraColumns, "/columns/", "arms");
         DefineParams(pipeline, sources);
+
+        DefineFunnelGroups(pipeline.FunnelGroups, PipelineLabel);
+        DefineFunnelGroups(sources.ExtraFunnelGroups, "arms");
 
         foreach (var table in sources.Tables)
         {
@@ -300,6 +309,332 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
+    /// Compiles one log tap definition (a fully merged <c>/log_taps/&lt;id&gt;</c> object) into a variant (design 8.3).
+    /// Call after the nodes are compiled: <c>columns_from</c> expands a compiled model node's inputs. Returns null
+    /// after reporting errors.
+    /// </summary>
+    public CompiledTap? CompileTap(string tapId, JsonObject definition, string artifact)
+    {
+        var pointer = "/log_taps/" + tapId;
+        LogTapSpec spec;
+        try
+        {
+            spec = definition.Deserialize<LogTapSpec>(ArtifactSerializer.Options) ?? throw new JsonException("tap must be an object");
+        }
+        catch (JsonException ex)
+        {
+            _diagnostics.Error("TAP_INVALID", artifact, pointer + ArtifactSerializer.JsonPathToPointer(ex.Path), ex.Message,
+                "a tap needs \"group\" and \"attach\"; run 'stratarec schema pipeline' for the full schema");
+            return null;
+        }
+
+        var ok = true;
+        var group = -1;
+        foreach (var g in _groups)
+        {
+            if (g.Name == spec.Group)
+            {
+                group = g.Index;
+            }
+        }
+
+        if (group < 0)
+        {
+            var names = new List<string>();
+            foreach (var g in _groups)
+            {
+                names.Add(g.Name);
+            }
+
+            _diagnostics.Error("TAP_UNKNOWN_GROUP", artifact, pointer + "/group", $"Funnel group '{spec.Group}' is not declared.",
+                NameSuggestions.DidYouMean(spec.Group, names) ?? $"declare it under /funnel_groups/{spec.Group}");
+            ok = false;
+        }
+
+        var delivery = spec.Delivery switch
+        {
+            null or "best_effort" => Logging.LogDelivery.BestEffort,
+            "durable" => Logging.LogDelivery.Durable,
+            _ => (Logging.LogDelivery)0,
+        };
+        if (delivery == 0)
+        {
+            _diagnostics.Error("TAP_BAD_DELIVERY", artifact, pointer + "/delivery", $"Unknown delivery '{spec.Delivery}'.", "use best_effort or durable");
+            ok = false;
+        }
+
+        var output = spec.Attach.Output == true;
+        if (output == (spec.Attach.After is not null))
+        {
+            _diagnostics.Error("TAP_BAD_ATTACH", artifact, pointer + "/attach", "A tap attaches either after a node or to the output.",
+                "use {\"after\": \"<node_id>\"} or {\"output\": true}");
+            ok = false;
+        }
+
+        var scope = spec.Rows?.Scope switch
+        {
+            null or "survived" => TapScope.Survived,
+            "entered" => TapScope.Entered,
+            "dropped" => TapScope.Dropped,
+            _ => (TapScope)0,
+        };
+        if (scope == 0 || (output && scope != TapScope.Survived))
+        {
+            _diagnostics.Error("TAP_BAD_SCOPE", artifact, pointer + "/rows/scope", $"Invalid scope '{spec.Rows?.Scope}'.",
+                output ? "output taps record the returned rows; omit scope" : "use entered, survived or dropped");
+            ok = false;
+        }
+
+        if (spec.Rows?.Rate is { } rate && !(rate > 0 && rate <= 1))
+        {
+            _diagnostics.Error("TAP_BAD_RATE", artifact, pointer + "/rows/rate", "rows.rate must be in (0, 1].");
+            ok = false;
+        }
+
+        if (spec.Rows?.MaxRows is < 1)
+        {
+            _diagnostics.Error("TAP_BAD_MAX_ROWS", artifact, pointer + "/rows/max_rows", "rows.max_rows must be at least 1.");
+            ok = false;
+        }
+
+        if (spec.FetchMissing == true)
+        {
+            _diagnostics.Error("TAP_FETCH_MISSING_UNSUPPORTED", artifact, pointer + "/fetch_missing",
+                "fetch_missing (design 8.5) is not supported by this binary yet.",
+                "attach the tap after a node that already reads the feature, or log it from a later tap");
+            ok = false;
+        }
+
+        var reads = new List<Symbol>();
+        CompiledExpression? filter = null;
+        if (spec.Rows?.Filter is { } filterSource)
+        {
+            filter = CompileTapExpression(filterSource, new CompileOptions { ExpectedType = ColumnType.Bool, AllowNullableResult = true }, artifact, pointer + "/rows/filter", reads, ref ok);
+        }
+
+        var context = new List<(string, CompiledExpression)>();
+        if (spec.Context is not null)
+        {
+            foreach (var name in Sorted(spec.Context.Keys))
+            {
+                var e = CompileTapExpression(spec.Context[name], new CompileOptions { RequestLevelOnly = true, AllowNullableResult = true }, artifact, pointer + "/context/" + name, reads, ref ok);
+                if (e is not null)
+                {
+                    context.Add((name, e));
+                }
+            }
+        }
+
+        var sources = new SortedDictionary<string, (string Source, string Pointer)>(StringComparer.Ordinal);
+        if (spec.ColumnsFrom is { } from)
+        {
+            var nodeId = from.EndsWith(".inputs", StringComparison.Ordinal) ? from[..^7] : null;
+            CompiledNode? model = null;
+            foreach (var n in _nodes)
+            {
+                if (n.NodeId == nodeId)
+                {
+                    model = n;
+                    break;
+                }
+            }
+
+            if (model is null || model.Operator.NamedInputs.Count == 0)
+            {
+                _diagnostics.Error("TAP_BAD_COLUMNS_FROM", artifact, pointer + "/columns_from", $"'{from}' does not name a compiled model node's inputs.",
+                    "use '<node_id>.inputs' for a ModelScorer node");
+                ok = false;
+            }
+            else
+            {
+                foreach (var (name, source) in model.Operator.NamedInputs)
+                {
+                    sources[name] = (source, pointer + "/columns_from");
+                }
+            }
+        }
+
+        if (spec.Columns is not null)
+        {
+            foreach (var (name, source) in spec.Columns)
+            {
+                if (sources.ContainsKey(name))
+                {
+                    _diagnostics.Error("TAP_DUPLICATE_COLUMN", artifact, pointer + "/columns/" + name, $"Column '{name}' is also produced by columns_from.");
+                    ok = false;
+                    continue;
+                }
+
+                sources[name] = (source, pointer + "/columns/" + name);
+            }
+        }
+
+        var columns = new List<(string, CompiledExpression)>();
+        var columnSources = new List<int>();
+        var types = new JsonObject();
+        foreach (var (name, (source, columnPointer)) in sources)
+        {
+            var before = reads.Count;
+            var e = CompileTapExpression(source, CompileOptions.Any, artifact, columnPointer, reads, ref ok);
+            if (e is null)
+            {
+                continue;
+            }
+
+            columns.Add((name, e));
+            types[name] = e.ResultType.ToString();
+            var direct = -1;
+            for (var i = before; i < reads.Count; i++)
+            {
+                if (reads[i] is { Kind: SymbolKind.Column } r && Schema.Columns[r.Id].Kind == ColumnKind.Output)
+                {
+                    direct = direct == -1 ? r.Id : -2;
+                }
+            }
+
+            columnSources.Add(direct >= 0 ? direct : -1);
+        }
+
+        var readOutputs = new SortedSet<int>();
+        var readFeatures = new SortedSet<int>();
+        var readContext = new SortedSet<int>();
+        var personal = false;
+        foreach (var symbol in reads)
+        {
+            if (symbol.Kind == SymbolKind.Column)
+            {
+                var column = Schema.Columns[symbol.Id];
+                if (column.Kind == ColumnKind.Feature)
+                {
+                    readFeatures.Add(column.FeatureIndex);
+                    personal |= _features[column.FeatureIndex].Definition.IsPersonal;
+                }
+                else if (column.Kind == ColumnKind.Output && symbol.FixedSlot < 0)
+                {
+                    readOutputs.Add(symbol.Id);
+                }
+            }
+            else if (symbol.Kind == SymbolKind.Context && Schema.ContextFields[symbol.Id].FeatureIndex is >= 0 and var f)
+            {
+                readContext.Add(f);
+                personal |= _features[f].Definition.IsPersonal;
+            }
+        }
+
+        if (personal && (spec.Purpose is null || delivery != Logging.LogDelivery.Durable))
+        {
+            _diagnostics.Error("TAP_PERSONAL", artifact, pointer, "The tap records personal features; it needs a 'purpose' and durable delivery (design 8.9).",
+                "add \"purpose\": \"...\" and \"delivery\": \"durable\", or drop the personal columns");
+            ok = false;
+        }
+
+        if (!ok)
+        {
+            return null;
+        }
+
+        return new CompiledTap
+        {
+            TapId = tapId,
+            Definition = definition,
+            Group = group,
+            Delivery = delivery,
+            AttachAfter = spec.Attach.After,
+            Scope = scope,
+            Filter = filter,
+            Rate = spec.Rows?.Rate ?? 1.0,
+            MaxRows = spec.Rows?.MaxRows,
+            Context = context.ToArray(),
+            Columns = columns.ToArray(),
+            Purpose = spec.Purpose,
+            SchemaId = CanonicalJson.Hash(new JsonObject { ["tap"] = definition.DeepClone(), ["types"] = types }),
+            ReadOutputs = ToSortedArray(readOutputs),
+            ReadFeatures = ToSortedArray(readFeatures),
+            ReadContextFeatures = ToSortedArray(readContext),
+            ColumnSources = columnSources.ToArray(),
+        };
+    }
+
+    private CompiledExpression? CompileTapExpression(string source, CompileOptions options, string artifact, string pointer, List<Symbol> reads, ref bool ok)
+    {
+        if (ExpressionCompiler.TryCompile(source, _scope!, options, out var expression, out var errors))
+        {
+            foreach (var symbol in expression.Reads)
+            {
+                reads.Add(symbol);
+            }
+
+            return expression;
+        }
+
+        foreach (var d in errors)
+        {
+            _diagnostics.Error(d.Code, artifact, pointer, $"{d.Message} (at offset {d.Offset} in '{source}')", d.Hint);
+        }
+
+        ok = false;
+        return null;
+    }
+
+    private void DefineFunnelGroups(IReadOnlyDictionary<string, FunnelGroupSpec> groups, string artifact)
+    {
+        foreach (var name in Sorted(groups.Keys))
+        {
+            var spec = groups[name];
+            var pointer = "/funnel_groups/" + name;
+            var exists = false;
+            foreach (var g in _groups)
+            {
+                exists |= g.Name == name;
+            }
+
+            if (exists)
+            {
+                continue; // identical re-add (checked by the experiment compiler)
+            }
+
+            if (!(spec.Rate >= 0 && spec.Rate <= 1))
+            {
+                _diagnostics.Error("FUNNEL_BAD_RATE", artifact, pointer + "/rate", "rate must be in [0, 1].");
+                continue;
+            }
+
+            if (spec.Key.Count == 0)
+            {
+                _diagnostics.Error("FUNNEL_NO_KEY", artifact, pointer + "/key", "A funnel group needs at least one key expression.", "e.g. [\"ctx.request.id\"]");
+                continue;
+            }
+
+            var keys = new List<CompiledExpression>();
+            for (var i = 0; i < spec.Key.Count; i++)
+            {
+                if (ExpressionCompiler.TryCompile(spec.Key[i], _scope!, new CompileOptions { RequestLevelOnly = true, AllowNullableResult = true }, out var key, out var errors))
+                {
+                    keys.Add(key);
+                    continue;
+                }
+
+                foreach (var d in errors)
+                {
+                    _diagnostics.Error(d.Code, artifact, pointer + "/key/" + i, $"{d.Message} (at offset {d.Offset} in '{spec.Key[i]}')", d.Hint);
+                }
+            }
+
+            if (keys.Count == spec.Key.Count)
+            {
+                _groups.Add(new CompiledFunnelGroup
+                {
+                    Index = _groups.Count,
+                    Name = name,
+                    Seed = Logging.CoordinatedSampling.GroupSeed(_sources!.Pipeline.PipelineId, name),
+                    Rate = spec.Rate,
+                    Keys = keys.ToArray(),
+                });
+            }
+        }
+    }
+
+    /// <summary>
     /// Compiles a request-level condition over <c>ctx.*</c> (design 5.5), e.g. a trigger site's OR of arms'
     /// <c>when</c> (design 12.6). Returns null after reporting errors at <paramref name="pointer"/>.
     /// </summary>
@@ -360,11 +695,17 @@ public sealed class PlanBuilder
     /// reads has a producer that cannot be skipped before it; fixed columns have one producer per path; row sources
     /// after a producer write that column; nodes sharing an order are independent.
     /// </summary>
-    public void ValidateDataFlow(IReadOnlyList<CompiledNode> timeline, IReadOnlyDictionary<string, CompiledNode> fallbacks, OutputPlan? output, string artifact)
+    public void ValidateDataFlow(
+        IReadOnlyList<CompiledNode> timeline,
+        IReadOnlyDictionary<string, CompiledNode> fallbacks,
+        OutputPlan? output,
+        string artifact,
+        IReadOnlyList<CompiledTap>? taps = null)
     {
         var schema = Schema;
         var guaranteed = new HashSet<int>();
         var possible = new Dictionary<int, string>();
+        var fetched = new HashSet<int>();
         var ordered = new List<CompiledNode>(timeline);
         ordered.Sort(static (a, b) => a.Order != b.Order ? a.Order!.Value.CompareTo(b.Order!.Value) : string.CompareOrdinal(a.NodeId, b.NodeId));
 
@@ -445,6 +786,45 @@ public sealed class PlanBuilder
                     guaranteed.Add(output2.LogicalId);
                 }
             }
+
+            MarkFetched(fetched, node.ReadFeatures);
+            if (fallback is not null)
+            {
+                MarkFetched(fetched, fallback.ReadFeatures);
+            }
+
+            if (taps is not null)
+            {
+                foreach (var tap in taps)
+                {
+                    if (tap.AttachAfter == node.NodeId)
+                    {
+                        ValidateTap(tap, possible, fetched, artifact);
+                    }
+                }
+            }
+        }
+
+        if (taps is not null && output is not null)
+        {
+            foreach (var (_, expression) in output.Columns)
+            {
+                foreach (var symbol in expression.Reads)
+                {
+                    if (symbol.Kind == SymbolKind.Column && schema.Columns[symbol.Id].FeatureIndex is >= 0 and var f)
+                    {
+                        MarkFetched(fetched, new[] { f });
+                    }
+                }
+            }
+
+            foreach (var tap in taps)
+            {
+                if (tap.AttachOutput)
+                {
+                    ValidateTap(tap, possible, fetched, artifact);
+                }
+            }
         }
 
         if (output is not null)
@@ -459,6 +839,47 @@ public sealed class PlanBuilder
                             $"Output reads non-nullable column '{schema.Columns[symbol.Id].Name}', which is not guaranteed to be produced.");
                     }
                 }
+            }
+        }
+    }
+
+    /// <summary>
+    /// A tap is a passive observer (design 8.3, 8.5): every output column it reads must have a producer before the
+    /// attach point, and every candidate feature must already have been fetched there.
+    /// </summary>
+    private void ValidateTap(CompiledTap tap, Dictionary<int, string> possible, HashSet<int> fetched, string artifact)
+    {
+        var pointer = "/log_taps/" + tap.TapId;
+        var where = tap.AttachOutput ? "the output" : $"'{tap.AttachAfter}'";
+        foreach (var logical in tap.ReadOutputs)
+        {
+            if (!possible.ContainsKey(logical))
+            {
+                _diagnostics.Error("TAP_COLUMN_NOT_PRODUCED", artifact, pointer,
+                    $"Tap '{tap.TapId}' reads '{Schema.Columns[logical].Name}', which no node produces before {where}.",
+                    "attach the tap later, or log a column that exists at this point");
+            }
+        }
+
+        foreach (var feature in tap.ReadFeatures)
+        {
+            if (!fetched.Contains(feature))
+            {
+                _diagnostics.Error("TAP_FEATURE_NOT_FETCHED", artifact, pointer,
+                    $"Tap '{tap.TapId}' reads feature '{_features[feature].Definition.Name}', which is not fetched before {where}; taps never trigger fetches.",
+                    "attach the tap after a node that reads the feature");
+            }
+        }
+    }
+
+    /// <summary>Marks features (and the features derived ones are computed from) as fetched.</summary>
+    private void MarkFetched(HashSet<int> fetched, int[] features)
+    {
+        foreach (var f in features)
+        {
+            if (fetched.Add(f))
+            {
+                MarkFetched(fetched, _features[f].Dependencies);
             }
         }
     }
@@ -486,7 +907,8 @@ public sealed class PlanBuilder
         ParamTable parameters,
         LayerInfo[] layers,
         ExperimentInfo[] experiments,
-        ArmInfo[] arms)
+        ArmInfo[] arms,
+        LogPlan? log = null)
     {
         var schema = Schema;
 
@@ -523,6 +945,8 @@ public sealed class PlanBuilder
             }
         }
 
+        log ??= LogPlan.Empty;
+
         return new ExecutionPlan
         {
             PipelineId = _sources!.Pipeline.PipelineId,
@@ -534,6 +958,7 @@ public sealed class PlanBuilder
             Fallbacks = fallbacks,
             Nodes = _nodes.ToArray(),
             Output = output,
+            Log = log,
             Params = parameters,
             Layers = layers,
             Experiments = experiments,

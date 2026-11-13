@@ -26,7 +26,18 @@ internal sealed partial class UnifiedCompilation
     {
         // Layers that touch nodes, and per layer the arms that touch nodes (others behave like "not assigned" here).
         var choices = new SortedDictionary<int, List<int>>();
+        var spaces = new List<VariantSpace>();
         foreach (var (_, v) in _variants)
+        {
+            spaces.Add(v);
+        }
+
+        foreach (var (_, t) in _taps)
+        {
+            spaces.Add(t);
+        }
+
+        foreach (var v in spaces)
         {
             for (var i = 0; i < v.Layers.Length; i++)
             {
@@ -138,6 +149,21 @@ internal sealed partial class UnifiedCompilation
             }
         }
 
+        var taps = new List<CompiledTap>();
+        foreach (var (_, t) in _taps)
+        {
+            var index = t.IndexOf(arms);
+            if (t.Failed[index])
+            {
+                return;
+            }
+
+            if (t.Variants[index] is { } tap)
+            {
+                taps.Add(tap);
+            }
+        }
+
         var nodes = new List<CompiledNode>();
         foreach (var slot in timeline)
         {
@@ -166,7 +192,7 @@ internal sealed partial class UnifiedCompilation
         }
 
         var start = _diagnostics.Count;
-        _builder.ValidateDataFlow(nodes, selectedFallbacks, output, _pipelineLabel);
+        _builder.ValidateDataFlow(nodes, selectedFallbacks, output, _pipelineLabel, taps);
         Settle(start, assigned);
         report.Checked++;
     }
