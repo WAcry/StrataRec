@@ -7,6 +7,7 @@ using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Assignment;
 using StrataRec.Experiments.Compilation;
+using StrataRec.Hosting.LocalTables;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
 
@@ -140,6 +141,9 @@ public sealed class LoadedPipeline
     /// <summary>Content ids of the artifacts the plan was compiled from, when the loader knew them (replay bundles record them).</summary>
     public IReadOnlyDictionary<string, string> ArtifactIds { get; init; } = new Dictionary<string, string>();
 
+    /// <summary>The plan's local tables (design 6.6), held while the plan is served.</summary>
+    internal LocalTableLease? LocalTables { get; init; }
+
     /// <summary>Request-level metric tags of the plan (design 13.1), built once per loaded plan.</summary>
     internal RequestTelemetry Telemetry =>
         _telemetry ?? Interlocked.CompareExchange(ref _telemetry, RequestTelemetry.Create(Plan), null) ?? _telemetry!;
@@ -161,11 +165,14 @@ public sealed record PlanLoadResult(
 /// In-flight requests keep the plan they started with; a plan that fails to compile never replaces the current one.
 /// </summary>
 /// <remarks>
-/// Observability (design 13): each request gets one span (<see cref="StrataRecTracing.StartRequest"/>) and request-level
-/// metrics per pipeline and per assigned arm; plan loads are metrics and event logs. Everything is optional: without
-/// listeners or a logger factory the engine records nothing and allocates nothing for it.
+/// <para>Local feature tables (design 6.6) belong to <see cref="LocalTables"/>: a plan is served only once every table it
+/// reads has completed its first load, and tables whose identity a new plan shares are taken over, not loaded again.
+/// Disposing the engine stops their update sources.</para>
+/// <para>Observability (design 13): each request gets one span (<see cref="StrataRecTracing.StartRequest"/>) and
+/// request-level metrics per pipeline and per assigned arm; plan loads are metrics and event logs. Everything is
+/// optional: without listeners or a logger factory the engine records nothing and allocates nothing for it.</para>
 /// </remarks>
-public sealed partial class RecEngine : IRecEngine
+public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposable
 {
     private readonly ConcurrentDictionary<string, LoadedPipeline> _pipelines = new(StringComparer.Ordinal);
     private readonly object _publishGate = new();
@@ -173,23 +180,33 @@ public sealed partial class RecEngine : IRecEngine
     private readonly PipelineExecutor _executor;
     private readonly IAssignmentProvider? _assignmentProvider;
     private readonly ILogger _logger;
+    private readonly bool _ownsLocalTables;
+    private int _disposed;
 
     /// <param name="executor">Runs the plans; defaults to one sharing <paramref name="loggerFactory"/>.</param>
     /// <param name="loggerFactory">Receives plan load events (design 13.2); null logs nothing.</param>
+    /// <param name="localTables">Hosts the plans' local feature tables; null creates one the engine owns and disposes. A
+    /// host passed in is the caller's to dispose (it may serve several engines).</param>
     public RecEngine(
         PlanEnvironment? environment = null,
         IAssignmentProvider? assignmentProvider = null,
         PipelineExecutor? executor = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        LocalTableHost? localTables = null)
     {
         Environment = environment ?? new PlanEnvironment();
         _assignmentProvider = assignmentProvider;
         _executor = executor ?? new PipelineExecutor(loggerFactory: loggerFactory);
         _logger = loggerFactory?.CreateLogger<RecEngine>() ?? NullLogger<RecEngine>.Instance;
+        _ownsLocalTables = localTables is null;
+        LocalTables = localTables ?? new LocalTableHost(loggerFactory: loggerFactory);
     }
 
     /// <summary>Operators, connectors and clients this binary provides.</summary>
     public PlanEnvironment Environment { get; }
+
+    /// <summary>The local feature tables of the served plans (design 6.6).</summary>
+    public LocalTableHost LocalTables { get; }
 
     /// <summary>Ids of the pipelines currently served, sorted.</summary>
     public List<string> PipelineIds()
@@ -202,8 +219,18 @@ public sealed partial class RecEngine : IRecEngine
     public bool TryGetPipeline(string pipelineId, out LoadedPipeline pipeline) => _pipelines.TryGetValue(pipelineId, out pipeline!);
 
     /// <summary>
-    /// Compiles a plan and, when it has no errors, makes it current for its pipeline. Thread-safe; call it from a
-    /// background thread (design 10.3 step 2).
+    /// Compiles a plan and, when it has no errors, makes it current for its pipeline once its local tables are loaded
+    /// (<see cref="LoadAsync"/>). Blocks while new tables load; call it from a background thread (design 10.3 step 2).
+    /// </summary>
+    public PlanLoadResult Load(PlanCompileRequest request, IReadOnlyDictionary<string, IReadOnlyDictionary<string, int[]>>? armRanges = null, long? sequence = null) =>
+        LoadAsync(request, armRanges, sequence).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Compiles a plan and, when it has no errors, makes it current for its pipeline. Thread-safe. A plan that reads local
+    /// feature tables (design 6.6) becomes current only after every one of them has completed its first load; until then
+    /// the current plan keeps serving. A table that fails to load rejects the plan with a <c>LOCAL_TABLE_LOAD_FAILED</c>
+    /// error naming the binding and the bad file. Tables the current plan already holds with the same identity are taken
+    /// over at once, so a configuration change that does not touch a table never reloads it.
     /// </summary>
     /// <param name="armRanges">Bucket ranges per experiment and arm (from the manifest or allocation file).</param>
     /// <param name="sequence">
@@ -211,10 +238,34 @@ public sealed partial class RecEngine : IRecEngine
     /// sequence, so a slow load of an older release cannot overwrite a newer one that finished first. When omitted,
     /// a ticket taken at the start of the call orders local loads; do not mix the two schemes for one pipeline.
     /// </param>
-    public PlanLoadResult Load(PlanCompileRequest request, IReadOnlyDictionary<string, IReadOnlyDictionary<string, int[]>>? armRanges = null, long? sequence = null)
+    /// <param name="cancellationToken">Stops waiting for tables (the plan is not applied); the tables of other plans load on.</param>
+    public async Task<PlanLoadResult> LoadAsync(
+        PlanCompileRequest request,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, int[]>>? armRanges = null,
+        long? sequence = null,
+        CancellationToken cancellationToken = default)
     {
         var order = sequence ?? Interlocked.Increment(ref _loadTicket);
-        var compilation = PlanCompiler.Compile(request, Environment);
+        var lease = LocalTables.OpenLease();
+        PlanLoadResult? result = null;
+        try
+        {
+            return result = await LoadWithTablesAsync(request, armRanges, order, lease, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (result is not { Applied: true })
+            {
+                lease.Dispose(); // the plan is not served: its new tables stop, shared ones lose a reference
+            }
+        }
+    }
+
+    private async Task<PlanLoadResult> LoadWithTablesAsync(
+        PlanCompileRequest request, IReadOnlyDictionary<string, IReadOnlyDictionary<string, int[]>>? armRanges, long order, LocalTableLease lease,
+        CancellationToken cancellationToken)
+    {
+        var compilation = PlanCompiler.Compile(request, Environment, lease);
         var diagnostics = new DiagnosticBag();
         diagnostics.AddRange(compilation.Diagnostics);
         var pipelineId = request.Pipeline.PipelineId;
@@ -235,6 +286,19 @@ public sealed partial class RecEngine : IRecEngine
             }
         }
 
+        // Readiness (design 6.6 local item 6): the plan is served only once its tables hold a complete load.
+        var failures = await lease.WaitLoadedAsync(cancellationToken).ConfigureAwait(false);
+        if (failures.Count > 0)
+        {
+            foreach (var failure in failures)
+            {
+                diagnostics.Error("LOCAL_TABLE_LOAD_FAILED", failure.Artifact, failure.Pointer, failure.Message, failure.Hint);
+            }
+
+            PlanLoadTelemetry.TablesFailed(_logger, pipelineId, request.ManifestId, diagnostics);
+            return new PlanLoadResult(pipelineId, false, request.ManifestId, plan.CompileTime, diagnostics.Items, compilation.Report);
+        }
+
         var loaded = new LoadedPipeline
         {
             Plan = plan,
@@ -243,9 +307,11 @@ public sealed partial class RecEngine : IRecEngine
             Report = compilation.Report,
             Sequence = order,
             ArtifactIds = request.ArtifactIds,
+            LocalTables = lease,
         };
         _ = loaded.Telemetry; // request metric tags are built with the plan, not on its first request
         long? served = null;
+        LoadedPipeline? replaced = null;
         lock (_publishGate)
         {
             if (_pipelines.TryGetValue(pipelineId, out var current) && current.Sequence >= order)
@@ -256,6 +322,7 @@ public sealed partial class RecEngine : IRecEngine
             }
             else
             {
+                replaced = current;
                 _pipelines[pipelineId] = loaded;
                 PlanLoadTelemetry.Applied(plan, order); // gauges stay ordered with the swaps
             }
@@ -268,9 +335,34 @@ public sealed partial class RecEngine : IRecEngine
             return new PlanLoadResult(pipelineId, false, request.ManifestId, plan.CompileTime, diagnostics.Items, compilation.Report);
         }
 
+        // The replaced plan's tables that the new plan does not share are no longer used: their sources stop. Requests
+        // still running on the old plan read the versions they pinned.
+        replaced?.LocalTables?.Dispose();
         PlanLoadTelemetry.LogApplied(_logger, plan, order);
         return new PlanLoadResult(pipelineId, true, request.ManifestId, plan.CompileTime, diagnostics.Items, compilation.Report);
     }
+
+    /// <summary>Stops the update sources of the served plans' local tables (and the table host, when the engine created it).
+    /// Requests running meanwhile keep the versions they pinned.</summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        foreach (var (_, pipeline) in _pipelines)
+        {
+            pipeline.LocalTables?.Dispose();
+        }
+
+        if (_ownsLocalTables)
+        {
+            await LocalTables.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 
     public async ValueTask<RecResult> ExecuteAsync(RecRequest request, CancellationToken cancellationToken = default)
     {

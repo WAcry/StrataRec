@@ -4,6 +4,7 @@ using System.Text.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Keys;
 using StrataRec.Hosting;
+using StrataRec.Hosting.LocalTables;
 using StrataRec.Hosting.Replay;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Pipeline.Replay;
@@ -134,7 +135,11 @@ internal static class ReplayCommand
     /// <summary>Loads every pipeline of a workspace into a fresh engine; prints diagnostics and returns null on errors.</summary>
     internal static RecEngine? LoadEngine(string config, string environment, string format)
     {
-        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = Path.GetFullPath(config) });
+        // A replay answers local reads from the recording (design 13.4), so the engine never loads local tables: replaying
+        // needs neither their data nor their snapshot files.
+        var engine = new RecEngine(
+            new PlanEnvironment { BaseDirectory = Path.GetFullPath(config) },
+            localTables: new LocalTableHost(new LocalTableHostOptions { LoadTables = false }));
         var diagnostics = ServiceCollectionExtensions.LoadWorkspace(engine, config, environment);
         if (diagnostics.HasErrors)
         {

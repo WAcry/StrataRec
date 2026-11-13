@@ -148,13 +148,14 @@ public sealed class RequestAllocationTests
 
         File.WriteAllText(Path.Combine(root, "fixtures", "items.json"), items.Append("\n}").ToString());
 
-        var authors = new StringBuilder("{");
+        // author_store is a local table loaded from a snapshot directory (one JSONL part).
+        var authors = new StringBuilder();
         for (var id = 100; id < 400; id++)
         {
-            authors.Append(id == 100 ? "\n" : ",\n").Append(CultureInfo.InvariantCulture, $"\"{id}\": {{ \"a_followers\": {random.Next(1_000_000)}.0 }}");
+            authors.Append(CultureInfo.InvariantCulture, $"{{\"key\": {id}, \"version\": 1, \"fields\": {{\"a_followers\": {random.Next(1_000_000)}.0}}}}\n");
         }
 
-        File.WriteAllText(Path.Combine(root, "fixtures", "authors.json"), authors.Append("\n}").ToString());
+        File.WriteAllText(Path.Combine(root, "fixtures", "author_snapshot", "part-0000.jsonl"), authors.ToString());
 
         // Two thirds from the personalized source, the rest from the popular list; the lists overlap.
         var twoTower = candidates * 2 / 3;

@@ -161,6 +161,12 @@ internal static partial class PlanLoadTelemetry
         LogRejected(logger, pipelineId, manifestId, diagnostics.ErrorCount, FirstError(diagnostics));
     }
 
+    public static void TablesFailed(ILogger logger, string pipelineId, string manifestId, DiagnosticBag diagnostics)
+    {
+        Count(pipelineId, "tables_failed");
+        LogTablesFailed(logger, pipelineId, manifestId, diagnostics.ErrorCount, FirstError(diagnostics));
+    }
+
     public static void Stale(ILogger logger, string pipelineId, string manifestId, long sequence, long current)
     {
         Count(pipelineId, "stale");
@@ -194,6 +200,10 @@ internal static partial class PlanLoadTelemetry
     [LoggerMessage(EventId = 1003, Level = LogLevel.Error,
         Message = "Manifest '{ManifestId}' for pipeline '{PipelineId}' rejected with {ErrorCount} error(s); the current plan stays. First: {FirstError}")]
     private static partial void LogRejected(ILogger logger, string pipelineId, string manifestId, int errorCount, string? firstError);
+
+    [LoggerMessage(EventId = 1005, Level = LogLevel.Error,
+        Message = "Plan of pipeline '{PipelineId}' from manifest '{ManifestId}' not applied: {ErrorCount} local table(s) failed to load; the current plan stays. First: {FirstError}")]
+    private static partial void LogTablesFailed(ILogger logger, string pipelineId, string manifestId, int errorCount, string? firstError);
 
     [LoggerMessage(EventId = 1004, Level = LogLevel.Information,
         Message = "Manifest '{ManifestId}' for pipeline '{PipelineId}' not applied: its sequence {Sequence} is not newer than the served {CurrentSequence}")]

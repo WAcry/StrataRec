@@ -1,10 +1,16 @@
-// Local bindings: every source is an in-memory fixture, so the pipeline runs offline and deterministically.
+// Local bindings: every source reads fixtures in this workspace, so the pipeline runs offline and deterministically.
 {
   "environment": "local",
   "sources": {
     "user_store":   { "connector": "memory@1", "data_file": "fixtures/users.json" },
     "item_store":   { "connector": "memory@1", "data_file": "fixtures/items.json", "max_batch": 25 },
-    "author_store": { "connector": "memory@1", "data_file": "fixtures/authors.json" }
+    // Creators are a bounded set read for every request: an in-process table (design 6.6) loaded from a snapshot
+    // directory, with no I/O on the request path. The engine serves the plan once the first load is complete.
+    "author_store": {
+      "mode": "local",
+      "max_bytes": "16MiB",
+      "bootstrap": { "source": "snapshot_files@1", "uri": "fixtures/author_snapshot" }
+    }
   },
   "models": {
     "ctr_model": {

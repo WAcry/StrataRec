@@ -99,7 +99,7 @@ public sealed class HomeFeedEndToEndTests
                 foreach (var quality in new[] { "control", "strong" })
                 {
                     var arms = new[] { $"exp_freshness_calibration/{fresh}", $"exp_mmr_diversity/{mmr}", $"exp_quality_weight/{quality}" };
-                    var reference = PlanCompiler.CompileMerged(host.Request, arms, host.Environment);
+                    var reference = host.CompileMerged(arms);
                     Assert.True(reference.Succeeded, string.Join("\n", reference.Diagnostics));
 
                     foreach (var (user, surface) in new[] { (1001L, "home"), (1002L, "explore") })
