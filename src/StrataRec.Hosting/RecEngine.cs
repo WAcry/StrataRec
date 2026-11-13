@@ -57,6 +57,13 @@ public sealed class DebugOptions
 
     /// <summary>Return log batches in <see cref="RecResult.LogBatches"/> instead of writing them (design 8.6 item 6).</summary>
     public bool CaptureLogs { get; init; }
+
+    /// <summary>
+    /// Record the request as a replay bundle in <see cref="RecResult.Recording"/> (design 13.4): inputs, assignment, every
+    /// external response with its status and duration, every node decision, the sampling and the result. Costs nothing
+    /// when off; when on, the recording allocates in proportion to the data the request fetched.
+    /// </summary>
+    public bool Record { get; init; }
 }
 
 /// <summary>Assignment and trigger record of a request (design 12.6).</summary>
@@ -90,6 +97,12 @@ public sealed class RecResult
     /// <summary>Captured log batches when <see cref="DebugOptions.CaptureLogs"/> was set.</summary>
     public IReadOnlyList<Logging.LogBatch>? LogBatches { get; init; }
 
+    /// <summary>
+    /// The replay bundle when <see cref="DebugOptions.Record"/> was set and the request was executed (a request rejected
+    /// before execution has nothing to replay). Save it with <see cref="Replay.ReplayBundleFile"/>.
+    /// </summary>
+    public ReplayBundle? Recording { get; init; }
+
     public double ElapsedMs { get; init; }
 }
 
@@ -109,6 +122,9 @@ public sealed class LoadedPipeline
     public required long Sequence { get; init; }
 
     public DateTimeOffset LoadedAt { get; init; } = DateTimeOffset.UtcNow;
+
+    /// <summary>Content ids of the artifacts the plan was compiled from, when the loader knew them (replay bundles record them).</summary>
+    public IReadOnlyDictionary<string, string> ArtifactIds { get; init; } = new Dictionary<string, string>();
 
     /// <summary>Request-level metric tags of the plan (design 13.1), built once per loaded plan.</summary>
     internal RequestTelemetry Telemetry =>
@@ -135,7 +151,7 @@ public sealed record PlanLoadResult(
 /// metrics per pipeline and per assigned arm; plan loads are metrics and event logs. Everything is optional: without
 /// listeners or a logger factory the engine records nothing and allocates nothing for it.
 /// </remarks>
-public sealed class RecEngine : IRecEngine
+public sealed partial class RecEngine : IRecEngine
 {
     private readonly ConcurrentDictionary<string, LoadedPipeline> _pipelines = new(StringComparer.Ordinal);
     private readonly object _publishGate = new();
@@ -212,6 +228,7 @@ public sealed class RecEngine : IRecEngine
             FallbackPipeline = request.Pipeline.FallbackPipeline,
             Report = compilation.Report,
             Sequence = order,
+            ArtifactIds = request.ArtifactIds,
         };
         _ = loaded.Telemetry; // request metric tags are built with the plan, not on its first request
         long? served = null;
@@ -252,6 +269,12 @@ public sealed class RecEngine : IRecEngine
         var arms = RequestArms.None;
         var degraded = false;
         RecResult? result = null; // stays null when the request is aborted (cancelled by the caller, or a defect)
+
+        // A recorded request resolves its seed and time once, so both pipelines see the same values and the bundle holds
+        // exactly what ran (design 5.7).
+        var record = request.Debug?.Record == true;
+        var seed = record ? request.Seed ?? PipelineRequest.DefaultSeed(request.RequestId) : request.Seed;
+        var timeMs = record ? request.TimeMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : request.TimeMs;
         try
         {
             if (!_pipelines.TryGetValue(request.PipelineId, out pipeline))
@@ -273,32 +296,22 @@ public sealed class RecEngine : IRecEngine
                 return result = Rejected(request, "deadline exceeded before execution (assignment took the whole budget)");
             }
 
-            var executed = await Run(pipeline, request, arms, remaining, cancellationToken).ConfigureAwait(false);
+            var executed = await Run(pipeline, request, arms, remaining, seed, timeMs, cancellationToken).ConfigureAwait(false);
             remaining = request.Deadline - Stopwatch.GetElapsedTime(started);
             if (executed.Succeeded || pipeline.FallbackPipeline is not { } fallbackId || fallbackId == request.PipelineId
                 || !_pipelines.TryGetValue(fallbackId, out var fallback) || remaining <= TimeSpan.Zero)
             {
                 degraded = executed.Degraded;
-                return result = ToResult(request, pipeline, executed, unknown, request.PipelineId);
+                result = ToResult(request, pipeline, executed, unknown, request.PipelineId);
+                return result = record ? WithRecording(result, Bundle(request, pipeline, AssignmentSource(pipeline, request), seed!.Value, timeMs!.Value, result, executed, null)) : result;
             }
 
             // The pipeline failed: serve its fallback pipeline, without experiments, within what is left (design 5.6).
             degraded = true;
-            var served = await Run(fallback, request, RequestArms.None, remaining, cancellationToken).ConfigureAwait(false);
+            var served = await Run(fallback, request, RequestArms.None, remaining, seed, timeMs, cancellationToken).ConfigureAwait(false);
             var converted = ToResult(request, fallback, served, unknown, fallbackId);
-            return result = new RecResult
-            {
-                Succeeded = converted.Succeeded,
-                Error = $"pipeline '{request.PipelineId}' failed: {executed.Error}" + (served.Succeeded ? string.Empty : $"; fallback '{fallbackId}' failed: {served.Error}"),
-                Items = converted.Items,
-                Experiments = new ExperimentRecord(executed.AssignedArms, executed.TriggeredExperiments, unknown),
-                ManifestId = converted.ManifestId,
-                ServedBy = fallbackId,
-                ColumnProducers = converted.ColumnProducers,
-                Trace = converted.Trace,
-                LogBatches = converted.LogBatches,
-                ElapsedMs = executed.ElapsedMs + served.ElapsedMs,
-            };
+            result = Combine(request, executed, converted, served, unknown, fallbackId);
+            return result = record ? WithRecording(result, Bundle(request, pipeline, AssignmentSource(pipeline, request), seed!.Value, timeMs!.Value, result, executed, served)) : result;
         }
         finally
         {
@@ -369,17 +382,34 @@ public sealed class RecEngine : IRecEngine
         return (assigned, unknownIds, null);
     }
 
-    private ValueTask<PipelineResult> Run(LoadedPipeline pipeline, RecRequest request, RequestArms arms, TimeSpan deadline, CancellationToken cancellationToken) =>
+    private ValueTask<PipelineResult> Run(
+        LoadedPipeline pipeline, RecRequest request, RequestArms arms, TimeSpan deadline, long? seed, long? timeMs, CancellationToken cancellationToken) =>
         _executor.ExecuteAsync(pipeline.Plan, new PipelineRequest
         {
             RequestId = request.RequestId,
             Inputs = request.Inputs,
             Arms = arms,
             Deadline = deadline,
-            Seed = request.Seed,
-            TimeMs = request.TimeMs,
+            Seed = seed,
+            TimeMs = timeMs,
             CaptureLogs = request.Debug?.CaptureLogs == true,
+            Record = request.Debug?.Record == true,
         }, cancellationToken);
+
+    /// <summary>The result of a request its fallback pipeline served: the primary's assignment and error, the fallback's items.</summary>
+    private static RecResult Combine(RecRequest request, PipelineResult executed, RecResult converted, PipelineResult served, int unknown, string fallbackId) => new()
+    {
+        Succeeded = converted.Succeeded,
+        Error = $"pipeline '{request.PipelineId}' failed: {executed.Error}" + (served.Succeeded ? string.Empty : $"; fallback '{fallbackId}' failed: {served.Error}"),
+        Items = converted.Items,
+        Experiments = new ExperimentRecord(executed.AssignedArms, executed.TriggeredExperiments, unknown),
+        ManifestId = converted.ManifestId,
+        ServedBy = fallbackId,
+        ColumnProducers = converted.ColumnProducers,
+        Trace = converted.Trace,
+        LogBatches = converted.LogBatches,
+        ElapsedMs = executed.ElapsedMs + served.ElapsedMs,
+    };
 
     /// <summary>Maps external arm ids; unknown ids and second arms in one layer are ignored and counted (design 11.1).</summary>
     private static RequestArms MapExternal(ExecutionPlan plan, IReadOnlyList<string> ids, out int unknown)

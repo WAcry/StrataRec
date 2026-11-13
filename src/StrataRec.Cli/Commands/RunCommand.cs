@@ -5,6 +5,7 @@ using StrataRec.Artifacts.Json;
 using StrataRec.Core.Values;
 using StrataRec.Features.Catalog;
 using StrataRec.Hosting;
+using StrataRec.Hosting.Replay;
 using StrataRec.Hosting.Workspace;
 using StrataRec.Pipeline.Planning;
 
@@ -24,13 +25,19 @@ internal static class RunCommand
         var arms = new Option<string[]>("--arms", "-a") { Description = "Force these arms (experiment/arm).", AllowMultipleArgumentsPerToken = true };
         var trace = new Option<bool>("--trace", "-t") { Description = "Include every node's outcome." };
         var logs = new Option<bool>("--logs", "-l") { Description = "Include the log batches the request's taps captured (nothing is written)." };
-        var command = new Command("run", "Execute a request locally and print the result as JSON.") { config, environment, request, arms, trace, logs };
+        var record = new Option<string?>("--record")
+        {
+            Description = "Also write a replay bundle of the request to this file (design 13.4); replay it with 'stratarec replay'.",
+        };
+        var command = new Command("run", "Execute a request locally and print the result as JSON.") { config, environment, request, arms, trace, logs, record };
         command.SetAction((parse, cancellationToken) => RunAsync(parse.GetValue(config)!, parse.GetValue(environment)!, parse.GetValue(request)!,
-            parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(trace), Console.Out, cancellationToken, parse.GetValue(logs)));
+            parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(trace), Console.Out, cancellationToken, parse.GetValue(logs), parse.GetValue(record)));
         return command;
     }
 
-    internal static async Task<int> RunAsync(string config, string environment, string requestPath, string[] arms, bool trace, TextWriter output, CancellationToken cancellationToken, bool logs = false)
+    internal static async Task<int> RunAsync(
+        string config, string environment, string requestPath, string[] arms, bool trace, TextWriter output, CancellationToken cancellationToken, bool logs = false,
+        string? recordPath = null)
     {
         JsonObject document;
         try
@@ -101,10 +108,23 @@ internal static class RunCommand
             Deadline = TimeSpan.FromMilliseconds(document["deadline_ms"]?.GetValue<double>() ?? 1000),
             TimeMs = document["time_ms"]?.GetValue<long>(),
             Seed = document["seed"]?.GetValue<long>(),
-            Debug = new DebugOptions { ForceArms = forced.Count > 0 ? forced : null, Trace = trace, CaptureLogs = logs },
+            Debug = new DebugOptions { ForceArms = forced.Count > 0 ? forced : null, Trace = trace, CaptureLogs = logs, Record = recordPath is not null },
         };
 
         var result = await engine.ExecuteAsync(request, cancellationToken).ConfigureAwait(false);
+        if (recordPath is not null)
+        {
+            if (result.Recording is { } bundle)
+            {
+                ReplayBundleFile.Save(bundle, recordPath);
+                Console.Error.WriteLine($"recorded {request.RequestId} to {recordPath}");
+            }
+            else
+            {
+                Console.Error.WriteLine($"nothing recorded: the request was rejected before execution ({result.Error})");
+            }
+        }
+
         output.WriteLine(Output.ToJson(json =>
         {
             json.WriteStartObject();

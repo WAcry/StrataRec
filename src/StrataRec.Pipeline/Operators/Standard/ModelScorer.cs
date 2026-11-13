@@ -246,7 +246,7 @@ public sealed class ModelScorerFactory : IOperatorFactory
                     BatchSize = count,
                     Options = new ModelCallOptions(Seed: context.Seed),
                 };
-                calls[b] = InvokeAsync(call, writers[b], memory, context.RequestId, context.Events, context.CallerCancellation, cts.Token);
+                calls[b] = context.InvokeModelAsync(client, target, call, writers[b], rows.AsMemory(offset, count), cts.Token);
             }
 
             var results = await Task.WhenAll(calls).ConfigureAwait(false);
@@ -322,45 +322,6 @@ public sealed class ModelScorerFactory : IOperatorFactory
                             return;
                     }
                 }
-            }
-        }
-
-        private async Task<ModelStatus> InvokeAsync(
-            ModelCall call,
-            OutputWriter writer,
-            Core.Memory.RequestMemory memory,
-            string requestId,
-            RequestEventLog? events,
-            CancellationToken callerCancellation,
-            CancellationToken cancellationToken)
-        {
-            memory.Hold();
-            var io = target.Start();
-            var outcome = IoOutcome.Error;
-            string? error = null;
-            try
-            {
-                var status = await client.InvokeAsync(call, writer, cancellationToken).ConfigureAwait(false);
-                (outcome, error) = status.Succeeded ? (IoOutcome.Ok, null) : (IoOutcome.Error, status.Error);
-                return status;
-            }
-            catch (OperationCanceledException)
-            {
-                // The model timeout or the node's budget, unless the caller gave up on the request.
-                outcome = callerCancellation.IsCancellationRequested ? IoOutcome.Cancelled : IoOutcome.Timeout;
-                throw;
-            }
-            catch (Exception ex)
-            {
-                // A client's own transport timeout is a timeout, as for feature sources.
-                outcome = ex is TimeoutException ? IoOutcome.Timeout : IoOutcome.Error;
-                error = ex.Message;
-                throw;
-            }
-            finally
-            {
-                memory.Release();
-                io.Complete(outcome, -1, requestId, error, events);
             }
         }
     }

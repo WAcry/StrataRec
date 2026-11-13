@@ -128,6 +128,9 @@ public readonly struct IoCall
         _span = span;
     }
 
+    /// <summary>Time since the call started (zero for a call that was never started); what a replay bundle records.</summary>
+    public TimeSpan Elapsed => _target is null ? TimeSpan.Zero : Stopwatch.GetElapsedTime(_started);
+
     /// <summary>
     /// Records the call: duration, keys and errors as metrics; health and windowed failure summaries in
     /// <paramref name="events"/> (design 13.2); and ends the span.
@@ -169,7 +172,8 @@ public readonly struct IoCall
         }
     }
 
-    internal static string OutcomeName(IoOutcome outcome) => outcome switch
+    /// <summary>The <c>stratarec.outcome</c> spelling of an outcome, also used by replay bundles.</summary>
+    public static string OutcomeName(IoOutcome outcome) => outcome switch
     {
         IoOutcome.Ok => "ok",
         IoOutcome.Partial => "partial",

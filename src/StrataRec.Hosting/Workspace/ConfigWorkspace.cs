@@ -203,6 +203,22 @@ public sealed class ConfigWorkspace
             }
         }
 
+        var artifactIds = new SortedDictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["pipeline:" + pipelineId] = pipeline.ContentId,
+            ["catalog:" + catalog!.Value.CatalogId] = catalog.ContentId,
+            ["bindings:" + bindingsEnvironment] = bindings.ContentId,
+        };
+        if (Policy is { } policy)
+        {
+            artifactIds["policy"] = policy.ContentId;
+        }
+
+        foreach (var table in tables)
+        {
+            artifactIds["table:" + table.TableId] = Tables[table.TableId].ContentId;
+        }
+
         var placements = new List<ExperimentPlacement>();
         var listed = new SortedDictionary<string, string>(StringComparer.Ordinal);
         if (allocation is not null)
@@ -231,6 +247,7 @@ public sealed class ConfigWorkspace
             }
 
             placements.Add(new ExperimentPlacement(experiment.Value, layer));
+            artifactIds["experiment:" + id] = experiment.ContentId;
         }
 
         if (diagnostics.ErrorCount > errorsBefore)
@@ -248,6 +265,7 @@ public sealed class ConfigWorkspace
             Experiments = placements,
             Assignment = allocation?.Value.Assignment,
             ManifestId = "workspace:" + pipelineId + "/" + environment,
+            ArtifactIds = artifactIds,
             Today = today,
         };
     }

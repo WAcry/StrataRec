@@ -26,6 +26,13 @@ public sealed class PlanCompileRequest
     public string ManifestId { get; init; } = "local";
 
     /// <summary>
+    /// Content id of each artifact the request was assembled from (<c>pipeline:&lt;id&gt;</c>, <c>catalog:&lt;id&gt;</c>,
+    /// <c>bindings:&lt;env&gt;</c>, <c>policy</c>, <c>table:&lt;id&gt;</c>, <c>experiment:&lt;id&gt;</c>), when the loader knows them.
+    /// Not used by compilation; replay bundles record it (design 13.4) so a replay can say which artifacts changed.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> ArtifactIds { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>
     /// Compile baseline ⊕ arm for every arm on its own (design 11.5 check 1). This is what proves the independence
     /// rule (design 11.6: an arm may only reference the baseline and itself). On by default; hosts that already ran
     /// manifest validation in CI may turn it off to shorten load time.

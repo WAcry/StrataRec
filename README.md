@@ -17,6 +17,8 @@ dotnet test StrataRec.sln           # 单元测试 + 集成测试
 dotnet run --project src/StrataRec.Cli -- validate     -c samples/home_feed
 dotnet run --project src/StrataRec.Cli -- explain-plan -c samples/home_feed
 dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r samples/home_feed/requests/user_1001.json --trace --logs
+dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r samples/home_feed/requests/user_1001.json --record bundles/1001.json
+dotnet run --project src/StrataRec.Cli -- replay       -c samples/home_feed -b bundles   # 用录制的 I/O 重现并对比；compare --baseline 对比两份配置
 dotnet run --project src/StrataRec.Cli -- schema pipeline          # 各类产物的 JSON Schema
 dotnet run --project src/StrataRec.Cli -- operators                # 算子及其声明的效果
 ```

@@ -182,6 +182,108 @@ public static class LogBatchJson
         }
     }
 
+    /// <summary>
+    /// Reads a value written by <see cref="WriteValue"/> back as <paramref name="type"/> (promoted storage, like
+    /// <see cref="ScalarValue"/>): null is missing, a bool is 0 or 1 (<c>true</c>/<c>false</c> are accepted too), an
+    /// <c>int32</c> value or <c>list&lt;int32&gt;</c> element must fit int32. The encoding carries no type, so the reader
+    /// supplies it, as a log consumer does from the batch's schema.
+    /// </summary>
+    /// <remarks>Non-finite floats were written as null, so they read back as missing (design 8.7).</remarks>
+    public static bool TryReadValue(JsonElement json, ColumnType type, out ScalarValue value, out string? error)
+    {
+        value = ScalarValue.Missing;
+        error = null;
+        if (json.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return true;
+        }
+
+        switch (type.Kind)
+        {
+            case StorageKind.Bool when json.ValueKind == JsonValueKind.Number && json.TryGetInt64(out var flag) && flag is 0 or 1:
+                value = ScalarValue.FromBool(flag == 1);
+                return true;
+            case StorageKind.Bool when json.ValueKind is JsonValueKind.True or JsonValueKind.False:
+                value = ScalarValue.FromBool(json.GetBoolean());
+                return true;
+            case StorageKind.Int32 or StorageKind.Int64 when json.ValueKind == JsonValueKind.Number && json.TryGetInt64(out var integer):
+                if (type.Kind == StorageKind.Int32 && integer is < int.MinValue or > int.MaxValue)
+                {
+                    break;
+                }
+
+                value = ScalarValue.FromInt64(integer);
+                return true;
+            case StorageKind.Float32 or StorageKind.Float64 when json.ValueKind == JsonValueKind.Number:
+                value = ScalarValue.FromFloat64(json.GetDouble());
+                return true;
+            case StorageKind.String when json.ValueKind == JsonValueKind.String:
+                value = ScalarValue.FromString(json.GetString());
+                return true;
+            case StorageKind.Text when json.ValueKind == JsonValueKind.String:
+                value = ScalarValue.FromText(json.GetString());
+                return true;
+            case StorageKind.Vector when json.ValueKind == JsonValueKind.Array:
+                var vector = new float[json.GetArrayLength()];
+                var v = 0;
+                foreach (var element in json.EnumerateArray())
+                {
+                    if (element.ValueKind != JsonValueKind.Number)
+                    {
+                        error = $"vector element {v} is {element.ValueKind}, not a number";
+                        return false;
+                    }
+
+                    vector[v++] = element.GetSingle();
+                }
+
+                if (type.Dimension > 0 && vector.Length != type.Dimension)
+                {
+                    error = $"expected {type.Dimension} elements for {type}, got {vector.Length}";
+                    return false;
+                }
+
+                value = ScalarValue.FromVector(vector);
+                return true;
+            case StorageKind.ListInt32 or StorageKind.ListInt64 when json.ValueKind == JsonValueKind.Array:
+                var longs = new long[json.GetArrayLength()];
+                var l = 0;
+                foreach (var element in json.EnumerateArray())
+                {
+                    if (element.ValueKind != JsonValueKind.Number || !element.TryGetInt64(out var item)
+                        || (type.Kind == StorageKind.ListInt32 && item is < int.MinValue or > int.MaxValue))
+                    {
+                        error = $"element {l} ({element.GetRawText()}) is not a valid {type} element";
+                        return false;
+                    }
+
+                    longs[l++] = item;
+                }
+
+                value = ScalarValue.FromInt64List(longs);
+                return true;
+            case StorageKind.ListString when json.ValueKind == JsonValueKind.Array:
+                var strings = new string[json.GetArrayLength()];
+                var s = 0;
+                foreach (var element in json.EnumerateArray())
+                {
+                    if (element.ValueKind != JsonValueKind.String)
+                    {
+                        error = $"element {s} is {element.ValueKind}, not a string";
+                        return false;
+                    }
+
+                    strings[s++] = element.GetString()!;
+                }
+
+                value = ScalarValue.FromStringList(strings);
+                return true;
+        }
+
+        error = $"{json.GetRawText()} is not a valid {type}";
+        return false;
+    }
+
     private static bool AllFinite(ReadOnlySpan<float> values)
     {
         foreach (var f in values)

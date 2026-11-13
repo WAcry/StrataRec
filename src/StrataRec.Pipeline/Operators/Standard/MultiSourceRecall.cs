@@ -127,7 +127,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         public override async ValueTask ExecuteAsync(OperatorContext context)
         {
             var calls = new Task<CandidateSourceStatus>?[sources.Length];
-            var sinks = new Sink?[sources.Length];
+            var buffers = new CandidateBuffer?[sources.Length];
             for (var i = 0; i < sources.Length; i++)
             {
                 var quotaValue = context.Param(sources[i].Quota);
@@ -137,10 +137,10 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                     continue;
                 }
 
-                var sink = new Sink(quota, context.Memory);
-                sinks[i] = sink;
+                var buffer = new CandidateBuffer(quota, context.Memory);
+                buffers[i] = buffer;
                 var query = new CandidateQuery { SourceName = sources[i].Name, Limit = quota, Inputs = context.Inputs, RequestId = context.RequestId, Seed = context.Seed };
-                calls[i] = CallAsync(sources[i], query, sink, context.Memory, context.Events, context.CallerCancellation, context.CancellationToken);
+                calls[i] = context.RetrieveAsync(sources[i].Source, sources[i].Io, sources[i].TimeoutMs, query, buffer);
             }
 
             var attempted = 0;
@@ -157,7 +157,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 if (!status.Succeeded)
                 {
                     (failed ??= new List<string>()).Add($"{sources[i].Name}: {status.Error}");
-                    sinks[i] = null;
+                    buffers[i] = null;
                 }
             }
 
@@ -172,67 +172,16 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 context.ReportDegraded("recall sources failed: " + string.Join("; ", failed));
             }
 
-            Merge(context, sinks);
-        }
-
-        /// <remarks>
-        /// The sink's buffers are rented from the request memory, so the call holds the memory until the source really
-        /// completes. Usually the operator awaits every call anyway, but when one call is cancelled with the request
-        /// its exception ends the operator while other sources may still be adding; their sinks must not return to
-        /// the pool under them. The sink is closed first, so a source that adds after completing changes nothing.
-        /// </remarks>
-        private static async Task<CandidateSourceStatus> CallAsync(
-            SourceEntry source,
-            CandidateQuery query,
-            Sink sink,
-            RequestMemory memory,
-            RequestEventLog? events,
-            CancellationToken callerCancellation,
-            CancellationToken cancellationToken)
-        {
-            memory.Hold();
-            var io = source.Io.Start();
-            var status = default(CandidateSourceStatus);
-            var outcome = IoOutcome.Timeout; // the node's budget ran out (the exception propagates) unless set below
-            try
-            {
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                if (source.TimeoutMs is { } timeout)
-                {
-                    cts.CancelAfter(timeout);
-                }
-
-                status = await source.Source.RetrieveAsync(query, sink, cts.Token).ConfigureAwait(false);
-                outcome = status.Succeeded ? IoOutcome.Ok : IoOutcome.Error;
-                return status;
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                return status = CandidateSourceStatus.Failed("timed out");
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                // A client's own transport timeout is a timeout, as for feature sources.
-                outcome = ex is TimeoutException ? IoOutcome.Timeout : IoOutcome.Error;
-                return status = CandidateSourceStatus.Failed(ex.Message);
-            }
-            finally
-            {
-                sink.Close();
-                memory.Release();
-                // A call cut off by the caller is not the source's fault: neither timed nor counted against its health.
-                io.Complete(outcome == IoOutcome.Timeout && callerCancellation.IsCancellationRequested ? IoOutcome.Cancelled : outcome,
-                    -1, query.RequestId, status.Error, events);
-            }
+            Merge(context, buffers);
         }
 
         /// <summary>
-        /// Merges the sinks in source order: the first occurrence of a key fixes its position and primary source; later
+        /// Merges the buffers in source order: the first occurrence of a key fixes its position and primary source; later
         /// ones add their source bit, the best (lowest) rank and the best score. A source stops contributing at its
         /// first new key that no longer fits in the table. The index and the merged columns are rented from the request
         /// memory, sized to the most keys that can be added, so nothing here allocates per key.
         /// </summary>
-        private void Merge(OperatorContext context, Sink?[] sinks)
+        private void Merge(OperatorContext context, CandidateBuffer?[] sinks)
         {
             var table = context.Table;
             var memory = context.Memory;
@@ -330,59 +279,6 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 ColumnValues.Set(scoreColumn, row, ScalarValue.FromFloat64(scores[i]));
                 primaryColumn.Set(row, sources[primaries[i]].Name);
             }
-        }
-    }
-
-    /// <summary>
-    /// Collects one source's results; capped at the quota (excess is dropped, design 4.8). The buffers are rented from
-    /// the request memory at the quota, which the table's capacity already accounts for. Closed when the source call
-    /// completes: later additions are ignored.
-    /// </summary>
-    private sealed class Sink : ICandidateSink
-    {
-        private readonly EntityKey[] _keys;
-        private readonly double[] _scores;
-        private readonly int _limit;
-        private int _count;
-        private bool _closed;
-
-        public Sink(int limit, RequestMemory memory)
-        {
-            _limit = limit;
-            _keys = memory.Rent<EntityKey>(limit);
-            _scores = memory.Rent<double>(limit);
-        }
-
-        public int Count => _count;
-
-        public ReadOnlySpan<EntityKey> Keys => _keys.AsSpan(0, _count);
-
-        public ReadOnlySpan<double> Scores => _scores.AsSpan(0, _count);
-
-        public int Truncated { get; private set; }
-
-        public void Add(long entityId, double score) => Add(EntityKey.FromInt64(entityId), score);
-
-        public void Add(string entityId, double score) => Add(EntityKey.FromString(entityId), score);
-
-        public void Close() => Volatile.Write(ref _closed, true);
-
-        private void Add(EntityKey key, double score)
-        {
-            if (Volatile.Read(ref _closed))
-            {
-                return;
-            }
-
-            if (_count >= _limit)
-            {
-                Truncated++;
-                return;
-            }
-
-            _keys[_count] = key;
-            _scores[_count] = double.IsFinite(score) ? score : 0.0;
-            _count++;
         }
     }
 }
