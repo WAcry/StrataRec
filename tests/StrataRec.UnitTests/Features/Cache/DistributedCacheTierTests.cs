@@ -69,6 +69,34 @@ public class DistributedCacheTierTests
         Assert.Equal(0, tier.QueuedBytes);
     }
 
+    /// <summary>
+    /// Review 19: once the disposal began, the loop sends no further batch. The write in flight finishes; the two queued
+    /// behind it are dropped and counted, not sent on a cancelled token; the store is disposed last.
+    /// </summary>
+    [Fact]
+    public async Task TheDisposal_LetsTheWriteInFlightFinish_AndDropsTheQueuedBatches_WithoutSendingThem()
+    {
+        using var written = new CountedWrites("written");
+        using var dropped = new CountedWrites("dropped");
+        var store = new GatedStore(holdCall: 1);
+        var tier = new DistributedCacheTier(store);
+        var cache = Cache();
+        Assert.True(tier.TryWrite(cache, Entries(1), 1));
+        await store.Held.Task.WaitAsync(Wait);
+        Assert.True(tier.TryWrite(cache, Entries(2), 1));
+        Assert.True(tier.TryWrite(cache, Entries(3), 1));
+
+        var disposing = tier.DisposeAsync().AsTask();
+        await store.Cancelled.Task.WaitAsync(Wait);
+        store.Release();
+        await disposing.WaitAsync(Wait);
+
+        Assert.Equal(1, store.Calls);
+        Assert.Equal((1L, 2L), (written.Total, dropped.Total));
+        Assert.Equal(0, tier.QueuedBytes);
+        Assert.Equal((1, true), (store.Disposals, store.DisposedAfterTheWriteReturned));
+    }
+
     private static LocalTableCache Cache() =>
         new LocalFeatureTable(Schema, new LocalFeatureTableOptions { MaxBytes = 1 << 20, Cache = new CacheTableOptions { TtlMs = 60_000 } }).Cache!;
 
@@ -129,6 +157,43 @@ public class DistributedCacheTierTests
             DisposedAfterTheWriteReturned = Volatile.Read(ref _running) == 0;
             Interlocked.Increment(ref _disposals);
         }
+    }
+
+    /// <summary>Records counted by <c>stratarec.cache.writes</c> with one outcome, of the distributed tier.</summary>
+    private sealed class CountedWrites : IDisposable
+    {
+        private readonly MeterListener _listener = new();
+        private long _total;
+
+        public CountedWrites(string outcome)
+        {
+            _listener.InstrumentPublished = (published, listener) =>
+            {
+                if (published.Meter.Name == StrataRecTelemetry.Name && published.Name == StrataRecMetrics.Names.CacheWrites)
+                {
+                    listener.EnableMeasurementEvents(published);
+                }
+            };
+            _listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+            {
+                bool tier = false, matches = false;
+                foreach (var tag in tags)
+                {
+                    tier |= tag.Key == StrataRecTags.CacheTier && Equals(tag.Value, "distributed");
+                    matches |= tag.Key == StrataRecTags.Outcome && Equals(tag.Value, outcome);
+                }
+
+                if (tier && matches)
+                {
+                    Interlocked.Add(ref _total, value);
+                }
+            });
+            _listener.Start();
+        }
+
+        public long Total => Interlocked.Read(ref _total);
+
+        public void Dispose() => _listener.Dispose();
     }
 
     /// <summary>A metric listener whose callback throws for one instrument.</summary>

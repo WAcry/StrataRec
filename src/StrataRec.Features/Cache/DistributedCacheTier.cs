@@ -104,9 +104,10 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
         var reader = _queue.Reader;
         try
         {
-            while (await reader.WaitToReadAsync(_stopping.Token).ConfigureAwait(false))
+            // Once the disposal began, nothing more is sent: what is still queued is dropped by DisposeAsync, counted.
+            while (!_stopping.IsCancellationRequested && await reader.WaitToReadAsync(_stopping.Token).ConfigureAwait(false))
             {
-                while (reader.TryRead(out var write))
+                while (!_stopping.IsCancellationRequested && reader.TryRead(out var write))
                 {
                     Interlocked.Add(ref _queuedBytes, -write.Bytes);
                     CacheWriteOutcome outcome;
@@ -153,10 +154,10 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
     private void Observed(Exception exception) => Interlocked.CompareExchange(ref _observerFailure, exception, null);
 
     /// <summary>
-    /// Stops the write loop (cancelling a write in progress), waits until it really exited, drops
-    /// what is still queued, then disposes the store, exactly once whatever failed before. Throws, after all that, what
-    /// went wrong on the way (a callback the store registered on the cancelled token, a metric listener, the store's
-    /// disposal), so that the host logs it.
+    /// Stops the write loop (cancelling a write in progress, and sending no further batch), waits until it really
+    /// exited, drops what is still queued (counted), then disposes the store, exactly once whatever failed before. Throws,
+    /// after all that, what went wrong on the way (a callback the store registered on the cancelled token, a metric
+    /// listener, the store's disposal), so that the host logs it.
     /// </summary>
     public async ValueTask DisposeAsync()
     {
