@@ -23,9 +23,14 @@ internal sealed class ExprFixture
     private ScalarValue[] _contextValues = Array.Empty<ScalarValue>();
     private ScalarValue[] _paramValues = Array.Empty<ScalarValue>();
 
-    public ExprFixture(int capacity = 64)
+    private readonly IBufferPool? _pool;
+
+    /// <param name="capacity">Physical rows of the table.</param>
+    /// <param name="pool">Where the table's arrays come from; one full of old data shows rows read before anything wrote them.</param>
+    public ExprFixture(int capacity = 64, IBufferPool? pool = null)
     {
         Capacity = capacity;
+        _pool = pool;
         Scope = new DictionaryScope();
         Scope.Add(new Symbol(SymbolKind.Column, "col.entity_id", ColumnType.Int64, 0, TableSchema.EntityIdSlot));
     }
@@ -96,7 +101,7 @@ internal sealed class ExprFixture
             slotTypes.Add(c.Type);
         }
 
-        Memory = new RequestMemory();
+        Memory = new RequestMemory(_pool);
         Table = new CandidateTable(new TableSchema(EntityKeyType.Int64, slotTypes), Capacity, Memory);
         Bindings = new OutputBindings(_columns.Count + 1, Memory);
         var logical = new Dictionary<string, int>(StringComparer.Ordinal);
