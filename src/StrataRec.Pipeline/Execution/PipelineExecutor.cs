@@ -209,7 +209,7 @@ public sealed class PipelineExecutor
     {
         var slot = state.Plan.Timeline[position];
         var node = state.Variants[position];
-        RecordSiteTriggers(state, slot);
+        await RecordSiteTriggersAsync(state, slot, cancellationToken).ConfigureAwait(false);
         if (node is null)
         {
             return null;
@@ -252,6 +252,12 @@ public sealed class PipelineExecutor
                 Record(state, node.NodeId, NodeOutcomeKind.Failed, attempt.Detail + " (skipped)", null, started, rowsIn);
                 return null;
             case FailurePolicy.Fallback when state.Plan.SelectFallback(node, state.Arms) is { } fallback:
+                // A fallback site triggers only when the fallback is invoked, which is independent of the arm (design 12.6).
+                if (state.Plan.Fallbacks.TryGetValue(fallback.NodeId, out var fallbackSlot))
+                {
+                    await RecordSiteTriggersAsync(state, fallbackSlot, cancellationToken).ConfigureAwait(false);
+                }
+
                 var fb = await RunNodeAsync(state, fallback, 0, cancellationToken).ConfigureAwait(false);
                 if (fb.Kind is NodeOutcomeKind.Succeeded or NodeOutcomeKind.Degraded)
                 {
@@ -466,28 +472,36 @@ public sealed class PipelineExecutor
             return cached;
         }
 
-        // `when` reads only ctx.*; context features were prefetched at request start (design 5.5).
-        var contextFeatures = new List<int>();
-        foreach (var symbol in node.When.Reads)
-        {
-            if (symbol.Kind == SymbolKind.Context && state.Plan.Schema.ContextFields[symbol.Id].FeatureIndex is >= 0 and var f)
-            {
-                contextFeatures.Add(f);
-            }
-        }
-
-        if (contextFeatures.Count > 0)
-        {
-            await state.Features.EnsureAsync(contextFeatures, cancellationToken).ConfigureAwait(false);
-        }
-
+        await EnsureContextAsync(state, node.When, cancellationToken).ConfigureAwait(false);
         var value = node.When.EvaluateScalar(state.Eval);
         var result = !value.IsMissing && value.AsBool();
         state.WhenResults[position] = result;
         return result;
     }
 
-    private static void RecordSiteTriggers(RequestState state, TimelineSlot slot)
+    /// <summary>`when` and site conditions read only ctx.*; make sure the context features they read are present (design 5.5).</summary>
+    private static ValueTask EnsureContextAsync(RequestState state, CompiledExpression expression, CancellationToken cancellationToken)
+    {
+        List<int>? contextFeatures = null;
+        foreach (var symbol in expression.Reads)
+        {
+            if (symbol.Kind == SymbolKind.Context && state.Plan.Schema.ContextFields[symbol.Id].FeatureIndex is >= 0 and var f)
+            {
+                (contextFeatures ??= new List<int>()).Add(f);
+            }
+        }
+
+        return contextFeatures is null ? ValueTask.CompletedTask : AwaitEnsure(state, contextFeatures, cancellationToken);
+
+        static async ValueTask AwaitEnsure(RequestState state, List<int> features, CancellationToken cancellationToken) =>
+            await state.Features.EnsureAsync(features, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Records experiments triggered by reaching this position (design 12.6): the site condition is the OR of every
+    /// arm's effective `when` here, so the decision is identical across an experiment's arms, control included.
+    /// </summary>
+    private static async ValueTask RecordSiteTriggersAsync(RequestState state, TimelineSlot slot, CancellationToken cancellationToken)
     {
         for (var i = 0; i < slot.SiteExperiments.Length; i++)
         {
@@ -504,6 +518,7 @@ public sealed class PipelineExecutor
                 continue;
             }
 
+            await EnsureContextAsync(state, condition, cancellationToken).ConfigureAwait(false);
             var value = condition.EvaluateScalar(state.Eval);
             state.Triggered[experiment] = !value.IsMissing && value.AsBool();
         }
@@ -536,7 +551,7 @@ public sealed class PipelineExecutor
         var output = plan.Output;
         var limitValue = state.Params[output.Limit.Id];
         var limit = limitValue.IsMissing ? 0 : (int)Math.Clamp(limitValue.AsInt64(), 0, int.MaxValue);
-        foreach (var experiment in output.LimitExperiments)
+        foreach (var experiment in output.ParamExperiments)
         {
             if (IsAssigned(state, experiment))
             {

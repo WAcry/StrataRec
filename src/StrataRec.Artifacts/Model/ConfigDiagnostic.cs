@@ -67,7 +67,20 @@ public sealed class DiagnosticBag
         }
     }
 
+    public int Count => _items.Count;
+
     public void Add(ConfigDiagnostic diagnostic) => _items.Add(diagnostic);
+
+    /// <summary>
+    /// Removes and returns the diagnostics recorded since <paramref name="start"/> (a previous <see cref="Count"/>), so a
+    /// caller can re-attribute them, e.g. to the experiment arm whose patch caused them.
+    /// </summary>
+    public List<ConfigDiagnostic> RemoveFrom(int start)
+    {
+        var taken = _items.GetRange(start, _items.Count - start);
+        _items.RemoveRange(start, _items.Count - start);
+        return taken;
+    }
 
     public void AddRange(IEnumerable<ConfigDiagnostic> diagnostics) => _items.AddRange(diagnostics);
 

@@ -118,8 +118,11 @@ public sealed class OutputPlan
 
     public required (string Name, CompiledExpression Expression)[] Columns { get; init; }
 
-    /// <summary>Experiments overriding the limit parameter (a parameter trigger site, design 12.6).</summary>
-    public int[] LimitExperiments { get; set; } = Array.Empty<int>();
+    /// <summary>
+    /// Experiments overriding a parameter the output reads (<c>limit_param</c> or a parameter in an output column);
+    /// a parameter trigger site (design 12.6).
+    /// </summary>
+    public int[] ParamExperiments { get; set; } = Array.Empty<int>();
 }
 
 /// <summary>

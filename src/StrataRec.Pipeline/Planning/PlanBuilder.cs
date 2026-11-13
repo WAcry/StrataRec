@@ -299,6 +299,25 @@ public sealed class PlanBuilder
         return node;
     }
 
+    /// <summary>
+    /// Compiles a request-level condition over <c>ctx.*</c> (design 5.5), e.g. a trigger site's OR of arms'
+    /// <c>when</c> (design 12.6). Returns null after reporting errors at <paramref name="pointer"/>.
+    /// </summary>
+    public CompiledExpression? CompileRequestCondition(string source, string artifact, string pointer)
+    {
+        if (ExpressionCompiler.TryCompile(source, _scope!, CompileOptions.RequestCondition, out var expression, out var errors))
+        {
+            return expression;
+        }
+
+        foreach (var d in errors)
+        {
+            _diagnostics.Error(d.Code, artifact, pointer, $"{d.Message} (at offset {d.Offset} in '{source}')", d.Hint);
+        }
+
+        return null;
+    }
+
     /// <summary>Compiles the output section (design 3.4).</summary>
     public OutputPlan? CompileOutput()
     {
