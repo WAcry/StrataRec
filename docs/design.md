@@ -2106,7 +2106,7 @@ MMR 实验的 `mmr` 桶删除 `diversity_cap`、在第 550 位新增 `mmr_divers
 | 模型调用 | 耗时、错误、后备比例；生成类调用的输出 token 数，成对类调用的比较对数 |
 | 列 | 非有限值次数 `column_nonfinite_total{node,column}`、超出存储范围（`int32`、`list<int32>`）次数 `column_out_of_range_total{node,column}` |
 | 实验桶 | 请求级的延迟、错误率、空结果率、降级率（用于健康门禁和实验护栏） |
-| 分配 | 被忽略的分配次数，按原因（未知、层冲突）；分配查询（`IAssignmentProvider`）的耗时与超时 |
+| 分配 | 被忽略的分配次数，按原因（未知、层冲突），不按桶细分：未知的 ID 来自平台，取值没有上界 |
 | 计划 | 编译耗时、节点变体数量、当前 manifest 序号、被拒绝的 manifest 和 `incompatible` 状态 |
 | 日志 | 队列深度、每个探针的字节数、按（探针，时间窗口）统计的丢弃数、持久批次的序号 |
 | 内存 | 池中保留的字节数、每请求租借的字节数、取消后仍未结束的外部 I/O（`abandoned_io_total`） |
