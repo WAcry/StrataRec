@@ -276,7 +276,8 @@ public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
         /// <summary>
         /// Waits for the run and the cancellation callbacks, then leaves the host's set of entries. The entry (and its
         /// token source, never disposed) stays alive while either runs, past a shutdown that gave up waiting. A callback's
-        /// exception is logged; the run handles its own failures, so anything escaping it is only observed.
+        /// exception is logged; the run handles its own failures, so anything escaping it is only observed. Diagnostics
+        /// never change when the entry counts as stopped: a logger that throws still leaves the wait for the run in place.
         /// </summary>
         private async Task StoppedAsync(Task run, Task callbacks)
         {
@@ -288,14 +289,24 @@ public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
                 }
                 catch (Exception ex)
                 {
-                    LogCancellationCallbacksFailed(_host._logger, callbacks.Exception ?? ex, Spec.Name);
+                    try
+                    {
+                        LogCancellationCallbacksFailed(_host._logger, callbacks.Exception ?? ex, Spec.Name);
+                    }
+                    catch (Exception)
+                    {
+                        // A failing logger cannot report itself.
+                    }
                 }
 
-                await run.ConfigureAwait(false);
-            }
-            catch (Exception)
-            {
-                // RunAsync catches what the source throws; this is a failing logger, which cannot report itself.
+                try
+                {
+                    await run.ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // RunAsync catches what the source throws; this is a failing logger, which cannot report itself.
+                }
             }
             finally
             {

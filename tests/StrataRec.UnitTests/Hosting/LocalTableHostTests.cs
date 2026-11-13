@@ -266,6 +266,52 @@ public class LocalTableHostTests
     }
 
     [Fact]
+    public async Task ACallbackAndItsLogBothFailing_StillLeaveShutdownWaitingForTheSource()
+    {
+        // The failed callback is logged (event 1206), and here that log throws too. The stop must still wait for the run:
+        // a shutdown that returned now would let the caller free what the source is still cleaning up (review 14).
+        var logs = new ListLoggerFactory(throwOn: 1206);
+        var host = new LocalTableHost(new LocalTableHostOptions { ShutdownTimeout = TimeSpan.FromSeconds(30) }, logs);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var returned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new ScriptedSource(async (_, writer, token) =>
+        {
+            await Load(1)(UpdatePosition.Empty, writer, token);
+            token.Register(() => throw new InvalidOperationException("cleanup failed"));
+            try
+            {
+                await Task.Delay(Timeout.Infinite, token);
+            }
+            catch (OperationCanceledException)
+            {
+                cancelled.TrySetResult();
+                await cleanup.Task; // the source accepted the cancellation and cleans up asynchronously
+            }
+            finally
+            {
+                returned.TrySetResult();
+            }
+        });
+        var lease = host.OpenLease();
+        lease.Acquire(Spec(source));
+        Assert.Empty(await lease.WaitLoadedAsync());
+
+        var disposal = Task.Run(() => host.DisposeAsync().AsTask());
+        await cancelled.Task.WaitAsync(Wait);
+        await logs.Thrown.Task.WaitAsync(Wait);
+
+        // A shutdown that stopped waiting completes right after the failed log; this one has 30 s and the source runs on.
+        Assert.NotSame(disposal, await Task.WhenAny(disposal, Task.Delay(200)));
+        Assert.False(returned.Task.IsCompleted);
+
+        cleanup.TrySetResult();
+        await disposal.WaitAsync(Wait);
+        Assert.True(returned.Task.IsCompleted);
+        lease.Dispose();
+    }
+
+    [Fact]
     public async Task WaitLoaded_HonoursItsToken_AlsoWhenThereIsNothingToWaitFor()
     {
         using var host = new LocalTableHost();
@@ -378,11 +424,17 @@ public class LocalTableHostTests
         }
     }
 
-    private sealed class ListLoggerFactory : ILoggerFactory
+    /// <summary>Records every log entry; with <paramref name="throwOn"/>, the log call for that event id throws instead.</summary>
+    private sealed class ListLoggerFactory(int? throwOn = null) : ILoggerFactory
     {
+        private readonly int? _throwOn = throwOn;
+
         public ConcurrentQueue<LogEntry> Entries { get; } = new();
 
-        public ILogger CreateLogger(string categoryName) => new ListLogger(Entries);
+        /// <summary>Completes when a log call has thrown.</summary>
+        public TaskCompletionSource Thrown { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ILogger CreateLogger(string categoryName) => new ListLogger(this);
 
         public void AddProvider(ILoggerProvider provider)
         {
@@ -392,7 +444,7 @@ public class LocalTableHostTests
         {
         }
 
-        private sealed class ListLogger(ConcurrentQueue<LogEntry> entries) : ILogger
+        private sealed class ListLogger(ListLoggerFactory factory) : ILogger
         {
             public IDisposable? BeginScope<TState>(TState state)
                 where TState : notnull => null;
@@ -401,6 +453,12 @@ public class LocalTableHostTests
 
             public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
             {
+                if (eventId.Id == factory._throwOn)
+                {
+                    factory.Thrown.TrySetResult();
+                    throw new InvalidOperationException("logger failed");
+                }
+
                 var values = new Dictionary<string, object?>(StringComparer.Ordinal);
                 if (state is IReadOnlyList<KeyValuePair<string, object?>> pairs)
                 {
@@ -410,7 +468,7 @@ public class LocalTableHostTests
                     }
                 }
 
-                entries.Enqueue(new LogEntry(eventId.Id, formatter(state, exception), values, exception));
+                factory.Entries.Enqueue(new LogEntry(eventId.Id, formatter(state, exception), values, exception));
             }
         }
     }
