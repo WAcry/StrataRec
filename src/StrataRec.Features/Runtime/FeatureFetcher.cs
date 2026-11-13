@@ -626,6 +626,11 @@ public sealed partial class FeatureFetcher
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default));
 
+        // The wait decides the status; the call is completed once, after it (as BoundedCall does): completing inside the
+        // try would complete it again from the catch when the completion itself throws (a hook that fails, say).
+        var status = default(FetchStatus);
+        IoOutcome? outcome = null;
+        var observeNow = false;
         try
         {
             // The wait has its own bound — the time left before the fetch's deadline, and the caller's token — and does
@@ -635,19 +640,26 @@ public sealed partial class FeatureFetcher
             // even when the connector ignores both; Classify tells them apart by the caller's token.
             var remaining = Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), cancellation.DeadlineTimestamp);
             var wait = task.WaitAsync(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, cancellationToken);
-            if (ReferenceEquals(wait, task))
-            {
-                // WaitAsync found the task complete (it did between the check in ConnectorCall and here) and returned it
-                // without comparing anything with the bound: no wait was installed to decide, so it is observed now.
-                return Observed(io, group, batch, fields, writer, budgetMs, sequence, new ValueTask<FetchStatus>(task), cancellation, cancellationToken);
-            }
 
-            var status = await wait.ConfigureAwait(false);
-            return Completed(io, group, batch, fields, writer, sequence, status);
+            // WaitAsync found the task complete (it did between the check in ConnectorCall and here) and returned it without
+            // comparing anything with the bound: no wait was installed to decide, so it is observed now.
+            observeNow = ReferenceEquals(wait, task);
+            if (!observeNow)
+            {
+                status = await wait.ConfigureAwait(false);
+            }
         }
         catch (Exception ex)
         {
-            return Completed(io, group, batch, fields, writer, sequence, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken));
+            status = Failure(group, ex, budgetMs, cancellationToken);
+            outcome = Classify(ex, cancellationToken);
+        }
+
+        try
+        {
+            return observeNow
+                ? Observed(io, group, batch, fields, writer, budgetMs, sequence, new ValueTask<FetchStatus>(task), cancellation, cancellationToken)
+                : Completed(io, group, batch, fields, writer, sequence, status, outcome);
         }
         finally
         {

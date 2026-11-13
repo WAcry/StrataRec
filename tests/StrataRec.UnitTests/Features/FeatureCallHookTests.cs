@@ -114,6 +114,56 @@ public class FeatureCallHookTests
         Assert.Equal(50.0, request.Value(score, 1).AsFloat64());
     }
 
+    [Fact]
+    public async Task AHookThatThrowsWhileRecording_SeesTheCallOnce()
+    {
+        // The call is completed once, after the wait decided it: a completion that throws (here the hook) is not run again
+        // from the failure path, which would record a successful call a second time as an error (review 14 follow-up).
+        var connector = new ScriptedConnector(async (keys, fields, writer, _) =>
+        {
+            await Task.Yield(); // completes after the fetch has installed its wait
+            ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 1.5);
+            return FetchStatus.Ok;
+        });
+        var rig = new FeatureTestRig().Source("item_store", connector);
+        var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+        var hook = new ThrowingHook();
+        var request = rig.NewRequest(new long[] { 1, 2 }, hook: hook);
+
+        try
+        {
+            await request.EnsureAsync(score);
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "recorder failed")
+        {
+            // A failing recorder is a defect; it may surface. What matters is that the call is not completed twice.
+        }
+
+        await request.Fetcher.WhenIoCompleteAsync();
+        var call = Assert.Single(hook.Recorded);
+        Assert.Equal((IoOutcome.Ok, FetchOutcome.Ok), (call.Outcome, call.Status.Outcome));
+    }
+
+    /// <summary>Notes each recorded call, then throws.</summary>
+    private sealed class ThrowingHook : IFeatureCallHook
+    {
+        public bool Replays => false;
+
+        public ConcurrentQueue<FeatureCallInfo> Recorded { get; } = new();
+
+        public int Begin(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields) => 0;
+
+        public void Record(in FeatureCallInfo call, IStagedFeatureValues? values)
+        {
+            Recorded.Enqueue(call);
+            throw new InvalidOperationException("recorder failed");
+        }
+
+        public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer) =>
+            throw new NotSupportedException();
+    }
+
     /// <summary>Records calls like a bundle recorder would; when replaying, answers 10 × key for every field.</summary>
     internal sealed class ListHook(bool replays = false) : IFeatureCallHook
     {
