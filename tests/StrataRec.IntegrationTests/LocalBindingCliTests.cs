@@ -91,7 +91,7 @@ public sealed class LocalBindingCliTests
         Assert.Null(binding["additionalProperties"]); // connector settings
         Assert.Null(properties["bootstrap"]!["additionalProperties"]); // the update source's own settings
         var cache = FindObjectWithProperty(properties["cache"], "ttl_ms")!;
-        Assert.Equal(false, cache["additionalProperties"]!.GetValue<bool>()); // the engine's own settings: a typo is an error
+        Assert.False(cache["additionalProperties"]!.GetValue<bool>()); // the engine's own settings: a typo is an error
         Assert.Contains("stale_if_error_ms", cache["properties"]!.AsObject().Select(p => p.Key));
         var distributed = FindObjectWithProperty(cache, "store")!;
         Assert.Null(distributed["additionalProperties"]); // the store's own settings
