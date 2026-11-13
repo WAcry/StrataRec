@@ -146,8 +146,10 @@ internal interface IBoundedCall<T>
 /// <para>Rules, each locked by tests: (1) the call's bound is the earlier of its own timeout and the node's deadline, or
 /// the caller cancelling; the wait ends at it and never waits on a token the client holds (cancelling a token runs the
 /// client's callbacks one after another, and one that blocks would hold the wait), and what the client returns, throws or
-/// honours is heard only if it completed within the bound (<see cref="Winner"/>), never when it completed after the
-/// bound had won, even an instant after; (2) the call holds the request memory once, from before it is sent until both
+/// honours is heard only if the framework observes it completed within the bound (<see cref="Winner"/>): by a wait it
+/// set up, or, when no wait was set up (the client answered before Send returned, or completed before the wait could be
+/// set up), by the bound not having passed when it looks; never when the bound had won, even an instant before; (2) the
+/// call holds the request memory once, from before it is sent until both
 /// the client has really completed and the call site has recorded it, so an abandoned client writes only into live
 /// buffers and <c>stratarec.io.abandoned</c> counts it once; (3) the tokens the client holds stay alive until it
 /// completes; (4) the outcome is <c>cancelled</c> when the caller cancelled (neither timed nor counted against the
@@ -191,17 +193,14 @@ internal static class BoundedCall
 
         if (!pending.IsCompleted)
         {
-            return AwaitAsync(call, pending.AsTask(), io, budget, memory, own, deadline, timeoutMs, requestId, events);
+            return AwaitAsync(call, pending.AsTask(), io, budget, memory, own, token, deadline, timeoutMs, requestId, events);
         }
 
         var result = Defect<T>();
         try
         {
-            // Rule 1: the client completed before Send returned, that is just now; it is in time unless its bound has passed.
-            var winner = Settled(budget, own, deadline);
-            result = winner == Winner.Client
-                ? Completed(call, pending, budget, timeoutMs)
-                : CutOff<T>(winner, Discard(pending), own, budget, timeoutMs, abandoned: false);
+            // Rule 1: the client completed before Send returned; the framework observes it now.
+            result = Observed(call, pending, budget, own, token, deadline, timeoutMs);
         }
         finally
         {
@@ -221,18 +220,34 @@ internal static class BoundedCall
     }
 
     /// <summary>The rest of a call whose client did not answer synchronously; the memory and the budget are held already.</summary>
+    /// <param name="token">
+    /// The client's token, read before the call was sent: the lease disposes <paramref name="own"/> as soon as the client
+    /// has completed, which may be before the wait is even set up, and a disposed source's token can no longer be read.
+    /// </param>
     private static async ValueTask<CallResult<T>> AwaitAsync<T, TCall>(
-        TCall call, Task<T> client, IoCall io, AttemptBudget budget, RequestMemory memory, CancellationTokenSource? own, long deadline, int? timeoutMs,
-        string requestId, RequestEventLog? events)
+        TCall call, Task<T> client, IoCall io, AttemptBudget budget, RequestMemory memory, CancellationTokenSource? own, CancellationToken token,
+        long deadline, int? timeoutMs, string requestId, RequestEventLog? events)
         where TCall : struct, IBoundedCall<T>
     {
         var lease = Lease.Until(client, memory, budget, own);
         var result = Defect<T>();
         try
         {
-            // Rule 1: the wait has its own bound and ends with the client still running if need be. Its outcome says who
-            // won; the client may complete between the wait's end and this continuation, so the client's state cannot.
+            // Rule 1: the wait has its own bound and ends with the client still running if need be.
             var wait = ((Task)client).WaitAsync(AttemptBudget.Until(deadline), budget.Caller);
+            if (wait.IsCompleted && client.IsCompleted)
+            {
+                // No wait was set up: WaitAsync returns a completed client as it is, whatever the time left or the caller,
+                // so its outcome says nothing about who came first. The client completed after Send returned pending and
+                // before the wait (while its ValueTask became a task, say): the framework observes it now, as an answer
+                // that came before Send returned.
+                result = Observed(call, new ValueTask<T>(client), budget, own, token, deadline, timeoutMs);
+                return result;
+            }
+
+            // A wait that was set up has an outcome saying who won; the client may complete between the wait's end and
+            // this continuation, so the client's state cannot. (One that ended at once without the client found the bound
+            // passed or the caller gone.)
             await wait.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
             var winner = Waited(wait, client, budget.Caller);
             result = winner == Winner.Client
@@ -301,19 +316,25 @@ internal static class BoundedCall
     }
 
     /// <summary>
-    /// The winner for a client that completed before Send returned, that is just now: it was in time unless the caller has
-    /// cancelled, the deadline is reached, or the timer that enforces it has cancelled the client's token (a timer may
-    /// fire slightly before the clock reaches the deadline, as for <see cref="AttemptBudget.RanOut"/>).
+    /// Rule 1 for a completed client that no wait bounded: one that answered before Send returned, or one that completed
+    /// before its wait was set up. The framework observes it now, so it is heard only if its bound has not passed now: the
+    /// caller has not cancelled, the deadline is not reached, and the timer that enforces it has not cancelled the
+    /// client's token (a timer may fire slightly before the clock reaches the deadline, as for
+    /// <see cref="AttemptBudget.RanOut"/>). A client that completed in time but is observed late, because the thread was
+    /// preempted, has timed out all the same: the framework can only stand behind what it observed.
     /// </summary>
-    private static Winner Settled(AttemptBudget budget, CancellationTokenSource? own, long deadline)
+    /// <param name="completed">The client's outcome; must have completed.</param>
+    /// <param name="token">The token the client got, read before it was sent (its source may be disposed by now).</param>
+    private static CallResult<T> Observed<T, TCall>(
+        TCall call, ValueTask<T> completed, AttemptBudget budget, CancellationTokenSource? own, CancellationToken token, long deadline, int? timeoutMs)
+        where TCall : struct, IBoundedCall<T>
     {
-        if (budget.Caller.IsCancellationRequested)
-        {
-            return Winner.Caller;
-        }
-
-        var token = own is null ? budget.Token : own.Token;
-        return token.IsCancellationRequested || Stopwatch.GetTimestamp() >= deadline ? Winner.Bound : Winner.Client;
+        var winner = budget.Caller.IsCancellationRequested ? Winner.Caller
+            : token.IsCancellationRequested || Stopwatch.GetTimestamp() >= deadline ? Winner.Bound
+            : Winner.Client;
+        return winner == Winner.Client
+            ? Completed(call, completed, budget, timeoutMs)
+            : CutOff<T>(winner, Discard(completed), own, budget, timeoutMs, abandoned: false);
     }
 
     /// <summary>
