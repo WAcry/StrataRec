@@ -28,6 +28,10 @@ public abstract class CompiledExpression
     /// Evaluates a request-level expression (<see cref="IsRowDependent"/> is false).
     /// Returns <see cref="ScalarValue.Missing"/> when a nullable result is absent.
     /// </summary>
+    /// <remarks>A list result that comes from a literal in the expression (<c>[1, 2]</c>, <c>ctx.l ?? ['a']</c>) is a
+    /// fresh copy, because the compiled expression and its constants are shared by every request and thread. Other
+    /// results are returned as they are, without copying: a list read from <c>ctx.*</c> or <c>param.*</c> is the
+    /// caller's own array.</remarks>
     public abstract ScalarValue EvaluateScalar(in EvalContext context);
 
     /// <summary>
@@ -40,6 +44,9 @@ public abstract class CompiledExpression
     /// other kinds to the same kind. Missing results clear the destination's validity bit; present results set it.</para>
     /// <para>Non-finite values are written as-is; the engine applies column defaults and counting at commit
     /// (design 4.3). Request-level expressions broadcast their value to every listed row.</para>
+    /// <para>The destination may be a column the expression reads (an in-place update such as <c>col.a ?? [7]</c>
+    /// written into <c>col.a</c>): every listed row's result is computed from the values and validity the column had
+    /// when the call started.</para>
     /// <para>No managed allocation for numeric and bool expressions in steady state.</para>
     /// </remarks>
     public abstract void Evaluate(in EvalContext context, ReadOnlySpan<int> rows, ColumnBuffer destination);

@@ -9,6 +9,8 @@ namespace StrataRec.Expressions.Binding;
 /// Resolves names, checks types and nullability (design 7.4) and lowers the AST into typed IR. Sugar is expanded here
 /// so that both backends only implement primitives: n-ary <c>min</c>/<c>max</c>, <c>clamp</c>, <c>logit</c>,
 /// <c>soft_floor</c>, <c>linear_decay</c> and <c>x in l</c>. <c>let</c> bindings become shared IR nodes.
+/// Built-ins lift every argument (design 7.4 rule 2), so an expansion must not reach a constant through a
+/// conditional branch that skips an argument: <c>?:</c> only lifts its condition.
 /// </summary>
 /// <remarks>Errors are collected rather than thrown; an ill-typed subexpression gets the poison type
 /// <see cref="TypeKind.Error"/>, which silently propagates so one mistake produces one diagnostic.</remarks>
@@ -578,6 +580,10 @@ internal sealed class Binder
             case "linear_decay":
             {
                 // x <= start ? 1.0 : (x >= end ? 0.0 : (end - x) / (end - start)); end <= start gives a step at start.
+                // That form returns 1.0 without looking at end, so a missing end would not make the result missing.
+                // Lowered instead as x >= end ? (x <= start ? 1.0 : 0.0) : (x <= start ? 1.0 : fraction): the same
+                // value for every present input, but every path tests both conditions, so the result is missing
+                // whenever any argument is (design 7.4 rule 2).
                 if (!AllNumeric(args, call, name, out _))
                 {
                     return Poison(call);
@@ -589,8 +595,12 @@ internal sealed class Binder
                 var fraction = Lift(IrOp.Div, TypeKind.Float, call,
                     Lift(IrOp.Sub, TypeKind.Float, call, end, x),
                     Lift(IrOp.Sub, TypeKind.Float, call, end, start));
-                var afterStart = Conditional(Lift(IrOp.Ge, TypeKind.Bool, call, x, end), Float(0.0), fraction, call);
-                return Conditional(Lift(IrOp.Le, TypeKind.Bool, call, x, start), Float(1.0), afterStart, call);
+                var notStarted = Lift(IrOp.Le, TypeKind.Bool, call, x, start);
+                var ended = Lift(IrOp.Ge, TypeKind.Bool, call, x, end);
+                return Conditional(ended,
+                    Conditional(notStarted, Float(1.0), Float(0.0), call),
+                    Conditional(notStarted, Float(1.0), fraction, call),
+                    call);
             }
 
             case "dot":

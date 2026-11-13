@@ -322,7 +322,7 @@ internal static class Lexer
         var start = i;
         if (i + 1 >= s.Length)
         {
-            throw Error(start, 1, "Incomplete escape sequence.");
+            throw Error(start, 1, "Incomplete escape sequence at the end of the expression.", "escape a backslash as '\\\\'");
         }
 
         var e = s[i + 1];
@@ -341,32 +341,37 @@ internal static class Lexer
             case 'r': sb.Append('\r'); return;
             case 't': sb.Append('\t'); return;
             case 'v': sb.Append('\v'); return;
-            case 'x' or 'X': AppendCodePoint(s, ref i, 2, 16, start, sb); return;
-            case 'u': AppendCodePoint(s, ref i, 4, 16, start, sb); return;
-            case 'U': AppendCodePoint(s, ref i, 8, 16, start, sb); return;
+            case 'x' or 'X': AppendCodePoint(s, ref i, 2, 16, start, sb, "write exactly 2 hex digits, e.g. '\\x41'"); return;
+            case 'u': AppendCodePoint(s, ref i, 4, 16, start, sb, "write exactly 4 hex digits, e.g. '\\u00e9'"); return;
+            case 'U': AppendCodePoint(s, ref i, 8, 16, start, sb, "write exactly 8 hex digits, e.g. '\\U0001F600'"); return;
             case >= '0' and <= '3':
                 i--;
-                AppendCodePoint(s, ref i, 3, 8, start, sb);
+                AppendCodePoint(s, ref i, 3, 8, start, sb, "write exactly 3 octal digits, from '\\000' to '\\377'");
                 return;
             default:
                 throw Error(start, 2, $"Invalid escape sequence '\\{Printable(e)}'.", "escape a backslash as '\\\\'");
         }
     }
 
-    private static void AppendCodePoint(string s, ref int i, int digits, int radix, int start, StringBuilder sb)
+    /// <summary>
+    /// Reads a fixed-width numeric escape (hex <c>x</c>, <c>u</c>, <c>U</c> or octal) and appends its code point, which
+    /// must be a Unicode scalar value: at most U+10FFFF and not a surrogate. Eight hex digits reach 0xFFFFFFFF, so the
+    /// value is accumulated in 64 bits. Every rejection is a syntax diagnostic with a hint, never a runtime exception.
+    /// </summary>
+    private static void AppendCodePoint(string s, ref int i, int digits, int radix, int start, StringBuilder sb, string hint)
     {
         if (i + digits > s.Length)
         {
-            throw Error(start, s.Length - start, "Incomplete escape sequence.");
+            throw Error(start, s.Length - start, "Incomplete escape sequence.", hint);
         }
 
-        var value = 0;
+        long value = 0;
         for (var k = 0; k < digits; k++)
         {
             var d = DigitValue(s[i + k]);
             if (d < 0 || d >= radix)
             {
-                throw Error(start, i + k - start + 1, "Invalid digit in escape sequence.");
+                throw Error(start, i + k - start + 1, "Invalid digit in escape sequence.", hint);
             }
 
             value = (value * radix) + d;
@@ -375,10 +380,12 @@ internal static class Lexer
         i += digits;
         if (value > 0x10FFFF || (value is >= 0xD800 and <= 0xDFFF))
         {
-            throw Error(start, i - start, "Escape sequence is not a valid Unicode scalar value.");
+            throw Error(start, i - start, $"Escape sequence '{s.Substring(start, i - start)}' is not a Unicode scalar value.",
+                "use a code point from U+0000 to U+10FFFF outside the surrogates U+D800-U+DFFF; write a character above "
+                + "U+FFFF as one escape such as '\\U0001F600', not as a surrogate pair");
         }
 
-        sb.Append(char.ConvertFromUtf32(value));
+        sb.Append(char.ConvertFromUtf32((int)value));
     }
 
     private static int DigitValue(char c) => c switch

@@ -15,8 +15,10 @@ namespace StrataRec.Expressions.Runtime;
 /// arguments are encoded into a reusable byte buffer and hashed in one shot, which equals the builder's streaming
 /// result and allocates nothing per row.
 /// This is deliberately a second writer of the canonical encoding rather than a <see cref="StableHash.Builder"/>: it
-/// starts on a caller-provided stack buffer, so the scalar path never touches the array pool. The hash01 parity tests
-/// (<c>SemanticsTests</c>) pin both writers to the same bytes, so a change to either encoding fails the tests.
+/// starts on a caller-provided stack buffer, so the scalar path never touches the array pool. Float64 values go through
+/// <see cref="StableHash.CanonicalFloat64Bits"/> like the builder's (−0.0 as 0.0, every NaN as one quiet NaN), so the
+/// optimizer's and the SIMD kernels' freedom over NaN sign and payload cannot change a hash. The hash01 parity tests
+/// (<c>SemanticsTests</c>, <c>ExpressionReviewRegressionTests</c>) pin both writers to the same bytes.
 /// </remarks>
 internal ref struct Hash01Encoder
 {
@@ -49,7 +51,7 @@ internal ref struct Hash01Encoder
     {
         var dst = Reserve(9);
         dst[0] = TagFloat64;
-        BinaryPrimitives.WriteDoubleLittleEndian(dst[1..], value == 0.0 ? 0.0 : value);
+        BinaryPrimitives.WriteInt64LittleEndian(dst[1..], StableHash.CanonicalFloat64Bits(value));
     }
 
     public void Add(bool value)

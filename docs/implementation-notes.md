@@ -18,6 +18,7 @@
 | 8.6 热路径捕获 | 没有日志管道且请求没有设置 `CaptureLogs` 时，跳过漏斗采样和探针捕获 | 捕获出来的批次没有任何消费者，只会白白占用 CPU 和内存 | `PipelineExecutor.cs` |
 | 6.7 缺失与失败 | 衍生特征的表达式抛出异常（数据层面的错误本应变成缺失值，所以这只会是缺陷）时，只让这一个特征失败，按数据源失败处理，读取它的节点也随之失败 | 异常不应越过特征拉取路径，也不应影响同一请求里的其他特征 | `Features/Runtime/FeatureFetcher.cs` |
 | 5.7 `hash01` | 表达式后端用栈上缓冲区自行写规范编码，没有复用 `StableHash.Builder`。两份实现由一致性测试锁定为逐字节相同 | 标量路径因此完全不经过数组池 | `Expressions/Runtime/Hash01.cs` |
+| 5.7 规范编码 | `float64` 除了 −0.0 按 0.0 编码，所有 NaN（任意符号和载荷）一律按静默 NaN `0x7FF8000000000000` 编码。离线任务复算哈希时也要这样规范化 | IEEE 754 不规定定义域错误（`sqrt(-1)`、`0/0`）产生的 NaN 的符号和载荷，优化器把取负移进不变量、SIMD 交换操作数都会改变它，`hash01` 的结果不能随之变化 | `Core/Hashing/StableHash.cs` `CanonicalFloat64Bits` |
 | 9.x 输出 | 输出段在所有节点之后编译 | 算子会声明隐式列（例如 `recall.primary_source`），输出需要能读到它们 | `PlanCompiler.cs` `Run` |
 | 6.9 模型输入 | 模型输入必须是列或特征的直接引用。需要变换的输入先声明成衍生特征（示例里的 `author.log_followers`） | 这是设计 6.9 训练与服务一致性的要求。实现中给出了带修复提示的错误 `MODEL_INPUT_NOT_REFERENCE` | `samples/home_feed/catalog/home_feed.jsonc` |
 
