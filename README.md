@@ -137,6 +137,20 @@ dotnet run -c Release --project tests/StrataRec.Benchmarks -- --filter '*Pipelin
   → sort → diversity) over 500 and 5,000 synthetic candidates. It runs once with no experiments, once with all
   treatment arms, and once with log capture on.
 
+Measured with `--job short --inProcess` on a Xeon 6975P-C, .NET 8:
+
+| `PipelineBenchmarks` | 500 candidates | 5,000 candidates |
+| --- | --- | --- |
+| Baseline | 230 μs, 43 KB | 2.31 ms, 220 KB |
+| All treatment arms | 247 μs, 46 KB | 2.48 ms, 232 KB |
+| All arms, with log capture | 282 μs, 57 KB | 2.80 ms, 283 KB |
+
+There are no Gen1 or Gen2 collections. Entity-key indexes, fetch keys, recall merge scratch and the request's buffer
+ledger come from pooled request memory, so per-key work allocates nothing. Most of what remains is per connector call:
+the sample uses `max_batch: 25`, which means about 400 calls at 5,000 candidates. The rest is a constant per-request
+overhead of roughly 30–50 KB. The design budget is about 2 KB; see
+[`docs/implementation-notes.md`](docs/implementation-notes.md) for what is left.
+
 ## Repository layout
 
 | Project | Responsibility |
