@@ -14,8 +14,9 @@ namespace StrataRec.Expressions.Runtime;
 /// All-int64 calls with two or three arguments use <see cref="StableHash.Hash01(long, long)"/> directly. Mixed
 /// arguments are encoded into a reusable byte buffer and hashed in one shot, which equals the builder's streaming
 /// result and allocates nothing per row.
-/// TODO(lead): after rebasing on the pooled, resettable StableHash.Builder, the mixed path can use one builder per
-/// Evaluate call with Reset() per row instead of this local encoder; the parity tests pin the encoding either way.
+/// This is deliberately a second writer of the canonical encoding rather than a <see cref="StableHash.Builder"/>: it
+/// starts on a caller-provided stack buffer, so the scalar path never touches the array pool. The hash01 parity tests
+/// (<c>SemanticsTests</c>) pin both writers to the same bytes, so a change to either encoding fails the tests.
 /// </remarks>
 internal ref struct Hash01Encoder
 {

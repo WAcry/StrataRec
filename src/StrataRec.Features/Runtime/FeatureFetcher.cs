@@ -691,7 +691,20 @@ public sealed class FeatureFetcher
         var definition = feature.Definition;
         var column = _table.GetOrCreateSlot(feature.Slot);
         var span = buffer.AsSpan(0, count);
-        feature.Expression!.Evaluate(new EvalContext(_table, _bindings, _context, _params), span, column);
+        try
+        {
+            feature.Expression!.Evaluate(new EvalContext(_table, _bindings, _context, _params), span, column);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // The backend does not throw for data (errors become missing values); an exception here is a defect in
+            // a function or connector-provided value. Treat it like a failed source (design 6.7): readers of this
+            // feature fail with a clear error, everything else in the request keeps going. Rows stay unfilled.
+            _state[feature.Index] = FeatureState.Failed;
+            _errors[feature.Index] = $"derived feature '{definition.Name}' failed to evaluate: {ex.Message}";
+            return;
+        }
+
         if (definition.HasDefault)
         {
             foreach (var row in span)
@@ -822,7 +835,20 @@ public sealed class FeatureFetcher
                     _memory.ClearOnReturn = true;
                 }
 
-                StoreContext(info, info.Expression!.EvaluateScalar(new EvalContext(null, null, _context, _params)));
+                ScalarValue derived;
+                try
+                {
+                    derived = info.Expression!.EvaluateScalar(new EvalContext(null, null, _context, _params));
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    // Same rule as candidate-derived features: a throwing expression fails this feature only.
+                    _state[f] = FeatureState.Failed;
+                    _errors[f] = $"derived feature '{info.Definition.Name}' failed to evaluate: {ex.Message}";
+                    continue;
+                }
+
+                StoreContext(info, derived);
             }
         }
         finally

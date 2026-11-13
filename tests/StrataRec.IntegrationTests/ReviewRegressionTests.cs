@@ -174,21 +174,22 @@ public sealed class ReviewRegressionTests
     [Fact]
     public async Task FallbackPipelineOnlyGetsTheRemainingBudget()
     {
-        var root = FallbackWorkspace(brokenLatencyMs: 2_000);
+        // The primary hangs until the 400 ms deadline; the backup needs 200 ms. With the remaining budget (~0 ms) the
+        // backup cannot finish; with a fresh 400 ms budget (finding 12) it would have succeeded at ~600 ms.
+        var root = FallbackWorkspace(brokenLatencyMs: 5_000, backupLatencyMs: 200);
         var engine = new RecEngine(new PlanEnvironment { BaseDirectory = root });
         ServiceCollectionExtensions.LoadWorkspace(engine, root, "local", new[] { "primary" }).ThrowIfErrors("load");
 
         var result = await engine.ExecuteAsync(new RecRequest
         {
-            PipelineId = "primary", RequestId = "r", Inputs = new RequestInputs(), Deadline = TimeSpan.FromMilliseconds(150),
+            PipelineId = "primary", RequestId = "r", Inputs = new RequestInputs(), Deadline = TimeSpan.FromMilliseconds(400),
         });
 
         Assert.False(result.Succeeded);
-        Assert.Equal("primary", result.ServedBy);
-        Assert.InRange(result.ElapsedMs, 0, 1_000);
+        Assert.InRange(result.ElapsedMs, 0, 3_000); // the deadline cancelled the 5 s primary
     }
 
-    private static string FallbackWorkspace(int brokenLatencyMs)
+    private static string FallbackWorkspace(int brokenLatencyMs, int backupLatencyMs = 0)
     {
         var root = Directory.CreateTempSubdirectory("stratarec-fallback-").FullName;
         foreach (var dir in new[] { "catalog", "bindings", "pipelines", "fixtures" })
@@ -202,7 +203,7 @@ public sealed class ReviewRegressionTests
             { "environment": "local",
               "candidate_sources": {
                 "broken":  { "client": "memory_list@1", "items": [1, 2, 3], "fail": true, "latency_ms": {{brokenLatencyMs}} },
-                "popular": { "client": "memory_list@1", "data_file": "fixtures/recall_popular.json" } } }
+                "popular": { "client": "memory_list@1", "data_file": "fixtures/recall_popular.json", "latency_ms": {{backupLatencyMs}} } } }
             """);
         foreach (var (id, source, fallback) in new[] { ("primary", "broken", "\"fallback_pipeline\": \"backup\","), ("backup", "popular", string.Empty) })
         {

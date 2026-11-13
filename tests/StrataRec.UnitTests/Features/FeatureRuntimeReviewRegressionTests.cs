@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
+using StrataRec.Expressions;
 using StrataRec.Features.Connectors;
 using StrataRec.Features.Runtime;
 
@@ -585,6 +586,51 @@ public class FeatureRuntimeReviewRegressionTests
         Assert.True(result.Failed);
         Assert.Contains("non-finite", result.Error);
         Assert.Equal(2, request.Fetcher.NonFiniteReplaced);
+    }
+
+    [Fact]
+    public async Task Derived_ThrowingExpression_FailsOnlyThatFeature()
+    {
+        var connector = ScriptedConnector.Values((key, _) => key * 1.0);
+        var rig = new FeatureTestRig().Source("item_store", connector);
+        var physical = rig.Physical("item.a", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        var broken = rig.Derived("item.broken", FeatureTestRig.Item, ColumnType.Float64.AsNullable(),
+            new TestExpression("boom()", ColumnType.Float64.AsNullable(), (in EvalContext _, ReadOnlySpan<int> _, ColumnBuffer _) => throw new InvalidOperationException("boom")),
+            Array.Empty<int>());
+        rig.Build();
+        var request = rig.NewRequest(TwoItems);
+
+        var ok = await request.EnsureAsync(physical);
+        var failed = await request.EnsureAsync(broken);
+
+        Assert.Equal(FeatureState.Ok, ok.State);
+        Assert.Equal(2.0, request.Value(physical, 1).AsFloat64());
+        Assert.True(failed.Failed);
+        Assert.Contains("item.broken", failed.Error);
+        Assert.Contains("boom", failed.Error);
+        Assert.False(request.IsFilled(broken, 0));
+    }
+
+    [Fact]
+    public async Task ContextDerived_ThrowingExpression_FailsOnlyThatFeature()
+    {
+        var connector = ScriptedConnector.Values((_, _) => 5.0);
+        var rig = new FeatureTestRig().Source("user_store", connector);
+        var age = rig.Physical("user.age", FeatureTestRig.User, ColumnType.Float64, "user_store");
+        var broken = rig.Derived("user.broken", FeatureTestRig.User, ColumnType.Float64.AsNullable(),
+            new TestExpression("boom()", ColumnType.Float64.AsNullable(), scalar: _ => throw new InvalidOperationException("boom")),
+            Array.Empty<int>());
+        rig.Build();
+        var request = rig.NewRequest(TwoItems, userId: 7);
+
+        request.Fetcher.StartContextFetch(new[] { age, broken }, CancellationToken.None);
+        var ok = await request.EnsureAsync(age);
+        var failed = await request.EnsureAsync(broken);
+
+        Assert.Equal(FeatureState.Ok, ok.State);
+        Assert.Equal(5.0, request.ContextValue(age).AsFloat64());
+        Assert.True(failed.Failed);
+        Assert.Contains("user.broken", failed.Error);
     }
 
     [Fact]
