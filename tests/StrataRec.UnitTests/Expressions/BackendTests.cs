@@ -172,7 +172,9 @@ public class BackendTests
         Assert.False(compiled.IsRowDependent);
         var d = (ScalarColumn<float>)ColumnBuffer.Create(ColumnType.Float32, f.Capacity, f.Memory);
         compiled.Evaluate(f.Context, new[] { 1, 3 }, d);
-        Assert.Equal(new[] { 0f, 3f, 0f, 3f }, d.Span[..4].ToArray());
+        // Only the selected rows are written; the others hold whatever the rented (uncleared) array held.
+        Assert.Equal(3f, d.Span[1]);
+        Assert.Equal(3f, d.Span[3]);
 
         var missing = (ScalarColumn<double>)ColumnBuffer.Create(ColumnType.Parse("float64?"), f.Capacity, f.Memory);
         f.Compile("ctx.m + 1.0").Evaluate(f.Context, new[] { 0, 2 }, missing);
