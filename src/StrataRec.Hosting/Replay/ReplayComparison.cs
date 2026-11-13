@@ -27,14 +27,20 @@ public sealed class ReplaySideSummary
     /// <summary>Requests that succeeded with no items.</summary>
     public required double EmptyRate { get; init; }
 
-    /// <summary>Requests served by a fallback node or pipeline, or with a failed node skipped.</summary>
+    /// <summary>
+    /// Requests that succeeded with degraded service: served by a fallback node or pipeline, or with a node that degraded,
+    /// failed and was skipped, or was skipped for lack of time or input. A failed request is an error, not degraded service.
+    /// </summary>
     public required double DegradedRate { get; init; }
 
     /// <summary>Missing feature values / requested feature values (absent at the source, or not in the bundle).</summary>
     public required double FeatureMissingRate { get; init; }
 
-    /// <summary>Distribution of the score column over every returned item.</summary>
+    /// <summary>Distribution of the score column's finite values over every returned item.</summary>
     public required Distribution Scores { get; init; }
+
+    /// <summary>Returned items whose score is NaN or ±∞; they are left out of <see cref="Scores"/> and the KS statistic.</summary>
+    public required int NonFiniteScores { get; init; }
 
     /// <summary>Requests whose replay reproduced the recorded result exactly.</summary>
     public required int ReproducedRecording { get; init; }
@@ -78,10 +84,10 @@ public sealed class ComparisonReport
     /// <summary>Kendall τ of candidate vs baseline over requests with at least two shared items.</summary>
     public required Distribution KendallTau { get; init; }
 
-    /// <summary>Two-sample Kolmogorov–Smirnov statistic between the baseline and candidate score distributions.</summary>
+    /// <summary>Two-sample Kolmogorov–Smirnov statistic between the baseline and candidate distributions of finite scores.</summary>
     public required double ScoreKs { get; init; }
 
-    /// <summary>Candidate − baseline score of items both returned for the same request.</summary>
+    /// <summary>Candidate − baseline score of items both returned for the same request, where both scores are finite.</summary>
     public required Distribution ScoreDelta { get; init; }
 
     /// <summary>Requests whose candidate result equals the baseline result exactly.</summary>
@@ -157,7 +163,7 @@ public static class ReplayComparison
         fields = new Dictionary<(string Source, string Field), long[]>();
         var latencies = new List<double>();
         var gaps = new Dictionary<(string Kind, string Source, string? Field, string Reason), (int Count, List<string> Examples)>();
-        int count = 0, errors = 0, empty = 0, degraded = 0, reproduced = 0;
+        int count = 0, errors = 0, empty = 0, degraded = 0, reproduced = 0, nonFinite = 0;
         long requested = 0, missing = 0;
         foreach (var pair in pairs)
         {
@@ -171,13 +177,22 @@ public static class ReplayComparison
             latencies.Add(outcome.Report.ElapsedMs);
             errors += result.Succeeded ? 0 : 1;
             empty += result.Succeeded && result.Items.Count == 0 ? 1 : 0;
-            degraded += IsDegraded(outcome) ? 1 : 0;
+            degraded += result.Succeeded && IsDegraded(outcome) ? 1 : 0;
             reproduced += outcome.Report.Diff.Identical ? 1 : 0;
             foreach (var item in result.Items)
             {
-                if (item.Columns.TryGetValue(scoreColumn, out var score) && score.Kind is StorageKind.Float64 or StorageKind.Int64)
+                if (Score(item, scoreColumn) is not { } score)
                 {
-                    scores.Add(score.AsFloat64());
+                    continue;
+                }
+
+                if (double.IsFinite(score))
+                {
+                    scores.Add(score);
+                }
+                else
+                {
+                    nonFinite++;
                 }
             }
 
@@ -228,12 +243,16 @@ public static class ReplayComparison
             DegradedRate = Rate(degraded, count),
             FeatureMissingRate = requested == 0 ? 0.0 : (double)missing / requested,
             Scores = ResultComparison.Summarize(scores),
+            NonFiniteScores = nonFinite,
             ReproducedRecording = reproduced,
             Gaps = gapList,
         };
     }
 
-    /// <summary>A request is degraded when it was served by a fallback pipeline, or a node degraded, fell back or failed and was skipped.</summary>
+    /// <summary>
+    /// The service of a successful request was degraded: it was served by a fallback pipeline, or a node degraded, fell
+    /// back, failed and was skipped, or was skipped for lack of time or input. Only meaningful for a request that succeeded.
+    /// </summary>
     private static bool IsDegraded(ReplayOutcome outcome)
     {
         if (outcome.Result.ServedBy != outcome.Bundle.Request.PipelineId)
@@ -257,21 +276,24 @@ public static class ReplayComparison
         var byId = new Dictionary<Core.Keys.EntityKey, double>();
         foreach (var item in baseline.Items)
         {
-            if (item.Columns.TryGetValue(scoreColumn, out var score) && score.Kind is StorageKind.Float64 or StorageKind.Int64)
+            if (Score(item, scoreColumn) is { } score && double.IsFinite(score))
             {
-                byId.TryAdd(item.Id, score.AsFloat64());
+                byId.TryAdd(item.Id, score);
             }
         }
 
         foreach (var item in candidate.Items)
         {
-            if (item.Columns.TryGetValue(scoreColumn, out var score) && score.Kind is StorageKind.Float64 or StorageKind.Int64
-                && byId.TryGetValue(item.Id, out var before))
+            if (Score(item, scoreColumn) is { } score && double.IsFinite(score) && byId.TryGetValue(item.Id, out var before))
             {
-                deltas.Add(score.AsFloat64() - before);
+                deltas.Add(score - before);
             }
         }
     }
+
+    /// <summary>The item's numeric score; null when the column is absent, missing or not a number.</summary>
+    private static double? Score(Pipeline.Execution.RankedItem item, string scoreColumn) =>
+        item.Columns.TryGetValue(scoreColumn, out var score) && score.Kind is StorageKind.Float64 or StorageKind.Int64 ? score.AsFloat64() : null;
 
     private static List<FieldMissingChange> FieldChanges(Dictionary<(string Source, string Field), long[]> baseline, Dictionary<(string Source, string Field), long[]> candidate)
     {

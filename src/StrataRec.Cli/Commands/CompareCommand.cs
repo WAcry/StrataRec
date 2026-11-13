@@ -184,6 +184,7 @@ internal static class CompareCommand
         json.WriteNumber("degraded_rate", Math.Round(side.DegradedRate, 6));
         json.WriteNumber("feature_missing_rate", Math.Round(side.FeatureMissingRate, 6));
         WriteDistribution(json, "score", side.Scores);
+        json.WriteNumber("non_finite_scores", side.NonFiniteScores);
         json.WriteNumber("reproduced_recording", side.ReproducedRecording);
         ReplayCommand.WriteGaps(json, "gaps", side.Gaps);
         json.WriteEndObject();
@@ -242,6 +243,11 @@ internal static class CompareCommand
         Row("degraded rate", Percent(report.Baseline.DegradedRate), Percent(report.Candidate.DegradedRate));
         Row("feature missing rate", Percent(report.Baseline.FeatureMissingRate), Percent(report.Candidate.FeatureMissingRate));
         Row($"{report.ScoreColumn} mean / p50", Pair(report.Baseline.Scores.Mean, report.Baseline.Scores.P50), Pair(report.Candidate.Scores.Mean, report.Candidate.Scores.P50));
+        if (report.Baseline.NonFiniteScores + report.Candidate.NonFiniteScores > 0)
+        {
+            Row($"non-finite {report.ScoreColumn}s", Number(report.Baseline.NonFiniteScores), Number(report.Candidate.NonFiniteScores));
+        }
+
         Row("reproduced recording", Number(report.Baseline.ReproducedRecording), Number(report.Candidate.ReproducedRecording));
         output.WriteLine();
         output.WriteLine($"identical results           {report.Identical} of {report.Bundles}");

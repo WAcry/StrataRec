@@ -305,16 +305,20 @@ public static class ResultComparison
         return (double)(concordant - discordant) / (concordant + discordant);
     }
 
-    /// <summary>Two-sample Kolmogorov–Smirnov statistic: the largest gap between the empirical distributions (0–1).</summary>
+    /// <summary>
+    /// Two-sample Kolmogorov–Smirnov statistic: the largest gap between the empirical distributions (0–1), over the
+    /// finite values of each sample. NaN and ±∞ have no place in a distribution of scores; they are left out (callers
+    /// count them separately), so the statistic is defined and the computation ends for any input.
+    /// </summary>
     public static double KolmogorovSmirnov(IReadOnlyList<double> a, IReadOnlyList<double> b)
     {
-        if (a.Count == 0 || b.Count == 0)
+        var left = SortedFinite(a);
+        var right = SortedFinite(b);
+        if (left.Length == 0 || right.Length == 0)
         {
-            return a.Count == b.Count ? 0.0 : 1.0;
+            return left.Length == right.Length ? 0.0 : 1.0;
         }
 
-        var left = Sorted(a);
-        var right = Sorted(b);
         var i = 0;
         var j = 0;
         var max = 0.0;
@@ -337,15 +341,18 @@ public static class ResultComparison
         return max;
     }
 
-    /// <summary>Summary of a sample: count, mean, min, p50, p90, p95, max (nearest-rank percentiles).</summary>
+    /// <summary>
+    /// Summary of a sample's finite values: count, mean, min, p50, p90, p95, max (nearest-rank percentiles). NaN and ±∞
+    /// are left out, as in <see cref="KolmogorovSmirnov"/>.
+    /// </summary>
     public static Distribution Summarize(IReadOnlyList<double> values)
     {
-        if (values.Count == 0)
+        var sorted = SortedFinite(values);
+        if (sorted.Length == 0)
         {
             return new Distribution(0, null, null, null, null, null, null);
         }
 
-        var sorted = Sorted(values);
         var sum = 0.0;
         foreach (var v in sorted)
         {
@@ -358,12 +365,23 @@ public static class ResultComparison
 
     private static double Percentile(double[] sorted, double p) => sorted[Math.Clamp((int)Math.Ceiling(p * sorted.Length) - 1, 0, sorted.Length - 1)];
 
-    private static double[] Sorted(IReadOnlyList<double> values)
+    /// <summary>The finite values, sorted; every iteration of the KS walk then advances at least one index.</summary>
+    private static double[] SortedFinite(IReadOnlyList<double> values)
     {
-        var array = new double[values.Count];
-        for (var i = 0; i < array.Length; i++)
+        var count = 0;
+        for (var i = 0; i < values.Count; i++)
         {
-            array[i] = values[i];
+            count += double.IsFinite(values[i]) ? 1 : 0;
+        }
+
+        var array = new double[count];
+        var n = 0;
+        for (var i = 0; i < values.Count; i++)
+        {
+            if (double.IsFinite(values[i]))
+            {
+                array[n++] = values[i];
+            }
         }
 
         Array.Sort(array);

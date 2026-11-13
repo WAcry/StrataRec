@@ -38,6 +38,48 @@ public sealed class ResultComparisonTests
     }
 
     [Fact]
+    public void KolmogorovSmirnov_LeavesOutNonFiniteValues_AndEndsForAnyInput()
+    {
+        // NaN compares false with everything: an index walk keyed on comparisons never advanced past one and looped forever.
+        var results = Bounded(() => new[]
+        {
+            ResultComparison.KolmogorovSmirnov(new[] { double.NaN }, new[] { 1.0 }),
+            ResultComparison.KolmogorovSmirnov(new[] { 1.0, double.NaN, 2.0 }, new[] { double.PositiveInfinity, 2.0, 1.0, double.NegativeInfinity }),
+            ResultComparison.KolmogorovSmirnov(new[] { double.NaN, double.PositiveInfinity }, new[] { double.NegativeInfinity }),
+            ResultComparison.KolmogorovSmirnov(new[] { 1.0, 2.0, double.NaN, 3.0, 4.0 }, new[] { 3.0, double.NaN, 4.0, 5.0, 6.0 }),
+        });
+
+        Assert.Equal(1.0, results[0]); // only one side has finite values
+        Assert.Equal(0.0, results[1]);
+        Assert.Equal(0.0, results[2]); // neither side has any
+        Assert.Equal(0.5, results[3]);
+    }
+
+    [Fact]
+    public void Summarize_LeavesOutNonFiniteValues()
+    {
+        var summary = ResultComparison.Summarize(new[] { 2.0, double.NaN, 1.0, double.PositiveInfinity, double.NegativeInfinity });
+
+        Assert.Equal(new Distribution(2, 1.5, 1, 1, 2, 2, 2), summary);
+        Assert.Equal(new Distribution(0, null, null, null, null, null, null), ResultComparison.Summarize(new[] { double.NaN }));
+    }
+
+    [Fact]
+    public void Diff_TreatsNaNAsEqualToNaN()
+    {
+        var recorded = Result(true, (1, double.NaN, "a"));
+        var replayed = Result(true, (1, double.NaN, "a"));
+        foreach (var (left, right) in recorded.Columns.Zip(replayed.Columns))
+        {
+            ((Dictionary<string, ScalarValue>)left)["embedding"] = ScalarValue.FromVector(new[] { float.NaN, float.PositiveInfinity });
+            ((Dictionary<string, ScalarValue>)right)["embedding"] = ScalarValue.FromVector(new[] { float.NaN, float.PositiveInfinity });
+        }
+
+        Assert.True(ResultComparison.Diff(recorded, replayed).Identical);
+        Assert.False(ResultComparison.Diff(recorded, Result(true, (1, 0.5, "a"))).Identical);
+    }
+
+    [Fact]
     public void Summarize_UsesNearestRankPercentiles()
     {
         var values = Enumerable.Range(1, 20).Select(i => (double)i).Reverse().ToArray();
@@ -96,6 +138,19 @@ public sealed class ResultComparisonTests
         Assert.Equal(new[] { "age" }, diff.AddedColumns);
         Assert.Empty(diff.Changes);
         Assert.Equal(new[] { "age" }, reverse.RemovedColumns);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="compute"/> on a dedicated background thread with a generous bound, so a regression to an
+    /// endless loop fails the test instead of hanging the run (no thread-pool timing involved).
+    /// </summary>
+    internal static T Bounded<T>(Func<T> compute)
+    {
+        T result = default!;
+        var thread = new Thread(() => result = compute()) { IsBackground = true };
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "the computation did not end");
+        return result;
     }
 
     private static EntityKey[] Ids(params long[] ids) => ids.Select(EntityKey.FromInt64).ToArray();
