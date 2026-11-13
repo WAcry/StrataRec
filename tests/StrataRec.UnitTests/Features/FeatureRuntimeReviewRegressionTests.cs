@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using StrataRec.Core.Columns;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
@@ -120,12 +121,12 @@ public class FeatureRuntimeReviewRegressionTests
             });
             return FetchStatus.Ok;
         });
-        var rig = new FeatureTestRig().Source("item_store", connector, timeoutMs: 30_000, maxBatch: 1);
+        var rig = new FeatureTestRig().Source("item_store", connector, maxBatch: 1);
         var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
         var tag = rig.Physical("item.tag", FeatureTestRig.Item, ColumnType.String, "item_store");
         var history = rig.Physical("item.history", FeatureTestRig.Item, ColumnType.ListInt64, "item_store");
         rig.Build();
-        var request = rig.NewRequest(Enumerable.Range(1, Count).Select(i => (long)i).ToArray(), deadlineMs: 30_000);
+        var request = rig.NewRequest(Enumerable.Range(1, Count).Select(i => (long)i).ToArray());
 
         var ensure = request.EnsureAsync(score, tag, history).AsTask();
         start.SetResult();
@@ -418,8 +419,11 @@ public class FeatureRuntimeReviewRegressionTests
     }
 
     [Fact]
-    public async Task HungChunk_IsATimeoutFailure_AndItsLateResultIsRejected()
+    public async Task HungChunk_FailsAlone_AndItsLateResultIsRejected()
     {
+        // The caller cuts the hung chunk off, not a budget: the budget is the whole fetch's, and a short one would cut off
+        // the chunk that answered as well, were the test thread held up before the fetch observed it. A hung chunk timing
+        // out at the budget is covered where every chunk hangs (HungConnector_WaitEndsAtSourceTimeout_..., FetchChunkTests).
         var release = new TaskCompletionSource();
         var connector = new ScriptedConnector(async (keys, fields, writer, _) =>
         {
@@ -431,17 +435,24 @@ public class FeatureRuntimeReviewRegressionTests
             ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 3.0);
             return FetchStatus.Ok;
         });
-        var rig = new FeatureTestRig().Source("item_store", connector, timeoutMs: 50, maxBatch: 1);
+        var rig = new FeatureTestRig().Source("item_store", connector, maxBatch: 1);
         var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
         rig.Build();
-        var request = rig.NewRequest(TwoItems);
+        var hook = new FeatureCallHookTests.ListHook();
+        var request = rig.NewRequest(TwoItems, hook: hook);
+        using var caller = new CancellationTokenSource();
 
-        var result = await request.EnsureAsync(score);
+        var ensure = request.Fetcher.EnsureAsync(new[] { score }, caller.Token);
+        var answered = Assert.Single(hook.Recorded); // key 2 answered synchronously, decided while the chunks were sent
+        Assert.Equal((2L, IoOutcome.Ok), (answered.Keys[0], answered.Outcome));
+        caller.Cancel();
+        var result = await ensure;
         release.SetResult();
         await request.Fetcher.WhenIoCompleteAsync();
 
         Assert.Equal(FeatureState.Degraded, result.State);
-        Assert.Contains("timed out", result.Error);
+        Assert.Contains("was cancelled", result.Error);
+        Assert.Equal(IoOutcome.Cancelled, hook.Recorded.Single(call => call.Keys[0] == 1).Outcome);
         Assert.True(request.Value(score, 0).IsMissing);
         Assert.Equal(6.0, request.Value(score, 1).AsFloat64());
     }

@@ -26,6 +26,13 @@ internal sealed class FeatureTestRig
 {
     public const int UserIdContext = 0;
 
+    /// <summary>
+    /// The default source budget and request deadline: a minute, longer than any test's work on any machine, and short
+    /// enough that a hung call still fails its test. A test that is about a budget passes its own; one that needs some
+    /// calls cut off while others answer cuts them off itself (the caller's token), since a budget is the whole fetch's.
+    /// </summary>
+    public const int UntimedMs = 60_000;
+
     public static readonly EntityDefinition Item = new()
     {
         Name = "item", Kind = EntityKind.Candidate, CandidateKeyColumn = "entity_id", CandidateKeyType = EntityKeyType.Int64,
@@ -54,7 +61,7 @@ internal sealed class FeatureTestRig
     };
 
     /// <summary>Binds a source to a test connector instance.</summary>
-    public FeatureTestRig Source(string name, IFeatureSourceConnector connector, int timeoutMs = 5000, int? maxBatch = null)
+    public FeatureTestRig Source(string name, IFeatureSourceConnector connector, int timeoutMs = UntimedMs, int? maxBatch = null)
     {
         _connectors[name] = connector;
         _sources[name] = new FeatureSourceBinding { Connector = TestConnectorFactory.Type, TimeoutMs = timeoutMs, MaxBatch = maxBatch };
@@ -62,7 +69,7 @@ internal sealed class FeatureTestRig
     }
 
     /// <summary>Binds a source to the built-in <c>memory@1</c> connector with inline data.</summary>
-    public FeatureTestRig MemorySource(string name, string json, int timeoutMs = 5000, int? maxBatch = null)
+    public FeatureTestRig MemorySource(string name, string json, int timeoutMs = UntimedMs, int? maxBatch = null)
     {
         using var document = JsonDocument.Parse(json);
         _sources[name] = new FeatureSourceBinding
@@ -164,7 +171,7 @@ internal sealed class FeatureTestRig
 
     /// <param name="capacity">Rows the candidate table can hold, for tests that append rows later.</param>
     public TestRequest NewRequest(
-        long[] candidates, long? userId = null, IBufferPool? pool = null, int deadlineMs = 10_000, IFeatureCallHook? hook = null, int capacity = 0)
+        long[] candidates, long? userId = null, IBufferPool? pool = null, int deadlineMs = UntimedMs, IFeatureCallHook? hook = null, int capacity = 0)
     {
         var memory = new RequestMemory(pool);
         var table = new CandidateTable(new TableSchema(EntityKeyType.Int64, _slots), Math.Max(Math.Max(1, capacity), candidates.Length), memory);

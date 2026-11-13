@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using Microsoft.Extensions.Logging;
 using StrataRec.Core.Diagnostics;
@@ -94,5 +95,41 @@ internal sealed class MetricCapture : IDisposable
         }
 
         Measurements.Enqueue(new Measured(instrument.Name, value, copy));
+    }
+}
+
+/// <summary>
+/// Cancels <see cref="Token"/> a fixed time after a node starts (its span starts), for a test about a request the caller
+/// cuts off in that node. A timer started with the request fires in an earlier node whenever the nodes before it are slow,
+/// as on a busy machine; this one cannot fire before that node runs.
+/// </summary>
+internal sealed class CancelInNode : IDisposable
+{
+    private readonly CancellationTokenSource _cancel = new();
+    private readonly ActivityListener _listener;
+
+    public CancelInNode(string node, TimeSpan after)
+    {
+        _listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == StrataRecTelemetry.Name,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded, // node spans exist
+            ActivityStarted = span =>
+            {
+                if (span.OperationName == node)
+                {
+                    _cancel.CancelAfter(after);
+                }
+            },
+        };
+        ActivitySource.AddActivityListener(_listener);
+    }
+
+    public CancellationToken Token => _cancel.Token;
+
+    public void Dispose()
+    {
+        _listener.Dispose();
+        _cancel.Dispose();
     }
 }

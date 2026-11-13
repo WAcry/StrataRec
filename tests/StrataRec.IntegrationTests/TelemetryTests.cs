@@ -124,7 +124,8 @@ public sealed class MetricsTests
         using (var capture = new MetricCapture())
         {
             var (engine, _) = LoadEngine(HomeFeedTestHost.LoadModified(root => SlowDown(root, slow, tightTimeout: false)));
-            using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+            var node = slow == "model" ? "ctr_ranker" : "recall";
+            using var cancel = new CancelInNode(node, TimeSpan.FromMilliseconds(300));
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await engine.ExecuteAsync(Request("req-cancelled"), cancel.Token));
 
@@ -139,7 +140,6 @@ public sealed class MetricsTests
             Assert.Single(capture.Of(StrataRecMetrics.Names.RequestErrors)); // the request itself failed
 
             // Review 6 #5: the node the caller cut off still has its outcome, duration and rows.
-            var node = slow == "model" ? "ctr_ranker" : "recall";
             Assert.Single(capture.Of(StrataRecMetrics.Names.NodeOutcomes), m => Tag(m, StrataRecTags.Node) == node && Tag(m, StrataRecTags.Outcome) == "aborted");
             Assert.InRange(Assert.Single(capture.Of(StrataRecMetrics.Names.NodeDuration), m => Tag(m, StrataRecTags.Node) == node).Value, 0.2, 5);
             Assert.Single(capture.Of(StrataRecMetrics.Names.NodeRowsIn), m => Tag(m, StrataRecTags.Node) == node);
@@ -440,7 +440,7 @@ public sealed class TracingTests
         // Review 6 #8: the release and the arms are known before execution; an abort must not erase them.
         using var spans = new SpanCapture();
         var (engine, plan) = MetricsTests.LoadEngine(HomeFeedTestHost.LoadModified(root => MetricsTests.SlowDown(root, "model", tightTimeout: false)));
-        using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+        using var cancel = new CancelInNode("ctr_ranker", TimeSpan.FromMilliseconds(300));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await engine.ExecuteAsync(MetricsTests.Request("req-aborted"), cancel.Token));
 

@@ -317,12 +317,13 @@ public class FetchChunkTests
     {
         // Sixteen chunks of four keys write at the same time on threads of their own: their numeric values, strings, lists
         // and "written" bits share fetch-wide buffers (several chunks per 64-bit word, were the bits dense). The first chunk
-        // writes and marks all of its values, then hangs past the budget and goes on writing after the request returned.
+        // writes and marks all of its values, then hangs, and goes on writing after the request returned. The caller cuts
+        // it off once the fetch has decided the other fifteen, so no budget decides anything here: a budget is the
+        // fetch's, and on a busy machine it also cut off chunks still finishing their writes.
         const int Chunks = 16;
         const int MaxBatch = 4;
         using var start = new ManualResetEventSlim();
         using var late = new ManualResetEventSlim();
-        using var others = new CountdownEvent(Chunks - 1);
         using var abandonedWrote = new ManualResetEventSlim();
         static object? ValueOf(long key, string field) => field switch
         {
@@ -369,32 +370,36 @@ public class FetchChunkTests
                     }
                 }
 
-                others.Signal();
                 return FetchStatus.Ok;
             });
         });
-        var rig = new FeatureTestRig().Source("item_store", connector, timeoutMs: 1_500, maxBatch: MaxBatch);
+        var rig = new FeatureTestRig().Source("item_store", connector, maxBatch: MaxBatch);
         var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
         var tag = rig.Physical("item.tag", FeatureTestRig.Item, ColumnType.String, "item_store");
         var history = rig.Physical("item.history", FeatureTestRig.Item, ColumnType.ListInt64, "item_store");
         rig.Build();
         var pool = new PoisoningPool();
-        var request = rig.NewRequest(Enumerable.Range(1, Chunks * MaxBatch).Select(i => (long)i).ToArray(), pool: pool, deadlineMs: 600_000);
+        var hook = new DecisionHook();
+        var request = rig.NewRequest(Enumerable.Range(1, Chunks * MaxBatch).Select(i => (long)i).ToArray(), pool: pool, hook: hook);
+        using var caller = new CancellationTokenSource();
 
-        var ensure = request.EnsureAsync(score, tag, history).AsTask();
+        var ensure = request.Fetcher.EnsureAsync(new[] { score, tag, history }, caller.Token).AsTask();
         start.Set();
-        Assert.True(others.Wait(Patience));
+        await hook.WhenDecided(Chunks - 1).WaitAsync(Patience); // every chunk but the hung one is decided
         Assert.True(abandonedWrote.Wait(Patience));
-        var result = await ensure.WaitAsync(Patience); // returns at the budget, the first chunk still running
+        caller.Cancel();
+        var result = await ensure.WaitAsync(Patience); // returns at once, the first chunk still running
 
         Assert.Equal(FeatureState.Degraded, result.State);
-        Assert.Contains("timed out", result.Error);
+        Assert.Contains("was cancelled", result.Error);
+        Assert.Equal((Chunks, Chunks), (hook.Decided, hook.Outcomes.Count)); // each decided once
+        Assert.All(hook.Outcomes, call => Assert.Equal(call.Key == 1 ? IoOutcome.Cancelled : IoOutcome.Ok, call.Value));
         for (var row = 0; row < Chunks * MaxBatch; row++)
         {
             long key = row + 1;
             if (key <= MaxBatch)
             {
-                // Written and marked before the budget, but the call timed out: never read.
+                // Written and marked before the cut-off, but the call was cut off: never read.
                 Assert.True(request.Value(score, row).IsMissing);
                 Assert.True(request.Value(tag, row).IsMissing);
                 Assert.True(request.Value(history, row).IsMissing);
@@ -487,5 +492,58 @@ public class FetchChunkTests
         { IsBackground = true, Name = "test connector" };
         thread.Start();
         return new ValueTask<FetchStatus>(done.Task);
+    }
+
+    /// <summary>
+    /// Records the outcome of each call by its first key, and tells when a number of calls has been decided: what a test
+    /// waits for before it cuts off the calls still running, instead of hoping a budget runs out after the others.
+    /// </summary>
+    private sealed class DecisionHook : IFeatureCallHook
+    {
+        private readonly List<(int Count, TaskCompletionSource Reached)> _awaited = new();
+        private int _decided;
+
+        public ConcurrentDictionary<long, IoOutcome> Outcomes { get; } = new();
+
+        /// <summary>Calls recorded, counting a call recorded twice twice.</summary>
+        public int Decided => Volatile.Read(ref _decided);
+
+        public bool Replays => false;
+
+        public Task WhenDecided(int count)
+        {
+            lock (_awaited)
+            {
+                if (_decided >= count)
+                {
+                    return Task.CompletedTask;
+                }
+
+                var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _awaited.Add((count, reached));
+                return reached.Task;
+            }
+        }
+
+        public int Begin(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields) => 0;
+
+        public void Record(in FeatureCallInfo call, IStagedFeatureValues? values)
+        {
+            lock (_awaited)
+            {
+                Outcomes[call.Batch.CandidateKeys.Span[0].Int64Value] = call.Outcome;
+                _decided++;
+                foreach (var (count, reached) in _awaited)
+                {
+                    if (count == _decided)
+                    {
+                        reached.SetResult();
+                    }
+                }
+            }
+        }
+
+        public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer) =>
+            throw new NotSupportedException();
     }
 }
