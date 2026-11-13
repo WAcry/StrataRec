@@ -24,4 +24,15 @@ internal static class SampleBindings
         sources[source] = replacement;
         File.WriteAllText(path, document.ToJsonString());
     }
+
+    /// <summary>Replaces the binding of model <paramref name="model"/> in <c>bindings/local.jsonc</c>.</summary>
+    public static void RebindModel(string root, string model, string binding)
+    {
+        var path = Path.Combine(root, "bindings", "local.jsonc");
+        var document = (JsonObject)Jsonc.Parse(File.ReadAllBytes(path), path)!;
+        var models = (JsonObject)document["models"]!;
+        Assert.True(models.ContainsKey(model), $"the sample binds no model '{model}'");
+        models[model] = JsonNode.Parse(binding);
+        File.WriteAllText(path, document.ToJsonString());
+    }
 }

@@ -47,8 +47,8 @@ public sealed class BindingException : Exception
 
 /// <summary>
 /// The host's secret store (design 6.4 item 4): bindings name credentials only by reference (<c>secret://name</c>), and
-/// instances resolve them through this when they load. Register one in the host's service container, or set it on the
-/// plan environment.
+/// instances resolve them through this when they load. Register one in the host's service container, or set
+/// <c>BindingHostOptions.Secrets</c>.
 /// </summary>
 /// <remarks>Called at load, never on the request path, and once per load of an instance: the engine keeps no copy of a
 /// value and does not cache or rotate secrets. An instance that needs a rotated credential resolves it again itself.</remarks>
@@ -90,7 +90,7 @@ public sealed class SecretReference
         if (_resolver is null)
         {
             throw new BindingException(Pointer, $"The binding refers to secret '{Name}', but this host has no secret store.",
-                "register an ISecretResolver in the host's service container, or pass one to the engine (RecEngine secrets, BindingHostOptions.Secrets)");
+                "register an ISecretResolver in the host's service container, or set BindingHostOptions.Secrets");
         }
 
         var value = await _resolver.ResolveAsync(Name, cancellationToken).ConfigureAwait(false);

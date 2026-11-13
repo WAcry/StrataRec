@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Experiments.Assignment;
+using StrataRec.Hosting.Bindings;
 using StrataRec.Hosting.Workspace;
 using StrataRec.Pipeline.Planning;
 
@@ -60,7 +61,7 @@ public static class ServiceCollectionExtensions
             var loggerFactory = provider.GetService<ILoggerFactory>();
             var executor = new Pipeline.Execution.PipelineExecutor(logs: provider.GetService<Logging.LogPipeline>(), loggerFactory: loggerFactory);
             var engine = new RecEngine(environment, provider.GetService<IAssignmentProvider>(), executor, loggerFactory,
-                secrets: provider.GetService<ISecretResolver>());
+                bindingOptions: new BindingHostOptions { Secrets = provider.GetService<ISecretResolver>() });
             LoadWorkspace(engine, options.ConfigRoot, options.Environment, options.Pipelines).ThrowIfErrors("Loading StrataRec configuration");
             return engine;
         });

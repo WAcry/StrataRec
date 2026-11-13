@@ -3,7 +3,6 @@ using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using StrataRec.Artifacts.Model;
-using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Assignment;
@@ -202,19 +201,20 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// <param name="executor">Runs the plans; defaults to one sharing <paramref name="loggerFactory"/>.</param>
     /// <param name="loggerFactory">Receives plan load events (design 13.2); null logs nothing.</param>
     /// <param name="bindings">Hosts what the plans bind (tables, clients, connectors); null creates one the engine owns and
-    /// disposes. A host passed in is the caller's to dispose (it may serve several engines), with its own secret store.</param>
-    /// <param name="secrets">The host's secret store (design 6.4 item 4) for the host the engine creates.</param>
+    /// disposes. A host passed in is the caller's to dispose (it may serve several engines), with its own options.</param>
+    /// <param name="bindingOptions">Options of the host the engine creates: its secret store (design 6.4), load and
+    /// shutdown bounds.</param>
     public RecEngine(
         PlanEnvironment? environment = null,
         IAssignmentProvider? assignmentProvider = null,
         PipelineExecutor? executor = null,
         ILoggerFactory? loggerFactory = null,
         BindingHost? bindings = null,
-        ISecretResolver? secrets = null)
+        BindingHostOptions? bindingOptions = null)
     {
-        if (bindings is not null && secrets is not null)
+        if (bindings is not null && bindingOptions is not null)
         {
-            throw new ArgumentException("A binding host passed in has its own secret store (BindingHostOptions.Secrets).", nameof(secrets));
+            throw new ArgumentException("A binding host passed in has its own options; pass one or the other.", nameof(bindingOptions));
         }
 
         Environment = environment ?? new PlanEnvironment();
@@ -222,7 +222,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         _executor = executor ?? new PipelineExecutor(loggerFactory: loggerFactory);
         _logger = loggerFactory?.CreateLogger<RecEngine>() ?? NullLogger<RecEngine>.Instance;
         _ownsBindings = bindings is null;
-        Bindings = bindings ?? new BindingHost(new BindingHostOptions { Secrets = secrets }, loggerFactory);
+        Bindings = bindings ?? new BindingHost(bindingOptions, loggerFactory);
     }
 
     /// <summary>Operators, connectors and clients this binary provides.</summary>
@@ -670,6 +670,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             }
         }
 
+        disposed = Volatile.Read(ref _disposed); // a disposed engine takes no request, also for a pipeline it never served
         return null;
     }
 
