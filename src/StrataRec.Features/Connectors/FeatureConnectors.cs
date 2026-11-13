@@ -5,7 +5,12 @@ using StrataRec.Core.Types;
 namespace StrataRec.Features.Connectors;
 
 /// <summary>The keys of one fetch (design 6.5). Candidate keys are deduplicated.</summary>
-public sealed class EntityKeyBatch
+/// <remarks>
+/// A struct: each <c>max_batch</c> chunk of a fetch is one connector call and a request makes hundreds of them, so an
+/// object per call was a measurable share of the request's allocation. Pass it on by <c>in</c> where the signature
+/// allows (async methods cannot take <c>in</c> parameters); a copy is five words.
+/// </remarks>
+public readonly struct EntityKeyBatch
 {
     public required KeyShape Shape { get; init; }
 
@@ -40,8 +45,11 @@ public readonly record struct CompiledFieldBinding(string Field, int FieldIndex,
 /// value is fully decoded, so a record that fails half-way never exposes an unwritten (pooled) value.
 /// <see cref="SetString"/>, <see cref="SetInt64List"/>, <see cref="SetInt32List"/> and <see cref="SetStringList"/> mark
 /// their value present themselves. A connector reporting <see cref="FetchOutcome.Partial"/> therefore needs no extra bookkeeping.</para>
-/// <para>A writer is used by exactly one connector call (each <c>max_batch</c> chunk gets its own), so implementations
-/// may write from any one thread at a time without synchronization.</para>
+/// <para>A writer belongs to one connector call while that call runs (each <c>max_batch</c> chunk gets its own), so
+/// implementations may write from any one thread at a time without synchronization. The chunks of one fetch share
+/// buffers: the memory <see cref="GetValues{T}"/> returns is this call's window of a fetch-wide array, so write only
+/// inside it. Once a call has completed, the engine may hand the same writer object to another chunk: a connector must
+/// not keep it, nor write through it after returning (see <see cref="IFeatureSourceConnector.FetchAsync"/>).</para>
 /// </remarks>
 public interface IFeatureBatchWriter
 {

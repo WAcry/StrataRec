@@ -43,11 +43,14 @@ public readonly record struct FeatureFillResult(FeatureState State, string? Erro
 /// really completes, even when the request stopped waiting for it at the source timeout or deadline; the background
 /// context fetch holds it until its last staging read and derived computation. Buffers therefore never return to the
 /// pool while anything may still write or read them.</para>
+/// <para>Allocation (design 4.8, 15): a fetch is split into <c>max_batch</c> chunks, often hundreds per request, so a
+/// chunk whose connector answers synchronously allocates nothing: its keys are a struct, its staging is a window of the
+/// fetch's <see cref="StagingArea"/> seen through a reused view, its cancellation is the fetch's, and its status comes
+/// back in a <see cref="ValueTask{TResult}"/>. Only a call that really goes asynchronous allocates what waiting needs.</para>
 /// </remarks>
 public sealed class FeatureFetcher
 {
-    private static readonly Task<FetchStatus> NoTimeLeft =
-        Task.FromResult(FetchStatus.Failed("no time left before the request deadline"));
+    private static readonly FetchStatus NoTimeLeft = FetchStatus.Failed("no time left before the request deadline");
 
     private readonly FeaturePlan _plan;
     private readonly CandidateTable _table;
@@ -384,8 +387,8 @@ public sealed class FeatureFetcher
         // Lifetimes: the index and the chunk arrays are read only on the request's thread (Backfill, CompleteAsync),
         // before the request releases the memory. The key array is read by connector calls, which may outlive the
         // request, but each call holds the memory from before FetchAsync until the connector really completes and the call
-        // has been recorded (CallAsync/IoLease), so the keys cannot return to the pool while a connector or a recording can
-        // still read them.
+        // has been recorded (ConnectorCall, IoLease), so the keys cannot return to the pool while a connector or a
+        // recording can still read them.
         EntityKeyIndex? index = null;
         EntityKey[]? keys = null;
         var keyCount = 0;
@@ -427,118 +430,167 @@ public sealed class FeatureFetcher
             }
         }
 
-        // Each max_batch chunk is an independent call with its own staging buffer: chunks run concurrently, and a
-        // buffer's bitmaps, string dictionary and list arena are not safe for concurrent writers.
+        // Each max_batch chunk is an independent call, and chunks run concurrently. They share the fetch's staging area
+        // (each writes only its own region of it, see StagingArea), its time budget and its cancellation source.
         var chunkSize = group.MaxBatch;
         var chunkCount = (keyCount + chunkSize - 1) / chunkSize;
         if (chunkCount == 0)
         {
-            return new PendingFetch(group, features, index, chunkSize, 0, Array.Empty<StagingBuffer?>(), Array.Empty<Task<FetchStatus>>(), Array.Empty<bool>(), noContextKey);
+            return new PendingFetch(group, features, index, chunkSize, 0, null, Array.Empty<ValueTask<FetchStatus>>(), Array.Empty<bool>(), noContextKey);
         }
 
         var all = keys!;
-        var chunks = _memory.Rent<StagingBuffer?>(chunkCount);
-        var calls = _memory.Rent<Task<FetchStatus>>(chunkCount);
+        var calls = _memory.Rent<ValueTask<FetchStatus>>(chunkCount);
         var chunkFailed = _memory.RentCleared<bool>(chunkCount);
         var budget = BudgetMs(group);
-        for (var c = 0; c < chunkCount; c++)
+        if (budget <= 0)
         {
-            var offset = c * chunkSize;
-            var count = Math.Min(chunkSize, keyCount - offset);
-            if (budget <= 0)
+            for (var c = 0; c < chunkCount; c++)
             {
-                chunks[c] = null;
-                calls[c] = NoTimeLeft;
-                RecordUnsent(group, group.Shape, contextKey, all.AsMemory(offset, count), fields);
-                continue;
+                calls[c] = new ValueTask<FetchStatus>(NoTimeLeft);
+                RecordUnsent(group, new EntityKeyBatch { Shape = group.Shape, ContextKey = contextKey, CandidateKeys = ChunkKeys(all, keyCount, chunkSize, c) }, fields);
             }
 
-            var staging = new StagingBuffer(fields, count, _memory);
-            chunks[c] = staging;
-            var batch = new EntityKeyBatch { Shape = group.Shape, ContextKey = contextKey, CandidateKeys = all.AsMemory(offset, count) };
-            calls[c] = CallAsync(group, batch, fields, staging, budget, cancellationToken);
+            return new PendingFetch(group, features, index, chunkSize, chunkCount, null, calls, chunkFailed, noContextKey);
         }
 
-        return new PendingFetch(group, features, index, chunkSize, chunkCount, chunks, calls, chunkFailed, noContextKey);
+        var staging = new StagingArea(fields, keyCount, chunkSize, _memory);
+        var cancellation = _hook is { Replays: true } ? null : new FetchCancellation(cancellationToken, budget);
+        StagingBuffer? writer = null;
+        try
+        {
+            for (var c = 0; c < chunkCount; c++)
+            {
+                var batch = new EntityKeyBatch { Shape = group.Shape, ContextKey = contextKey, CandidateKeys = ChunkKeys(all, keyCount, chunkSize, c) };
+                writer ??= new StagingBuffer(staging);
+                writer.Bind(c);
+                calls[c] = CallAsync(group, batch, fields, writer, budget, cancellation, cancellationToken, out var writerHeld);
+                if (writerHeld)
+                {
+                    writer = null; // the call runs on and may write through this view until it really completes
+                }
+            }
+        }
+        finally
+        {
+            cancellation?.Release(); // the fetch's own reference; every sent chunk holds one until its connector completes
+        }
+
+        return new PendingFetch(group, features, index, chunkSize, chunkCount, staging, calls, chunkFailed, noContextKey);
+    }
+
+    private static ReadOnlyMemory<EntityKey> ChunkKeys(EntityKey[] keys, int keyCount, int chunkSize, int chunk)
+    {
+        var offset = chunk * chunkSize;
+        return keys.AsMemory(offset, Math.Min(chunkSize, keyCount - offset));
     }
 
     /// <summary>
     /// Runs one connector call, waiting for it at most <paramref name="budgetMs"/> — the source timeout or the time
-    /// left before the request deadline, whichever is less. Cancellation is only a request to the connector, so the
-    /// wait itself is bounded: a result arriving later is rejected as a timeout and its staging is never read.
+    /// left before the request deadline, whichever is less, after which <paramref name="cancellation"/> fires.
+    /// Cancellation is only a request to the connector, so the wait itself is bounded: a result arriving later is
+    /// rejected as a timeout and its staging is never read.
     /// </summary>
     /// <remarks>
-    /// The call's hold on the request memory (its <see cref="IoLease"/>) lasts until the connector task really completes,
-    /// because a connector that ignores cancellation may still be writing into <paramref name="writer"/> (design 4.8),
-    /// and until the call has been recorded, which reads the keys and the staging. Never throws: failures become
-    /// <see cref="FetchOutcome.Failed"/>.
+    /// <para>The call's hold on the request memory lasts until the connector really completes, because a connector that
+    /// ignores cancellation may still be writing into <paramref name="writer"/> (design 4.8), and until the call has
+    /// been recorded, which reads the keys and the staging. Never throws for a connector failure: failures become
+    /// <see cref="FetchOutcome.Failed"/>.</para>
+    /// <para>The returned task is consumed exactly once, or never (a prefetch nobody awaits): it is a plain result or
+    /// a <see cref="Task"/>, never a pooled source.</para>
     /// </remarks>
-    private Task<FetchStatus> CallAsync(
-        FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields, StagingBuffer writer, int budgetMs, CancellationToken cancellationToken)
+    /// <param name="cancellation">The fetch's cancellation; null only when the request replays.</param>
+    /// <param name="writerHeld">True when the call is still running and owns <paramref name="writer"/>; otherwise the
+    /// view may be pointed at the next chunk.</param>
+    private ValueTask<FetchStatus> CallAsync(
+        FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, StagingBuffer writer, int budgetMs, FetchCancellation? cancellation,
+        CancellationToken cancellationToken, out bool writerHeld)
     {
         if (_hook is null)
         {
-            return ConnectorCallAsync(group, batch, fields, writer, budgetMs, 0, cancellationToken);
+            return ConnectorCall(group, batch, fields, writer, budgetMs, 0, cancellation!, cancellationToken, out writerHeld);
         }
 
-        // A replayed call answers at once from the recording: no connector, no wait, no metrics or health (design 13.4).
-        return _hook.Replays
-            ? Task.FromResult(_hook.Replay(group, batch, fields, writer))
-            : ConnectorCallAsync(group, batch, fields, writer, budgetMs, _hook.Begin(group, batch, fields), cancellationToken);
+        if (_hook.Replays)
+        {
+            // A replayed call answers at once from the recording: no connector, no wait, no metrics or health (design 13.4).
+            writerHeld = false;
+            return new ValueTask<FetchStatus>(_hook.Replay(group, batch, fields, writer));
+        }
+
+        return ConnectorCall(group, batch, fields, writer, budgetMs, _hook.Begin(group, batch, fields), cancellation!, cancellationToken, out writerHeld);
     }
 
     /// <summary>Records a chunk the request had no time left to send, so a replay fails it the same way.</summary>
-    private void RecordUnsent(FetchGroup group, KeyShape shape, EntityKey contextKey, ReadOnlyMemory<EntityKey> keys, CompiledFieldBinding[] fields)
+    private void RecordUnsent(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields)
     {
         if (_hook is { Replays: false } recorder)
         {
-            var batch = new EntityKeyBatch { Shape = shape, ContextKey = contextKey, CandidateKeys = keys };
-            recorder.Record(new FeatureCallInfo(group, batch, fields, recorder.Begin(group, batch, fields), false, NoTimeLeft.Result, IoOutcome.Timeout, TimeSpan.Zero), null);
+            recorder.Record(new FeatureCallInfo(group, batch, fields, recorder.Begin(group, batch, fields), false, NoTimeLeft, IoOutcome.Timeout, TimeSpan.Zero), null);
         }
     }
 
-    private async Task<FetchStatus> ConnectorCallAsync(
-        FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields, StagingBuffer writer, int budgetMs, int sequence, CancellationToken cancellationToken)
+    /// <summary>
+    /// Sends one call. A connector that answers synchronously is recorded and released here, with nothing allocated;
+    /// only one that returns a pending task goes on to <see cref="AwaitConnectorAsync"/>.
+    /// </summary>
+    private ValueTask<FetchStatus> ConnectorCall(
+        FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, StagingBuffer writer, int budgetMs, int sequence,
+        FetchCancellation cancellation, CancellationToken cancellationToken, out bool writerHeld)
     {
         _memory.Hold();
         var io = group.Io.Start();
-        var lease = new IoLease(_memory, CancellationTokenSource.CreateLinkedTokenSource(cancellationToken));
-        lease.Cancellation.CancelAfter(budgetMs);
+        cancellation.AddCall();
         ValueTask<FetchStatus> call;
         try
         {
-            call = group.Connector.FetchAsync(batch, fields, writer, lease.Cancellation.Token);
+            call = group.Connector.FetchAsync(batch, fields, writer, cancellation.Token);
         }
         catch (Exception ex)
         {
-            lease.ConnectorDone(); // threw before returning a task: the connector is no longer writing
+            // Threw before returning a task: the connector is no longer writing.
+            writerHeld = false;
+            cancellation.Release();
             try
             {
-                return Completed(io, group, batch, fields, writer, sequence, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken));
+                return new ValueTask<FetchStatus>(
+                    Completed(io, group, batch, fields, writer, sequence, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken)));
             }
             finally
             {
-                lease.CallSiteDone();
+                _memory.Release();
             }
         }
 
         if (call.IsCompleted)
         {
+            writerHeld = false;
+            cancellation.Release();
             try
             {
-                return Completed(io, group, batch, fields, writer, sequence, call.GetAwaiter().GetResult());
+                return new ValueTask<FetchStatus>(Completed(io, group, batch, fields, writer, sequence, call.GetAwaiter().GetResult()));
             }
             catch (Exception ex)
             {
-                return Completed(io, group, batch, fields, writer, sequence, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken));
+                return new ValueTask<FetchStatus>(
+                    Completed(io, group, batch, fields, writer, sequence, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken)));
             }
             finally
             {
-                lease.ConnectorDone();
-                lease.CallSiteDone();
+                _memory.Release(); // after Completed: a recording reads the keys and the staging there
             }
         }
 
+        writerHeld = true;
+        return AwaitConnectorAsync(io, group, batch, fields, writer, budgetMs, sequence, call, cancellation, cancellationToken);
+    }
+
+    /// <summary>The rest of a call whose connector did not complete synchronously; the memory is already held.</summary>
+    private async ValueTask<FetchStatus> AwaitConnectorAsync(
+        IoCall io, FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields, StagingBuffer writer, int budgetMs, int sequence,
+        ValueTask<FetchStatus> call, FetchCancellation cancellation, CancellationToken cancellationToken)
+    {
+        var lease = new IoLease(_memory, cancellation);
         var task = call.AsTask();
         TrackIo(task.ContinueWith(
             static (t, state) =>
@@ -553,7 +605,9 @@ public sealed class FeatureFetcher
 
         try
         {
-            var status = await task.WaitAsync(TimeSpan.FromMilliseconds(budgetMs), cancellationToken).ConfigureAwait(false);
+            // The fetch's token fires at the budget or with the caller's token: the wait ends then, even when the
+            // connector ignores it. Classify tells the two apart by the caller's token.
+            var status = await task.WaitAsync(cancellation.Token).ConfigureAwait(false);
             return Completed(io, group, batch, fields, writer, sequence, status);
         }
         catch (Exception ex)
@@ -573,7 +627,7 @@ public sealed class FeatureFetcher
     /// status through. Staged values are recorded only for a call that answered within its budget.
     /// </summary>
     private FetchStatus Completed(
-        in IoCall io, FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields, StagingBuffer writer, int sequence, FetchStatus status,
+        in IoCall io, FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, StagingBuffer writer, int sequence, FetchStatus status,
         IoOutcome? outcome = null)
     {
         var result = outcome ?? status.Outcome switch
@@ -674,9 +728,9 @@ public sealed class FeatureFetcher
     }
 
     /// <summary>
-    /// Copies staged values into the live rows that are still unfilled, matching by key (design 4.5). Key index k lives
-    /// in chunk k / max_batch at local row k % max_batch. A value is read only if its chunk succeeded and the connector
-    /// wrote that field for that key; anything else takes the default or becomes missing.
+    /// Copies staged values into the live rows that are still unfilled, matching by key (design 4.5). Key index k belongs
+    /// to chunk k / max_batch. A value is read only if its chunk succeeded and the connector wrote that field for that
+    /// key; anything else takes the default or becomes missing.
     /// </summary>
     private void Backfill(PendingFetch pending, FeatureRuntimeInfo feature, int fieldIndex)
     {
@@ -707,18 +761,10 @@ public sealed class FeatureFetcher
                 }
             }
 
-            StagingBuffer? staging = null;
-            var local = 0;
-            if (keyIndex >= 0)
+            if (keyIndex >= 0 && pending.Staging is { } staging && !pending.ChunkFailed[keyIndex / pending.ChunkSize]
+                && staging.HasValue(fieldIndex, keyIndex))
             {
-                var chunk = keyIndex / pending.ChunkSize;
-                local = keyIndex - (chunk * pending.ChunkSize);
-                staging = pending.ChunkFailed[chunk] ? null : pending.Chunks[chunk];
-            }
-
-            if (staging is not null && staging.HasValue(fieldIndex, local))
-            {
-                column.CopyFrom(staging.Field(fieldIndex), local, row);
+                staging.CopyTo(fieldIndex, keyIndex, column, row);
                 column.SetValid(row);
                 copied[copiedCount++] = row;
             }
@@ -892,27 +938,38 @@ public sealed class FeatureFetcher
                 var v = group.ContextKeyId >= 0 ? _context[group.ContextKeyId] : ScalarValue.Missing;
                 if (v.IsMissing)
                 {
-                    fetches.Add(new ContextFetch(features, null, Task.FromResult(FetchStatus.Ok)));
+                    fetches.Add(new ContextFetch(features, null, new ValueTask<FetchStatus>(FetchStatus.Ok)));
                     continue;
                 }
 
                 var fields = FieldBindings(group, features);
+                var batch = new EntityKeyBatch { Shape = group.Shape, ContextKey = ToKey(v) };
                 var budget = BudgetMs(group);
                 if (budget <= 0)
                 {
-                    fetches.Add(new ContextFetch(features, null, NoTimeLeft));
-                    RecordUnsent(group, group.Shape, ToKey(v), default, fields);
+                    fetches.Add(new ContextFetch(features, null, new ValueTask<FetchStatus>(NoTimeLeft)));
+                    RecordUnsent(group, batch, fields);
                     continue;
                 }
 
                 var staging = new StagingBuffer(fields, 1, _memory);
-                var batch = new EntityKeyBatch { Shape = group.Shape, ContextKey = ToKey(v) };
-                fetches.Add(new ContextFetch(features, staging, CallAsync(group, batch, fields, staging, budget, cancellationToken)));
+                var cancellation = _hook is { Replays: true } ? null : new FetchCancellation(cancellationToken, budget);
+                ValueTask<FetchStatus> call;
+                try
+                {
+                    call = CallAsync(group, batch, fields, staging, budget, cancellation, cancellationToken, out _);
+                }
+                finally
+                {
+                    cancellation?.Release();
+                }
+
+                fetches.Add(new ContextFetch(features, staging, call));
             }
 
             foreach (var fetch in fetches)
             {
-                var status = await fetch.Task.ConfigureAwait(false);
+                var status = await fetch.Call.ConfigureAwait(false);
                 for (var i = 0; i < fetch.Features.Length; i++)
                 {
                     var f = fetch.Features[i];
@@ -923,9 +980,7 @@ public sealed class FeatureFetcher
                         continue;
                     }
 
-                    var value = fetch.Staging is not null && fetch.Staging.HasValue(i, 0)
-                        ? ColumnValues.Get(fetch.Staging.Field(i), 0)
-                        : ScalarValue.Missing;
+                    var value = fetch.Staging is null ? ScalarValue.Missing : fetch.Staging.Get(i, 0);
                     var partial = status.Outcome == FetchOutcome.Partial;
                     _state[f] = partial ? FeatureState.Degraded : FeatureState.Ok;
                     _errors[f] = partial ? status.Error : null;
@@ -1141,8 +1196,8 @@ public sealed class FeatureFetcher
         EntityKeyIndex? index,
         int chunkSize,
         int chunkCount,
-        StagingBuffer?[] chunks,
-        Task<FetchStatus>[] calls,
+        StagingArea? staging,
+        ValueTask<FetchStatus>[] calls,
         bool[] chunkFailed,
         bool noContextKey)
     {
@@ -1151,9 +1206,7 @@ public sealed class FeatureFetcher
         /// <summary>Fetched features; staging field i holds <c>Features[i]</c>.</summary>
         public int[] Features { get; } = features;
 
-        /// <summary>
-        /// Key → key index; key index k is row k % ChunkSize of chunk k / ChunkSize. Null when no live row had a key.
-        /// </summary>
+        /// <summary>Key → key index; key index k belongs to chunk k / ChunkSize. Null when no live row had a key.</summary>
         public EntityKeyIndex? Index { get; } = index;
 
         public int ChunkSize { get; } = chunkSize;
@@ -1161,10 +1214,11 @@ public sealed class FeatureFetcher
         /// <summary>Number of chunks; the chunk arrays below are valid up to this length.</summary>
         public int ChunkCount { get; } = chunkCount;
 
-        /// <summary>Staging per chunk; null when the chunk was never sent (no time left).</summary>
-        public StagingBuffer?[] Chunks { get; } = chunks;
+        /// <summary>Staging of every chunk; null when no chunk was sent (no time left).</summary>
+        public StagingArea? Staging { get; } = staging;
 
-        public Task<FetchStatus>[] Calls { get; } = calls;
+        /// <summary>Each awaited once, by <see cref="CompleteAsync"/>; never, for a prefetch nobody needs.</summary>
+        public ValueTask<FetchStatus>[] Calls { get; } = calls;
 
         /// <summary>Set on completion: chunks whose staging must not be read.</summary>
         public bool[] ChunkFailed { get; } = chunkFailed;
@@ -1172,21 +1226,64 @@ public sealed class FeatureFetcher
         public bool NoContextKey { get; } = noContextKey;
     }
 
-    private sealed record ContextFetch(int[] Features, StagingBuffer? Staging, Task<FetchStatus> Task);
+    /// <param name="Call">Awaited once, by <see cref="FetchContextAsync"/>.</param>
+    private readonly record struct ContextFetch(int[] Features, StagingBuffer? Staging, ValueTask<FetchStatus> Call);
 
     /// <summary>
-    /// What a connector call holds: one hold on the request memory, and its cancellation source. Released when both the
-    /// connector has really completed and the call site has finished with the call (recorded it, when the request records),
-    /// in either order. One hold per external call, so the abandoned-I/O count stays one per connector call still running.
+    /// The cancellation of one fetch: a single source for all its chunks, linked to the caller's token and cancelled at
+    /// the fetch's budget, which the chunks share. A fetch of hundreds of chunks therefore creates one source and one
+    /// timer rather than two timers and a source per chunk (one for the connector's token, one for the wait).
     /// </summary>
-    private sealed class IoLease(RequestMemory memory, CancellationTokenSource cancellation)
+    /// <remarks>
+    /// Reference-counted: the starting fetch holds one reference until every chunk has been sent, and each sent chunk one
+    /// until its connector has really completed. The source is disposed with the last, so a connector that ignores
+    /// cancellation and finishes late still holds a live token; a fetch whose connectors never complete leaves its source
+    /// to the GC once the timer has fired.
+    /// </remarks>
+    private sealed class FetchCancellation
+    {
+        private readonly CancellationTokenSource _source;
+        private int _references = 1;
+
+        public FetchCancellation(CancellationToken caller, int budgetMs)
+        {
+            _source = CancellationTokenSource.CreateLinkedTokenSource(caller);
+            _source.CancelAfter(budgetMs);
+            Token = _source.Token; // read once: the property throws once the source is disposed
+        }
+
+        public CancellationToken Token { get; }
+
+        /// <summary>A chunk is about to be sent.</summary>
+        public void AddCall() => Interlocked.Increment(ref _references);
+
+        /// <summary>A chunk's connector has completed, or the fetch has sent its last chunk.</summary>
+        public void Release()
+        {
+            if (Interlocked.Decrement(ref _references) == 0)
+            {
+                _source.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// What a connector call that did not complete synchronously holds: the hold on the request memory taken before it
+    /// was sent, and a reference to its fetch's cancellation. The memory is released when both the connector has really
+    /// completed and the call site has finished with the call (recorded it, when the request records), in either order.
+    /// One hold per external call, so the abandoned-I/O count stays one per connector call still running. A call answered
+    /// synchronously needs none of this: its call site releases the hold right after recording it.
+    /// </summary>
+    private sealed class IoLease(RequestMemory memory, FetchCancellation cancellation)
     {
         private int _parts = 2;
 
-        public CancellationTokenSource Cancellation { get; } = cancellation;
-
-        /// <summary>The connector's task has completed (or the connector threw before returning one): it writes no more.</summary>
-        public void ConnectorDone() => Release();
+        /// <summary>The connector's task has completed: it writes no more and no longer needs its token.</summary>
+        public void ConnectorDone()
+        {
+            cancellation.Release();
+            Release();
+        }
 
         /// <summary>The call site has finished reading the keys and the staging.</summary>
         public void CallSiteDone() => Release();
@@ -1195,7 +1292,6 @@ public sealed class FeatureFetcher
         {
             if (Interlocked.Decrement(ref _parts) == 0)
             {
-                Cancellation.Dispose();
                 memory.Release();
             }
         }

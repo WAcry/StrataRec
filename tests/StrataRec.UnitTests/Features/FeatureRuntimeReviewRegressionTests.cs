@@ -74,9 +74,18 @@ public class FeatureRuntimeReviewRegressionTests
     // ---- Finding 2: concurrent max_batch chunks must not share staging state ----------------------------------------
 
     [Fact]
-    public async Task Batches_EachChunkWritesIntoItsOwnStagingBuffer()
+    public async Task Batches_EachChunkWritesItsOwnWindowOfTheFetchStaging()
     {
-        var connector = ScriptedConnector.Values((key, _) => key * 1.5);
+        // The chunks of a fetch share its staging arrays (one per field, not one per chunk), each through a window of
+        // its own keys: windows never overlap, so concurrent chunks never write the same element.
+        var windows = new List<(int Keys, ArraySegment<double> Segment)>();
+        var connector = new ScriptedConnector((keys, fields, writer, _) =>
+        {
+            Assert.True(MemoryMarshal.TryGetArray<double>(writer.GetValues<double>(0), out var segment));
+            windows.Add((writer.KeyCount, segment));
+            ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 1.5);
+            return ValueTask.FromResult(FetchStatus.Ok);
+        });
         var rig = new FeatureTestRig().Source("item_store", connector, maxBatch: 2);
         var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
         rig.Build();
@@ -84,16 +93,9 @@ public class FeatureRuntimeReviewRegressionTests
 
         await request.EnsureAsync(score);
 
-        var calls = connector.Calls.ToArray();
-        Assert.Equal(new[] { 2, 2, 1 }, calls.Select(c => c.Writer.KeyCount).OrderByDescending(n => n).ToArray());
-        var arrays = new HashSet<double[]>(ReferenceEqualityComparer.Instance);
-        foreach (var call in calls)
-        {
-            Assert.True(MemoryMarshal.TryGetArray<double>(call.Writer.GetValues<double>(0), out var segment));
-            Assert.Equal(0, segment.Offset); // not a window into a shared buffer
-            Assert.True(arrays.Add(segment.Array!));
-        }
-
+        Assert.Equal(new[] { 2, 2, 1 }, windows.Select(w => w.Keys));
+        Assert.Single(windows.Select(w => w.Segment.Array).Distinct(ReferenceEqualityComparer.Instance));
+        Assert.Equal(new[] { (0, 2), (2, 2), (4, 1) }, windows.Select(w => (w.Segment.Offset, w.Segment.Count)));
         for (var row = 0; row < 5; row++)
         {
             Assert.Equal((row + 1) * 1.5, request.Value(score, row).AsFloat64());
