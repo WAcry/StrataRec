@@ -102,54 +102,16 @@ public sealed class ConfigException : Exception
     public IReadOnlyList<ConfigDiagnostic> Diagnostics { get; }
 }
 
-/// <summary>Small string helpers for "did you mean" hints.</summary>
+/// <summary>"Did you mean" hints for configuration diagnostics.</summary>
 public static class NameSuggestions
 {
     /// <summary>Returns the candidate closest to <paramref name="name"/> by edit distance, if close enough.</summary>
-    public static string? Closest(string name, IEnumerable<string> candidates)
-    {
-        string? best = null;
-        var bestDistance = int.MaxValue;
-        foreach (var c in candidates)
-        {
-            var d = Distance(name, c);
-            if (d < bestDistance)
-            {
-                bestDistance = d;
-                best = c;
-            }
-        }
+    public static string? Closest(string name, IEnumerable<string> candidates) => Json.NameSuggestions.FindClosest(name, candidates);
 
-        return best is not null && bestDistance <= Math.Max(2, name.Length / 3) ? best : null;
-    }
-
+    /// <summary>Formats a hint such as <c>did you mean 'item.clicks_7d'?</c>, or returns null.</summary>
     public static string? DidYouMean(string name, IEnumerable<string> candidates)
     {
         var c = Closest(name, candidates);
         return c is null ? null : $"did you mean '{c}'?";
-    }
-
-    private static int Distance(string a, string b)
-    {
-        var prev = new int[b.Length + 1];
-        var cur = new int[b.Length + 1];
-        for (var j = 0; j <= b.Length; j++)
-        {
-            prev[j] = j;
-        }
-
-        for (var i = 1; i <= a.Length; i++)
-        {
-            cur[0] = i;
-            for (var j = 1; j <= b.Length; j++)
-            {
-                var cost = a[i - 1] == b[j - 1] ? 0 : 1;
-                cur[j] = Math.Min(Math.Min(cur[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost);
-            }
-
-            (prev, cur) = (cur, prev);
-        }
-
-        return prev[b.Length];
     }
 }
