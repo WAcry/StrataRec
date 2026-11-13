@@ -182,7 +182,7 @@ sequenceDiagram
     participant Pipe as 日志管道
 
     Host->>Engine: ExecuteAsync(RecRequest)
-    Engine->>Engine: 固定当前计划，分配实验桶，构建参数快照，漏斗组采样
+    Engine->>Engine: 固定当前计划，映射实验平台的分配，构建参数快照，漏斗组采样
     par 请求级特征预取
         Engine->>Sources: 拉取上下文特征
     and 召回
@@ -220,7 +220,7 @@ public sealed class RecRequest
     public required string PipelineId { get; init; }
     public required string RequestId { get; init; }
     public required RequestInputs Inputs { get; init; }   // 按 request_schema 校验的强类型输入
-    public IReadOnlyList<string>? Assignment { get; init; } // 实验平台分配的桶（experiment/arm）；为空时问 IAssignmentProvider，都没有就只跑基线
+    public IReadOnlyList<string>? Assignment { get; init; } // 实验平台分配的桶（experiment/arm）；null 时问 IAssignmentProvider，没有它就只跑基线；空列表表示平台没有分配桶
     public required TimeSpan Deadline { get; init; }
     public DebugOptions? Debug { get; init; }             // trace、explain、回放捕获、草稿；由宿主授权
 }
