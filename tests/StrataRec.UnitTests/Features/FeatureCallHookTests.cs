@@ -119,9 +119,10 @@ public class FeatureCallHookTests
     {
         // The call is completed once, after the wait decided it: a completion that throws (here the hook) is not run again
         // from the failure path, which would record a successful call a second time as an error (review 14 follow-up).
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var connector = new ScriptedConnector(async (keys, fields, writer, _) =>
         {
-            await Task.Yield(); // completes after the fetch has installed its wait
+            await gate.Task; // pending when the fetch installs its wait: the awaited branch decides this call
             ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 1.5);
             return FetchStatus.Ok;
         });
@@ -133,7 +134,9 @@ public class FeatureCallHookTests
 
         try
         {
-            await request.EnsureAsync(score);
+            var pending = request.EnsureAsync(score); // returns once the one chunk is sent and its wait installed
+            gate.SetResult();
+            await pending;
         }
         catch (InvalidOperationException ex) when (ex.Message == "recorder failed")
         {
@@ -143,6 +146,43 @@ public class FeatureCallHookTests
         await request.Fetcher.WhenIoCompleteAsync();
         var call = Assert.Single(hook.Recorded);
         Assert.Equal((IoOutcome.Ok, FetchOutcome.Ok), (call.Outcome, call.Status.Outcome));
+    }
+
+    [Fact]
+    public async Task AFailureWhoseDescriptionThrows_StillReturnsTheMemory()
+    {
+        // The wait, the classification of a failure and the completion all end in the call site's one finally: an exception
+        // whose Message throws fails the fetch, but never keeps the request memory held (review 15).
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var connector = new ScriptedConnector(async (_, _, _, _) =>
+        {
+            await gate.Task;
+            throw new UndescribableException();
+        });
+        var rig = new FeatureTestRig().Source("item_store", connector);
+        var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+        var request = rig.NewRequest(new long[] { 1, 2 });
+
+        var pending = request.EnsureAsync(score);
+        gate.SetResult();
+        try
+        {
+            await pending;
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "message formatting failed")
+        {
+            // The diagnostic failed; it may surface.
+        }
+
+        await request.Fetcher.WhenIoCompleteAsync();
+        Assert.Equal(0, request.Memory.Release()); // the request's own hold was the last
+        Assert.True(request.Memory.IsReturned);
+    }
+
+    private sealed class UndescribableException : Exception
+    {
+        public override string Message => throw new InvalidOperationException("message formatting failed");
     }
 
     /// <summary>Notes each recorded call, then throws.</summary>

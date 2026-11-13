@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using StrataRec.Core.Values;
 using StrataRec.Features.Runtime;
 using StrataRec.Hosting;
 using StrataRec.Pipeline.Execution;
@@ -109,6 +110,39 @@ public sealed class SampleTimingTests
                 Debug = new DebugOptions { Trace = true, ForceArms = ReplayTests.ControlArms },
             };
         }
+    }
+
+    [Fact]
+    public async Task ATracedAndARecordedRun_ServedByTheFallbackPipeline_CompareByTheServedRun()
+    {
+        // A trace has only the run that served; a recording has the primary's too. Both compare by the served pipeline and
+        // its run, and a request the primary served differs in which pipeline served (review 15).
+        var failing = Engine(ReviewRegressionTests.FallbackWorkspace(brokenLatencyMs: 0));
+        var healthyRoot = ReviewRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
+        ReplayTests.Edit(healthyRoot, "bindings/local.jsonc", "\"fail\": true", "\"fail\": false");
+        var healthy = Engine(healthyRoot);
+
+        var traced = await failing.ExecuteAsync(Request(new DebugOptions { Trace = true }));
+        var recorded = await failing.ExecuteAsync(Request(new DebugOptions { Record = true }));
+        var servedByPrimary = await healthy.ExecuteAsync(Request(new DebugOptions { Record = true }));
+        Assert.Equal(("backup", "backup", "primary"), (traced.ServedBy, recorded.ServedBy, servedByPrimary.ServedBy));
+
+        LiveRunAssert.SameNodeOutcomes(traced, recorded);
+        LiveRunAssert.SameNodeOutcomes(recorded, traced);
+        var error = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => LiveRunAssert.SameNodeOutcomes(servedByPrimary, recorded));
+        Assert.Contains("\n  (served by): primary → backup", error.Message);
+
+        static RecEngine Engine(string root)
+        {
+            var engine = new RecEngine(new PlanEnvironment { BaseDirectory = root });
+            ServiceCollectionExtensions.LoadWorkspace(engine, root, "local", new[] { "primary", "backup" }).ThrowIfErrors("load");
+            return engine;
+        }
+
+        static RecRequest Request(DebugOptions debug) => new()
+        {
+            PipelineId = "primary", RequestId = "r", Inputs = new RequestInputs(), Deadline = TimeSpan.FromSeconds(60), Debug = debug,
+        };
     }
 
     private static (int? TimeoutMs, string? Fallback) Ranker(ExecutionPlan plan)

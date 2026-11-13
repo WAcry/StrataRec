@@ -778,10 +778,13 @@ public sealed class PlanBuilder
         {
             var node = ordered[i];
 
-            // Same order ⇒ no dependency (design 5.3).
+            // Same order ⇒ no dependency (design 5.3). A position runs its node or, when that fails, its fallback, so
+            // every branch of one position must be independent of every branch of the other (review 15): a fallback that
+            // appends rows, filters or reads a column the other writes makes the order matter as much as its node would.
+            var branches = Branches(node, fallbacks);
             for (var j = i + 1; j < ordered.Count && ordered[j].Order == node.Order; j++)
             {
-                if (DependsOn(node, ordered[j]) || DependsOn(ordered[j], node))
+                if (Dependent(branches, Branches(ordered[j], fallbacks)))
                 {
                     _diagnostics.Error("ORDER_DEPENDENCY", artifact, ordered[j].Pointer + "/order",
                         $"Nodes '{node.NodeId}' and '{ordered[j].NodeId}' share order {node.Order} but depend on each other.",
@@ -803,10 +806,10 @@ public sealed class PlanBuilder
                 }
             }
 
-            CompiledNode? fallback = null;
+            var fallback = branches.Fallback;
             if (node.OnFailure == FailurePolicy.Fallback)
             {
-                if (!fallbacks.TryGetValue(node.FallbackNodeId!, out fallback))
+                if (fallback is null)
                 {
                     _diagnostics.Error("FALLBACK_UNKNOWN", artifact, node.Pointer + "/on_failure",
                         $"Fallback node '{node.FallbackNodeId}' does not exist or is not declared with \"role\": \"fallback\".");
@@ -1489,6 +1492,24 @@ public sealed class PlanBuilder
                     NameSuggestions.DidYouMean(name, specs.Keys) ?? $"declare it under /param_schema/{name}");
             }
         }
+    }
+
+    /// <summary>
+    /// What may run at a node's position: the node and, when it fails over (<c>on_failure: fallback</c>), its fallback;
+    /// null when the fallback is unknown (reported where the fallback is checked). The one description the order and the
+    /// data-flow checks share.
+    /// </summary>
+    private static (CompiledNode Node, CompiledNode? Fallback) Branches(CompiledNode node, IReadOnlyDictionary<string, CompiledNode> fallbacks) =>
+        (node, node.OnFailure == FailurePolicy.Fallback && fallbacks.TryGetValue(node.FallbackNodeId!, out var fallback) ? fallback : null);
+
+    /// <summary>Whether any branch of one position depends on any branch of the other, in either direction.</summary>
+    private static bool Dependent((CompiledNode Node, CompiledNode? Fallback) a, (CompiledNode Node, CompiledNode? Fallback) b)
+    {
+        return Either(a.Node, b.Node)
+            || (a.Fallback is { } fa && (Either(fa, b.Node) || (b.Fallback is { } fb1 && Either(fa, fb1))))
+            || (b.Fallback is { } fb && Either(a.Node, fb));
+
+        static bool Either(CompiledNode x, CompiledNode y) => DependsOn(x, y) || DependsOn(y, x);
     }
 
     private static bool DependsOn(CompiledNode reader, CompiledNode writer)
