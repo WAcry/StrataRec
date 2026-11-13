@@ -281,10 +281,11 @@ internal static class ReplayCommand
                 foreach (var column in change.Columns)
                 {
                     json.WriteStartObject(column.Column);
+                    // The bundle encoding: NaN and ±∞ stay distinguishable from a missing value.
                     json.WritePropertyName("recorded");
-                    Logging.LogBatchJson.WriteValue(json, column.Recorded);
+                    Logging.LogBatchJson.WriteValue(json, column.Recorded, nonFiniteAsStrings: true);
                     json.WritePropertyName("replayed");
-                    Logging.LogBatchJson.WriteValue(json, column.Replayed);
+                    Logging.LogBatchJson.WriteValue(json, column.Replayed, nonFiniteAsStrings: true);
                     json.WriteEndObject();
                 }
 

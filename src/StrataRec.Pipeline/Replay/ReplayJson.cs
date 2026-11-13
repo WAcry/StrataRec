@@ -45,8 +45,9 @@ public static class ReplayTiming
 /// <summary>
 /// Converts between engine values and the JSON of a bundle. Every value goes through the log encoding
 /// (<see cref="LogBatchJson.WriteValue"/> / <see cref="LogBatchJson.TryReadValue"/>), so bundles and logs share one value
-/// encoding; a value is always read with the type recorded next to it. Readers throw <see cref="ReplayBundleException"/>
-/// with the pointer of the bad value.
+/// encoding, with one difference: a bundle keeps NaN and ±∞ (as the strings <c>"NaN"</c>, <c>"Infinity"</c>,
+/// <c>"-Infinity"</c>) where a log writes null, because a replay must see what the request saw. A value is always read
+/// with the type recorded next to it. Readers throw <see cref="ReplayBundleException"/> with the pointer of the bad value.
 /// </summary>
 public static class ReplayJson
 {
@@ -68,7 +69,7 @@ public static class ReplayJson
         var buffer = new ArrayBufferWriter<byte>();
         using (var json = new Utf8JsonWriter(buffer))
         {
-            LogBatchJson.WriteValue(json, value);
+            LogBatchJson.WriteValue(json, value, nonFiniteAsStrings: true);
         }
 
         return Parse(buffer);
@@ -82,7 +83,7 @@ public static class ReplayJson
             json.WriteStartArray();
             foreach (var value in values)
             {
-                LogBatchJson.WriteValue(json, value);
+                LogBatchJson.WriteValue(json, value, nonFiniteAsStrings: true);
             }
 
             json.WriteEndArray();
@@ -119,7 +120,7 @@ public static class ReplayJson
         return Parse(buffer);
     }
 
-    /// <summary>float32 values; a non-finite value is written as null, as logs do.</summary>
+    /// <summary>float32 values; a non-finite value is written as its name (<c>"NaN"</c>, <c>"Infinity"</c>, <c>"-Infinity"</c>).</summary>
     public static JsonElement Floats(ReadOnlySpan<float> values)
     {
         var buffer = new ArrayBufferWriter<byte>();
@@ -128,7 +129,7 @@ public static class ReplayJson
             json.WriteStartArray();
             foreach (var value in values)
             {
-                LogBatchJson.WriteValue(json, ScalarValue.FromFloat64(value));
+                LogBatchJson.WriteValue(json, ScalarValue.FromFloat64(value), nonFiniteAsStrings: true);
             }
 
             json.WriteEndArray();
@@ -157,9 +158,10 @@ public static class ReplayJson
             return ScalarValue.Missing;
         }
 
-        if (!LogBatchJson.TryReadValue(element, type, out var value, out var error))
+        if (!LogBatchJson.TryReadValue(element, type, out var value, out var error, nonFiniteAsStrings: true))
         {
-            throw new ReplayBundleException(pointer, error!, $"values use the log encoding of their recorded type ({type})");
+            throw new ReplayBundleException(pointer, error!,
+                $"values use the log encoding of their recorded type ({type}), with \"NaN\", \"Infinity\" and \"-Infinity\" for non-finite floats");
         }
 
         return value;
@@ -220,7 +222,7 @@ public static class ReplayJson
         return keys;
     }
 
-    /// <summary>float32 values; null (a non-finite value) reads back as NaN, which the engine sanitizes like the original.</summary>
+    /// <summary>float32 values, with non-finite values written as their names.</summary>
     public static float[] Floats(JsonElement json, string pointer)
     {
         if (json.ValueKind != JsonValueKind.Array)
@@ -232,12 +234,20 @@ public static class ReplayJson
         var i = 0;
         foreach (var element in json.EnumerateArray())
         {
-            values[i] = element.ValueKind switch
+            if (element.ValueKind == JsonValueKind.Number)
             {
-                JsonValueKind.Null => float.NaN,
-                JsonValueKind.Number => element.GetSingle(),
-                _ => throw new ReplayBundleException(pointer + "/" + i.ToString(CultureInfo.InvariantCulture), $"expected a number or null, got {element.ValueKind}"),
-            };
+                values[i] = element.GetSingle();
+            }
+            else if (LogBatchJson.TryNonFinite(element, out var named))
+            {
+                values[i] = (float)named;
+            }
+            else
+            {
+                throw new ReplayBundleException(pointer + "/" + i.ToString(CultureInfo.InvariantCulture), $"expected a number, got {element.GetRawText()}",
+                    "write NaN and infinities as \"NaN\", \"Infinity\" or \"-Infinity\"");
+            }
+
             i++;
         }
 

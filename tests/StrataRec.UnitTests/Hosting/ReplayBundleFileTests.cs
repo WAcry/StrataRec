@@ -10,7 +10,7 @@ public sealed class ReplayBundleFileTests
 {
     private const string Minimal = """
         {
-          "format": "stratarec.replay_bundle/1",
+          "format": "stratarec.replay_bundle/2",
           "request": { "pipeline_id": "p", "request_id": "r", "seed": 1, "time_ms": 0, "deadline_ms": 100, "assignment": { "source": "none" } },
           "manifest": { "id": "m" },
           "runs": [
@@ -37,6 +37,19 @@ public sealed class ReplayBundleFileTests
         var replay = RunReplay.Create(bundle.Runs[0], "/runs/0");
         Assert.Empty(replay.Gaps);
         Assert.Single(ComparableResult.From(bundle.Result, "/result").Ids);
+    }
+
+    [Fact]
+    public void NonFiniteCandidateScores_RoundTripAsTheirNames()
+    {
+        var bundle = ReplayBundleFile.Parse(Edit(b => b["runs"]![0]!["candidate_calls"] = JsonNode.Parse(
+            """[{ "seq": 1, "node": "recall", "source": "s", "limit": 3, "status": "ok", "ids": [1, 2, 3], "scores": ["NaN", "Infinity", 0.5] }]""")));
+        bundle.Runs[0].CandidateCalls[0].Scores.Add(double.NegativeInfinity);
+
+        var json = ReplayBundleFile.Serialize(bundle);
+
+        Assert.Contains("\"-Infinity\"", json);
+        Assert.Equal(new[] { double.NaN, double.PositiveInfinity, 0.5, double.NegativeInfinity }, ReplayBundleFile.Parse(json).Runs[0].CandidateCalls[0].Scores);
     }
 
     [Fact]
