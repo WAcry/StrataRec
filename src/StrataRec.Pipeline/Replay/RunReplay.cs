@@ -201,48 +201,74 @@ public sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    /// <summary>Answers a candidate source call; <paramref name="buffer"/> is filled up to its limit.</summary>
+    /// <summary>
+    /// Answers a candidate source call; <paramref name="buffer"/> is filled up to its limit. The node's own recorded call
+    /// of the source is replayed exactly, status included, and consumed. A node the recording has no (unconsumed) call
+    /// for, such as a node the configuration added, gets a copy of the longest list the source returned to any node, and
+    /// consumes nothing: another node's call stays that node's, whatever order the nodes ask in.
+    /// </summary>
     internal CandidateSourceStatus Retrieve(string node, string source, CandidateQuery query, CandidateBuffer buffer)
     {
         lock (_gate)
         {
-            CandidateEntry? entry = null;
+            CandidateEntry? exact = null;
             foreach (var candidate in _candidateCalls)
             {
-                if (!candidate.Consumed && candidate.Source == source && (candidate.Node == node || entry is null))
+                if (!candidate.Consumed && candidate.Source == source && candidate.Node == node)
                 {
-                    entry = candidate;
-                    if (candidate.Node == node)
-                    {
-                        break;
-                    }
+                    exact = candidate;
+                    break;
                 }
             }
 
-            if (entry is null)
+            if (exact is not null)
+            {
+                exact.Consumed = true;
+                if (exact.Outcome != IoOutcome.Ok)
+                {
+                    return CandidateSourceStatus.Failed(exact.Error ?? "timed out");
+                }
+
+                Copy(exact, node, query, buffer);
+                return CandidateSourceStatus.Ok;
+            }
+
+            // The data of a successful call; a failure belongs to the call that failed.
+            CandidateEntry? longest = null;
+            foreach (var candidate in _candidateCalls)
+            {
+                if (candidate.Source == source && candidate.Outcome == IoOutcome.Ok && (longest is null || candidate.Ids.Length > longest.Ids.Length))
+                {
+                    longest = candidate;
+                }
+            }
+
+            if (longest is null)
             {
                 AddGap("candidate_source", source, null, "not_recorded", 1, node);
                 return CandidateSourceStatus.Ok;
             }
 
-            entry.Consumed = true;
-            if (entry.Outcome != IoOutcome.Ok)
-            {
-                return CandidateSourceStatus.Failed(entry.Error ?? "timed out");
-            }
-
-            var count = Math.Min(entry.Ids.Length, query.Limit);
-            for (var i = 0; i < count; i++)
-            {
-                buffer.Add(entry.Ids[i], entry.Scores[i]);
-            }
-
-            if (query.Limit > entry.Limit && entry.Ids.Length >= entry.Limit)
-            {
-                AddGap("candidate_source", source, null, "limit_exceeds_recording", query.Limit - entry.Ids.Length, node);
-            }
-
+            Copy(longest, node, query, buffer);
             return CandidateSourceStatus.Ok;
+        }
+    }
+
+    /// <summary>
+    /// Copies a recorded list up to the query's limit. Asking for more than the recording holds is a shortfall only when
+    /// the recorded call stopped at its own limit (the source might have had more); a source that returned fewer had none.
+    /// </summary>
+    private void Copy(CandidateEntry entry, string node, CandidateQuery query, CandidateBuffer buffer)
+    {
+        var count = Math.Min(entry.Ids.Length, query.Limit);
+        for (var i = 0; i < count; i++)
+        {
+            buffer.Add(entry.Ids[i], entry.Scores[i]);
+        }
+
+        if (query.Limit > entry.Ids.Length && entry.Ids.Length >= entry.Limit)
+        {
+            AddGap("candidate_source", entry.Source, null, "limit_exceeds_recording", query.Limit - entry.Ids.Length, node);
         }
     }
 

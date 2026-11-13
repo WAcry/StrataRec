@@ -77,6 +77,55 @@ public sealed class RunReplayTests
         Assert.Equal((5L, 7L), (staging.Get(0, 0).AsInt64(), staging.Get(0, 1).AsInt64()));
     }
 
+    [Fact]
+    public void ANodeWithoutARecordedCall_GetsACopy_WithoutTakingAnotherNodesCall()
+    {
+        var run = Run();
+        run.CandidateCalls.Add(new ReplayCandidateCall
+        {
+            Seq = 0, Node = "recall", Source = "s", Limit = 2, Status = "ok", Ids = Json("[1, 2]"), Scores = new List<double> { 2, 1 },
+        });
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        // Added nodes ask first, with a smaller and a larger quota; then the recorded node asks for its own call.
+        var (one, oneStatus) = Retrieve(replay, "added_small", 1);
+        var (three, threeStatus) = Retrieve(replay, "added_large", 3);
+        var (own, ownStatus) = Retrieve(replay, "recall", 2);
+
+        Assert.True(oneStatus.Succeeded && threeStatus.Succeeded && ownStatus.Succeeded);
+        Assert.Equal(new long[] { 1 }, one);
+        Assert.Equal(new long[] { 1, 2 }, three);
+        Assert.Equal(new long[] { 1, 2 }, own);
+        var shortfall = Assert.Single(replay.Gaps); // the recording stopped at its limit of 2; the source may have had a third
+        Assert.Equal(("candidate_source", "s", "limit_exceeds_recording", 1), (shortfall.Kind, shortfall.Source, shortfall.Reason, shortfall.Count));
+        Assert.Equal(new[] { "added_large" }, shortfall.Examples);
+    }
+
+    [Fact]
+    public void ANodeWithoutARecordedCall_OfASourceThatOnlyFailed_IsAGap()
+    {
+        var run = Run();
+        run.CandidateCalls.Add(new ReplayCandidateCall { Seq = 0, Node = "recall", Source = "s", Limit = 2, Status = "timeout", Error = "timed out" });
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var (added, addedStatus) = Retrieve(replay, "added", 2);
+        var (_, ownStatus) = Retrieve(replay, "recall", 2);
+
+        Assert.True(addedStatus.Succeeded);
+        Assert.Empty(added);
+        Assert.False(ownStatus.Succeeded); // the recorded timeout is replayed for the node that had it
+        var gap = Assert.Single(replay.Gaps);
+        Assert.Equal(("candidate_source", "not_recorded", "added"), (gap.Kind, gap.Reason, Assert.Single(gap.Examples)));
+    }
+
+    internal static (long[] Ids, StrataRec.Pipeline.Sources.CandidateSourceStatus Status) Retrieve(RunReplay replay, string node, int limit)
+    {
+        var buffer = new StrataRec.Pipeline.Sources.CandidateBuffer(limit, new RequestMemory());
+        var query = new StrataRec.Pipeline.Sources.CandidateQuery { SourceName = "s", Limit = limit, Inputs = new RequestInputs(), RequestId = "r" };
+        var status = replay.Retrieve(node, "s", query, buffer);
+        return (buffer.Keys.ToArray().Select(k => k.Int64Value).ToArray(), status);
+    }
+
     internal static ReplayRunRecord Run() => new()
     {
         PipelineId = "p",
