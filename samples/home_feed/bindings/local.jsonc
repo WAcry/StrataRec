@@ -2,8 +2,10 @@
 {
   "environment": "local",
   "sources": {
-    "user_store":   { "connector": "memory@1", "data_file": "fixtures/users.json" },
-    "item_store":   { "connector": "memory@1", "data_file": "fixtures/items.json", "max_batch": 25 },
+    // In-memory fixtures answer synchronously in microseconds. The timeout only bounds a cold start (JIT) on a busy
+    // machine: an answer the fetch sees after its bound is a timeout, however it arrived (design 4.8).
+    "user_store":   { "connector": "memory@1", "data_file": "fixtures/users.json", "timeout_ms": 1000 },
+    "item_store":   { "connector": "memory@1", "data_file": "fixtures/items.json", "timeout_ms": 1000, "max_batch": 25 },
     // Creators are a bounded set read for every request: an in-process table (design 6.6) loaded from a snapshot
     // directory, with no I/O on the request path. The engine serves the plan once the first load is complete.
     "author_store": {

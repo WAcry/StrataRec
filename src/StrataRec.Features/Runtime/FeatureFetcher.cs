@@ -583,36 +583,20 @@ public sealed partial class FeatureFetcher
         }
         catch (Exception ex)
         {
-            // Threw before returning a task: the connector is no longer writing.
-            writerHeld = false;
-            cancellation.Release();
-            try
-            {
-                return new ValueTask<FetchStatus>(
-                    Completed(io, group, batch, fields, writer, sequence, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken)));
-            }
-            finally
-            {
-                _memory.Release();
-            }
+            call = ValueTask.FromException<FetchStatus>(ex); // threw before returning a task: completed, writing no more
         }
 
         if (call.IsCompleted)
         {
             writerHeld = false;
-            cancellation.Release();
             try
             {
-                return new ValueTask<FetchStatus>(Completed(io, group, batch, fields, writer, sequence, call.GetAwaiter().GetResult()));
-            }
-            catch (Exception ex)
-            {
-                return new ValueTask<FetchStatus>(
-                    Completed(io, group, batch, fields, writer, sequence, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken)));
+                return new ValueTask<FetchStatus>(Observed(io, group, batch, fields, writer, budgetMs, sequence, call, cancellation, cancellationToken));
             }
             finally
             {
-                _memory.Release(); // after Completed: a recording reads the keys and the staging there
+                cancellation.Release();
+                _memory.Release(); // after Observed: a recording reads the keys and the staging there
             }
         }
 
@@ -646,7 +630,15 @@ public sealed partial class FeatureFetcher
             // chunk sent later gets no fresh budget. The wait ends with a TimeoutException or the caller's cancellation,
             // even when the connector ignores both; Classify tells them apart by the caller's token.
             var remaining = Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), cancellation.DeadlineTimestamp);
-            var status = await task.WaitAsync(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, cancellationToken).ConfigureAwait(false);
+            var wait = task.WaitAsync(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, cancellationToken);
+            if (ReferenceEquals(wait, task))
+            {
+                // WaitAsync found the task complete (it did between the check in ConnectorCall and here) and returned it
+                // without comparing anything with the bound: no wait was installed to decide, so it is observed now.
+                return Observed(io, group, batch, fields, writer, budgetMs, sequence, new ValueTask<FetchStatus>(task), cancellation, cancellationToken);
+            }
+
+            var status = await wait.ConfigureAwait(false);
             return Completed(io, group, batch, fields, writer, sequence, status);
         }
         catch (Exception ex)
@@ -659,6 +651,43 @@ public sealed partial class FeatureFetcher
             // after the request has released its own hold.
             lease.CallSiteDone();
         }
+    }
+
+    /// <summary>
+    /// Settles a call found completed without an installed wait to decide it: a connector that returned (or threw)
+    /// synchronously, or a task <c>WaitAsync</c> returned as it was. The one rule of when such a result counts (design
+    /// 4.8): only if the fetch observes it within its bound, that is now. Once the caller has cancelled, the deadline has
+    /// passed, or the fetch's timer has cancelled the connectors' token (a timer may fire slightly before the clock reaches
+    /// the deadline), the chunk is cancelled or timed out: its staging is never read and its keys fail like any timeout's.
+    /// A connector that completed in time but is observed late (preempted) is timed out too: conservative by design.
+    /// </summary>
+    /// <param name="completed">Consumed exactly once, in time or not, so a pooled source is released and a failure observed.</param>
+    private FetchStatus Observed(
+        in IoCall io, FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, StagingBuffer writer, int budgetMs, int sequence,
+        ValueTask<FetchStatus> completed, FetchCancellation cancellation, CancellationToken cancellationToken)
+    {
+        IoOutcome? cutOff = cancellationToken.IsCancellationRequested ? IoOutcome.Cancelled
+            : Stopwatch.GetTimestamp() >= cancellation.DeadlineTimestamp || cancellation.Token.IsCancellationRequested ? IoOutcome.Timeout
+            : null;
+        FetchStatus status;
+        IoOutcome? outcome = null;
+        try
+        {
+            status = completed.GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            status = Failure(group, ex, budgetMs, cancellationToken);
+            outcome = Classify(ex, cancellationToken);
+        }
+
+        if (cutOff is { } late)
+        {
+            status = late == IoOutcome.Cancelled ? Cancelled(group) : TimedOut(group, budgetMs);
+            outcome = late;
+        }
+
+        return Completed(io, group, batch, fields, writer, sequence, status, outcome);
     }
 
     /// <summary>
@@ -692,11 +721,15 @@ public sealed partial class FeatureFetcher
 
     private static FetchStatus Failure(FetchGroup group, Exception ex, int budgetMs, CancellationToken requestToken) => ex switch
     {
-        TimeoutException => FetchStatus.Failed($"source '{group.SourceName}' timed out after {budgetMs} ms"),
-        OperationCanceledException when requestToken.IsCancellationRequested => FetchStatus.Failed($"source '{group.SourceName}' was cancelled"),
-        OperationCanceledException => FetchStatus.Failed($"source '{group.SourceName}' timed out after {budgetMs} ms"),
+        TimeoutException => TimedOut(group, budgetMs),
+        OperationCanceledException when requestToken.IsCancellationRequested => Cancelled(group),
+        OperationCanceledException => TimedOut(group, budgetMs),
         _ => FetchStatus.Failed($"source '{group.SourceName}' failed: {ex.Message}"),
     };
+
+    private static FetchStatus TimedOut(FetchGroup group, int budgetMs) => FetchStatus.Failed($"source '{group.SourceName}' timed out after {budgetMs} ms");
+
+    private static FetchStatus Cancelled(FetchGroup group) => FetchStatus.Failed($"source '{group.SourceName}' was cancelled");
 
     private void TrackIo(Task task)
     {
