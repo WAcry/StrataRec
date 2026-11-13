@@ -18,8 +18,11 @@ public sealed class StrataRecOptions
     /// <summary>Pipelines to serve; empty serves every pipeline in the workspace.</summary>
     public List<string> Pipelines { get; } = new();
 
-    /// <summary>Operators, connectors and clients; register custom ones here.</summary>
-    public PlanEnvironment PlanEnvironment { get; set; } = new();
+    /// <summary>
+    /// Operators, connectors and clients; register custom ones here. Defaults to the standard library with fixture
+    /// paths resolved against <see cref="ConfigRoot"/>.
+    /// </summary>
+    public PlanEnvironment? PlanEnvironment { get; set; }
 }
 
 /// <summary>Registers the engine in a host's service container.</summary>
@@ -37,7 +40,8 @@ public static class ServiceCollectionExtensions
         configure(options);
         services.AddSingleton(provider =>
         {
-            var engine = new RecEngine(options.PlanEnvironment, provider.GetService<IAssignmentProvider>());
+            var environment = options.PlanEnvironment ?? new PlanEnvironment { BaseDirectory = Path.GetFullPath(options.ConfigRoot) };
+            var engine = new RecEngine(environment, provider.GetService<IAssignmentProvider>());
             LoadWorkspace(engine, options.ConfigRoot, options.Environment, options.Pipelines).ThrowIfErrors("Loading StrataRec configuration");
             return engine;
         });
