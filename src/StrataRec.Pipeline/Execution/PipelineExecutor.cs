@@ -299,18 +299,27 @@ public sealed class PipelineExecutor
 
             var parameters = plan.Params.Snapshot(request.Arms);
             var variants = new CompiledNode?[plan.Timeline.Length];
-            var capacity = 0;
+            long capacity = 0;
             for (var i = 0; i < variants.Length; i++)
             {
                 var node = plan.Timeline[i].Select(request.Arms);
                 variants[i] = node;
-                if (node is not null && (node.Effects & Effects.RowSource) != 0)
+                if (node is null)
                 {
-                    capacity += Math.Max(0, node.Operator.GetRowLimit(parameters));
+                    continue;
+                }
+
+                capacity += RowLimit(node, parameters);
+
+                // A fallback row source gets room of its own: a primary that failed may already have appended rows, and a
+                // failure restores only the selection, never the physical rows (design 4.8, 5.6).
+                if (node.OnFailure == FailurePolicy.Fallback && plan.SelectFallback(node, request.Arms) is { } fallback)
+                {
+                    capacity += RowLimit(fallback, parameters);
                 }
             }
 
-            var table = new CandidateTable(plan.TableSchema, capacity, memory);
+            var table = new CandidateTable(plan.TableSchema, (int)Math.Min(capacity, int.MaxValue), memory);
             var bindings = new OutputBindings(plan.Schema.Columns.Count, memory);
             var deadline = start + (long)(request.Deadline.TotalSeconds * Stopwatch.Frequency);
             // One set of counters per request: operator expressions and derived features count into the same totals.
@@ -447,6 +456,10 @@ public sealed class PipelineExecutor
             }
         }
     }
+
+    /// <summary>The rows a row source may append for this request; 0 for other nodes.</summary>
+    private static long RowLimit(CompiledNode node, ReadOnlySpan<ScalarValue> parameters) =>
+        (node.Effects & Effects.RowSource) != 0 ? Math.Max(0, node.Operator.GetRowLimit(parameters)) : 0;
 
     /// <summary>Runs one timeline position. Returns an error message when the request must fail.</summary>
     private static async ValueTask<string?> RunPositionAsync(RequestState state, int position, CancellationToken cancellationToken)
@@ -634,13 +647,13 @@ public sealed class PipelineExecutor
             capturedCount = state.Table.Rows.Capture(captured);
         }
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (state.Replay is null)
-        {
-            cts.CancelAfter(TimeSpan.FromMilliseconds(budgetMs));
-        }
-
-        var context = new OperatorContext(state, node.NodeId, node.Effects, cts.Token);
+        // The attempt's absolute deadline. The context hands the operator a token cancelled at it and bounds every external
+        // wait by it, whether or not the client honours the token. A replay takes timing from its recording instead.
+        var deadline = state.Replay is null
+            ? Stopwatch.GetTimestamp() + (long)(Math.Min(budgetMs, AttemptBudget.MaxWaitMs) * Stopwatch.Frequency / 1000)
+            : long.MaxValue;
+        var budget = new AttemptBudget(cancellationToken, deadline);
+        var context = new OperatorContext(state, node.NodeId, node.Effects, budget);
         string? failure;
         var timedOut = false;
         try
@@ -649,7 +662,17 @@ public sealed class PipelineExecutor
             // (design 12.6). Recording only successes would bias triggered analysis against arms that fail more.
             MarkParamTriggers(state, node);
             await node.Operator.ExecuteAsync(context).ConfigureAwait(false);
-            failure = context.FailureReason ?? Commit(state, node);
+            if (budget.RanOut)
+            {
+                // A late success is not a success (AttemptBudget.RanOut). The operator itself is awaited, never abandoned:
+                // it changes the table the fallback works on.
+                timedOut = true;
+                failure = $"timed out after {budgetMs:0} ms";
+            }
+            else
+            {
+                failure = context.FailureReason ?? Commit(state, node);
+            }
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -659,6 +682,11 @@ public sealed class PipelineExecutor
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             failure = $"{ExceptionName(ex)}: {ex.Message}";
+        }
+        finally
+        {
+            // The node token's source lives on while a client the context abandoned still holds its token.
+            budget.Release();
         }
 
         state.Recorder?.Attempt(node.NodeId, timedOut ? ReplayTiming.TimedOut : ReplayTiming.Ran, budgetMs);

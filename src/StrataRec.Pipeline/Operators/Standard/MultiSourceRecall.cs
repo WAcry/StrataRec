@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
@@ -145,6 +146,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
 
             var attempted = 0;
             List<string>? failed = null;
+            OperationCanceledException? cutOff = null;
             for (var i = 0; i < calls.Length; i++)
             {
                 if (calls[i] is null)
@@ -153,12 +155,31 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 }
 
                 attempted++;
-                var status = await calls[i]!.ConfigureAwait(false);
+                CandidateSourceStatus status;
+                try
+                {
+                    status = await calls[i]!.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException ex)
+                {
+                    // The node's budget or the caller: every call is cut off by the same bound, so the others end at once.
+                    // Waiting for them keeps every call recorded before the node's outcome is.
+                    cutOff ??= ex;
+                    buffers[i] = null;
+                    continue;
+                }
+
                 if (!status.Succeeded)
                 {
+                    // Failed or timed out: its buffer is never read (an abandoned source may still be writing it).
                     (failed ??= new List<string>()).Add($"{sources[i].Name}: {status.Error}");
                     buffers[i] = null;
                 }
+            }
+
+            if (cutOff is not null)
+            {
+                ExceptionDispatchInfo.Throw(cutOff);
             }
 
             if (failed is not null && failed.Count == attempted)

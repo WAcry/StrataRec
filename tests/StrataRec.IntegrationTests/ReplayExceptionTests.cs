@@ -131,7 +131,7 @@ public sealed class ReplayExceptionTests
                 {
                     var call = new ModelCall { Model = "flaky", Inputs = Array.Empty<NamedInput>(), BatchSize = rows.Length };
                     await context.InvokeModelAsync(new FlakyClient(exception), new IoTarget(IoKind.Model, "flaky"), call, new DiscardingWriter(), rows,
-                        context.CancellationToken);
+                        timeoutMs: null);
                 }
                 catch (TException)
                 {

@@ -38,7 +38,7 @@ public static class ReplayTiming
     /// <summary>No budget was left to start the attempt.</summary>
     public const string DeadlineExceeded = "deadline_exceeded";
 
-    /// <summary>The attempt was cancelled when its budget ran out.</summary>
+    /// <summary>The attempt ran out of its budget: it was cut off at it, or returned only after it (its result unused).</summary>
     public const string TimedOut = "timed_out";
 }
 

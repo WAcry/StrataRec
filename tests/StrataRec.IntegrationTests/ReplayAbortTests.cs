@@ -140,10 +140,12 @@ public sealed class ReplayAbortTests
     }
 
     [Fact]
-    public async Task ACallStillInFlightAtTheAbort_IsOutstanding_AndWhatItReturnsLaterIsNotRecorded()
+    public async Task ACallTheCallerCutOff_IsRecordedAsTheRequestSawIt_AndWhatTheClientReturnsLaterIsNot()
     {
+        // A custom operator awaits the framework's call of a client that ignores cancellation. The call itself stops
+        // waiting when the caller cancels, so the request is aborted at once, with the call recorded as cancelled.
         var stuck = new StuckClient();
-        var engine = WithStuckScorer(stuck);
+        var engine = WithStuckScorer(stuck, awaitCall: true);
         ReplayBundle? delivered = null;
         using var cancel = new CancellationTokenSource();
 
@@ -152,17 +154,17 @@ public sealed class ReplayAbortTests
         await stuck.Started.Task.WaitAsync(TimeSpan.FromSeconds(60));
         cancel.Cancel();
 
-        // The operator stops waiting for a client that ignores cancellation: the request is aborted with the call in flight.
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(TimeSpan.FromSeconds(60)));
+        Assert.False(stuck.Answered.Task.IsCompleted);
         var call = Assert.Single(delivered!.Runs[0].ModelCalls);
-        Assert.Equal(("outstanding", false), (call.Status, call.Threw));
+        Assert.Equal(("cancelled", true), (call.Status, call.Threw));
         Assert.Equal(30, call.Keys!.Value.GetArrayLength()); // the coarse top 30, known when the call began
         Assert.Equal(30, call.InputDigests.Count);
 
-        // The client answers after the snapshot; its answer is recorded nowhere.
+        // The client answers after the abort; its answer is recorded nowhere.
         stuck.Release.SetResult();
-        await stuck.Invocation!.WaitAsync(TimeSpan.FromSeconds(60));
-        Assert.Equal("outstanding", delivered.Runs[0].ModelCalls[0].Status);
+        await stuck.Answered.Task.WaitAsync(TimeSpan.FromSeconds(60));
+        Assert.Equal("cancelled", delivered.Runs[0].ModelCalls[0].Status);
         Assert.Empty(delivered.Runs[0].ModelCalls[0].Outputs);
 
         var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(delivered)));
@@ -171,6 +173,29 @@ public sealed class ReplayAbortTests
         Assert.True(outcome.Report.Diff.Identical);
         Assert.DoesNotContain(outcome.Report.Nodes, n => n.Changed);
         Assert.Equal("aborted", outcome.Report.Nodes.Single(n => n.Node == "ctr_ranker").Replayed);
+    }
+
+    [Fact]
+    public async Task ACallStillInFlightWhenTheRunIsRecorded_IsOutstanding_AndWhatItReturnsLaterIsNotRecorded()
+    {
+        // An operator that does not wait for its call (it must; nothing forces it to) fails for want of its column, and the
+        // run is recorded while the call is still in flight: the recording is a snapshot and never waits for a call.
+        var stuck = new StuckClient();
+        var engine = WithStuckScorer(stuck, awaitCall: false);
+
+        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-in-flight", 1001, "home", arms: null, deadlineMs: 600_000))
+            .AsTask().WaitAsync(TimeSpan.FromSeconds(60));
+
+        Assert.Equal("node 'ctr_ranker' failed: did not write non-nullable column 'score.ctr'", recorded.Error);
+        var call = Assert.Single(recorded.Recording!.Runs[0].ModelCalls);
+        Assert.Equal(("outstanding", false), (call.Status, call.Threw));
+        Assert.Equal(30, call.InputDigests.Count);
+
+        // The call completes after the snapshot; its answer is recorded nowhere.
+        stuck.Release.SetResult();
+        Assert.True((await stuck.Invocation!.WaitAsync(TimeSpan.FromSeconds(60))).Succeeded);
+        Assert.Equal("outstanding", recorded.Recording.Runs[0].ModelCalls[0].Status);
+        Assert.Empty(recorded.Recording.Runs[0].ModelCalls[0].Outputs);
     }
 
     [Fact]
@@ -250,8 +275,9 @@ public sealed class ReplayAbortTests
         Debug = new DebugOptions { ForceArms = request.Debug?.ForceArms, OnRecording = onRecording },
     };
 
-    /// <summary>The baseline pipeline without experiments or taps, with ctr_ranker replaced by an operator that stops waiting for a stuck client.</summary>
-    private static RecEngine WithStuckScorer(StuckClient client)
+    /// <summary>The baseline pipeline without experiments or taps, with ctr_ranker replaced by an operator that calls a stuck client.</summary>
+    /// <param name="awaitCall">Whether the operator awaits the framework's call, as it should, or returns without it.</param>
+    private static RecEngine WithStuckScorer(StuckClient client, bool awaitCall)
     {
         var host = HomeFeedTestHost.Load();
         var pipeline = host.Request.Pipeline;
@@ -264,7 +290,7 @@ public sealed class ReplayAbortTests
         var engine = new RecEngine(new PlanEnvironment
         {
             BaseDirectory = host.Root,
-            Operators = OperatorRegistry.CreateDefault().Add(new StuckScorerFactory(client)),
+            Operators = OperatorRegistry.CreateDefault().Add(new StuckScorerFactory(client, awaitCall)),
         });
         var load = engine.Load(new PlanCompileRequest
         {
@@ -311,7 +337,10 @@ public sealed class ReplayAbortTests
 
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        /// <summary>The framework call the operator stopped waiting for; it completes (and tries to record) after the client answers.</summary>
+        /// <summary>Set once the client has answered, after the test released it.</summary>
+        public TaskCompletionSource Answered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>The framework's call of the client, as the operator started it.</summary>
         public Task<ModelStatus>? Invocation { get; set; }
 
         public string ClientType => "stuck";
@@ -323,27 +352,32 @@ public sealed class ReplayAbortTests
             Started.TrySetResult();
             await Release.Task;
             outputs.GetFloat32("score", call.BatchSize).Span.Fill(0.5f);
+            Answered.TrySetResult();
             return ModelStatus.Ok;
         }
     }
 
-    /// <summary>Calls the stuck client through the framework and waits for it only as long as its node token allows.</summary>
-    private sealed class StuckScorerFactory(StuckClient client) : IOperatorFactory
+    /// <summary>Calls the stuck client through the framework, which bounds the wait for it.</summary>
+    private sealed class StuckScorerFactory(StuckClient client, bool awaitCall) : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } =
             new("StuckScorer", 1, Effects.ColumnWriter, typeof(ExpressionScorerConfig), "Scores with a model that never answers in time.");
 
-        // Compiled as an expression scorer for its output declaration; the request is aborted before anything is written.
-        public Operator? Compile(OperatorCompileContext context) => new ExpressionScorerFactory().Compile(context) is null ? null : new StuckScorer(client);
+        // Compiled as an expression scorer for its output declaration; the operator never writes it.
+        public Operator? Compile(OperatorCompileContext context) =>
+            new ExpressionScorerFactory().Compile(context) is null ? null : new StuckScorer(client, awaitCall);
 
-        private sealed class StuckScorer(StuckClient client) : Operator
+        private sealed class StuckScorer(StuckClient client, bool awaitCall) : Operator
         {
             public override async ValueTask ExecuteAsync(OperatorContext context)
             {
                 var rows = context.LiveRows.ToArray();
                 var call = new ModelCall { Model = "stuck", Inputs = Array.Empty<NamedInput>(), BatchSize = rows.Length };
-                client.Invocation = context.InvokeModelAsync(client, new IoTarget(IoKind.Model, "stuck"), call, new ArrayWriter(), rows, context.CancellationToken);
-                await client.Invocation.WaitAsync(context.CancellationToken);
+                client.Invocation = context.InvokeModelAsync(client, new IoTarget(IoKind.Model, "stuck"), call, new ArrayWriter(), rows, timeoutMs: null);
+                if (awaitCall)
+                {
+                    await client.Invocation;
+                }
             }
         }
 

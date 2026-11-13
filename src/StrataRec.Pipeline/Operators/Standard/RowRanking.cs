@@ -10,7 +10,13 @@ namespace StrataRec.Pipeline.Operators.Standard;
 /// </summary>
 internal static class RowRanking
 {
-    /// <summary>Reads a numeric column as double; returns false when the row is missing or NaN.</summary>
+    private const ulong SignBit = 0x8000_0000_0000_0000UL;
+
+    /// <summary>
+    /// Reads a numeric column as double, for operators that compute with scores (MMR); returns false when the row is
+    /// missing or NaN. Ranking compares <see cref="TryGetSortKey"/> instead: a double holds 53 bits, so distinct int64
+    /// scores beyond 2^53 can read as the same double.
+    /// </summary>
     public static bool TryGetScore(ColumnBuffer column, int row, out double value)
     {
         value = 0;
@@ -31,6 +37,52 @@ internal static class RowRanking
     }
 
     /// <summary>
+    /// An exact sort key of a row's score: keys compared as unsigned integers order the scores of one column as numbers,
+    /// ascending. Integers flip the sign bit, so every int64 keeps its own place; floats take the IEEE 754 total order,
+    /// with −0.0 read as +0.0 so the two zeros tie. Returns false when the row is missing or NaN.
+    /// </summary>
+    public static bool TryGetSortKey(ColumnBuffer column, int row, out ulong key)
+    {
+        key = 0;
+        if (!column.IsValid(row))
+        {
+            return false;
+        }
+
+        switch (column)
+        {
+            case ScalarColumn<long> l:
+                key = Int64Key(l[row]);
+                return true;
+            case ScalarColumn<int> i:
+                key = Int64Key(i[row]);
+                return true;
+            case ScalarColumn<double> d:
+                return TryFloat64Key(d[row], out key);
+            case ScalarColumn<float> f:
+                return TryFloat64Key(f[row], out key); // widening is exact
+            default:
+                throw new InvalidOperationException($"Column of type {column.Type} is not numeric.");
+        }
+    }
+
+    internal static ulong Int64Key(long value) => unchecked((ulong)value) ^ SignBit;
+
+    internal static bool TryFloat64Key(double value, out ulong key)
+    {
+        if (double.IsNaN(value))
+        {
+            key = 0;
+            return false;
+        }
+
+        // Negative numbers order backwards by their bits: flip them all; non-negative ones only need the sign bit set.
+        var bits = unchecked((ulong)BitConverter.DoubleToInt64Bits(value == 0 ? 0.0 : value));
+        key = (bits & SignBit) != 0 ? ~bits : bits | SignBit;
+        return true;
+    }
+
+    /// <summary>
     /// Orders <paramref name="rows"/> in place so that its first <paramref name="k"/> entries are the best k rows in
     /// rank order. Entries after k are in unspecified order. Runs in O(n + k log k) expected time.
     /// </summary>
@@ -48,9 +100,11 @@ internal static class RowRanking
         for (var i = 0; i < n; i++)
         {
             var row = rows[i];
-            var v = 0.0;
-            var present = score is not null && TryGetScore(score, row, out v);
-            entries[i] = new Entry(present ? (ascending ? v : -v) : 0, intIds is null ? 0 : intIds[row], row, present ? (byte)0 : (byte)1);
+            ulong key = 0;
+            var present = score is not null && TryGetSortKey(score, row, out key);
+
+            // Best first: descending order is ascending order of the complemented key.
+            entries[i] = new Entry(present ? (ascending ? key : ~key) : 0, intIds is null ? 0 : intIds[row], row, present ? (byte)0 : (byte)1);
         }
 
         var comparer = new EntryComparer(intIds is null ? table.StringIds : null);
@@ -133,7 +187,7 @@ internal static class RowRanking
         }
     }
 
-    internal readonly record struct Entry(double Key, long Id, int Row, byte Missing);
+    internal readonly record struct Entry(ulong Key, long Id, int Row, byte Missing);
 
     private readonly struct EntryComparer(DictStringColumn? stringIds) : IComparer<Entry>
     {
