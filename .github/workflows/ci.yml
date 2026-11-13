@@ -39,7 +39,8 @@ jobs:
 
       - name: Pin the SDK
         if: matrix.pin
-        run: echo '{ "sdk": { "version": "${{ matrix.sdk }}.100", "rollForward": "latestFeature" } }' > global.json
+        run: |
+          echo '{ "sdk": { "version": "${{ matrix.sdk }}.100", "rollForward": "latestFeature" } }' > global.json
 
       - name: Show the SDK
         run: dotnet --version
