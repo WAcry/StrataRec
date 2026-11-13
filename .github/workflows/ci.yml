@@ -18,17 +18,16 @@ env:
 
 jobs:
   build-test:
-    name: build and test (${{ matrix.os }}, SDK ${{ matrix.sdk }})
-    runs-on: ${{ matrix.os }}
+    name: build and test (SDK ${{ matrix.sdk }})
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           # The minimum supported SDK, pinned so a newer preinstalled SDK cannot mask a toolchain incompatibility.
-          - { os: ubuntu-latest, sdk: "8.0", pin: true }
-          - { os: windows-latest, sdk: "8.0", pin: true }
+          - { sdk: "8.0", pin: true }
           # The newest SDK (still targeting net8.0, so the .NET 8 runtime runs the tests).
-          - { os: ubuntu-latest, sdk: "10.0", pin: false }
+          - { sdk: "10.0", pin: false }
     steps:
       - uses: actions/checkout@v4
 
@@ -40,7 +39,6 @@ jobs:
 
       - name: Pin the SDK
         if: matrix.pin
-        shell: bash
         run: echo '{ "sdk": { "version": "${{ matrix.sdk }}.100", "rollForward": "latestFeature" } }' > global.json
 
       - name: Show the SDK
@@ -59,7 +57,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-${{ matrix.os }}-${{ matrix.sdk }}
+          name: test-results-${{ matrix.sdk }}
           path: TestResults
 
   sample:

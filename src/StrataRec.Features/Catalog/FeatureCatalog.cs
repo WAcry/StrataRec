@@ -72,10 +72,6 @@ public sealed class FeatureDefinition
 
     public bool IsDerived => Expr is not null;
 
-    public string? Sensitivity { get; init; }
-
-    public bool IsPersonal => Sensitivity == "personal";
-
     public bool Deprecated { get; init; }
 
     public string? Owner { get; init; }
@@ -170,12 +166,6 @@ public sealed class FeatureCatalog
                 continue;
             }
 
-            if (spec.Sensitivity is not (null or "public" or "internal" or "personal"))
-            {
-                diagnostics.Error("FEATURE_BAD_SENSITIVITY", artifactName, pointer + "/sensitivity",
-                    $"Unknown sensitivity '{spec.Sensitivity}'.", "use public, internal or personal");
-            }
-
             features[name] = new FeatureDefinition
             {
                 Name = name,
@@ -185,7 +175,6 @@ public sealed class FeatureCatalog
                 Field = spec.Field,
                 HasDefault = hasDefault,
                 Default = def,
-                Sensitivity = spec.Sensitivity,
                 Deprecated = spec.Deprecated ?? false,
                 Owner = spec.Owner,
                 Description = spec.Description,

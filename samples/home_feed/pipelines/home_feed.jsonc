@@ -84,7 +84,7 @@
       "columns": { "coarse": "col.score.coarse" }
     },
     "ranker_inputs": {
-      "group": "all", "delivery": "durable", "purpose": "model_training",
+      "group": "all", "delivery": "durable",
       "attach": { "after": "ctr_ranker" },
       "columns_from": "ctr_ranker.inputs",
       "columns": { "p_click": "col.score.ctr" }

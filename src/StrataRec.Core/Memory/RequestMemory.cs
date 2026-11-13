@@ -54,11 +54,6 @@ public sealed class RequestMemory
     /// <summary>Total bytes currently rented (approximate, for metrics).</summary>
     public long RentedBytes { get; private set; }
 
-    /// <summary>
-    /// When set, buffers are zeroed on return (used for requests that touched <c>personal</c> features, design 4.8).
-    /// </summary>
-    public bool ClearOnReturn { get; set; }
-
     /// <summary>Rents an array of at least <paramref name="minimumLength"/> elements. Contents are unspecified.</summary>
     public T[] Rent<T>(int minimumLength)
     {
@@ -132,14 +127,13 @@ public sealed class RequestMemory
 
         // Once _returned is set no Rent touches the ledger (it checks under the lock and gives a late lease straight
         // back), so the ledger can be walked outside the lock without copying it.
-        var clear = ClearOnReturn;
         var leases = _leases;
         var count = _leaseCount;
         _leases = Array.Empty<Lease>();
         _leaseCount = 0;
         for (var i = 0; i < count; i++)
         {
-            leases[i].Returner.Return(_pool, leases[i].Array, clear);
+            leases[i].Returner.Return(_pool, leases[i].Array);
         }
 
         if (leases.Length > 0)
@@ -177,25 +171,25 @@ public sealed class RequestMemory
 
     private abstract class ArrayReturner
     {
-        public abstract void Return(IBufferPool pool, Array array, bool clear);
+        public abstract void Return(IBufferPool pool, Array array);
     }
 
     private sealed class Returner<T> : ArrayReturner
     {
         public static readonly Returner<T> Instance = new();
 
-        public override void Return(IBufferPool pool, Array array, bool clear)
+        public override void Return(IBufferPool pool, Array array)
         {
             var typed = (T[])array;
             var containsRefs = RuntimeHelpers.IsReferenceOrContainsReferences<T>();
 #if STRATAREC_POISON_BUFFERS
-            if (!containsRefs && !clear)
+            if (!containsRefs)
             {
                 // Debug/test builds fill returned buffers with a fixed pattern so use-after-return surfaces quickly.
                 Poison(typed);
             }
 #endif
-            pool.Return(typed, clear || containsRefs);
+            pool.Return(typed, containsRefs);
         }
 
 #if STRATAREC_POISON_BUFFERS

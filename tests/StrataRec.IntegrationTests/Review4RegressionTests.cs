@@ -143,27 +143,6 @@ public sealed class Review4RegressionTests
         Assert.Contains(compilation.Diagnostics, d => d.IsError && d.Code == "TAP_PINNED_NOT_PRODUCED" && d.Message.Contains("fusion"));
     }
 
-    [Fact]
-    public void FeaturesDerivedFromPersonalDataKeepTheLoggingRestriction()
-    {
-        // Finding 2: an alias of a personal feature must not escape purpose/durable rules (design 8.9).
-        var host = HomeFeedTestHost.LoadModified(root =>
-        {
-            var catalog = Path.Combine(root, "catalog", "home_feed.jsonc");
-            File.WriteAllText(catalog, File.ReadAllText(catalog)
-                .Replace("\"field\": \"u_tenure_d\", \"default\": 0.0 }", "\"field\": \"u_tenure_d\", \"default\": 0.0, \"sensitivity\": \"personal\" }", StringComparison.Ordinal)
-                .Replace("\"derived_features\": {", "\"derived_features\": { \"user.tenure_copy\": { \"type\": \"float32\", \"expr\": \"ctx.user.tenure_days\" },", StringComparison.Ordinal));
-            var pipeline = Path.Combine(root, "pipelines", "home_feed.jsonc");
-            File.WriteAllText(pipeline, File.ReadAllText(pipeline).Replace(
-                "\"context\": { \"user_id\": \"ctx.request.user_id\",", "\"context\": { \"tenure\": \"ctx.user.tenure_copy\", \"user_id\": \"ctx.request.user_id\",", StringComparison.Ordinal));
-        });
-
-        var compilation = host.Compile();
-
-        Assert.False(compilation.Succeeded);
-        Assert.Contains(compilation.Diagnostics, d => d.IsError && d.Code == "TAP_PERSONAL");
-    }
-
     private static HomeFeedTestHost WithPipelineEdit(string from, string to) => HomeFeedTestHost.LoadModified(root =>
     {
         var pipeline = Path.Combine(root, "pipelines", "home_feed.jsonc");

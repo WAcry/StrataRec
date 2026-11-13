@@ -331,22 +331,6 @@ public sealed class FeatureFetcher
     }
 
     /// <summary>
-    /// Requests that the request's buffers be zeroed on return when a <c>personal</c> feature is about to be
-    /// materialized (design 4.8). Staging and slot buffers hold the values in pooled arrays.
-    /// </summary>
-    private void ClearOnReturnIfPersonal(int[] features)
-    {
-        foreach (var f in features)
-        {
-            if (_plan.Features[f].IsPersonal)
-            {
-                _memory.ClearOnReturn = true;
-                return;
-            }
-        }
-    }
-
-    /// <summary>
     /// A group keyed by a failed feature cannot be fetched; its features fail too (design 6.7: a dependency failure
     /// never degrades into legitimate missing values).
     /// </summary>
@@ -370,8 +354,6 @@ public sealed class FeatureFetcher
     private PendingFetch Start(FetchGroup group, int[] features, CancellationToken cancellationToken)
     {
         var fields = FieldBindings(group, features);
-        ClearOnReturnIfPersonal(features);
-
         // Collect distinct keys of live rows that still miss any of the fetched features. The index, the key array and
         // the per-chunk arrays are rented from the request memory (design 4.8), so a fetch allocates nothing per key.
         // Lifetimes: the index and the chunk arrays are read only on the request's thread (Backfill, CompleteAsync),
@@ -705,11 +687,6 @@ public sealed class FeatureFetcher
             return;
         }
 
-        if (feature.IsPersonal)
-        {
-            _memory.ClearOnReturn = true;
-        }
-
         var definition = feature.Definition;
         var column = _table.GetOrCreateSlot(feature.Slot);
         var span = buffer.AsSpan(0, count);
@@ -799,7 +776,6 @@ public sealed class FeatureFetcher
                     continue;
                 }
 
-                ClearOnReturnIfPersonal(features);
                 var fields = FieldBindings(group, features);
                 var budget = BudgetMs(group);
                 if (budget <= 0)
@@ -850,11 +826,6 @@ public sealed class FeatureFetcher
                 if (worst == FeatureState.Failed)
                 {
                     continue;
-                }
-
-                if (info.IsPersonal)
-                {
-                    _memory.ClearOnReturn = true;
                 }
 
                 ScalarValue derived;

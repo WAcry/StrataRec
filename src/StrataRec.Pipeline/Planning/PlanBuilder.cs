@@ -516,7 +516,6 @@ public sealed class PlanBuilder
         var readFeatures = new SortedSet<int>();
         var readContext = new SortedSet<int>();
         var pinnedNodes = new SortedSet<string>(StringComparer.Ordinal);
-        var personal = false;
         foreach (var symbol in reads)
         {
             if (symbol.Kind == SymbolKind.Column)
@@ -525,11 +524,9 @@ public sealed class PlanBuilder
                 if (column.Kind == ColumnKind.Feature)
                 {
                     readFeatures.Add(column.FeatureIndex);
-                    personal |= IsPersonalFeature(column.FeatureIndex);
                 }
                 else if (column.Kind == ColumnKind.Output)
                 {
-                    personal |= IsPersonalText(symbol.Id, new HashSet<int>());
                     if (symbol.FixedSlot < 0)
                     {
                         readOutputs.Add(symbol.Id);
@@ -543,15 +540,7 @@ public sealed class PlanBuilder
             else if (symbol.Kind == SymbolKind.Context && Schema.ContextFields[symbol.Id].FeatureIndex is >= 0 and var f)
             {
                 readContext.Add(f);
-                personal |= IsPersonalFeature(f);
             }
-        }
-
-        if (personal && (spec.Purpose is null || delivery != Logging.LogDelivery.Durable))
-        {
-            _diagnostics.Error("TAP_PERSONAL", artifact, pointer, "The tap records personal data (a personal feature, a feature derived from one, or text generated from one); it needs a 'purpose' and durable delivery (design 8.9).",
-                "add \"purpose\": \"...\" and \"delivery\": \"durable\", or drop the personal columns");
-            ok = false;
         }
 
         if (!ok)
@@ -572,7 +561,6 @@ public sealed class PlanBuilder
             MaxRows = spec.Rows?.MaxRows,
             Context = context.ToArray(),
             Columns = columns.ToArray(),
-            Purpose = spec.Purpose,
             SchemaId = CanonicalJson.Hash(new JsonObject { ["tap"] = definition.DeepClone(), ["types"] = types }),
             ReadOutputs = ToSortedArray(readOutputs),
             ReadFeatures = ToSortedArray(readFeatures),
@@ -1252,69 +1240,6 @@ public sealed class PlanBuilder
             Expression = expression,
             Dependencies = dependencies,
         });
-    }
-
-    /// <summary>
-    /// Personal per design 8.9: declared personal, or derived from a personal feature — an alias or a transformation
-    /// must not launder the restriction away.
-    /// </summary>
-    private bool IsPersonalFeature(int feature)
-    {
-        var info = _features[feature];
-        if (info.Definition.IsPersonal)
-        {
-            return true;
-        }
-
-        foreach (var dependency in info.Dependencies)
-        {
-            if (IsPersonalFeature(dependency))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// A <c>text</c> output column generated from personal data (design 8.9: e.g. a prompt containing the user's
-    /// history): some producer, in any variant, reads a personal feature or such a text column. Numeric outputs such as
-    /// model scores are not personal.
-    /// </summary>
-    private bool IsPersonalText(int logical, HashSet<int> visiting)
-    {
-        if (Schema.Columns[logical].Type.Kind != StorageKind.Text || !visiting.Add(logical))
-        {
-            return false;
-        }
-
-        foreach (var node in _nodes)
-        {
-            if (!Writes(node, logical))
-            {
-                continue;
-            }
-
-            foreach (var f in node.ReadFeatures)
-            {
-                if (IsPersonalFeature(f))
-                {
-                    return true;
-                }
-            }
-
-            foreach (var read in node.ReadColumns)
-            {
-                var column = Schema.Columns[read];
-                if (column.Kind == ColumnKind.Feature ? IsPersonalFeature(column.FeatureIndex) : IsPersonalText(read, visiting))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
     }
 
     private int FeatureIndexOf(in Symbol symbol)

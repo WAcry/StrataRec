@@ -49,9 +49,6 @@ public sealed class FeatureSpec
 
     public string? Description { get; init; }
 
-    /// <summary><c>public</c>, <c>internal</c> or <c>personal</c> (design 6.10).</summary>
-    public string? Sensitivity { get; init; }
-
     public bool? Deprecated { get; init; }
 }
 

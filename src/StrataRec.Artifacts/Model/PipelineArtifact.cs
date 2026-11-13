@@ -138,8 +138,6 @@ public sealed class LogTapSpec
     public string? ColumnsFrom { get; init; }
 
     public bool? FetchMissing { get; init; }
-
-    public string? Purpose { get; init; }
 }
 
 public sealed class LogTapAttachSpec

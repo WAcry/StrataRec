@@ -64,8 +64,6 @@ public sealed class CompiledTap
 
     public required (string Name, CompiledExpression Expression)[] Columns { get; init; }
 
-    public string? Purpose { get; init; }
-
     /// <summary>Content id of the tap's schema: definition plus resolved column types (lineage, design 8.7).</summary>
     public required string SchemaId { get; init; }
 

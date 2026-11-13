@@ -70,7 +70,7 @@ internal sealed class FeatureTestRig
         return this;
     }
 
-    public int Physical(string name, EntityDefinition entity, ColumnType type, string source, ScalarValue? defaultValue = null, bool personal = false)
+    public int Physical(string name, EntityDefinition entity, ColumnType type, string source, ScalarValue? defaultValue = null)
     {
         var hasDefault = defaultValue is not null;
         var finalType = hasDefault ? type.AsNonNullable() : type.AsNullable();
@@ -83,7 +83,6 @@ internal sealed class FeatureTestRig
             Field = name[(name.IndexOf('.') + 1)..],
             HasDefault = hasDefault,
             Default = defaultValue ?? ScalarValue.Missing,
-            Sensitivity = personal ? "personal" : null,
             Pointer = "/features/" + name,
         };
         return Add(definition, finalType, null, Array.Empty<int>());
@@ -91,7 +90,7 @@ internal sealed class FeatureTestRig
 
     public int Derived(
         string name, EntityDefinition entity, ColumnType type, CompiledExpression expression, int[] dependencies,
-        ScalarValue? defaultValue = null, bool personal = false)
+        ScalarValue? defaultValue = null)
     {
         var hasDefault = defaultValue is not null;
         var finalType = hasDefault ? type.AsNonNullable() : type;
@@ -103,7 +102,6 @@ internal sealed class FeatureTestRig
             Expr = expression.Source,
             HasDefault = hasDefault,
             Default = defaultValue ?? ScalarValue.Missing,
-            Sensitivity = personal ? "personal" : null,
             Pointer = "/features/" + name,
         };
         return Add(definition, finalType, expression, dependencies);
@@ -287,9 +285,6 @@ internal sealed class PoisoningPool : IBufferPool
 
     public int Returned { get; private set; }
 
-    /// <summary>Unmanaged arrays returned without clearing (would keep personal values in a real pool).</summary>
-    public int ReturnedUncleared { get; private set; }
-
     public T[] Rent<T>(int minimumLength)
     {
         var array = new T[Math.Max(1, minimumLength)];
@@ -302,10 +297,6 @@ internal sealed class PoisoningPool : IBufferPool
         lock (_gate)
         {
             Returned++;
-            if (!clearArray && !RuntimeHelpers.IsReferenceOrContainsReferences<T>())
-            {
-                ReturnedUncleared++;
-            }
         }
 
         if (clearArray)
