@@ -1,3 +1,4 @@
+using System.Numerics;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
@@ -47,13 +48,14 @@ public sealed class TableSchema
 /// </summary>
 public readonly struct TableCheckpoint
 {
-    internal TableCheckpoint(int[] order, int count, int physicalRows, int appended, int compactions)
+    internal TableCheckpoint(int[] order, int count, int physicalRows, int appended, int compactions, int slots)
     {
         Order = order;
         Count = count;
         PhysicalRows = physicalRows;
         Appended = appended;
         Compactions = compactions;
+        Slots = slots;
     }
 
     /// <summary>The ranking, in an array rented from the request memory; <see cref="Count"/> rows.</summary>
@@ -68,6 +70,9 @@ public readonly struct TableCheckpoint
 
     /// <summary>How many times the table had been compacted: a rollback cannot cross a Compact.</summary>
     internal int Compactions { get; }
+
+    /// <summary>How many slots had been created: the ones created after it are dropped by a rollback.</summary>
+    internal int Slots { get; }
 }
 
 /// <summary>
@@ -76,6 +81,17 @@ public readonly struct TableCheckpoint
 /// <remarks>
 /// <para>Slots are allocated lazily on first write. Each slot has a fill bitmap marking which physical rows have been
 /// populated (with a value or an explicit "missing"); rows needing a fetch are <c>alive &amp; ~filled</c>.</para>
+/// <para>A row has no value in a slot until something writes it, and the table alone applies that rule: every row of a
+/// new slot is missing and unfilled, including rows appended before the slot existed (a row source's column that an
+/// earlier row source did not write); a row is missing and unfilled in every existing slot when it is appended; and
+/// <see cref="Rollback"/> makes the rows it releases so again. Writers mark what they write (the <c>Set</c> methods of
+/// the column buffers, or one of the bulk <c>SetValid</c> overloads after a bulk write), so a value nobody wrote
+/// (pooled data, a rolled-back attempt's, the <c>''</c> or <c>0</c> of a never-written row) is never read as valid,
+/// and a writer that forgets to mark leaves its rows missing rather than wrong.</para>
+/// <para>Data no successful attempt wrote is never visible either: <see cref="Rollback"/> drops every slot created since
+/// its checkpoint (a failed node's own outputs, or a shared row-source slot it started) and releases the rows the attempt
+/// appended in the slots that existed before, which keep everything else. A dropped slot reads as never written, through
+/// any read path (the current version or a pinned <c>col.x@node</c>), exactly as in a replay that skips the attempt.</para>
 /// <para>Rows at or past <see cref="PhysicalRowCount"/> carry nothing that is read: a row's state in every slot is reset
 /// when it is appended, and <see cref="Rollback"/> releases the rows a failed attempt appended, so the next append
 /// reuses them.</para>
@@ -85,6 +101,8 @@ public sealed class CandidateTable
 {
     private readonly ColumnBuffer?[] _slots;
     private readonly ulong[]?[] _filled;
+    private readonly int[] _created; // [0, _createdCount): every existing slot but the key column, in creation order
+    private int _createdCount;
     private int _totalAppended;
     private EntityKeyIndex? _keyIndex; // key → first physical row, for rows [0, _indexedRows); built on first FindRow
     private int _indexedRows;
@@ -98,6 +116,7 @@ public sealed class CandidateTable
         Memory = memory;
         _slots = new ColumnBuffer?[schema.SlotCount];
         _filled = new ulong[]?[schema.SlotCount];
+        _created = memory.Rent<int>(schema.SlotCount);
         Rows = new RowSelection(capacity, memory);
         _slots[TableSchema.EntityIdSlot] = ColumnBuffer.Create(schema.SlotTypes[0], capacity, memory);
     }
@@ -141,20 +160,19 @@ public sealed class CandidateTable
     /// <summary>Returns the slot's buffer, or null when nothing has been written to it yet.</summary>
     public ColumnBuffer? TryGetSlot(int slot) => _slots[slot];
 
-    /// <summary>Returns the slot's buffer, creating it on first use.</summary>
-    public ColumnBuffer GetOrCreateSlot(int slot) =>
-        _slots[slot] ??= ColumnBuffer.Create(Schema.SlotTypes[slot], Math.Max(1, StorageCapacity), Memory);
-
-    /// <summary>Discards whatever was written to a slot (used when a node fails before committing).</summary>
-    public void ResetSlot(int slot)
+    /// <summary>Returns the slot's buffer, creating it on first use with every row missing (see the remarks).</summary>
+    public ColumnBuffer GetOrCreateSlot(int slot)
     {
-        if (slot == TableSchema.EntityIdSlot)
+        if (_slots[slot] is { } existing)
         {
-            throw new InvalidOperationException("The entity id slot cannot be reset.");
+            return existing;
         }
 
-        _slots[slot] = null;
-        _filled[slot] = null;
+        var created = ColumnBuffer.Create(Schema.SlotTypes[slot], Math.Max(1, StorageCapacity), Memory);
+        created.SetAllMissing();
+        _slots[slot] = created;
+        _created[_createdCount++] = slot;
+        return created;
     }
 
     /// <summary>Fill bitmap of a slot (allocated, all-clear, on first use).</summary>
@@ -184,6 +202,34 @@ public sealed class CandidateTable
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Number of live rows that have no value in the slot: all of them when the slot was never created. Checked a word of
+    /// rows at a time, so a slot with a value on every live row costs no per-row work.
+    /// </summary>
+    public int CountMissingLiveRows(int slot)
+    {
+        if (_slots[slot] is not { } buffer)
+        {
+            return Rows.Count;
+        }
+
+        var validity = buffer.Validity;
+        if (validity is null)
+        {
+            return 0; // the key column: written for every row when it is appended
+        }
+
+        var alive = Rows.AliveBits;
+        var words = Math.Min(alive.Length, Bits.WordCount(Math.Max(1, StorageCapacity)));
+        var missing = 0;
+        for (var i = 0; i < words; i++)
+        {
+            missing += BitOperations.PopCount(alive[i] & ~validity[i]);
+        }
+
+        return missing;
     }
 
     /// <summary>Rows that may still be appended in this request.</summary>
@@ -311,16 +357,17 @@ public sealed class CandidateTable
     {
         var order = Memory.Rent<int>(Math.Max(1, Rows.Count));
         var count = Rows.Capture(order);
-        return new TableCheckpoint(order, count, PhysicalRowCount, _totalAppended, _compactions);
+        return new TableCheckpoint(order, count, PhysicalRowCount, _totalAppended, _compactions, _createdCount);
     }
 
     /// <summary>
-    /// Leaves the table as it was at <paramref name="checkpoint"/>, which a failed node attempt must (design 4.6): the
-    /// ranking is restored, and the rows appended since are released as if never appended. They are no longer found by
-    /// <see cref="FindRow"/>, so a later row source may append the same keys; they hold nothing in any slot (missing
-    /// and unfilled); and their capacity may be appended again, reusing the same physical rows. Rows that existed at the
-    /// checkpoint keep their state, dropped ones included, so a later row source still cannot revive a filtered key.
-    /// Slots allocated since stay allocated; the attempt's outputs are never committed, so nothing reads them.
+    /// Leaves the table as it was at <paramref name="checkpoint"/>, which a failed node attempt must (design 4.6). Slots
+    /// created since are dropped: they read as never written again, whoever reads them, and the next write creates them
+    /// anew. The ranking is restored, and the rows appended since are released as if never appended. They are no longer
+    /// found by <see cref="FindRow"/>, so a later row source may append the same keys; they hold nothing in any remaining
+    /// slot (missing and unfilled); and their capacity may be appended again, reusing the same physical rows. Rows that
+    /// existed at the checkpoint keep their state in the remaining slots, dropped rows included, so a later row source
+    /// still cannot revive a filtered key, and the rows earlier row sources wrote into a shared slot keep their values.
     /// </summary>
     /// <exception cref="InvalidOperationException">
     /// The table was compacted since the checkpoint (physical rows moved), or the checkpoint was never taken.
@@ -332,6 +379,14 @@ public sealed class CandidateTable
             throw new InvalidOperationException("A table can only be rolled back to a checkpoint taken from it since its last Compact.");
         }
 
+        for (var i = checkpoint.Slots; i < _createdCount; i++)
+        {
+            // Its arrays stay rented until the request ends, like everything a Compact replaces.
+            _slots[_created[i]] = null;
+            _filled[_created[i]] = null;
+        }
+
+        _createdCount = checkpoint.Slots;
         Rows.Restore(checkpoint.Order.AsSpan(0, checkpoint.Count));
         var first = checkpoint.PhysicalRows;
         var appended = PhysicalRowCount - first;
@@ -369,8 +424,8 @@ public sealed class CandidateTable
 
     /// <summary>
     /// Makes appended rows live. The key column is filled; every other existing slot has the new rows missing and
-    /// unfilled, so values written before the append (pooled garbage, or a rolled-back attempt's) are never read for
-    /// them. A row source that writes those columns sets them afterwards.
+    /// unfilled, so values written before the append (pooled data, or a rolled-back attempt's) are never read for them.
+    /// A row source that writes those columns sets them afterwards.
     /// </summary>
     private void PublishAppended(int first, int count)
     {

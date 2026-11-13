@@ -640,9 +640,10 @@ public sealed class PipelineExecutor
             return new Attempt(NodeOutcomeKind.Failed, "deadline exceeded");
         }
 
-        // A failed attempt leaves the table exactly as it was (design 4.6): the ranking, and no rows of its own, so neither
-        // the fallback nor a replay (which skips a recorded timeout) sees what it appended. Only row effects change those.
-        var checkpoint = node.HasRowEffects ? state.Table.Checkpoint() : (TableCheckpoint?)null;
+        // A failed attempt leaves the table exactly as it was (design 4.6): the ranking, no rows and no slots of its own, so
+        // nothing that runs or reads later (the fallback, a pinned col.x@node, the output) sees what it wrote, just as in a
+        // replay, which skips a recorded timeout instead of running it.
+        var checkpoint = state.Table.Checkpoint();
 
         // The attempt's absolute deadline. The context hands the operator a token cancelled at it and bounds every external
         // wait by it, whether or not the client honours the token. A replay takes timing from its recording instead.
@@ -691,11 +692,7 @@ public sealed class PipelineExecutor
         if (failure is not null)
         {
             // Every way an attempt fails ends here: an exception, a failure it reported, a timeout, a late success, a commit.
-            if (checkpoint is { } before)
-            {
-                state.Table.Rollback(before);
-            }
-
+            state.Table.Rollback(checkpoint);
             return new Attempt(NodeOutcomeKind.Failed, failure);
         }
 
@@ -721,30 +718,25 @@ public sealed class PipelineExecutor
 
     /// <summary>
     /// Validates and publishes a successful node's outputs (design 4.3, 4.6): non-finite values take the column default
-    /// or become missing; non-nullable columns must have a value on every live row.
+    /// or become missing; non-nullable columns must then have a value on every live row.
     /// </summary>
+    /// <remarks>
+    /// A row nobody wrote is missing (<see cref="CandidateTable"/>), so a row the node skipped, a column it never wrote,
+    /// and a row an earlier row source appended without this column all fail the node here. The default does not fill
+    /// them: it replaces only values that cannot be stored (non-finite, out of int32 range), which the writer and the
+    /// sanitizing above already did, so a missing producer never turns into the default (design 4.6).
+    /// </remarks>
     private static string? Commit(RequestState state, CompiledNode node)
     {
-        var live = state.Table.Rows.Order;
+        var table = state.Table;
+        var live = table.Rows.Order;
         for (var o = 0; o < node.Outputs.Length; o++)
         {
             var output = node.Outputs[o];
             var column = state.Plan.Schema.Columns[output.LogicalId];
-            var buffer = state.Table.TryGetSlot(output.Slot);
-            if (buffer is null)
-            {
-                if (!output.Type.Nullable && live.Length > 0)
-                {
-                    return $"did not write non-nullable column '{output.Name}'";
-                }
 
-                buffer = state.Table.GetOrCreateSlot(output.Slot);
-                foreach (var row in live)
-                {
-                    buffer.SetMissing(row);
-                }
-            }
-
+            // A node that never asked for its buffer wrote nothing: the new slot has every row missing.
+            var buffer = table.GetOrCreateSlot(output.Slot);
             if (ColumnValues.IsFloat(buffer)
                 && ColumnValues.SanitizeNonFinite(buffer, live, column.HasDefault ? column.Default : ScalarValue.Missing) is > 0 and var replaced)
             {
@@ -755,22 +747,9 @@ public sealed class PipelineExecutor
                 }
             }
 
-            if (!output.Type.Nullable && buffer.Validity is not null)
+            if (!output.Type.Nullable && table.CountMissingLiveRows(output.Slot) is > 0 and var missing)
             {
-                foreach (var row in live)
-                {
-                    if (buffer.IsValid(row))
-                    {
-                        continue;
-                    }
-
-                    if (!column.HasDefault)
-                    {
-                        return $"wrote a missing value into non-nullable column '{output.Name}'";
-                    }
-
-                    ColumnValues.Set(buffer, row, column.Default);
-                }
+                return $"left non-nullable column '{output.Name}' without a value on {missing} of {live.Length} live rows";
             }
         }
 

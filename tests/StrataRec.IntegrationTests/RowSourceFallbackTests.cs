@@ -161,7 +161,7 @@ public sealed class RowSourceFallbackTests
         "fails" => "gave up after appending",
         "throws" => "InvalidOperationException: broke after appending",
         "returns late" => "timed out after 50 ms",
-        _ => "wrote a missing value into non-nullable column 'recall.best_score'",
+        _ => "left non-nullable column 'recall.best_score' without a value on 1 of 2 live rows",
     };
 
     /// <param name="how">How the primary fails once it has appended its candidates; null for a primary whose source fails, so it appends nothing.</param>
