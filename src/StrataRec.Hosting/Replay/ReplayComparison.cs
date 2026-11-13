@@ -22,7 +22,11 @@ public sealed class ReplaySideSummary
     /// <summary>Engine time per replayed request; recorded mode answers I/O instantly, so this is CPU work only.</summary>
     public required Distribution LatencyMs { get; init; }
 
+    /// <summary>Requests that returned no result, including those whose replay stopped where the recording was aborted.</summary>
     public required double ErrorRate { get; init; }
+
+    /// <summary>Requests whose replay stopped where the recording was aborted (counted in <see cref="ErrorRate"/>, as serving counts aborts).</summary>
+    public required int Aborted { get; init; }
 
     /// <summary>Requests that succeeded with no items.</summary>
     public required double EmptyRate { get; init; }
@@ -163,7 +167,7 @@ public static class ReplayComparison
         fields = new Dictionary<(string Source, string Field), long[]>();
         var latencies = new List<double>();
         var gaps = new Dictionary<(string Kind, string Source, string? Field, string Reason), (int Count, List<string> Examples)>();
-        int count = 0, errors = 0, empty = 0, degraded = 0, reproduced = 0, nonFinite = 0;
+        int count = 0, errors = 0, aborted = 0, empty = 0, degraded = 0, reproduced = 0, nonFinite = 0;
         long requested = 0, missing = 0;
         foreach (var pair in pairs)
         {
@@ -176,6 +180,7 @@ public static class ReplayComparison
             var result = outcome.Result;
             latencies.Add(outcome.Report.ElapsedMs);
             errors += result.Succeeded ? 0 : 1;
+            aborted += outcome.Aborted ? 1 : 0;
             empty += result.Succeeded && result.Items.Count == 0 ? 1 : 0;
             degraded += result.Succeeded && IsDegraded(outcome) ? 1 : 0;
             reproduced += outcome.Report.Diff.Identical ? 1 : 0;
@@ -239,6 +244,7 @@ public static class ReplayComparison
             Requests = count,
             LatencyMs = ResultComparison.Summarize(latencies),
             ErrorRate = Rate(errors, count),
+            Aborted = aborted,
             EmptyRate = Rate(empty, count),
             DegradedRate = Rate(degraded, count),
             FeatureMissingRate = requested == 0 ? 0.0 : (double)missing / requested,

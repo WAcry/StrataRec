@@ -132,7 +132,7 @@ public sealed class ReplayNodeRecord
 {
     public required string Node { get; init; }
 
-    [Description("succeeded, degraded, fallback, skipped_when, skipped_deadline, skipped_input or failed.")]
+    [Description("succeeded, degraded, fallback, skipped_when, skipped_deadline, skipped_input, failed, or aborted (the position running when the request was aborted).")]
     public required string Outcome { get; init; }
 
     public string? Detail { get; init; }
@@ -177,7 +177,7 @@ public sealed class ReplayCandidateCall
     [Description("Candidates requested (the source's quota).")]
     public int Limit { get; init; }
 
-    [Description("ok, timeout, error or cancelled.")]
+    [Description("ok, timeout, error, cancelled, or outstanding (still in flight when the request was aborted).")]
     public required string Status { get; init; }
 
     public string? Error { get; init; }
@@ -213,7 +213,7 @@ public sealed class ReplayFeatureCall
     [Description("False when the request had no time left to send the call.")]
     public bool Sent { get; init; } = true;
 
-    [Description("ok, partial, timeout, error or cancelled.")]
+    [Description("ok, partial, timeout, error, cancelled, or outstanding (still in flight when the request was aborted).")]
     public required string Status { get; init; }
 
     public string? Error { get; init; }
@@ -250,7 +250,7 @@ public sealed class ReplayModelCall
 
     public int BatchSize { get; init; }
 
-    [Description("ok, timeout, error or cancelled.")]
+    [Description("ok, timeout, error, cancelled, or outstanding (still in flight when the request was aborted).")]
     public required string Status { get; init; }
 
     public string? Error { get; init; }
@@ -324,6 +324,9 @@ public sealed class ReplayResultRecord
     public string? ServedBy { get; init; }
 
     public required bool Succeeded { get; init; }
+
+    [Description("The run, or the request, was aborted (cancelled by its caller, or stopped by a defect) and returned no result. The recording is a snapshot taken at the abort: calls still in flight are outstanding, and what they returned afterwards is not recorded.")]
+    public bool Aborted { get; init; }
 
     public string? Error { get; init; }
 

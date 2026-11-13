@@ -31,6 +31,9 @@ public enum RequestEvent : byte
 
     /// <summary>The log sink rejected a batch permanently.</summary>
     LogBatchRejected,
+
+    /// <summary>A run's replay recording could not be built, or the host's recording callback threw.</summary>
+    RecordingFailed,
 }
 
 /// <summary>

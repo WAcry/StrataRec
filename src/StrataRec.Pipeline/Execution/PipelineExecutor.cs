@@ -48,6 +48,18 @@ public sealed class PipelineRequest
     public bool Record { get; init; }
 
     /// <summary>
+    /// Receives the run's recording on every exit (design 13.4): with the result when the run returns, and before the
+    /// exception propagates when it is aborted (cancelled by the caller, or a defect), so an aborted run can be replayed
+    /// too. Setting it records the run. Called once, on the request's thread; an exception it throws is reported as an
+    /// event and does not change the run's outcome.
+    /// </summary>
+    /// <remarks>
+    /// An aborted run's recording is a snapshot taken at the abort: calls still in flight are <c>outstanding</c>, and what
+    /// they return afterwards is not in it. Nothing waits for them.
+    /// </remarks>
+    public Action<ReplayRunRecord>? OnRecording { get; init; }
+
+    /// <summary>
     /// Replay a recorded run instead of calling sources and models (design 13.4): external calls are answered from the
     /// recording and timing decisions come from it, not from the clock. A replay never writes persistent logs and records
     /// no metrics, event logs or spans. Use <see cref="RunReplay.Deadline"/> as <see cref="Deadline"/>.
@@ -261,7 +273,7 @@ public sealed class PipelineExecutor
         var replay = request.Replay;
         // A replay that records keeps its node decisions, parameters and result (its calls are answered, not recorded),
         // which is what a replay report compares with the original run.
-        var recorder = request.Record ? new RunRecorder() : null;
+        var recorder = request.Record || request.OnRecording is not null ? new RunRecorder() : null;
         var events = replay is null ? _events : null;
         try
         {
@@ -273,6 +285,7 @@ public sealed class PipelineExecutor
                 if (recorder is not null)
                 {
                     rejected.Recording = recorder.Build(plan, request, null, rejected, LogDestination(request));
+                    Deliver(plan, request, rejected.Recording, events);
                 }
 
                 return rejected;
@@ -341,10 +354,17 @@ public sealed class PipelineExecutor
                 }
             }
 
+            if (result is null && replay?.AbortReason is { } recordedAbort)
+            {
+                // The recording was aborted after its last position: it has no result to reproduce.
+                throw new ReplayAbortedException(recordedAbort);
+            }
+
             result ??= await BuildResultAsync(state, request, start, cancellationToken).ConfigureAwait(false);
             if (recorder is not null)
             {
                 result.Recording = recorder.Build(plan, request, parameters, result, LogDestination(request));
+                Deliver(plan, request, result.Recording, events);
             }
 
             PublishLogs(state, request, result, returned: true);
@@ -355,16 +375,35 @@ public sealed class PipelineExecutor
             // Cancelled by the caller (or a defect): nobody receives a result, but the request was assigned, may have
             // been exposed, and may have captured taps. Dropping those records would remove slow or failing requests
             // from experiment analysis, biased by arm (design 8.8, 12.6). Request memory is still held here.
-            var reason = ex is OperationCanceledException ? "cancelled by the caller" : "aborted: " + ex.Message;
+            var reason = ex switch
+            {
+                ReplayAbortedException => ex.Message, // the recorded reason
+                OperationCanceledException => "cancelled by the caller",
+                _ => "aborted: " + ex.Message,
+            };
             if (state.PositionOpen && position < state.Variants.Length && state.Variants[position] is { } open)
             {
                 Record(state, open, NodeOutcomeCategory.Aborted, reason, null, state.PositionStarted, state.PositionRowsIn);
             }
 
             EndNodeSpan(state, position, reason);
+            var aborted = Failed(plan, request, reason, start, state.Outcomes, state.Triggered, state.NonFinite, state.Counters.OutOfRange);
+            if (recorder is not null)
+            {
+                try
+                {
+                    // A snapshot, taken while the request still holds its memory; calls in flight stay outstanding in it.
+                    Deliver(plan, request, recorder.Build(plan, request, state.Params, aborted, LogDestination(request), aborted: true), events);
+                }
+                catch (Exception recordError)
+                {
+                    events?.Report(RequestEvent.RecordingFailed, plan.PipelineId, request.RequestId, recordError.Message);
+                }
+            }
+
             try
             {
-                PublishLogs(state, request, Failed(plan, request, reason, start, state.Outcomes, state.Triggered, state.NonFinite, state.Counters.OutOfRange), returned: false);
+                PublishLogs(state, request, aborted, returned: false);
             }
             catch (Exception publishError)
             {
@@ -401,6 +440,20 @@ public sealed class PipelineExecutor
     {
         var slot = state.Plan.Timeline[position];
         var node = state.Variants[position];
+        if (node is not null && state.Replay is { AbortReason: { } recordedAbort } replay && replay.AbortsAt(node.NodeId, out var running))
+        {
+            // The recording was aborted before this position finished: it holds no decision to reproduce here or later.
+            // A node that was running then is recorded as aborted again; one never reached is not recorded at all.
+            if (running)
+            {
+                state.PositionOpen = true;
+                state.PositionStarted = Stopwatch.GetTimestamp();
+                state.PositionRowsIn = state.Table.Rows.Count;
+            }
+
+            throw new ReplayAbortedException(recordedAbort);
+        }
+
         await RecordSiteTriggersAsync(state, slot, cancellationToken).ConfigureAwait(false);
         if (node is null)
         {
@@ -1134,6 +1187,24 @@ public sealed class PipelineExecutor
     /// <summary>Where the run's log batches go, as a bundle records it.</summary>
     private string LogDestination(PipelineRequest request) =>
         request.CaptureLogs ? "captured" : _logs is not null ? "pipeline" : "none";
+
+    /// <summary>Hands a run's recording to <see cref="PipelineRequest.OnRecording"/>; a callback that throws never changes the run's outcome.</summary>
+    private static void Deliver(ExecutionPlan plan, PipelineRequest request, ReplayRunRecord run, RequestEventLog? events)
+    {
+        if (request.OnRecording is not { } deliver)
+        {
+            return;
+        }
+
+        try
+        {
+            deliver(run);
+        }
+        catch (Exception ex)
+        {
+            events?.Report(RequestEvent.RecordingFailed, plan.PipelineId, request.RequestId, ex.Message);
+        }
+    }
 
     private static int[] FirstRows(CandidateTable table, int limit)
     {

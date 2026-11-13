@@ -20,8 +20,20 @@ public sealed class ReplayOutcome
 {
     public required ReplayBundle Bundle { get; init; }
 
-    /// <summary>The replayed result, with every node's outcome in <see cref="RecResult.Trace"/>.</summary>
+    /// <summary>
+    /// The replayed result, with every node's outcome in <see cref="RecResult.Trace"/>. When the replay was aborted (see
+    /// <see cref="AbortReason"/>) there is no result: this is a failure with the reason and no items, and the node
+    /// decisions up to the abort are in <see cref="ReplayReport.Nodes"/>.
+    /// </summary>
     public required RecResult Result { get; init; }
+
+    /// <summary>
+    /// Why the replay was aborted, as recorded; null when it returned a result. A recording of an aborted request replays
+    /// its decisions up to the point of the abort and stops there (design 13.4).
+    /// </summary>
+    public string? AbortReason { get; init; }
+
+    public bool Aborted => AbortReason is not null;
 
     public required ReplayReport Report { get; init; }
 }
@@ -79,12 +91,18 @@ public sealed record ItemChange(int Rank, EntityKey? RecordedId, EntityKey? Repl
 /// <summary>Difference of two results: the recorded one and the replayed one (or a baseline and a candidate).</summary>
 public sealed class ResultDiff
 {
-    /// <summary>Same success, the same items in the same order and every column value equal.</summary>
+    /// <summary>Both aborted, or neither with the same success, the same items in the same order and every column value equal.</summary>
     public required bool Identical { get; init; }
 
     public required bool LeftSucceeded { get; init; }
 
     public required bool RightSucceeded { get; init; }
+
+    /// <summary>The left (recorded) request was aborted and has no result.</summary>
+    public bool LeftAborted { get; init; }
+
+    /// <summary>The right (replayed) run stopped where its recording was aborted.</summary>
+    public bool RightAborted { get; init; }
 
     public required int LeftCount { get; init; }
 
@@ -111,11 +129,15 @@ public sealed class ComparableResult
 {
     public required bool Succeeded { get; init; }
 
+    /// <summary>The request (or replay) was aborted and returned no result.</summary>
+    public bool Aborted { get; init; }
+
     public required IReadOnlyList<EntityKey> Ids { get; init; }
 
     public required IReadOnlyList<IReadOnlyDictionary<string, ScalarValue>> Columns { get; init; }
 
-    public static ComparableResult From(RecResult result)
+    /// <param name="aborted">The replay stopped where its recording was aborted; <paramref name="result"/> is a placeholder failure.</param>
+    public static ComparableResult From(RecResult result, bool aborted = false)
     {
         var ids = new List<EntityKey>(result.Items.Count);
         var columns = new List<IReadOnlyDictionary<string, ScalarValue>>(result.Items.Count);
@@ -125,7 +147,7 @@ public sealed class ComparableResult
             columns.Add(item.Columns);
         }
 
-        return new ComparableResult { Succeeded = result.Succeeded, Ids = ids, Columns = columns };
+        return new ComparableResult { Succeeded = result.Succeeded, Aborted = aborted, Ids = ids, Columns = columns };
     }
 
     /// <summary>Decodes a recorded result with its recorded column types.</summary>
@@ -160,7 +182,7 @@ public sealed class ComparableResult
             columns.Add(values);
         }
 
-        return new ComparableResult { Succeeded = result.Succeeded, Ids = ids, Columns = columns };
+        return new ComparableResult { Succeeded = result.Succeeded, Aborted = result.Aborted, Ids = ids, Columns = columns };
     }
 }
 
@@ -208,9 +230,11 @@ public static class ResultComparison
 
         return new ResultDiff
         {
-            Identical = left.Succeeded == right.Succeeded && changes.Count == 0 && added.Count == 0 && removed.Count == 0,
+            Identical = left.Aborted == right.Aborted && left.Succeeded == right.Succeeded && changes.Count == 0 && added.Count == 0 && removed.Count == 0,
             LeftSucceeded = left.Succeeded,
             RightSucceeded = right.Succeeded,
+            LeftAborted = left.Aborted,
+            RightAborted = right.Aborted,
             LeftCount = left.Ids.Count,
             RightCount = right.Ids.Count,
             Overlap = Overlap(left.Ids, right.Ids, count),

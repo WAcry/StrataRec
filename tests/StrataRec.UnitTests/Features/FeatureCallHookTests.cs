@@ -125,7 +125,7 @@ public class FeatureCallHookTests
 
         public TaskCompletionSource<Call> FirstRecorded { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public int NextSequence() => Interlocked.Increment(ref _sequence) - 1;
+        public int Begin(FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields) => Interlocked.Increment(ref _sequence) - 1;
 
         public void Record(in FeatureCallInfo call, IStagedFeatureValues? values)
         {

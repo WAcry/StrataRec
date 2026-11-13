@@ -254,14 +254,24 @@ public static class ReplayJson
         return values;
     }
 
+    /// <summary>The status of a call that was still in flight when its request was aborted (design 13.4).</summary>
+    public const string Outstanding = "outstanding";
+
+    /// <summary>The error recorded with an <see cref="Outstanding"/> call.</summary>
+    public const string OutstandingError = "still in flight when the request was aborted";
+
+    /// <summary>
+    /// A recorded status. An outstanding call never answered the request, so it replays like a cancelled one: the request
+    /// stopped waiting for it.
+    /// </summary>
     public static IoOutcome Outcome(string? status, string pointer) => status switch
     {
         "ok" => IoOutcome.Ok,
         "partial" => IoOutcome.Partial,
         "timeout" => IoOutcome.Timeout,
         "error" => IoOutcome.Error,
-        "cancelled" => IoOutcome.Cancelled,
-        _ => throw new ReplayBundleException(pointer, $"unknown status '{status}'", "use ok, partial, timeout, error or cancelled"),
+        "cancelled" or Outstanding => IoOutcome.Cancelled,
+        _ => throw new ReplayBundleException(pointer, $"unknown status '{status}'", "use ok, partial, timeout, error, cancelled or outstanding"),
     };
 
     public static string ShapeName(KeyShape shape) => shape switch

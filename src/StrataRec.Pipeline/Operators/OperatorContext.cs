@@ -144,7 +144,7 @@ public sealed class OperatorContext
         }
 
         var recorder = _state.Recorder;
-        var sequence = recorder?.NextSequence() ?? 0;
+        var sequence = recorder?.BeginCandidateCall(NodeId, target.Name, query.Limit) ?? 0;
         var memory = _state.Memory;
         memory.Hold();
         var io = target.Start();
@@ -185,7 +185,7 @@ public sealed class OperatorContext
 
             var duration = recorder is null ? TimeSpan.Zero : io.Elapsed;
             io.Complete(outcome, -1, query.RequestId, status.Error, _state.Events);
-            recorder?.CandidateCall(sequence, NodeId, target.Name, query.Limit, outcome, status.Error, duration, buffer);
+            recorder?.CandidateCall(sequence, outcome, status.Error, duration, buffer);
             memory.Release();
         }
     }
@@ -217,7 +217,7 @@ public sealed class OperatorContext
         }
 
         var recorder = _state.Recorder;
-        var sequence = recorder?.NextSequence() ?? 0;
+        var sequence = recorder?.BeginModelCall(NodeId, call, KeysOf(rows)) ?? 0;
         var recording = recorder is null ? null : new RecordingOutputWriter(outputs);
         var memory = _state.Memory;
         memory.Hold();
@@ -250,7 +250,7 @@ public sealed class OperatorContext
         {
             var duration = recorder is null ? TimeSpan.Zero : io.Elapsed;
             io.Complete(outcome, -1, RequestId, error, _state.Events);
-            recorder?.ModelCall(sequence, NodeId, call, KeysOf(rows), outcome, error, thrown, duration, recording!);
+            recorder?.ModelCall(sequence, outcome, error, thrown, duration, recording!);
             memory.Release();
         }
     }

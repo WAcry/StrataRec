@@ -180,6 +180,7 @@ internal static class CompareCommand
         json.WriteNumber("requests", side.Requests);
         WriteDistribution(json, "latency_ms", side.LatencyMs);
         json.WriteNumber("error_rate", Math.Round(side.ErrorRate, 6));
+        json.WriteNumber("aborted", side.Aborted);
         json.WriteNumber("empty_rate", Math.Round(side.EmptyRate, 6));
         json.WriteNumber("degraded_rate", Math.Round(side.DegradedRate, 6));
         json.WriteNumber("feature_missing_rate", Math.Round(side.FeatureMissingRate, 6));
@@ -239,6 +240,11 @@ internal static class CompareCommand
         Row("requests", Number(report.Baseline.Requests), Number(report.Candidate.Requests));
         Row("latency p50 / p95 (ms)", Pair(report.Baseline.LatencyMs.P50, report.Baseline.LatencyMs.P95), Pair(report.Candidate.LatencyMs.P50, report.Candidate.LatencyMs.P95));
         Row("error rate", Percent(report.Baseline.ErrorRate), Percent(report.Candidate.ErrorRate));
+        if (report.Baseline.Aborted + report.Candidate.Aborted > 0)
+        {
+            Row("aborted (as recorded)", Number(report.Baseline.Aborted), Number(report.Candidate.Aborted));
+        }
+
         Row("empty rate", Percent(report.Baseline.EmptyRate), Percent(report.Candidate.EmptyRate));
         Row("degraded rate", Percent(report.Baseline.DegradedRate), Percent(report.Candidate.DegradedRate));
         Row("feature missing rate", Percent(report.Baseline.FeatureMissingRate), Percent(report.Candidate.FeatureMissingRate));

@@ -189,6 +189,7 @@ internal static class ReplayCommand
         WriteStrings(json, "replayed", report.ReplayedArms);
         json.WriteEndObject();
         json.WriteBoolean("succeeded", result.Succeeded);
+        json.WriteBoolean("aborted", outcome.Aborted); // stopped where the recording was aborted: no result, error is the reason
         if (result.Error is not null)
         {
             json.WriteString("error", result.Error);
@@ -254,6 +255,8 @@ internal static class ReplayCommand
         json.WriteStartObject(name);
         json.WriteBoolean("identical", diff.Identical);
         json.WriteBoolean("recorded_succeeded", diff.LeftSucceeded);
+        json.WriteBoolean("recorded_aborted", diff.LeftAborted);
+        json.WriteBoolean("replayed_aborted", diff.RightAborted);
         json.WriteNumber("recorded_items", diff.LeftCount);
         json.WriteNumber("replayed_items", diff.RightCount);
         json.WriteNumber("overlap", Math.Round(diff.Overlap, 6));
@@ -357,12 +360,19 @@ internal static class ReplayCommand
         }
 
         output.WriteLine($"  arms      {Join(report.ReplayedArms)}" + (Join(report.RecordedArms) == Join(report.ReplayedArms) ? string.Empty : $" (recorded {Join(report.RecordedArms)})"));
-        output.WriteLine($"  result    {(result.Succeeded ? "succeeded" : "failed: " + result.Error)}, {result.Items.Count} item(s), served by {result.ServedBy}, " +
-            $"{report.ElapsedMs.ToString("0.###", CultureInfo.InvariantCulture)} ms");
-        output.WriteLine(diff.Identical
-            ? "  diff      identical to the recorded result"
-            : $"  diff      differs: {diff.LeftCount} recorded vs {diff.RightCount} replayed item(s), overlap {diff.Overlap.ToString("0.###", CultureInfo.InvariantCulture)}, " +
-              $"kendall tau {(diff.KendallTau is { } tau ? tau.ToString("0.###", CultureInfo.InvariantCulture) : "n/a")}");
+        var elapsed = report.ElapsedMs.ToString("0.###", CultureInfo.InvariantCulture);
+        output.WriteLine(outcome.Aborted
+            ? $"  result    aborted where the recording was ({outcome.AbortReason}): no result, in {result.ServedBy}, {elapsed} ms"
+            : $"  result    {(result.Succeeded ? "succeeded" : "failed: " + result.Error)}, {result.Items.Count} item(s), served by {result.ServedBy}, {elapsed} ms");
+        output.WriteLine(diff switch
+        {
+            { Identical: true, LeftAborted: true } => "  diff      aborted, as recorded; node decisions up to the abort are compared below",
+            { Identical: true } => "  diff      identical to the recorded result",
+            { LeftAborted: true } => "  diff      differs: the recorded request was aborted, the replay returned a result",
+            { RightAborted: true } => "  diff      differs: the replay was aborted, the recorded request returned a result",
+            _ => $"  diff      differs: {diff.LeftCount} recorded vs {diff.RightCount} replayed item(s), overlap {diff.Overlap.ToString("0.###", CultureInfo.InvariantCulture)}, " +
+                 $"kendall tau {(diff.KendallTau is { } tau ? tau.ToString("0.###", CultureInfo.InvariantCulture) : "n/a")}",
+        });
         if (diff.AddedColumns.Count > 0 || diff.RemovedColumns.Count > 0)
         {
             output.WriteLine($"    columns added: {Join(diff.AddedColumns)}; removed: {Join(diff.RemovedColumns)}");

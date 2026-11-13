@@ -484,7 +484,7 @@ public sealed class FeatureFetcher
         // A replayed call answers at once from the recording: no connector, no wait, no metrics or health (design 13.4).
         return _hook.Replays
             ? Task.FromResult(_hook.Replay(group, batch, fields, writer))
-            : ConnectorCallAsync(group, batch, fields, writer, budgetMs, _hook.NextSequence(), cancellationToken);
+            : ConnectorCallAsync(group, batch, fields, writer, budgetMs, _hook.Begin(group, batch, fields), cancellationToken);
     }
 
     /// <summary>Records a chunk the request had no time left to send, so a replay fails it the same way.</summary>
@@ -493,7 +493,7 @@ public sealed class FeatureFetcher
         if (_hook is { Replays: false } recorder)
         {
             var batch = new EntityKeyBatch { Shape = shape, ContextKey = contextKey, CandidateKeys = keys };
-            recorder.Record(new FeatureCallInfo(group, batch, fields, recorder.NextSequence(), false, NoTimeLeft.Result, IoOutcome.Timeout, TimeSpan.Zero), null);
+            recorder.Record(new FeatureCallInfo(group, batch, fields, recorder.Begin(group, batch, fields), false, NoTimeLeft.Result, IoOutcome.Timeout, TimeSpan.Zero), null);
         }
     }
 

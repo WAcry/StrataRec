@@ -57,6 +57,14 @@ public sealed class ReplayedCallException(string message, string? originalType =
     public string? OriginalType { get; } = originalType;
 }
 
+/// <summary>
+/// Thrown by a replayed run where its recording was aborted (design 13.4): at the first timeline position the recorded
+/// run did not finish, or before its result. The recording holds no decisions past that point, so the replay stops there
+/// and reports the run as aborted, as recorded, instead of inventing the rest.
+/// </summary>
+/// <param name="reason">Why the recorded run was aborted, as recorded.</param>
+public sealed class ReplayAbortedException(string reason) : Exception(reason);
+
 /// <summary>The exceptions a replay throws for recorded calls that threw (the contract of <see cref="Operators.OperatorContext.InvokeModelAsync"/>).</summary>
 internal static class ReplayedExceptions
 {
@@ -138,13 +146,22 @@ public sealed class RunReplay : IFeatureCallHook
     private readonly Dictionary<(string Model, string? Version), List<ModelEntry>> _modelCalls = new();
     private readonly Dictionary<string, double> _remaining = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Queue<ReplayAttemptRecord>> _attempts = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _finished = new(StringComparer.Ordinal);
+    private string? _abortedNode;
     private readonly Dictionary<(string Kind, string Source, string? Field, string Reason), GapCounter> _gaps = new();
     private readonly Dictionary<(string Source, string Field), long[]> _stats = new();
 
-    private RunReplay(ReplayRunRecord? recorded) => Recorded = recorded;
+    private RunReplay(ReplayRunRecord? recorded)
+    {
+        Recorded = recorded;
+        AbortReason = recorded is { Result.Aborted: true } ? recorded.Result.Error ?? "aborted" : null;
+    }
 
     /// <summary>The recording being replayed; null when the bundle had no run for this pipeline.</summary>
     public ReplayRunRecord? Recorded { get; }
+
+    /// <summary>Why the recorded run was aborted; null when it returned a result.</summary>
+    public string? AbortReason { get; }
 
     /// <summary>The deadline a replayed run executes with: long enough never to decide anything; timing comes from the recording.</summary>
     public static TimeSpan Deadline => TimeSpan.FromHours(1);
@@ -211,7 +228,7 @@ public sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    public int NextSequence() => 0;
+    public int Begin(FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields) => 0;
 
     public void Record(in FeatureCallInfo call, IStagedFeatureValues? values)
     {
@@ -379,6 +396,17 @@ public sealed class RunReplay : IFeatureCallHook
 
             return Synthesize(call, calls, outputs, keys, digests);
         }
+    }
+
+    /// <summary>
+    /// The recorded run was aborted before it finished <paramref name="node"/>'s position: the replay must stop there.
+    /// <paramref name="running"/> tells whether the node was running at the abort (recorded as <c>aborted</c>) rather than
+    /// never reached.
+    /// </summary>
+    internal bool AbortsAt(string node, out bool running)
+    {
+        running = node == _abortedNode;
+        return AbortReason is not null && !_finished.Contains(node);
     }
 
     /// <summary>Time left when the node passed its <c>when</c> in the recording; infinite for a node the recording lacks.</summary>
@@ -773,6 +801,15 @@ public sealed class RunReplay : IFeatureCallHook
         for (var i = 0; i < run.Nodes.Count; i++)
         {
             var node = run.Nodes[i];
+            if (node.Outcome == "aborted")
+            {
+                _abortedNode ??= node.Node;
+            }
+            else
+            {
+                _finished.Add(node.Node);
+            }
+
             if (node.RemainingMs is { } remaining)
             {
                 _remaining.TryAdd(node.Node, remaining);
