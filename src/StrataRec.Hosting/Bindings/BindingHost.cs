@@ -67,11 +67,12 @@ public sealed class BindingHostOptions
 /// different: a request of a replaced plan, or a call it abandoned at a timeout, may still be inside it, so the lease
 /// lets go of its instances only once it is retired and its last request has ended (<see cref="BindingLease"/>). An
 /// instance no lease holds then has its load cancelled and is disposed once that load returned.</para>
-/// <para><b>Stopping and disposing never run their code on the caller's thread.</b> A source is cancelled with
-/// <see cref="CancellationTokenSource.CancelAsync"/>: the callbacks it registered on its token run on the thread pool,
-/// not on the thread that releases a lease (a plan swap, or the end of a request on a client's thread) or disposes the
-/// host. Their task and the source's run make up the entry's <see cref="TableEntry.Completion"/>; an instance is
-/// disposed on the thread pool (<see cref="ClientEntry.Disposed"/>). Shutdown waits for both within one
+/// <para><b>Stopping and disposing never run their code on the caller's thread.</b> A source, or an instance's load, is
+/// cancelled with <see cref="CancellationTokenSource.CancelAsync"/>: the callbacks it registered on its token run on the
+/// thread pool, not on the thread that releases a lease (a plan swap, or the end of a request on a client's thread) or
+/// disposes the host. Their task and the source's run make up the entry's <see cref="TableEntry.Completion"/>; an
+/// instance is disposed on the thread pool once its load and those callbacks have returned
+/// (<see cref="ClientEntry.Disposed"/>), whichever of the release and the shutdown cancelled first. Shutdown waits for both within one
 /// <see cref="BindingHostOptions.ShutdownTimeout"/>; past it, the entries stay alive until they end, and an exception
 /// of a callback or a disposal is logged, never thrown at the caller. Diagnostics never change a lifecycle: a logger
 /// that throws leaves every wait in place.</para>
@@ -83,7 +84,7 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
     private readonly object _gate = new();
     private readonly Dictionary<string, TableEntry> _byIdentity = new(StringComparer.Ordinal);
     private readonly HashSet<TableEntry> _entries = new(); // every entry whose source may still run, for shutdown
-    private readonly Dictionary<(object Factory, string Identity), ClientEntry> _clients = new();
+    private readonly Dictionary<BindingKey, ClientEntry> _clients = new();
     private readonly HashSet<ClientEntry> _clientEntries = new(); // every instance not yet disposed, for shutdown
     private readonly ILogger _logger;
     private bool _disposed;
@@ -176,7 +177,7 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
         var disposing = new List<Task>(clients.Count);
         foreach (var client in clients)
         {
-            client.CancelLoad();
+            _ = client.CancelLoad(); // the disposal waits for its callbacks; Disposed below waits for the disposal
             disposing.Add(client.Disposed); // never faults: see ClientEntry.DisposeAsync
         }
 
@@ -451,7 +452,15 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
                 if (!Table.IsLoaded)
                 {
                     var error = new LocalTableLoadException(Spec, failure);
-                    LogFirstLoadFailed(_host._logger, failure, Spec.Name, Spec.Artifact, Spec.Pointer, error.Message);
+                    try
+                    {
+                        LogFirstLoadFailed(_host._logger, failure, Spec.Name, Spec.Artifact, Spec.Pointer, error.Message);
+                    }
+                    catch (Exception)
+                    {
+                        // A failing logger cannot report itself, and must not keep the plans waiting from the failure.
+                    }
+
                     _ready.TrySetException(error);
                     return; // never handed out again (see Acquire), so never restarted
                 }
