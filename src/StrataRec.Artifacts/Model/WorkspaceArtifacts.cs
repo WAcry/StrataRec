@@ -3,10 +3,14 @@ using System.Text.Json.Nodes;
 namespace StrataRec.Artifacts.Model;
 
 /// <summary>
-/// Authoring-side allocation file <c>allocation/&lt;pipeline&gt;.&lt;env&gt;.jsonc</c> (design 10.1): which artifacts
-/// make up a release and each experiment's layer. <c>stratarec build</c> turns it into a <see cref="ReleaseManifest"/>.
+/// Authoring-side release file <c>releases/&lt;pipeline&gt;.&lt;env&gt;.jsonc</c> (design 10.1): which artifacts make up
+/// a release and each in-flight experiment's layer. <c>stratarec build</c> turns it into a <see cref="ReleaseManifest"/>.
 /// </summary>
-public sealed class AllocationArtifact
+/// <remarks>
+/// It composes a release and nothing else: which arms a request is in (ratios, ramping, holdouts) is the
+/// experimentation platform's, so ramping an experiment never changes a release.
+/// </remarks>
+public sealed class ReleaseArtifact
 {
     public required string PipelineId { get; init; }
 
@@ -20,10 +24,11 @@ public sealed class AllocationArtifact
 
     public List<string> Tables { get; init; } = new();
 
-    public Dictionary<string, AllocationExperiment> Experiments { get; init; } = new();
+    public Dictionary<string, ReleaseExperiment> Experiments { get; init; } = new();
 }
 
-public sealed class AllocationExperiment
+/// <summary>An experiment in flight in a release.</summary>
+public sealed class ReleaseExperiment
 {
     /// <inheritdoc cref="ManifestExperiment.Layer"/>
     public required string Layer { get; init; }

@@ -12,13 +12,13 @@ internal static class CommonOptions
 {
     public static Option<string> Config() => new("--config", "-c")
     {
-        Description = "Configuration directory (policy.jsonc, catalog/, bindings/, pipelines/, experiments/, allocation/, tables/).",
+        Description = "Configuration directory (policy.jsonc, catalog/, bindings/, pipelines/, experiments/, releases/, tables/).",
         DefaultValueFactory = _ => "config",
     };
 
     public static Option<string> Environment() => new("--env", "-e")
     {
-        Description = "Environment: selects allocation/<pipeline>.<env>.jsonc and bindings/<env>.jsonc.",
+        Description = "Environment: selects releases/<pipeline>.<env>.jsonc and bindings/<env>.jsonc.",
         DefaultValueFactory = _ => "local",
     };
 

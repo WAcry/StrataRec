@@ -24,7 +24,7 @@ public sealed record LoadedArtifact<T>(T Value, JsonNode Document, string Path, 
 /// ├── bindings/&lt;environment&gt;.jsonc
 /// ├── pipelines/&lt;pipeline_id&gt;.jsonc
 /// ├── experiments/&lt;experiment_id&gt;.jsonc
-/// ├── allocation/&lt;pipeline_id&gt;.&lt;environment&gt;.jsonc   catalog, bindings, tables, experiment layers
+/// ├── releases/&lt;pipeline_id&gt;.&lt;environment&gt;.jsonc     catalog, bindings, tables, experiment layers
 /// └── tables/&lt;table_id&gt;.jsonc
 /// </code>
 /// File names must match the ids inside, so a path always tells you what a file defines. Every problem is reported
@@ -47,8 +47,8 @@ public sealed class ConfigWorkspace
 
     public SortedDictionary<string, LoadedArtifact<ExperimentArtifact>> Experiments { get; } = new(StringComparer.Ordinal);
 
-    /// <summary>Allocations by <c>pipeline_id/environment</c>.</summary>
-    public SortedDictionary<string, LoadedArtifact<AllocationArtifact>> Allocations { get; } = new(StringComparer.Ordinal);
+    /// <summary>Release files by <c>pipeline_id/environment</c>.</summary>
+    public SortedDictionary<string, LoadedArtifact<ReleaseArtifact>> Releases { get; } = new(StringComparer.Ordinal);
 
     public SortedDictionary<string, LoadedArtifact<DataTableArtifact>> Tables { get; } = new(StringComparer.Ordinal);
 
@@ -100,12 +100,22 @@ public sealed class ConfigWorkspace
             }
         }
 
-        foreach (var file in workspace.Files("allocation"))
+        if (Directory.Exists(Path.Combine(workspace.Root, "allocation")))
         {
-            if (workspace.Read<AllocationArtifact>(file, diagnostics) is { } a
+            // Its files are not read: compiling the baseline without the experiments they list would serve a different
+            // release without saying so.
+            diagnostics.Error("ALLOCATION_DIRECTORY_RENAMED", "allocation/", string.Empty,
+                "The directory was renamed to releases/: traffic allocation (ratios, ramping, salts, holdouts) is the experiment platform's, " +
+                "and a release file only composes the release (catalog, bindings, tables, each experiment's layer).",
+                "move allocation/<pipeline>.<env>.jsonc to releases/ and remove its \"assignment\" section and the experiments' \"arms\" ranges");
+        }
+
+        foreach (var file in workspace.Files("releases"))
+        {
+            if (workspace.Read<ReleaseArtifact>(file, diagnostics) is { } a
                 && workspace.CheckName(a, a.Value.PipelineId + "." + a.Value.Environment, "/environment", diagnostics))
             {
-                workspace.Allocations[a.Value.PipelineId + "/" + a.Value.Environment] = a;
+                workspace.Releases[a.Value.PipelineId + "/" + a.Value.Environment] = a;
             }
         }
 
@@ -121,11 +131,11 @@ public sealed class ConfigWorkspace
     }
 
     /// <summary>
-    /// Assembles the compile inputs for one pipeline in one environment: the allocation file decides the catalog,
-    /// bindings, tables and which experiments run in which layer. Without an allocation the baseline is
+    /// Assembles the compile inputs for one pipeline in one environment: the release file decides the catalog,
+    /// bindings, tables and which experiments run in which layer. Without a release file the baseline is
     /// compiled alone against <c>bindings/&lt;environment&gt;.jsonc</c>.
     /// </summary>
-    /// <param name="extraExperiments">Experiments to include although the allocation does not list them (draft preview, design 10.7), as id → layer.</param>
+    /// <param name="extraExperiments">Experiments to include although the release file does not list them (draft preview, design 10.7), as id → layer.</param>
     public PlanCompileRequest? CreateCompileRequest(
         string pipelineId,
         string environment,
@@ -143,15 +153,15 @@ public sealed class ConfigWorkspace
             return null;
         }
 
-        Allocations.TryGetValue(pipelineId + "/" + environment, out var allocation);
-        var allocationLabel = allocation?.Path ?? "allocation";
+        Releases.TryGetValue(pipelineId + "/" + environment, out var release);
+        var releaseLabel = release?.Path ?? "releases/" + pipelineId + "." + environment + ".jsonc";
 
         LoadedArtifact<FeatureCatalogArtifact>? catalog = null;
-        if (allocation?.Value.Catalog is { } catalogId)
+        if (release?.Value.Catalog is { } catalogId)
         {
             if (!Catalogs.TryGetValue(catalogId, out catalog))
             {
-                diagnostics.Error("CATALOG_UNKNOWN", allocationLabel, "/catalog", $"No catalog '{catalogId}'.", NameSuggestions.DidYouMean(catalogId, Catalogs.Keys));
+                diagnostics.Error("CATALOG_UNKNOWN", releaseLabel, "/catalog", $"No catalog '{catalogId}'.", NameSuggestions.DidYouMean(catalogId, Catalogs.Keys));
                 return null;
             }
         }
@@ -159,9 +169,9 @@ public sealed class ConfigWorkspace
         {
             if (Catalogs.Count != 1)
             {
-                diagnostics.Error("CATALOG_AMBIGUOUS", allocationLabel, "/catalog",
+                diagnostics.Error("CATALOG_AMBIGUOUS", releaseLabel, "/catalog",
                     Catalogs.Count == 0 ? "The workspace has no feature catalog." : $"Several catalogs exist and none is named '{pipelineId}'.",
-                    "name the catalog in the allocation file (\"catalog\": \"<catalog_id>\")");
+                    "name the catalog in the release file (\"catalog\": \"<catalog_id>\")");
                 return null;
             }
 
@@ -171,27 +181,27 @@ public sealed class ConfigWorkspace
             }
         }
 
-        var bindingsEnvironment = allocation?.Value.Bindings ?? environment;
+        var bindingsEnvironment = release?.Value.Bindings ?? environment;
         if (!Bindings.TryGetValue(bindingsEnvironment, out var bindings))
         {
-            diagnostics.Error("BINDINGS_UNKNOWN", allocationLabel, "/bindings", $"No bindings for environment '{bindingsEnvironment}'.",
+            diagnostics.Error("BINDINGS_UNKNOWN", releaseLabel, "/bindings", $"No bindings for environment '{bindingsEnvironment}'.",
                 NameSuggestions.DidYouMean(bindingsEnvironment, Bindings.Keys) ?? $"create bindings/{bindingsEnvironment}.jsonc");
             return null;
         }
 
         var tables = new List<DataTableArtifact>();
-        if (allocation is not null && allocation.Value.Tables.Count > 0)
+        if (release is not null && release.Value.Tables.Count > 0)
         {
-            for (var i = 0; i < allocation.Value.Tables.Count; i++)
+            for (var i = 0; i < release.Value.Tables.Count; i++)
             {
-                var id = allocation.Value.Tables[i];
+                var id = release.Value.Tables[i];
                 if (Tables.TryGetValue(id, out var table))
                 {
                     tables.Add(table.Value);
                 }
                 else
                 {
-                    diagnostics.Error("TABLE_UNKNOWN", allocationLabel, "/tables/" + i, $"No table '{id}'.", NameSuggestions.DidYouMean(id, Tables.Keys));
+                    diagnostics.Error("TABLE_UNKNOWN", releaseLabel, "/tables/" + i, $"No table '{id}'.", NameSuggestions.DidYouMean(id, Tables.Keys));
                 }
             }
         }
@@ -221,9 +231,9 @@ public sealed class ConfigWorkspace
 
         var placements = new List<ExperimentPlacement>();
         var listed = new SortedDictionary<string, string>(StringComparer.Ordinal);
-        if (allocation is not null)
+        if (release is not null)
         {
-            foreach (var (id, entry) in allocation.Value.Experiments)
+            foreach (var (id, entry) in release.Value.Experiments)
             {
                 listed[id] = entry.Layer;
             }
@@ -241,7 +251,7 @@ public sealed class ConfigWorkspace
         {
             if (!Experiments.TryGetValue(id, out var experiment))
             {
-                diagnostics.Error("EXPERIMENT_UNKNOWN", allocationLabel, "/experiments/" + JsonPointer.Escape(id), $"No experiment '{id}'.",
+                diagnostics.Error("EXPERIMENT_UNKNOWN", releaseLabel, "/experiments/" + JsonPointer.Escape(id), $"No experiment '{id}'.",
                     NameSuggestions.DidYouMean(id, Experiments.Keys) ?? $"create experiments/{id}.jsonc");
                 continue;
             }
@@ -324,8 +334,8 @@ public sealed class ConfigWorkspace
         }
         catch (ArtifactFormatException ex)
         {
-            diagnostics.Error("ARTIFACT_SCHEMA", relative, ArtifactSerializer.JsonPathToPointer(ex.JsonPath), ex.InnerException?.Message ?? ex.Message,
-                $"run 'stratarec schema {SchemaName<T>()}' for the JSON Schema of this file");
+            diagnostics.Error("ARTIFACT_SCHEMA", relative, ArtifactSerializer.JsonPathToPointer(ex.JsonPath), ex.Reason,
+                ex.Hint ?? $"run 'stratarec schema {SchemaName<T>()}' for the JSON Schema of this file");
             return null;
         }
     }
@@ -350,7 +360,7 @@ public sealed class ConfigWorkspace
         nameof(FeatureCatalogArtifact) => "catalog",
         nameof(SourceBindingArtifact) => "bindings",
         nameof(ExperimentArtifact) => "experiment",
-        nameof(AllocationArtifact) => "allocation",
+        nameof(ReleaseArtifact) => "release",
         nameof(PolicyArtifact) => "policy",
         nameof(DataTableArtifact) => "table",
         _ => "manifest",

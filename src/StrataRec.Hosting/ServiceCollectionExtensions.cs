@@ -15,7 +15,7 @@ public sealed class StrataRecOptions
     /// <summary>Configuration directory (design 10.1 layout). Required.</summary>
     public string ConfigRoot { get; set; } = "config";
 
-    /// <summary>Environment whose allocation file and bindings are used, e.g. <c>local</c> or <c>prod-us-east</c>.</summary>
+    /// <summary>Environment whose release file and bindings are used, e.g. <c>local</c> or <c>prod-us-east</c>.</summary>
     public string Environment { get; set; } = "local";
 
     /// <summary>Pipelines to serve; empty serves every pipeline in the workspace.</summary>

@@ -295,8 +295,8 @@ public sealed class HomeFeedEndToEndTests
                 { "experiment_id": "exp_conflict", "pipeline_id": "home_feed", "owner": "t", "description": "d", "expires_at": "2099-01-01",
                   "arms": { "control": {}, "k": { "params": { "quality_weight": 0.5 } } } }
                 """);
-            var allocation = Path.Combine(root, "allocation", "home_feed.local.jsonc");
-            File.WriteAllText(allocation, File.ReadAllText(allocation).Replace(
+            var release = Path.Combine(root, "releases", "home_feed.local.jsonc");
+            File.WriteAllText(release, File.ReadAllText(release).Replace(
                 "\"exp_quality_weight\":",
                 "\"exp_conflict\": { \"layer\": \"rerank\" },\n    \"exp_quality_weight\":",
                 StringComparison.Ordinal));
@@ -321,8 +321,8 @@ public sealed class HomeFeedEndToEndTests
                 { "experiment_id": "exp_borrow", "pipeline_id": "home_feed", "owner": "t", "description": "d", "expires_at": "2099-01-01",
                   "arms": { "control": {}, "borrow": { "nodes": { "fusion": { "config": { "multipliers": { "lambda": "param.mmr_lambda" } } } } } } }
                 """);
-            var allocation = Path.Combine(root, "allocation", "home_feed.local.jsonc");
-            File.WriteAllText(allocation, File.ReadAllText(allocation).Replace(
+            var release = Path.Combine(root, "releases", "home_feed.local.jsonc");
+            File.WriteAllText(release, File.ReadAllText(release).Replace(
                 "\"exp_quality_weight\":",
                 "\"exp_borrow\": { \"layer\": \"extra\" },\n    \"exp_quality_weight\":",
                 StringComparison.Ordinal));

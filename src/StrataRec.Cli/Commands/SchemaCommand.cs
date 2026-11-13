@@ -21,7 +21,7 @@ internal static class SchemaCommand
         ("catalog", typeof(FeatureCatalogArtifact)),
         ("bindings", typeof(SourceBindingArtifact)),
         ("experiment", typeof(ExperimentArtifact)),
-        ("allocation", typeof(AllocationArtifact)),
+        ("release", typeof(ReleaseArtifact)),
         ("policy", typeof(PolicyArtifact)),
         ("table", typeof(DataTableArtifact)),
         ("manifest", typeof(ReleaseManifest)),
@@ -30,7 +30,7 @@ internal static class SchemaCommand
 
     public static Command Create()
     {
-        var kind = new Argument<string>("kind") { Description = "pipeline, catalog, bindings, experiment, allocation, policy, table, manifest, replay_bundle, or operator." };
+        var kind = new Argument<string>("kind") { Description = "pipeline, catalog, bindings, experiment, release, policy, table, manifest, replay_bundle, or operator." };
         var op = new Argument<string?>("operator") { Description = "Operator id for 'operator', e.g. TopK@1.", Arity = ArgumentArity.ZeroOrOne };
         var command = new Command("schema", "Print the JSON Schema of an artifact type or an operator's config.") { kind, op };
         command.SetAction(parse => Run(parse.GetValue(kind)!, parse.GetValue(op), Console.Out, Console.Error));
