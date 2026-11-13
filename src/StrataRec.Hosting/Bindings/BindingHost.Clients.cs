@@ -81,6 +81,19 @@ public sealed partial class BindingHost
         entry.Release();
     }
 
+    /// <summary>A callback a client registered on a lease's signature lookups threw when they were cancelled: logged, never thrown.</summary>
+    internal void LookupCancellationCallbacksFailed(Exception exception)
+    {
+        try
+        {
+            LogLookupCancellationCallbacksFailed(_logger, exception);
+        }
+        catch (Exception)
+        {
+            // A failing logger cannot report itself.
+        }
+    }
+
     private void Finished(ClientEntry entry)
     {
         lock (_gate)
@@ -377,6 +390,10 @@ public sealed partial class BindingHost
     [LoggerMessage(EventId = 1212, Level = LogLevel.Warning,
         Message = "A cancellation callback of the load of the {Instance} of {Artifact} threw; the instance is disposed regardless")]
     private static partial void LogLoadCancellationCallbacksFailed(ILogger logger, Exception exception, string instance, string artifact);
+
+    [LoggerMessage(EventId = 1213, Level = LogLevel.Warning,
+        Message = "A cancellation callback of a model signature lookup threw; the lookups are cancelled regardless")]
+    private static partial void LogLookupCancellationCallbacksFailed(ILogger logger, Exception exception);
 }
 
 /// <summary>

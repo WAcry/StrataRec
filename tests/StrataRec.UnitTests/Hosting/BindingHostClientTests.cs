@@ -365,6 +365,84 @@ public sealed class BindingHostClientTests
     }
 
     [Fact]
+    public async Task ASignatureLookupThatBlocksBeforeReturning_IsBoundedByTheLoadTimeout_AndKeepsItsInstanceUntilItReturns()
+    {
+        await using var host = new BindingHost(new BindingHostOptions { LoadTimeout = TimeSpan.FromMilliseconds(50) });
+        var server = new BlockingServer();
+        var lease = host.OpenLease();
+        try
+        {
+            // On a thread of its own, so a compile that blocks fails the test instead of hanging it.
+            var lookup = await Task.Run(() => lease.CompileAsync(bindings =>
+                bindings.Signature(bindings.Acquire(Spec(server), server.Create), "ctr_model", null))).WaitAsync(Wait);
+
+            Assert.Equal(SignatureStatus.Failed, lookup.Status); // the client has not returned: its answer is not waited for
+            Assert.Contains("within 50 ms", lookup.Error, StringComparison.Ordinal);
+            Assert.True(server.Inside);
+            lease.Dispose(); // the plan is rejected
+            await Task.Delay(50);
+            Assert.False(server.Disposed.Task.IsCompleted); // the client is still inside its method
+        }
+        finally
+        {
+            server.Gate.Set();
+        }
+
+        await server.Disposed.Task.WaitAsync(Wait);
+        Assert.Equal(0, server.DisposalsInside);
+    }
+
+    [Fact]
+    public async Task ASignatureLookupThatBlocksBeforeReturning_DoesNotHoldUpACancelledCompile()
+    {
+        await using var host = new BindingHost(); // a bound of minutes: only the cancellation can end the wait
+        var server = new BlockingServer();
+        var lease = host.OpenLease();
+        using var cancel = new CancellationTokenSource();
+        try
+        {
+            var compiling = Task.Run(() => lease.CompileAsync(bindings =>
+                bindings.Signature(bindings.Acquire(Spec(server), server.Create), "ctr_model", null), cancel.Token));
+            await server.Entered.Task.WaitAsync(Wait);
+
+            cancel.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => compiling.WaitAsync(Wait));
+            Assert.True(server.Inside);
+            lease.Dispose();
+            await Task.Delay(50);
+            Assert.False(server.Disposed.Task.IsCompleted);
+        }
+        finally
+        {
+            server.Gate.Set();
+        }
+
+        await server.Disposed.Task.WaitAsync(Wait);
+        Assert.Equal(0, server.DisposalsInside);
+    }
+
+    [Fact]
+    public async Task ASignatureLookupsCancellationCallbackStillCleaningUp_KeepsTheInstanceUntilItEnds()
+    {
+        await using var host = new BindingHost();
+        var server = new CleaningServer();
+        var lease = host.OpenLease();
+
+        var compiling = lease.CompileAsync(bindings => bindings.Signature(bindings.Acquire(Spec(server), server.Create), "ctr_model", null));
+        await server.Entered.Task.WaitAsync(Wait);
+        lease.Dispose(); // cancels the lookup: its callback ends the lookup, then goes on cleaning up with the instance
+        await server.CleanupStarted.Task.WaitAsync(Wait);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => compiling.WaitAsync(Wait)); // the second compile meets the retired lease
+        await Task.Delay(50);
+        Assert.False(server.Disposed.Task.IsCompleted);
+
+        server.Gate.Set();
+        await server.Disposed.Task.WaitAsync(Wait);
+        Assert.Equal(0, server.DisposalsDuringCleanup);
+    }
+
+    [Fact]
     public async Task ASignatureLookupStillRunningWhenItsLeaseRetires_KeepsTheInstanceUntilTheClientAnswers()
     {
         await using var host = new BindingHost();
@@ -590,6 +668,116 @@ public sealed class BindingHostClientTests
 
         public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
             ValueTask.FromResult(ModelStatus.Ok);
+    }
+
+    /// <summary>
+    /// A client without a load whose signature method blocks (synchronous I/O, say) before it returns its task, until
+    /// <see cref="Gate"/> is set; disposable. Its own factory.
+    /// </summary>
+    private sealed class BlockingServer : IModelClient, IDisposable
+    {
+        private int _inside;
+        private int _disposalsInside;
+
+        public ManualResetEventSlim Gate { get; } = new();
+
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Disposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool Inside => Volatile.Read(ref _inside) > 0;
+
+        public int DisposalsInside => Volatile.Read(ref _disposalsInside);
+
+        public string ClientType => "blocking@1";
+
+        public BlockingServer Create(BindingContext context) => this;
+
+        public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _inside);
+            try
+            {
+                Entered.TrySetResult();
+                Gate.Wait(); // ignores the token, and has not returned a task yet
+                return ValueTask.FromResult(Instance.Signature());
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _inside);
+            }
+        }
+
+        public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(ModelStatus.Ok);
+
+        public void Dispose()
+        {
+            if (Inside)
+            {
+                Interlocked.Increment(ref _disposalsInside);
+            }
+
+            Disposed.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// A client without a load whose signature lookup waits for its server; when the lookup is cancelled, its callback
+    /// ends the lookup at once and then goes on cleaning up until <see cref="Gate"/> is set. Disposable; its own factory.
+    /// </summary>
+    private sealed class CleaningServer : IModelClient, IDisposable
+    {
+        private int _cleaningUp;
+        private int _disposalsDuringCleanup;
+
+        public ManualResetEventSlim Gate { get; } = new();
+
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource CleanupStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Disposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int DisposalsDuringCleanup => Volatile.Read(ref _disposalsDuringCleanup);
+
+        public string ClientType => "cleaning@1";
+
+        public CleaningServer Create(BindingContext context) => this;
+
+        public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken)
+        {
+            var answer = new TaskCompletionSource<ModelSignature>(TaskCreationOptions.RunContinuationsAsynchronously);
+            cancellationToken.Register(() =>
+            {
+                Volatile.Write(ref _cleaningUp, 1);
+                CleanupStarted.TrySetResult();
+                answer.TrySetCanceled(); // the lookup returns first...
+                try
+                {
+                    Gate.Wait(); // ...while the cleanup goes on using the instance
+                }
+                finally
+                {
+                    Volatile.Write(ref _cleaningUp, 0);
+                }
+            });
+            Entered.TrySetResult();
+            return new ValueTask<ModelSignature>(answer.Task);
+        }
+
+        public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(ModelStatus.Ok);
+
+        public void Dispose()
+        {
+            if (Volatile.Read(ref _cleaningUp) != 0)
+            {
+                Interlocked.Increment(ref _disposalsDuringCleanup);
+            }
+
+            Disposed.TrySetResult();
+        }
     }
 
     /// <summary>A loadable, disposable model client whose load the test finishes or fails.</summary>

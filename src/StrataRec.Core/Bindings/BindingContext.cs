@@ -28,9 +28,11 @@ namespace StrataRec.Core.Bindings;
 /// once, on the thread pool, bounded and cancellable, and serves no plan with the instance before it completed. Nothing
 /// on the request path waits for I/O the load could have done.</para>
 /// <para><b>Calls.</b> The request calls (<c>InvokeAsync</c>, <c>FetchAsync</c>, <c>RetrieveAsync</c>) and model
-/// signature lookups come only after the load completed. The engine may stop waiting for a call at its timeout and
-/// cancel its token; the instance stays alive until the call has returned, so a call that ignores its token only delays
-/// the disposal.</para>
+/// signature lookups come only after the load completed; signature lookups run on the thread pool, bounded by the load's
+/// timeout. The engine may stop waiting for a call at its timeout and cancel its token; the instance stays alive until
+/// the call has returned, so a call that ignores its token only delays the disposal. When the engine cancels a load or
+/// the signature lookups, it also waits for the callbacks registered on that token to run; a request call should not
+/// leave a callback that uses the instance after it returned.</para>
 /// <para><b>Dispose.</b> An instance that holds resources implements <see cref="IAsyncDisposable"/> (preferred) or
 /// <see cref="IDisposable"/>. The engine disposes it exactly once, on the thread pool, when no served plan uses it any
 /// more (its plans were replaced or rejected, or the engine is disposed) and nothing can call it: no request of those
