@@ -943,13 +943,7 @@ public sealed class PipelineExecutor
         state.PositionOpen = false;
         var elapsed = Stopwatch.GetElapsedTime(started);
         var rowsOut = state.Table.Rows.Count;
-        var kind = category switch
-        {
-            NodeOutcomeCategory.Succeeded => NodeOutcomeKind.Succeeded,
-            NodeOutcomeCategory.Degraded or NodeOutcomeCategory.Fallback => NodeOutcomeKind.Degraded,
-            NodeOutcomeCategory.Failed or NodeOutcomeCategory.Aborted => NodeOutcomeKind.Failed,
-            _ => NodeOutcomeKind.Skipped,
-        };
+        var kind = PlanTelemetry.Kind(category);
         var outcome = new NodeOutcome(node.NodeId, kind, detail, producedBy, elapsed.TotalMilliseconds, rowsIn, rowsOut);
         state.Outcomes.Add(outcome);
         state.Degraded |= category is not (NodeOutcomeCategory.Succeeded or NodeOutcomeCategory.SkippedWhen);
