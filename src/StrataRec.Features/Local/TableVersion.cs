@@ -1199,9 +1199,27 @@ public sealed class TableVersion
     /// <summary>The code of a string, or -1 when the dictionary does not hold it.</summary>
     internal int FindString(ReadOnlySpan<char> value) => _codes.Find(value, _strings);
 
-    /// <summary>Bytes adding a string of <paramref name="length"/> chars would cost (dictionary growth included).</summary>
-    internal long StringGrowthBytes(int length) =>
-        StringObjectBytes(length) + (_stringCount == _strings.Length ? _strings.Length * 8L : 0) + _codes.GrowthBytes();
+    /// <summary>
+    /// Bytes that adding <paramref name="count"/> new strings, whose <see cref="StringObjectBytes"/> sum to
+    /// <paramref name="objectBytes"/>, costs: the strings, plus every growth of the dictionary array and of its code map
+    /// that the additions pass (several, when one record brings many new strings). <see cref="AddString"/> adds exactly
+    /// this when called <paramref name="count"/> times.
+    /// </summary>
+    internal long StringAdditionBytes(int count, long objectBytes)
+    {
+        if (count == 0)
+        {
+            return 0;
+        }
+
+        var bytes = objectBytes;
+        for (long capacity = _strings.Length; _stringCount + (long)count > capacity; capacity *= 2)
+        {
+            bytes += capacity * 8; // AddString: a full array is copied into one twice as long
+        }
+
+        return bytes + _codes.GrowthBytes(count);
+    }
 
     /// <summary>
     /// Adds a string to the dictionary and returns its code. The element is stored before any record using the code is
@@ -1266,7 +1284,8 @@ public sealed class TableVersion
 
     private static long IndexBytes(IndexTable index) => index.Entries.Length * 8L;
 
-    private static long StringObjectBytes(int length) => RecordLayout.Align(22L + (2L * length), 8) + 8;
+    /// <summary>What one dictionary string of <paramref name="length"/> chars is charged: the string object and a reference.</summary>
+    internal static long StringObjectBytes(int length) => RecordLayout.Align(22L + (2L * length), 8) + 8;
 }
 
 /// <summary>
@@ -1338,7 +1357,17 @@ internal sealed class StringCodeMap
 
     public long Bytes => _slots.Length * 4L;
 
-    public long GrowthBytes() => _count + 1 > _slots.Length / 2 ? _slots.Length * 4L : 0;
+    /// <summary>Bytes the map grows by while <paramref name="additions"/> codes are added: each growth doubles it.</summary>
+    public long GrowthBytes(int additions)
+    {
+        long bytes = 0;
+        for (long slots = _slots.Length; _count + (long)additions > slots / 2; slots *= 2)
+        {
+            bytes += slots * 4; // Add: a map past half full is rebuilt twice as large
+        }
+
+        return bytes;
+    }
 
     public int Find(ReadOnlySpan<char> value, string[] strings)
     {

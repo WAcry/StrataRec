@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using StrataRec.Core.Columns;
@@ -48,7 +49,10 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     private readonly ulong[] _written;
     private byte[] _pending = new byte[256];
     private int _pendingUsed;
-    private long _pendingStringBytes;
+    private long[] _newStrings = new long[16]; // scratch set of the record's new strings, see NewStringBytes
+    private int _lookedUpField = -1;           // a string field NewStringBytes looked up: its code in _lookedUpIn, or -1 if new
+    private int _lookedUpCode;
+    private TableVersion? _lookedUpIn;
     private readonly int[] _pendingStart;
     private readonly int[] _pendingCount;
     private int _openList = -1;
@@ -224,11 +228,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         _openList = -1;
         _pendingStart[field] = AppendChars(value);
         _pendingCount[field] = value.Length;
-        if (kind == StorageKind.String)
-        {
-            _pendingStringBytes += PendingStringBytes(value.Length);
-        }
-
         MarkWritten(field, valid: true);
     }
 
@@ -251,14 +250,16 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     internal void AddInt32Item(int token, int field, int value)
     {
         CheckListItem(token, field, StorageKind.ListInt32, "AddInt32Item");
-        Unsafe.WriteUnaligned(ref _pending[Reserve(4)], value);
+        var at = Reserve(4); // before reading _pending: Reserve may replace it (see Reserve)
+        Unsafe.WriteUnaligned(ref _pending[at], value);
         _pendingCount[field]++;
     }
 
     internal void AddInt64Item(int token, int field, long value)
     {
         CheckListItem(token, field, StorageKind.ListInt64, "AddInt64Item");
-        Unsafe.WriteUnaligned(ref _pending[Reserve(8)], value);
+        var at = Reserve(8);
+        Unsafe.WriteUnaligned(ref _pending[at], value);
         _pendingCount[field]++;
     }
 
@@ -270,7 +271,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         Unsafe.WriteUnaligned(ref _pending[at], item.Length);
         item.CopyTo(MemoryMarshal.Cast<byte, char>(_pending.AsSpan(at + 4, 2 * item.Length)));
         _pendingCount[field]++;
-        _pendingStringBytes += PendingStringBytes(item.Length);
     }
 
     internal void SetMissing(int token, int field)
@@ -295,7 +295,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
         var newKey = _oldPosition == 0;
         var size = RecordSize(OldRecord(out var oldOffset), oldOffset);
-        EnsureBudget(size, newKey, _pendingStringBytes);
+        EnsureBudget(size, newKey, strings: true);
         ReprobeIfMoved(newKey);
         var oldPage = OldRecord(out oldOffset);
 
@@ -317,10 +317,16 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         {
             if (_layout.Kinds[f] == StorageKind.String && Bits.Get(_written, f) && FixedValid(f))
             {
-                var code = Encode(MemoryMarshal.Cast<byte, char>(_pending.AsSpan(_pendingStart[f], 2 * _pendingCount[f])));
+                // NewStringBytes may have looked this value up already, in this very version (nothing was added since).
+                var chars = MemoryMarshal.Cast<byte, char>(_pending.AsSpan(_pendingStart[f], 2 * _pendingCount[f]));
+                var code = f == _lookedUpField && ReferenceEquals(_lookedUpIn, _version)
+                    ? (_lookedUpCode >= 0 ? _lookedUpCode : _version.AddString(new string(chars)))
+                    : Encode(chars);
                 Unsafe.WriteUnaligned(ref _fixed[_layout.Offsets[f]], code);
             }
         }
+
+        _lookedUpIn = null; // do not keep a version alive past its commit
 
         BinaryPrimitives.WriteInt64LittleEndian(_fixed.AsSpan(RecordLayout.VersionOffset), _recordVersion);
         BinaryPrimitives.WriteInt32LittleEndian(_fixed.AsSpan(RecordLayout.LengthOffset), size);
@@ -397,8 +403,9 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         Array.Clear(_fixed);
         Array.Clear(_written);
         _pendingUsed = 0;
-        _pendingStringBytes = 0;
         _openList = -1;
+        _lookedUpField = -1;
+        _lookedUpIn = null;
         return new RecordBuilder(this, _token);
     }
 
@@ -414,7 +421,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
         var newKey = _oldPosition == 0;
         var size = _layout.HeaderSize + (_layout.StringKeys ? RecordLayout.Align(2 * _keyLength, 8) : 0);
-        EnsureBudget(size, newKey, 0);
+        EnsureBudget(size, newKey, strings: false);
         ReprobeIfMoved(newKey);
         var oldPage = OldRecord(out var oldOffset);
 
@@ -516,11 +523,11 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     /// <summary>
     /// Enforces <c>max_bytes</c>: the table's size after this write (a new page, index growth, new strings) must fit.
     /// When it would not, superseded records are compacted away first; if it still would not, the write fails and the
-    /// table is unchanged.
+    /// table is unchanged. The charge is exactly what the write then adds, so the limit holds to the byte.
     /// </summary>
-    private void EnsureBudget(int recordBytes, bool newKey, long stringBytes)
+    private void EnsureBudget(int recordBytes, bool newKey, bool strings)
     {
-        var required = Required(_version, recordBytes, newKey, stringBytes);
+        var required = Required(recordBytes, newKey, strings);
         if (required <= _options.MaxBytes)
         {
             return;
@@ -528,8 +535,10 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
         if (_version.SupersededBytes > 0)
         {
+            // Recomputed against the compacted version: its dictionary keeps only strings still in use, so a string this
+            // record shares with a superseded record only is new again.
             CompactCore(long.MinValue);
-            required = Required(_version, recordBytes, newKey, stringBytes);
+            required = Required(recordBytes, newKey, strings);
             if (required <= _options.MaxBytes)
             {
                 return;
@@ -539,9 +548,111 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         throw new LocalTableFullException(Schema, _options.MaxBytes, required);
     }
 
-    private static long Required(TableVersion version, int recordBytes, bool newKey, long stringBytes) =>
-        version.Bytes + version.PageGrowthBytes(recordBytes) + version.IndexGrowthBytes(newKey) +
-        (stringBytes > 0 ? stringBytes + version.StringGrowthBytes(0) : 0);
+    private long Required(int recordBytes, bool newKey, bool strings) =>
+        _version.Bytes + _version.PageGrowthBytes(recordBytes) + _version.IndexGrowthBytes(newKey) + (strings ? NewStringBytes() : 0);
+
+    /// <summary>
+    /// What the record's strings add to the dictionary of the version being written: each distinct value of its written
+    /// <c>string</c> fields and <c>list&lt;string&gt;</c> items that the dictionary does not hold yet, once however often
+    /// the record repeats it, plus the dictionary growths that adding them passes. This is what <see cref="Encode"/> then
+    /// does at commit (fields kept from the old record already have codes). Allocates only when a record brings more
+    /// strings than any record before it.
+    /// </summary>
+    private long NewStringBytes()
+    {
+        _lookedUpField = -1;
+        var fields = _layout.DictionaryFields;
+        var candidates = 0L;
+        var single = -1;
+        foreach (var f in fields)
+        {
+            if (Bits.Get(_written, f) && FixedValid(f))
+            {
+                candidates += _layout.Kinds[f] == StorageKind.String ? 1 : _pendingCount[f];
+                single = f;
+            }
+        }
+
+        if (candidates == 0)
+        {
+            return 0;
+        }
+
+        if (candidates == 1 && _layout.Kinds[single] == StorageKind.String)
+        {
+            // The common case, one string value: nothing to repeat, so no set; the lookup is kept for Encode.
+            var chars = MemoryMarshal.Cast<byte, char>(_pending.AsSpan(_pendingStart[single], 2 * _pendingCount[single]));
+            _lookedUpCode = _version.FindString(chars);
+            _lookedUpField = single;
+            _lookedUpIn = _version;
+            return _lookedUpCode >= 0 ? 0 : _version.StringAdditionBytes(1, TableVersion.StringObjectBytes(chars.Length));
+        }
+
+        // An open-addressing set of the new strings found so far, as (pending offset + 1) << 32 | length; at most half full.
+        var size = (int)BitOperations.RoundUpToPowerOf2((ulong)Math.Max(16, 2 * candidates));
+        if (_newStrings.Length < size)
+        {
+            _newStrings = new long[size];
+        }
+
+        var set = _newStrings.AsSpan(0, size);
+        set.Clear();
+        var count = 0;
+        var objectBytes = 0L;
+        foreach (var f in fields)
+        {
+            if (!Bits.Get(_written, f) || !FixedValid(f))
+            {
+                continue;
+            }
+
+            if (_layout.Kinds[f] == StorageKind.String)
+            {
+                CountNewString(set, _pendingStart[f], _pendingCount[f], ref count, ref objectBytes);
+            }
+            else if (_layout.Kinds[f] == StorageKind.ListString)
+            {
+                var at = _pendingStart[f];
+                for (var i = 0; i < _pendingCount[f]; i++)
+                {
+                    var length = Unsafe.ReadUnaligned<int>(ref _pending[at]);
+                    CountNewString(set, at + 4, length, ref count, ref objectBytes);
+                    at += RecordLayout.Align(4 + (2 * length), 4);
+                }
+            }
+        }
+
+        return _version.StringAdditionBytes(count, objectBytes);
+    }
+
+    private void CountNewString(Span<long> set, int offset, int length, ref int count, ref long objectBytes)
+    {
+        var chars = MemoryMarshal.Cast<byte, char>(_pending.AsSpan(offset, 2 * length));
+        if (_version.FindString(chars) >= 0)
+        {
+            return;
+        }
+
+        var mask = set.Length - 1;
+        for (var slot = string.GetHashCode(chars) & mask; ; slot = (slot + 1) & mask)
+        {
+            var entry = set[slot];
+            if (entry == 0)
+            {
+                set[slot] = ((long)(offset + 1) << 32) | (uint)length;
+                count++;
+                objectBytes += TableVersion.StringObjectBytes(length);
+                return;
+            }
+
+            var seenLength = (int)(uint)entry;
+            if (seenLength == length
+                && MemoryMarshal.Cast<byte, char>(_pending.AsSpan((int)(entry >> 32) - 1, 2 * seenLength)).SequenceEqual(chars))
+            {
+                return; // repeated within the record: one dictionary string
+            }
+        }
+    }
 
     private void MaybeCompact()
     {
@@ -708,7 +819,11 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         return at;
     }
 
-    /// <summary>Bytes at the end of the pending buffer (list items are appended in place, so the open list stays contiguous).</summary>
+    /// <summary>
+    /// Bytes at the end of the pending buffer (list items are appended in place, so the open list stays contiguous).
+    /// May replace <see cref="_pending"/>: call it first and index the field afterwards, never in one expression such as
+    /// <c>_pending[Reserve(n)]</c>, where C# reads the field (the old array) before the call.
+    /// </summary>
     private int Reserve(int bytes)
     {
         if (_pendingUsed + bytes > _pending.Length)
@@ -818,7 +933,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         }
     }
 
-    private static long PendingStringBytes(int length) => RecordLayout.Align(22L + (2L * length), 8) + 8;
 }
 
 /// <summary>

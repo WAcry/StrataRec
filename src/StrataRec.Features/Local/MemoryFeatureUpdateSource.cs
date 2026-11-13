@@ -67,6 +67,7 @@ public sealed class MemoryFeatureUpdateSource : IFeatureUpdateSource
         var next = (int)Math.Min(int.MaxValue, from.OffsetOf(0));
         while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             MemoryFeatureUpdate[] batch;
             Task changed;
             bool completed;
