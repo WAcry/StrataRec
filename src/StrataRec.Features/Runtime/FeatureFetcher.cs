@@ -35,7 +35,8 @@ public readonly record struct FeatureFillResult(FeatureState State, string? Erro
 /// Request-scoped feature enrichment (design 4.5, 5.4, 6.5–6.8). Fetch results land in key-ordered staging buffers and
 /// are backfilled into whatever rows are live <em>when a reader needs them</em>, so filters and Compact during in-flight
 /// I/O never misplace values. Local groups (design 6.6) are read synchronously from their tables when a reader needs
-/// them (<c>FeatureFetcher.Local.cs</c>).
+/// them (<c>FeatureFetcher.Local.cs</c>); cache groups the same way, with the keys the table does not have fresh resolved
+/// through the distributed tier and the connector (<c>FeatureFetcher.Cache.cs</c>).
 /// </summary>
 /// <remarks>
 /// <para>Not thread-safe; driven by the request's executor. Connectors and the context prefetch run concurrently
