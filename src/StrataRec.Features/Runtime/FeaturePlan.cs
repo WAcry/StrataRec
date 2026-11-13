@@ -1,4 +1,5 @@
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Expressions;
@@ -51,6 +52,15 @@ public sealed class FeatureRuntimeInfo
     public bool IsContext => Definition.IsContext;
 
     public bool IsDerived => Definition.IsDerived;
+
+    /// <summary>
+    /// Tags of <see cref="StrataRecMetrics.ColumnNonFinite"/> for this feature (<c>stratarec.column</c>), built once per
+    /// plan on first use: non-finite values are rare, and features are not produced by a node.
+    /// </summary>
+    internal KeyValuePair<string, object?>[] NonFiniteTags =>
+        _nonFiniteTags ?? Interlocked.CompareExchange(ref _nonFiniteTags, [new(StrataRecTags.Column, Definition.Name)], null) ?? _nonFiniteTags!;
+
+    private KeyValuePair<string, object?>[]? _nonFiniteTags;
 }
 
 /// <summary>
@@ -87,6 +97,11 @@ public sealed class FetchGroup
     public required CompiledFieldBinding[] Fields { get; init; }
 
     public int Wave { get; internal set; }
+
+    /// <summary>Metric tags and span name of this source (design 13.1), built once per plan on first use.</summary>
+    public IoTarget Io => _io ?? Interlocked.CompareExchange(ref _io, new IoTarget(IoKind.FeatureSource, SourceName), null) ?? _io!;
+
+    private IoTarget? _io;
 }
 
 /// <summary>
@@ -103,6 +118,7 @@ public sealed class FeaturePlan
         foreach (var g in groups)
         {
             MaxWave = Math.Max(MaxWave, g.Wave);
+            _ = g.Io; // build the source's metric tags with the plan, not on its first request
         }
     }
 

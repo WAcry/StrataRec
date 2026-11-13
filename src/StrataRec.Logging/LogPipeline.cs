@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Threading.Channels;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using StrataRec.Core.Diagnostics;
 
 namespace StrataRec.Logging;
 
@@ -82,16 +84,28 @@ public readonly record struct TapLogStats(string TapId, long Delivered, long Dro
 /// retried until the sink accepts them (or rejects them permanently); best-effort batches are dropped when their queue
 /// is full or a write fails.
 /// </summary>
-public sealed class LogPipeline : IAsyncDisposable
+/// <remarks>
+/// Observability (design 13.1, 13.2): queue depth, per-tap delivery, durable overflow and rejections are metrics
+/// (<see cref="StrataRecMetrics"/>). A failing sink is logged when it starts failing and when it recovers, not per write;
+/// failures of the host's hooks are summarized per window.
+/// </remarks>
+public sealed partial class LogPipeline : IAsyncDisposable
 {
+    private static readonly KeyValuePair<string, object?>[] DurableTags = [new(StrataRecTags.LogDelivery, "durable")];
+    private static readonly KeyValuePair<string, object?>[] BestEffortTags = [new(StrataRecTags.LogDelivery, "best_effort")];
+
     private readonly ILogSink _sink;
     private readonly LogPipelineOptions _options;
+    private readonly ILogger _logger;
+    private readonly RequestEventLog? _events;
     private readonly Channel<LogBatch> _durable;
     private readonly Channel<LogBatch> _bestEffort;
     private readonly Task _durableLoop;
     private readonly Task _bestEffortLoop;
     private readonly CancellationTokenSource _stop = new();
-    private readonly ConcurrentDictionary<string, long[]> _stats = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, TapCounters> _stats = new(StringComparer.Ordinal);
+    /// <summary>Consecutive failed writes per loop (0: durable, 1: best-effort); each loop touches only its own.</summary>
+    private readonly long[] _failedWrites = new long[2];
     /// <summary>How long disposal waits past <see cref="LogPipelineOptions.DrainTimeout"/> for loops to see cancellation.</summary>
     private static readonly TimeSpan ShutdownGrace = TimeSpan.FromMilliseconds(500);
 
@@ -99,10 +113,13 @@ public sealed class LogPipeline : IAsyncDisposable
     private long _pending;
     private int _disposed;
 
-    public LogPipeline(ILogSink sink, LogPipelineOptions? options = null, string? producerId = null)
+    /// <param name="loggerFactory">Receives sink failures and recoveries and hook failures (design 13.2); null logs nothing.</param>
+    public LogPipeline(ILogSink sink, LogPipelineOptions? options = null, string? producerId = null, ILoggerFactory? loggerFactory = null)
     {
         _sink = sink;
         _options = options ?? new LogPipelineOptions();
+        _logger = loggerFactory?.CreateLogger<LogPipeline>() ?? NullLogger<LogPipeline>.Instance;
+        _events = loggerFactory is null ? null : new RequestEventLog(_logger);
         ProducerId = producerId ?? $"{Environment.MachineName}/{Environment.ProcessId}/{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
         _durable = Channel.CreateBounded<LogBatch>(new BoundedChannelOptions(_options.DurableCapacity) { SingleReader = true });
         _bestEffort = Channel.CreateBounded<LogBatch>(new BoundedChannelOptions(_options.BestEffortCapacity) { SingleReader = true });
@@ -134,7 +151,7 @@ public sealed class LogPipeline : IAsyncDisposable
             Count(batch.TapId, delivered: 0, dropped: 1);
             if (batch.Delivery == LogDelivery.Durable)
             {
-                Interlocked.Increment(ref _durableOverflow);
+                Overflow();
             }
 
             return LogAdmission.Closed;
@@ -146,6 +163,7 @@ public sealed class LogPipeline : IAsyncDisposable
             batch.Seq = Interlocked.Increment(ref _seq);
             if (_durable.Writer.TryWrite(batch))
             {
+                StrataRecMetrics.LogQueueDepth.Add(1, DurableTags);
                 return LogAdmission.Queued;
             }
 
@@ -155,7 +173,7 @@ public sealed class LogPipeline : IAsyncDisposable
                 return LogAdmission.Spilled;
             }
 
-            Interlocked.Increment(ref _durableOverflow);
+            Overflow();
             Count(batch.TapId, 0, 1);
             return LogAdmission.Dropped;
         }
@@ -167,7 +185,14 @@ public sealed class LogPipeline : IAsyncDisposable
             return LogAdmission.Dropped;
         }
 
+        StrataRecMetrics.LogQueueDepth.Add(1, BestEffortTags);
         return LogAdmission.Queued;
+    }
+
+    private void Overflow()
+    {
+        Interlocked.Increment(ref _durableOverflow);
+        StrataRecMetrics.LogDurableOverflow.Add(1);
     }
 
     private bool Spill(LogBatch batch)
@@ -183,7 +208,7 @@ public sealed class LogPipeline : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"StrataRec durable spill failed: {ex.Message}");
+            _events?.Report(RequestEvent.LogSpillFailed, batch.TapId, batch.RequestId, ex.Message);
             return false;
         }
     }
@@ -194,7 +219,7 @@ public sealed class LogPipeline : IAsyncDisposable
         var list = new List<TapLogStats>();
         foreach (var (tap, counters) in _stats)
         {
-            list.Add(new TapLogStats(tap, Interlocked.Read(ref counters[0]), Interlocked.Read(ref counters[1])));
+            list.Add(new TapLogStats(tap, Interlocked.Read(ref counters.Delivered), Interlocked.Read(ref counters.Dropped)));
         }
 
         list.Sort(static (a, b) => string.CompareOrdinal(a.TapId, b.TapId));
@@ -230,13 +255,16 @@ public sealed class LogPipeline : IAsyncDisposable
         catch (OperationCanceledException)
         {
             // Drain timed out; remaining durable batches show up as a sequence gap.
+            LogDrainTimedOut(_logger, _options.DrainTimeout.TotalSeconds, Interlocked.Read(ref _pending));
         }
         catch (TimeoutException)
         {
-            Debug.WriteLine("StrataRec log sink did not stop within the drain timeout; abandoning in-flight writes.");
+            LogSinkStuck(_logger, _options.DrainTimeout.TotalSeconds);
+            _events?.Dispose();
             return; // the loops still use _stop; leave it to the finalizer
         }
 
+        _events?.Dispose();
         _stop.Dispose();
     }
 
@@ -261,6 +289,7 @@ public sealed class LogPipeline : IAsyncDisposable
             }
 
             Interlocked.Add(ref _pending, -buffer.Count);
+            StrataRecMetrics.LogQueueDepth.Add(-buffer.Count, durable ? DurableTags : BestEffortTags);
         }
     }
 
@@ -276,6 +305,7 @@ public sealed class LogPipeline : IAsyncDisposable
             try
             {
                 await _sink.WriteAsync(batches, token).ConfigureAwait(false);
+                SinkSucceeded(durable);
                 return true;
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -289,16 +319,19 @@ public sealed class LogPipeline : IAsyncDisposable
                     if (rejected.Add(batch))
                     {
                         Interlocked.Increment(ref _rejected);
+                        StrataRecMetrics.LogRejected.Add(1);
+                        _events?.Report(RequestEvent.LogBatchRejected, batch.TapId, batch.RequestId, ex.Message);
                         NotifyRejected(batch, ex);
                     }
                 }
 
                 // The sink wrote everything else in this call.
+                SinkSucceeded(durable);
                 return true;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"StrataRec log sink failed: {ex.Message}");
+                SinkFailed(durable, ex);
                 if (!durable)
                 {
                     return false;
@@ -326,14 +359,68 @@ public sealed class LogPipeline : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"StrataRec rejected-batch handler failed: {ex.Message}");
+            _events?.Report(RequestEvent.LogRejectedHandlerFailed, batch.TapId, batch.RequestId, ex.Message);
+        }
+    }
+
+    /// <summary>Logs the first failure of a run of failed writes; later ones are only counted (design 13.2: events, not traffic).</summary>
+    private void SinkFailed(bool durable, Exception ex)
+    {
+        if (_failedWrites[durable ? 0 : 1]++ == 0)
+        {
+            LogSinkFailing(_logger, durable ? "durable" : "best_effort", ex);
+        }
+    }
+
+    private void SinkSucceeded(bool durable)
+    {
+        ref var failed = ref _failedWrites[durable ? 0 : 1];
+        if (failed > 0)
+        {
+            LogSinkRecovered(_logger, durable ? "durable" : "best_effort", failed);
+            failed = 0;
         }
     }
 
     private void Count(string tap, long delivered, long dropped)
     {
-        var counters = _stats.GetOrAdd(tap, static _ => new long[2]);
-        Interlocked.Add(ref counters[0], delivered);
-        Interlocked.Add(ref counters[1], dropped);
+        var counters = _stats.GetOrAdd(tap, static id => new TapCounters(id));
+        if (delivered > 0)
+        {
+            Interlocked.Add(ref counters.Delivered, delivered);
+            StrataRecMetrics.LogBatches.Add(delivered, counters.DeliveredTags);
+        }
+
+        if (dropped > 0)
+        {
+            Interlocked.Add(ref counters.Dropped, dropped);
+            StrataRecMetrics.LogBatches.Add(dropped, counters.DroppedTags);
+        }
+    }
+
+    [LoggerMessage(EventId = 3001, Level = LogLevel.Error,
+        Message = "Log sink failed writing {Delivery} batches; durable batches are retried, best-effort batches are dropped until it recovers")]
+    private static partial void LogSinkFailing(ILogger logger, string delivery, Exception exception);
+
+    [LoggerMessage(EventId = 3002, Level = LogLevel.Information, Message = "Log sink recovered writing {Delivery} batches after {FailedWrites} failed write(s)")]
+    private static partial void LogSinkRecovered(ILogger logger, string delivery, long failedWrites);
+
+    [LoggerMessage(EventId = 3003, Level = LogLevel.Warning,
+        Message = "Log pipeline stopped draining after {DrainTimeoutSeconds} s with {Pending} batch(es) unwritten; durable ones leave a sequence gap")]
+    private static partial void LogDrainTimedOut(ILogger logger, double drainTimeoutSeconds, long pending);
+
+    [LoggerMessage(EventId = 3004, Level = LogLevel.Warning,
+        Message = "Log sink did not stop within the {DrainTimeoutSeconds} s drain timeout; abandoning in-flight writes")]
+    private static partial void LogSinkStuck(ILogger logger, double drainTimeoutSeconds);
+
+    /// <summary>Delivery counters of one tap and its metric tags, built once per tap.</summary>
+    private sealed class TapCounters(string tap)
+    {
+        public long Delivered;
+        public long Dropped;
+
+        public KeyValuePair<string, object?>[] DeliveredTags { get; } = [new(StrataRecTags.Tap, tap), new(StrataRecTags.Outcome, "delivered")];
+
+        public KeyValuePair<string, object?>[] DroppedTags { get; } = [new(StrataRecTags.Tap, tap), new(StrataRecTags.Outcome, "dropped")];
     }
 }

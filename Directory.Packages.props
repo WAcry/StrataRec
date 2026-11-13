@@ -8,6 +8,8 @@
     <PackageVersion Include="System.Text.Json" Version="10.0.15" />
     <PackageVersion Include="System.IO.Hashing" Version="10.0.15" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.15" />
+    <!-- 9.0+ on net8.0 for InstrumentAdvice and Gauge<T>; Logging.Abstractions 10.x already brings this exact version. -->
+    <PackageVersion Include="System.Diagnostics.DiagnosticSource" Version="10.0.15" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.15" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.15" />
     <PackageVersion Include="System.CommandLine" Version="2.0.15" />

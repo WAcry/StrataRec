@@ -1,4 +1,5 @@
 using StrataRec.Core.Columns;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
@@ -183,7 +184,8 @@ public sealed class ModelScorerFactory : IOperatorFactory
             named[name] = expr.Source;
         }
 
-        return new ModelScorer(config.Model, config.Version, versionParam, bound.Value.Client, bound.Value.TimeoutMs, inputs, outputs, config.BatchSize, named);
+        return new ModelScorer(config.Model, config.Version, versionParam, bound.Value.Client, bound.Value.TimeoutMs, inputs, outputs, config.BatchSize, named,
+            new IoTarget(IoKind.Model, config.Model));
     }
 
     private sealed class ModelScorer(
@@ -195,9 +197,12 @@ public sealed class ModelScorerFactory : IOperatorFactory
         (string Name, CompiledExpression Expr)[] inputs,
         (string Name, OutputColumn Column)[] outputs,
         int batchSize,
-        IReadOnlyDictionary<string, string> namedInputs) : Operator
+        IReadOnlyDictionary<string, string> namedInputs,
+        IoTarget target) : Operator
     {
         public override IReadOnlyDictionary<string, string> NamedInputs => namedInputs;
+
+        internal override IoTarget ModelTarget => target;
 
         public override async ValueTask ExecuteAsync(OperatorContext context)
         {
@@ -241,7 +246,7 @@ public sealed class ModelScorerFactory : IOperatorFactory
                     BatchSize = count,
                     Options = new ModelCallOptions(Seed: context.Seed),
                 };
-                calls[b] = InvokeAsync(call, writers[b], memory, cts.Token);
+                calls[b] = InvokeAsync(call, writers[b], memory, context.RequestId, context.Events, context.CallerCancellation, cts.Token);
             }
 
             var results = await Task.WhenAll(calls).ConfigureAwait(false);
@@ -320,16 +325,40 @@ public sealed class ModelScorerFactory : IOperatorFactory
             }
         }
 
-        private async Task<ModelStatus> InvokeAsync(ModelCall call, OutputWriter writer, Core.Memory.RequestMemory memory, CancellationToken cancellationToken)
+        private async Task<ModelStatus> InvokeAsync(
+            ModelCall call,
+            OutputWriter writer,
+            Core.Memory.RequestMemory memory,
+            string requestId,
+            RequestEventLog? events,
+            CancellationToken callerCancellation,
+            CancellationToken cancellationToken)
         {
             memory.Hold();
+            var io = target.Start();
+            var outcome = IoOutcome.Error;
+            string? error = null;
             try
             {
-                return await client.InvokeAsync(call, writer, cancellationToken).ConfigureAwait(false);
+                var status = await client.InvokeAsync(call, writer, cancellationToken).ConfigureAwait(false);
+                (outcome, error) = status.Succeeded ? (IoOutcome.Ok, null) : (IoOutcome.Error, status.Error);
+                return status;
+            }
+            catch (OperationCanceledException)
+            {
+                // The model timeout or the node's budget, unless the caller gave up on the request.
+                outcome = callerCancellation.IsCancellationRequested ? IoOutcome.Cancelled : IoOutcome.Timeout;
+                throw;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                throw;
             }
             finally
             {
                 memory.Release();
+                io.Complete(outcome, -1, requestId, error, events);
             }
         }
     }

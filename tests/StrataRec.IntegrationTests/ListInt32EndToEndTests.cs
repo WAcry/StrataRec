@@ -1,4 +1,5 @@
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting.Workspace;
@@ -10,14 +11,17 @@ namespace StrataRec.IntegrationTests;
 /// <summary>
 /// <c>int32</c> and <c>list&lt;int32&gt;</c> node outputs end to end (design 4.3, 4.6): a value that does not fit int32
 /// storage takes the column's declared default, or becomes missing, and is counted in
-/// <see cref="PipelineResult.OutOfRangeValues"/>; it is never wrapped.
+/// <see cref="PipelineResult.OutOfRangeValues"/>; it is never wrapped. In the listener collection: one test reads the
+/// out-of-range metric.
 /// </summary>
+[Collection(ProcessWideListenersCollection.Name)]
 public class ListInt32EndToEndTests
 {
     [Fact]
     public async Task ExpressionScorer_OutOfRangeWrites_TakeTheColumnDefault_OrBecomeMissing_AndAreCounted()
     {
         var plan = Compile(Workspace());
+        using var capture = new MetricCapture();
 
         var result = await new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
         {
@@ -46,6 +50,9 @@ public class ListInt32EndToEndTests
 
         Assert.Equal(8, result.OutOfRangeValues);
         Assert.Equal(0, result.NonFiniteValues);
+        var metric = Assert.Single(capture.Of(StrataRecMetrics.Names.ColumnOutOfRange));
+        Assert.Equal(8, metric.Value);
+        Assert.Equal(plan.PipelineId, Assert.Single(metric.Tags, t => t.Key == StrataRecTags.Pipeline).Value);
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using StrataRec.Core.Columns;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Tables;
@@ -55,6 +56,8 @@ public sealed class FeatureFetcher
     private readonly ScalarValue[] _params;
     private readonly RequestMemory _memory;
     private readonly long _deadlineTimestamp;
+    private readonly string? _requestId;
+    private readonly RequestEventLog? _events;
     private readonly FeatureState[] _state;
     private readonly string?[] _errors;
     private readonly List<PendingFetch> _pending = new();
@@ -65,6 +68,8 @@ public sealed class FeatureFetcher
 
     /// <param name="counters">The request's expression counters, shared with the operators' evaluations so a request
     /// reports one total per event; null gives the fetcher counters of its own.</param>
+    /// <param name="requestId">Sample request id for failure summaries (design 13.2).</param>
+    /// <param name="events">Source health and failure summaries; null when the engine has no logger.</param>
     public FeatureFetcher(
         FeaturePlan plan,
         CandidateTable table,
@@ -73,7 +78,9 @@ public sealed class FeatureFetcher
         ScalarValue[] parameters,
         RequestMemory memory,
         long deadlineTimestamp,
-        ExpressionCounters? counters = null)
+        ExpressionCounters? counters = null,
+        string? requestId = null,
+        RequestEventLog? events = null)
     {
         _plan = plan;
         _table = table;
@@ -83,6 +90,8 @@ public sealed class FeatureFetcher
         _memory = memory;
         _deadlineTimestamp = deadlineTimestamp;
         _counters = counters ?? new ExpressionCounters();
+        _requestId = requestId;
+        _events = events;
         _state = new FeatureState[plan.Features.Count];
         _errors = new string?[plan.Features.Count];
     }
@@ -461,6 +470,7 @@ public sealed class FeatureFetcher
         FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields, StagingBuffer writer, int budgetMs, CancellationToken cancellationToken)
     {
         _memory.Hold();
+        var io = group.Io.Start();
         var lease = new IoLease(_memory, CancellationTokenSource.CreateLinkedTokenSource(cancellationToken));
         lease.Cancellation.CancelAfter(budgetMs);
         ValueTask<FetchStatus> call;
@@ -471,18 +481,18 @@ public sealed class FeatureFetcher
         catch (Exception ex)
         {
             lease.Dispose(); // threw before returning a task: the connector is no longer writing
-            return Failure(group, ex, budgetMs, cancellationToken);
+            return Completed(io, batch, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken));
         }
 
         if (call.IsCompleted)
         {
             try
             {
-                return call.GetAwaiter().GetResult();
+                return Completed(io, batch, call.GetAwaiter().GetResult());
             }
             catch (Exception ex)
             {
-                return Failure(group, ex, budgetMs, cancellationToken);
+                return Completed(io, batch, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken));
             }
             finally
             {
@@ -504,13 +514,32 @@ public sealed class FeatureFetcher
 
         try
         {
-            return await task.WaitAsync(TimeSpan.FromMilliseconds(budgetMs), cancellationToken).ConfigureAwait(false);
+            return Completed(io, batch, await task.WaitAsync(TimeSpan.FromMilliseconds(budgetMs), cancellationToken).ConfigureAwait(false));
         }
         catch (Exception ex)
         {
-            return Failure(group, ex, budgetMs, cancellationToken);
+            return Completed(io, batch, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken));
         }
     }
+
+    /// <summary>Records a finished call (metrics, source health, span) and passes its status through.</summary>
+    private FetchStatus Completed(in IoCall io, EntityKeyBatch batch, FetchStatus status, IoOutcome? outcome = null)
+    {
+        io.Complete(outcome ?? status.Outcome switch
+        {
+            FetchOutcome.Failed => IoOutcome.Error,
+            FetchOutcome.Partial => IoOutcome.Partial,
+            _ => IoOutcome.Ok,
+        }, batch.KeyCount, _requestId, status.Error, _events);
+        return status;
+    }
+
+    private static IoOutcome Classify(Exception ex, CancellationToken requestToken) => ex switch
+    {
+        OperationCanceledException when requestToken.IsCancellationRequested => IoOutcome.Cancelled,
+        TimeoutException or OperationCanceledException => IoOutcome.Timeout,
+        _ => IoOutcome.Error,
+    };
 
     private static FetchStatus Failure(FetchGroup group, Exception ex, int budgetMs, CancellationToken requestToken) => ex switch
     {
@@ -651,7 +680,7 @@ public sealed class FeatureFetcher
 
         if (copiedCount > 0 && ColumnValues.IsFloat(column))
         {
-            AddNonFinite(ColumnValues.SanitizeNonFinite(column, copied.AsSpan(0, copiedCount), DefaultOrMissing(definition)));
+            AddNonFinite(feature, ColumnValues.SanitizeNonFinite(column, copied.AsSpan(0, copiedCount), DefaultOrMissing(definition)));
         }
     }
 
@@ -733,7 +762,7 @@ public sealed class FeatureFetcher
         {
             // The expression backend writes NaN/±∞ as-is and leaves sanitizing to the engine (design 4.3).
             var replaced = ColumnValues.SanitizeNonFinite(column, span, DefaultOrMissing(definition));
-            AddNonFinite(replaced);
+            AddNonFinite(feature, replaced);
             if (replaced > 0 && !definition.HasDefault && !feature.Type.Nullable)
             {
                 // Same rule as a node output (design 4.6): a non-nullable column cannot hold the replacement "missing".
@@ -906,7 +935,7 @@ public sealed class FeatureFetcher
         var definition = info.Definition;
         if (value.Kind == StorageKind.Float64 && !double.IsFinite(value.AsFloat64()))
         {
-            AddNonFinite(1);
+            AddNonFinite(info, 1);
             value = ScalarValue.Missing;
             if (!definition.HasDefault && !info.Type.Nullable)
             {
@@ -938,11 +967,12 @@ public sealed class FeatureFetcher
     private static ScalarValue DefaultOrMissing(FeatureDefinition definition) =>
         definition.HasDefault ? definition.Default : ScalarValue.Missing;
 
-    private void AddNonFinite(int count)
+    private void AddNonFinite(FeatureRuntimeInfo feature, int count)
     {
         if (count > 0)
         {
             Interlocked.Add(ref _nonFiniteReplaced, count);
+            StrataRecMetrics.ColumnNonFinite.Add(count, feature.NonFiniteTags);
         }
     }
 

@@ -106,7 +106,11 @@ public sealed class RequestMemory
     }
 
     /// <summary>Releases one holder; the last release returns every rented buffer to the pool.</summary>
-    public void Release()
+    /// <returns>
+    /// The holders left. When the request releases its own hold, these are external operations still running after it
+    /// returned (metric <c>stratarec.io.abandoned</c>).
+    /// </returns>
+    public int Release()
     {
         lock (_gate)
         {
@@ -118,7 +122,7 @@ public sealed class RequestMemory
             _holders--;
             if (_holders > 0)
             {
-                return;
+                return _holders;
             }
 
             _returned = true;
@@ -140,6 +144,8 @@ public sealed class RequestMemory
         {
             ArrayPool<Lease>.Shared.Return(leases, clearArray: true);
         }
+
+        return 0;
     }
 
     /// <summary>Doubles the ledger. The ledger comes from the shared pool, not from <see cref="IBufferPool"/>: it is bookkeeping.</summary>
