@@ -40,6 +40,7 @@ internal sealed class RunRecorder : IFeatureCallHook
     private readonly Dictionary<int, ReplayModelCall> _pendingModels = new();
     private readonly List<ReplayNodeRecord> _nodes = new();
     private List<ReplayAttemptRecord>? _attempts;
+    private List<string>? _triggered;
     private double? _remainingMs;
     private bool?[]? _sampled;
     private CompiledTap?[]? _taps;
@@ -250,6 +251,9 @@ internal sealed class RunRecorder : IFeatureCallHook
     public void Attempt(string node, string timing, double budgetMs) =>
         (_attempts ??= new List<ReplayAttemptRecord>()).Add(new ReplayAttemptRecord { Node = node, Timing = timing, BudgetMs = Math.Round(budgetMs, 3) });
 
+    /// <summary>The experiments the current position triggered before the request was aborted there; recorded with its outcome.</summary>
+    public void AbortedTriggers(List<string> experiments) => _triggered = experiments;
+
     /// <summary>Closes the current position with its outcome.</summary>
     public void Position(in NodeOutcome outcome, string category)
     {
@@ -264,8 +268,10 @@ internal sealed class RunRecorder : IFeatureCallHook
             RowsOut = outcome.RowsOut,
             RemainingMs = _remainingMs,
             Attempts = _attempts ?? new List<ReplayAttemptRecord>(),
+            Triggered = _triggered,
         });
         _attempts = null;
+        _triggered = null;
         _remainingMs = null;
     }
 

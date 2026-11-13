@@ -154,6 +154,9 @@ public sealed class ReplayNodeRecord
 
     [Description("The node's run and its fallback's, with how each ended relative to its time budget.")]
     public List<ReplayAttemptRecord> Attempts { get; init; } = new();
+
+    [Description("Experiments this position triggered before the request was aborted there (its site, a parameter the node read, its fallback's site or parameters), as experiment ids. Present only on an aborted position: a replay cannot run a partly run position again, so it restores this exposure instead.")]
+    public List<string>? Triggered { get; init; }
 }
 
 /// <summary>How one node attempt ended relative to its time budget.</summary>

@@ -339,6 +339,9 @@ public sealed class RunReplay : IFeatureCallHook
         return AbortReason is not null && !_finished.Contains(node);
     }
 
+    /// <summary>Experiment ids the position running at the abort had triggered (empty when none, or nothing was running).</summary>
+    internal IReadOnlyList<string> AbortedTriggers { get; private set; } = Array.Empty<string>();
+
     /// <summary>Time left when the node passed its <c>when</c> in the recording; infinite for a node the recording lacks.</summary>
     internal double RemainingMs(string node) => _remaining.TryGetValue(node, out var ms) ? ms : double.PositiveInfinity;
 
@@ -731,9 +734,10 @@ public sealed class RunReplay : IFeatureCallHook
         for (var i = 0; i < run.Nodes.Count; i++)
         {
             var node = run.Nodes[i];
-            if (node.Outcome == "aborted")
+            if (node.Outcome == "aborted" && _abortedNode is null)
             {
-                _abortedNode ??= node.Node;
+                _abortedNode = node.Node;
+                AbortedTriggers = node.Triggered ?? new List<string>();
             }
             else
             {
