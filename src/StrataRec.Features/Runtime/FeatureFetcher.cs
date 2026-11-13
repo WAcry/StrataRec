@@ -136,8 +136,8 @@ public sealed class FeatureFetcher
     /// </summary>
     public void StartContextFetch(IEnumerable<int> features, CancellationToken cancellationToken)
     {
-        var closure = Select(_plan.Closure(features), context: true);
-        if (closure.Count == 0)
+        var closure = Closure(features, out var member);
+        if (!AnyContext(closure))
         {
             _contextTask = Task.CompletedTask;
             return;
@@ -147,7 +147,7 @@ public sealed class FeatureFetcher
         // may be after the request has returned (a failed request, or one that never reads context features). Holding
         // the memory for the whole operation, not just for each connector call, keeps those reads off returned buffers.
         _memory.Hold();
-        _contextTask = FetchContextAsync(closure, cancellationToken);
+        _contextTask = FetchContextAsync(closure, member, cancellationToken);
         TrackIo(_contextTask);
     }
 
@@ -157,12 +157,13 @@ public sealed class FeatureFetcher
     /// </summary>
     public void Prefetch(IEnumerable<int> features, CancellationToken cancellationToken)
     {
-        var closure = _plan.Closure(features);
-        var member = Membership(closure);
-        foreach (var group in GroupsOf(closure, wave: 0))
+        var closure = Closure(features, out var member);
+        var groups = GroupsOf(closure, wave: 0);
+        for (var i = 0; i < groups.Count; i++)
         {
             // A group keyed by a feature that is not available yet (e.g. a derived key computed by EnsureAsync) would
             // find no keys now; EnsureAsync fetches it once the key exists.
+            var group = _plan.Groups[groups.Items[i]];
             if (group.KeyFeatureIndex >= 0 && !_table.IsFilledForLiveRows(_plan.Features[group.KeyFeatureIndex].Slot))
             {
                 continue;
@@ -188,14 +189,13 @@ public sealed class FeatureFetcher
             return new FeatureFillResult(FeatureState.Ok);
         }
 
-        var closure = _plan.Closure(features);
-        var candidate = Select(closure, context: false);
-        if (_contextTask is not null && candidate.Count != closure.Count)
+        var closure = Closure(features, out var member);
+        if (_contextTask is not null && AnyContext(closure))
         {
             await _contextTask.ConfigureAwait(false);
         }
 
-        var member = Membership(candidate);
+        // member marks the whole closure, context features included: every lookup below is of a candidate feature.
         ComputeDerivedOfWave(-1, member);
         for (var wave = 0; wave <= _plan.MaxWave; wave++)
         {
@@ -211,21 +211,22 @@ public sealed class FeatureFetcher
             }
 
             // Then anything still unfilled (rows appended since, fields not prefetched, or never prefetched).
-            List<PendingFetch>? started = null;
-            foreach (var group in GroupsOf(candidate, wave))
+            var groups = GroupsOf(closure, wave);
+            PendingFetch[]? started = null;
+            var startedCount = 0;
+            for (var g = 0; g < groups.Count; g++)
             {
+                var group = _plan.Groups[groups.Items[g]];
                 if (FeaturesToFetch(group, member, skipInFlight: false) is { } fetch && !FailIfKeyFailed(group, fetch))
                 {
-                    (started ??= new List<PendingFetch>()).Add(Start(group, fetch, cancellationToken));
+                    started ??= _memory.Rent<PendingFetch>(groups.Count);
+                    started[startedCount++] = Start(group, fetch, cancellationToken);
                 }
             }
 
-            if (started is not null)
+            for (var s = 0; s < startedCount; s++)
             {
-                foreach (var pending in started)
-                {
-                    await CompleteAsync(pending).ConfigureAwait(false);
-                }
+                await CompleteAsync(started![s]).ConfigureAwait(false);
             }
 
             ComputeDerivedOfWave(wave, member);
@@ -233,8 +234,9 @@ public sealed class FeatureFetcher
 
         var worst = FeatureState.Ok;
         string? error = null;
-        foreach (var f in closure)
+        for (var i = 0; i < closure.Count; i++)
         {
+            var f = closure.Items[i];
             if (_state[f] > worst)
             {
                 worst = _state[f];
@@ -245,29 +247,30 @@ public sealed class FeatureFetcher
         return new FeatureFillResult(worst, error);
     }
 
-    private List<int> Select(List<int> features, bool context)
+    /// <summary>
+    /// The features plus everything they depend on, in dependency order (<see cref="FeaturePlan.Closure(IEnumerable{int})"/>),
+    /// in arrays rented from the request memory: an ensure runs for every node, and its closure was a set, a list and a
+    /// boxed enumerator each time. <paramref name="member"/> marks the closure by feature index.
+    /// </summary>
+    private IndexList Closure(IEnumerable<int> features, out bool[] member)
     {
-        var result = new List<int>(features.Count);
-        foreach (var f in features)
+        var length = Math.Max(1, _plan.Features.Count);
+        var order = _memory.Rent<int>(length);
+        member = _memory.RentCleared<bool>(length);
+        return new IndexList(order, _plan.Closure(features, order, member));
+    }
+
+    private bool AnyContext(IndexList features)
+    {
+        for (var i = 0; i < features.Count; i++)
         {
-            if (_plan.Features[f].IsContext == context)
+            if (_plan.Features[features.Items[i]].IsContext)
             {
-                result.Add(f);
+                return true;
             }
         }
 
-        return result;
-    }
-
-    private bool[] Membership(List<int> features)
-    {
-        var member = new bool[_plan.Features.Count];
-        foreach (var f in features)
-        {
-            member[f] = true;
-        }
-
-        return member;
+        return false;
     }
 
     private static bool Intersects(int[] features, bool[] member)
@@ -283,24 +286,26 @@ public sealed class FeatureFetcher
         return false;
     }
 
-    /// <summary>Distinct candidate fetch groups of the given features in one wave, in group order.</summary>
-    private List<FetchGroup> GroupsOf(List<int> features, int wave)
+    /// <summary>Indices of the distinct candidate fetch groups of the given features in one wave, in group order.</summary>
+    private IndexList GroupsOf(IndexList features, int wave)
     {
-        var seen = new bool[_plan.Groups.Count];
-        var result = new List<FetchGroup>();
-        foreach (var f in features)
+        var length = Math.Max(1, _plan.Groups.Count);
+        var seen = _memory.RentCleared<bool>(length);
+        var result = _memory.Rent<int>(length);
+        var count = 0;
+        for (var i = 0; i < features.Count; i++)
         {
-            var info = _plan.Features[f];
+            var info = _plan.Features[features.Items[i]];
             if (info.IsDerived || info.IsContext || info.Wave != wave || info.GroupIndex < 0 || seen[info.GroupIndex])
             {
                 continue;
             }
 
             seen[info.GroupIndex] = true;
-            result.Add(_plan.Groups[info.GroupIndex]);
+            result[count++] = info.GroupIndex;
         }
 
-        return result;
+        return new IndexList(result, count);
     }
 
     /// <summary>
@@ -310,22 +315,24 @@ public sealed class FeatureFetcher
     /// </summary>
     private int[]? FeaturesToFetch(FetchGroup group, bool[] member, bool skipInFlight)
     {
-        List<int>? selected = null;
-        foreach (var f in group.FeatureIndices)
+        var members = group.FeatureIndices;
+        Span<int> selected = members.Length <= 128 ? stackalloc int[members.Length] : _memory.Rent<int>(members.Length);
+        var count = 0;
+        foreach (var f in members)
         {
             if (member[f] && _state[f] != FeatureState.Failed && !_table.IsFilledForLiveRows(_plan.Features[f].Slot)
                 && !(skipInFlight && InFlight(group, f)))
             {
-                (selected ??= new List<int>(group.FeatureIndices.Length)).Add(f);
+                selected[count++] = f;
             }
         }
 
-        if (selected is null)
+        if (count == 0)
         {
             return null;
         }
 
-        return selected.Count == group.FeatureIndices.Length ? group.FeatureIndices : selected.ToArray();
+        return count == members.Length ? members : selected[..count].ToArray();
     }
 
     private bool InFlight(FetchGroup group, int feature)
@@ -788,8 +795,10 @@ public sealed class FeatureFetcher
 
     private void ComputeDerivedOfWave(int wave, bool[] member)
     {
-        foreach (var f in _plan.DerivedOrder)
+        var order = _plan.DerivedOrder;
+        for (var i = 0; i < order.Count; i++) // an interface foreach would box the enumerator, twice per ensure
         {
+            var f = order[i];
             var info = _plan.Features[f];
             if (member[f] && !info.IsContext && info.Wave == wave)
             {
@@ -917,17 +926,20 @@ public sealed class FeatureFetcher
         return (worst, error);
     }
 
-    private async Task FetchContextAsync(List<int> closure, CancellationToken cancellationToken)
+    /// <param name="closure">The features to make available; only its context features are fetched.</param>
+    /// <param name="member">Marks <paramref name="closure"/> by feature index.</param>
+    private async Task FetchContextAsync(IndexList closure, bool[] member, CancellationToken cancellationToken)
     {
         try
         {
-            var member = Membership(closure);
-            var seenGroup = new bool[_plan.Groups.Count];
-            var fetches = new List<ContextFetch>();
-            foreach (var f in closure)
+            var groupCount = Math.Max(1, _plan.Groups.Count);
+            var seenGroup = _memory.RentCleared<bool>(groupCount);
+            var fetches = _memory.Rent<ContextFetch>(groupCount);
+            var fetchCount = 0;
+            for (var c = 0; c < closure.Count; c++)
             {
-                var info = _plan.Features[f];
-                if (info.IsDerived || info.GroupIndex < 0 || seenGroup[info.GroupIndex])
+                var info = _plan.Features[closure.Items[c]];
+                if (!info.IsContext || info.IsDerived || info.GroupIndex < 0 || seenGroup[info.GroupIndex])
                 {
                     continue;
                 }
@@ -938,7 +950,7 @@ public sealed class FeatureFetcher
                 var v = group.ContextKeyId >= 0 ? _context[group.ContextKeyId] : ScalarValue.Missing;
                 if (v.IsMissing)
                 {
-                    fetches.Add(new ContextFetch(features, null, new ValueTask<FetchStatus>(FetchStatus.Ok)));
+                    fetches[fetchCount++] = new ContextFetch(features, null, new ValueTask<FetchStatus>(FetchStatus.Ok));
                     continue;
                 }
 
@@ -947,7 +959,7 @@ public sealed class FeatureFetcher
                 var budget = BudgetMs(group);
                 if (budget <= 0)
                 {
-                    fetches.Add(new ContextFetch(features, null, new ValueTask<FetchStatus>(NoTimeLeft)));
+                    fetches[fetchCount++] = new ContextFetch(features, null, new ValueTask<FetchStatus>(NoTimeLeft));
                     RecordUnsent(group, batch, fields);
                     continue;
                 }
@@ -964,11 +976,12 @@ public sealed class FeatureFetcher
                     cancellation?.Release();
                 }
 
-                fetches.Add(new ContextFetch(features, staging, call));
+                fetches[fetchCount++] = new ContextFetch(features, staging, call);
             }
 
-            foreach (var fetch in fetches)
+            for (var n = 0; n < fetchCount; n++)
             {
+                var fetch = fetches[n];
                 var status = await fetch.Call.ConfigureAwait(false);
                 for (var i = 0; i < fetch.Features.Length; i++)
                 {
@@ -988,8 +1001,10 @@ public sealed class FeatureFetcher
                 }
             }
 
-            foreach (var f in _plan.DerivedOrder)
+            var order = _plan.DerivedOrder;
+            for (var d = 0; d < order.Count; d++)
             {
+                var f = order[d];
                 var info = _plan.Features[f];
                 if (!info.IsContext || !member[f])
                 {
@@ -1225,6 +1240,9 @@ public sealed class FeatureFetcher
 
         public bool NoContextKey { get; } = noContextKey;
     }
+
+    /// <summary>Feature or group indices in an array rented from the request memory, valid up to <see cref="Count"/>.</summary>
+    private readonly record struct IndexList(int[] Items, int Count);
 
     /// <param name="Call">Awaited once, by <see cref="FetchContextAsync"/>.</param>
     private readonly record struct ContextFetch(int[] Features, StagingBuffer? Staging, ValueTask<FetchStatus> Call);

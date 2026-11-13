@@ -42,7 +42,10 @@ public sealed class RequestInputs : IReadOnlyDictionary<string, ScalarValue>
 
     public bool TryGetValue(string key, [MaybeNullWhen(false)] out ScalarValue value) => _values.TryGetValue(key, out value);
 
-    public IEnumerator<KeyValuePair<string, ScalarValue>> GetEnumerator() => _values.GetEnumerator();
+    /// <summary>A struct enumerator: the engine reads the inputs on every request, and an interface enumerator is an object.</summary>
+    public Dictionary<string, ScalarValue>.Enumerator GetEnumerator() => _values.GetEnumerator();
 
-    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    IEnumerator<KeyValuePair<string, ScalarValue>> IEnumerable<KeyValuePair<string, ScalarValue>>.GetEnumerator() => _values.GetEnumerator();
+
+    IEnumerator IEnumerable.GetEnumerator() => _values.GetEnumerator();
 }
