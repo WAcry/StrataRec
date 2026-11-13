@@ -48,9 +48,24 @@ public sealed class DiagnosticBag
 
     public IReadOnlyList<ConfigDiagnostic> Items => _items;
 
-    public bool HasErrors => _items.Exists(d => d.IsError);
+    public bool HasErrors => _items.Exists(static d => d.IsError);
 
-    public int ErrorCount => _items.Count(d => d.IsError);
+    public int ErrorCount
+    {
+        get
+        {
+            var count = 0;
+            foreach (var d in _items)
+            {
+                if (d.IsError)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+    }
 
     public void Add(ConfigDiagnostic diagnostic) => _items.Add(diagnostic);
 
@@ -70,7 +85,7 @@ public sealed class DiagnosticBag
     {
         if (HasErrors)
         {
-            throw new ConfigException(what, _items.Where(d => d.IsError).ToArray());
+            throw new ConfigException(what, _items.FindAll(static d => d.IsError));
         }
     }
 }

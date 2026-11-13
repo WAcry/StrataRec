@@ -25,7 +25,22 @@
     <DefineConstants>$(DefineConstants);STRATAREC_POISON_BUFFERS</DefineConstants>
   </PropertyGroup>
 
-  <PropertyGroup Condition="$(MSBuildProjectDirectory.Contains('/src/')) Or $(MSBuildProjectDirectory.Contains('\src\'))">
-    <IsPackable>true</IsPackable>
+  <PropertyGroup>
+    <IsProductionCode Condition="$(MSBuildProjectDirectory.Contains('/src/')) Or $(MSBuildProjectDirectory.Contains('\src\'))">true</IsProductionCode>
   </PropertyGroup>
+
+  <!--
+    Production code (src/) must not use LINQ: it allocates enumerators, closures and intermediate collections on
+    paths that scale with candidate count. Enforced by RS0030 (BannedSymbols.txt) and by not importing System.Linq.
+    Tests and benchmarks are exempt.
+  -->
+  <PropertyGroup Condition="'$(IsProductionCode)' == 'true'">
+    <IsPackable>true</IsPackable>
+    <WarningsAsErrors>$(WarningsAsErrors);RS0030</WarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsProductionCode)' == 'true'">
+    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers" />
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.txt" />
+  </ItemGroup>
 </Project>

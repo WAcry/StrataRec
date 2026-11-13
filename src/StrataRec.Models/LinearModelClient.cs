@@ -30,7 +30,16 @@ public sealed class LinearModelClient : IModelClient
     {
         _modelName = modelName;
         _outputs = outputs;
-        _inputs = outputs.SelectMany(o => o.Weights.Keys).Distinct(StringComparer.Ordinal).OrderBy(n => n, StringComparer.Ordinal).ToArray();
+        var inputs = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var output in outputs)
+        {
+            foreach (var name in output.Weights.Keys)
+            {
+                inputs.Add(name);
+            }
+        }
+
+        _inputs = new List<string>(inputs);
         _versions = versions is null ? null : new HashSet<string>(versions, StringComparer.Ordinal);
         _latencyMs = latencyMs;
         _fail = fail;
@@ -51,9 +60,19 @@ public sealed class LinearModelClient : IModelClient
         }
 
         var dyn = new[] { -1 };
-        return new ModelSignature(
-            _inputs.Select(i => new TensorSpec(i, TensorElementType.Float32, dyn)).ToArray(),
-            _outputs.Select(o => new TensorSpec(o.Name, TensorElementType.Float32, dyn)).ToArray());
+        var inputSpecs = new TensorSpec[_inputs.Count];
+        for (var i = 0; i < inputSpecs.Length; i++)
+        {
+            inputSpecs[i] = new TensorSpec(_inputs[i], TensorElementType.Float32, dyn);
+        }
+
+        var outputSpecs = new TensorSpec[_outputs.Count];
+        for (var i = 0; i < outputSpecs.Length; i++)
+        {
+            outputSpecs[i] = new TensorSpec(_outputs[i].Name, TensorElementType.Float32, dyn);
+        }
+
+        return new ModelSignature(inputSpecs, outputSpecs);
     }
 
     public async ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
@@ -159,9 +178,15 @@ public sealed class LinearModelClientFactory : IModelClientFactory
             outputs.Add(new LinearOutput(output.Name, bias, weights, activation == "sigmoid"));
         }
 
-        IEnumerable<string>? versions = settings.TryGetValue("versions", out var v)
-            ? v.EnumerateArray().Select(e => e.GetString()!).ToArray()
-            : null;
+        List<string>? versions = null;
+        if (settings.TryGetValue("versions", out var v))
+        {
+            versions = new List<string>();
+            foreach (var e in v.EnumerateArray())
+            {
+                versions.Add(e.GetString()!);
+            }
+        }
         var latency = settings.TryGetValue("latency_ms", out var l) ? l.GetInt32() : 0;
         var fail = settings.TryGetValue("fail", out var f) && f.GetBoolean();
         return new LinearModelClient(modelName, outputs, versions, latency, fail);

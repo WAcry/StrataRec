@@ -104,7 +104,9 @@ public sealed class FeatureCatalog
         CatalogId = catalogId;
         Entities = entities;
         _features = features;
-        Features = features.Values.OrderBy(f => f.Name, StringComparer.Ordinal).ToArray();
+        var ordered = new List<FeatureDefinition>(features.Values);
+        ordered.Sort(static (a, b) => string.CompareOrdinal(a.Name, b.Name));
+        Features = ordered;
     }
 
     public string CatalogId { get; }
@@ -125,8 +127,11 @@ public sealed class FeatureCatalog
         string artifactName = "catalog")
     {
         var entities = new Dictionary<string, EntityDefinition>(StringComparer.Ordinal);
-        foreach (var (name, spec) in artifact.Entities.OrderBy(e => e.Key, StringComparer.Ordinal))
+        var entityNames = new List<string>(artifact.Entities.Keys);
+        entityNames.Sort(StringComparer.Ordinal);
+        foreach (var name in entityNames)
         {
+            var spec = artifact.Entities[name];
             var entity = BuildEntity(name, spec, requestSchema, diagnostics, artifactName);
             if (entity is not null)
             {
@@ -238,12 +243,8 @@ public sealed class FeatureCatalog
         string name, EntitySpec spec, IReadOnlyDictionary<string, ColumnType> requestSchema, DiagnosticBag diagnostics, string artifactName)
     {
         var pointer = "/entities/" + EscapePointer(name);
-        var keys = spec.Key is System.Text.Json.Nodes.JsonArray arr
-            ? arr.Select(k => k?.GetValue<string>() ?? string.Empty).ToArray()
-            : new[] { spec.Key.GetValue<string>() };
-        var keyTypes = spec.KeyType is System.Text.Json.Nodes.JsonArray tarr
-            ? tarr.Select(k => k?.GetValue<string>() ?? string.Empty).ToArray()
-            : new[] { spec.KeyType.GetValue<string>() };
+        var keys = StringsOf(spec.Key);
+        var keyTypes = StringsOf(spec.KeyType);
         if (keys.Length != keyTypes.Length || keys.Length is < 1 or > 2)
         {
             diagnostics.Error("ENTITY_BAD_KEY", artifactName, pointer, "'key' and 'key_type' must both have one element, or two for cross entities.");
@@ -346,8 +347,13 @@ public sealed class FeatureCatalog
     private static void ValidateForeignKeys(
         Dictionary<string, EntityDefinition> entities, Dictionary<string, FeatureDefinition> features, DiagnosticBag diagnostics, string artifactName)
     {
-        foreach (var entity in entities.Values.Where(e => e.KeyIsFeature))
+        foreach (var entity in entities.Values)
         {
+            if (!entity.KeyIsFeature)
+            {
+                continue;
+            }
+
             var pointer = "/entities/" + EscapePointer(entity.Name) + "/key";
             if (!features.TryGetValue(entity.CandidateKeyColumn!, out var keyFeature))
             {
@@ -407,6 +413,22 @@ public sealed class FeatureCatalog
         }
 
         return true;
+    }
+
+    private static string[] StringsOf(System.Text.Json.Nodes.JsonNode node)
+    {
+        if (node is not System.Text.Json.Nodes.JsonArray array)
+        {
+            return new[] { node.GetValue<string>() };
+        }
+
+        var result = new string[array.Count];
+        for (var i = 0; i < result.Length; i++)
+        {
+            result[i] = array[i]?.GetValue<string>() ?? string.Empty;
+        }
+
+        return result;
     }
 
     internal static string EscapePointer(string token) => token.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal);

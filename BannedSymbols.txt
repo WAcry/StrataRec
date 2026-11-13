@@ -1,0 +1,3 @@
+N:System.Linq;LINQ is banned in production code (allocations on hot paths). Use explicit loops, arrays, List<T>, Dictionary/HashSet and Array.Sort. See AGENTS.md.
+T:System.Linq.Enumerable;LINQ is banned in production code (allocations on hot paths). Use explicit loops. See AGENTS.md.
+T:System.Linq.Queryable;LINQ is banned in production code. See AGENTS.md.

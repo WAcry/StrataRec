@@ -126,6 +126,32 @@ public sealed class RowSelection
         Count = Math.Max(0, count);
     }
 
+    /// <summary>
+    /// Copies the current ranking into <paramref name="buffer"/> (length ≥ <see cref="Count"/>) and returns the count.
+    /// With <see cref="Restore"/>, lets the engine undo the row effects of a node that fails (design 4.6).
+    /// </summary>
+    public int Capture(Span<int> buffer)
+    {
+        Order.CopyTo(buffer);
+        return Count;
+    }
+
+    /// <summary>Restores a ranking captured by <see cref="Capture"/> with no Compact in between.</summary>
+    public void Restore(ReadOnlySpan<int> captured)
+    {
+        foreach (var row in Order)
+        {
+            Bits.Clear(_alive, row);
+        }
+
+        captured.CopyTo(_order);
+        Count = captured.Length;
+        foreach (var row in captured)
+        {
+            Bits.Set(_alive, row);
+        }
+    }
+
     /// <summary>After Compact: live rows are physical rows 0..count-1 in rank order.</summary>
     internal void ResetIdentity(int count)
     {

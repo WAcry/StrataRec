@@ -38,6 +38,11 @@ Dependencies point downward in that table; never add a reference that creates a 
 
 - C# 12, file-scoped namespaces, nullable enabled, `TreatWarningsAsErrors`. Private fields are `_camelCase`.
 - Public types get XML doc comments explaining *why*, not restating the name.
+- **No LINQ in `src/`.** Requests can carry many candidates and the engine is columnar (SoA) precisely to avoid
+  allocations; LINQ allocates enumerators, closures and intermediate collections. Use explicit loops, arrays,
+  `List<T>`, `Dictionary`/`HashSet`, `Array.Sort`/`List.Sort` with ordinal comparers. Enforced at build time by
+  `BannedSymbols.txt` (RS0030) and by removing `System.Linq` from implicit usings (`Directory.Build.targets`).
+  Tests and benchmarks may use LINQ.
 - Hot paths (anything per row or per request) must not allocate per row. Use `RequestMemory` for buffers that
   live for the request; operators never return buffers themselves.
 - Configuration uses only standard syntax: JSON(C), RFC 7396 merge patch, RFC 6901 pointers, RFC 8785

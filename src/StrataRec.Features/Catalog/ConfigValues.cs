@@ -57,7 +57,12 @@ public static class ConfigValues
                     value = ScalarValue.FromText(v.GetValue<string>());
                     return true;
                 case StorageKind.Vector when node is JsonArray a:
-                    var vec = a.Select(e => (float)e!.GetValue<double>()).ToArray();
+                    var vec = new float[a.Count];
+                    for (var i = 0; i < vec.Length; i++)
+                    {
+                        vec[i] = (float)a[i]!.GetValue<double>();
+                    }
+
                     if (type.Dimension > 0 && vec.Length != type.Dimension)
                     {
                         error = $"expected {type.Dimension} elements, got {vec.Length}";
@@ -67,10 +72,22 @@ public static class ConfigValues
                     value = ScalarValue.FromVector(vec);
                     return true;
                 case StorageKind.ListInt64 when node is JsonArray a:
-                    value = ScalarValue.FromInt64List(a.Select(e => e!.GetValue<long>()).ToArray());
+                    var longs = new long[a.Count];
+                    for (var i = 0; i < longs.Length; i++)
+                    {
+                        longs[i] = a[i]!.GetValue<long>();
+                    }
+
+                    value = ScalarValue.FromInt64List(longs);
                     return true;
                 case StorageKind.ListString when node is JsonArray a:
-                    value = ScalarValue.FromStringList(a.Select(e => e!.GetValue<string>()).ToArray());
+                    var strings = new string[a.Count];
+                    for (var i = 0; i < strings.Length; i++)
+                    {
+                        strings[i] = a[i]!.GetValue<string>();
+                    }
+
+                    value = ScalarValue.FromStringList(strings);
                     return true;
             }
         }

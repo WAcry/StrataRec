@@ -25,7 +25,13 @@ public sealed class TableSchema
         }
 
         KeyType = keyType;
-        SlotTypes = slotTypes.ToArray();
+        var types = new ColumnType[slotTypes.Count];
+        for (var i = 0; i < types.Length; i++)
+        {
+            types[i] = slotTypes[i];
+        }
+
+        SlotTypes = types;
     }
 
     public EntityKeyType KeyType { get; }

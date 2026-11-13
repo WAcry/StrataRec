@@ -1,0 +1,6 @@
+<Project>
+  <!-- Implicit usings are added by the SDK after Directory.Build.props, so the removal must live here. -->
+  <ItemGroup Condition="'$(IsProductionCode)' == 'true'">
+    <Using Remove="System.Linq" />
+  </ItemGroup>
+</Project>

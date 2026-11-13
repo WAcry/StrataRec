@@ -16,9 +16,22 @@ public sealed record TensorSpec(string Name, TensorElementType ElementType, IRea
 /// <summary>Inputs and outputs a model version accepts and produces; checked at load time (design 6.9).</summary>
 public sealed record ModelSignature(IReadOnlyList<TensorSpec> Inputs, IReadOnlyList<TensorSpec> Outputs)
 {
-    public TensorSpec? FindInput(string name) => Inputs.FirstOrDefault(i => i.Name == name);
+    public TensorSpec? FindInput(string name) => Find(Inputs, name);
 
-    public TensorSpec? FindOutput(string name) => Outputs.FirstOrDefault(o => o.Name == name);
+    public TensorSpec? FindOutput(string name) => Find(Outputs, name);
+
+    private static TensorSpec? Find(IReadOnlyList<TensorSpec> specs, string name)
+    {
+        for (var i = 0; i < specs.Count; i++)
+        {
+            if (string.Equals(specs[i].Name, name, StringComparison.Ordinal))
+            {
+                return specs[i];
+            }
+        }
+
+        return null;
+    }
 }
 
 /// <summary>One named model input: a dense tensor or a text value.</summary>

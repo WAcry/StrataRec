@@ -184,7 +184,7 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
         StorageKind.String or StorageKind.Text => "'" + AsString() + "'",
         StorageKind.Vector => "vec[" + AsVector().Length.ToString(CultureInfo.InvariantCulture) + "]",
         StorageKind.ListInt64 => "[" + string.Join(", ", AsInt64List()) + "]",
-        StorageKind.ListString => "[" + string.Join(", ", AsStringList().Select(s => "'" + s + "'")) + "]",
+        StorageKind.ListString => "['" + string.Join("', '", AsStringList()) + "']",
         _ => "?",
     };
 

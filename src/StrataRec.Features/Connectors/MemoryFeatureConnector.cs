@@ -29,7 +29,12 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
             throw new FormatException("memory@1 data must be a JSON object keyed by entity key.");
         }
 
-        _rows = data.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone(), StringComparer.Ordinal);
+        _rows = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        foreach (var property in data.EnumerateObject())
+        {
+            _rows[property.Name] = property.Value.Clone();
+        }
+
         _latencyMs = latencyMs;
         _fail = fail;
     }
@@ -143,10 +148,24 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
 
                     break;
                 case StorageKind.ListInt64:
-                    writer.SetInt64List(field.FieldIndex, keyIndex, v.EnumerateArray().Select(e => e.GetInt64()).ToArray());
+                    var longs = new long[v.GetArrayLength()];
+                    var li = 0;
+                    foreach (var e in v.EnumerateArray())
+                    {
+                        longs[li++] = e.GetInt64();
+                    }
+
+                    writer.SetInt64List(field.FieldIndex, keyIndex, longs);
                     break;
                 case StorageKind.ListString:
-                    writer.SetStringList(field.FieldIndex, keyIndex, v.EnumerateArray().Select(e => e.GetString()!).ToArray());
+                    var strings = new string[v.GetArrayLength()];
+                    var si = 0;
+                    foreach (var e in v.EnumerateArray())
+                    {
+                        strings[si++] = e.GetString()!;
+                    }
+
+                    writer.SetStringList(field.FieldIndex, keyIndex, strings);
                     break;
             }
         }
