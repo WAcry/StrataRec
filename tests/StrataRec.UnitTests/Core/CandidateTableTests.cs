@@ -90,4 +90,51 @@ public class CandidateTableTests
 
     [Fact]
     public void ColumnType_RejectsUnknown() => Assert.False(ColumnType.TryParse("float16", out _, out _));
+
+    [Fact]
+    public void FindRow_IndexesRowsAppendedAfterTheFirstLookup_FirstRowWins()
+    {
+        var table = NewTable(16, out var memory);
+        Assert.Equal(-1, table.FindRow(EntityKey.FromInt64(10))); // empty table
+
+        table.AppendRows(new long[] { 10, 20, 30 });
+        Assert.Equal(1, table.FindRow(EntityKey.FromInt64(20)));
+        Assert.Equal(-1, table.FindRow(EntityKey.FromInt64(40)));
+
+        table.AppendRows(new long[] { 40, 20, 50 }); // 20 again: the first row keeps it
+        Assert.Equal(3, table.FindRow(EntityKey.FromInt64(40)));
+        Assert.Equal(1, table.FindRow(EntityKey.FromInt64(20)));
+        Assert.Equal(5, table.FindRow(EntityKey.FromInt64(50)));
+        Assert.Equal(-1, table.FindRow(EntityKey.FromString("20"))); // other key type
+
+        // Dropped rows are still found until Compact; afterwards keys map to their new rows.
+        table.Rows.Replace(new[] { 5, 0, 3 }, allowDrop: true);
+        Assert.Equal(2, table.FindRow(EntityKey.FromInt64(30)));
+        table.Compact();
+        Assert.Equal(0, table.FindRow(EntityKey.FromInt64(50)));
+        Assert.Equal(1, table.FindRow(EntityKey.FromInt64(10)));
+        Assert.Equal(2, table.FindRow(EntityKey.FromInt64(40)));
+        Assert.Equal(-1, table.FindRow(EntityKey.FromInt64(30)));
+
+        table.AppendRows(new long[] { 30, 60 });
+        Assert.Equal(3, table.FindRow(EntityKey.FromInt64(30)));
+        Assert.Equal(4, table.FindRow(EntityKey.FromInt64(60)));
+        memory.Release();
+    }
+
+    [Fact]
+    public void FindRow_StringKeys()
+    {
+        var memory = new RequestMemory();
+        var table = new CandidateTable(new TableSchema(EntityKeyType.String, new[] { ColumnType.String }), 8, memory);
+        table.AppendRows(new[] { "a", "B", "a" });
+        Assert.Equal(0, table.FindRow(EntityKey.FromString("a")));
+        Assert.Equal(1, table.FindRow(EntityKey.FromString("B")));
+        Assert.Equal(-1, table.FindRow(EntityKey.FromString("b"))); // ordinal
+        Assert.Equal(-1, table.FindRow(EntityKey.FromInt64(0)));
+
+        table.AppendRows(new[] { "c" });
+        Assert.Equal(3, table.FindRow(EntityKey.FromString("c")));
+        memory.Release();
+    }
 }

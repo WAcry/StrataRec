@@ -1,5 +1,6 @@
 using StrataRec.Core.Columns;
 using StrataRec.Core.Keys;
+using StrataRec.Core.Memory;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Pipeline.Sources;
@@ -125,7 +126,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         public override async ValueTask ExecuteAsync(OperatorContext context)
         {
             var calls = new Task<CandidateSourceStatus>?[sources.Length];
-            var sinks = new Sink[sources.Length];
+            var sinks = new Sink?[sources.Length];
             for (var i = 0; i < sources.Length; i++)
             {
                 var quotaValue = context.Param(sources[i].Quota);
@@ -135,13 +136,14 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                     continue;
                 }
 
-                sinks[i] = new Sink(quota);
+                var sink = new Sink(quota, context.Memory);
+                sinks[i] = sink;
                 var query = new CandidateQuery { SourceName = sources[i].Name, Limit = quota, Inputs = context.Inputs, RequestId = context.RequestId, Seed = context.Seed };
-                calls[i] = CallAsync(sources[i], query, sinks[i], context.CancellationToken);
+                calls[i] = CallAsync(sources[i], query, sink, context.Memory, context.CancellationToken);
             }
 
             var attempted = 0;
-            var failed = new List<string>();
+            List<string>? failed = null;
             for (var i = 0; i < calls.Length; i++)
             {
                 if (calls[i] is null)
@@ -153,18 +155,18 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 var status = await calls[i]!.ConfigureAwait(false);
                 if (!status.Succeeded)
                 {
-                    failed.Add($"{sources[i].Name}: {status.Error}");
-                    sinks[i] = null!;
+                    (failed ??= new List<string>()).Add($"{sources[i].Name}: {status.Error}");
+                    sinks[i] = null;
                 }
             }
 
-            if (attempted > 0 && failed.Count == attempted)
+            if (failed is not null && failed.Count == attempted)
             {
                 context.Fail("every recall source failed (" + string.Join("; ", failed) + ")");
                 return;
             }
 
-            if (failed.Count > 0)
+            if (failed is not null)
             {
                 context.ReportDegraded("recall sources failed: " + string.Join("; ", failed));
             }
@@ -172,16 +174,24 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
             Merge(context, sinks);
         }
 
-        private static async Task<CandidateSourceStatus> CallAsync(SourceEntry source, CandidateQuery query, Sink sink, CancellationToken cancellationToken)
+        /// <remarks>
+        /// The sink's buffers are rented from the request memory, so the call holds the memory until the source really
+        /// completes. Usually the operator awaits every call anyway, but when one call is cancelled with the request
+        /// its exception ends the operator while other sources may still be adding; their sinks must not return to
+        /// the pool under them. The sink is closed first, so a source that adds after completing changes nothing.
+        /// </remarks>
+        private static async Task<CandidateSourceStatus> CallAsync(
+            SourceEntry source, CandidateQuery query, Sink sink, RequestMemory memory, CancellationToken cancellationToken)
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            if (source.TimeoutMs is { } timeout)
-            {
-                cts.CancelAfter(timeout);
-            }
-
+            memory.Hold();
             try
             {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                if (source.TimeoutMs is { } timeout)
+                {
+                    cts.CancelAfter(timeout);
+                }
+
                 return await source.Source.RetrieveAsync(query, sink, cts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -192,18 +202,42 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
             {
                 return CandidateSourceStatus.Failed(ex.Message);
             }
+            finally
+            {
+                sink.Close();
+                memory.Release();
+            }
         }
 
-        private void Merge(OperatorContext context, Sink[] sinks)
+        /// <summary>
+        /// Merges the sinks in source order: the first occurrence of a key fixes its position and primary source; later
+        /// ones add their source bit, the best (lowest) rank and the best score. A source stops contributing at its
+        /// first new key that no longer fits in the table. The index and the merged columns are rented from the request
+        /// memory, sized to the most keys that can be added, so nothing here allocates per key.
+        /// </summary>
+        private void Merge(OperatorContext context, Sink?[] sinks)
         {
             var table = context.Table;
+            var memory = context.Memory;
             var stringKeys = table.KeyType == EntityKeyType.String;
-            var index = new Dictionary<EntityKey, int>();
-            var keys = new List<EntityKey>();
-            var masks = new List<long>();
-            var ranks = new List<long>();
-            var scores = new List<double>();
-            var primaries = new List<int>();
+            var freeRows = table.FreeRows;
+            long total = 0;
+            foreach (var sink in sinks)
+            {
+                total += sink?.Count ?? 0;
+            }
+
+            var capacity = (int)Math.Min(total, freeRows);
+            if (capacity == 0)
+            {
+                return;
+            }
+
+            var index = new EntityKeyIndex(table.KeyType, capacity, memory);
+            var masks = memory.Rent<long>(capacity);
+            var ranks = memory.Rent<long>(capacity);
+            var scores = memory.Rent<double>(capacity);
+            var primaries = memory.Rent<int>(capacity);
             for (var s = 0; s < sinks.Length; s++)
             {
                 var sink = sinks[s];
@@ -212,37 +246,45 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                     continue;
                 }
 
-                for (var r = 0; r < sink.Count; r++)
+                var sinkKeys = sink.Keys;
+                var sinkScores = sink.Scores;
+                for (var r = 0; r < sinkKeys.Length; r++)
                 {
-                    var key = sink.Keys[r];
+                    var key = sinkKeys[r];
                     if (key.IsString != stringKeys || table.FindRow(key) >= 0)
                     {
                         continue; // wrong key type, or already in the table from an earlier row source
                     }
 
-                    if (index.TryGetValue(key, out var at))
+                    int at;
+                    if (index.Count >= freeRows)
                     {
-                        masks[at] |= 1L << s;
-                        ranks[at] = Math.Min(ranks[at], r + 1);
-                        scores[at] = Math.Max(scores[at], sink.Scores[r]);
-                        continue;
+                        if (!index.TryGetValue(key, out at))
+                        {
+                            break; // no room for a new key: the rest of this source is dropped
+                        }
+                    }
+                    else
+                    {
+                        at = index.GetOrAdd(key, index.Count, out var added);
+                        if (added)
+                        {
+                            masks[at] = 1L << s;
+                            ranks[at] = r + 1;
+                            scores[at] = sinkScores[r];
+                            primaries[at] = s;
+                            continue;
+                        }
                     }
 
-                    if (keys.Count >= table.FreeRows)
-                    {
-                        break;
-                    }
-
-                    index[key] = keys.Count;
-                    keys.Add(key);
-                    masks.Add(1L << s);
-                    ranks.Add(r + 1);
-                    scores.Add(sink.Scores[r]);
-                    primaries.Add(s);
+                    masks[at] |= 1L << s;
+                    ranks[at] = Math.Min(ranks[at], r + 1);
+                    scores[at] = Math.Max(scores[at], sinkScores[r]);
                 }
             }
 
-            if (keys.Count == 0)
+            var count = index.Count;
+            if (count == 0)
             {
                 return;
             }
@@ -250,30 +292,20 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
             int first;
             if (stringKeys)
             {
-                var ids = new string[keys.Count];
-                for (var i = 0; i < ids.Length; i++)
-                {
-                    ids[i] = keys[i].StringValue!;
-                }
-
-                first = context.AppendRows(ids);
+                var ids = memory.Rent<string>(count);
+                index.StringKeys.CopyTo(ids);
+                first = context.AppendRows(new ArraySegment<string>(ids, 0, count));
             }
             else
             {
-                var ids = context.Memory.Rent<long>(keys.Count);
-                for (var i = 0; i < keys.Count; i++)
-                {
-                    ids[i] = keys[i].Int64Value;
-                }
-
-                first = context.AppendRows(ids.AsSpan(0, keys.Count));
+                first = context.AppendRows(index.Int64Keys);
             }
 
             var maskColumn = (ScalarColumn<long>)context.Output(mask);
             var rankColumn = (ScalarColumn<long>)context.Output(bestRank);
             var scoreColumn = context.Output(bestScore);
             var primaryColumn = (DictStringColumn)context.Output(primary);
-            for (var i = 0; i < keys.Count; i++)
+            for (var i = 0; i < count; i++)
             {
                 var row = first + i;
                 maskColumn.Set(row, masks[i]);
@@ -284,14 +316,31 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         }
     }
 
-    /// <summary>Collects one source's results; capped at the quota (excess is dropped, design 4.8).</summary>
-    private sealed class Sink(int limit) : ICandidateSink
+    /// <summary>
+    /// Collects one source's results; capped at the quota (excess is dropped, design 4.8). The buffers are rented from
+    /// the request memory at the quota, which the table's capacity already accounts for. Closed when the source call
+    /// completes: later additions are ignored.
+    /// </summary>
+    private sealed class Sink : ICandidateSink
     {
-        public List<EntityKey> Keys { get; } = new();
+        private readonly EntityKey[] _keys;
+        private readonly double[] _scores;
+        private readonly int _limit;
+        private int _count;
+        private bool _closed;
 
-        public List<double> Scores { get; } = new();
+        public Sink(int limit, RequestMemory memory)
+        {
+            _limit = limit;
+            _keys = memory.Rent<EntityKey>(limit);
+            _scores = memory.Rent<double>(limit);
+        }
 
-        public int Count => Keys.Count;
+        public int Count => _count;
+
+        public ReadOnlySpan<EntityKey> Keys => _keys.AsSpan(0, _count);
+
+        public ReadOnlySpan<double> Scores => _scores.AsSpan(0, _count);
 
         public int Truncated { get; private set; }
 
@@ -299,16 +348,24 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
 
         public void Add(string entityId, double score) => Add(EntityKey.FromString(entityId), score);
 
+        public void Close() => Volatile.Write(ref _closed, true);
+
         private void Add(EntityKey key, double score)
         {
-            if (Keys.Count >= limit)
+            if (Volatile.Read(ref _closed))
+            {
+                return;
+            }
+
+            if (_count >= _limit)
             {
                 Truncated++;
                 return;
             }
 
-            Keys.Add(key);
-            Scores.Add(double.IsFinite(score) ? score : 0.0);
+            _keys[_count] = key;
+            _scores[_count] = double.IsFinite(score) ? score : 0.0;
+            _count++;
         }
     }
 }

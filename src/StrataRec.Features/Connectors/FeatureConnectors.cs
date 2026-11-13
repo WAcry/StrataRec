@@ -13,6 +13,10 @@ public sealed class EntityKeyBatch
     public EntityKey ContextKey { get; init; }
 
     /// <summary>Candidate keys for <see cref="KeyShape.Many"/> and <see cref="KeyShape.Cross"/>.</summary>
+    /// <remarks>
+    /// The keys live in the request's pooled buffers (design 4.8): they stay valid until the connector call completes,
+    /// even past the request's own timeout, and not after. A connector that needs keys later must copy them.
+    /// </remarks>
     public ReadOnlyMemory<EntityKey> CandidateKeys { get; init; }
 
     /// <summary>Number of staging rows: 1 for single-key shapes, otherwise the candidate key count.</summary>
@@ -99,7 +103,8 @@ public interface IFeatureSourceConnector
     /// <paramref name="fields"/> holds only the fields the request needs at this point (late materialization,
     /// design 6.8), so the same source may be called again later for other fields of the same keys. The engine stops
     /// waiting at the source timeout or the request deadline, whichever comes first, and discards whatever the call
-    /// writes afterwards; the writer's buffers stay rented until the call actually completes (design 4.8).
+    /// writes afterwards; the writer's buffers stay rented until the call actually completes (design 4.8). The same
+    /// holds for <see cref="EntityKeyBatch.CandidateKeys"/>: neither may be kept past completion.
     /// </remarks>
     ValueTask<FetchStatus> FetchAsync(
         EntityKeyBatch keys,
