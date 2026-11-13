@@ -126,18 +126,18 @@ public sealed class RowSelection
         Count = Math.Max(0, count);
     }
 
-    /// <summary>
-    /// Copies the current ranking into <paramref name="buffer"/> (length ≥ <see cref="Count"/>) and returns the count.
-    /// With <see cref="Restore"/>, lets the engine undo the row effects of a node that fails (design 4.6).
-    /// </summary>
+    /// <summary>Copies the current ranking into <paramref name="buffer"/> (length ≥ <see cref="Count"/>) and returns the count.</summary>
     public int Capture(Span<int> buffer)
     {
         Order.CopyTo(buffer);
         return Count;
     }
 
-    /// <summary>Restores a ranking captured by <see cref="Capture"/> with no Compact in between.</summary>
-    public void Restore(ReadOnlySpan<int> captured)
+    /// <summary>
+    /// Restores a ranking captured by <see cref="Capture"/> with no Compact in between. Only for
+    /// <see cref="CandidateTable.Rollback"/>: undoing a node attempt restores more than the ranking (design 4.6).
+    /// </summary>
+    internal void Restore(ReadOnlySpan<int> captured)
     {
         foreach (var row in Order)
         {

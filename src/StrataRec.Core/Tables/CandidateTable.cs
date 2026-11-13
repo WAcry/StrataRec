@@ -42,11 +42,43 @@ public sealed class TableSchema
 }
 
 /// <summary>
+/// The state of a <see cref="CandidateTable"/> before a node attempt (<see cref="CandidateTable.Checkpoint"/>), to return
+/// it to if the attempt fails (<see cref="CandidateTable.Rollback"/>).
+/// </summary>
+public readonly struct TableCheckpoint
+{
+    internal TableCheckpoint(int[] order, int count, int physicalRows, int appended, int compactions)
+    {
+        Order = order;
+        Count = count;
+        PhysicalRows = physicalRows;
+        Appended = appended;
+        Compactions = compactions;
+    }
+
+    /// <summary>The ranking, in an array rented from the request memory; <see cref="Count"/> rows.</summary>
+    internal int[] Order { get; }
+
+    internal int Count { get; }
+
+    internal int PhysicalRows { get; }
+
+    /// <summary>Rows appended in the request so far, which bounds what may still be appended.</summary>
+    internal int Appended { get; }
+
+    /// <summary>How many times the table had been compacted: a rollback cannot cross a Compact.</summary>
+    internal int Compactions { get; }
+}
+
+/// <summary>
 /// Columnar storage of every candidate in one request (design 4.4, 4.5).
 /// </summary>
 /// <remarks>
 /// <para>Slots are allocated lazily on first write. Each slot has a fill bitmap marking which physical rows have been
 /// populated (with a value or an explicit "missing"); rows needing a fetch are <c>alive &amp; ~filled</c>.</para>
+/// <para>Rows at or past <see cref="PhysicalRowCount"/> carry nothing that is read: a row's state in every slot is reset
+/// when it is appended, and <see cref="Rollback"/> releases the rows a failed attempt appended, so the next append
+/// reuses them.</para>
 /// <para>Not thread-safe: a table is owned by one request and mutated on the request's logical thread.</para>
 /// </remarks>
 public sealed class CandidateTable
@@ -56,6 +88,7 @@ public sealed class CandidateTable
     private int _totalAppended;
     private EntityKeyIndex? _keyIndex; // key → first physical row, for rows [0, _indexedRows); built on first FindRow
     private int _indexedRows;
+    private int _compactions;
 
     public CandidateTable(TableSchema schema, int capacity, RequestMemory memory)
     {
@@ -71,7 +104,10 @@ public sealed class CandidateTable
 
     public TableSchema Schema { get; }
 
-    /// <summary>Maximum number of rows that may ever be appended in this request (sum of the plan's row-source limits).</summary>
+    /// <summary>
+    /// Maximum number of rows that may ever be appended in this request (the plan's row-source limits); rows a failed
+    /// attempt appended are given back by <see cref="Rollback"/>.
+    /// </summary>
     public int Capacity { get; }
 
     /// <summary>Number of physical rows currently stored (appended rows, minus rows released by Compact).</summary>
@@ -260,10 +296,60 @@ public sealed class CandidateTable
 
         PhysicalRowCount = count;
         Rows.ResetIdentity(count);
+        _compactions++;
 
         // Rows moved: re-index lazily. Compact never raises StorageCapacity, so the index's arrays still fit.
         _keyIndex?.Clear();
         _indexedRows = 0;
+    }
+
+    /// <summary>
+    /// Remembers the table as it is before a node attempt, for <see cref="Rollback"/> if the attempt fails (design 4.6).
+    /// The ranking is copied into an array rented from the request memory.
+    /// </summary>
+    public TableCheckpoint Checkpoint()
+    {
+        var order = Memory.Rent<int>(Math.Max(1, Rows.Count));
+        var count = Rows.Capture(order);
+        return new TableCheckpoint(order, count, PhysicalRowCount, _totalAppended, _compactions);
+    }
+
+    /// <summary>
+    /// Leaves the table as it was at <paramref name="checkpoint"/>, which a failed node attempt must (design 4.6): the
+    /// ranking is restored, and the rows appended since are released as if never appended. They are no longer found by
+    /// <see cref="FindRow"/>, so a later row source may append the same keys; they hold nothing in any slot (missing
+    /// and unfilled); and their capacity may be appended again, reusing the same physical rows. Rows that existed at the
+    /// checkpoint keep their state, dropped ones included, so a later row source still cannot revive a filtered key.
+    /// Slots allocated since stay allocated; the attempt's outputs are never committed, so nothing reads them.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The table was compacted since the checkpoint (physical rows moved), or the checkpoint was never taken.
+    /// </exception>
+    public void Rollback(in TableCheckpoint checkpoint)
+    {
+        if (checkpoint.Order is null || checkpoint.Compactions != _compactions || checkpoint.PhysicalRows > PhysicalRowCount)
+        {
+            throw new InvalidOperationException("A table can only be rolled back to a checkpoint taken from it since its last Compact.");
+        }
+
+        Rows.Restore(checkpoint.Order.AsSpan(0, checkpoint.Count));
+        var first = checkpoint.PhysicalRows;
+        var appended = PhysicalRowCount - first;
+        if (appended == 0)
+        {
+            return;
+        }
+
+        ClearRowState(first, appended);
+        if (_indexedRows > first)
+        {
+            // Keys of released rows must not be found. Rebuilt lazily from row 0, first row first, as on first use.
+            _keyIndex!.Clear();
+            _indexedRows = 0;
+        }
+
+        PhysicalRowCount = first;
+        _totalAppended = checkpoint.Appended;
     }
 
     private int ReserveRows(int count)
@@ -282,29 +368,32 @@ public sealed class CandidateTable
     }
 
     /// <summary>
-    /// Makes appended rows live. The key column is filled; every other existing slot marks the new rows missing and
-    /// unfilled, so values written before the append (or pooled garbage) are never read for them. A row source that
-    /// writes those columns sets them afterwards.
+    /// Makes appended rows live. The key column is filled; every other existing slot has the new rows missing and
+    /// unfilled, so values written before the append (pooled garbage, or a rolled-back attempt's) are never read for
+    /// them. A row source that writes those columns sets them afterwards.
     /// </summary>
     private void PublishAppended(int first, int count)
     {
+        ClearRowState(first, count);
         Bits.SetRange(GetFilled(TableSchema.EntityIdSlot), first, count);
-        for (var s = 1; s < _slots.Length; s++)
+        Rows.AppendRange(first, count);
+    }
+
+    /// <summary>Rows <c>[first, first + count)</c> hold nothing: missing in every slot but the key column, unfilled in every slot.</summary>
+    private void ClearRowState(int first, int count)
+    {
+        for (var s = 0; s < _slots.Length; s++)
         {
-            var slot = _slots[s];
-            if (slot is not null)
+            if (s != TableSchema.EntityIdSlot && _slots[s] is { } slot)
             {
                 Bits.ClearRange(slot.EnsureValidity(), first, count);
             }
 
-            var filled = _filled[s];
-            if (filled is not null)
+            if (_filled[s] is { } filled)
             {
                 Bits.ClearRange(filled, first, count);
             }
         }
-
-        Rows.AppendRange(first, count);
     }
 
     private void RequireKeyType(EntityKeyType expected)

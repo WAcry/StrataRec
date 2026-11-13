@@ -95,7 +95,10 @@ internal enum CallEnd : byte
     /// <summary>The client threw in time (anything but cancellation).</summary>
     Threw,
 
-    /// <summary>The call's own timeout: the wait was cut off at it, or the client honoured it (or cancelled on its own).</summary>
+    /// <summary>
+    /// The call's own timeout: the call was cut off at it (the wait ended, or the client completed only after it), or the
+    /// client honoured it (or cancelled on its own).
+    /// </summary>
     TimedOut,
 
     /// <summary>The node's budget ran out.</summary>
@@ -140,15 +143,19 @@ internal interface IBoundedCall<T>
 /// <see cref="OperatorContext.InvokeModelAsync"/> go through it; they only translate the result.
 /// </summary>
 /// <remarks>
-/// <para>Rules, each locked by tests: (1) the wait ends at the call's own timeout or the node's deadline, whichever is
-/// first, or when the caller cancels, and never waits on a token the client holds (cancelling a token runs the client's
-/// callbacks one after another, and one that blocks would hold the wait); (2) the call holds the request memory once,
-/// from before it is sent until both the client has really completed and the call site has recorded it, so an abandoned
-/// client writes only into live buffers and <c>stratarec.io.abandoned</c> counts it once; (3) the tokens the client holds
-/// stay alive until it completes; (4) the outcome is <c>cancelled</c> when the caller cancelled (neither timed nor counted
-/// against the dependency), <c>timeout</c> for a timeout, the budget or a client's <see cref="TimeoutException"/>, and
-/// <c>error</c> otherwise; (5) the call is completed (metrics, health, span) and recorded exactly once, at the call site;
-/// (6) a client that answers synchronously costs no lease, continuation, timer or wait.</para>
+/// <para>Rules, each locked by tests: (1) the call's bound is the earlier of its own timeout and the node's deadline, or
+/// the caller cancelling; the wait ends at it and never waits on a token the client holds (cancelling a token runs the
+/// client's callbacks one after another, and one that blocks would hold the wait), and what the client returns, throws or
+/// honours is heard only if it completed within the bound (<see cref="Winner"/>), never when it completed after the
+/// bound had won, even an instant after; (2) the call holds the request memory once, from before it is sent until both
+/// the client has really completed and the call site has recorded it, so an abandoned client writes only into live
+/// buffers and <c>stratarec.io.abandoned</c> counts it once; (3) the tokens the client holds stay alive until it
+/// completes; (4) the outcome is <c>cancelled</c> when the caller cancelled (neither timed nor counted against the
+/// dependency), <c>timeout</c> for a timeout, the budget or a client's <see cref="TimeoutException"/>, and <c>error</c>
+/// otherwise; (5) the call is completed (metrics, health, span) and recorded exactly once, at the call site; (6) a client
+/// that answers synchronously costs no lease, continuation or wait, and a call that shares the node's budget allocates
+/// nothing at all; a call with an own timeout shorter than the budget costs one linked token source and its timer (about
+/// 160 B), created before it is sent so that the client's token carries the timeout.</para>
 /// <para>Feature fetches have their own implementation of the same rules (FeatureFetcher), with one token source and
 /// one deadline per fetch for all its chunks.</para>
 /// </remarks>
@@ -156,8 +163,9 @@ internal static class BoundedCall
 {
     /// <summary>
     /// Sends one call and waits for it within its bound. A client that answers synchronously is completed, recorded and
-    /// released here, with nothing allocated (this is not an async method: Debug builds compile async state machines as
-    /// classes); only a pending one goes on to <see cref="AwaitAsync{T, TCall}"/>.
+    /// released here, with nothing allocated beyond the call's own token source if it has one (rule 6; this is not an
+    /// async method: Debug builds compile async state machines as classes); only a pending one goes on to
+    /// <see cref="AwaitAsync{T, TCall}"/>.
     /// </summary>
     /// <param name="call">The call site: sends the call, judges an answer, records the end.</param>
     /// <param name="budget">The attempt's budget: the node token and deadline, and the caller's token.</param>
@@ -189,7 +197,11 @@ internal static class BoundedCall
         var result = Defect<T>();
         try
         {
-            result = Completed(call, pending, budget, own, timeoutMs);
+            // Rule 1: the client completed before Send returned, that is just now; it is in time unless its bound has passed.
+            var winner = Settled(budget, own, deadline);
+            result = winner == Winner.Client
+                ? Completed(call, pending, budget, timeoutMs)
+                : CutOff<T>(winner, Discard(pending), own, budget, timeoutMs, abandoned: false);
         }
         finally
         {
@@ -218,11 +230,14 @@ internal static class BoundedCall
         var result = Defect<T>();
         try
         {
-            // Rule 1: the wait has its own bound and ends with the client still running if need be.
-            await ((Task)client).WaitAsync(AttemptBudget.Until(deadline), budget.Caller).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-            result = client.IsCompleted
-                ? Completed(call, new ValueTask<T>(client), budget, own, timeoutMs)
-                : Unanswered<T>(budget, own, timeoutMs, null, abandoned: true);
+            // Rule 1: the wait has its own bound and ends with the client still running if need be. Its outcome says who
+            // won; the client may complete between the wait's end and this continuation, so the client's state cannot.
+            var wait = ((Task)client).WaitAsync(AttemptBudget.Until(deadline), budget.Caller);
+            await wait.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            var winner = Waited(wait, client, budget.Caller);
+            result = winner == Winner.Client
+                ? Completed(call, new ValueTask<T>(client), budget, timeoutMs)
+                : CutOff<T>(winner, null, own, budget, timeoutMs, abandoned: true);
             return result;
         }
         finally
@@ -270,8 +285,70 @@ internal static class BoundedCall
         return (null, budget.Token, budget.Deadline);
     }
 
+    /// <summary>
+    /// Who ended a call (rule 1): the client, by completing within the call's bound (with an answer, a failure or a
+    /// cancellation of its own), or the bound or the caller before it. Decided once, from how the call ended, and never
+    /// re-derived from the client's state afterwards: a client that completes an instant after it lost stays lost.
+    /// </summary>
+    private enum Winner : byte
+    {
+        Client,
+
+        /// <summary>The call's deadline: its own timeout, or the node's when it has none shorter.</summary>
+        Bound,
+
+        Caller,
+    }
+
+    /// <summary>
+    /// The winner for a client that completed before Send returned, that is just now: it was in time unless the caller has
+    /// cancelled, the deadline is reached, or the timer that enforces it has cancelled the client's token (a timer may
+    /// fire slightly before the clock reaches the deadline, as for <see cref="AttemptBudget.RanOut"/>).
+    /// </summary>
+    private static Winner Settled(AttemptBudget budget, CancellationTokenSource? own, long deadline)
+    {
+        if (budget.Caller.IsCancellationRequested)
+        {
+            return Winner.Caller;
+        }
+
+        var token = own is null ? budget.Token : own.Token;
+        return token.IsCancellationRequested || Stopwatch.GetTimestamp() >= deadline ? Winner.Bound : Winner.Client;
+    }
+
+    /// <summary>
+    /// The winner of the wait for a pending client, read from the wait's own outcome. The wait's timeout faults it with a
+    /// <see cref="TimeoutException"/> of its own, while a client's failure is passed on as the very same exception, so a
+    /// client that throws a <see cref="TimeoutException"/> itself is told apart by identity. The caller's token cancels
+    /// the wait; so does a client's own cancellation, which counts as the client's only while the caller has not cancelled.
+    /// </summary>
+    private static Winner Waited(Task wait, Task client, CancellationToken caller) => wait.Status switch
+    {
+        TaskStatus.RanToCompletion => Winner.Client,
+        TaskStatus.Faulted => IsClientFailure(wait.Exception!, client) ? Winner.Client : Winner.Bound,
+        _ => caller.IsCancellationRequested ? Winner.Caller : Winner.Client,
+    };
+
+    private static bool IsClientFailure(AggregateException waited, Task client)
+    {
+        var thrown = waited.InnerExceptions[0];
+        if (client.Exception is { } failure)
+        {
+            var exceptions = failure.InnerExceptions;
+            for (var i = 0; i < exceptions.Count; i++)
+            {
+                if (ReferenceEquals(exceptions[i], thrown))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>A client that completed in time: its answer, what it threw, or the cancellation it honoured.</summary>
-    private static CallResult<T> Completed<T, TCall>(TCall call, ValueTask<T> pending, AttemptBudget budget, CancellationTokenSource? own, int? timeoutMs)
+    private static CallResult<T> Completed<T, TCall>(TCall call, ValueTask<T> pending, AttemptBudget budget, int? timeoutMs)
         where TCall : struct, IBoundedCall<T>
     {
         try
@@ -283,7 +360,10 @@ internal static class BoundedCall
         }
         catch (OperationCanceledException ex)
         {
-            return Unanswered<T>(budget, own, timeoutMs, ex, abandoned: false);
+            // It honoured a token (or cancelled on its own) in time: the tokens say whose, the caller's first.
+            return budget.Caller.IsCancellationRequested ? Cancelled<T>(budget, ex, abandoned: false)
+                : budget.Token.IsCancellationRequested ? RanOut<T>(budget, ex, abandoned: false)
+                : TimedOut<T>(timeoutMs, abandoned: false);
         }
         catch (Exception ex)
         {
@@ -293,26 +373,48 @@ internal static class BoundedCall
     }
 
     /// <summary>
-    /// A call that ended without an answer, either cut off by the wait (<paramref name="abandoned"/>) or by the client
-    /// honouring a token (<paramref name="honoured"/>): the caller first, then the node's budget, else the call's own timeout.
+    /// A call the bound or the caller won (rule 1): nothing the client returned or threw is used. A bound without a
+    /// timeout of its own is the node's deadline, so the budget ran out (even if the budget's timer has not fired yet);
+    /// otherwise the call's own timeout expired.
     /// </summary>
-    private static CallResult<T> Unanswered<T>(AttemptBudget budget, CancellationTokenSource? own, int? timeoutMs, OperationCanceledException? honoured, bool abandoned)
+    /// <param name="honoured">A cancellation the client threw after it lost, thrown on to the operator as its own.</param>
+    /// <param name="abandoned">The client was still running when the call ended.</param>
+    private static CallResult<T> CutOff<T>(
+        Winner winner, OperationCanceledException? honoured, CancellationTokenSource? own, AttemptBudget budget, int? timeoutMs, bool abandoned) =>
+        winner == Winner.Caller ? Cancelled<T>(budget, honoured, abandoned)
+        : own is null ? RanOut<T>(budget, honoured, abandoned)
+        : TimedOut<T>(timeoutMs, abandoned);
+
+    /// <summary>
+    /// Consumes, once (as a source-backed ValueTask requires), the outcome of a client that completed after it lost.
+    /// Returns the cancellation it threw, if any; whatever else it returned or threw is dropped.
+    /// </summary>
+    private static OperationCanceledException? Discard<T>(ValueTask<T> pending)
     {
-        if (budget.Caller.IsCancellationRequested)
+        try
         {
-            return new CallResult<T>(CallEnd.Cancelled, default, honoured ?? new OperationCanceledException(budget.Caller), IoOutcome.Cancelled, null, abandoned);
+            _ = pending.GetAwaiter().GetResult();
+            return null;
         }
-
-        // A wait without a timeout of its own ended at the node's deadline, even if the budget's timer has not fired yet.
-        if (budget.Token.IsCancellationRequested || (abandoned && own is null))
+        catch (OperationCanceledException ex)
         {
-            var cancelled = honoured ?? new OperationCanceledException("The node's budget ran out before the call completed.", budget.Token);
-            return new CallResult<T>(CallEnd.BudgetRanOut, default, cancelled, IoOutcome.Timeout, null, abandoned);
+            return ex;
         }
-
-        var error = timeoutMs is { } timeout ? $"timed out after {timeout} ms" : "timed out";
-        return new CallResult<T>(CallEnd.TimedOut, default, null, IoOutcome.Timeout, error, abandoned);
+        catch (Exception)
+        {
+            return null;
+        }
     }
+
+    private static CallResult<T> Cancelled<T>(AttemptBudget budget, OperationCanceledException? honoured, bool abandoned) =>
+        new(CallEnd.Cancelled, default, honoured ?? new OperationCanceledException(budget.Caller), IoOutcome.Cancelled, null, abandoned);
+
+    private static CallResult<T> RanOut<T>(AttemptBudget budget, OperationCanceledException? honoured, bool abandoned) =>
+        new(CallEnd.BudgetRanOut, default, honoured ?? new OperationCanceledException("The node's budget ran out before the call completed.", budget.Token),
+            IoOutcome.Timeout, null, abandoned);
+
+    private static CallResult<T> TimedOut<T>(int? timeoutMs, bool abandoned) =>
+        new(CallEnd.TimedOut, default, null, IoOutcome.Timeout, timeoutMs is { } timeout ? $"timed out after {timeout} ms" : "timed out", abandoned);
 
     /// <summary>
     /// What a call whose client did not answer synchronously holds: the hold on the request memory taken before it was

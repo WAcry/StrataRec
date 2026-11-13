@@ -309,14 +309,15 @@ public sealed class PipelineExecutor
                     continue;
                 }
 
-                capacity += RowLimit(node, parameters);
-
-                // A fallback row source gets room of its own: a primary that failed may already have appended rows, and a
-                // failure restores only the selection, never the physical rows (design 4.8, 5.6).
+                // Only one of a position's primary and fallback appends rows that stay: a failed attempt gives its rows back
+                // (CandidateTable.Rollback), so the fallback reuses them (design 4.8, 5.6).
+                var limit = RowLimit(node, parameters);
                 if (node.OnFailure == FailurePolicy.Fallback && plan.SelectFallback(node, request.Arms) is { } fallback)
                 {
-                    capacity += RowLimit(fallback, parameters);
+                    limit = Math.Max(limit, RowLimit(fallback, parameters));
                 }
+
+                capacity += limit;
             }
 
             var table = new CandidateTable(plan.TableSchema, (int)Math.Min(capacity, int.MaxValue), memory);
@@ -639,13 +640,9 @@ public sealed class PipelineExecutor
             return new Attempt(NodeOutcomeKind.Failed, "deadline exceeded");
         }
 
-        int[]? captured = null;
-        var capturedCount = 0;
-        if (node.HasRowEffects)
-        {
-            captured = state.Memory.Rent<int>(Math.Max(1, state.Table.Rows.Count));
-            capturedCount = state.Table.Rows.Capture(captured);
-        }
+        // A failed attempt leaves the table exactly as it was (design 4.6): the ranking, and no rows of its own, so neither
+        // the fallback nor a replay (which skips a recorded timeout) sees what it appended. Only row effects change those.
+        var checkpoint = node.HasRowEffects ? state.Table.Checkpoint() : (TableCheckpoint?)null;
 
         // The attempt's absolute deadline. The context hands the operator a token cancelled at it and bounds every external
         // wait by it, whether or not the client honours the token. A replay takes timing from its recording instead.
@@ -693,9 +690,10 @@ public sealed class PipelineExecutor
 
         if (failure is not null)
         {
-            if (captured is not null)
+            // Every way an attempt fails ends here: an exception, a failure it reported, a timeout, a late success, a commit.
+            if (checkpoint is { } before)
             {
-                state.Table.Rows.Restore(captured.AsSpan(0, capturedCount));
+                state.Table.Rollback(before);
             }
 
             return new Attempt(NodeOutcomeKind.Failed, failure);

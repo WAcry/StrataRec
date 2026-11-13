@@ -1,6 +1,7 @@
 using StrataRec.Artifacts.Model;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting.Workspace;
+using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
@@ -11,7 +12,10 @@ internal static class MiniWorkspace
     /// <param name="candidateSources">The members of the bindings' <c>candidate_sources</c> object.</param>
     /// <param name="pipeline">The pipeline artifact; its id must be <c>p</c>.</param>
     /// <param name="files">Other files (e.g. a source's <c>data_file</c>) by path relative to the workspace root.</param>
-    public static ExecutionPlan Compile(string candidateSources, string pipeline, CandidateSourceRegistry? sources = null, IReadOnlyDictionary<string, string>? files = null)
+    /// <param name="operators">The operators available; the standard library by default.</param>
+    public static ExecutionPlan Compile(
+        string candidateSources, string pipeline, CandidateSourceRegistry? sources = null, IReadOnlyDictionary<string, string>? files = null,
+        OperatorRegistry? operators = null)
     {
         var root = Directory.CreateTempSubdirectory("stratarec-mini-").FullName;
         foreach (var dir in new[] { "catalog", "bindings", "pipelines" })
@@ -33,7 +37,12 @@ internal static class MiniWorkspace
         var workspace = ConfigWorkspace.Load(root, diagnostics);
         var request = workspace.CreateCompileRequest("p", "local", diagnostics);
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
-        var environment = new PlanEnvironment { BaseDirectory = root, CandidateSources = sources ?? CandidateSourceRegistry.CreateDefault() };
+        var environment = new PlanEnvironment
+        {
+            BaseDirectory = root,
+            CandidateSources = sources ?? CandidateSourceRegistry.CreateDefault(),
+            Operators = operators ?? OperatorRegistry.CreateDefault(),
+        };
         var compilation = PlanCompiler.Compile(request!, environment);
         Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
         return compilation.Plan!;
