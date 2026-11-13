@@ -150,6 +150,46 @@ public sealed class TrafficAssignerTests
     }
 
     [Fact]
+    public void OverlappingDomainsAreRejected()
+    {
+        var diagnostics = new DiagnosticBag();
+        var spec = Spec(withDomains: true);
+        spec.Domains["holdout"] = new DomainSpec { Buckets = new[] { 0, 999 } };
+        Create(spec, diagnostics);
+
+        Assert.Equal("ASSIGN_DOMAIN_OVERLAP", Assert.Single(diagnostics.Items).Code);
+    }
+
+    [Fact]
+    public void MisspelledAllocatedArmIsRejected()
+    {
+        var diagnostics = new DiagnosticBag();
+        var ranges = new Dictionary<string, IReadOnlyDictionary<string, int[]>>(Ranges)
+        {
+            ["exp_rank"] = new Dictionary<string, int[]> { ["control"] = new[] { 0, 99 }, ["treatement"] = new[] { 100, 199 } },
+            ["exp_gone"] = new Dictionary<string, int[]> { ["control"] = new[] { 0, 9 } },
+        };
+        Create(Spec(), diagnostics, ranges);
+
+        var arm = Assert.Single(diagnostics.Items, d => d.Code == "ASSIGN_UNKNOWN_ARM");
+        Assert.Equal("/experiments/exp_rank/arms/treatement", arm.Pointer);
+        Assert.Contains("treatment", arm.Hint);
+        Assert.Single(diagnostics.Items, d => d.Code == "ASSIGN_UNKNOWN_EXPERIMENT");
+    }
+
+    [Fact]
+    public void ExternallyAssignedLayersNeedNoSaltOrUnit()
+    {
+        var diagnostics = new DiagnosticBag();
+        var spec = Spec();
+        spec.Layers.Remove("rerank");
+        var ranges = new Dictionary<string, IReadOnlyDictionary<string, int[]>> { ["exp_rank"] = Ranges["exp_rank"] };
+        Create(spec, diagnostics, ranges);
+
+        Assert.Empty(diagnostics.Items);
+    }
+
+    [Fact]
     public void UnitsMustBeDeclaredRequestInputs()
     {
         var diagnostics = new DiagnosticBag();

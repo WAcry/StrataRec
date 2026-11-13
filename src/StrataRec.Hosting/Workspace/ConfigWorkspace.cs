@@ -133,6 +133,9 @@ public sealed class ConfigWorkspace
         DateOnly? today = null,
         IReadOnlyDictionary<string, string>? extraExperiments = null)
     {
+        // Any assembly error aborts: a partial request (an experiment or table silently left out) must never be
+        // compiled, loaded over a working plan, or built into a release.
+        var errorsBefore = diagnostics.ErrorCount;
         if (!Pipelines.TryGetValue(pipelineId, out var pipeline))
         {
             diagnostics.Error("PIPELINE_UNKNOWN", "workspace", "/pipelines", $"No pipeline '{pipelineId}' in {Root}.",
@@ -228,6 +231,11 @@ public sealed class ConfigWorkspace
             }
 
             placements.Add(new ExperimentPlacement(experiment.Value, layer));
+        }
+
+        if (diagnostics.ErrorCount > errorsBefore)
+        {
+            return null;
         }
 
         return new PlanCompileRequest

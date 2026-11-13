@@ -84,6 +84,23 @@ public static class ServiceCollectionExtensions
             ids.AddRange(workspace.Pipelines.Keys);
         }
 
+        // A pipeline's fallback_pipeline must be served too, or the fallback silently never happens (design 5.6).
+        for (var i = 0; i < ids.Count; i++)
+        {
+            if (workspace.Pipelines.TryGetValue(ids[i], out var loaded) && loaded.Value.FallbackPipeline is { } fallback && !ids.Contains(fallback))
+            {
+                if (workspace.Pipelines.ContainsKey(fallback))
+                {
+                    ids.Add(fallback);
+                }
+                else
+                {
+                    diagnostics.Error("FALLBACK_PIPELINE_UNKNOWN", loaded.Path, "/fallback_pipeline", $"Fallback pipeline '{fallback}' is not in the workspace.",
+                        NameSuggestions.DidYouMean(fallback, workspace.Pipelines.Keys) ?? $"create pipelines/{fallback}.jsonc or remove fallback_pipeline");
+                }
+            }
+        }
+
         foreach (var id in ids)
         {
             var request = workspace.CreateCompileRequest(id, environment, diagnostics, DateOnly.FromDateTime(DateTime.UtcNow));

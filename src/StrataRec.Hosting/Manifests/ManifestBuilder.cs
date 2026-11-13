@@ -111,11 +111,24 @@ public static class ManifestBuilder
             ? await FetchAsync<PolicyArtifact>(store, policyId, label, "/artifacts/policy", diagnostics, cancellationToken).ConfigureAwait(false)
             : new PolicyArtifact();
 
+        // Content hashes prove integrity, not identity: a valid blob of another pipeline or experiment must not be served
+        // under this manifest's names.
+        if (pipeline is not null && pipeline.PipelineId != manifest.PipelineId)
+        {
+            diagnostics.Error("MANIFEST_IDENTITY", label, "/artifacts/pipeline", $"The pipeline artifact defines '{pipeline.PipelineId}', not '{manifest.PipelineId}'.");
+        }
+
         var tables = new List<DataTableArtifact>();
         foreach (var (name, id) in manifest.Artifacts.Tables)
         {
-            if (await FetchAsync<DataTableArtifact>(store, id, label, "/artifacts/tables/" + JsonPointer.Escape(name), diagnostics, cancellationToken).ConfigureAwait(false) is { } table)
+            var pointer = "/artifacts/tables/" + JsonPointer.Escape(name);
+            if (await FetchAsync<DataTableArtifact>(store, id, label, pointer, diagnostics, cancellationToken).ConfigureAwait(false) is { } table)
             {
+                if (table.TableId != name)
+                {
+                    diagnostics.Error("MANIFEST_IDENTITY", label, pointer, $"The table artifact defines '{table.TableId}', not '{name}'.");
+                }
+
                 tables.Add(table);
             }
         }
@@ -123,8 +136,14 @@ public static class ManifestBuilder
         var placements = new List<ExperimentPlacement>();
         foreach (var (name, entry) in manifest.Experiments)
         {
-            if (await FetchAsync<ExperimentArtifact>(store, entry.Artifact, label, "/experiments/" + JsonPointer.Escape(name) + "/artifact", diagnostics, cancellationToken).ConfigureAwait(false) is { } experiment)
+            var pointer = "/experiments/" + JsonPointer.Escape(name) + "/artifact";
+            if (await FetchAsync<ExperimentArtifact>(store, entry.Artifact, label, pointer, diagnostics, cancellationToken).ConfigureAwait(false) is { } experiment)
             {
+                if (experiment.ExperimentId != name)
+                {
+                    diagnostics.Error("MANIFEST_IDENTITY", label, pointer, $"The experiment artifact defines '{experiment.ExperimentId}', not '{name}'.");
+                }
+
                 placements.Add(new ExperimentPlacement(experiment, entry.Layer));
             }
         }

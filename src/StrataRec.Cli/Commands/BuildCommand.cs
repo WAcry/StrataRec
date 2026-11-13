@@ -31,7 +31,7 @@ internal static class BuildCommand
     {
         var diagnostics = new DiagnosticBag();
         var (workspace, request, compilation) = CommonOptions.Compile(config, environment, pipeline, diagnostics);
-        if (request is null || compilation is not { Succeeded: true })
+        if (request is null || compilation is not { Succeeded: true } || diagnostics.HasErrors)
         {
             Output.Diagnostics(diagnostics.Items, "text", Console.Error);
             return 1;

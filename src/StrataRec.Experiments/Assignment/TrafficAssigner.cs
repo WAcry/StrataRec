@@ -92,7 +92,57 @@ public sealed class TrafficAssigner
                 continue;
             }
 
+            foreach (var (other, first, last) in domains)
+            {
+                if (range[0] <= last && first <= range[1])
+                {
+                    diagnostics.Error("ASSIGN_DOMAIN_OVERLAP", artifact, "/domains/" + name + "/buckets",
+                        $"Domain '{name}' overlaps domain '{other}'; domains split traffic exclusively (design 11.1).");
+                }
+            }
+
             domains.Add((name, range[0], range[1]));
+        }
+
+        // Every allocated experiment and arm must exist: a misspelled arm silently receives no traffic otherwise.
+        foreach (var (experimentId, armRanges) in armRangesByExperiment)
+        {
+            ExperimentInfo? experiment = null;
+            foreach (var e in planExperiments)
+            {
+                if (e.Id == experimentId)
+                {
+                    experiment = e;
+                }
+            }
+
+            if (experiment is null)
+            {
+                var ids = new List<string>();
+                foreach (var e in planExperiments)
+                {
+                    ids.Add(e.Id);
+                }
+
+                diagnostics.Error("ASSIGN_UNKNOWN_EXPERIMENT", artifact, "/experiments/" + experimentId, $"Experiment '{experimentId}' is not in the plan.",
+                    NameSuggestions.DidYouMean(experimentId, ids));
+                continue;
+            }
+
+            var names = new List<string>();
+            foreach (var armIndex in experiment.ArmIndices)
+            {
+                names.Add(planArms[armIndex].ArmName);
+            }
+
+            foreach (var (armName, _) in armRanges)
+            {
+                if (!names.Contains(armName))
+                {
+                    diagnostics.Error("ASSIGN_UNKNOWN_ARM", artifact, "/experiments/" + experimentId + "/arms/" + armName,
+                        $"Experiment '{experimentId}' has no arm '{armName}'.", NameSuggestions.DidYouMean(armName, names) ?? $"arms: {string.Join(", ", names)}");
+                }
+            }
         }
 
         var layers = new List<LayerRule>();
@@ -100,7 +150,19 @@ public sealed class TrafficAssigner
         {
             if (!spec.Layers.TryGetValue(layer.Name, out var layerSpec))
             {
-                diagnostics.Error("ASSIGN_UNKNOWN_LAYER", artifact, "/layers", $"Layer '{layer.Name}' has experiments but no assignment definition.");
+                // Without bucket ranges the layer is assigned externally (IAssignmentProvider) and needs no salt or unit.
+                var allocated = false;
+                foreach (var experiment in planExperiments)
+                {
+                    allocated |= experiment.LayerIndex == layer.Index && armRangesByExperiment.ContainsKey(experiment.Id);
+                }
+
+                if (allocated)
+                {
+                    diagnostics.Error("ASSIGN_UNKNOWN_LAYER", artifact, "/layers", $"Layer '{layer.Name}' has allocated experiments but no assignment definition.",
+                        $"add \"{layer.Name}\": {{ \"domain\": \"main\", \"salt\": \"...\", \"unit\": [\"ctx.request.user_id\"] }} under /assignment/layers");
+                }
+
                 continue;
             }
 

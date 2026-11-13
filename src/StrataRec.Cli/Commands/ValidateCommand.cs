@@ -51,6 +51,7 @@ internal static class ValidateCommand
 
                 var compilation = PlanCompiler.Compile(request, CommonOptions.PlanEnvironment(workspace));
                 diagnostics.AddRange(compilation.Diagnostics);
+                CommonOptions.ValidateAssignment(workspace, request, compilation, environment, diagnostics);
                 summaries.Add(Summary(id, request, compilation));
             }
         }

@@ -123,9 +123,11 @@ internal sealed partial class UnifiedCompilation
             var list = new List<int>(layers);
             if (Product(choices, list) > _request.MaxCombinationsChecked)
             {
-                _diagnostics.Warning("COMBINATION_CHECK_LIMITED", _pipelineLabel, column.Pointer,
-                    $"Column '{column.Name}' is affected by {list.Count} layers; not every arm combination was checked for a missing producer.",
-                    "keep experiments that remove or replace producers of the same column in fewer layers");
+                // Without a complete check the plan could leave a non-nullable column without a producer for some
+                // assignment (design 11.5 check 3), so it is rejected rather than published on a warning.
+                _diagnostics.Error("COMBINATION_CHECK_LIMIT", _pipelineLabel, column.Pointer,
+                    $"Column '{column.Name}' is affected by arms in {list.Count} layers ({Product(choices, list)} combinations, limit {_request.MaxCombinationsChecked}); not every combination can be checked for a missing producer.",
+                    "put experiments that change producers or readers of this column into fewer layers, or graduate some of them");
                 continue;
             }
 
@@ -360,6 +362,53 @@ internal sealed partial class UnifiedCompilation
     }
 
     private bool CoOccur(ArmPatch a, ArmPatch b) => a.Domain is null || b.Domain is null || a.Domain == b.Domain;
+
+    private static bool CoOccur(List<ArmPatch> arms)
+    {
+        string? domain = null;
+        foreach (var arm in arms)
+        {
+            if (arm.Domain is not { } d)
+            {
+                continue;
+            }
+
+            if (domain is not null && domain != d)
+            {
+                return false;
+            }
+
+            domain = d;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Compiles the bare baseline on its own when arms add schema entries or parameter leaves (design 11.6): the
+    /// unified schema contains every addition, so without this an addition could make an invalid baseline resolve,
+    /// and removing that experiment would break the baseline.
+    /// </summary>
+    private void ValidateBaselineAlone()
+    {
+        var needed = false;
+        foreach (var arm in _arms)
+        {
+            needed |= arm.Valid && (arm.Additions.Count > 0 || arm.ExtraParamLeaves.Count > 0);
+        }
+
+        if (!needed)
+        {
+            return;
+        }
+
+        var scratch = new DiagnosticBag();
+        new UnifiedCompilation(WithoutExperiments(_request), _environment, _view, scratch, buildPlan: false).Run();
+        foreach (var d in scratch.Items)
+        {
+            Report(d, Array.Empty<ArmPatch>());
+        }
+    }
 
     private bool CoOccur(int[] combination)
     {

@@ -101,6 +101,9 @@ public sealed class LoadedPipeline
 
     public required PlanReport Report { get; init; }
 
+    /// <summary>Release order of this plan: the manifest <c>seq</c>, or the engine's load ticket for local loads.</summary>
+    public required long Sequence { get; init; }
+
     public DateTimeOffset LoadedAt { get; init; } = DateTimeOffset.UtcNow;
 }
 
@@ -120,6 +123,8 @@ public sealed record PlanLoadResult(
 public sealed class RecEngine : IRecEngine
 {
     private readonly ConcurrentDictionary<string, LoadedPipeline> _pipelines = new(StringComparer.Ordinal);
+    private readonly object _publishGate = new();
+    private long _loadTicket;
     private readonly PipelineExecutor _executor;
     private readonly IAssignmentProvider? _assignmentProvider;
 
@@ -148,8 +153,14 @@ public sealed class RecEngine : IRecEngine
     /// background thread (design 10.3 step 2).
     /// </summary>
     /// <param name="armRanges">Bucket ranges per experiment and arm (from the manifest or allocation file).</param>
-    public PlanLoadResult Load(PlanCompileRequest request, IReadOnlyDictionary<string, IReadOnlyDictionary<string, int[]>>? armRanges = null)
+    /// <param name="sequence">
+    /// Release order (the manifest's <c>seq</c>, design 10.2). A plan never replaces one with an equal or higher
+    /// sequence, so a slow load of an older release cannot overwrite a newer one that finished first. When omitted,
+    /// a ticket taken at the start of the call orders local loads; do not mix the two schemes for one pipeline.
+    /// </param>
+    public PlanLoadResult Load(PlanCompileRequest request, IReadOnlyDictionary<string, IReadOnlyDictionary<string, int[]>>? armRanges = null, long? sequence = null)
     {
+        var order = sequence ?? Interlocked.Increment(ref _loadTicket);
         var compilation = PlanCompiler.Compile(request, Environment);
         var diagnostics = new DiagnosticBag();
         diagnostics.AddRange(compilation.Diagnostics);
@@ -169,18 +180,32 @@ public sealed class RecEngine : IRecEngine
             }
         }
 
-        _pipelines[pipelineId] = new LoadedPipeline
+        lock (_publishGate)
         {
-            Plan = plan,
-            Assigner = assigner,
-            FallbackPipeline = request.Pipeline.FallbackPipeline,
-            Report = compilation.Report,
-        };
+            if (_pipelines.TryGetValue(pipelineId, out var current) && current.Sequence >= order)
+            {
+                diagnostics.Info("PLAN_STALE", "engine", string.Empty,
+                    $"Not applied: pipeline '{pipelineId}' already serves sequence {current.Sequence} (this load is {order}).");
+                return new PlanLoadResult(pipelineId, false, request.ManifestId, plan.CompileTime, diagnostics.Items, compilation.Report);
+            }
+
+            _pipelines[pipelineId] = new LoadedPipeline
+            {
+                Plan = plan,
+                Assigner = assigner,
+                FallbackPipeline = request.Pipeline.FallbackPipeline,
+                Report = compilation.Report,
+                Sequence = order,
+            };
+        }
+
         return new PlanLoadResult(pipelineId, true, request.ManifestId, plan.CompileTime, diagnostics.Items, compilation.Report);
     }
 
     public async ValueTask<RecResult> ExecuteAsync(RecRequest request, CancellationToken cancellationToken = default)
     {
+        // One end-to-end deadline: assignment, the pipeline and its fallback pipeline all spend the same budget.
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
         if (!_pipelines.TryGetValue(request.PipelineId, out var pipeline))
         {
             return Rejected(request, $"Unknown pipeline '{request.PipelineId}'.");
@@ -213,15 +238,22 @@ public sealed class RecEngine : IRecEngine
             arms = pipeline.Assigner?.Assign(request.Inputs) ?? RequestArms.None;
         }
 
-        var result = await Run(pipeline, request, arms, cancellationToken).ConfigureAwait(false);
+        var remaining = request.Deadline - System.Diagnostics.Stopwatch.GetElapsedTime(started);
+        if (remaining <= TimeSpan.Zero)
+        {
+            return Rejected(request, "deadline exceeded before execution (assignment took the whole budget)");
+        }
+
+        var result = await Run(pipeline, request, arms, remaining, cancellationToken).ConfigureAwait(false);
+        remaining = request.Deadline - System.Diagnostics.Stopwatch.GetElapsedTime(started);
         if (result.Succeeded || pipeline.FallbackPipeline is not { } fallbackId || fallbackId == request.PipelineId
-            || !_pipelines.TryGetValue(fallbackId, out var fallback))
+            || !_pipelines.TryGetValue(fallbackId, out var fallback) || remaining <= TimeSpan.Zero)
         {
             return ToResult(request, pipeline, result, unknown, request.PipelineId);
         }
 
-        // The pipeline failed: serve its fallback pipeline, without experiments (design 5.6).
-        var served = await Run(fallback, request, RequestArms.None, cancellationToken).ConfigureAwait(false);
+        // The pipeline failed: serve its fallback pipeline, without experiments, within what is left (design 5.6).
+        var served = await Run(fallback, request, RequestArms.None, remaining, cancellationToken).ConfigureAwait(false);
         var converted = ToResult(request, fallback, served, unknown, fallbackId);
         return new RecResult
         {
@@ -238,13 +270,13 @@ public sealed class RecEngine : IRecEngine
         };
     }
 
-    private ValueTask<PipelineResult> Run(LoadedPipeline pipeline, RecRequest request, RequestArms arms, CancellationToken cancellationToken) =>
+    private ValueTask<PipelineResult> Run(LoadedPipeline pipeline, RecRequest request, RequestArms arms, TimeSpan deadline, CancellationToken cancellationToken) =>
         _executor.ExecuteAsync(pipeline.Plan, new PipelineRequest
         {
             RequestId = request.RequestId,
             Inputs = request.Inputs,
             Arms = arms,
-            Deadline = request.Deadline,
+            Deadline = deadline,
             Seed = request.Seed,
             TimeMs = request.TimeMs,
             CaptureLogs = request.Debug?.CaptureLogs == true,
@@ -256,6 +288,7 @@ public sealed class RecEngine : IRecEngine
         unknown = 0;
         var byLayer = new int[plan.Layers.Length];
         Array.Fill(byLayer, -1);
+        string? domain = null;
         foreach (var id in ids)
         {
             if (!plan.TryGetArm(id, out var arm) || byLayer[arm.LayerIndex] >= 0)
@@ -264,6 +297,15 @@ public sealed class RecEngine : IRecEngine
                 continue;
             }
 
+            // Arms from different traffic domains never co-occur (design 11.1); their combination was not validated.
+            var armDomain = plan.Layers[arm.LayerIndex].Domain;
+            if (armDomain is not null && domain is not null && armDomain != domain)
+            {
+                unknown++;
+                continue;
+            }
+
+            domain ??= armDomain;
             byLayer[arm.LayerIndex] = arm.Index;
         }
 

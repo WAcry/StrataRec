@@ -751,6 +751,18 @@ public sealed class PlanBuilder
                     _diagnostics.Error("FALLBACK_OUTPUTS", artifact, fallback.Pointer,
                         $"Fallback '{fallback.NodeId}' must produce exactly the columns of '{node.NodeId}'.");
                 }
+                else
+                {
+                    foreach (var logical in fallback.RequiredOutputs)
+                    {
+                        if (!guaranteed.Contains(logical))
+                        {
+                            _diagnostics.Error("COLUMN_NO_PRODUCER", artifact, fallback.Pointer,
+                                $"Fallback '{fallback.NodeId}' (for '{node.NodeId}') reads non-nullable column '{schema.Columns[logical].Name}', which is not guaranteed to be produced before it.",
+                                "make the producer unskippable, or declare the column nullable and handle missing values with '??'");
+                        }
+                    }
+                }
             }
 
             var unskippable = node.When is null && node.MinRemainingMs is null

@@ -270,7 +270,6 @@ public sealed class PipelineExecutor
         if (attempt.Kind is NodeOutcomeKind.Succeeded or NodeOutcomeKind.Degraded)
         {
             Record(state, node.NodeId, attempt.Kind, attempt.Detail, node.NodeId, started, rowsIn);
-            MarkParamTriggers(state, node);
             if (state.Batches is not null)
             {
                 await TapCapture.AfterNodeAsync(state, node.NodeId, entered, rowsIn, cancellationToken).ConfigureAwait(false);
@@ -303,7 +302,6 @@ public sealed class PipelineExecutor
                 if (fb.Kind is NodeOutcomeKind.Succeeded or NodeOutcomeKind.Degraded)
                 {
                     Record(state, node.NodeId, NodeOutcomeKind.Degraded, $"{attempt.Detail}; served by fallback '{fallback.NodeId}'", fallback.NodeId, started, rowsIn);
-                    MarkParamTriggers(state, fallback);
                     if (state.Batches is not null)
                     {
                         await TapCapture.AfterNodeAsync(state, node.NodeId, entered, rowsIn, cancellationToken).ConfigureAwait(false);
@@ -367,6 +365,9 @@ public sealed class PipelineExecutor
         string? failure;
         try
         {
+            // The operator is about to read its parameters: that is exposure, whether it then succeeds or fails
+            // (design 12.6). Recording only successes would bias triggered analysis against arms that fail more.
+            MarkParamTriggers(state, node);
             await node.Operator.ExecuteAsync(context).ConfigureAwait(false);
             failure = context.FailureReason ?? Commit(state, node);
         }

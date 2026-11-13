@@ -122,6 +122,9 @@ internal static class ArmAnalyzer
         foreach (var op in analysis.Footprint)
         {
             var pointer = arm.PointerPrefix + op.Path;
+            var tokens = op.Path.Tokens;
+
+            // 1. Authorization (policy.jsonc): patchable, or add-only with a new entry.
             if (FirstPrefix(patchable, op.Path) is null)
             {
                 if (FirstPrefix(addOnly, op.Path) is not { } root)
@@ -133,45 +136,53 @@ internal static class ArmAnalyzer
                     continue;
                 }
 
-                if (op.Kind == PatchOpKind.Add && op.Path.Depth == root.Depth + 1)
+                if (!(op.Kind == PatchOpKind.Add && op.Path.Depth == root.Depth + 1))
                 {
-                    var section = root.LastToken ?? string.Empty;
-                    if (!arm.Additions.TryGetValue(section, out var entries))
+                    if (!IsNoOp(op, view))
                     {
-                        entries = new SortedDictionary<string, (JsonNode, string)>(StringComparer.Ordinal);
-                        arm.Additions[section] = entries;
+                        AddOnlyError(arm, diagnostics, pointer, root.ToString(), op);
                     }
 
-                    if (!IsValidId(op.Path.LastToken!) && section is "columns" or "param_schema")
+                    continue;
+                }
+            }
+
+            // 2. Engine constraint, whatever the policy says: one schema is compiled for every arm, so schema
+            //    sections only take new entries (design 11.4 reason 2).
+            if (tokens.Length >= 1 && Array.IndexOf(SchemaSections, tokens[0]) >= 0)
+            {
+                if (op.Kind != PatchOpKind.Add || tokens.Length != 2)
+                {
+                    if (!IsNoOp(op, view))
                     {
-                        diagnostics.Error("BAD_ID", arm.Artifact, pointer, $"'{op.Path.LastToken}' is not a valid name.",
-                            "names start with a letter or '_' and contain letters, digits, '_', '.' or '-'");
-                        arm.Valid = false;
-                        continue;
+                        AddOnlyError(arm, diagnostics, pointer, "/" + tokens[0], op);
                     }
 
-                    entries[op.Path.LastToken!] = (op.Value!, pointer);
-                    arm.Footprint.Add(op);
                     continue;
                 }
 
-                // Re-adding an entry identical to the baseline is a no-op (design 11.4), e.g. after another
-                // experiment graduated the same addition.
-                if (op.Kind == PatchOpKind.Replace && op.Path.TryEvaluate(view.Document, out var existing) && JsonEquals(existing, op.Value))
+                if (!IsValidId(tokens[1]) && tokens[0] is "columns" or "param_schema")
                 {
+                    diagnostics.Error("BAD_ID", arm.Artifact, pointer, $"'{tokens[1]}' is not a valid name.",
+                        "names start with a letter or '_' and contain letters, digits, '_', '.' or '-'");
+                    arm.Valid = false;
                     continue;
                 }
 
-                diagnostics.Error("PATCH_ADD_ONLY", arm.Artifact, pointer,
-                    $"'{root}' is add-only for experiments; this patch {(op.Kind == PatchOpKind.Delete ? "deletes" : "changes")} an existing entry.",
-                    "add an entry under a new name instead; one name has one meaning in logs and models (design 11.4)");
-                arm.Valid = false;
+                if (!arm.Additions.TryGetValue(tokens[0], out var entries))
+                {
+                    entries = new SortedDictionary<string, (JsonNode, string)>(StringComparer.Ordinal);
+                    arm.Additions[tokens[0]] = entries;
+                }
+
+                entries[tokens[1]] = (op.Value!, pointer);
+                arm.Footprint.Add(op);
                 continue;
             }
 
+            // 3. Effects: what the arm changes in the plan.
             arm.Footprint.Add(op);
-            var tokens = op.Path.Tokens;
-            switch (tokens[0])
+            switch (tokens.Length == 0 ? string.Empty : tokens[0])
             {
                 case "params":
                     paramOps.Add(op);
@@ -198,10 +209,30 @@ internal static class ArmAnalyzer
                         "patch individual entries");
                     arm.Valid = false;
                     break;
+                default:
+                    diagnostics.Error("PATCH_NOT_ALLOWED", arm.Artifact, pointer, $"'{op.Path}' is not part of the patchable view.",
+                        "experiments patch /params, /nodes, /log_taps and add to /columns, /param_schema, /features, /derived_features, /funnel_groups");
+                    arm.Valid = false;
+                    break;
             }
         }
 
         AnalyzeParams(arm, view, paramOps, diagnostics);
+    }
+
+    /// <summary>Sections compiled once into the shared plan schema; experiments may only add to them.</summary>
+    internal static readonly string[] SchemaSections = { "columns", "param_schema", "features", "derived_features", "funnel_groups" };
+
+    /// <summary>Re-adding an entry identical to the baseline is a no-op (design 11.4), e.g. after a graduation.</summary>
+    private static bool IsNoOp(PatchOperation op, PatchableView view) =>
+        op.Kind == PatchOpKind.Replace && op.Path.TryEvaluate(view.Document, out var existing) && JsonEquals(existing, op.Value);
+
+    private static void AddOnlyError(ArmPatch arm, DiagnosticBag diagnostics, string pointer, string root, PatchOperation op)
+    {
+        diagnostics.Error("PATCH_ADD_ONLY", arm.Artifact, pointer,
+            $"'{root}' is add-only for experiments; this patch {(op.Kind == PatchOpKind.Delete ? "deletes" : "changes")} an existing entry.",
+            "add an entry under a new name instead; one name has one meaning in logs and models (design 11.4)");
+        arm.Valid = false;
     }
 
     /// <summary>
@@ -226,6 +257,14 @@ internal static class ArmAnalyzer
             if (!baseSchema.TryGetPropertyValue(name, out spec) && addedSchema is not null && addedSchema.TryGetValue(name, out var added))
             {
                 spec = added.Value;
+            }
+
+            if (spec is not null and not JsonObject)
+            {
+                diagnostics.Error("PATCH_SCHEMA", arm.Artifact, arm.PointerPrefix + "/param_schema/" + JsonPointer.Escape(name),
+                    $"The param_schema entry for '{name}' must be an object.", "e.g. { \"type\": \"float64\", \"min\": 0, \"max\": 1 }");
+                arm.Valid = false;
+                continue;
             }
 
             if (spec is null)

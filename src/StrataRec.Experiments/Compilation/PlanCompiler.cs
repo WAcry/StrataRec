@@ -79,8 +79,6 @@ internal sealed partial class UnifiedCompilation
 {
     internal static readonly PlanReport EmptyReport = new() { Nodes = Array.Empty<NodeVariantReport>(), Arms = Array.Empty<ArmReport>() };
 
-    private static readonly string[] AddOnlySections = { "columns", "param_schema", "features", "derived_features", "funnel_groups" };
-
     private readonly PlanCompileRequest _request;
     private readonly PlanEnvironment _environment;
     private readonly PatchableView _view;
@@ -153,6 +151,7 @@ internal sealed partial class UnifiedCompilation
         }
 
         ValidatePairs();
+        ValidateBaselineAlone();
         if (_request.ValidateArmsIndependently)
         {
             ValidateArmsIndependently();
@@ -287,7 +286,7 @@ internal sealed partial class UnifiedCompilation
 
     private SchemaSources BuildSchemaSources()
     {
-        foreach (var section in AddOnlySections)
+        foreach (var section in ArmAnalyzer.SchemaSections)
         {
             _additions[section] = new SortedDictionary<string, (JsonNode, ArmPatch)>(StringComparer.Ordinal);
         }
@@ -634,6 +633,11 @@ internal sealed partial class UnifiedCompilation
         for (var c = 0; c < space.Count; c++)
         {
             var armsInCombination = ArmPatches(variants.ArmsOf(c));
+            if (!CoOccur(armsInCombination))
+            {
+                continue; // arms in different traffic domains are never assigned together
+            }
+
             var definition = Merge(baseline, armsInCombination, "nodes", nodeId);
             if (definition is null)
             {
@@ -719,6 +723,11 @@ internal sealed partial class UnifiedCompilation
             for (var c = 0; c < space.Count; c++)
             {
                 var armsInCombination = ArmPatches(variants.ArmsOf(c));
+                if (!CoOccur(armsInCombination))
+                {
+                    continue;
+                }
+
                 var definition = Merge(baseline, armsInCombination, "log_taps", tapId);
                 if (definition is null)
                 {
@@ -1092,7 +1101,7 @@ internal sealed partial class UnifiedCompilation
         var layers = new LayerInfo[_layers.Count];
         for (var i = 0; i < layers.Length; i++)
         {
-            layers[i] = new LayerInfo(i, _layers[i]);
+            layers[i] = new LayerInfo(i, _layers[i], _layerDomains[i]);
         }
 
         return layers;

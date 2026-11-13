@@ -200,6 +200,40 @@ public sealed class ArmAnalyzerTests
     }
 
     [Fact]
+    public void MalformedAddedParameterSchemaIsADiagnosticNotACrash()
+    {
+        var (arm, diagnostics) = Analyze("""{ "param_schema": { "new_param": 42 }, "params": { "new_param": 1 } }""");
+
+        var error = Assert.Single(diagnostics.Items);
+        Assert.Equal("PATCH_SCHEMA", error.Code);
+        Assert.Equal("/arms/treatment/param_schema/new_param", error.Pointer);
+        Assert.False(arm.Valid);
+    }
+
+    [Fact]
+    public void AddOnlyNodePolicyStillRecordsTheAddedNode()
+    {
+        var policy = new PolicyArtifact { ExperimentPatchable = new() { "/params" }, ExperimentAddOnly = new() { "/nodes", "/columns" } };
+        var (arm, diagnostics) = Analyze("""{ "nodes": { "extra": { "order": 600, "op": "TopK@1", "config": { "score_col": "score.base", "k": 5 } } } }""", policy);
+
+        Assert.Empty(diagnostics.Items);
+        Assert.Equal(new[] { "extra" }, arm.AddedNodes);
+        Assert.Equal(new[] { "extra" }, arm.TouchedNodes);
+
+        var (_, modify) = Analyze("""{ "nodes": { "top_k": { "order": 450 } } }""", policy);
+        Assert.Equal("PATCH_ADD_ONLY", Assert.Single(modify.Items).Code);
+    }
+
+    [Fact]
+    public void SchemaSectionsStayAddOnlyEvenWhenThePolicyMakesThemPatchable()
+    {
+        var policy = new PolicyArtifact { ExperimentPatchable = new() { "/params", "/nodes", "/columns" } };
+        var (_, diagnostics) = Analyze("""{ "columns": { "score.base": { "type": "float64" } } }""", policy);
+
+        Assert.Equal("PATCH_ADD_ONLY", Assert.Single(diagnostics.Items).Code);
+    }
+
+    [Fact]
     public void WholeSectionReplacementIsRejected()
     {
         var (_, diagnostics) = Analyze("""{ "nodes": null }""");
