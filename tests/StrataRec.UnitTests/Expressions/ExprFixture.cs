@@ -234,6 +234,7 @@ internal sealed class ExprFixture
             TextColumn c => ScalarValue.FromText(c.Get(row)),
             VectorColumn c => ScalarValue.FromVector(c.Row(row).ToArray()),
             ListColumn<long> c => ScalarValue.FromInt64List(c.Get(row).ToArray()),
+            ListColumn<int> c => ScalarValue.FromInt64List(c.Get(row).ToArray().Select(v => (long)v).ToArray()),
             ListColumn<string> c => ScalarValue.FromStringList(c.Get(row).ToArray()),
             _ => throw new InvalidOperationException(),
         };

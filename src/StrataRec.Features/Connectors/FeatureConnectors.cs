@@ -38,8 +38,8 @@ public readonly record struct CompiledFieldBinding(string Field, int FieldIndex,
 /// actually wrote are ever read. A key absent from the response needs no call. Values written through
 /// <see cref="GetValues{T}"/> count once <see cref="SetValid"/> is called for that field and key; call it after the
 /// value is fully decoded, so a record that fails half-way never exposes an unwritten (pooled) value.
-/// <see cref="SetString"/>, <see cref="SetInt64List"/> and <see cref="SetStringList"/> mark their value present
-/// themselves. A connector reporting <see cref="FetchOutcome.Partial"/> therefore needs no extra bookkeeping.</para>
+/// <see cref="SetString"/>, <see cref="SetInt64List"/>, <see cref="SetInt32List"/> and <see cref="SetStringList"/> mark
+/// their value present themselves. A connector reporting <see cref="FetchOutcome.Partial"/> therefore needs no extra bookkeeping.</para>
 /// <para>A writer is used by exactly one connector call (each <c>max_batch</c> chunk gets its own), so implementations
 /// may write from any one thread at a time without synchronization.</para>
 /// </remarks>
@@ -64,7 +64,12 @@ public interface IFeatureBatchWriter
     /// <summary>Writes a <c>string</c> or <c>text</c> field value.</summary>
     void SetString(int fieldIndex, int keyIndex, string value);
 
+    /// <summary>Writes a <c>list&lt;int64&gt;</c> field value.</summary>
     void SetInt64List(int fieldIndex, int keyIndex, ReadOnlySpan<long> value);
+
+    /// <summary>Writes a <c>list&lt;int32&gt;</c> field value. The field's type decides the width: a connector decoding
+    /// int32 ids (tags, topics, token ids) writes them as they are, with no int64 copy.</summary>
+    void SetInt32List(int fieldIndex, int keyIndex, ReadOnlySpan<int> value);
 
     void SetStringList(int fieldIndex, int keyIndex, ReadOnlySpan<string> value);
 }

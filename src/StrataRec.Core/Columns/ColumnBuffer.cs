@@ -119,6 +119,7 @@ public abstract class ColumnBuffer
         StorageKind.String => new DictStringColumn(type, capacity, memory),
         StorageKind.Text => new TextColumn(type, capacity, memory),
         StorageKind.Vector => new VectorColumn(type, capacity, memory),
+        StorageKind.ListInt32 => new ListColumn<int>(type, capacity, memory),
         StorageKind.ListInt64 => new ListColumn<long>(type, capacity, memory),
         StorageKind.ListString => new ListColumn<string>(type, capacity, memory),
         _ => throw new ArgumentException($"Unsupported column type {type}.", nameof(type)),

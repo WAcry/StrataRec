@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using StrataRec.Core.Columns;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 
@@ -33,20 +34,26 @@ public static class ConfigValues
                     value = ScalarValue.FromBool(v.GetValue<bool>());
                     return true;
                 case StorageKind.Int32 or StorageKind.Int64 when node is JsonValue v && v.GetValueKind() == JsonValueKind.Number:
-                    if (v.TryGetValue<long>(out var l))
+                    long integer;
+                    if (!v.TryGetValue(out integer))
                     {
-                        value = ScalarValue.FromInt64(l);
-                        return true;
+                        var d0 = v.GetValue<double>();
+                        if (!(Math.Floor(d0) == d0 && Math.Abs(d0) < 9.2e18))
+                        {
+                            break;
+                        }
+
+                        integer = (long)d0;
                     }
 
-                    var d0 = v.GetValue<double>();
-                    if (Math.Floor(d0) == d0 && Math.Abs(d0) < 9.2e18)
+                    if (type.Kind == StorageKind.Int32 && !Int32Range.Fits(integer))
                     {
-                        value = ScalarValue.FromInt64((long)d0);
-                        return true;
+                        error = OutsideInt32(node, type);
+                        return false;
                     }
 
-                    break;
+                    value = ScalarValue.FromInt64(integer);
+                    return true;
                 case StorageKind.Float32 or StorageKind.Float64 when node is JsonValue v && v.GetValueKind() == JsonValueKind.Number:
                     value = ScalarValue.FromFloat64(v.GetValue<double>());
                     return true;
@@ -71,11 +78,18 @@ public static class ConfigValues
 
                     value = ScalarValue.FromVector(vec);
                     return true;
-                case StorageKind.ListInt64 when node is JsonArray a:
+                case StorageKind.ListInt64 or StorageKind.ListInt32 when node is JsonArray a:
+                    // A list<int32> value is held promoted, as int64 elements (like any int32 value); each element must
+                    // fit the storage it will be written to.
                     var longs = new long[a.Count];
                     for (var i = 0; i < longs.Length; i++)
                     {
                         longs[i] = a[i]!.GetValue<long>();
+                        if (type.Kind == StorageKind.ListInt32 && !Int32Range.Fits(longs[i]))
+                        {
+                            error = OutsideInt32(node, type, i);
+                            return false;
+                        }
                     }
 
                     value = ScalarValue.FromInt64List(longs);
@@ -103,4 +117,11 @@ public static class ConfigValues
 
     public static ScalarValue ToScalar(JsonNode? node, ColumnType type) =>
         TryToScalar(node, type, out var value, out var error) ? value : throw new FormatException(error);
+
+    /// <summary>The message for an integer that int32 storage cannot hold; callers prefix the JSON pointer.</summary>
+    private static string OutsideInt32(JsonNode node, ColumnType type, int element = -1) =>
+        (element < 0
+            ? $"{node.ToJsonString()} is outside the int32 range [{int.MinValue}, {int.MaxValue}] of {type}"
+            : $"element {element} of {node.ToJsonString()} is outside the int32 range [{int.MinValue}, {int.MaxValue}] of {type}") +
+        $"; use a value in range or declare the type as {type.Promoted()}";
 }

@@ -89,10 +89,10 @@ internal sealed class VectorizedExpression : CompiledExpression
         }
     }
 
-    public override void Evaluate(in EvalContext context, ReadOnlySpan<int> rows, ColumnBuffer destination)
+    public override void Evaluate(in EvalContext context, ReadOnlySpan<int> rows, ColumnBuffer destination, in ScalarValue outOfRange)
     {
         ArgumentNullException.ThrowIfNull(destination);
-        DestinationWriter.Validate(_type, destination);
+        DestinationWriter.Validate(_type, destination, outOfRange);
         if (rows.IsEmpty)
         {
             return;
@@ -100,11 +100,11 @@ internal sealed class VectorizedExpression : CompiledExpression
 
         if (_vector is null)
         {
-            DestinationWriter.Broadcast(Run(context), rows, destination);
+            DestinationWriter.Broadcast(Run(context), rows, destination, outOfRange, context.Counters);
             return;
         }
 
-        _vector.Evaluate(context, rows, destination);
+        _vector.Evaluate(context, rows, destination, outOfRange);
     }
 
     /// <summary>Copies <paramref name="value"/> when its array is one of the expression's own constants.</summary>

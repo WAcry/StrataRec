@@ -83,6 +83,13 @@ public sealed class PipelineResult
     /// <summary>Number of non-finite values replaced or masked at commit (metric <c>column_nonfinite_total</c>).</summary>
     public int NonFiniteValues { get; init; }
 
+    /// <summary>
+    /// Number of values that did not fit the int32 storage of an <c>int32</c> or <c>list&lt;int32&gt;</c> column or feature
+    /// and were replaced by its default or marked missing (metric <c>column_out_of_range_total</c>, design 4.3). Counted
+    /// where the value is written, so it includes writes of nodes that later failed.
+    /// </summary>
+    public long OutOfRangeValues { get; init; }
+
     /// <summary>Log batches of the request when <see cref="PipelineRequest.CaptureLogs"/> was set.</summary>
     public IReadOnlyList<Logging.LogBatch> LogBatches { get; set; } = Array.Empty<Logging.LogBatch>();
 }
@@ -189,7 +196,9 @@ public sealed class PipelineExecutor
             var table = new CandidateTable(plan.TableSchema, capacity, memory);
             var bindings = new OutputBindings(plan.Schema.Columns.Count, memory);
             var deadline = start + (long)(request.Deadline.TotalSeconds * Stopwatch.Frequency);
-            fetcher = new FeatureFetcher(plan.Features, table, context, bindings, parameters, memory, deadline);
+            // One set of counters per request: operator expressions and derived features count into the same totals.
+            var counters = new ExpressionCounters();
+            fetcher = new FeatureFetcher(plan.Features, table, context, bindings, parameters, memory, deadline, counters);
             state = new RequestState
             {
                 Plan = plan,
@@ -202,7 +211,7 @@ public sealed class PipelineExecutor
                 Context = context,
                 Params = parameters,
                 Features = fetcher,
-                Counters = new ExpressionCounters(),
+                Counters = counters,
                 DeadlineTimestamp = deadline,
                 Arms = request.Arms,
                 Variants = variants,
@@ -223,7 +232,7 @@ public sealed class PipelineExecutor
                 var error = await RunPositionAsync(state, i, cancellationToken).ConfigureAwait(false);
                 if (error is not null)
                 {
-                    result = Failed(plan, request, error, start, state.Outcomes, state.Triggered, state.NonFinite);
+                    result = Failed(plan, request, error, start, state.Outcomes, state.Triggered, state.NonFinite, state.Counters.OutOfRange);
                 }
             }
 
@@ -239,7 +248,7 @@ public sealed class PipelineExecutor
             var reason = ex is OperationCanceledException ? "cancelled by the caller" : "aborted: " + ex.Message;
             try
             {
-                PublishLogs(state, request, Failed(plan, request, reason, start, state.Outcomes, state.Triggered, state.NonFinite), returned: false);
+                PublishLogs(state, request, Failed(plan, request, reason, start, state.Outcomes, state.Triggered, state.NonFinite, state.Counters.OutOfRange), returned: false);
             }
             catch (Exception publishError)
             {
@@ -704,6 +713,7 @@ public sealed class PipelineExecutor
             ColumnProducers = producers,
             ElapsedMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds,
             NonFiniteValues = state.NonFinite + state.Features.NonFiniteReplaced,
+            OutOfRangeValues = state.Counters.OutOfRange,
         };
     }
 
@@ -791,7 +801,8 @@ public sealed class PipelineExecutor
     }
 
     private static PipelineResult Failed(
-        ExecutionPlan plan, PipelineRequest request, string error, long start, IReadOnlyList<NodeOutcome> outcomes, bool[] triggered, int nonFinite = 0) =>
+        ExecutionPlan plan, PipelineRequest request, string error, long start, IReadOnlyList<NodeOutcome> outcomes, bool[] triggered, int nonFinite = 0,
+        long outOfRange = 0) =>
         new()
         {
             Succeeded = false,
@@ -803,6 +814,7 @@ public sealed class PipelineExecutor
             ColumnProducers = new Dictionary<string, string>(),
             ElapsedMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds,
             NonFiniteValues = nonFinite,
+            OutOfRangeValues = outOfRange,
         };
 
     private static List<string> AssignedArmIds(ExecutionPlan plan, in RequestArms arms)

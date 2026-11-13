@@ -1,4 +1,5 @@
 using System.Globalization;
+using StrataRec.Core.Columns;
 using StrataRec.Core.Types;
 
 namespace StrataRec.Core.Values;
@@ -6,8 +7,12 @@ namespace StrataRec.Core.Values;
 /// <summary>
 /// A single request-level value: a request input, a context feature, a parameter or a constant.
 /// <para>
-/// Numeric values are stored promoted (int64 / float64). A value with <see cref="IsMissing"/> = true represents
-/// a legitimately absent value of a nullable type (design 6.7, layer 3).
+/// Numeric values are stored promoted (int64 / float64), and so are integer lists: a <c>list&lt;int32&gt;</c> value is a
+/// <c>long[]</c> of kind <see cref="StorageKind.ListInt64"/>, exactly as an <c>int32</c> value is an int64. The kinds
+/// <see cref="StorageKind.Int32"/>, <see cref="StorageKind.Float32"/> and <see cref="StorageKind.ListInt32"/> therefore
+/// never occur here; storage narrowing happens when a value is written into a column, which checks the int32 range
+/// (design 4.3). A value with <see cref="IsMissing"/> = true represents a legitimately absent value of a nullable type
+/// (design 6.7, layer 3).
 /// </para>
 /// </summary>
 public readonly struct ScalarValue : IEquatable<ScalarValue>
@@ -70,7 +75,8 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
 
     public string[] AsStringList() => Kind == StorageKind.ListString ? (string[])_ref! : throw WrongKind(StorageKind.ListString);
 
-    /// <summary>Converts to the given (promoted) type; returns false when the value cannot represent it.</summary>
+    /// <summary>Converts to the given type's promoted form; returns false when the value cannot represent it, including an
+    /// integer (or list element) outside the int32 range for <c>int32</c> and <c>list&lt;int32&gt;</c> targets.</summary>
     public bool TryConvert(ColumnType target, out ScalarValue converted)
     {
         converted = this;
@@ -82,7 +88,13 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
         var kind = target.Promoted().Kind;
         if (kind == Kind)
         {
-            return kind != StorageKind.Vector || target.Dimension == 0 || AsVector().Length == target.Dimension;
+            return target.Kind switch
+            {
+                StorageKind.Vector => target.Dimension == 0 || AsVector().Length == target.Dimension,
+                StorageKind.Int32 => Int32Range.Fits(_bits),
+                StorageKind.ListInt32 => Int32Range.AllFit(AsInt64List()),
+                _ => true,
+            };
         }
 
         switch (kind)
@@ -93,7 +105,7 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
             case StorageKind.Int64 when Kind == StorageKind.Float64:
                 var d = AsFloat64();
                 const double TwoPow63 = 9223372036854775808.0;
-                if (Math.Floor(d) == d && d >= -TwoPow63 && d < TwoPow63)
+                if (Math.Floor(d) == d && d >= -TwoPow63 && d < TwoPow63 && (target.Kind != StorageKind.Int32 || Int32Range.Fits((long)d)))
                 {
                     converted = FromInt64((long)d);
                     return true;

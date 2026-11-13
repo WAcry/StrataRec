@@ -45,6 +45,8 @@ public class DifferentialTests(ITestOutputHelper output)
         ("col.v1", "vec<float32,4>?", K.Vec),
         ("col.v2", "vec<float32,4>", K.Vec),
         ("col.li", "list<int64>?", K.ListInt),
+        ("col.li32", "list<int32>?", K.ListInt),
+        ("col.lj32", "list<int32>", K.ListInt),
         ("col.ls", "list<string>", K.ListStr),
     };
 
@@ -58,6 +60,7 @@ public class DifferentialTests(ITestOutputHelper output)
         ("ctx.s", "string?", K.Str),
         ("ctx.v", "vec<float32,4>?", K.Vec),
         ("ctx.li", "list<int64>", K.ListInt),
+        ("ctx.li32", "list<int32>?", K.ListInt),
         ("ctx.ls", "list<string>?", K.ListStr),
         ("ctx.t", "text?", K.Text),
         ("param.w", "float64", K.Float),
@@ -152,8 +155,15 @@ public class DifferentialTests(ITestOutputHelper output)
             // Broadcast through Evaluate as well.
             if (kind is K.Float or K.Int or K.Bool)
             {
-                var d = ColumnBuffer.Create(expression.ResultType.AsNullable(), f.Capacity, f.Memory);
+                // An int value broadcast into int32 storage must be missing on every row when it does not fit.
+                var narrow = kind == K.Int && random.Next(2) == 0;
+                var d = ColumnBuffer.Create(narrow ? ColumnType.Int32.AsNullable() : expression.ResultType.AsNullable(), f.Capacity, f.Memory);
                 expression.Evaluate(f.Context, f.Table.Rows.Order, d);
+                if (narrow && !ColumnValues.FitsStorage(expected, ColumnType.Int32))
+                {
+                    expected = ScalarValue.Missing;
+                }
+
                 foreach (var r in f.Table.Rows.Order)
                 {
                     if (!Same(expected, ExprFixture.Read(d, r)))
@@ -176,7 +186,12 @@ public class DifferentialTests(ITestOutputHelper output)
             rows = live.Take(1).ToArray();
         }
 
-        var destination = ColumnBuffer.Create(expression.ResultType.AsNullable(), f.Capacity, f.Memory);
+        // Int and int-list results sometimes go to int32 storage: values outside the int32 range (int results reach
+        // ±2^63) must then be missing, never wrapped (design 4.3).
+        var resultType = expression.ResultType.AsNullable();
+        var narrow = resultType.Kind is StorageKind.Int64 or StorageKind.ListInt64 && random.Next(3) == 0;
+        var destinationType = !narrow ? resultType : resultType.Kind == StorageKind.Int64 ? ColumnType.Int32.AsNullable() : ColumnType.ListInt32.AsNullable();
+        var destination = ColumnBuffer.Create(destinationType, f.Capacity, f.Memory);
         try
         {
             expression.Evaluate(f.Context, rows, destination);
@@ -198,6 +213,11 @@ public class DifferentialTests(ITestOutputHelper output)
             {
                 failures.Add($"[reference] {expression.Source} @row {r}: {ex.Message}");
                 return;
+            }
+
+            if (narrow && !ColumnValues.FitsStorage(expected, destinationType))
+            {
+                expected = ScalarValue.Missing;
             }
 
             var actual = ExprFixture.Read(destination, r);
@@ -321,6 +341,7 @@ public class DifferentialTests(ITestOutputHelper output)
             case TextColumn c: c.Set(row, Texts[random.Next(Texts.Length)]); break;
             case VectorColumn c: c.Set(row, RandomVector(random, garbage)); break;
             case ListColumn<long> c: c.Set(row, RandomLongs(random)); break;
+            case ListColumn<int> c: c.Set(row, RandomLongs(random).Select(v => (int)v).ToArray()); break;
             case ListColumn<string> c: c.Set(row, RandomStrings(random)); break;
         }
 

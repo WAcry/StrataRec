@@ -21,11 +21,19 @@ public enum StorageKind : byte
     ListInt64,
     /// <summary>Variable-length <c>list&lt;string&gt;</c>.</summary>
     ListString,
+
+    /// <summary>
+    /// Variable-length <c>list&lt;int32&gt;</c>: half the memory of <c>list&lt;int64&gt;</c> for id lists (tags, topics,
+    /// token ids). Like <see cref="Int32"/> it is a storage type only; expressions see it as <c>list&lt;int64&gt;</c>.
+    /// </summary>
+    /// <remarks>Appended after the existing kinds so their numeric values do not change.</remarks>
+    ListInt32,
 }
 
 /// <summary>
 /// A storage type plus nullability, e.g. <c>float32?</c>, <c>vec&lt;float32,64&gt;</c>, <c>list&lt;int64&gt;</c>.
-/// Expression evaluation works on the <see cref="Promoted"/> form (int32→int64, float32→float64).
+/// Expression evaluation works on the <see cref="Promoted"/> form (int32→int64, float32→float64,
+/// list&lt;int32&gt;→list&lt;int64&gt;).
 /// </summary>
 public readonly struct ColumnType : IEquatable<ColumnType>
 {
@@ -56,6 +64,10 @@ public readonly struct ColumnType : IEquatable<ColumnType>
 
     public bool IsFloat => Kind is StorageKind.Float32 or StorageKind.Float64;
 
+    /// <summary>True for storage that holds int32 values (<c>int32</c>, <c>list&lt;int32&gt;</c>): writing an int64 into it
+    /// narrows, and a value outside the int32 range cannot be stored (design 4.3).</summary>
+    public bool IsInt32Storage => Kind is StorageKind.Int32 or StorageKind.ListInt32;
+
     public static ColumnType Bool => new(StorageKind.Bool);
 
     public static ColumnType Int32 => new(StorageKind.Int32);
@@ -72,6 +84,8 @@ public readonly struct ColumnType : IEquatable<ColumnType>
 
     public static ColumnType ListInt64 => new(StorageKind.ListInt64);
 
+    public static ColumnType ListInt32 => new(StorageKind.ListInt32);
+
     public static ColumnType ListString => new(StorageKind.ListString);
 
     public static ColumnType Vector(int dimension) => new(StorageKind.Vector, false, dimension);
@@ -82,11 +96,13 @@ public readonly struct ColumnType : IEquatable<ColumnType>
 
     public ColumnType WithNullable(bool nullable) => new(Kind, nullable, Dimension);
 
-    /// <summary>The expression-level type: int32→int64, float32→float64; other kinds unchanged.</summary>
+    /// <summary>The expression-level type: int32→int64, float32→float64, list&lt;int32&gt;→list&lt;int64&gt;; other kinds
+    /// unchanged.</summary>
     public ColumnType Promoted() => Kind switch
     {
         StorageKind.Int32 => new ColumnType(StorageKind.Int64, Nullable),
         StorageKind.Float32 => new ColumnType(StorageKind.Float64, Nullable),
+        StorageKind.ListInt32 => new ColumnType(StorageKind.ListInt64, Nullable),
         _ => this,
     };
 
@@ -126,6 +142,7 @@ public readonly struct ColumnType : IEquatable<ColumnType>
             case "float64": type = new(StorageKind.Float64, nullable); break;
             case "string": type = new(StorageKind.String, nullable); break;
             case "text": type = new(StorageKind.Text, nullable); break;
+            case "list<int32>": type = new(StorageKind.ListInt32, nullable); break;
             case "list<int64>": type = new(StorageKind.ListInt64, nullable); break;
             case "list<string>": type = new(StorageKind.ListString, nullable); break;
             default:
@@ -143,7 +160,7 @@ public readonly struct ColumnType : IEquatable<ColumnType>
                 }
 
                 error = $"Unknown type '{text}'. Expected one of: bool, int32, int64, float32, float64, string, text, " +
-                        "vec<float32,N>, list<int64>, list<string>, optionally followed by '?'.";
+                        "vec<float32,N>, list<int32>, list<int64>, list<string>, optionally followed by '?'.";
                 return false;
         }
 
@@ -163,6 +180,7 @@ public readonly struct ColumnType : IEquatable<ColumnType>
             StorageKind.String => "string",
             StorageKind.Text => "text",
             StorageKind.Vector => Dimension > 0 ? $"vec<float32,{Dimension}>" : "vec",
+            StorageKind.ListInt32 => "list<int32>",
             StorageKind.ListInt64 => "list<int64>",
             StorageKind.ListString => "list<string>",
             _ => "<unknown>",

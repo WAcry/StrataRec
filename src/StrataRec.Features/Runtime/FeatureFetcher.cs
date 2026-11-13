@@ -59,9 +59,12 @@ public sealed class FeatureFetcher
     private readonly string?[] _errors;
     private readonly List<PendingFetch> _pending = new();
     private readonly List<Task> _io = new(); // guarded by lock (_io): connector completions and the context fetch
+    private readonly ExpressionCounters _counters;
     private Task? _contextTask;
     private int _nonFiniteReplaced;
 
+    /// <param name="counters">The request's expression counters, shared with the operators' evaluations so a request
+    /// reports one total per event; null gives the fetcher counters of its own.</param>
     public FeatureFetcher(
         FeaturePlan plan,
         CandidateTable table,
@@ -69,7 +72,8 @@ public sealed class FeatureFetcher
         OutputBindings bindings,
         ScalarValue[] parameters,
         RequestMemory memory,
-        long deadlineTimestamp)
+        long deadlineTimestamp,
+        ExpressionCounters? counters = null)
     {
         _plan = plan;
         _table = table;
@@ -78,6 +82,7 @@ public sealed class FeatureFetcher
         _params = parameters;
         _memory = memory;
         _deadlineTimestamp = deadlineTimestamp;
+        _counters = counters ?? new ExpressionCounters();
         _state = new FeatureState[plan.Features.Count];
         _errors = new string?[plan.Features.Count];
     }
@@ -87,6 +92,13 @@ public sealed class FeatureFetcher
     /// feature's default or marked missing (design 4.3, metric <c>column_nonfinite_total</c>).
     /// </summary>
     public int NonFiniteReplaced => Volatile.Read(ref _nonFiniteReplaced);
+
+    /// <summary>
+    /// Counters of derived-feature evaluations. <see cref="ExpressionCounters.OutOfRange"/> includes derived values
+    /// (candidate or context) that did not fit an <c>int32</c> or <c>list&lt;int32&gt;</c> feature and were replaced by its
+    /// default or marked missing (design 4.3, metric <c>column_out_of_range_total</c>).
+    /// </summary>
+    public ExpressionCounters Counters => _counters;
 
     public FeatureState GetState(int feature) => _state[feature];
 
@@ -692,7 +704,9 @@ public sealed class FeatureFetcher
         var span = buffer.AsSpan(0, count);
         try
         {
-            feature.Expression!.Evaluate(new EvalContext(_table, _bindings, _context, _params), span, column);
+            // A value that does not fit int32 storage takes the default (or becomes missing) at the write and is
+            // counted there (design 4.3): unlike NaN, it cannot be stored and sanitized afterwards.
+            feature.Expression!.Evaluate(new EvalContext(_table, _bindings, _context, _params, _counters), span, column, DefaultOrMissing(definition));
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -831,7 +845,7 @@ public sealed class FeatureFetcher
                 ScalarValue derived;
                 try
                 {
-                    derived = info.Expression!.EvaluateScalar(new EvalContext(null, null, _context, _params));
+                    derived = info.Expression!.EvaluateScalar(new EvalContext(null, null, _context, _params, _counters));
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
@@ -881,9 +895,12 @@ public sealed class FeatureFetcher
     }
 
     /// <summary>
-    /// Publishes a context feature value: NaN/±∞ is counted and replaced by the default or missing (design 4.3), and a
-    /// missing value takes the default.
+    /// Publishes a context feature value: NaN/±∞, and an integer (or list element) outside the int32 range of an
+    /// <c>int32</c> or <c>list&lt;int32&gt;</c> feature, are counted and replaced by the default or missing (design 4.3), and
+    /// a missing value takes the default.
     /// </summary>
+    /// <remarks>Context values are held promoted, so an out-of-range value would not wrap here; it is still replaced,
+    /// so a feature's value always lies in its declared type wherever it is read, logged or written.</remarks>
     private void StoreContext(FeatureRuntimeInfo info, ScalarValue value)
     {
         var definition = info.Definition;
@@ -896,6 +913,18 @@ public sealed class FeatureFetcher
                 _state[info.Index] = FeatureState.Failed;
                 _errors[info.Index] = $"feature '{definition.Name}' produced a non-finite value but is non-nullable and declares no default";
             }
+        }
+        else if (!value.IsMissing && !ColumnValues.FitsStorage(value, info.Type))
+        {
+            _counters.AddOutOfRange(1);
+            if (!definition.HasDefault && !info.Type.Nullable)
+            {
+                _state[info.Index] = FeatureState.Failed;
+                _errors[info.Index] = $"feature '{definition.Name}' produced {value}, outside the int32 range of its {info.Type} type, " +
+                    "but is non-nullable and declares no default";
+            }
+
+            value = ScalarValue.Missing;
         }
 
         if (value.IsMissing && definition.HasDefault)

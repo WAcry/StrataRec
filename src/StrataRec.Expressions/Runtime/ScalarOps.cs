@@ -290,6 +290,57 @@ internal static class ListOps
         return count;
     }
 
+    // int32 list storage (design 4.3: list<int32> is a storage type, its elements mean int64 values). These overloads
+    // compare in place, without widening a list into a temporary buffer.
+
+    /// <summary>int64 membership in int32 storage: a value outside the int32 range cannot be an element.</summary>
+    public static bool Contains(ReadOnlySpan<int> list, long value) => Int32Range.Fits(value) && list.Contains((int)value);
+
+    /// <inheritdoc cref="Overlap(ReadOnlySpan{long}, ReadOnlySpan{long})"/>
+    public static long Overlap(ReadOnlySpan<int> a, ReadOnlySpan<int> b)
+    {
+        long count = 0;
+        foreach (var x in a)
+        {
+            if (b.Contains(x))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    /// <inheritdoc cref="Overlap(ReadOnlySpan{long}, ReadOnlySpan{long})"/>
+    public static long Overlap(ReadOnlySpan<int> a, ReadOnlySpan<long> b)
+    {
+        long count = 0;
+        foreach (var x in a)
+        {
+            if (b.Contains(x))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    /// <inheritdoc cref="Overlap(ReadOnlySpan{long}, ReadOnlySpan{long})"/>
+    public static long Overlap(ReadOnlySpan<long> a, ReadOnlySpan<int> b)
+    {
+        long count = 0;
+        foreach (var x in a)
+        {
+            if (Contains(b, x))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
     public static long Overlap(ReadOnlySpan<string> a, ReadOnlySpan<string> b)
     {
         long count = 0;
@@ -462,6 +513,7 @@ internal static class ValueAccess
             (TypeKind.Text, TextColumn c) => ScalarValue.FromText(c.Get(row)),
             (TypeKind.Vector, VectorColumn c) => ScalarValue.FromVector(c.Row(row).ToArray()),
             (TypeKind.ListInt, ListColumn<long> c) => ScalarValue.FromInt64List(c.Get(row).ToArray()),
+            (TypeKind.ListInt, ListColumn<int> c) => ScalarValue.FromInt64List(Int32Range.ToInt64Array(c.Get(row))),
             (TypeKind.ListString, ListColumn<string> c) => ScalarValue.FromStringList(c.Get(row).ToArray()),
             _ => throw ColumnTypeMismatch(symbol, buffer),
         };

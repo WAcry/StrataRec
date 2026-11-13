@@ -423,6 +423,7 @@ internal sealed class ColumnInstr(Symbol symbol, ExprType type) : Instr(type)
 
             case (TypeKind.Vector, VectorColumn):
             case (TypeKind.ListInt, ListColumn<long>):
+            case (TypeKind.ListInt, ListColumn<int>): // list<int32> storage: read in place, see Lanes.IntList
             case (TypeKind.ListString, ListColumn<string>):
                 loc.Source = SourceKind.Column;
                 loc.SourceRef = buffer;
