@@ -142,6 +142,20 @@ public class LocalBindingTests
         Assert.Contains("'uri'", several[1].Hint);
     }
 
+    [Theory]
+    [InlineData("file://%")]
+    [InlineData("file://[broken")]
+    [InlineData("snap\u0000shot")]
+    public void Bootstrap_WithAMalformedUri_IsAnErrorAtTheUri_WithAHint(string uri)
+    {
+        var json = JsonSerializer.Serialize(uri);
+        var error = Assert.Single(Errors(Build(Binding($$"""{ "mode": "local", "max_bytes": "1MiB", "bootstrap": { "source": "snapshot_files@1", "uri": {{json}} } }"""))));
+
+        Assert.Equal(("UPDATE_SOURCE_CONFIG", "/sources/item_store/bootstrap/uri"), (error.Code, error.Pointer));
+        Assert.Contains("file://", error.Hint);
+        Assert.Contains("local path", error.Hint);
+    }
+
     [Fact]
     public void UnknownMode_IsAnErrorAtTheMode()
     {

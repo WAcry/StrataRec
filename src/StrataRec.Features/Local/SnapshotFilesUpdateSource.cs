@@ -51,12 +51,13 @@ public sealed class SnapshotFilesUpdateSource : IFeatureUpdateSource
             throw new ArgumentOutOfRangeException(nameof(reload), reload, "The reload period must be positive.");
         }
 
-        ManifestPath = manifestPath;
+        ManifestPath = Path.GetFullPath(manifestPath); // a relative path means the current directory now, not when it runs
         Reload = reload;
     }
 
     public string SourceType => Type;
 
+    /// <summary>The manifest's absolute path, fixed when the source is created.</summary>
     public string ManifestPath { get; }
 
     /// <summary>How often to look for a new snapshot; null to load once.</summary>
@@ -205,24 +206,33 @@ public sealed class SnapshotFilesUpdateSourceFactory : IFeatureUpdateSourceFacto
         return period;
     }
 
+    /// <summary>
+    /// The manifest's absolute path, fixed now: a relative path resolves against <paramref name="baseDirectory"/>, or the
+    /// current directory as it is now, never as it is when the source runs. The syntax of <c>uri</c> is checked here, so
+    /// a malformed one is a configuration error at <c>/uri</c> (found by <c>validate</c>, which reads no snapshot file).
+    /// </summary>
     private static string ResolveManifest(string uri, string? baseDirectory, string location)
     {
-        string path;
-        if (uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
-        {
-            path = new Uri(uri).LocalPath;
-        }
-        else if (uri.Contains("://", StringComparison.Ordinal))
+        if (!uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase) && uri.Contains("://", StringComparison.Ordinal))
         {
             throw new FeatureUpdateException(location, "/uri", $"'{uri}' is not a local path; {SnapshotFilesUpdateSource.Type} reads local files.",
                 "sync the snapshot to a local directory first, or register an update source for the object store");
         }
-        else
-        {
-            path = Path.IsPathRooted(uri) || baseDirectory is null ? uri : Path.Combine(baseDirectory, uri);
-        }
 
-        return path.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ? path : Path.Combine(path, SnapshotFilesUpdateSource.ManifestFileName);
+        try
+        {
+            var path = uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase)
+                ? new Uri(uri).LocalPath
+                : Path.Combine(baseDirectory ?? Directory.GetCurrentDirectory(), uri); // a rooted uri stays as it is
+            var manifest = path.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ? path : Path.Combine(path, SnapshotFilesUpdateSource.ManifestFileName);
+            return Path.GetFullPath(manifest);
+        }
+        catch (Exception ex) when (ex is UriFormatException or ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            throw new FeatureUpdateException(location, "/uri", $"'{uri}' is not a valid local path or file:// URI ({ex.Message})",
+                "give the snapshot directory or its snapshot.json as a local path (absolute, or relative to the configuration directory), " +
+                "or as a file:// URI such as file:///var/lib/snapshots/authors", ex);
+        }
     }
 }
 

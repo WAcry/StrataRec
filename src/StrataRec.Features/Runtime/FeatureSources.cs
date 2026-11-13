@@ -199,11 +199,12 @@ internal sealed class FeatureSourceResolver
             return null;
         }
 
-        // One update source per table: a source may be stateful (a stream consumer), so tables never share one.
-        IFeatureUpdateSource bootstrap;
+        // One update source per table: a source may be stateful (a stream consumer), so tables never share one. The spec
+        // creates it, with the base directory it pins for the identity too.
+        LocalTableSpec spec;
         try
         {
-            bootstrap = supply.BootstrapFactory!.Create(supply.Name, supply.Binding.Bootstrap!.Settings, _baseDirectory);
+            spec = LocalTableSpec.Create(schema, supply.Options!, supply.Binding, supply.BootstrapFactory!, supply.Name, _artifact, pointer, _baseDirectory);
         }
         catch (FeatureUpdateException ex)
         {
@@ -211,7 +212,6 @@ internal sealed class FeatureSourceResolver
             return null;
         }
 
-        var spec = new LocalTableSpec(schema, supply.Options!, supply.Binding, bootstrap, _artifact, pointer, _baseDirectory);
         LocalFeatureTable table;
         try
         {
@@ -398,7 +398,7 @@ internal sealed class FeatureSourceResolver
         {
             try
             {
-                _ = factory.Create(sourceName, binding.Bootstrap!.Settings, _baseDirectory);
+                _ = factory.Create(sourceName, binding.Bootstrap!.Settings, LocalTableSpec.PinBaseDirectory(_baseDirectory));
             }
             catch (FeatureUpdateException ex)
             {

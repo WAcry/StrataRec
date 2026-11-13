@@ -309,7 +309,8 @@ public class LocalTableHostTests
         var binding = ArtifactSerializer.Deserialize<FeatureSourceBinding>(
             $$"""{ "mode": "local", "max_bytes": "{{maxBytes}}", "bootstrap": { "source": "scripted@1" } }""");
         ByteSize.TryParse(maxBytes, out var bytes);
-        return new LocalTableSpec(schema, new LocalFeatureTableOptions { MaxBytes = bytes }, binding, source, "bindings:test", "/sources/item_store", null);
+        return LocalTableSpec.Create(
+            schema, new LocalFeatureTableOptions { MaxBytes = bytes }, binding, new FixedSource(source), "item_store", "bindings:test", "/sources/item_store", null);
     }
 
     /// <summary>A run that loads item 1 with <paramref name="score"/> in one reload and returns.</summary>
@@ -351,6 +352,14 @@ public class LocalTableHostTests
         {
             returned.TrySetResult();
         }
+    }
+
+    /// <summary>A factory that hands out one given source.</summary>
+    private sealed class FixedSource(IFeatureUpdateSource source) : IFeatureUpdateSourceFactory
+    {
+        public string SourceType => source.SourceType;
+
+        public IFeatureUpdateSource Create(string sourceName, IReadOnlyDictionary<string, System.Text.Json.JsonElement> settings, string? baseDirectory) => source;
     }
 
     /// <summary>Runs its scripted runs in order (the last one again if it is run more often); counts runs.</summary>
