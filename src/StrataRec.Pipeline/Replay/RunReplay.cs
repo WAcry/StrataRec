@@ -552,8 +552,11 @@ public sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// Writes a recorded value into a staging field. The value was decoded with its recorded type; a field whose type
-    /// changed takes it only when it converts without loss of meaning (numeric widening, string ↔ text).
+    /// Writes a recorded value into a staging field; false (nothing written) when it does not fit. The value was decoded
+    /// with its recorded type; a field whose type changed takes it only when it converts without loss of meaning: numeric
+    /// widening, rounding to float32 as the source itself would, string ↔ text. A value outside the new type's range (an
+    /// integer beyond int32, a finite number beyond float32) does not fit: storing it would publish a wrapped value or an
+    /// infinity the recording never had. Exact and synthesized calls both write through here, so they apply one rule.
     /// </summary>
     private static bool TryWrite(IFeatureBatchWriter writer, int field, int key, ColumnType type, in ScalarValue value)
     {
@@ -568,7 +571,7 @@ public sealed class RunReplay : IFeatureCallHook
             case StorageKind.Int64 when value.Kind == StorageKind.Int64:
                 writer.GetValues<long>(field).Span[key] = value.AsInt64();
                 break;
-            case StorageKind.Float32 when value.Kind is StorageKind.Float64 or StorageKind.Int64:
+            case StorageKind.Float32 when value.Kind is StorageKind.Float64 or StorageKind.Int64 && FitsFloat32(value.AsFloat64()):
                 writer.GetValues<float>(field).Span[key] = (float)value.AsFloat64();
                 break;
             case StorageKind.Float64 when value.Kind is StorageKind.Float64 or StorageKind.Int64:
@@ -603,6 +606,9 @@ public sealed class RunReplay : IFeatureCallHook
         writer.SetValid(field, key);
         return true;
     }
+
+    /// <summary>NaN and ±∞ stay what they are; a finite value must not overflow to an infinity.</summary>
+    private static bool FitsFloat32(double value) => !double.IsFinite(value) || float.IsFinite((float)value);
 
     private static RowKey RowKeyOf(KeyShape shape, in EntityKey context, ReadOnlySpan<EntityKey> keys, int row) => shape switch
     {
