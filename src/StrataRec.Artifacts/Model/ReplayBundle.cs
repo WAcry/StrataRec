@@ -22,7 +22,7 @@ namespace StrataRec.Artifacts.Model;
 public sealed class ReplayBundle
 {
     /// <summary>The format this build reads and writes.</summary>
-    /// <remarks>Version 2 keeps non-finite values (version 1 wrote them as null).</remarks>
+    /// <remarks>Version 2 keeps non-finite values (version 1 wrote them as null) and digests model inputs with their element type and shape.</remarks>
     public const string CurrentFormat = "stratarec.replay_bundle/2";
 
     [Description("Format and version: \"stratarec.replay_bundle/2\".")]
@@ -263,7 +263,7 @@ public sealed class ReplayModelCall
     [Description("Entity id of each batch row, when the operator scored rows; outputs are matched by it on replay.")]
     public JsonElement? Keys { get; init; }
 
-    [Description("XXH3 of each row's inputs (one per key), or of the whole call when there are no keys; hex.")]
+    [Description("XXH3 of each row's inputs (one per key): the row's slice of inputs whose leading dimension is the batch size and every other input whole, each with its name, element type and shape (batch dimension left out); or of the whole call when there are no keys. Hex.")]
     public List<string> InputDigests { get; init; } = new();
 
     [Description("Output → flat float32 values, batch_size × values per row; NaN and ±∞ are the strings \"NaN\", \"Infinity\" and \"-Infinity\".")]

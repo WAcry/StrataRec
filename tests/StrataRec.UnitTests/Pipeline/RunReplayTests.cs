@@ -6,6 +6,7 @@ using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Features.Connectors;
 using StrataRec.Features.Runtime;
+using StrataRec.Models;
 using StrataRec.Pipeline.Replay;
 using StrataRec.UnitTests.Features;
 
@@ -116,6 +117,96 @@ public sealed class RunReplayTests
         Assert.False(ownStatus.Succeeded); // the recorded timeout is replayed for the node that had it
         var gap = Assert.Single(replay.Gaps);
         Assert.Equal(("candidate_source", "not_recorded", "added"), (gap.Kind, gap.Reason, Assert.Single(gap.Examples)));
+    }
+
+    [Fact]
+    public void ASharedModelInput_IsInEveryRowsDigest_Whole()
+    {
+        // Batch of 2 with a shared tensor of 4 values: its length divides by the batch size, but its leading dimension is
+        // not the batch, so it is not split into rows. Changing half of it changes both rows' inputs.
+        var run = Run();
+        run.ModelCalls.Add(ModelCallOf(0, Call(2, NamedInput.FromFloat32("global", new[] { 4 }, new float[] { 10, 20, 30, 40 })), new long[] { 1, 2 }, 100, 101));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var (status, scores) = Invoke(replay, Call(2, NamedInput.FromFloat32("global", new[] { 4 }, new float[] { 10, 20, 300, 400 })), 1, 2);
+
+        Assert.True(status.Succeeded);
+        Assert.All(scores, s => Assert.True(float.IsNaN(s)));
+        var gap = Assert.Single(replay.Gaps);
+        Assert.Equal(("model", "inputs_changed", 2), (gap.Kind, gap.Reason, gap.Count));
+    }
+
+    [Fact]
+    public void ModelInputDigests_IncludeShapeAndElementType_ButNotTheBatchDimension()
+    {
+        var flat = new float[] { 1, 2, 3, 4, 5, 6 };
+        Assert.NotEqual(RowDigests(Call(1, NamedInput.FromFloat32("x", new[] { 1, 2, 3 }, flat))), RowDigests(Call(1, NamedInput.FromFloat32("x", new[] { 1, 6 }, flat))));
+        Assert.NotEqual(RowDigests(Call(1, NamedInput.FromFloat32("x", new[] { 1, 1 }, new float[] { 7 }))),
+            RowDigests(Call(1, NamedInput.FromInt64("x", new[] { 1, 1 }, new long[] { 7 }))));
+
+        // Rows of a [batch, 2] tensor keep their digests in another batch: row 1 of a batch of 3 is row 0 of a batch of 1.
+        var batchOfThree = RowDigests(Call(3, NamedInput.FromFloat32("x", new[] { 3, 2 }, new float[] { 1, 2, 3, 4, 5, 6 }), NamedInput.FromText("prompt", "p")));
+        var batchOfOne = RowDigests(Call(1, NamedInput.FromFloat32("x", new[] { 1, 2 }, new float[] { 3, 4 }), NamedInput.FromText("prompt", "p")));
+        Assert.Equal(batchOfThree[1], batchOfOne[0]);
+        Assert.Equal(3, batchOfThree.Distinct().Count());
+    }
+
+    [Fact]
+    public void ARebatchedModelCall_TakesEachRowFromTheRecordingWithTheSameEntityAndInputs()
+    {
+        // Entity 1 was scored twice with different inputs; the later recording is the one with the inputs the replay has.
+        var run = Run();
+        run.ModelCalls.Add(ModelCallOf(0, Call(1, NamedInput.FromFloat32("x", new[] { 1 }, new float[] { 10 })), new long[] { 1 }, 100));
+        run.ModelCalls.Add(ModelCallOf(1, Call(1, NamedInput.FromFloat32("x", new[] { 1 }, new float[] { 20 })), new long[] { 1 }, 200));
+        run.ModelCalls.Add(ModelCallOf(2, Call(1, NamedInput.FromFloat32("x", new[] { 1 }, new float[] { 30 })), new long[] { 2 }, 300));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var (status, scores) = Invoke(replay, Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new float[] { 20, 30 })), 1, 2);
+        var (_, changed) = Invoke(replay, Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new float[] { 40, 30 })), 1, 3);
+
+        Assert.True(status.Succeeded);
+        Assert.Equal(new float[] { 200, 300 }, scores);
+        Assert.True(float.IsNaN(changed[0]) && float.IsNaN(changed[1]));
+        Assert.Equal(new[] { ("inputs_changed", "1"), ("not_recorded", "3") }, replay.Gaps.Select(g => (g.Reason, Assert.Single(g.Examples))));
+    }
+
+    internal static ModelCall Call(int batch, params NamedInput[] inputs) => new() { Model = "m", Inputs = inputs, BatchSize = batch };
+
+    internal static string[] RowDigests(ModelCall call)
+    {
+        var order = ModelInputDigest.NameOrder(call);
+        return Enumerable.Range(0, call.BatchSize).Select(r => ReplayJson.Hex(ModelInputDigest.Row(call, order, r))).ToArray();
+    }
+
+    /// <summary>A successful recorded call of model <c>m</c> scoring <paramref name="keys"/>, one <c>score</c> per row.</summary>
+    internal static ReplayModelCall ModelCallOf(int seq, ModelCall call, long[] keys, params float[] scores) => new()
+    {
+        Seq = seq,
+        Node = "ranker",
+        Model = "m",
+        BatchSize = call.BatchSize,
+        Status = "ok",
+        Keys = Json("[" + string.Join(",", keys) + "]"),
+        InputDigests = RowDigests(call).ToList(),
+        Outputs = new Dictionary<string, JsonElement> { ["score"] = JsonSerializer.SerializeToElement(scores) },
+    };
+
+    internal static (ModelStatus Status, float[] Scores) Invoke(RunReplay replay, ModelCall call, params long[] keys)
+    {
+        var writer = new ArrayOutputWriter();
+        var status = replay.InvokeModel(call, writer, keys.Select(EntityKey.FromInt64).ToArray());
+        return (status, writer.Floats.TryGetValue("score", out var scores) ? scores : Array.Empty<float>());
+    }
+
+    internal sealed class ArrayOutputWriter : IModelOutputWriter
+    {
+        public Dictionary<string, float[]> Floats { get; } = new();
+
+        public Memory<float> GetFloat32(string name, int elementCount) => Floats[name] = new float[elementCount];
+
+        public void SetText(string name, string text)
+        {
+        }
     }
 
     internal static (long[] Ids, StrataRec.Pipeline.Sources.CandidateSourceStatus Status) Retrieve(RunReplay replay, string node, int limit)

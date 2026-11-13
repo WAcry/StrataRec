@@ -273,9 +273,11 @@ public sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// Answers a model call. Keyed calls (<paramref name="keys"/>: the entity of each batch row) are matched per row, and a
-    /// recorded output is used only where the row's inputs are unchanged. A recorded failure is replayed: returned, or
-    /// thrown when the client threw (a timeout as <see cref="OperationCanceledException"/>).
+    /// Answers a model call. A call without keys is matched by the digest of its whole input. A keyed call
+    /// (<paramref name="keys"/>: the entity of each batch row) takes the next recorded call with the same keys: when that
+    /// call failed, or every row's inputs are unchanged, it is replayed as recorded; otherwise each row's output comes from
+    /// whichever successful call scored that entity with the same inputs (<see cref="Synthesize"/>). A recorded failure is
+    /// returned, or thrown when the client threw (a timeout as <see cref="OperationCanceledException"/>).
     /// </summary>
     internal ModelStatus InvokeModel(ModelCall call, IModelOutputWriter outputs, EntityKey[]? keys)
     {
@@ -293,7 +295,7 @@ public sealed class RunReplay : IFeatureCallHook
                     return ModelStatus.Failed($"model '{call.Model}': this call is not in the replay bundle");
                 }
 
-                return Answer(unkeyed, outputs, call.BatchSize, null);
+                return Answer(unkeyed, outputs);
             }
 
             var digests = new string[keys.Length];
@@ -302,10 +304,10 @@ public sealed class RunReplay : IFeatureCallHook
                 digests[r] = ReplayJson.Hex(ModelInputDigest.Row(call, order, r));
             }
 
-            var exact = Take(calls, entry => entry.Keys is not null && entry.Keys.AsSpan().SequenceEqual(keys));
-            if (exact is not null)
+            var positional = Take(calls, entry => entry.Keys is not null && entry.Keys.AsSpan().SequenceEqual(keys));
+            if (positional is not null && (positional.Outcome != IoOutcome.Ok || positional.Digests.AsSpan().SequenceEqual(digests)))
             {
-                return Answer(exact, outputs, call.BatchSize, digests);
+                return Answer(positional, outputs);
             }
 
             return Synthesize(call, calls, outputs, keys, digests);
@@ -410,7 +412,8 @@ public sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    private ModelStatus Answer(ModelEntry entry, IModelOutputWriter outputs, int batchSize, string[]? digests)
+    /// <summary>Replays a recorded call as it was: its failure, or every output it returned.</summary>
+    private static ModelStatus Answer(ModelEntry entry, IModelOutputWriter outputs)
     {
         if (entry.Outcome != IoOutcome.Ok)
         {
@@ -427,41 +430,9 @@ public sealed class RunReplay : IFeatureCallHook
             return ModelStatus.Failed(entry.Error ?? $"model '{entry.Model}' failed in the recording");
         }
 
-        GapCounter? changed = null;
         foreach (var (name, values) in entry.Outputs)
         {
-            var perRow = entry.BatchSize > 0 ? values.Length / entry.BatchSize : values.Length;
-            var destination = outputs.GetFloat32(name, digests is null ? values.Length : batchSize * perRow).Span;
-            if (digests is null)
-            {
-                values.CopyTo(destination);
-                continue;
-            }
-
-            for (var r = 0; r < batchSize; r++)
-            {
-                var slice = destination.Slice(r * perRow, perRow);
-                if (digests[r] == entry.Digests[r])
-                {
-                    values.AsSpan(r * perRow, perRow).CopyTo(slice);
-                }
-                else
-                {
-                    slice.Fill(float.NaN);
-                }
-            }
-        }
-
-        if (digests is not null)
-        {
-            for (var r = 0; r < batchSize; r++)
-            {
-                if (digests[r] != entry.Digests[r])
-                {
-                    changed ??= Gap("model", entry.Model, null, "inputs_changed");
-                    changed.Add(1, entry.Keys![r].ToString());
-                }
-            }
+            values.CopyTo(outputs.GetFloat32(name, values.Length).Span);
         }
 
         foreach (var (name, text) in entry.Texts)
@@ -472,12 +443,18 @@ public sealed class RunReplay : IFeatureCallHook
         return ModelStatus.Ok;
     }
 
-    /// <summary>A keyed call the recording does not have as such: each row's output comes from whichever recorded call scored it.</summary>
+    /// <summary>
+    /// A keyed call the recording does not have as such (other batches, or changed inputs): each row's output comes from
+    /// a successful recorded call that scored the same entity with the same inputs, whichever call and row that was. An
+    /// entity scored only with other inputs is an <c>inputs_changed</c> gap; one never scored is <c>not_recorded</c>.
+    /// </summary>
     private ModelStatus Synthesize(ModelCall call, List<ModelEntry>? calls, IModelOutputWriter outputs, EntityKey[] keys, string[] digests)
     {
-        // Output layout (names and values per row) from the recorded calls of the same model and version.
+        // Output layout (names and values per row) and the rows by (entity, input digest), from the successful keyed calls
+        // of the same model and version. An entity can be scored several times with different inputs.
         var layout = new List<(string Name, int PerRow)>();
-        var rowsByKey = new Dictionary<EntityKey, (ModelEntry Entry, int Row)>();
+        var rows = new Dictionary<(EntityKey Key, string Digest), List<(ModelEntry Entry, int Row)>>();
+        var scored = new HashSet<EntityKey>();
         if (calls is not null)
         {
             foreach (var entry in calls)
@@ -489,14 +466,21 @@ public sealed class RunReplay : IFeatureCallHook
 
                 for (var r = 0; r < entry.Keys.Length; r++)
                 {
-                    rowsByKey.TryAdd(entry.Keys[r], (entry, r));
+                    if (!rows.TryGetValue((entry.Keys[r], entry.Digests[r]), out var list))
+                    {
+                        list = new List<(ModelEntry Entry, int Row)>(1);
+                        rows[(entry.Keys[r], entry.Digests[r])] = list;
+                    }
+
+                    list.Add((entry, r));
+                    scored.Add(entry.Keys[r]);
                 }
 
                 foreach (var (name, values) in entry.Outputs)
                 {
                     if (!layout.Exists(o => o.Name == name))
                     {
-                        layout.Add((name, entry.BatchSize > 0 ? values.Length / entry.BatchSize : 1));
+                        layout.Add((name, PerRow(entry, values)));
                     }
                 }
             }
@@ -513,39 +497,66 @@ public sealed class RunReplay : IFeatureCallHook
             return ModelStatus.Failed($"model '{call.Model}' has no recorded output in the replay bundle");
         }
 
-        GapCounter? missing = null;
-        GapCounter? changed = null;
+        var lacking = new bool[keys.Length];
         foreach (var (name, perRow) in layout)
         {
             var destination = outputs.GetFloat32(name, keys.Length * perRow).Span;
             for (var r = 0; r < keys.Length; r++)
             {
                 var slice = destination.Slice(r * perRow, perRow);
-                if (rowsByKey.TryGetValue(keys[r], out var recorded) && recorded.Entry.Digests[recorded.Row] == digests[r]
-                    && recorded.Entry.Outputs.TryGetValue(name, out var values) && values.Length >= (recorded.Row + 1) * perRow)
+                if (Recorded(rows, keys[r], digests[r], name, perRow) is { } values)
                 {
-                    values.AsSpan(recorded.Row * perRow, perRow).CopyTo(slice);
+                    values.Span.CopyTo(slice);
                 }
                 else
                 {
                     slice.Fill(float.NaN);
+                    lacking[r] = true;
                 }
             }
         }
 
+        GapCounter? missing = null;
+        GapCounter? changed = null;
         for (var r = 0; r < keys.Length; r++)
         {
-            if (!rowsByKey.TryGetValue(keys[r], out var recorded))
+            if (!lacking[r])
             {
-                (missing ??= Gap("model", call.Model, null, "not_recorded")).Add(1, keys[r].ToString());
+                continue;
             }
-            else if (recorded.Entry.Digests[recorded.Row] != digests[r])
+
+            if (!rows.ContainsKey((keys[r], digests[r])) && scored.Contains(keys[r]))
             {
                 (changed ??= Gap("model", call.Model, null, "inputs_changed")).Add(1, keys[r].ToString());
+            }
+            else
+            {
+                (missing ??= Gap("model", call.Model, null, "not_recorded")).Add(1, keys[r].ToString());
             }
         }
 
         return ModelStatus.Ok;
+
+        static int PerRow(ModelEntry entry, float[] values) => entry.BatchSize > 0 ? values.Length / entry.BatchSize : 1;
+
+        // The first recorded row of the entity with these inputs that has the output in the same layout.
+        static ReadOnlyMemory<float>? Recorded(Dictionary<(EntityKey, string), List<(ModelEntry Entry, int Row)>> rows, EntityKey key, string digest, string name, int perRow)
+        {
+            if (!rows.TryGetValue((key, digest), out var list))
+            {
+                return null;
+            }
+
+            foreach (var (entry, row) in list)
+            {
+                if (entry.Outputs.TryGetValue(name, out var values) && PerRow(entry, values) == perRow && values.Length >= (row + 1) * perRow)
+                {
+                    return values.AsMemory(row * perRow, perRow);
+                }
+            }
+
+            return null;
+        }
     }
 
     private static ModelEntry? Take(List<ModelEntry>? calls, Predicate<ModelEntry> match)

@@ -7,12 +7,16 @@ namespace StrataRec.Pipeline.Replay;
 /// Digests of model inputs, so a replay serves a recorded output only for the inputs it was computed from: a changed
 /// feature definition or model input changes the digest, and the output becomes a reported gap instead of a stale value.
 /// </summary>
+/// <remarks>
+/// An input is row-wise when its leading dimension is the batch size (<c>Shape[0] == BatchSize</c>, the tensor contract of
+/// <see cref="ModelCall.BatchSize"/>); a row's digest covers its slice of each row-wise input and every other input whole,
+/// since a shared input (a user vector, a text prompt) affects every row. Each input contributes its name, element type
+/// and shape, so the same values in another layout do not collide; the batch dimension of a row-wise input is left out,
+/// so the same row in a differently sized batch has the same digest.
+/// </remarks>
 internal static class ModelInputDigest
 {
-    /// <summary>
-    /// Digest of row <paramref name="row"/>: every input in name order, the row's slice of row-wise tensors (leading
-    /// dimension = batch size), whole tensors and text otherwise.
-    /// </summary>
+    /// <summary>Digest of row <paramref name="row"/>: every input in name order (see the remarks).</summary>
     public static ulong Row(ModelCall call, int[] order, int row)
     {
         var builder = default(StableHash.Builder);
@@ -32,7 +36,7 @@ internal static class ModelInputDigest
         }
     }
 
-    /// <summary>Digest of the whole call, for calls whose outputs are not per row.</summary>
+    /// <summary>Digest of the whole call, for calls whose outputs are not per row: the batch size and every input whole.</summary>
     public static ulong Call(ModelCall call, int[] order)
     {
         var builder = default(StableHash.Builder);
@@ -69,24 +73,46 @@ internal static class ModelInputDigest
         return order;
     }
 
+    /// <summary>The input's leading dimension is the batch: each row has its own slice.</summary>
+    public static bool IsRowWise(in NamedInput input, int batch) =>
+        batch > 0 && input.ElementType != TensorElementType.Text && input.Shape is { Length: > 0 } shape && shape[0] == batch;
+
+    /// <param name="row">The row whose digest is being built; -1 hashes every input whole.</param>
     private static void AddInput(ref StableHash.Builder builder, in NamedInput input, int batch, int row)
     {
+        var length = input.ElementType switch
+        {
+            TensorElementType.Float32 => input.Float32.Length,
+            TensorElementType.Int64 => input.Int64.Length,
+            _ => 0,
+        };
+
+        // Row-wise data that does not split evenly into rows is malformed; it is hashed whole, which can only miss a match.
+        var sliced = row >= 0 && IsRowWise(input, batch) && length % batch == 0;
         builder.Add(input.Name);
+        builder.AddIndex((int)input.ElementType);
+        var shape = input.Shape ?? Array.Empty<int>();
+        builder.AddIndex(shape.Length);
+        for (var d = 0; d < shape.Length; d++)
+        {
+            builder.AddIndex(sliced && d == 0 ? -1 : shape[d]); // the batch dimension, normalized
+        }
+
+        var count = sliced ? length / batch : length;
+        var start = sliced ? row * count : 0;
         switch (input.ElementType)
         {
             case TensorElementType.Float32:
-                var floats = Slice(input.Float32.Span, batch, row);
-                builder.AddIndex(floats.Length);
-                foreach (var f in floats)
+                builder.AddIndex(count);
+                foreach (var f in input.Float32.Span.Slice(start, count))
                 {
                     builder.Add((double)f);
                 }
 
                 break;
             case TensorElementType.Int64:
-                var longs = Slice(input.Int64.Span, batch, row);
-                builder.AddIndex(longs.Length);
-                foreach (var l in longs)
+                builder.AddIndex(count);
+                foreach (var l in input.Int64.Span.Slice(start, count))
                 {
                     builder.Add(l);
                 }
@@ -96,17 +122,6 @@ internal static class ModelInputDigest
                 builder.Add(input.Text ?? string.Empty);
                 break;
         }
-    }
-
-    private static ReadOnlySpan<T> Slice<T>(ReadOnlySpan<T> data, int batch, int row)
-    {
-        if (row < 0 || batch <= 0 || data.Length % batch != 0)
-        {
-            return data;
-        }
-
-        var perRow = data.Length / batch;
-        return data.Slice(row * perRow, perRow);
     }
 }
 
