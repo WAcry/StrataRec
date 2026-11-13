@@ -26,12 +26,12 @@ internal static class RunCommand
         var request = new Option<string>("--request", "-r")
         {
             Description = "Request JSON: pipeline_id, request_id, inputs, assignment (the arms the experiment platform answered, experiment/arm), " +
-                          "deadline_ms, time_ms, seed, force_arms.",
+                          "deadline_ms, time_ms, seed, force_arms (forced arms over the assignment; [] forces the baseline).",
             Required = true,
         };
         var arms = new Option<string[]>("--arms", "-a")
         {
-            Description = "Force these arms (experiment/arm), overriding the request's assignment; unknown arms fail the request.",
+            Description = "Force these arms (experiment/arm), overriding the request file's force_arms and assignment; unknown arms fail the request.",
             AllowMultipleArgumentsPerToken = true,
         };
         var trace = new Option<bool>("--trace", "-t") { Description = "Include every node's outcome." };
@@ -108,11 +108,10 @@ internal static class RunCommand
             return 2;
         }
 
-        var forced = ExplainPlanCommand.SplitArms(arms);
-        if (forced.Count == 0 && forceArms is not null)
-        {
-            forced.AddRange(forceArms);
-        }
+        // --arms wins over the file's force_arms. A present force_arms is forced even when empty (the baseline), as an
+        // empty DebugOptions.ForceArms is to the engine: presence, not length, decides.
+        var cliArms = ExplainPlanCommand.SplitArms(arms);
+        IReadOnlyList<string>? forced = cliArms.Count > 0 ? cliArms : forceArms;
 
         var request = new RecRequest
         {
@@ -125,7 +124,7 @@ internal static class RunCommand
             Seed = document["seed"]?.GetValue<long>(),
             Debug = new DebugOptions
             {
-                ForceArms = forced.Count > 0 ? forced : null,
+                ForceArms = forced,
                 Trace = trace,
                 CaptureLogs = logs,
                 Record = recordPath is not null,
