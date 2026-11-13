@@ -1,5 +1,6 @@
 using StrataRec.Core.Columns;
 using StrataRec.Core.Memory;
+using StrataRec.Core.Types;
 using StrataRec.Features.Connectors;
 
 namespace StrataRec.Features.Runtime;
@@ -84,8 +85,27 @@ internal sealed class StagingBuffer : IFeatureBatchWriter
     public void SetInt64List(int fieldIndex, int keyIndex, ReadOnlySpan<long> value)
     {
         CheckKey(keyIndex);
-        ((ListColumn<long>)_fields[fieldIndex]).Set(keyIndex, value);
-        Bits.Set(_written, WrittenBit(fieldIndex, keyIndex));
+        var bit = WrittenBit(fieldIndex, keyIndex);
+        if (_fields[fieldIndex] is not ListColumn<long> list)
+        {
+            throw WrongField(fieldIndex, nameof(SetInt64List));
+        }
+
+        list.Set(keyIndex, value);
+        Bits.Set(_written, bit);
+    }
+
+    public void SetInt32List(int fieldIndex, int keyIndex, ReadOnlySpan<int> value)
+    {
+        CheckKey(keyIndex);
+        var bit = WrittenBit(fieldIndex, keyIndex);
+        if (_fields[fieldIndex] is not ListColumn<int> list)
+        {
+            throw WrongField(fieldIndex, nameof(SetInt32List));
+        }
+
+        list.Set(keyIndex, value);
+        Bits.Set(_written, bit);
     }
 
     public void SetStringList(int fieldIndex, int keyIndex, ReadOnlySpan<string> value)
@@ -105,6 +125,17 @@ internal sealed class StagingBuffer : IFeatureBatchWriter
 
         return (fieldIndex * _bitsPerField) + keyIndex;
     }
+
+    /// <summary>A list setter that does not match the field's declared type (e.g. int64 values for a
+    /// <c>list&lt;int32&gt;</c> field): a connector bug, reported with the type it should have used.</summary>
+    private InvalidOperationException WrongField(int fieldIndex, string method) =>
+        new($"Field {fieldIndex} has type {_fields[fieldIndex].Type}; {method} does not match it" +
+            (_fields[fieldIndex].Type.Kind switch
+            {
+                StorageKind.ListInt32 => " (use SetInt32List).",
+                StorageKind.ListInt64 => " (use SetInt64List).",
+                _ => ".",
+            }));
 
     private void CheckKey(int keyIndex)
     {

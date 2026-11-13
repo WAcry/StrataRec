@@ -337,7 +337,8 @@ internal sealed class TestExpression(string source, ColumnType resultType, TestE
 
     public override ScalarValue EvaluateScalar(in EvalContext context) => scalar!(context.Context);
 
-    public override void Evaluate(in EvalContext context, ReadOnlySpan<int> rows1, ColumnBuffer destination) => rows!(context, rows1, destination);
+    public override void Evaluate(in EvalContext context, ReadOnlySpan<int> rows1, ColumnBuffer destination, in ScalarValue outOfRange) =>
+        rows!(context, rows1, destination);
 
     /// <summary><c>col.&lt;source&gt;</c> for an int64 feature in <paramref name="slot"/> (missing stays missing).</summary>
     public static TestExpression CopyInt64(string name, int slot) => new(

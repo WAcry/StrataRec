@@ -1,5 +1,6 @@
 using StrataRec.Core.Columns;
 using StrataRec.Core.Types;
+using StrataRec.Core.Values;
 using StrataRec.Expressions;
 
 namespace StrataRec.Pipeline.Operators.Standard;
@@ -87,14 +88,17 @@ public sealed class ExpressionScorerFactory : IOperatorFactory
             return null;
         }
 
-        return new ExpressionScorer(expression, output);
+        return new ExpressionScorer(expression, output, declared.HasDefault ? declared.Default : ScalarValue.Missing);
     }
 
-    private sealed class ExpressionScorer(CompiledExpression expression, OutputColumn output) : Operator
+    /// <param name="outOfRange">The column's default: what a row gets when its result does not fit <c>int32</c> or
+    /// <c>list&lt;int32&gt;</c> storage (design 4.3). Missing when none is declared; the row is then missing, which commit
+    /// rejects for a non-nullable column.</param>
+    private sealed class ExpressionScorer(CompiledExpression expression, OutputColumn output, ScalarValue outOfRange) : Operator
     {
         public override ValueTask ExecuteAsync(OperatorContext context)
         {
-            expression.Evaluate(context.EvalContext, context.LiveRows, context.Output(output));
+            expression.Evaluate(context.EvalContext, context.LiveRows, context.Output(output), outOfRange);
             return ValueTask.CompletedTask;
         }
     }

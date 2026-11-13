@@ -253,6 +253,31 @@ public sealed class LogPipelineTests
     }
 
     [Fact]
+    public void ListInt32ColumnIsEncodedWithTheNestedColumns()
+    {
+        var batch = Batch("served", LogDelivery.Durable);
+        batch = new LogBatch
+        {
+            TapId = batch.TapId, RequestId = batch.RequestId, PipelineId = batch.PipelineId, ManifestId = batch.ManifestId, SchemaId = batch.SchemaId,
+            TimeMs = batch.TimeMs, Delivery = batch.Delivery, RequestProbability = 1, Int64EntityIds = batch.Int64EntityIds, Ranks = batch.Ranks,
+            RowProbabilities = batch.RowProbabilities, Context = batch.Context,
+            Columns = new[]
+            {
+                // Values are held promoted (int64 lists), like any int32 value; the column keeps its storage type.
+                new LogColumn("tags", ColumnType.ListInt32.AsNullable(), new[] { ScalarValue.FromInt64List(new long[] { 1, int.MinValue, int.MaxValue }), ScalarValue.Missing }),
+            },
+        };
+
+        using var document = JsonDocument.Parse(LogBatchJson.Encode(batch));
+        var root = document.RootElement;
+        var tags = root.GetProperty("nested_cols").GetProperty("tags");
+        Assert.Equal(new long[] { 1, int.MinValue, int.MaxValue }, tags[0].EnumerateArray().Select(e => e.GetInt64()).ToArray());
+        Assert.Equal(JsonValueKind.Null, tags[1].ValueKind);
+        Assert.Equal(1, root.GetProperty("missing").GetProperty("tags")[0].GetInt32());
+        Assert.False(root.GetProperty("int_cols").TryGetProperty("tags", out _));
+    }
+
+    [Fact]
     public async Task JsonLinesSinkRejectsOnlyTheUnencodableBatch()
     {
         var writer = new StringWriter();

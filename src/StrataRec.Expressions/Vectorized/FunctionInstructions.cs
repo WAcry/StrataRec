@@ -9,6 +9,48 @@ using StrataRec.Expressions.Runtime;
 
 namespace StrataRec.Expressions.Vectorized;
 
+/// <summary>
+/// One lane of an int list operand, viewed in place: int64 elements (<c>list&lt;int64&gt;</c> storage, request-level
+/// values, literals) or int32 elements (<c>list&lt;int32&gt;</c> storage). Either way the elements mean int64 values
+/// (design 4.3), so a kernel branches on the width instead of widening into a buffer per row: once per call for a plain
+/// column (<see cref="Lanes.DirectIntListColumn"/>), once per lane for selects that may mix widths.
+/// </summary>
+internal readonly ref struct IntListLane
+{
+    public IntListLane(ReadOnlySpan<long> values)
+    {
+        Int64 = values;
+    }
+
+    public IntListLane(ReadOnlySpan<int> values)
+    {
+        Int32 = values;
+        IsInt32 = true;
+    }
+
+    /// <summary>The elements when <see cref="IsInt32"/> is false.</summary>
+    public ReadOnlySpan<long> Int64 { get; }
+
+    /// <summary>The elements when <see cref="IsInt32"/> is true.</summary>
+    public ReadOnlySpan<int> Int32 { get; }
+
+    public bool IsInt32 { get; }
+
+    public int Length => IsInt32 ? Int32.Length : Int64.Length;
+
+    /// <summary>Membership with int64 semantics: a probe outside the int32 range is simply absent from int32 storage.</summary>
+    public bool Contains(long value) => IsInt32 ? ListOps.Contains(Int32, value) : Int64.Contains(value);
+
+    /// <summary><c>overlap_count(this, other)</c>: elements of this list (with multiplicity) that occur in <paramref name="other"/>.</summary>
+    public long OverlapWith(IntListLane other) => (IsInt32, other.IsInt32) switch
+    {
+        (false, false) => ListOps.Overlap(Int64, other.Int64),
+        (true, true) => ListOps.Overlap(Int32, other.Int32),
+        (true, false) => ListOps.Overlap(Int32, other.Int64),
+        _ => ListOps.Overlap(Int64, other.Int32),
+    };
+}
+
 /// <summary>Per-lane access to vector, list and string operands.</summary>
 internal static class Lanes
 {
@@ -30,22 +72,49 @@ internal static class Lanes
         };
     }
 
-    public static ReadOnlySpan<long> LongList(ref Frame f, Opnd o, int lane)
+    /// <summary>
+    /// The <c>ListColumn&lt;long&gt;</c> or <c>ListColumn&lt;int&gt;</c> an int list operand reads in place (a plain column
+    /// reference), or null when its lanes must be resolved one by one (a request-level value, an all-missing column, a
+    /// lazy select). Kernels test it once per call and loop over the typed column, keeping the width dispatch of
+    /// <see cref="IntList"/> out of the common case.
+    /// </summary>
+    public static ColumnBuffer? DirectIntListColumn(ref Frame f, Opnd o)
+    {
+        if (o.IsScalar)
+        {
+            return null;
+        }
+
+        ref var loc = ref f.Locs[o.Index];
+        return loc.Source == SourceKind.Column ? (ColumnBuffer)loc.SourceRef! : null;
+    }
+
+    /// <summary>An int list lane, zero-copy over whichever storage backs it: a <c>list&lt;int32&gt;</c> column yields its
+    /// int32 extent, a <c>list&lt;int64&gt;</c> column or a request-level value its int64 one. A lazy select may mix the
+    /// two from lane to lane.</summary>
+    public static IntListLane IntList(ref Frame f, Opnd o, int lane)
     {
         if (o.IsScalar)
         {
             ref var s = ref f.Scalar(o);
-            return s.IsMissing ? default : s.AsInt64List();
+            return s.IsMissing ? default : new IntListLane(s.AsInt64List());
         }
 
         ref var loc = ref f.Locs[o.Index];
-        return loc.Source switch
+        switch (loc.Source)
         {
-            SourceKind.Column => ((ListColumn<long>)loc.SourceRef!).Get(f.Row(lane)),
-            SourceKind.Broadcast => (long[])loc.SourceRef!,
-            SourceKind.Select => LongList(ref f, Pick(ref loc, lane), lane),
-            _ => default,
-        };
+            case SourceKind.Column:
+                // ListColumn<T> is sealed: the test is one method-table compare per lane.
+                return loc.SourceRef is ListColumn<int> narrow
+                    ? new IntListLane(narrow.Get(f.Row(lane)))
+                    : new IntListLane(((ListColumn<long>)loc.SourceRef!).Get(f.Row(lane)));
+            case SourceKind.Broadcast:
+                return new IntListLane((long[])loc.SourceRef!);
+            case SourceKind.Select:
+                return IntList(ref f, Pick(ref loc, lane), lane);
+            default:
+                return default;
+        }
     }
 
     public static ReadOnlySpan<string> StringList(ref Frame f, Opnd o, int lane)
@@ -120,14 +189,49 @@ internal sealed class SizeInstr(TypeKind operandKind, ExprType type, Opnd operan
             return;
         }
 
-        for (var i = 0; i < f.N; i++)
+        switch (operandKind)
         {
-            dst[i] = operandKind switch
-            {
-                TypeKind.ListInt => Lanes.LongList(ref f, x, i).Length,
-                TypeKind.ListString => Lanes.StringList(ref f, x, i).Length,
-                _ => TextOps.CodePointCount(Lanes.String(ref f, x, i)),
-            };
+            case TypeKind.ListInt:
+                switch (Lanes.DirectIntListColumn(ref f, x))
+                {
+                    case ListColumn<long> c:
+                        Sizes(ref f, c, dst);
+                        break;
+                    case ListColumn<int> c:
+                        Sizes(ref f, c, dst);
+                        break;
+                    default:
+                        for (var i = 0; i < dst.Length; i++)
+                        {
+                            dst[i] = Lanes.IntList(ref f, x, i).Length;
+                        }
+
+                        break;
+                }
+
+                break;
+            case TypeKind.ListString:
+                for (var i = 0; i < dst.Length; i++)
+                {
+                    dst[i] = Lanes.StringList(ref f, x, i).Length;
+                }
+
+                break;
+            default:
+                for (var i = 0; i < dst.Length; i++)
+                {
+                    dst[i] = TextOps.CodePointCount(Lanes.String(ref f, x, i));
+                }
+
+                break;
+        }
+    }
+
+    private static void Sizes<T>(ref Frame f, ListColumn<T> column, Span<long> dst)
+    {
+        for (var i = 0; i < dst.Length; i++)
+        {
+            dst[i] = column.LengthOf(f.Row(i));
         }
     }
 }
@@ -174,9 +278,29 @@ internal sealed class ContainsInstr(TypeKind listKind, ExprType type, Opnd list,
             }
 
             case TypeKind.ListInt:
-                for (var i = 0; i < n; i++)
+                switch (Lanes.DirectIntListColumn(ref f, l))
                 {
-                    BitKernels.SetBit(dst, i, Lanes.LongList(ref f, l, i).Contains(Lanes.Int(ref f, x, i)));
+                    case ListColumn<long> c:
+                        for (var i = 0; i < n; i++)
+                        {
+                            BitKernels.SetBit(dst, i, c.Get(f.Row(i)).Contains(Lanes.Int(ref f, x, i)));
+                        }
+
+                        break;
+                    case ListColumn<int> c:
+                        for (var i = 0; i < n; i++)
+                        {
+                            BitKernels.SetBit(dst, i, ListOps.Contains(c.Get(f.Row(i)), Lanes.Int(ref f, x, i)));
+                        }
+
+                        break;
+                    default:
+                        for (var i = 0; i < n; i++)
+                        {
+                            BitKernels.SetBit(dst, i, Lanes.IntList(ref f, l, i).Contains(Lanes.Int(ref f, x, i)));
+                        }
+
+                        break;
                 }
 
                 break;
@@ -277,6 +401,36 @@ internal sealed class OverlapInstr(TypeKind listKind, ExprType type, Opnd first,
 {
     private static readonly Comparison<string> Ordinal = string.CompareOrdinal;
 
+    /// <summary>Elements of <paramref name="list"/> (with multiplicity) found in the sorted request-level keys.</summary>
+    private static long CountIn(ReadOnlySpan<long> list, ReadOnlySpan<long> sortedKeys)
+    {
+        long count = 0;
+        foreach (var v in list)
+        {
+            if (sortedKeys.BinarySearch(v) >= 0)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    /// <inheritdoc cref="CountIn(ReadOnlySpan{long}, ReadOnlySpan{long})"/>
+    private static long CountIn(ReadOnlySpan<int> list, ReadOnlySpan<long> sortedKeys)
+    {
+        long count = 0;
+        foreach (var v in list)
+        {
+            if (sortedKeys.BinarySearch((long)v) >= 0)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
     public override void Execute(ref Frame f)
     {
         Opnd a = Operands[0], b = Operands[1];
@@ -298,18 +452,30 @@ internal sealed class OverlapInstr(TypeKind listKind, ExprType type, Opnd first,
                     var keys = sorted.AsSpan(0, source.Length);
                     source.CopyTo(keys);
                     keys.Sort();
-                    for (var i = 0; i < n; i++)
+                    switch (Lanes.DirectIntListColumn(ref f, a))
                     {
-                        long count = 0;
-                        foreach (var v in Lanes.LongList(ref f, a, i))
-                        {
-                            if (keys.BinarySearch(v) >= 0)
+                        case ListColumn<long> c:
+                            for (var i = 0; i < n; i++)
                             {
-                                count++;
+                                dst[i] = CountIn(c.Get(f.Row(i)), keys);
                             }
-                        }
 
-                        dst[i] = count;
+                            break;
+                        case ListColumn<int> c:
+                            for (var i = 0; i < n; i++)
+                            {
+                                dst[i] = CountIn(c.Get(f.Row(i)), keys);
+                            }
+
+                            break;
+                        default:
+                            for (var i = 0; i < n; i++)
+                            {
+                                var list = Lanes.IntList(ref f, a, i);
+                                dst[i] = list.IsInt32 ? CountIn(list.Int32, keys) : CountIn(list.Int64, keys);
+                            }
+
+                            break;
                     }
                 }
                 finally
@@ -321,7 +487,7 @@ internal sealed class OverlapInstr(TypeKind listKind, ExprType type, Opnd first,
             {
                 for (var i = 0; i < n; i++)
                 {
-                    dst[i] = ListOps.Overlap(Lanes.LongList(ref f, a, i), Lanes.LongList(ref f, b, i));
+                    dst[i] = Lanes.IntList(ref f, a, i).OverlapWith(Lanes.IntList(ref f, b, i));
                 }
             }
 

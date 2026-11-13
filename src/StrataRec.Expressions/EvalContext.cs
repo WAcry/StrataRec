@@ -39,9 +39,24 @@ public readonly struct EvalContext
 public sealed class ExpressionCounters
 {
     private long _intModZero;
+    private long _outOfRange;
 
     /// <summary>Number of <c>x % 0</c> evaluations (metric <c>expr_int_mod_zero_total</c>).</summary>
     public long IntModZero => Interlocked.Read(ref _intModZero);
 
+    /// <summary>
+    /// Number of values that did not fit the storage they were written to and were replaced by the column's default or
+    /// marked missing (metric <c>column_out_of_range_total</c>, design 4.3): an int64 outside the int32 range written to
+    /// an <c>int32</c> column, or a list with such an element written to a <c>list&lt;int32&gt;</c> column (counted once
+    /// per list).
+    /// </summary>
+    /// <remarks>Kept apart from the non-finite count (<c>column_nonfinite_total</c>): NaN/±∞ points at the arithmetic
+    /// of an expression, an out-of-range value at a column declared too narrow for its data. It is also detected
+    /// earlier: a NaN survives in float storage until the engine sanitizes it at commit, while an int64 that does not
+    /// fit int32 storage cannot be stored at all, so the write itself must apply the rule.</remarks>
+    public long OutOfRange => Interlocked.Read(ref _outOfRange);
+
     public void AddIntModZero(long count) => Interlocked.Add(ref _intModZero, count);
+
+    public void AddOutOfRange(long count) => Interlocked.Add(ref _outOfRange, count);
 }

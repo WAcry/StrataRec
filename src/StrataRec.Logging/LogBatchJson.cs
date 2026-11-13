@@ -84,7 +84,7 @@ public static class LogBatchJson
         WriteColumns(json, "float_cols", batch.Columns, static k => k is StorageKind.Float32 or StorageKind.Float64);
         WriteColumns(json, "int_cols", batch.Columns, static k => k is StorageKind.Int32 or StorageKind.Int64 or StorageKind.Bool);
         WriteColumns(json, "string_cols", batch.Columns, static k => k is StorageKind.String or StorageKind.Text);
-        WriteColumns(json, "nested_cols", batch.Columns, static k => k is StorageKind.Vector or StorageKind.ListInt64 or StorageKind.ListString);
+        WriteColumns(json, "nested_cols", batch.Columns, static k => k is StorageKind.Vector or StorageKind.ListInt32 or StorageKind.ListInt64 or StorageKind.ListString);
         json.WriteStartObject("missing");
         foreach (var column in batch.Columns)
         {
@@ -161,7 +161,7 @@ public static class LogBatchJson
 
                 json.WriteEndArray();
                 break;
-            case StorageKind.ListInt64:
+            case StorageKind.ListInt64: // also list<int32> columns: values are held promoted (see ScalarValue)
                 json.WriteStartArray();
                 foreach (var l in value.AsInt64List())
                 {

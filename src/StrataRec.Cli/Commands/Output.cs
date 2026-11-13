@@ -114,7 +114,7 @@ internal static class Output
 
                 json.WriteEndArray();
                 break;
-            case StorageKind.ListInt64:
+            case StorageKind.ListInt64: // also list<int32> values: ScalarValue holds them promoted
                 json.WriteStartArray();
                 foreach (var l in value.AsInt64List())
                 {

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Globalization;
 using System.Text.Json;
 using StrataRec.Core.Keys;
@@ -193,7 +194,7 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
                     writer.SetValid(field.FieldIndex, keyIndex);
                     break;
                 case StorageKind.Int32:
-                    writer.GetValues<int>(field.FieldIndex).Span[keyIndex] = v.GetInt32();
+                    writer.GetValues<int>(field.FieldIndex).Span[keyIndex] = ReadInt32(v, field);
                     writer.SetValid(field.FieldIndex, keyIndex);
                     break;
                 case StorageKind.Int64:
@@ -239,6 +240,28 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
 
                     writer.SetInt64List(field.FieldIndex, keyIndex, longs);
                     break;
+                case StorageKind.ListInt32:
+                {
+                    // Decoded straight to int32 (the writer copies, so the pooled buffer can go back right away).
+                    var count = v.GetArrayLength();
+                    var ints = ArrayPool<int>.Shared.Rent(Math.Max(1, count));
+                    try
+                    {
+                        var ii = 0;
+                        foreach (var e in v.EnumerateArray())
+                        {
+                            ints[ii++] = ReadInt32(e, field);
+                        }
+
+                        writer.SetInt32List(field.FieldIndex, keyIndex, ints.AsSpan(0, count));
+                    }
+                    finally
+                    {
+                        ArrayPool<int>.Shared.Return(ints);
+                    }
+
+                    break;
+                }
                 case StorageKind.ListString:
                     var strings = new string[v.GetArrayLength()];
                     var si = 0;
@@ -251,6 +274,22 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// An <c>int32</c> value or <c>list&lt;int32&gt;</c> element. Data that does not fit is a broken fixture, not a value to
+    /// wrap: the call fails (the source is reported failed) with the field and value named.
+    /// </summary>
+    private static int ReadInt32(JsonElement value, in CompiledFieldBinding field)
+    {
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var result))
+        {
+            return result;
+        }
+
+        throw new FormatException(
+            $"memory@1 field '{field.Field}' ({field.Type}) holds {value.GetRawText()}, which is not an int32 in [{int.MinValue}, {int.MaxValue}]; " +
+            "fix the data or declare the field with an int64 type.");
     }
 
     /// <summary>A top-level entry; for Cross data its properties are candidate keys, indexed by int64 when canonical.</summary>

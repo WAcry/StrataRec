@@ -1,3 +1,4 @@
+using StrataRec.Core.Columns;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Expressions.Ir;
@@ -864,6 +865,16 @@ internal sealed class Binder
             return;
         }
 
+        // A computed value outside the int32 range is replaced at run time (design 4.3); a constant one can only be a
+        // configuration mistake, so it is reported here, where it can be fixed.
+        if (_options.ExpectedType is { IsInt32Storage: true } narrow && root.IsConst && !ColumnValues.FitsStorage(root.Value, narrow))
+        {
+            Report(ExpressionErrorCodes.InvalidArgument,
+                $"The constant {root.Value} does not fit this site's {narrow.AsNonNullable()} storage, which holds [{int.MinValue}, {int.MaxValue}]",
+                ast.Start, ast.Length, $"declare the column as {narrow.Promoted().AsNonNullable()}, or use values in the int32 range");
+            return;
+        }
+
         if (root.Type.Nullable && !_options.AllowNullableResult)
         {
             ReportNullableResult(root, ast);
@@ -878,7 +889,7 @@ internal sealed class Binder
         StorageKind.String => actual.Kind == TypeKind.String,
         StorageKind.Text => actual.Kind == TypeKind.Text,
         StorageKind.Vector => actual.Kind == TypeKind.Vector && (expected.Dimension == 0 || actual.Dim == 0 || expected.Dimension == actual.Dim),
-        StorageKind.ListInt64 => actual.Kind == TypeKind.ListInt,
+        StorageKind.ListInt64 or StorageKind.ListInt32 => actual.Kind == TypeKind.ListInt,
         StorageKind.ListString => actual.Kind == TypeKind.ListString,
         _ => false,
     };
