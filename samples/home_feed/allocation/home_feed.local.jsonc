@@ -1,0 +1,20 @@
+// Traffic layout for local runs (design 10.1, 11.1): one domain, three orthogonal layers.
+{
+  "pipeline_id": "home_feed",
+  "environment": "local",
+  "catalog": "home_feed",
+  "bindings": "local",
+  "assignment": {
+    "buckets": 100,
+    "layers": {
+      "rerank": { "domain": "main", "salt": "home_feed/rerank/1", "unit": ["ctx.request.user_id", "ctx.request.session_id"] },
+      "fusion": { "domain": "main", "salt": "home_feed/fusion/1", "unit": ["ctx.request.user_id", "ctx.request.session_id"] },
+      "params": { "domain": "main", "salt": "home_feed/params/1", "unit": ["ctx.request.user_id", "ctx.request.session_id"] }
+    }
+  },
+  "experiments": {
+    "exp_mmr_diversity":         { "layer": "rerank", "arms": { "control": [0, 49], "mmr": [50, 99] } },
+    "exp_freshness_calibration": { "layer": "fusion", "arms": { "control": [0, 49], "calibrated": [50, 99] } },
+    "exp_quality_weight":        { "layer": "params", "arms": { "control": [0, 49], "strong": [50, 99] } }
+  }
+}

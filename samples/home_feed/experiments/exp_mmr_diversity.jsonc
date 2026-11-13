@@ -1,0 +1,22 @@
+// Replace the category window cap with MMR diversification (design 9.4).
+{
+  "experiment_id": "exp_mmr_diversity",
+  "pipeline_id": "home_feed",
+  "owner": "rerank-team",
+  "description": "MMR on item embeddings instead of a per-category sliding window.",
+  "expires_at": "2099-12-31",
+  "arms": {
+    "control": {},
+    "mmr": {
+      "param_schema": { "mmr_lambda": { "type": "float64", "min": 0, "max": 1 } },
+      "params": { "mmr_lambda": 0.7 },
+      "nodes": {
+        "diversity_cap": null,
+        "mmr_diversifier": {
+          "order": 550, "op": "MmrDiversifier@1",
+          "config": { "score_col": "score.final", "embedding_col": "item.embedding", "lambda_param": "mmr_lambda", "window": 20 }
+        }
+      }
+    }
+  }
+}

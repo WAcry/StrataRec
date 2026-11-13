@@ -1,0 +1,81 @@
+// The home feed baseline (design 9.3): recall → filter → coarse score → truncate → model → fusion → sort → diversity.
+{
+  "pipeline_id": "home_feed",
+  "entity_key_type": "int64",
+  "request_schema": {
+    "user_id":    { "type": "int64?" },
+    "session_id": { "type": "string?" },
+    "surface":    { "type": "string" }
+  },
+  "columns": {
+    "score.coarse": { "type": "float32", "default": 0.0 },
+    "score.ctr":    { "type": "float32", "default": 0.0 },
+    "score.final":  { "type": "float32", "flow": true, "default": 0.0 }
+  },
+  "param_schema": {
+    "recall_quotas":  { "type": "map<string,int64>", "min": 0, "max": 1000 },
+    "coarse_k":       { "type": "int64", "min": 1, "max": 1000 },
+    "final_top_k":    { "type": "int64", "min": 1, "max": 100 },
+    "quality_weight": { "type": "float64", "min": 0, "max": 1 }
+  },
+  "params": {
+    "recall_quotas": { "two_tower": 40, "popular": 20 },
+    "coarse_k": 30,
+    "final_top_k": 10,
+    "quality_weight": 0.3
+  },
+  "nodes": {
+    "recall": {
+      "order": 100, "op": "MultiSourceRecall@1",
+      "config": { "quotas_param": "recall_quotas", "source_order": ["two_tower", "popular"] }
+    },
+    "safety_filter": {
+      "order": 200, "op": "ExpressionFilter@1",
+      "config": { "predicate": "(col.item.is_policy_safe ?? true) && col.item.report_rate < 0.05" }
+    },
+    "coarse_score": {
+      "order": 300, "op": "ExpressionScorer@1",
+      "config": { "output_col": "score.coarse", "expr": "col.item.smoothed_ctr" }
+    },
+    "coarse_top_k": {
+      "order": 350, "op": "TopK@1",
+      "config": { "score_col": "score.coarse", "k_param": "coarse_k" }
+    },
+    "ctr_ranker": {
+      "order": 400, "op": "ModelScorer@1", "on_failure": "fallback:ctr_backup", "timeout_ms": 50,
+      "config": {
+        "model": "ctr_model",
+        "inputs": { "smoothed_ctr": "col.item.smoothed_ctr", "log_followers": "log1p(col.author.followers)" },
+        "outputs": { "p_click": "score.ctr" }
+      }
+    },
+    "ctr_backup": {
+      "role": "fallback", "op": "ExpressionScorer@1",
+      "config": { "output_col": "score.ctr", "expr": "col.item.smoothed_ctr" }
+    },
+    "fusion": {
+      "order": 450, "op": "CompositeMultiplierScorer@1",
+      "config": {
+        "output_col": "score.final",
+        "base_expr": "col.score.ctr",
+        "multipliers": { "quality": "1.0 + param.quality_weight * (1.0 - col.item.report_rate * 10.0)" }
+      }
+    },
+    "rank_sort": {
+      "order": 500, "op": "TopK@1",
+      "config": { "score_col": "score.final", "k": 1000 }
+    },
+    "diversity_cap": {
+      "order": 520, "op": "SlidingWindowQuota@1", "when": "ctx.request.surface == 'home'",
+      "config": { "group_col": "item.category", "window": 3, "max_per_window": 1 }
+    }
+  },
+  "output": {
+    "limit_param": "final_top_k",
+    "columns": {
+      "score": "col.score.final",
+      "category": "col.item.category",
+      "primary_source": "col.recall.primary_source"
+    }
+  }
+}

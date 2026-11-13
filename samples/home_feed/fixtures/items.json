@@ -1,0 +1,885 @@
+{
+ "1": {
+  "i_age_h": 12.5,
+  "i_author_id": 101,
+  "i_category": "music",
+  "i_clk_7d": 325.0,
+  "i_emb": [
+   0.643,
+   -0.812,
+   0.166,
+   0.819
+  ],
+  "i_imp_7d": 2852.0,
+  "i_report_rate": 0.0118,
+  "i_safe": true
+ },
+ "10": {
+  "i_age_h": 155.7,
+  "i_author_id": 110,
+  "i_category": "sports",
+  "i_clk_7d": 8.0,
+  "i_emb": [
+   0.986,
+   0.644,
+   -0.431,
+   -0.228
+  ],
+  "i_imp_7d": 732.0,
+  "i_report_rate": 0.021
+ },
+ "11": {
+  "i_author_id": 111,
+  "i_category": "music",
+  "i_clk_7d": 23.0,
+  "i_emb": [
+   -0.766,
+   -0.882,
+   0.536,
+   -0.741
+  ],
+  "i_imp_7d": 3042.0,
+  "i_report_rate": 0.0139,
+  "i_safe": true
+ },
+ "12": {
+  "i_age_h": 119.7,
+  "i_author_id": 100,
+  "i_category": "tech",
+  "i_clk_7d": 113.0,
+  "i_emb": [
+   -0.667,
+   -0.197,
+   -0.444,
+   -0.726
+  ],
+  "i_imp_7d": 2228.0,
+  "i_report_rate": 0.0275,
+  "i_safe": true
+ },
+ "13": {
+  "i_age_h": 100.3,
+  "i_author_id": 101,
+  "i_category": "food",
+  "i_clk_7d": 388.0,
+  "i_emb": [
+   -0.282,
+   0.768,
+   0.915,
+   -0.698
+  ],
+  "i_imp_7d": 3726.0,
+  "i_report_rate": 0.0084,
+  "i_safe": true
+ },
+ "14": {
+  "i_age_h": 3.9,
+  "i_author_id": 102,
+  "i_category": "travel",
+  "i_clk_7d": 36.0,
+  "i_emb": [
+   0.662,
+   -0.635,
+   -0.436,
+   -0.709
+  ],
+  "i_imp_7d": 1643.0,
+  "i_report_rate": 0.0198,
+  "i_safe": true
+ },
+ "15": {
+  "i_age_h": 228.8,
+  "i_author_id": 103,
+  "i_category": "sports",
+  "i_clk_7d": 217.0,
+  "i_emb": [
+   0.381,
+   0.031,
+   0.235,
+   0.352
+  ],
+  "i_imp_7d": 4579.0,
+  "i_report_rate": 0.017
+ },
+ "16": {
+  "i_age_h": 228.5,
+  "i_author_id": 104,
+  "i_category": "music",
+  "i_clk_7d": 36.0,
+  "i_emb": [
+   0.361,
+   0.119,
+   -0.204,
+   -0.212
+  ],
+  "i_imp_7d": 642.0,
+  "i_report_rate": 0.0261,
+  "i_safe": true
+ },
+ "17": {
+  "i_age_h": 15.9,
+  "i_author_id": 105,
+  "i_category": "tech",
+  "i_clk_7d": 322.0,
+  "i_emb": [
+   -0.865,
+   -0.582,
+   -0.675,
+   -0.32
+  ],
+  "i_imp_7d": 4144.0,
+  "i_report_rate": 0.08,
+  "i_safe": true
+ },
+ "18": {
+  "i_age_h": 129.3,
+  "i_author_id": 106,
+  "i_category": "food",
+  "i_clk_7d": 10.0,
+  "i_emb": [
+   0.898,
+   0.227,
+   -0.859,
+   -0.584
+  ],
+  "i_imp_7d": 630.0,
+  "i_report_rate": 0.017,
+  "i_safe": true
+ },
+ "19": {
+  "i_age_h": 84.0,
+  "i_author_id": 107,
+  "i_category": "travel",
+  "i_clk_7d": 72.0,
+  "i_emb": [
+   -0.272,
+   -0.754,
+   0.698,
+   0.986
+  ],
+  "i_imp_7d": 3282.0,
+  "i_report_rate": 0.0076,
+  "i_safe": true
+ },
+ "2": {
+  "i_age_h": 17.7,
+  "i_author_id": 102,
+  "i_category": "tech",
+  "i_clk_7d": 18.0,
+  "i_emb": [
+   -0.819,
+   -0.151,
+   0.654,
+   -0.752
+  ],
+  "i_imp_7d": 1958.0,
+  "i_report_rate": 0.013,
+  "i_safe": true
+ },
+ "20": {
+  "i_age_h": 35.4,
+  "i_author_id": 108,
+  "i_category": "sports",
+  "i_clk_7d": 242.0,
+  "i_emb": [
+   0.499,
+   0.481,
+   -0.043,
+   0.384
+  ],
+  "i_imp_7d": 4017.0,
+  "i_report_rate": 0.0094
+ },
+ "21": {
+  "i_age_h": 127.3,
+  "i_author_id": 109,
+  "i_category": "music",
+  "i_clk_7d": 33.0,
+  "i_emb": [
+   -0.707,
+   0.086,
+   -0.946,
+   0.056
+  ],
+  "i_imp_7d": 4429.0,
+  "i_report_rate": 0.0285,
+  "i_safe": true
+ },
+ "22": {
+  "i_author_id": 110,
+  "i_category": "tech",
+  "i_clk_7d": 80.0,
+  "i_emb": [
+   -0.666,
+   0.544,
+   0.065,
+   0.558
+  ],
+  "i_imp_7d": 945.0,
+  "i_report_rate": 0.0078,
+  "i_safe": true
+ },
+ "23": {
+  "i_age_h": 189.4,
+  "i_author_id": 111,
+  "i_category": "food",
+  "i_clk_7d": 226.0,
+  "i_emb": [
+   0.517,
+   -0.61,
+   -0.521,
+   -0.199
+  ],
+  "i_imp_7d": 2900.0,
+  "i_report_rate": 0.0184,
+  "i_safe": false
+ },
+ "24": {
+  "i_age_h": 175.7,
+  "i_author_id": 100,
+  "i_category": "travel",
+  "i_clk_7d": 57.0,
+  "i_emb": [
+   0.979,
+   0.58,
+   -0.056,
+   -0.613
+  ],
+  "i_imp_7d": 2057.0,
+  "i_report_rate": 0.0148,
+  "i_safe": true
+ },
+ "25": {
+  "i_age_h": 237.1,
+  "i_author_id": 101,
+  "i_category": "sports",
+  "i_clk_7d": 170.0,
+  "i_emb": [
+   0.91,
+   -0.271,
+   -0.559,
+   -0.546
+  ],
+  "i_imp_7d": 3020.0,
+  "i_report_rate": 0.0281
+ },
+ "26": {
+  "i_age_h": 236.5,
+  "i_author_id": 102,
+  "i_category": "music",
+  "i_clk_7d": 79.0,
+  "i_emb": [
+   0.221,
+   -0.996,
+   0.818,
+   -0.312
+  ],
+  "i_imp_7d": 1811.0,
+  "i_report_rate": 0.0145,
+  "i_safe": true
+ },
+ "27": {
+  "i_age_h": 93.9,
+  "i_author_id": 103,
+  "i_category": "tech",
+  "i_clk_7d": 90.0,
+  "i_emb": [
+   0.423,
+   -0.601,
+   0.778,
+   -0.132
+  ],
+  "i_imp_7d": 894.0,
+  "i_report_rate": 0.0036,
+  "i_safe": true
+ },
+ "28": {
+  "i_age_h": 173.5,
+  "i_author_id": 104,
+  "i_category": "food",
+  "i_clk_7d": 43.0,
+  "i_emb": [
+   -0.074,
+   0.487,
+   -0.83,
+   -0.682
+  ],
+  "i_imp_7d": 2923.0,
+  "i_report_rate": 0.0284,
+  "i_safe": true
+ },
+ "29": {
+  "i_age_h": 112.2,
+  "i_author_id": 105,
+  "i_category": "travel",
+  "i_clk_7d": 10.0,
+  "i_emb": [
+   0.312,
+   0.223,
+   0.192,
+   -0.051
+  ],
+  "i_imp_7d": 1240.0,
+  "i_report_rate": 0.0177,
+  "i_safe": true
+ },
+ "3": {
+  "i_age_h": 15.8,
+  "i_author_id": 103,
+  "i_category": "food",
+  "i_clk_7d": 157.0,
+  "i_emb": [
+   0.171,
+   -0.901,
+   -0.558,
+   0.113
+  ],
+  "i_imp_7d": 2028.0,
+  "i_report_rate": 0.0175,
+  "i_safe": true
+ },
+ "30": {
+  "i_age_h": 6.1,
+  "i_author_id": 106,
+  "i_category": "sports",
+  "i_clk_7d": 70.0,
+  "i_emb": [
+   0.599,
+   0.453,
+   -0.794,
+   0.499
+  ],
+  "i_imp_7d": 3070.0,
+  "i_report_rate": 0.0164
+ },
+ "31": {
+  "i_age_h": 198.5,
+  "i_author_id": 107,
+  "i_category": "music",
+  "i_clk_7d": 73.0,
+  "i_emb": [
+   -0.578,
+   -0.496,
+   -0.414,
+   -0.519
+  ],
+  "i_imp_7d": 1340.0,
+  "i_report_rate": 0.0262,
+  "i_safe": true
+ },
+ "32": {
+  "i_age_h": 32.3,
+  "i_author_id": 108,
+  "i_category": "tech",
+  "i_clk_7d": 99.0,
+  "i_emb": [
+   0.82,
+   -0.292,
+   -0.084,
+   0.167
+  ],
+  "i_imp_7d": 2870.0,
+  "i_report_rate": 0.0126,
+  "i_safe": true
+ },
+ "33": {
+  "i_author_id": 109,
+  "i_category": "food",
+  "i_clk_7d": 236.0,
+  "i_emb": [
+   0.064,
+   0.047,
+   -0.963,
+   -0.12
+  ],
+  "i_imp_7d": 4433.0,
+  "i_report_rate": 0.0275,
+  "i_safe": true
+ },
+ "34": {
+  "i_age_h": 186.5,
+  "i_author_id": 110,
+  "i_category": "travel",
+  "i_clk_7d": 127.0,
+  "i_emb": [
+   -0.7,
+   -0.717,
+   0.238,
+   -0.759
+  ],
+  "i_imp_7d": 1700.0,
+  "i_report_rate": 0.08,
+  "i_safe": true
+ },
+ "35": {
+  "i_age_h": 133.8,
+  "i_author_id": 111,
+  "i_category": "sports",
+  "i_clk_7d": 29.0,
+  "i_emb": [
+   0.569,
+   -0.788,
+   0.121,
+   -0.503
+  ],
+  "i_imp_7d": 705.0,
+  "i_report_rate": 0.0156
+ },
+ "36": {
+  "i_age_h": 109.1,
+  "i_author_id": 100,
+  "i_category": "music",
+  "i_clk_7d": 24.0,
+  "i_emb": [
+   -0.944,
+   0.788,
+   -0.873,
+   -0.349
+  ],
+  "i_imp_7d": 2468.0,
+  "i_report_rate": 0.0029,
+  "i_safe": true
+ },
+ "37": {
+  "i_age_h": 67.2,
+  "i_author_id": 101,
+  "i_category": "tech",
+  "i_clk_7d": 324.0,
+  "i_emb": [
+   0.016,
+   0.615,
+   0.016,
+   -0.505
+  ],
+  "i_imp_7d": 4341.0,
+  "i_report_rate": 0.006,
+  "i_safe": true
+ },
+ "38": {
+  "i_age_h": 63.0,
+  "i_author_id": 102,
+  "i_category": "food",
+  "i_clk_7d": 474.0,
+  "i_emb": [
+   0.119,
+   0.887,
+   0.68,
+   -0.726
+  ],
+  "i_imp_7d": 4486.0,
+  "i_report_rate": 0.0283,
+  "i_safe": true
+ },
+ "39": {
+  "i_age_h": 161.4,
+  "i_author_id": 103,
+  "i_category": "travel",
+  "i_clk_7d": 59.0,
+  "i_emb": [
+   -0.143,
+   -0.575,
+   -0.394,
+   -0.755
+  ],
+  "i_imp_7d": 1196.0,
+  "i_report_rate": 0.0095,
+  "i_safe": true
+ },
+ "4": {
+  "i_age_h": 29.2,
+  "i_author_id": 104,
+  "i_category": "travel",
+  "i_clk_7d": 49.0,
+  "i_emb": [
+   -0.383,
+   0.632,
+   -0.639,
+   0.163
+  ],
+  "i_imp_7d": 1290.0,
+  "i_report_rate": 0.0043,
+  "i_safe": true
+ },
+ "40": {
+  "i_age_h": 88.5,
+  "i_author_id": 104,
+  "i_category": "sports",
+  "i_clk_7d": 165.0,
+  "i_emb": [
+   -0.494,
+   -0.725,
+   -0.065,
+   0.493
+  ],
+  "i_imp_7d": 1465.0,
+  "i_report_rate": 0.0193
+ },
+ "41": {
+  "i_age_h": 237.6,
+  "i_author_id": 105,
+  "i_category": "music",
+  "i_clk_7d": 49.0,
+  "i_emb": [
+   0.665,
+   -0.677,
+   -0.137,
+   0.031
+  ],
+  "i_imp_7d": 971.0,
+  "i_report_rate": 0.0146,
+  "i_safe": true
+ },
+ "42": {
+  "i_age_h": 23.0,
+  "i_author_id": 106,
+  "i_category": "tech",
+  "i_clk_7d": 159.0,
+  "i_emb": [
+   -0.268,
+   -0.324,
+   -0.083,
+   0.406
+  ],
+  "i_imp_7d": 2978.0,
+  "i_report_rate": 0.0107,
+  "i_safe": true
+ },
+ "43": {
+  "i_age_h": 123.4,
+  "i_author_id": 107,
+  "i_category": "food",
+  "i_clk_7d": 144.0,
+  "i_emb": [
+   -0.871,
+   0.97,
+   0.577,
+   0.943
+  ],
+  "i_imp_7d": 3348.0,
+  "i_report_rate": 0.0187,
+  "i_safe": true
+ },
+ "44": {
+  "i_author_id": 108,
+  "i_category": "travel",
+  "i_clk_7d": 15.0,
+  "i_emb": [
+   -0.637,
+   0.512,
+   0.64,
+   0.699
+  ],
+  "i_imp_7d": 1058.0,
+  "i_report_rate": 0.0082,
+  "i_safe": true
+ },
+ "45": {
+  "i_age_h": 124.0,
+  "i_author_id": 109,
+  "i_category": "sports",
+  "i_clk_7d": 119.0,
+  "i_emb": [
+   -0.011,
+   -0.346,
+   -0.442,
+   0.599
+  ],
+  "i_imp_7d": 2318.0,
+  "i_report_rate": 0.0161
+ },
+ "46": {
+  "i_age_h": 225.3,
+  "i_author_id": 110,
+  "i_category": "music",
+  "i_clk_7d": 91.0,
+  "i_emb": [
+   0.269,
+   0.603,
+   -0.833,
+   0.712
+  ],
+  "i_imp_7d": 1701.0,
+  "i_report_rate": 0.0022,
+  "i_safe": false
+ },
+ "47": {
+  "i_age_h": 3.8,
+  "i_author_id": 111,
+  "i_category": "tech",
+  "i_clk_7d": 26.0,
+  "i_emb": [
+   0.989,
+   -0.164,
+   0.831,
+   0.243
+  ],
+  "i_imp_7d": 745.0,
+  "i_report_rate": 0.0037,
+  "i_safe": true
+ },
+ "48": {
+  "i_age_h": 27.2,
+  "i_author_id": 100,
+  "i_category": "food",
+  "i_clk_7d": 36.0,
+  "i_emb": [
+   -0.677,
+   -0.899,
+   -0.596,
+   -0.376
+  ],
+  "i_imp_7d": 553.0,
+  "i_report_rate": 0.0072,
+  "i_safe": true
+ },
+ "49": {
+  "i_age_h": 107.5,
+  "i_author_id": 101,
+  "i_category": "travel",
+  "i_clk_7d": 178.0,
+  "i_emb": [
+   0.344,
+   -0.459,
+   0.607,
+   0.989
+  ],
+  "i_imp_7d": 2698.0,
+  "i_report_rate": 0.0062,
+  "i_safe": true
+ },
+ "5": {
+  "i_age_h": 16.0,
+  "i_author_id": 105,
+  "i_category": "sports",
+  "i_clk_7d": 83.0,
+  "i_emb": [
+   -0.881,
+   -0.588,
+   0.361,
+   -0.145
+  ],
+  "i_imp_7d": 1739.0,
+  "i_report_rate": 0.0164
+ },
+ "50": {
+  "i_age_h": 132.7,
+  "i_author_id": 102,
+  "i_category": "sports",
+  "i_clk_7d": 3.0,
+  "i_emb": [
+   -0.621,
+   -0.05,
+   0.869,
+   -0.787
+  ],
+  "i_imp_7d": 502.0,
+  "i_report_rate": 0.022
+ },
+ "51": {
+  "i_age_h": 131.5,
+  "i_author_id": 103,
+  "i_category": "music",
+  "i_clk_7d": 301.0,
+  "i_emb": [
+   0.777,
+   0.941,
+   -0.384,
+   -0.57
+  ],
+  "i_imp_7d": 3740.0,
+  "i_report_rate": 0.08,
+  "i_safe": true
+ },
+ "52": {
+  "i_age_h": 169.9,
+  "i_author_id": 104,
+  "i_category": "tech",
+  "i_clk_7d": 92.0,
+  "i_emb": [
+   0.272,
+   -0.191,
+   -0.305,
+   -0.891
+  ],
+  "i_imp_7d": 2080.0,
+  "i_report_rate": 0.025,
+  "i_safe": true
+ },
+ "53": {
+  "i_age_h": 211.3,
+  "i_author_id": 105,
+  "i_category": "food",
+  "i_clk_7d": 8.0,
+  "i_emb": [
+   -0.139,
+   -0.889,
+   0.33,
+   -0.238
+  ],
+  "i_imp_7d": 1263.0,
+  "i_report_rate": 0.0188,
+  "i_safe": true
+ },
+ "54": {
+  "i_age_h": 58.9,
+  "i_author_id": 106,
+  "i_category": "travel",
+  "i_clk_7d": 356.0,
+  "i_emb": [
+   -0.414,
+   -0.081,
+   -0.685,
+   -0.108
+  ],
+  "i_imp_7d": 4344.0,
+  "i_report_rate": 0.0085,
+  "i_safe": true
+ },
+ "55": {
+  "i_author_id": 107,
+  "i_category": "sports",
+  "i_clk_7d": 110.0,
+  "i_emb": [
+   -0.353,
+   -0.931,
+   0.765,
+   -0.564
+  ],
+  "i_imp_7d": 2356.0,
+  "i_report_rate": 0.0099
+ },
+ "56": {
+  "i_age_h": 114.4,
+  "i_author_id": 108,
+  "i_category": "music",
+  "i_clk_7d": 8.0,
+  "i_emb": [
+   0.006,
+   -0.598,
+   0.009,
+   -0.99
+  ],
+  "i_imp_7d": 1698.0,
+  "i_report_rate": 0.0114,
+  "i_safe": true
+ },
+ "57": {
+  "i_age_h": 141.2,
+  "i_author_id": 109,
+  "i_category": "tech",
+  "i_clk_7d": 233.0,
+  "i_emb": [
+   -0.212,
+   -0.401,
+   0.259,
+   -0.831
+  ],
+  "i_imp_7d": 2364.0,
+  "i_report_rate": 0.0043,
+  "i_safe": true
+ },
+ "58": {
+  "i_age_h": 214.4,
+  "i_author_id": 110,
+  "i_category": "food",
+  "i_clk_7d": 467.0,
+  "i_emb": [
+   0.568,
+   0.193,
+   0.529,
+   0.441
+  ],
+  "i_imp_7d": 4535.0,
+  "i_report_rate": 0.0047,
+  "i_safe": true
+ },
+ "59": {
+  "i_age_h": 154.7,
+  "i_author_id": 111,
+  "i_category": "travel",
+  "i_clk_7d": 94.0,
+  "i_emb": [
+   -0.912,
+   0.671,
+   0.784,
+   0.255
+  ],
+  "i_imp_7d": 4248.0,
+  "i_report_rate": 0.0217,
+  "i_safe": true
+ },
+ "6": {
+  "i_age_h": 87.4,
+  "i_author_id": 106,
+  "i_category": "music",
+  "i_clk_7d": 162.0,
+  "i_emb": [
+   -0.503,
+   -0.64,
+   0.56,
+   -0.836
+  ],
+  "i_imp_7d": 2773.0,
+  "i_report_rate": 0.0277,
+  "i_safe": true
+ },
+ "60": {
+  "i_age_h": 121.5,
+  "i_author_id": 100,
+  "i_category": "sports",
+  "i_clk_7d": 91.0,
+  "i_emb": [
+   0.67,
+   0.609,
+   0.653,
+   0.168
+  ],
+  "i_imp_7d": 4341.0,
+  "i_report_rate": 0.0157
+ },
+ "7": {
+  "i_age_h": 175.3,
+  "i_author_id": 107,
+  "i_category": "tech",
+  "i_clk_7d": 173.0,
+  "i_emb": [
+   -0.424,
+   0.96,
+   -0.764,
+   -0.164
+  ],
+  "i_imp_7d": 2659.0,
+  "i_report_rate": 0.0263,
+  "i_safe": true
+ },
+ "8": {
+  "i_age_h": 10.4,
+  "i_author_id": 108,
+  "i_category": "food",
+  "i_clk_7d": 67.0,
+  "i_emb": [
+   0.336,
+   0.529,
+   0.146,
+   0.751
+  ],
+  "i_imp_7d": 3002.0,
+  "i_report_rate": 0.0147,
+  "i_safe": true
+ },
+ "9": {
+  "i_age_h": 119.7,
+  "i_author_id": 109,
+  "i_category": "travel",
+  "i_clk_7d": 122.0,
+  "i_emb": [
+   0.594,
+   -0.862,
+   -0.813,
+   -0.46
+  ],
+  "i_imp_7d": 2770.0,
+  "i_report_rate": 0.0105,
+  "i_safe": true
+ }
+}

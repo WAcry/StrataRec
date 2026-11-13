@@ -383,7 +383,7 @@ internal sealed partial class UnifiedCompilation
             }
             catch (JsonException ex)
             {
-                _diagnostics.Error("PATCH_SCHEMA", arm.Artifact, arm.PointerPrefix + "/" + section + "/" + JsonPointer.Escape(name) + PatchableView.JsonPathToPointer(ex.Path),
+                _diagnostics.Error("PATCH_SCHEMA", arm.Artifact, arm.PointerPrefix + "/" + section + "/" + JsonPointer.Escape(name) + ArtifactSerializer.JsonPathToPointer(ex.Path),
                     ex.Message, "a new entry must be a complete definition (design 11.3)");
             }
         }

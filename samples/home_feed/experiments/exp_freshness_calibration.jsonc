@@ -1,0 +1,19 @@
+// Boost fresh items after fusion. Writes the flow column score.final (design 4.6).
+{
+  "experiment_id": "exp_freshness_calibration",
+  "pipeline_id": "home_feed",
+  "owner": "fusion-team",
+  "description": "Multiply the final score by a freshness factor.",
+  "expires_at": "2099-12-31",
+  "arms": {
+    "control": {},
+    "calibrated": {
+      "nodes": {
+        "freshness_calibration": {
+          "order": 470, "op": "ExpressionScorer@1",
+          "config": { "output_col": "score.final", "expr": "col.score.final * (1.0 + 0.5 * exp(-(col.item.age_hours ?? 240.0) / 48.0))" }
+        }
+      }
+    }
+  }
+}

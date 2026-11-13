@@ -1,0 +1,25 @@
+// Features of the home feed (design 6.3). A feature with "default" is non-nullable; without one it is T?.
+{
+  "catalog_id": "home_feed",
+  "entities": {
+    "user":   { "scope": "context",   "key": "ctx.request.user_id", "key_type": "int64" },
+    "item":   { "scope": "candidate", "key": "col.entity_id",       "key_type": "int64" },
+    "author": { "scope": "candidate", "key": "col.item.author_id",  "key_type": "int64" }
+  },
+  "features": {
+    "user.ctr_30d":        { "type": "float32", "source": "user_store", "field": "u_ctr_30d", "default": 0.02 },
+    "user.tenure_days":    { "type": "float32", "source": "user_store", "field": "u_tenure_d", "default": 0.0 },
+    "item.clicks_7d":      { "type": "float32", "source": "item_store", "field": "i_clk_7d", "default": 0.0 },
+    "item.impressions_7d": { "type": "float32", "source": "item_store", "field": "i_imp_7d", "default": 0.0 },
+    "item.author_id":      { "type": "int64",   "source": "item_store", "field": "i_author_id" },
+    "item.category":       { "type": "string",  "source": "item_store", "field": "i_category", "default": "unknown" },
+    "item.is_policy_safe": { "type": "bool",    "source": "item_store", "field": "i_safe" },
+    "item.report_rate":    { "type": "float32", "source": "item_store", "field": "i_report_rate", "default": 0.0 },
+    "item.age_hours":      { "type": "float32", "source": "item_store", "field": "i_age_h" },
+    "item.embedding":      { "type": "vec<float32,4>", "source": "item_store", "field": "i_emb" },
+    "author.followers":    { "type": "float32", "source": "author_store", "field": "a_followers", "default": 0.0 }
+  },
+  "derived_features": {
+    "item.smoothed_ctr": { "type": "float32", "expr": "(col.item.clicks_7d + 10.0) / (col.item.impressions_7d + 100.0)" }
+  }
+}

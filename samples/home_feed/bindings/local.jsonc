@@ -1,0 +1,19 @@
+// Local bindings: every source is an in-memory fixture, so the pipeline runs offline and deterministically.
+{
+  "environment": "local",
+  "sources": {
+    "user_store":   { "connector": "memory@1", "data_file": "fixtures/users.json" },
+    "item_store":   { "connector": "memory@1", "data_file": "fixtures/items.json", "max_batch": 25 },
+    "author_store": { "connector": "memory@1", "data_file": "fixtures/authors.json" }
+  },
+  "models": {
+    "ctr_model": {
+      "client": "linear@1",
+      "outputs": { "p_click": { "bias": -1.5, "weights": { "smoothed_ctr": 12.0, "log_followers": 0.05 }, "activation": "sigmoid" } }
+    }
+  },
+  "candidate_sources": {
+    "two_tower": { "client": "memory_list@1", "data_file": "fixtures/recall_two_tower.json" },
+    "popular":   { "client": "memory_list@1", "data_file": "fixtures/recall_popular.json" }
+  }
+}

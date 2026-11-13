@@ -1,0 +1,7 @@
+{
+  "pipeline_id": "home_feed",
+  "request_id": "req-anon",
+  "inputs": { "session_id": "s-anon", "surface": "explore" },
+  "deadline_ms": 200,
+  "time_ms": 1767225600000
+}

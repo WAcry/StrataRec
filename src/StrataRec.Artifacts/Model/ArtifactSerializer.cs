@@ -40,6 +40,63 @@ public static class ArtifactSerializer
 
     public static JsonNode ToNode<T>(T value) => JsonSerializer.SerializeToNode(value, Options)!;
 
+    /// <summary>Converts System.Text.Json's <c>$.a.b</c> / <c>$['a.b']</c> error paths to an RFC 6901 pointer, so deserialization errors say where in the document they are.</summary>
+    public static string JsonPathToPointer(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || path == "$")
+        {
+            return string.Empty;
+        }
+
+        var builder = new System.Text.StringBuilder();
+        var i = path[0] == '$' ? 1 : 0;
+        while (i < path.Length)
+        {
+            string token;
+            if (path[i] == '.')
+            {
+                var end = i + 1;
+                while (end < path.Length && path[end] != '.' && path[end] != '[')
+                {
+                    end++;
+                }
+
+                token = path[(i + 1)..end];
+                i = end;
+            }
+            else if (path[i] == '[' && i + 1 < path.Length && path[i + 1] == '\'')
+            {
+                var end = path.IndexOf("']", i + 2, StringComparison.Ordinal);
+                if (end < 0)
+                {
+                    break;
+                }
+
+                token = path[(i + 2)..end];
+                i = end + 2;
+            }
+            else if (path[i] == '[')
+            {
+                var end = path.IndexOf(']', i + 1);
+                if (end < 0)
+                {
+                    break;
+                }
+
+                token = path[(i + 1)..end];
+                i = end + 1;
+            }
+            else
+            {
+                break;
+            }
+
+            builder.Append('/').Append(Json.JsonPointer.Escape(token));
+        }
+
+        return builder.ToString();
+    }
+
     private static JsonSerializerOptions CreateOptions()
     {
         var options = new JsonSerializerOptions

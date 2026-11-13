@@ -4,7 +4,7 @@ namespace StrataRec.Artifacts.Json;
 /// "Did you mean ...?" suggestions for misspelled keys, so configuration errors can say how to fix them
 /// (AGENTS.md conventions; design 11.3 typo example <c>diversty_cap</c>).
 /// </summary>
-public static class NameSuggestions
+internal static class NameSuggestions
 {
     /// <summary>
     /// Returns the candidate closest to <paramref name="name"/> by <see cref="EditDistance"/>, or

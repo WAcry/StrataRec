@@ -35,6 +35,12 @@ public sealed class ManifestArtifacts
     public required string Pipeline { get; init; }
 
     public Dictionary<string, string> Tables { get; init; } = new();
+
+    /// <summary>
+    /// The policy the release was validated with (patchable paths, design 11.4). Nodes re-run patch validation at load
+    /// with the same policy, so a permissive repository policy is not rejected by stricter defaults.
+    /// </summary>
+    public string? Policy { get; init; }
 }
 
 /// <summary>Domain/layer traffic split (design 10.2, 11.1).</summary>

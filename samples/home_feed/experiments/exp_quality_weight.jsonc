@@ -1,0 +1,12 @@
+// A parameter-only experiment: no node variants, only a per-request parameter override (design 12.2).
+{
+  "experiment_id": "exp_quality_weight",
+  "pipeline_id": "home_feed",
+  "owner": "fusion-team",
+  "description": "Stronger quality multiplier and a shorter feed.",
+  "expires_at": "2099-12-31",
+  "arms": {
+    "control": {},
+    "strong": { "params": { "quality_weight": 0.8, "final_top_k": 8 } }
+  }
+}

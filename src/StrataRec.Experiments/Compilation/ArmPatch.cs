@@ -237,7 +237,7 @@ internal static class ArmAnalyzer
                 }
 
                 diagnostics.Error("PARAM_UNDECLARED", arm.Artifact, pointer, $"Parameter '{name}' is not declared.",
-                    Artifacts.Model.NameSuggestions.DidYouMean(name, declared) ?? $"declare it in the same arm under /param_schema/{name}");
+                    NameSuggestions.DidYouMean(name, declared) ?? $"declare it in the same arm under /param_schema/{name}");
                 arm.Valid = false;
                 continue;
             }
