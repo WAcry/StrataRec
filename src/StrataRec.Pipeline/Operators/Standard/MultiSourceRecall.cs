@@ -288,18 +288,29 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 first = context.AppendRows(index.Int64Keys);
             }
 
+            // The appended rows are consecutive: values are written row by row, their validity once for the whole range
+            // (a bit set per row and column would wait on the store to the same word before it).
             var maskColumn = (ScalarColumn<long>)context.Output(mask);
             var rankColumn = (ScalarColumn<long>)context.Output(bestRank);
-            var scoreColumn = context.Output(bestScore);
+            var scoreColumn = (ScalarColumn<double>)context.Output(bestScore);
             var primaryColumn = (DictStringColumn)context.Output(primary);
+            var maskValues = maskColumn.Values;
+            var rankValues = rankColumn.Values;
+            var scoreValues = scoreColumn.Values;
+            var primaryCodes = primaryColumn.Codes;
             for (var i = 0; i < count; i++)
             {
                 var row = first + i;
-                maskColumn.Set(row, masks[i]);
-                rankColumn.Set(row, ranks[i]);
-                ColumnValues.Set(scoreColumn, row, ScalarValue.FromFloat64(scores[i]));
-                primaryColumn.Set(row, sources[primaries[i]].Name);
+                maskValues[row] = masks[i];
+                rankValues[row] = ranks[i];
+                scoreValues[row] = scores[i];
+                primaryCodes[row] = primaryColumn.GetOrAddCode(sources[primaries[i]].Name);
             }
+
+            maskColumn.SetValid(first, count);
+            rankColumn.SetValid(first, count);
+            scoreColumn.SetValid(first, count);
+            primaryColumn.SetValid(first, count);
         }
     }
 }

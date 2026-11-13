@@ -11,6 +11,11 @@ namespace StrataRec.Core.Columns;
 /// valid (<see cref="IsValid"/>) and, for feature slots, filled. Other rows may hold arbitrary data, but every
 /// buffer guarantees <em>structural</em> validity for all rows: dictionary codes are in range, list extents are
 /// inside the arena. Vectorized code may therefore scan whole physical ranges without bounds failures.</para>
+/// <para>A buffer made directly starts with no validity bitmap, meaning every row is valid: scratch buffers are read
+/// only on the rows their writer wrote. A slot of a <see cref="Tables.CandidateTable"/> always has a bitmap, and every
+/// row in it is missing until something writes it (the table's rule); writers mark what they write, through the
+/// <c>Set</c> methods, or after a bulk write through <see cref="SetValid(ReadOnlySpan{int})"/> or
+/// <see cref="SetValid(int, int)"/>.</para>
 /// <para>All arrays are rented from the owning <see cref="RequestMemory"/> and returned when the request ends.</para>
 /// </remarks>
 public abstract class ColumnBuffer
@@ -34,17 +39,42 @@ public abstract class ColumnBuffer
     /// <summary>Validity bitmap (bit set = value present). <c>null</c> means every row is valid.</summary>
     public ulong[]? Validity => _validity;
 
-    public bool IsValid(int row) => _validity is null || Bits.Get(_validity, row);
+    // Row-at-a-time writers and readers call these once per row: they index the array directly rather than through a span.
+    public bool IsValid(int row) => _validity is not { } words || (words[row >> 6] & (1UL << row)) != 0;
 
     /// <summary>Marks a row as missing (allocating the validity bitmap on first use).</summary>
-    public void SetMissing(int row) => Bits.Clear(EnsureValidity(), row);
+    public void SetMissing(int row) => EnsureValidity()[row >> 6] &= ~(1UL << row);
 
     /// <summary>Marks a row as present. A no-op while the column has no validity bitmap.</summary>
     public void SetValid(int row)
     {
+        if (_validity is { } words)
+        {
+            words[row >> 6] |= 1UL << row;
+        }
+    }
+
+    /// <summary>
+    /// Marks the given rows present, for a writer that wrote their values through <see cref="ScalarColumn{T}.Values"/>
+    /// or a span. A no-op while the column has no validity bitmap.
+    /// </summary>
+    public void SetValid(ReadOnlySpan<int> rows)
+    {
         if (_validity is not null)
         {
-            Bits.Set(_validity, row);
+            Bits.SetEach(_validity, rows);
+        }
+    }
+
+    /// <summary>
+    /// Marks rows <c>[first, first + count)</c> present, for a writer that wrote their values in bulk (a row source writes
+    /// the rows it appended, which are consecutive). A no-op while the column has no validity bitmap.
+    /// </summary>
+    public void SetValid(int first, int count)
+    {
+        if (_validity is not null)
+        {
+            Bits.SetRange(_validity, first, count);
         }
     }
 
@@ -71,6 +101,14 @@ public abstract class ColumnBuffer
         }
 
         return _validity;
+    }
+
+    /// <summary>Marks every row missing. Only for <see cref="Tables.CandidateTable"/>, which owns when a row has a value.</summary>
+    internal void SetAllMissing()
+    {
+        var words = Bits.WordCount(Capacity);
+        _validity ??= Memory.Rent<ulong>(words);
+        _validity.AsSpan(0, words).Clear();
     }
 
     /// <summary>

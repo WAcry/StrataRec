@@ -487,11 +487,17 @@ internal static class DestinationWriter
                 return;
         }
 
-        if (!allValid || destination.Validity is not null)
+        if (allValid)
+        {
+            // A table slot starts with every row missing (CandidateTable): the written rows become present. A scratch
+            // buffer without a bitmap is already all valid.
+            destination.SetValid(rows);
+        }
+        else
         {
             for (var k = 0; k < rows.Length; k++)
             {
-                destination.SetValidity(rows[k], allValid || valid.Get(identity ? rows[k] : k));
+                destination.SetValidity(rows[k], valid.Get(identity ? rows[k] : k));
             }
         }
 

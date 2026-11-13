@@ -115,6 +115,8 @@ public static class ColumnValues
     /// Replaces non-finite values on the given rows with <paramref name="defaultValue"/> (or marks them missing when
     /// the default is missing). Returns the number of rows changed (metric <c>column_nonfinite_total</c>).
     /// </summary>
+    /// <remarks>A row's validity is read only when its value is not finite, which is rare: the common path is one scan of
+    /// the values.</remarks>
     public static int SanitizeNonFinite(ColumnBuffer column, ReadOnlySpan<int> rows, in ScalarValue defaultValue)
     {
         var changed = 0;
@@ -123,7 +125,7 @@ public static class ColumnValues
             case ScalarColumn<double> d:
                 foreach (var r in rows)
                 {
-                    if (d.IsValid(r) && !double.IsFinite(d[r]))
+                    if (!double.IsFinite(d[r]) && d.IsValid(r))
                     {
                         Replace(column, r, defaultValue);
                         changed++;
@@ -134,7 +136,7 @@ public static class ColumnValues
             case ScalarColumn<float> f:
                 foreach (var r in rows)
                 {
-                    if (f.IsValid(r) && !float.IsFinite(f[r]))
+                    if (!float.IsFinite(f[r]) && f.IsValid(r))
                     {
                         Replace(column, r, defaultValue);
                         changed++;

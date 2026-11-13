@@ -750,8 +750,8 @@ public sealed class PlanBuilder
 
     /// <summary>
     /// Static data-flow check of one fully merged node set (design 4.6, 5.3, 11.5): every non-nullable column a node
-    /// reads has a producer that cannot be skipped before it; fixed columns have one producer per path; row sources
-    /// after a producer write that column; nodes sharing an order are independent.
+    /// reads has a producer that cannot be skipped before it; fixed columns have one producer per path; row sources keep
+    /// every non-nullable column covered (<see cref="ValidateRowSource"/>); nodes sharing an order are independent.
     /// </summary>
     public void ValidateDataFlow(
         IReadOnlyList<CompiledNode> timeline,
@@ -763,6 +763,8 @@ public sealed class PlanBuilder
         var schema = Schema;
         var guaranteed = new HashSet<int>();
         var possible = new Dictionary<int, string>();
+        var versions = new Dictionary<int, string>(); // columns a node other than a row source wrote a version of → that node
+        var rowSources = new List<CompiledNode>();
         var fetched = new HashSet<int>();
         var ordered = new List<CompiledNode>(timeline);
         ordered.Sort(static (a, b) => a.Order != b.Order ? a.Order!.Value.CompareTo(b.Order!.Value) : string.CompareOrdinal(a.NodeId, b.NodeId));
@@ -831,16 +833,19 @@ public sealed class PlanBuilder
             var unskippable = node.When is null && node.MinRemainingMs is null
                 && (node.OnFailure == FailurePolicy.FailRequest || (fallback is not null && fallback.OnFailure == FailurePolicy.FailRequest));
 
-            if ((node.Effects & Effects.RowSource) != 0)
+            if (IsRowSource(node))
             {
-                foreach (var logical in possible.Keys)
+                ValidateRowSource(node, possible, versions, rowSources, artifact);
+                rowSources.Add(node);
+            }
+
+            foreach (var producer in fallback is null ? new[] { node } : new[] { node, fallback })
+            {
+                if (!IsRowSource(producer))
                 {
-                    var column = schema.Columns[logical];
-                    if (!column.Type.Nullable && !Writes(node, logical))
+                    foreach (var o in producer.Outputs)
                     {
-                        _diagnostics.Error("ROW_SOURCE_AFTER_COLUMN", artifact, node.Pointer,
-                            $"Row source '{node.NodeId}' appends rows after non-nullable column '{column.Name}' is produced but does not write it.",
-                            "move the row source earlier, write the column, or declare the column nullable");
+                        versions[o.LogicalId] = producer.NodeId;
                     }
                 }
             }
@@ -848,7 +853,7 @@ public sealed class PlanBuilder
             foreach (var output2 in node.Outputs)
             {
                 var column = schema.Columns[output2.LogicalId];
-                if (possible.TryGetValue(output2.LogicalId, out var previous) && !column.Flow && (node.Effects & Effects.RowSource) == 0)
+                if (possible.TryGetValue(output2.LogicalId, out var previous) && !column.Flow && !IsRowSource(node))
                 {
                     _diagnostics.Error("COLUMN_MULTIPLE_PRODUCERS", artifact, node.Pointer,
                         $"Column '{column.Name}' is produced by both '{previous}' and '{node.NodeId}' on the same path.",
@@ -918,6 +923,63 @@ public sealed class PlanBuilder
             }
         }
     }
+
+    /// <summary>
+    /// Checks a row source against the columns around it on one path (design 4.6). Row sources write one shared version
+    /// of each column, holding the rows each of them appended, and a row has no value in a column until something writes
+    /// it (<c>CandidateTable</c>). So a row source that appends rows after a non-nullable column exists must write it
+    /// (<c>ROW_SOURCE_AFTER_COLUMN</c>); every row source before the first one that writes a non-nullable column must write
+    /// it too (<c>ROW_SOURCE_BEFORE_COLUMN</c>); and no row source may write a column after another node wrote its own
+    /// version (<c>ROW_SOURCE_SHADOWS_VERSION</c>), since readers would switch to the shared version, which holds none of
+    /// that node's values. The first two would fail every request that runs both nodes, at commit; the last would hide
+    /// values without an error.
+    /// </summary>
+    private void ValidateRowSource(
+        CompiledNode node, Dictionary<int, string> possible, Dictionary<int, string> versions, List<CompiledNode> earlier, string artifact)
+    {
+        var schema = Schema;
+        foreach (var logical in possible.Keys)
+        {
+            var column = schema.Columns[logical];
+            if (!column.Type.Nullable && !Writes(node, logical))
+            {
+                _diagnostics.Error("ROW_SOURCE_AFTER_COLUMN", artifact, node.Pointer,
+                    $"Row source '{node.NodeId}' appends rows after non-nullable column '{column.Name}' is produced but does not write it.",
+                    versions.TryGetValue(logical, out var writer)
+                        ? $"move the row source before '{writer}', or declare the column nullable and handle missing values with '??'"
+                        : "write the column in the row source, move it earlier, or declare the column nullable and handle missing values with '??'");
+            }
+        }
+
+        foreach (var output in node.Outputs)
+        {
+            var column = schema.Columns[output.LogicalId];
+            if (versions.TryGetValue(output.LogicalId, out var writer))
+            {
+                _diagnostics.Error("ROW_SOURCE_SHADOWS_VERSION", artifact, node.Pointer,
+                    $"Row source '{node.NodeId}' writes '{column.Name}' after '{writer}' wrote its own version of it. Row sources write one " +
+                    $"version shared by the rows they append, which has none of the values '{writer}' wrote, and readers would switch to it.",
+                    $"move the row source before '{writer}', or write its values to another column and combine the two in a later node");
+            }
+            else if (!column.Type.Nullable && !possible.ContainsKey(output.LogicalId))
+            {
+                // The first row source to write the column: the rows appended before it have no value in it.
+                foreach (var before in earlier)
+                {
+                    if (!Writes(before, output.LogicalId))
+                    {
+                        _diagnostics.Error("ROW_SOURCE_BEFORE_COLUMN", artifact, before.Pointer,
+                            $"Row source '{before.NodeId}' appends rows but does not write non-nullable column '{column.Name}', which the " +
+                            $"later row source '{node.NodeId}' writes for its own rows; the rows of '{before.NodeId}' would have no value in it.",
+                            $"write '{column.Name}' in '{before.NodeId}' too, or declare it nullable " +
+                            $"(\"{column.Name}\": {{ \"type\": \"{column.Type.AsNullable()}\" }}) and handle missing values with '??'");
+                    }
+                }
+            }
+        }
+    }
+
+    private static bool IsRowSource(CompiledNode node) => (node.Effects & Effects.RowSource) != 0;
 
     /// <summary>
     /// A tap is a passive observer (design 8.3, 8.5): every output column it reads must have a producer before the
@@ -1036,7 +1098,7 @@ public sealed class PlanBuilder
                     if (o.LogicalId == logical)
                     {
                         found = true;
-                        rowSource |= (node.Effects & Effects.RowSource) != 0;
+                        rowSource |= IsRowSource(node);
                     }
                 }
             }
