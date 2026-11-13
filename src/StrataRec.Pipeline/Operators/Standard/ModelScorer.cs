@@ -216,12 +216,6 @@ public sealed class ModelScorerFactory : IOperatorFactory
             var batches = (n + batchSize - 1) / batchSize;
             var writers = new OutputWriter[batches];
             var calls = new Task<ModelStatus>[batches];
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(context.CancellationToken);
-            if (timeoutMs is { } t)
-            {
-                cts.CancelAfter(t);
-            }
-
             for (var b = 0; b < batches; b++)
             {
                 var offset = b * batchSize;
@@ -241,9 +235,11 @@ public sealed class ModelScorerFactory : IOperatorFactory
                     BatchSize = count,
                     Options = new ModelCallOptions(Seed: context.Seed),
                 };
-                calls[b] = context.InvokeModelAsync(client, target, call, writers[b], rows.AsMemory(offset, count), cts.Token);
+                calls[b] = context.InvokeModelAsync(client, target, call, writers[b], rows.AsMemory(offset, count), timeoutMs);
             }
 
+            // Each wait is bounded by the model's timeout and the node's budget; a batch that failed or was cut off is never
+            // read, since its abandoned client may still be writing it.
             var results = await Task.WhenAll(calls).ConfigureAwait(false);
             foreach (var status in results)
             {

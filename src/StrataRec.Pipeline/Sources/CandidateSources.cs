@@ -45,16 +45,22 @@ public readonly record struct CandidateSourceStatus(bool Succeeded, string? Erro
 /// quota, which the table's capacity already accounts for.
 /// </summary>
 /// <remarks>
-/// Closed by the framework when the source call completes, before the call releases the request memory: a source that
-/// adds after completing (which it must not) changes nothing and never writes into returned buffers. Being a framework
-/// type lets the call site record what a source returned, and refill it from a recording, for every operator.
+/// <para>Closed by the framework when the source call completes, before the call releases the request memory: a source
+/// that adds after completing (which it must not) changes nothing and never writes into returned buffers. Being a
+/// framework type lets the call site record what a source returned, and refill it from a recording, for every operator.</para>
+/// <para>A call the framework stopped waiting for (its timeout, the node's budget, the caller) abandons its buffer: the
+/// source may still be in the middle of an <see cref="Add(long, double)"/>, since closing is only a flag checked before
+/// each one, so from then on the buffer reads as empty and nobody reads the arrays the source may be writing. The arrays
+/// stay rented until the source completes (the call holds the request memory).</para>
 /// </remarks>
 public sealed class CandidateBuffer : ICandidateSink
 {
     private readonly EntityKey[] _keys;
     private readonly double[] _scores;
     private int _count;
+    private int _truncated;
     private bool _closed;
+    private bool _abandoned;
 
     public CandidateBuffer(int limit, RequestMemory memory)
     {
@@ -66,15 +72,16 @@ public sealed class CandidateBuffer : ICandidateSink
     /// <summary>The most candidates kept; also the <see cref="CandidateQuery.Limit"/> to ask for.</summary>
     public int Limit { get; }
 
-    public int Count => _count;
+    /// <summary>Candidates added; 0 once the call was abandoned.</summary>
+    public int Count => Volatile.Read(ref _abandoned) ? 0 : _count;
 
-    public ReadOnlySpan<EntityKey> Keys => _keys.AsSpan(0, _count);
+    public ReadOnlySpan<EntityKey> Keys => _keys.AsSpan(0, Count);
 
     /// <summary>Scores of <see cref="Keys"/>; a non-finite score is stored as 0.</summary>
-    public ReadOnlySpan<double> Scores => _scores.AsSpan(0, _count);
+    public ReadOnlySpan<double> Scores => _scores.AsSpan(0, Count);
 
-    /// <summary>Candidates dropped because the buffer was full.</summary>
-    public int Truncated { get; private set; }
+    /// <summary>Candidates dropped because the buffer was full; 0 once the call was abandoned.</summary>
+    public int Truncated => Volatile.Read(ref _abandoned) ? 0 : _truncated;
 
     public void Add(long entityId, double score) => Add(EntityKey.FromInt64(entityId), score);
 
@@ -89,7 +96,7 @@ public sealed class CandidateBuffer : ICandidateSink
 
         if (_count >= Limit)
         {
-            Truncated++;
+            _truncated++;
             return;
         }
 
@@ -99,6 +106,13 @@ public sealed class CandidateBuffer : ICandidateSink
     }
 
     internal void Close() => Volatile.Write(ref _closed, true);
+
+    /// <summary>The call was abandoned with the source still running: closes the buffer and hides what it holds.</summary>
+    internal void Abandon()
+    {
+        Volatile.Write(ref _abandoned, true);
+        Close();
+    }
 }
 
 /// <summary>A retrieval backend: ANN index, collaborative filtering, trending lists… (design 1.4). Thread-safe.</summary>

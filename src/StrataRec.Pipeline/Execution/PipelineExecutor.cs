@@ -647,13 +647,13 @@ public sealed class PipelineExecutor
             capturedCount = state.Table.Rows.Capture(captured);
         }
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (state.Replay is null)
-        {
-            cts.CancelAfter(TimeSpan.FromMilliseconds(budgetMs));
-        }
-
-        var context = new OperatorContext(state, node.NodeId, node.Effects, cts.Token);
+        // The attempt's absolute deadline. The context hands the operator a token cancelled at it and bounds every external
+        // wait by it, whether or not the client honours the token. A replay takes timing from its recording instead.
+        var deadline = state.Replay is null
+            ? Stopwatch.GetTimestamp() + (long)(Math.Min(budgetMs, AttemptBudget.MaxWaitMs) * Stopwatch.Frequency / 1000)
+            : long.MaxValue;
+        var budget = new AttemptBudget(cancellationToken, deadline);
+        var context = new OperatorContext(state, node.NodeId, node.Effects, budget);
         string? failure;
         var timedOut = false;
         try
@@ -662,7 +662,17 @@ public sealed class PipelineExecutor
             // (design 12.6). Recording only successes would bias triggered analysis against arms that fail more.
             MarkParamTriggers(state, node);
             await node.Operator.ExecuteAsync(context).ConfigureAwait(false);
-            failure = context.FailureReason ?? Commit(state, node);
+            if (budget.RanOut)
+            {
+                // A late success is not a success (AttemptBudget.RanOut). The operator itself is awaited, never abandoned:
+                // it changes the table the fallback works on.
+                timedOut = true;
+                failure = $"timed out after {budgetMs:0} ms";
+            }
+            else
+            {
+                failure = context.FailureReason ?? Commit(state, node);
+            }
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -672,6 +682,11 @@ public sealed class PipelineExecutor
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             failure = $"{ExceptionName(ex)}: {ex.Message}";
+        }
+        finally
+        {
+            // The node token's source lives on while a client the context abandoned still holds its token.
+            budget.Release();
         }
 
         state.Recorder?.Attempt(node.NodeId, timedOut ? ReplayTiming.TimedOut : ReplayTiming.Ran, budgetMs);

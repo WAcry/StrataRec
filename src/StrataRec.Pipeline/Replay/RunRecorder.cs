@@ -133,19 +133,23 @@ internal sealed class RunRecorder : IFeatureCallHook
         return sequence;
     }
 
-    /// <summary>Records a finished candidate source call; <paramref name="buffer"/> is closed and still rented.</summary>
-    public void CandidateCall(int sequence, IoOutcome outcome, string? error, TimeSpan duration, CandidateBuffer buffer)
+    /// <summary>Records a finished candidate source call, as the request saw it.</summary>
+    /// <param name="buffer">
+    /// What the source returned, closed and still rented; null unless it answered: the buffer of a call that failed or was
+    /// abandoned is not read, since an abandoned source may still be writing it.
+    /// </param>
+    public void CandidateCall(int sequence, IoOutcome outcome, string? error, TimeSpan duration, CandidateBuffer? buffer)
     {
         if (Begun(_pendingCandidates, sequence) is not { } begun)
         {
             return;
         }
 
-        var answered = outcome == IoOutcome.Ok;
-        var scores = new List<double>(answered ? buffer.Count : 0);
+        var answered = outcome == IoOutcome.Ok && buffer is not null;
+        var scores = new List<double>(answered ? buffer!.Count : 0);
         if (answered)
         {
-            foreach (var score in buffer.Scores)
+            foreach (var score in buffer!.Scores)
             {
                 scores.Add(score);
             }
@@ -160,7 +164,7 @@ internal sealed class RunRecorder : IFeatureCallHook
             Status = IoCall.OutcomeName(outcome),
             Error = error,
             DurationMs = duration.TotalMilliseconds,
-            Ids = answered ? ReplayJson.Keys(buffer.Keys) : null,
+            Ids = answered ? ReplayJson.Keys(buffer!.Keys) : null,
             Scores = scores,
         });
     }

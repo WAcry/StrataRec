@@ -165,7 +165,7 @@ public sealed class ReplayAttemptRecord
 {
     public required string Node { get; init; }
 
-    [Description("ran (finished within its budget, successfully or not), deadline_exceeded (no budget left to start) or timed_out (cancelled at its budget).")]
+    [Description("ran (finished within its budget, successfully or not), deadline_exceeded (no budget left to start) or timed_out (ran out of its budget: cut off at it, or returned only after it).")]
     public required string Timing { get; init; }
 
     public double? BudgetMs { get; init; }
