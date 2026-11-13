@@ -74,6 +74,18 @@ public sealed class ComparisonReport
 {
     public required int Bundles { get; init; }
 
+    /// <summary>Bundles replayed on both sides; only these enter the metrics.</summary>
+    public required int Compared { get; init; }
+
+    /// <summary>Bundles that could not be read or replayed on one side or both (see <see cref="RequestComparison.Error"/>).</summary>
+    public required int Unreadable { get; init; }
+
+    /// <summary>
+    /// <c>ok</c> (every bundle compared), <c>partial</c> (some bundles unreadable: the metrics cover the rest) or
+    /// <c>failed</c> (nothing compared, including when there were no bundles).
+    /// </summary>
+    public string Status => Compared == 0 ? "failed" : Unreadable > 0 ? "partial" : "ok";
+
     public required int TopK { get; init; }
 
     public required string ScoreColumn { get; init; }
@@ -115,8 +127,11 @@ public static class ReplayComparison
         var taus = new List<double>();
         var deltas = new List<double>();
         var identical = 0;
+        var compared = 0;
+        var unreadable = 0;
         foreach (var pair in pairs)
         {
+            unreadable += pair.Error is not null ? 1 : 0;
             if (pair.Baseline is not { } baseline || pair.Candidate is not { } candidate)
             {
                 requests.Add(new RequestComparison(pair.Name, pair.RequestId, pair.Baseline?.Result.Succeeded ?? false, pair.Candidate?.Result.Succeeded ?? false,
@@ -124,8 +139,9 @@ public static class ReplayComparison
                 continue;
             }
 
-            var left = ComparableResult.From(baseline.Result);
-            var right = ComparableResult.From(candidate.Result);
+            compared++;
+            var left = ComparableResult.From(baseline.Result, baseline.Aborted);
+            var right = ComparableResult.From(candidate.Result, candidate.Aborted);
             var diff = ResultComparison.Diff(left, right);
             var overlap = ResultComparison.Overlap(left.Ids, right.Ids, topK);
             overlaps.Add(overlap);
@@ -145,6 +161,8 @@ public static class ReplayComparison
         return new ComparisonReport
         {
             Bundles = pairs.Count,
+            Compared = compared,
+            Unreadable = unreadable,
             TopK = topK,
             ScoreColumn = scoreColumn,
             Baseline = baselineSide,

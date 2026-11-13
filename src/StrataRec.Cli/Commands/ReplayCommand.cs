@@ -29,7 +29,8 @@ internal static class ReplayCommand
             AllowMultipleArgumentsPerToken = true,
         };
         var expectIdentical = new Option<bool>("--expect-identical") { Description = "Exit with 1 unless every replay reproduces its recorded result exactly." };
-        var command = new Command("replay", "Replay recorded requests on a workspace and diff against the recorded results.")
+        var command = new Command("replay", "Replay recorded requests on a workspace and diff against the recorded results. " +
+            "Exits with 2 unless every bundle was replayed; the report is printed either way.")
         {
             config, environment, format, bundle, arms, expectIdentical,
         };
@@ -55,6 +56,11 @@ internal static class ReplayCommand
         {
             var (outcome, error) = await ReplayFileAsync(engine, file, options, cancellationToken).ConfigureAwait(false);
             results.Add((file, outcome, error));
+        }
+
+        if (files.Count == 0)
+        {
+            Console.Error.WriteLine($"{bundlePath}: no replay bundles found.");
         }
 
         var singleFile = files.Count == 1 && !Directory.Exists(bundlePath);
@@ -89,25 +95,40 @@ internal static class ReplayCommand
 
             if (!singleFile)
             {
-                var identical = 0;
-                foreach (var (_, outcome, _) in results)
-                {
-                    identical += outcome?.Report.Diff.Identical == true ? 1 : 0;
-                }
-
-                output.WriteLine($"{results.Count} bundle(s), {identical} reproduced the recorded result exactly");
+                var (replayed, unreadable, identical) = Counts(results);
+                output.WriteLine($"{results.Count} bundle(s), {replayed} replayed, {unreadable} unreadable, {identical} reproduced the recorded result exactly; " +
+                    $"status {Status(results)}");
             }
         }
 
-        var failed = false;
         var different = false;
-        foreach (var (_, outcome, error) in results)
+        foreach (var (_, outcome, _) in results)
         {
-            failed |= error is not null;
             different |= outcome is null || !outcome.Report.Diff.Identical;
         }
 
-        return failed ? 2 : expectIdentical && different ? 1 : 0;
+        // An unreadable bundle, or nothing to replay at all, is an input error even when the rest replayed identically.
+        return Status(results) != "ok" ? 2 : expectIdentical && different ? 1 : 0;
+    }
+
+    private static (int Replayed, int Unreadable, int Identical) Counts(List<(string File, ReplayOutcome? Outcome, string? Error)> results)
+    {
+        int replayed = 0, unreadable = 0, identical = 0;
+        foreach (var (_, outcome, error) in results)
+        {
+            replayed += outcome is not null ? 1 : 0;
+            unreadable += error is not null ? 1 : 0;
+            identical += outcome?.Report.Diff.Identical == true ? 1 : 0;
+        }
+
+        return (replayed, unreadable, identical);
+    }
+
+    /// <summary><c>ok</c> (every bundle replayed), <c>partial</c> (some unreadable) or <c>failed</c> (none replayed, or no bundles).</summary>
+    private static string Status(List<(string File, ReplayOutcome? Outcome, string? Error)> results)
+    {
+        var (replayed, unreadable, _) = Counts(results);
+        return replayed == 0 ? "failed" : unreadable > 0 ? "partial" : "ok";
     }
 
     /// <summary>Loads every pipeline of a workspace into a fresh engine; prints diagnostics and returns null on errors.</summary>
@@ -148,18 +169,19 @@ internal static class ReplayCommand
 
     private static void WriteReplaySummary(Utf8JsonWriter json, List<(string File, ReplayOutcome? Outcome, string? Error)> results)
     {
-        int identical = 0, errors = 0, gaps = 0;
-        foreach (var (_, outcome, error) in results)
+        var (replayed, unreadable, identical) = Counts(results);
+        var gaps = 0;
+        foreach (var (_, outcome, _) in results)
         {
-            identical += outcome?.Report.Diff.Identical == true ? 1 : 0;
-            errors += error is not null ? 1 : 0;
             gaps += outcome?.Report.Gaps.Count ?? 0;
         }
 
         json.WriteStartObject("summary");
+        json.WriteString("status", Status(results));
         json.WriteNumber("bundles", results.Count);
+        json.WriteNumber("replayed", replayed);
         json.WriteNumber("identical", identical);
-        json.WriteNumber("unreadable", errors);
+        json.WriteNumber("unreadable", unreadable);
         json.WriteNumber("gaps", gaps);
         json.WriteEndObject();
     }

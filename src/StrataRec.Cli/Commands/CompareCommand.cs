@@ -27,7 +27,8 @@ internal static class CompareCommand
         };
         var topK = new Option<int>("--top-k", "-k") { Description = "K of the Top-K overlap.", DefaultValueFactory = _ => 10 };
         var score = new Option<string>("--score") { Description = "Output column whose distribution is compared.", DefaultValueFactory = _ => "score" };
-        var command = new Command("compare", "Replay recorded requests on a baseline and a candidate workspace and compare the results (design 10.8).")
+        var command = new Command("compare", "Replay recorded requests on a baseline and a candidate workspace and compare the results (design 10.8). " +
+            "Exits with 2 unless every bundle was compared; the report is printed either way.")
         {
             candidate, environment, format, baseline, bundles, arms, topK, score,
         };
@@ -82,7 +83,6 @@ internal static class CompareCommand
         if (pairs.Count == 0)
         {
             Console.Error.WriteLine($"{bundlePath}: no replay bundles found.");
-            return 2;
         }
 
         var report = ReplayComparison.Compare(pairs, topK, scoreColumn, Manifest(pairs, static p => p.Baseline), Manifest(pairs, static p => p.Candidate));
@@ -95,7 +95,8 @@ internal static class CompareCommand
             WriteText(output, report, baselineConfig, candidateConfig);
         }
 
-        return 0;
+        // Metrics over part of the batch (or none of it) must not pass for a clean comparison in CI.
+        return report.Status == "ok" ? 0 : 2;
     }
 
     private static string Manifest(List<ReplayPair> pairs, Func<ReplayPair, ReplayOutcome?> side)
@@ -115,7 +116,10 @@ internal static class CompareCommand
     {
         json.WriteStartObject();
         json.WriteString("mode", "recorded");
+        json.WriteString("status", report.Status);
         json.WriteNumber("bundles", report.Bundles);
+        json.WriteNumber("compared", report.Compared);
+        json.WriteNumber("unreadable", report.Unreadable);
         json.WriteNumber("top_k", report.TopK);
         json.WriteString("score_column", report.ScoreColumn);
         WriteSide(json, "baseline", baseline, report.Baseline);
@@ -231,6 +235,12 @@ internal static class CompareCommand
     private static void WriteText(TextWriter output, ComparisonReport report, string baseline, string candidate)
     {
         output.WriteLine($"Recorded-mode comparison of {report.Bundles} bundle(s) (design 10.8); I/O is answered from the recordings.");
+        output.WriteLine(report.Status switch
+        {
+            "ok" => $"status: ok, {report.Compared} compared",
+            "partial" => $"status: partial, {report.Compared} compared, {report.Unreadable} unreadable (the metrics cover only the compared bundles)",
+            _ => $"status: failed, nothing compared ({report.Unreadable} unreadable)",
+        });
         output.WriteLine();
         // The baseline column is as wide as its longest value (paths and manifest ids can be long).
         var width = Math.Max(22, Math.Max(baseline.Length, report.Baseline.Manifest.Length) + 2);
