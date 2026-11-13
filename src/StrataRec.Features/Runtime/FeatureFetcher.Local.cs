@@ -40,14 +40,31 @@ public sealed partial class FeatureFetcher
     private TableVersion?[]? _pins; // by group index, rented on the first local read
     private readonly EntityKeyIndex? _localKeys; // the distinct keys of the current local read; null if no group is read locally
 
-    /// <summary>A local group read from its table; under replay, local groups are answered by the fetch path instead.</summary>
-    private bool ReadsLocally(FetchGroup group) => group.Local is not null && _hook is not { Replays: true };
+    /// <summary>
+    /// Whether this request reads the group from its table. A replay answers a local group through the fetch path instead,
+    /// from the recording (which it never prefetches either: see <see cref="Prefetches"/>).
+    /// </summary>
+    private bool ReadsLocally(FetchGroup group) => group.Supply.Mode switch
+    {
+        SupplyMode.Fetch => false,
+        SupplyMode.Local => _hook is not { Replays: true },
+    };
+
+    /// <summary>
+    /// Whether a prefetch (design 5.4) may start the group. A local group is read synchronously by the node that needs
+    /// it, for the rows live then, so it is never prefetched; nor under replay, whose answer must take the same rows' keys.
+    /// </summary>
+    private static bool Prefetches(FetchGroup group) => group.Supply.Mode switch
+    {
+        SupplyMode.Fetch => true,
+        SupplyMode.Local => false,
+    };
 
     /// <summary>The group's table version for this request, pinned on its first read.</summary>
     private TableVersion Pin(FetchGroup group)
     {
         var pins = _pins ??= _memory.RentCleared<TableVersion?>(Math.Max(1, _plan.Groups.Count));
-        return pins[group.Index] ??= group.Local!.Table.Pin();
+        return pins[group.Index] ??= group.Supply.Table!.Table.Pin();
     }
 
     /// <summary>Reads every local group of <paramref name="groups"/> for the members of <paramref name="member"/> still unfilled.</summary>
@@ -73,7 +90,7 @@ public sealed partial class FeatureFetcher
     /// <summary>One read of a candidate (or foreign-key) group: the live rows that miss any of <paramref name="features"/>.</summary>
     private void ReadLocal(FetchGroup group, ReadOnlySpan<int> features)
     {
-        var local = group.Local!;
+        var local = group.Supply.Table!;
         if (!local.Table.IsLoaded)
         {
             FailNotLoaded(local, features);
@@ -169,7 +186,7 @@ public sealed partial class FeatureFetcher
     private void Fill(
         FetchGroup group, ReadOnlySpan<int> features, TableVersion version, ReadOnlySpan<int> rows, ReadOnlySpan<LocalRecordRef> records)
     {
-        var local = group.Local!;
+        var local = group.Supply.Table!;
         var words = _table.GetFilled(_plan.Features[features[0]].Slot).Length;
         var rowBits = _memory.RentCleared<ulong>(words);
         foreach (var row in rows)
@@ -305,7 +322,7 @@ public sealed partial class FeatureFetcher
 
     private void ReadLocalContext(FetchGroup group, ReadOnlySpan<int> features)
     {
-        var local = group.Local!;
+        var local = group.Supply.Table!;
         if (!local.Table.IsLoaded)
         {
             FailNotLoaded(local, features);
@@ -404,7 +421,7 @@ public sealed partial class FeatureFetcher
         var fields = new int[features.Length];
         for (var i = 0; i < features.Length; i++)
         {
-            fields[i] = group.Local!.TableFields[_plan.Features[features[i]].FieldIndex];
+            fields[i] = group.Supply.Table!.TableFields[_plan.Features[features[i]].FieldIndex];
         }
 
         return fields;

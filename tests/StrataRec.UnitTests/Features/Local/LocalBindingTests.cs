@@ -45,6 +45,27 @@ public class LocalBindingTests
     }
 
     [Fact]
+    public void EveryMode_HasTheNameTheBindingParsesBack_AndTheSchemaAllowsExactlyThoseNames()
+    {
+        // The code handles a mode through switches over every SupplyMode value (a new value fails to compile there);
+        // what the compiler cannot see is the binding's spelling of a mode, and the schema's list of them.
+        var names = Enum.GetValues<SupplyMode>().Select(FeatureSourceResolver.ModeName).ToArray();
+        foreach (var mode in Enum.GetValues<SupplyMode>())
+        {
+            Assert.True(FeatureSourceResolver.TryParseMode(FeatureSourceResolver.ModeName(mode), out var parsed));
+            Assert.Equal(mode, parsed);
+        }
+
+        Assert.True(FeatureSourceResolver.TryParseMode(null, out var unset));
+        Assert.Equal(SupplyMode.Fetch, unset);
+        Assert.False(FeatureSourceResolver.TryParseMode("Local", out _));
+        var allowed = typeof(FeatureSourceBinding).GetProperty(nameof(FeatureSourceBinding.Mode))!
+            .GetCustomAttributes(typeof(System.ComponentModel.DataAnnotations.AllowedValuesAttribute), false)
+            .Cast<System.ComponentModel.DataAnnotations.AllowedValuesAttribute>().Single().Values;
+        Assert.Equal(names.Order(StringComparer.Ordinal), allowed.Cast<string>().Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
     public void LocalBinding_WithoutItsRequiredSettings_ReportsBothAtTheBinding()
     {
         var diagnostics = Build(new FeatureSourceBinding { Mode = "local" });
@@ -239,6 +260,6 @@ public class LocalBindingTests
         features(rig);
         var diagnostics = rig.TryBuild(baseDirectory);
         Assert.False(diagnostics.HasErrors, string.Join("; ", diagnostics.Items));
-        return rig.Plan.Groups.Single(g => g.SourceName == "item_store").Local!.Spec.Identity;
+        return rig.Plan.Groups.Single(g => g.SourceName == "item_store").Supply.Table!.Spec.Identity;
     }
 }
