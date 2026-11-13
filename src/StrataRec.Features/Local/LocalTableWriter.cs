@@ -54,7 +54,9 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     private readonly ulong[] _written;
     private readonly PendingBuffer _pending = new();
     private long[] _newStrings = new long[16]; // scratch set of the record's new strings, see NewStringBytes
-    private int _lookedUpField = -1;           // a string field NewStringBytes looked up: its code in _lookedUpIn, or -1 if new
+    // A string field NewStringBytes looked up during the current Commit (which clears it when it ends, however it ends):
+    // its code in _lookedUpIn, or -1 if new.
+    private int _lookedUpField = -1;
     private int _lookedUpCode;
     private TableVersion? _lookedUpIn;
     private readonly int[] _pendingStart;
@@ -75,6 +77,10 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     }
 
     public LocalTableSchema Schema => _layout.Schema;
+
+    /// <summary>Sees every version <see cref="BuildCompacted"/> builds, installed or discarded: lets a test check that a
+    /// discarded copy is not kept alive. Null outside tests.</summary>
+    internal Action<TableVersion>? CompactedCopyBuilt { get; set; }
 
     /// <summary>True between <see cref="BeginReload"/> and <see cref="CompleteReload"/> or <see cref="AbortReload"/>.</summary>
     public bool IsReloading => _reloading;
@@ -304,11 +310,21 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         _open = false;
         _token++;
         _openList = -1;
-        if (_ignored)
+        try
         {
-            return false;
+            return !_ignored && CommitRecord();
         }
+        finally
+        {
+            // The string lookup NewStringBytes keeps for Encode lives for this commit only, however it ends: on a write
+            // that fails for max_bytes it points into the compacted copy built and discarded for it, a whole second table.
+            _lookedUpField = -1;
+            _lookedUpIn = null;
+        }
+    }
 
+    private bool CommitRecord()
+    {
         var newKey = _oldPosition == 0;
         var size = RecordSize(OldRecord(out var oldOffset), oldOffset);
         EnsureBudget(size, newKey, strings: true);
@@ -341,8 +357,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
                 Unsafe.WriteUnaligned(ref _fixed[_layout.Offsets[f]], code);
             }
         }
-
-        _lookedUpIn = null; // do not keep a version alive past its commit
 
         BinaryPrimitives.WriteInt64LittleEndian(_fixed.AsSpan(RecordLayout.VersionOffset), _recordVersion);
         BinaryPrimitives.WriteInt32LittleEndian(_fixed.AsSpan(RecordLayout.LengthOffset), size);
@@ -420,8 +434,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         Array.Clear(_written);
         _pending.Clear();
         _openList = -1;
-        _lookedUpField = -1;
-        _lookedUpIn = null;
         return new RecordBuilder(this, _token);
     }
 
@@ -764,6 +776,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             next.AddRecords(tombstone ? 0 : 1, tombstone ? 1 : 0);
         }
 
+        CompactedCopyBuilt?.Invoke(next);
         return next;
     }
 
