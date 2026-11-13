@@ -279,8 +279,12 @@ public sealed partial class FeatureFetcher
         var calls = _memory.Rent<ValueTask<bool>>(chunks);
         for (var c = 0; c < chunks; c++)
         {
+            // A store's synchronous part runs here, unbounded (see IFeatureCacheStore.GetAsync): once one has taken the
+            // tier's time, the chunks not sent yet are not sent; their keys go to the connector like a late chunk's.
             var offset = c * chunkSize;
-            calls[c] = StoreCall(read, tier, offset, Math.Min(chunkSize, read.MissCount - offset), cancellationToken);
+            calls[c] = Stopwatch.GetTimestamp() >= read.StoreDeadline || read.Cancellation!.Token.IsCancellationRequested || cancellationToken.IsCancellationRequested
+                ? new ValueTask<bool>(false)
+                : StoreCall(read, tier, offset, Math.Min(chunkSize, read.MissCount - offset), cancellationToken);
         }
 
         var cache = read.Cache;

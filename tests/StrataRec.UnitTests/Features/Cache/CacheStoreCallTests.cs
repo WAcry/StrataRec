@@ -75,6 +75,105 @@ public class CacheStoreCallTests
         Assert.Equal((1, 1), (calls.Completed, calls.Errors)); // completed once, as an error
     }
 
+    /// <summary>
+    /// Review 19: a store's synchronous part runs on the request's thread and the engine does not bound it; what it
+    /// answers is judged when the engine first sees it complete. Here the store blocks before returning, past the tier's
+    /// timeout (the source has time left: the connector answers) or past the source's deadline (no time left: the keys
+    /// fail). Either way its fresh records (111) are never used.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AStoreThatAnswersSynchronously_AfterItsTime_IsLate_AndItsRecordsAreNotUsed(bool pastTheSourceDeadline)
+    {
+        var store = new SlowStore(blockMs: 40);
+        var connector = ScriptedConnector.Values((key, _) => key * 1.0);
+        var rig = new FeatureTestRig().CacheSource("item_store", connector, distributed: store, distributedTimeoutMs: 20,
+            timeoutMs: pastTheSourceDeadline ? 20 : FeatureTestRig.UntimedMs);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+        store.Prepare(rig.Tables["item_store"].Cache!, rig.Clock.NowMs, 111.0);
+
+        var request = rig.NewRequest([1, 2]);
+        var result = await request.EnsureAsync(clicks);
+
+        if (pastTheSourceDeadline)
+        {
+            Assert.Equal(FeatureState.Failed, result.State); // no key got a value: not the store's, and no time for the connector
+            Assert.Empty(connector.Calls);
+        }
+        else
+        {
+            Assert.Equal(FeatureState.Ok, result.State);
+            Assert.Equal((1.0, 2.0), (request.Value(clicks, 0).AsFloat64(), request.Value(clicks, 1).AsFloat64()));
+            Assert.Single(connector.Calls);
+        }
+
+        rig.WriteBack("item_store"); // nor written back: the table has the connector's value or nothing
+        var version = rig.Tables["item_store"].Pin();
+        var record = version.Find(1L);
+        Assert.Equal(pastTheSourceDeadline ? (double?)null : 1.0, record.Found ? version.Read(0, record).AsFloat64() : null);
+    }
+
+    /// <summary>Review 19: once the tier's time is up (here an earlier chunk's synchronous part took it), no further chunk is sent.</summary>
+    [Fact]
+    public async Task OnceTheTiersTimeIsUp_NoFurtherChunkIsSent_AndTheConnectorAnswersEveryKey()
+    {
+        var store = new SlowStore(blockMs: 40);
+        var connector = ScriptedConnector.Values((key, _) => key * 1.0);
+        var rig = new FeatureTestRig().CacheSource("item_store", connector, distributed: store, distributedTimeoutMs: 20, maxBatch: 2);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+        store.Prepare(rig.Tables["item_store"].Cache!, rig.Clock.NowMs, 111.0);
+
+        var request = rig.NewRequest([1, 2, 3, 4]); // two chunks
+        var result = await request.EnsureAsync(clicks);
+
+        Assert.Equal(1, store.Calls);
+        Assert.Equal(FeatureState.Ok, result.State);
+        Assert.Equal(new[] { 1.0, 2, 3, 4 }, Enumerable.Range(0, 4).Select(r => request.Value(clicks, r).AsFloat64()));
+        Assert.Equal(new long[] { 1, 2, 3, 4 }, connector.Calls.SelectMany(c => c.Keys).Select(k => k.Int64Value).Order());
+    }
+
+    /// <summary>
+    /// A store that blocks for <c>blockMs</c> before it returns (the synchronous part a store should not have), then answers
+    /// a fresh record for every key.
+    /// </summary>
+    private sealed class SlowStore(int blockMs) : IFeatureCacheStore
+    {
+        private ReadOnlyMemory<byte> _record;
+        private int _calls;
+
+        public string StoreType => TestCacheStoreFactory.Type;
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        public void Prepare(LocalTableCache cache, long writtenMs, double value)
+        {
+            var writer = new CacheRecordWriter(cache.Layout, 64);
+            writer.Begin(writtenMs, cache.Fingerprint, absent: false);
+            writer.Float64(0, value);
+            var (offset, length) = writer.End();
+            _record = writer.Bytes.AsMemory(offset, length);
+        }
+
+        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<EntityKey> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _calls);
+            var until = System.Diagnostics.Stopwatch.GetTimestamp() + (blockMs * System.Diagnostics.Stopwatch.Frequency / 1000);
+            while (System.Diagnostics.Stopwatch.GetTimestamp() < until)
+            {
+                Thread.Sleep(1);
+            }
+
+            records.Span.Fill(_record);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask SetAsync(CacheKeyspace keyspace, ReadOnlyMemory<CacheStoreEntry> entries, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+    }
+
     /// <summary>An exception whose <see cref="Exception.Message"/> getter throws (review 19).</summary>
     private sealed class UnreadableException : Exception
     {
