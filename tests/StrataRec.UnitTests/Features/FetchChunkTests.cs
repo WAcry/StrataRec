@@ -181,7 +181,8 @@ public class FetchChunkTests
     public async Task AChunkSentAfterTheBudgetRanOut_GetsNoFreshBudget()
     {
         // The first chunk answers synchronously, but only once the fetch's budget has run out; the second never answers.
-        // The budget is the fetch's, counted from its start, so the second chunk's wait times out at once.
+        // The budget is the fetch's, counted from its start, so the second chunk's wait times out at once. The first is a
+        // timeout too: its answer is observed after the deadline (FetchObservationTests).
         var never = new TaskCompletionSource<FetchStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
@@ -209,10 +210,10 @@ public class FetchChunkTests
 
         Assert.True(ensure.IsCompleted); // no wait at all, rather than another 100 ms
         var result = await ensure;
-        Assert.Equal(FeatureState.Degraded, result.State); // one chunk of two answered
+        Assert.Equal(FeatureState.Failed, result.State); // neither chunk answered within the budget
         var calls = hook.Recorded.OrderBy(c => c.Keys[0]).ToArray();
-        Assert.Equal(new[] { IoOutcome.Ok, IoOutcome.Timeout }, calls.Select(c => c.Outcome));
-        Assert.Contains("timed out after 100 ms", calls[1].Status.Error);
+        Assert.Equal(new[] { IoOutcome.Timeout, IoOutcome.Timeout }, calls.Select(c => c.Outcome));
+        Assert.All(calls, c => Assert.Contains("timed out after 100 ms", c.Status.Error));
         never.SetResult(FetchStatus.Ok);
         await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience);
     }
