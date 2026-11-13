@@ -299,18 +299,27 @@ public sealed class PipelineExecutor
 
             var parameters = plan.Params.Snapshot(request.Arms);
             var variants = new CompiledNode?[plan.Timeline.Length];
-            var capacity = 0;
+            long capacity = 0;
             for (var i = 0; i < variants.Length; i++)
             {
                 var node = plan.Timeline[i].Select(request.Arms);
                 variants[i] = node;
-                if (node is not null && (node.Effects & Effects.RowSource) != 0)
+                if (node is null)
                 {
-                    capacity += Math.Max(0, node.Operator.GetRowLimit(parameters));
+                    continue;
+                }
+
+                capacity += RowLimit(node, parameters);
+
+                // A fallback row source gets room of its own: a primary that failed may already have appended rows, and a
+                // failure restores only the selection, never the physical rows (design 4.8, 5.6).
+                if (node.OnFailure == FailurePolicy.Fallback && plan.SelectFallback(node, request.Arms) is { } fallback)
+                {
+                    capacity += RowLimit(fallback, parameters);
                 }
             }
 
-            var table = new CandidateTable(plan.TableSchema, capacity, memory);
+            var table = new CandidateTable(plan.TableSchema, (int)Math.Min(capacity, int.MaxValue), memory);
             var bindings = new OutputBindings(plan.Schema.Columns.Count, memory);
             var deadline = start + (long)(request.Deadline.TotalSeconds * Stopwatch.Frequency);
             // One set of counters per request: operator expressions and derived features count into the same totals.
@@ -447,6 +456,10 @@ public sealed class PipelineExecutor
             }
         }
     }
+
+    /// <summary>The rows a row source may append for this request; 0 for other nodes.</summary>
+    private static long RowLimit(CompiledNode node, ReadOnlySpan<ScalarValue> parameters) =>
+        (node.Effects & Effects.RowSource) != 0 ? Math.Max(0, node.Operator.GetRowLimit(parameters)) : 0;
 
     /// <summary>Runs one timeline position. Returns an error message when the request must fail.</summary>
     private static async ValueTask<string?> RunPositionAsync(RequestState state, int position, CancellationToken cancellationToken)
