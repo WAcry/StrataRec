@@ -57,7 +57,16 @@ internal static class CompareCommand
         var arms = ExplainPlanCommand.SplitArms(armArgs);
         var options = new ReplayOptions { Arms = arms.Count > 0 ? arms : null };
         var pairs = new List<ReplayPair>();
-        foreach (var file in ReplayBundleFile.Find(bundlePath))
+        var files = ReplayBundleFile.Find(bundlePath);
+        if (files.Count > 0)
+        {
+            // The first replay in the process pays for JIT compilation; unwarmed, that lands in whichever side replays
+            // first and inflates its latency percentiles.
+            await ReplayCommand.ReplayFileAsync(baseline, files[0], options, cancellationToken).ConfigureAwait(false);
+            await ReplayCommand.ReplayFileAsync(candidate, files[0], options, cancellationToken).ConfigureAwait(false);
+        }
+
+        foreach (var file in files)
         {
             var (before, error) = await ReplayCommand.ReplayFileAsync(baseline, file, options, cancellationToken).ConfigureAwait(false);
             if (before is null)
@@ -221,7 +230,9 @@ internal static class CompareCommand
     {
         output.WriteLine($"Recorded-mode comparison of {report.Bundles} bundle(s) (design 10.8); I/O is answered from the recordings.");
         output.WriteLine();
-        output.WriteLine($"{"",-26}{"baseline",-22}{"candidate",-22}");
+        // The baseline column is as wide as its longest value (paths and manifest ids can be long).
+        var width = Math.Max(22, Math.Max(baseline.Length, report.Baseline.Manifest.Length) + 2);
+        output.WriteLine($"{"",-26}{"baseline".PadRight(width)}candidate");
         Row("workspace", baseline, candidate);
         Row("manifest", report.Baseline.Manifest, report.Candidate.Manifest);
         Row("requests", Number(report.Baseline.Requests), Number(report.Candidate.Requests));
@@ -255,7 +266,7 @@ internal static class CompareCommand
             }
         }
 
-        void Row(string label, string left, string right) => output.WriteLine($"{label,-26}{left,-22}{right,-22}");
+        void Row(string label, string left, string right) => output.WriteLine($"{label,-26}{left.PadRight(width)}{right}");
         static string Number(int value) => value.ToString(CultureInfo.InvariantCulture);
         static string Percent(double value) => value.ToString("0.##%", CultureInfo.InvariantCulture);
         static string Rate(double? value) => value is { } v ? Percent(v) : "not requested";
