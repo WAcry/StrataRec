@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.IO.Hashing;
 using System.Numerics;
@@ -98,7 +99,7 @@ public sealed class TableVersion
     private long _stringBytes;
     private readonly StringCodeMap _codes;
 
-    internal TableVersion(RecordLayout layout, StringKeyHasher hasher, int maxPageSize, long generation, int expectedKeys, long expectedBytes)
+    internal TableVersion(RecordLayout layout, StringKeyHasher hasher, int maxPageSize, long generation, int expectedKeys)
     {
         _layout = layout;
         _hasher = hasher;
@@ -108,13 +109,13 @@ public sealed class TableVersion
         _pages = new byte[InitialDirectoryLength][];
         _strings = new string[InitialStringsLength];
         _codes = new StringCodeMap();
-        // A compaction knows how much it will copy; a fresh table starts with a small page.
-        var wanted = expectedBytes <= MinPageSize ? MinPageSize : BitOperations.RoundUpToPowerOf2((ulong)expectedBytes);
-        _nextPageSize = (int)Math.Min((ulong)maxPageSize, (ulong)wanted);
+        // Writes start with a small page and double from there; a compaction packs its pages instead (see Reserve).
+        _nextPageSize = Math.Min(maxPageSize, MinPageSize);
         _bytes = IndexBytes(_index) + (_pages.Length * 8L) + (_strings.Length * 8L) + _codes.Bytes;
     }
 
-    /// <summary>Increases by one with every version a table builds (compaction, reload).</summary>
+    /// <summary>Increases with every version a table installs (a compaction or reload); a compacted copy discarded for not
+    /// fitting <c>max_bytes</c> does not count.</summary>
     public long Generation { get; }
 
     /// <summary>Entities with a record (tombstones excluded).</summary>
@@ -302,25 +303,16 @@ public sealed class TableVersion
     /// string column's dictionary grows by the strings it has not seen. When <paramref name="absent"/> is missing, the
     /// target gets a validity bitmap (rented from its request memory) before the first row, even if every row turns out
     /// present: the loop then never calls out, which keeps its state in registers.</para>
-    /// <para>Rows and records are checked once per call (rows inside the target, records from a version of this layout);
-    /// the per-row loop itself is unchecked.</para>
+    /// <para>The per-row loops are unchecked; see <see cref="FillCore"/> for what makes that safe whatever the caller's
+    /// spans point at.</para>
     /// </remarks>
     public int Fill(
         int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ColumnBuffer target, in ScalarValue absent, Span<ulong> filled = default)
     {
-        var maxRow = CheckRows(records, rows);
-        CheckTarget(field, target, maxRow);
-        var stringMemo = _layout.Kinds[field] == StorageKind.String ? NewStringMemo(stackalloc int[StringMemoLength]) : default;
-        var replaced = FillField(field, records, rows, maxRow, target, absent, stringMemo);
-        if (!filled.IsEmpty)
-        {
-            foreach (var row in rows)
-            {
-                Bits.Set(filled, row);
-            }
-        }
-
-        return replaced;
+        var read = new LocalFieldRead(field, target, absent);
+        Span<int> nonFinite = stackalloc int[1];
+        FillCore(records, rows, new ReadOnlySpan<LocalFieldRead>(in read), nonFinite, filled);
+        return nonFinite[0];
     }
 
     /// <summary>
@@ -335,14 +327,65 @@ public sealed class TableVersion
     /// bitmap of the rows can be OR-ed into each slot's fill bitmap.</remarks>
     public void Fill(ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ReadOnlySpan<LocalFieldRead> reads, Span<int> nonFinite = default)
     {
+        if (!nonFinite.IsEmpty && nonFinite.Length < reads.Length)
+        {
+            throw new ArgumentException($"{nonFinite.Length} counters for {reads.Length} reads.", nameof(nonFinite));
+        }
+
+        FillCore(records, rows, reads, nonFinite, filled: default);
+    }
+
+    /// <summary>
+    /// Both Fills, and the one place that keeps their unchecked loops safe. The caller's spans can change under the
+    /// loops: <paramref name="rows"/> may be a view of a target column's own array (the first value written changes a row
+    /// not yet consumed), may overlap <paramref name="nonFinite"/>, or may be changed by another thread between the check
+    /// and the loop. So rows, records and reads are first copied into scratch arrays the table rents, the copies are
+    /// checked, and the loops read only the copies (and the column arrays, which each loop checks against the largest
+    /// row). The copies cost up to a microsecond per call for 500 rows, 3% of filling 30 fields of them from the cache.
+    /// </summary>
+    private void FillCore(
+        ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ReadOnlySpan<LocalFieldRead> reads, Span<int> nonFinite, Span<ulong> filled)
+    {
+        if (records.Length != rows.Length)
+        {
+            throw new ArgumentException($"{records.Length} records for {rows.Length} rows; pass one record per row.", nameof(rows));
+        }
+
+        var count = rows.Length;
+        var rowCopy = ArrayPool<int>.Shared.Rent(count);
+        var recordCopy = ArrayPool<LocalRecordRef>.Shared.Rent(count);
+        var readCopy = ArrayPool<LocalFieldRead>.Shared.Rent(reads.Length);
+        try
+        {
+            rows.CopyTo(rowCopy);
+            records.CopyTo(recordCopy);
+            reads.CopyTo(readCopy);
+            FillChecked(recordCopy.AsSpan(0, count), rowCopy.AsSpan(0, count), readCopy.AsSpan(0, reads.Length), nonFinite);
+            if (!filled.IsEmpty)
+            {
+                foreach (var row in rowCopy.AsSpan(0, count))
+                {
+                    Bits.Set(filled, row);
+                }
+            }
+        }
+        finally
+        {
+            // The copies hold page and column references: cleared, so the pool keeps no version or request memory alive.
+            recordCopy.AsSpan(0, count).Clear();
+            readCopy.AsSpan(0, reads.Length).Clear();
+            ArrayPool<int>.Shared.Return(rowCopy);
+            ArrayPool<LocalRecordRef>.Shared.Return(recordCopy);
+            ArrayPool<LocalFieldRead>.Shared.Return(readCopy);
+        }
+    }
+
+    /// <summary>The fill itself, on <see cref="FillCore"/>'s private copies, which nothing else can change.</summary>
+    private void FillChecked(ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ReadOnlySpan<LocalFieldRead> reads, Span<int> nonFinite)
+    {
         var maxRow = CheckRows(records, rows);
         if (!nonFinite.IsEmpty)
         {
-            if (nonFinite.Length < reads.Length)
-            {
-                throw new ArgumentException($"{nonFinite.Length} counters for {reads.Length} reads.", nameof(nonFinite));
-            }
-
             nonFinite[..reads.Length].Clear();
         }
 
@@ -452,17 +495,12 @@ public sealed class TableVersion
     }
 
     /// <summary>
-    /// Everything the unchecked fill loops rely on, checked once per call: one record per row, rows not negative, and
-    /// every record's fixed part inside its page (a reference from another table's version could otherwise point past
-    /// the end). Returns the largest row, or -1 when there are none; each target is checked against it.
+    /// Everything the unchecked fill loops rely on, checked once per call on <see cref="FillCore"/>'s copies: rows not
+    /// negative, and every record's fixed part inside its page (a reference from another table's version could otherwise
+    /// point past the end). Returns the largest row, or -1 when there are none; each target is checked against it.
     /// </summary>
     private int CheckRows(ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows)
     {
-        if (records.Length != rows.Length)
-        {
-            throw new ArgumentException($"{records.Length} records for {rows.Length} rows; pass one record per row.", nameof(rows));
-        }
-
         var maxRow = -1;
         var minRow = 0;
         var fixedSize = (uint)_layout.FixedSize;
@@ -689,10 +727,10 @@ public sealed class TableVersion
         }
     }
 
-    // The typed loops below index records, rows and column arrays without bounds checks: CheckRows and CheckTarget
-    // checked once per call that every row is in [0, Capacity) and every record's fixed part is inside its page, and
-    // each loop checks its column array against the capacity (RequireLength). Variable-length data is still read
-    // through bounds-checked spans.
+    // The typed loops below index records, rows and column arrays without bounds checks. The records and rows they get
+    // are FillCore's private copies, which CheckRows checked (rows not negative, fixed parts inside their pages) and which
+    // nothing else can change; each loop checks the column array it writes against the largest row (RequireLength).
+    // Variable-length data is still read through bounds-checked spans.
 
     private void FillScalar<T>(int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, int maxRow, ScalarColumn<T> column, in ScalarValue absent)
         where T : unmanaged
@@ -1173,11 +1211,25 @@ public sealed class TableVersion
     /// (a reader that later sees a position in it reads the element after the position's acquire), otherwise in a grown
     /// copy of the directory that is published whole.
     /// </summary>
-    internal long Reserve(int bytes, out byte[] page)
+    /// <param name="packFor">Set by a compaction: the bytes of this record and of every record it will still copy. A new
+    /// page is then just large enough for them (up to the largest page size), and the usual doubling of page sizes does
+    /// not advance, so writes after the compaction start again with a small page.</param>
+    internal long Reserve(int bytes, out byte[] page, long packFor = 0)
     {
         if (_currentPage is null || _pageUsed + bytes > _currentPage.Length)
         {
-            AddPage(bytes);
+            if (packFor > 0)
+            {
+                AddPage((int)Math.Max(bytes, Math.Min(_maxPageSize, packFor)));
+            }
+            else
+            {
+                AddPage(NewPageSize(bytes));
+                if (_nextPageSize < _maxPageSize)
+                {
+                    _nextPageSize = Math.Min(_maxPageSize, _nextPageSize * 2);
+                }
+            }
         }
 
         page = _currentPage!;
@@ -1249,13 +1301,9 @@ public sealed class TableVersion
         return code;
     }
 
-    private void AddPage(int recordBytes)
+    private void AddPage(int size)
     {
-        var page = new byte[NewPageSize(recordBytes)];
-        if (_nextPageSize < _maxPageSize)
-        {
-            _nextPageSize = Math.Min(_maxPageSize, _nextPageSize * 2);
-        }
+        var page = new byte[size];
 
         var directory = _pages;
         if (_pageCount == directory.Length)

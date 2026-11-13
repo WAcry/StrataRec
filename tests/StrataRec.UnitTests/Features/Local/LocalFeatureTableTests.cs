@@ -670,6 +670,89 @@ public class LocalFeatureTableTests
         memory.Release();
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Fill_RowsAliasingTheTargetColumn_CannotWritePastItsCapacity(bool multiField)
+    {
+        // Codex review 9, item 1: the rows are a view of the target column's own pooled array (capacity 2, physical length
+        // 16). Read live, the first write (8, to row 1) would turn the next row into 8, past the capacity.
+        var schema = Schema(fields: new[] { new LocalTableField("i32", ColumnType.Int32) });
+        var table = new LocalFeatureTable(schema);
+        WriteInt32(table, 1, 8);
+        WriteInt32(table, 2, 99);
+        var version = table.Pin();
+        var records = new LocalRecordRef[2];
+        Assert.Equal(2, version.Lookup(new long[] { 1, 2 }, records));
+
+        var memory = new RequestMemory();
+        var column = (ScalarColumn<int>)ColumnBuffer.Create(ColumnType.Int32, 2, memory);
+        var values = column.Values;
+        Assert.True(values.Length > 8, "the pooled array must have spare room for the probe");
+        Array.Fill(values, -777);
+        values[0] = 1;
+        values[1] = 0;
+        var rows = new ReadOnlySpan<int>(values, 0, 2);
+        if (multiField)
+        {
+            version.Fill(records, rows, new[] { new LocalFieldRead(0, column, ScalarValue.Missing) });
+        }
+        else
+        {
+            version.Fill(0, records, rows, column, ScalarValue.Missing);
+        }
+
+        // The rows were [1, 0] when the call began: key 1 went to row 1 and key 2 to row 0, and nothing else was written.
+        Assert.Equal(8, values[1]);
+        Assert.Equal(99, values[0]);
+        for (var i = 2; i < values.Length; i++)
+        {
+            Assert.Equal(-777, values[i]);
+        }
+
+        memory.Release();
+    }
+
+    [Fact]
+    public void Fill_NonFiniteCountersAliasingTheRows_DoNotChangeWhereValuesGo()
+    {
+        // The counters are written while the rows are still being read (after each block): with a live view of the rows,
+        // later blocks would go to the wrong rows.
+        var schema = Schema(fields: new[] { new LocalTableField("f32", ColumnType.Float32) });
+        var table = new LocalFeatureTable(schema);
+        var keys = new long[300];
+        for (var id = 1; id <= keys.Length; id++)
+        {
+            keys[id - 1] = id;
+            var builder = table.Writer.Begin(id, 1);
+            builder.SetFloat32(0, id % 3 == 0 ? float.NaN : id);
+            builder.Commit();
+        }
+
+        var version = table.Pin();
+        var records = new LocalRecordRef[keys.Length];
+        version.Lookup(keys, records);
+        var memory = new RequestMemory();
+        var expected = (ScalarColumn<float>)ColumnBuffer.Create(ColumnType.Float32, keys.Length, memory);
+        var actual = (ScalarColumn<float>)ColumnBuffer.Create(ColumnType.Float32, keys.Length, memory);
+        var rows = new int[keys.Length];
+        for (var i = 0; i < rows.Length; i++)
+        {
+            rows[i] = keys.Length - 1 - i;
+        }
+
+        var reference = version.Fill(0, records, (int[])rows.Clone(), expected, ScalarValue.Missing);
+        version.Fill(records, rows, new[] { new LocalFieldRead(0, actual, ScalarValue.Missing) }, rows.AsSpan(200, 1));
+
+        Assert.Equal(reference, rows[200]);
+        for (var row = 0; row < keys.Length; row++)
+        {
+            Assert.Equal(ColumnValues.Get(expected, row), ColumnValues.Get(actual, row));
+        }
+
+        memory.Release();
+    }
+
     [Fact]
     public void Fill_ChecksRowsAndRecordsOnce()
     {
@@ -823,5 +906,12 @@ public class LocalFeatureTableTests
                 case StorageKind.ListString: writer.SetStringList(i, k, value.AsStringList()); break;
             }
         }
+    }
+
+    private static void WriteInt32(LocalFeatureTable table, long key, int value)
+    {
+        var builder = table.Writer.Begin(key, 1);
+        builder.SetInt32(table.Schema.FieldIndex("i32"), value);
+        Assert.True(builder.Commit());
     }
 }

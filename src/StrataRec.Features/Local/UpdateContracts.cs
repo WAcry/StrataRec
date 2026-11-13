@@ -104,6 +104,10 @@ public sealed class UpdatePosition : IEquatable<UpdatePosition>
 {
     private readonly PartitionOffset[] _offsets;
 
+    /// <summary>
+    /// The only constructor, so every way of making a position (<see cref="Empty"/>, <see cref="Single"/>,
+    /// <see cref="FromJson"/>) passes the same checks: partitions and offsets non-negative, each partition once.
+    /// </summary>
     public UpdatePosition(IEnumerable<PartitionOffset> offsets)
     {
         ArgumentNullException.ThrowIfNull(offsets);
@@ -125,15 +129,11 @@ public sealed class UpdatePosition : IEquatable<UpdatePosition>
         _offsets = list.ToArray();
     }
 
-    private UpdatePosition(PartitionOffset[] offsets)
-    {
-        _offsets = offsets;
-    }
-
     /// <summary>Nothing applied: every partition at its start (also the position of a source without a stream).</summary>
     public static UpdatePosition Empty { get; } = new(Array.Empty<PartitionOffset>());
 
     /// <summary>A position of a single-partition stream.</summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="offset"/> is negative.</exception>
     public static UpdatePosition Single(long offset) => new(new[] { new PartitionOffset(0, offset) });
 
     /// <summary>Offsets ordered by partition.</summary>
