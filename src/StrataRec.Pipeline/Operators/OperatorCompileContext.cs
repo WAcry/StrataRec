@@ -276,6 +276,8 @@ public sealed class OperatorCompileContext
     public void Warning(string configKey, string code, string message, string? hint = null) =>
         _diagnostics.Warning(code, Artifact, Pointer + "/config" + configKey, message, hint);
 
+    private readonly HashSet<int> _selfReads = new();
+
     internal void RecordSymbol(in Symbol symbol)
     {
         switch (symbol.Kind)
@@ -290,6 +292,15 @@ public sealed class OperatorCompileContext
                 else if (column.Kind == ColumnKind.Output && symbol.FixedSlot < 0 && !symbol.Type.Nullable)
                 {
                     _requiredOutputs.Add(symbol.Id);
+                }
+                else if (column.Kind == ColumnKind.Output && symbol.FixedSlot >= 0 && symbol.Name.EndsWith("@" + NodeId, StringComparison.Ordinal)
+                    && _selfReads.Add(symbol.Id))
+                {
+                    // The node's own version does not exist until the node commits: it would read a fresh slot.
+                    HasErrors = true;
+                    _diagnostics.Error("VERSION_REF_SELF", Artifact, Pointer + "/config",
+                        $"Node '{NodeId}' reads its own output '{symbol.Name}', which does not exist until the node has run.",
+                        $"read 'col.{column.Name}' (the version before '{NodeId}') or a version pinned to an earlier node");
                 }
 
                 break;

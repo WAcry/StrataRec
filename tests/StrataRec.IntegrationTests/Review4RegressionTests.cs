@@ -203,4 +203,16 @@ public sealed class Review4RegressionTests
         var served = Assert.Single(result.LogBatches, b => b.TapId == "served");
         Assert.Equal(420.0, served.Context.Single(c => c.Item1 == "tenure").Item2.AsFloat64());
     }
+
+    [Fact]
+    public void NodeCannotReadItsOwnPinnedVersion()
+    {
+        // Found while fixing finding 15: col.x@self resolves to the slot the node is about to write.
+        var host = WithPipelineEdit("\"output_col\": \"score.coarse\", \"expr\": \"col.item.smoothed_ctr\"",
+            "\"output_col\": \"score.coarse\", \"expr\": \"col.item.smoothed_ctr + (col.score.coarse@coarse_score ?? 0.0)\"");
+
+        var compilation = host.Compile();
+
+        Assert.Contains(compilation.Diagnostics, d => d.IsError && d.Code == "VERSION_REF_SELF" && d.Pointer.StartsWith("/nodes/coarse_score", StringComparison.Ordinal));
+    }
 }
