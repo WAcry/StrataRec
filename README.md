@@ -114,12 +114,18 @@ operator's config schema, and `stratarec operators` lists operators with their d
 ## Determinism
 
 - Ties break by `entity_id` ascending.
-- Randomness only comes from `hash01(...)` / `StableHash`: XXH3 over a canonical encoding, so the same request and
-  plan always give byte-identical results, traces and tap output.
+- Randomness only comes from `hash01(...)` / `StableHash`: XXH3 over a canonical encoding.
 - Variant identity is the RFC 8785 canonical hash of the merged configuration.
 
-The integration tests compile each of the eight arm combinations of the sample in two ways and compare the results:
-once through the unified multi-layer plan, once as a single merged pipeline (the design 16.2 differential anchor).
+Determinism holds under fixed conditions (design 5.7): the same plan, request inputs and time, the same external
+responses, and the same execution decisions (timeouts, skips, fallbacks). Under those conditions, the ranked items,
+scores, selected variants and sampling decisions are identical. Operational metadata is not part of that guarantee:
+elapsed times and per-node durations in traces, and the `seq` and producer id of durable log batches, differ between
+runs. Byte-level comparisons must exclude them.
+
+The integration tests compile each of the eight arm combinations of the sample in two ways: once through the unified
+multi-layer plan, once as a single merged pipeline (the design 16.2 differential anchor). They compare the ranked
+items, ids and scores, not the full serialized result.
 
 ## Performance
 

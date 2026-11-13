@@ -18,18 +18,33 @@ env:
 
 jobs:
   build-test:
-    name: build and test (${{ matrix.os }})
+    name: build and test (${{ matrix.os }}, SDK ${{ matrix.sdk }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          # The minimum supported SDK, pinned so a newer preinstalled SDK cannot mask a toolchain incompatibility.
+          - { os: ubuntu-latest, sdk: "8.0", pin: true }
+          - { os: windows-latest, sdk: "8.0", pin: true }
+          # The newest SDK (still targeting net8.0, so the .NET 8 runtime runs the tests).
+          - { os: ubuntu-latest, sdk: "10.0", pin: false }
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: |
+            8.0.x
+            ${{ matrix.sdk }}.x
+
+      - name: Pin the SDK
+        if: matrix.pin
+        shell: bash
+        run: echo '{ "sdk": { "version": "${{ matrix.sdk }}.100", "rollForward": "latestFeature" } }' > global.json
+
+      - name: Show the SDK
+        run: dotnet --version
 
       - name: Restore
         run: dotnet restore StrataRec.sln
@@ -44,7 +59,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-${{ matrix.os }}
+          name: test-results-${{ matrix.os }}-${{ matrix.sdk }}
           path: TestResults
 
   sample:

@@ -32,7 +32,10 @@ public sealed class LogPipelineOptions
     /// <summary>Batches handed to the sink per write.</summary>
     public int MaxBatchesPerWrite { get; init; } = 256;
 
-    /// <summary>How long <see cref="LogPipeline.DisposeAsync"/> keeps draining durable batches (design 8.6 item 4).</summary>
+    /// <summary>
+    /// How long <see cref="LogPipeline.DisposeAsync"/> keeps draining durable batches (design 8.6 item 4). Disposal
+    /// returns at most half a second later even if the sink ignores cancellation.
+    /// </summary>
     public TimeSpan DrainTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
     public TimeSpan MaxRetryDelay { get; init; } = TimeSpan.FromSeconds(5);
@@ -89,6 +92,9 @@ public sealed class LogPipeline : IAsyncDisposable
     private readonly Task _bestEffortLoop;
     private readonly CancellationTokenSource _stop = new();
     private readonly ConcurrentDictionary<string, long[]> _stats = new(StringComparer.Ordinal);
+    /// <summary>How long disposal waits past <see cref="LogPipelineOptions.DrainTimeout"/> for loops to see cancellation.</summary>
+    private static readonly TimeSpan ShutdownGrace = TimeSpan.FromMilliseconds(500);
+
     private long _seq;
     private long _pending;
     private int _disposed;
@@ -217,11 +223,18 @@ public sealed class LogPipeline : IAsyncDisposable
         _stop.CancelAfter(_options.DrainTimeout);
         try
         {
-            await Task.WhenAll(_durableLoop, _bestEffortLoop).ConfigureAwait(false);
+            // Bounded even if a sink ignores cancellation: shutdown must not hang on one stuck write. A write still in
+            // flight after the grace period is abandoned; its batches show up as a sequence gap.
+            await Task.WhenAll(_durableLoop, _bestEffortLoop).WaitAsync(_options.DrainTimeout + ShutdownGrace).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             // Drain timed out; remaining durable batches show up as a sequence gap.
+        }
+        catch (TimeoutException)
+        {
+            Debug.WriteLine("StrataRec log sink did not stop within the drain timeout; abandoning in-flight writes.");
+            return; // the loops still use _stop; leave it to the finalizer
         }
 
         _stop.Dispose();

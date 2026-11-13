@@ -267,6 +267,36 @@ public sealed class LogPipelineTests
         Assert.Equal(2, writer.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
     }
 
+    [Fact]
+    public async Task DisposeIsBoundedEvenWhenTheSinkIgnoresCancellation()
+    {
+        // Review 5 finding 5: DrainTimeout must bound shutdown even if a write never completes.
+        var stuck = new TaskCompletionSource();
+        var sink = new StuckSink(stuck.Task);
+        var pipeline = new LogPipeline(sink, new LogPipelineOptions { DrainTimeout = TimeSpan.FromMilliseconds(20) });
+        pipeline.Submit(Batch("served", LogDelivery.Durable));
+        await sink.Started.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        await pipeline.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.InRange(watch.ElapsedMilliseconds, 0, 3_000);
+        stuck.SetResult();
+    }
+
+    private sealed class StuckSink(Task release) : ILogSink
+    {
+        private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Started => _started.Task;
+
+        public async ValueTask WriteAsync(IReadOnlyList<LogBatch> batches, CancellationToken cancellationToken)
+        {
+            _started.TrySetResult();
+            await release; // ignores cancellation on purpose
+        }
+    }
+
     private sealed class RejectingSink(string poisonTap) : ILogSink
     {
         public int Written;

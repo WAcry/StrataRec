@@ -714,7 +714,14 @@ public sealed class PipelineExecutor
     /// </summary>
     private void PublishLogs(RequestState state, PipelineRequest request, PipelineResult result, bool returned)
     {
-        var capture = returned && request.CaptureLogs;
+        // A capturing request (draft preview, debug run) never writes to the persistent logs, even when it is aborted
+        // and nobody receives its captures (design 8.6 item 6): forced arms must not contaminate experiment data.
+        if (request.CaptureLogs && !returned)
+        {
+            return;
+        }
+
+        var capture = request.CaptureLogs;
         if (state.Batches is null && (state.Plan.Experiments.Length == 0 || (_logs is null && !capture)))
         {
             return;

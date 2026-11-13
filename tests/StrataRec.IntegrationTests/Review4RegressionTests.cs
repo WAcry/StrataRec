@@ -215,4 +215,53 @@ public sealed class Review4RegressionTests
 
         Assert.Contains(compilation.Diagnostics, d => d.IsError && d.Code == "VERSION_REF_SELF" && d.Pointer.StartsWith("/nodes/coarse_score", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public async Task CancelledCapturingRequestNeverWritesToTheProductionLogs()
+    {
+        // Review 5 finding 2: a cancelled preview (CaptureLogs) must not fall back to persistent submission.
+        var host = HomeFeedTestHost.LoadModified(root =>
+        {
+            var bindings = Path.Combine(root, "bindings", "local.jsonc");
+            File.WriteAllText(bindings, File.ReadAllText(bindings).Replace("\"client\": \"memory_list@1\",", "\"client\": \"memory_list@1\", \"latency_ms\": 5000,", StringComparison.Ordinal));
+        });
+        var plan = host.Plan();
+        var sink = new InMemoryLogSink();
+        await using (var logs = new LogPipeline(sink))
+        {
+            var executor = new PipelineExecutor(logs: logs);
+            using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+            var request = HomeFeedTestHost.NewRequest(arms: plan.ArmsFromIds(new[] { "exp_quality_weight/strong" }), captureLogs: true);
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await executor.ExecuteAsync(plan, request, cancel.Token));
+            await logs.FlushAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        }
+
+        Assert.Empty(sink.Snapshot());
+    }
+
+    [Fact]
+    public void FunnelKeysMustBeHashableScalars()
+    {
+        // Review 5 finding 3: a list key compiled, then threw from sampling at request time.
+        var host = HomeFeedTestHost.LoadModified(root =>
+        {
+            var pipeline = Path.Combine(root, "pipelines", "home_feed.jsonc");
+            File.WriteAllText(pipeline, File.ReadAllText(pipeline)
+                .Replace("\"session_id\": { \"type\": \"string?\" },", "\"session_id\": { \"type\": \"string?\" }, \"history\": { \"type\": \"list<int64>?\" },", StringComparison.Ordinal)
+                .Replace("\"deep_trace\": { \"key\": [", "\"deep_trace\": { \"key\": [\"ctx.request.history\", ", StringComparison.Ordinal));
+        });
+
+        Assert.Contains(host.Compile().Diagnostics, d => d.IsError && d.Code == "FUNNEL_KEY_TYPE" && d.Pointer == "/funnel_groups/deep_trace/key/0");
+    }
+
+    [Fact]
+    public void RowSourceOutputsCannotBePinned()
+    {
+        // Review 5 finding 4: row sources share one slot per column, so col.x@recall read an unwritten per-node slot.
+        var host = WithPipelineEdit("\"primary_source\": \"col.recall.primary_source\"",
+            "\"primary_source\": \"col.recall.primary_source\", \"pinned\": \"col.recall.best_score@recall ?? -100.0\"");
+
+        Assert.Contains(host.Compile().Diagnostics, d => d.IsError && d.Code == "VERSION_REF_ROW_SOURCE");
+    }
 }

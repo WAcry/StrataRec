@@ -39,7 +39,7 @@
 | 6.6 | `cache`、`local` 两种供给方式和本地特征表（快照加更新流、开放寻址索引） | 只支持 `fetch`；其他 `mode` 报“not available in this build yet” |
 | 4.7 | 父子层级表 | 未实现 |
 | 13.1 / 13.2 | 指标（`System.Diagnostics.Metrics`）和分布式追踪（`ActivitySource`、OpenTelemetry） | 未接入。目前的可观测性来自结果中的节点结果、trace 和非有限值计数 |
-| 13.4 / 10.8 | 回放包与回放对比 | 未实现。确定性已经具备：同一请求和计划的结果逐字节一致，端到端测试有覆盖 |
+| 13.4 / 10.8 | 回放包与回放对比 | 未实现。确定性的前提已经具备：计划、请求输入、时间、外部响应和执行决定（超时、跳过、后备）都相同时，排序结果、分数、选中的变体和采样决定都相同，端到端测试比较的就是这些。耗时、`seq`、producer id 这类运行元数据不在保证范围内，回放对比时需要排除 |
 | 10.7 | 合并前的草稿预览 | 未实现 |
 | 5.9 | 成对、列表级、生成式等扩展算子示例（`PairwiseRanker@1` 等） | 内置算子见 `stratarec operators`，共 8 个 |
 | 8.5 | `fetch_missing`：只为被采样的行、在响应返回之后补拉探针需要的特征 | 未实现。目前探针只能记录服务链路已经拉取的数据 |
@@ -57,3 +57,6 @@
   `tests/StrataRec.IntegrationTests/ReviewRegressionTests.cs`。
 - 评审 4（日志、评审 3 修复的复核、ColumnExpr、端到端）：16 条，全部接受。修复深度的取舍见上表；回归测试见
   `tests/StrataRec.IntegrationTests/Review4RegressionTests.cs` 和 `tests/StrataRec.UnitTests/Logging/LoggingTests.cs`。
+- 评审 5（复核评审 4 的修复、热路径分配优化、文档）：6 条，全部修复。评审 4 的 16 条均确认关闭，分配优化中没有发现缓冲区生命周期问题。
+  - 主要问题：banned-API 分析器 5.x 在 .NET 8 SDK 上无法构建，改用 3.3.4，CI 同时在固定的 SDK 8 和 SDK 10 上构建。
+  - 评审 4 #6 的修复引入了回归：被取消的 `CaptureLogs` 请求会写入生产日志，已修复。

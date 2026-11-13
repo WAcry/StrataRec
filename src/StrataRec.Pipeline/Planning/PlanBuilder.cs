@@ -648,6 +648,16 @@ public sealed class PlanBuilder
                         continue;
                     }
 
+                    if (key.ResultType.Kind is not (StorageKind.Bool or StorageKind.Int32 or StorageKind.Int64 or StorageKind.Float32
+                        or StorageKind.Float64 or StorageKind.String or StorageKind.Text))
+                    {
+                        // Sampling hashes the key with the canonical scalar encoding (design 5.7, 8.2).
+                        _diagnostics.Error("FUNNEL_KEY_TYPE", artifact, pointer + "/key/" + i,
+                            $"Funnel group key '{spec.Key[i]}' has type {key.ResultType}; a key must be a scalar (bool, integer, float or string).",
+                            "key on a scalar request input such as ctx.request.user_id");
+                        continue;
+                    }
+
                     keys.Add(key);
                     continue;
                 }
@@ -1014,6 +1024,7 @@ public sealed class PlanBuilder
         foreach (var (nodeId, logical) in schema.VersionReferences)
         {
             var found = false;
+            var rowSource = false;
             foreach (var node in _nodes)
             {
                 if (node.NodeId != nodeId)
@@ -1023,11 +1034,22 @@ public sealed class PlanBuilder
 
                 foreach (var o in node.Outputs)
                 {
-                    found |= o.LogicalId == logical;
+                    if (o.LogicalId == logical)
+                    {
+                        found = true;
+                        rowSource |= (node.Effects & Effects.RowSource) != 0;
+                    }
                 }
             }
 
-            if (!found)
+            if (rowSource)
+            {
+                // Row sources append into one shared slot per column (every row source's rows), not a per-node version.
+                _diagnostics.Error("VERSION_REF_ROW_SOURCE", PipelineLabel, "/",
+                    $"'col.{schema.Columns[logical].Name}@{nodeId}' pins a row source's output; row sources have no per-node version.",
+                    $"read 'col.{schema.Columns[logical].Name}' before a later node rewrites it, or copy it to a new column with an ExpressionScorer");
+            }
+            else if (!found)
             {
                 _diagnostics.Error("VERSION_REF_UNKNOWN", PipelineLabel, "/",
                     $"'col.{schema.Columns[logical].Name}@{nodeId}' refers to a node that never writes that column.");
