@@ -154,6 +154,142 @@ public sealed class BoundedCallTests
     }
 
     [Theory]
+    [InlineData("answers")]
+    [InlineData("throws a timeout of its own")]
+    public async Task AClientCompletingAfterItsTimeoutWon_ButBeforeTheCallIsClassified_HasTimedOut(string completion)
+    {
+        // The wait ends at the call's timeout; its continuation is held until the client has completed. The call has
+        // timed out all the same: the winner is the wait's outcome, not the client's state when the call is classified.
+        using var gate = new ResumeGate();
+        var client = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var memory = new RequestMemory();
+        var budget = new AttemptBudget(CancellationToken.None, Deadline(600_000));
+        var site = new Site(memory);
+
+        var running = Task.Run(async () =>
+        {
+            gate.Mark();
+            return await Run(site.With(_ => new ValueTask<int>(client.Task)), budget, memory, timeoutMs: 200);
+        });
+        Assert.True(gate.WaitHeld(), "the wait never resumed on a thread of its own");
+        Assert.False(running.IsCompleted);
+        if (completion == "answers")
+        {
+            client.SetResult(31);
+        }
+        else
+        {
+            client.SetException(new TimeoutException("transport")); // not to be mistaken for the wait's own timeout
+        }
+
+        gate.Release();
+        var result = await running.WaitAsync(Patience);
+
+        Assert.Equal((CallEnd.TimedOut, IoOutcome.Timeout, 0, "timed out after 200 ms", true), (result.End, result.Outcome, result.Value, result.Error, result.Abandoned));
+        Assert.Null(result.Exception);
+        Assert.Equal(CallEnd.TimedOut, Assert.Single(site.Recorded).Result.End);
+        budget.Release();
+        memory.Release();
+        Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
+    }
+
+    [Fact]
+    public async Task AClientCompletingAfterTheCallerCancelled_ButBeforeTheCallIsClassified_IsCancelled()
+    {
+        using var gate = new ResumeGate();
+        using var caller = new CancellationTokenSource();
+        using var waiting = new ManualResetEventSlim();
+        var client = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var memory = new RequestMemory();
+        var budget = new AttemptBudget(caller.Token, Deadline(600_000));
+        var site = new Site(memory);
+
+        var running = Task.Run(async () =>
+        {
+            gate.Mark();
+            var pending = Run(site.With(_ => new ValueTask<int>(client.Task)), budget, memory, timeoutMs: null);
+            waiting.Set(); // the pending call has started its wait
+            return await pending;
+        });
+        Assert.True(waiting.Wait(Patience));
+        // Cancelled from a thread of its own: the wait's continuation may run inside Cancel, and the gate holds it there.
+        var cancelling = Task.Run(caller.Cancel);
+        Assert.True(gate.WaitHeld(), "the wait never resumed on a thread of its own");
+        client.SetResult(31);
+        gate.Release();
+        var result = await running.WaitAsync(Patience);
+        await cancelling.WaitAsync(Patience);
+
+        Assert.Equal((CallEnd.Cancelled, IoOutcome.Cancelled, 0, true), (result.End, result.Outcome, result.Value, result.Abandoned));
+        Assert.Equal(caller.Token, Assert.IsAssignableFrom<OperationCanceledException>(result.Exception).CancellationToken);
+        Assert.Equal(CallEnd.Cancelled, Assert.Single(site.Recorded).Result.End);
+        budget.Release();
+        memory.Release();
+        Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
+    }
+
+    [Fact]
+    public async Task AClientsOwnTimeoutException_ThrownInTime_IsTheClientsFailure()
+    {
+        // The wait passes the client's exception on: the very object it threw tells it apart from the wait's own timeout.
+        var client = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var memory = new RequestMemory();
+        var budget = new AttemptBudget(CancellationToken.None, Deadline(600_000));
+        var site = new Site(memory);
+        var thrown = new TimeoutException("transport");
+
+        var running = Run(site.With(_ => new ValueTask<int>(client.Task)), budget, memory, timeoutMs: 300_000).AsTask();
+        client.SetException(thrown);
+        var result = await running.WaitAsync(Patience);
+
+        Assert.Equal((CallEnd.Threw, IoOutcome.Timeout, "transport", false), (result.End, result.Outcome, result.Error, result.Abandoned));
+        Assert.Same(thrown, result.Exception);
+        budget.Release();
+        memory.Release();
+        Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
+    }
+
+    [Theory]
+    [InlineData("own")]
+    [InlineData("budget")]
+    [InlineData("caller")]
+    public async Task ASynchronousAnswerAfterTheCallsBound_IsNotUsed(string bound)
+    {
+        // The client waits until its token is cancelled and then answers anyway, synchronously. With an own timeout shorter
+        // than the budget, the node's budget is far from spent: only the call's own bound can tell the answer is late.
+        using var caller = new CancellationTokenSource();
+        var memory = new RequestMemory();
+        var budget = new AttemptBudget(caller.Token, Deadline(bound == "budget" ? 10 : 600_000));
+        var site = new Site(memory);
+
+        var pending = Run(site.With(token =>
+        {
+            if (bound == "caller")
+            {
+                caller.Cancel(); // the caller gives up while the client is still working
+            }
+
+            Assert.True(token.WaitHandle.WaitOne(Patience));
+            return ValueTask.FromResult(17);
+        }), budget, memory, timeoutMs: bound == "own" ? 10 : null);
+
+        Assert.True(pending.IsCompleted);
+        var result = await pending;
+        var expected = bound switch
+        {
+            "own" => (CallEnd.TimedOut, IoOutcome.Timeout, "timed out after 10 ms"),
+            "budget" => (CallEnd.BudgetRanOut, IoOutcome.Timeout, (string?)null),
+            _ => (CallEnd.Cancelled, IoOutcome.Cancelled, null),
+        };
+        Assert.Equal((expected.Item1, expected.Item2, expected.Item3, 0, false), (result.End, result.Outcome, result.Error, result.Value, result.Abandoned));
+        Assert.Equal(bound != "own", result.Exception is OperationCanceledException);
+        Assert.Equal(bound == "own", !budget.Token.IsCancellationRequested); // an own timeout: the node's budget was left
+        Assert.Equal(result.End, Assert.Single(site.Recorded).Result.End);
+        budget.Release();
+        Assert.Equal(0, memory.Release());
+    }
+
+    [Theory]
     [InlineData(7, IoOutcome.Ok, null)]
     [InlineData(-1, IoOutcome.Error, "negative")]
     public async Task ASynchronousAnswer_TakesNoLease_AndLetsGoOfEverythingAtOnce(int value, IoOutcome outcome, string? error)
@@ -281,6 +417,41 @@ public sealed class BoundedCallTests
         return new ValueTask<int>(done.Task);
     }
 
+    /// <summary>
+    /// Holds back the first continuation that resumes the marked flow on another thread, until released. The wait for a
+    /// pending client resumes that way when it ends (an async method restores its execution context when it resumes, and
+    /// the AsyncLocal is told), so a test can complete the client after the wait has ended and before the call is
+    /// classified: a window no timing makes reliable.
+    /// </summary>
+    private sealed class ResumeGate : IDisposable
+    {
+        private readonly AsyncLocal<ResumeGate?> _flow;
+        private readonly ManualResetEventSlim _held = new();
+        private readonly ManualResetEventSlim _released = new();
+        private int _caught;
+
+        public ResumeGate() => _flow = new AsyncLocal<ResumeGate?>(OnChanged);
+
+        /// <summary>Marks the current flow: what it awaits from now on carries the mark.</summary>
+        public void Mark() => _flow.Value = this;
+
+        /// <summary>Waits until a continuation is held.</summary>
+        public bool WaitHeld() => _held.Wait(Patience);
+
+        public void Release() => _released.Set();
+
+        public void Dispose() => _released.Set(); // never leave a thread held when a test fails
+
+        private void OnChanged(AsyncLocalValueChangedArgs<ResumeGate?> change)
+        {
+            if (change.ThreadContextChanged && ReferenceEquals(change.CurrentValue, this) && Interlocked.Exchange(ref _caught, 1) == 0)
+            {
+                _held.Set();
+                _released.Wait(Patience);
+            }
+        }
+    }
+
     /// <summary>A call site: a negative answer is a failure; every end is recorded with whether the memory was still live.</summary>
     private readonly struct Site(RequestMemory memory, Func<CancellationToken, ValueTask<int>>? send = null, List<(CallResult<int> Result, bool MemoryLive)>? ended = null)
         : IBoundedCall<int>
@@ -329,30 +500,51 @@ public sealed class BoundedCallTests
     }
 }
 
-/// <summary>A synchronously answering call through <see cref="BoundedCall"/> allocates nothing (rule 6).</summary>
+/// <summary>
+/// What a synchronously answering call through <see cref="BoundedCall"/> allocates (rule 6): nothing when it shares the
+/// node's budget, one linked token source and its timer when it has an own, shorter timeout.
+/// </summary>
 [Collection(AllocationMeasurement.Name)]
 public sealed class BoundedCallAllocationTests
 {
     [Fact]
-    public void ASynchronousAnswer_AllocatesNothing()
+    public void ASynchronousAnswer_SharingTheNodesBudget_AllocatesNothing()
+    {
+        Assert.Equal(0, BytesPerCall(timeoutMs: null, calls: 100));
+    }
+
+    [Fact]
+    public void ASynchronousAnswer_WithAShorterOwnTimeout_CostsOneTokenSourceAndTimer()
+    {
+        // The token source is created before the call is sent, so that the client's token carries the timeout. About
+        // 160 B on .NET 8: the linked source, its registration on the node token and the timer. Bounded, so that anything
+        // more per call shows up here.
+        var bytes = BytesPerCall(timeoutMs: 1_000, calls: 2_000);
+
+        Assert.InRange(bytes, 1, 256);
+    }
+
+    /// <summary>The average bytes one call allocates on this thread, after warming up.</summary>
+    private static double BytesPerCall(int? timeoutMs, int calls)
     {
         var memory = new RequestMemory();
         var budget = new AttemptBudget(CancellationToken.None, Stopwatch.GetTimestamp() + (600L * Stopwatch.Frequency));
         var target = new IoTarget(IoKind.CandidateSource, "s");
-        for (var i = 0; i < 10; i++)
+        for (var i = 0; i < 100; i++)
         {
-            Consume(BoundedCall.RunAsync<int, Answering>(default, budget, memory, target, null, "req", null));
+            Consume(BoundedCall.RunAsync<int, Answering>(default, budget, memory, target, timeoutMs, "req", null));
         }
 
         var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 100; i++)
+        for (var i = 0; i < calls; i++)
         {
-            Consume(BoundedCall.RunAsync<int, Answering>(default, budget, memory, target, null, "req", null));
+            Consume(BoundedCall.RunAsync<int, Answering>(default, budget, memory, target, timeoutMs, "req", null));
         }
 
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        var bytes = (double)(GC.GetAllocatedBytesForCurrentThread() - before) / calls;
         budget.Release();
         memory.Release();
+        return bytes;
     }
 
     /// <summary>Takes the result of a call that must have completed synchronously.</summary>

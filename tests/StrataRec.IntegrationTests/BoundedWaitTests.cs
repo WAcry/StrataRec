@@ -161,8 +161,8 @@ public sealed class BoundedWaitTests
     [Fact]
     public async Task AModelAnsweringOnlyAfterTheNodeBudget_IsATimeout_AndItsScoresAreNotServed()
     {
-        // The client answers synchronously, but only once the node's budget has cancelled its token: the operator never
-        // observes the token and returns its scores after the budget.
+        // The client answers synchronously, but only once the node's budget has cancelled its token. The answer came after
+        // the call's bound (the node's deadline): it is not heard, so the call is a timeout as the request saw it.
         var engine = Engine(HomeFeedTestHost.Load(), new CountingPool(), models: new LateModels());
 
         var result = await engine.ExecuteAsync(Request("req-late")).AsTask().WaitAsync(Patience);
@@ -171,7 +171,9 @@ public sealed class BoundedWaitTests
         var ranker = result.Trace!.Single(n => n.NodeId == "ctr_ranker");
         Assert.Equal(("ctr_backup", "timed out after 50 ms; served by fallback 'ctr_backup'"), (ranker.ProducedBy, ranker.Detail));
         var run = result.Recording!.Runs[0];
-        Assert.Equal("ok", Assert.Single(run.ModelCalls).Status); // the call itself answered
+        var call = Assert.Single(run.ModelCalls);
+        Assert.Equal(("timeout", true), (call.Status, call.Threw));
+        Assert.Empty(call.Outputs);
         Assert.Equal(ReplayTiming.TimedOut, run.Nodes.Single(n => n.Node == "ctr_ranker").Attempts[0].Timing);
 
         // Served exactly as when the model fails outright.
