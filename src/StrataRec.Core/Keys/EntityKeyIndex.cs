@@ -269,11 +269,21 @@ public sealed class EntityKeyIndex
         {
             Allocate(slotCount);
         }
-        else if ((_stringKeys ? _strings.Length : _int64Keys.Length) < _maxCount)
+        else if (!KeysFit())
         {
             RentKeys(); // the slot table is large enough, but this key type's arrays were rented smaller (or not at all)
         }
     }
+
+    /// <summary>Whether every array of the current key type holds <see cref="_maxCount"/> entries.</summary>
+    /// <remarks>
+    /// The arrays of one key type are rented separately, and a pool only promises at least the requested length (a pool
+    /// per element type may round each differently), so each is checked: a long string array says nothing about its
+    /// hash array. <see cref="RentKeys"/> rents the same set.
+    /// </remarks>
+    private bool KeysFit() => _stringKeys
+        ? _strings.Length >= _maxCount && _hashes.Length >= _maxCount
+        : _int64Keys.Length >= _maxCount;
 
     /// <summary>Removes every key, keeping the rented arrays for reuse.</summary>
     public void Clear()
