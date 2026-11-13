@@ -3,7 +3,7 @@ using System.Diagnostics.Metrics;
 using BenchmarkDotNet.Attributes;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Values;
-using StrataRec.Hosting.LocalTables;
+using StrataRec.Hosting.Bindings;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
 
@@ -31,7 +31,7 @@ public class PipelineBenchmarks
     private RequestInputs _inputs = null!;
     private RequestArms _allArms;
     private string _root = null!;
-    private LocalTableHost _tables = null!;
+    private BindingHost _tables = null!;
     private MeterListener? _meterListener;
     private ActivityListener? _activityListener;
 
@@ -42,7 +42,7 @@ public class PipelineBenchmarks
     public void Setup()
     {
         _root = HomeFeedBenchWorkspace.Create(Candidates, FeatureSupply.Sample);
-        _tables = new LocalTableHost();
+        _tables = new BindingHost();
         _plan = HomeFeedBenchWorkspace.Compile(_root, _tables);
         _allArms = _plan.ArmsFromIds(new[] { "exp_mmr_diversity/mmr", "exp_freshness_calibration/calibrated", "exp_quality_weight/strong" });
         _executor = new PipelineExecutor();

@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Experiments.Compilation;
-using StrataRec.Hosting.LocalTables;
+using StrataRec.Hosting.Bindings;
 using StrataRec.Hosting.Workspace;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Testing;
@@ -47,14 +47,15 @@ internal static class HomeFeedBenchWorkspace
     }
 
     /// <summary>Compiles home_feed with <paramref name="tables"/> holding its local tables, and waits for their loads.</summary>
-    public static ExecutionPlan Compile(string root, LocalTableHost tables)
+    public static ExecutionPlan Compile(string root, BindingHost tables)
     {
         var diagnostics = new DiagnosticBag();
         var workspace = ConfigWorkspace.Load(root, diagnostics);
         var request = workspace.CreateCompileRequest("home_feed", "local", diagnostics);
         diagnostics.ThrowIfErrors("load benchmark workspace");
         var lease = tables.OpenLease();
-        var plan = PlanCompiler.Compile(request!, new PlanEnvironment { BaseDirectory = root }, lease).GetPlanOrThrow();
+        var environment = new PlanEnvironment { BaseDirectory = root };
+        var plan = lease.CompileAsync(bindings => PlanCompiler.Compile(request!, environment, bindings)).GetAwaiter().GetResult().GetPlanOrThrow();
         var failures = lease.WaitLoadedAsync().GetAwaiter().GetResult();
         if (failures.Count > 0)
         {

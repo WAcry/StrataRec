@@ -1,7 +1,7 @@
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
-using StrataRec.Hosting.LocalTables;
+using StrataRec.Hosting.Bindings;
 using StrataRec.Hosting.Workspace;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
@@ -63,10 +63,10 @@ internal sealed class HomeFeedTestHost
     public PlanEnvironment Environment { get; }
 
     /// <summary>
-    /// The local tables of the plans this host compiles (the sample binds <c>author_store</c> locally). Plans compiled by
-    /// <see cref="Compile"/> keep their tables loaded for the life of the test.
+    /// What the plans this host compiles bind (the sample binds <c>author_store</c> locally). Plans compiled by
+    /// <see cref="Compile"/> keep their tables and clients loaded for the life of the test.
     /// </summary>
-    public LocalTableHost Tables { get; } = new();
+    public BindingHost Bindings { get; } = new();
 
     /// <summary>
     /// The sample's directory: the untimed copy (made once per test run and shared, so never edit it) or the sample as
@@ -89,11 +89,11 @@ internal sealed class HomeFeedTestHost
         return Open(root);
     }
 
-    /// <summary>Compiles the plan and loads its local tables, as the engine does before serving it.</summary>
+    /// <summary>Compiles the plan and loads what it binds, as the engine does before serving it.</summary>
     public PlanCompilation Compile()
     {
-        var lease = Tables.OpenLease();
-        var compilation = PlanCompiler.Compile(Request, Environment, lease);
+        var lease = Bindings.OpenLease();
+        var compilation = lease.CompileAsync(bindings => PlanCompiler.Compile(Request, Environment, bindings)).GetAwaiter().GetResult();
         var failures = lease.WaitLoadedAsync().GetAwaiter().GetResult();
         Assert.True(failures.Count == 0, string.Join("\n", failures.Select(f => f.Message)));
         return compilation;
@@ -102,8 +102,8 @@ internal sealed class HomeFeedTestHost
     /// <summary><see cref="PlanCompiler.CompileMerged"/> with the local tables loaded, like <see cref="Compile"/>.</summary>
     public PlanCompilation CompileMerged(IReadOnlyList<string> arms)
     {
-        var lease = Tables.OpenLease();
-        var compilation = PlanCompiler.CompileMerged(Request, arms, Environment, lease);
+        var lease = Bindings.OpenLease();
+        var compilation = lease.CompileAsync(bindings => PlanCompiler.CompileMerged(Request, arms, Environment, bindings)).GetAwaiter().GetResult();
         var failures = lease.WaitLoadedAsync().GetAwaiter().GetResult();
         Assert.True(failures.Count == 0, string.Join("\n", failures.Select(f => f.Message)));
         return compilation;

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 
 namespace StrataRec.Features.Local;
@@ -26,7 +27,7 @@ public sealed class LocalTableSpec
     }
 
     /// <summary>
-    /// Creates the spec and its bootstrap source with one base directory, pinned now (<see cref="PinBaseDirectory"/>):
+    /// Creates the spec and its bootstrap source with one base directory, pinned now (<see cref="BindingContext.PinBaseDirectory"/>, the rule every binding uses):
     /// the source resolves its relative paths against the same absolute directory the <see cref="Identity"/> names, so a
     /// later change of the process's current directory changes neither what the source reads nor which table is shared.
     /// </summary>
@@ -57,17 +58,10 @@ public sealed class LocalTableSpec
             throw new ArgumentException("A local binding names its bootstrap source.", nameof(binding));
         }
 
-        var directory = PinBaseDirectory(baseDirectory);
+        var directory = BindingContext.PinBaseDirectory(baseDirectory);
         var source = bootstrapFactory.Create(sourceName, bootstrap.Settings, directory);
         return new LocalTableSpec(schema, options, binding, source, artifact, pointer, directory);
     }
-
-    /// <summary>
-    /// The absolute directory a local table's relative paths resolve against: <paramref name="baseDirectory"/> made
-    /// absolute against the current directory as it is now, or the current directory when it is null or empty.
-    /// </summary>
-    public static string PinBaseDirectory(string? baseDirectory) =>
-        string.IsNullOrEmpty(baseDirectory) ? Directory.GetCurrentDirectory() : Path.GetFullPath(baseDirectory);
 
     public LocalTableSchema Schema { get; }
 
@@ -129,7 +123,7 @@ public sealed class LocalTableSpec
 }
 
 /// <summary>Gives a plan being compiled the table of each local (source, entity) it reads (design 6.6).</summary>
-/// <remarks>The engine's provider (<c>LocalTableHost</c> in Hosting) shares tables by <see cref="LocalTableSpec.Identity"/>
+/// <remarks>The engine's provider (<c>BindingLease</c> in Hosting) shares tables by <see cref="LocalTableSpec.Identity"/>
 /// and loads them in the background; a plan is served only once its tables are loaded.</remarks>
 public interface ILocalTableProvider
 {

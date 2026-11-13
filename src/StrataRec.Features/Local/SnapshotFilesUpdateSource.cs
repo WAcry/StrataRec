@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Xml;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 
@@ -213,26 +214,17 @@ public sealed class SnapshotFilesUpdateSourceFactory : IFeatureUpdateSourceFacto
     /// </summary>
     private static string ResolveManifest(string uri, string? baseDirectory, string location)
     {
-        if (!uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase) && uri.Contains("://", StringComparison.Ordinal))
+        if (!LocalPaths.TryResolve(uri, BindingContext.PinBaseDirectory(baseDirectory), out var path, out var error))
         {
-            throw new FeatureUpdateException(location, "/uri", $"'{uri}' is not a local path; {SnapshotFilesUpdateSource.Type} reads local files.",
-                "sync the snapshot to a local directory first, or register an update source for the object store");
+            var local = uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase) || !uri.Contains("://", StringComparison.Ordinal);
+            throw new FeatureUpdateException(location, "/uri", local ? error! : $"{error} {SnapshotFilesUpdateSource.Type} reads local files.",
+                local
+                    ? "give the snapshot directory or its snapshot.json as a local path (absolute, or relative to the configuration directory), " +
+                      "or as a file:// URI such as file:///var/lib/snapshots/authors"
+                    : "sync the snapshot to a local directory first, or register an update source for the object store");
         }
 
-        try
-        {
-            var path = uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase)
-                ? new Uri(uri).LocalPath
-                : Path.Combine(baseDirectory ?? Directory.GetCurrentDirectory(), uri); // a rooted uri stays as it is
-            var manifest = path.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ? path : Path.Combine(path, SnapshotFilesUpdateSource.ManifestFileName);
-            return Path.GetFullPath(manifest);
-        }
-        catch (Exception ex) when (ex is UriFormatException or ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            throw new FeatureUpdateException(location, "/uri", $"'{uri}' is not a valid local path or file:// URI ({ex.Message})",
-                "give the snapshot directory or its snapshot.json as a local path (absolute, or relative to the configuration directory), " +
-                "or as a file:// URI such as file:///var/lib/snapshots/authors", ex);
-        }
+        return path.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ? path : Path.Combine(path, SnapshotFilesUpdateSource.ManifestFileName);
     }
 }
 

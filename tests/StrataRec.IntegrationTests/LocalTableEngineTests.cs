@@ -9,7 +9,7 @@ using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Features.Local;
 using StrataRec.Hosting;
-using StrataRec.Hosting.LocalTables;
+using StrataRec.Hosting.Bindings;
 using StrataRec.Hosting.Replay;
 using StrataRec.Hosting.Workspace;
 using StrataRec.Pipeline.Planning;
@@ -37,7 +37,7 @@ public sealed class LocalTableEngineTests
         var second = AuthorTable(Load(engine, host.Root));
 
         Assert.Same(first, second);
-        Assert.Equal(1, engine.LocalTables.TableCount);
+        Assert.Equal(1, engine.Bindings.TableCount);
         Assert.Single(logs.Entries, e => e.EventId.Id == 1201); // loaded once
         Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-reuse"))).Succeeded);
     }
@@ -55,7 +55,7 @@ public sealed class LocalTableEngineTests
         Assert.NotSame(first, second);
         Assert.True(second.IsLoaded);
         Assert.Equal(32L << 20, second.Options.MaxBytes);
-        Assert.Equal(1, engine.LocalTables.TableCount); // the replaced plan's table is no longer held
+        Assert.Equal(1, engine.Bindings.TableCount); // the replaced plan's table is no longer held
         Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-rebuilt"))).Succeeded);
     }
 
@@ -74,7 +74,7 @@ public sealed class LocalTableEngineTests
         Assert.Contains("Local table author_store/author (source 'author_store' in bindings:local) failed to load from snapshot_files@1", error.Message);
         Assert.Contains("part-0000.jsonl:3", error.Message);
         Assert.NotNull(error.Hint);
-        Assert.Equal(0, engine.LocalTables.TableCount); // the failed plan's table is released with it
+        Assert.Equal(0, engine.Bindings.TableCount); // the failed plan's table is released with it
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public sealed class LocalTableEngineTests
 
         Assert.NotSame(current, retried);
         Assert.True(retried.IsLoaded);
-        Assert.Equal(1, engine.LocalTables.TableCount);
+        Assert.Equal(1, engine.Bindings.TableCount);
     }
 
     [Fact]
@@ -114,8 +114,8 @@ public sealed class LocalTableEngineTests
         var logs = new ListLoggerFactory();
         var host = HomeFeedTestHost.LoadModified(root =>
             ReplayTests.Edit(root, "bindings/local.jsonc", "\"uri\": \"fixtures/author_snapshot\"", "\"uri\": \"fixtures/author_snapshot\", \"reload\": \"PT0.01S\""));
-        var tables = new LocalTableHost(new LocalTableHostOptions { RestartDelay = TimeSpan.FromMilliseconds(5), MaxRestartDelay = TimeSpan.FromMilliseconds(20) }, logs);
-        await using var engine = new RecEngine(host.Environment, loggerFactory: logs, localTables: tables);
+        var tables = new BindingHost(new BindingHostOptions { RestartDelay = TimeSpan.FromMilliseconds(5), MaxRestartDelay = TimeSpan.FromMilliseconds(20) }, logs);
+        await using var engine = new RecEngine(host.Environment, loggerFactory: logs, bindings: tables);
         var table = AuthorTable(Load(engine, host.Root));
         Assert.Equal(186443.0, Followers(table, 100));
 
@@ -157,7 +157,7 @@ public sealed class LocalTableEngineTests
 
         // An engine for replays only (stratarec replay): its tables are never loaded, and never needed.
         var sample = HomeFeedTestHost.Load();
-        await using var replayOnly = new RecEngine(sample.Environment, localTables: new LocalTableHost(new LocalTableHostOptions { LoadTables = false }));
+        await using var replayOnly = new RecEngine(sample.Environment, bindings: new BindingHost(new BindingHostOptions { Load = false }));
         Assert.True(replayOnly.Load(sample.Request, sample.Workspace.ArmRanges("home_feed", "local")).Applied);
         var unloaded = await replayOnly.ReplayAsync(bundle);
 
@@ -213,7 +213,7 @@ public sealed class LocalTableEngineTests
     private static LocalFeatureTable AuthorTable(RecEngine engine)
     {
         Assert.True(engine.TryGetPipeline("home_feed", out var pipeline));
-        return Assert.Single(pipeline.LocalTables!.Tables, t => t.Schema.Source == "author_store");
+        return Assert.Single(pipeline.Bindings.Tables, t => t.Schema.Source == "author_store");
     }
 
     private static double Followers(LocalFeatureTable table, long author)
@@ -304,7 +304,7 @@ public sealed class LocalReadRecordingTests
         var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
         await using var owned = engine;
         Assert.True(engine.TryGetPipeline("home_feed", out var pipeline));
-        var table = Assert.Single(pipeline.LocalTables!.Tables, t => t.Schema.Source == "author_store");
+        var table = Assert.Single(pipeline.Bindings.Tables, t => t.Schema.Source == "author_store");
         var followers = table.Schema.FieldIndex("a_followers");
 
         // The read counts its keys after the fill and before it records: the update lands in that window, on the request's

@@ -1,20 +1,23 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
+using StrataRec.Features.Bindings;
 using StrataRec.Features.Local;
 
-namespace StrataRec.Hosting.LocalTables;
+namespace StrataRec.Hosting.Bindings;
 
-/// <summary>Options of a <see cref="LocalTableHost"/>.</summary>
-public sealed class LocalTableHostOptions
+/// <summary>Options of a <see cref="BindingHost"/>.</summary>
+public sealed class BindingHostOptions
 {
     /// <summary>
-    /// False creates tables without ever loading them: for engines that only replay (a replay answers local reads from
-    /// the recording, so it needs no data and no snapshot files) and for tools that compile without serving. Requests
-    /// that read such a table fail the features with an error saying it is not loaded.
+    /// False creates tables and instances without ever loading them: for engines that only replay (a replay answers local
+    /// reads and external calls from the recording, so it needs no data, no model files and no connections) and for tools
+    /// that compile without serving. Requests that read such a table fail the features with an error saying it is not
+    /// loaded; model signatures that need a loaded client are not checked.
     /// </summary>
-    public bool LoadTables { get; init; } = true;
+    public bool Load { get; init; } = true;
 
     /// <summary>Delay before the first restart of a failed update source; it doubles with every failure in a row.</summary>
     public TimeSpan RestartDelay { get; init; } = TimeSpan.FromSeconds(1);
@@ -23,58 +26,85 @@ public sealed class LocalTableHostOptions
     public TimeSpan MaxRestartDelay { get; init; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
-    /// How long <see cref="LocalTableHost.DisposeAsync"/> waits for cancelled update sources to return: their runs and
-    /// the callbacks they registered on the cancellation token, together.
+    /// The longest an instance's load (<see cref="ILoadable.LoadAsync"/>) may take, and the longest a plan load waits for
+    /// the model signatures it asked for. A model file is read, or a connection made, within it, or the plans that need
+    /// the instance are rejected. A local table's first load has no such bound: a large snapshot may take minutes.
+    /// </summary>
+    public TimeSpan LoadTimeout { get; init; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// How long <see cref="BindingHost.DisposeAsync"/> waits, all together, for cancelled update sources to return (their
+    /// runs and the callbacks they registered on the cancellation token) and for released instances to be disposed.
     /// </summary>
     public TimeSpan ShutdownTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>The host's secret store (design 6.4 item 4), which instances resolve their credentials through when they load.</summary>
+    public ISecretResolver? Secrets { get; init; }
 }
 
 /// <summary>
-/// Owns the engine's local feature tables (design 6.6): creates one for each local (source, entity) a plan reads, shares
-/// it with every plan whose <see cref="LocalTableSpec.Identity"/> is the same, runs its update source in the background,
-/// restarts the source after a failure, and stops the source when no plan holds the table any more. The one component
-/// with the table lifecycle; plans hold tables through a <see cref="LocalTableLease"/>.
+/// Owns what the engine's plans bind (design 6.4, 6.6): the local feature tables, and the instances bindings name (model
+/// clients, candidate sources, feature connectors). Each is created once per identity and shared with every plan whose
+/// spec has the same identity (<see cref="LocalTableSpec.Identity"/>, <see cref="BindingSpec.Identity"/>), so a plan swap
+/// takes over what is loaded instead of loading it again; each is loaded off the request path before a plan that needs
+/// it is served, and stopped or disposed once nothing uses it. The one component with these lifecycles; plans hold
+/// what they bind through one <see cref="BindingLease"/> each.
 /// </summary>
 /// <remarks>
-/// <para><b>Readiness.</b> A table is ready once its first load is complete (<see cref="LocalFeatureTable.IsLoaded"/>).
-/// <see cref="LocalTableLease.WaitLoadedAsync"/> starts the sources of the leased tables and waits for that; the engine
-/// serves a new plan only afterwards, so the old plan keeps serving while new tables load.</para>
-/// <para><b>Failures.</b> If the first load fails, the table is never handed out again: the plans waiting for it get a
-/// <see cref="LocalTableLoadException"/> naming the binding and the bad file, and the next plan with the same identity
-/// starts a new table, so loading again really retries. A source that fails after the first load leaves the table
+/// <para><b>Readiness.</b> A table is ready once its first load is complete (<see cref="LocalFeatureTable.IsLoaded"/>); an
+/// instance once its <see cref="ILoadable.LoadAsync"/> returned (at once when it has none). <see cref="BindingLease.WaitLoadedAsync"/>
+/// starts the loads of what the lease holds and waits for them; the engine serves a new plan only afterwards, so the old
+/// plan keeps serving while new tables and models load.</para>
+/// <para><b>Failures.</b> If the first load fails, the table or instance is never handed out again: the plans waiting for
+/// it get a failure naming the binding (and for a table, the bad file), and the next plan with the same identity starts
+/// a new one, so loading again really retries. A source that fails after the first load leaves the table
 /// serving what it has; the failure is logged and counted, and the source runs again from the table's
 /// <see cref="LocalFeatureTable.Position"/> after a delay that doubles with each failure in a row (reset when a run made
-/// progress), up to <see cref="LocalTableHostOptions.MaxRestartDelay"/>.</para>
+/// progress), up to <see cref="BindingHostOptions.MaxRestartDelay"/>. An instance's load is bounded by
+/// <see cref="BindingHostOptions.LoadTimeout"/>.</para>
 /// <para><b>Release.</b> A table no lease holds has its source cancelled. Requests of an older plan may still read it:
-/// they pinned a version, which stays valid, so stopping a source never needs to wait for requests.</para>
-/// <para><b>Stopping never runs source code on the caller's thread.</b> A source is cancelled with
+/// they pinned a version, which stays valid, so stopping a source never needs to wait for requests. An instance is
+/// different: a request of a replaced plan, or a call it abandoned at a timeout, may still be inside it, so the lease
+/// lets go of its instances only once it is retired and its last request has ended (<see cref="BindingLease"/>). An
+/// instance no lease holds then has its load cancelled and is disposed once that load returned.</para>
+/// <para><b>Stopping and disposing never run their code on the caller's thread.</b> A source is cancelled with
 /// <see cref="CancellationTokenSource.CancelAsync"/>: the callbacks it registered on its token run on the thread pool,
-/// not on the thread that releases a lease (a plan swap) or disposes the host. Their task and the source's run make up
-/// the entry's <see cref="Entry.Completion"/>, which shutdown waits for within one
-/// <see cref="LocalTableHostOptions.ShutdownTimeout"/>; past it, the entry stays alive until both end, and a callback's
-/// exception is logged, never thrown at the caller.</para>
-/// <para>Thread-safe. Sources run off the request path, each on its own long-running task until its first await.</para>
+/// not on the thread that releases a lease (a plan swap, or the end of a request on a client's thread) or disposes the
+/// host. Their task and the source's run make up the entry's <see cref="TableEntry.Completion"/>; an instance is
+/// disposed on the thread pool (<see cref="ClientEntry.Disposed"/>). Shutdown waits for both within one
+/// <see cref="BindingHostOptions.ShutdownTimeout"/>; past it, the entries stay alive until they end, and an exception
+/// of a callback or a disposal is logged, never thrown at the caller. Diagnostics never change a lifecycle: a logger
+/// that throws leaves every wait in place.</para>
+/// <para>Thread-safe. Sources run off the request path, each on its own long-running task until its first await;
+/// instance loads run on the thread pool.</para>
 /// </remarks>
-public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
+public sealed partial class BindingHost : IAsyncDisposable, IDisposable
 {
     private readonly object _gate = new();
-    private readonly Dictionary<string, Entry> _byIdentity = new(StringComparer.Ordinal);
-    private readonly HashSet<Entry> _entries = new(); // every entry whose source may still run, for shutdown
+    private readonly Dictionary<string, TableEntry> _byIdentity = new(StringComparer.Ordinal);
+    private readonly HashSet<TableEntry> _entries = new(); // every entry whose source may still run, for shutdown
+    private readonly Dictionary<(object Factory, string Identity), ClientEntry> _clients = new();
+    private readonly HashSet<ClientEntry> _clientEntries = new(); // every instance not yet disposed, for shutdown
     private readonly ILogger _logger;
     private bool _disposed;
 
-    public LocalTableHost(LocalTableHostOptions? options = null, ILoggerFactory? loggerFactory = null)
+    public BindingHost(BindingHostOptions? options = null, ILoggerFactory? loggerFactory = null)
     {
-        Options = options ?? new LocalTableHostOptions();
+        Options = options ?? new BindingHostOptions();
         if (Options.RestartDelay < TimeSpan.Zero || Options.MaxRestartDelay < Options.RestartDelay)
         {
             throw new ArgumentOutOfRangeException(nameof(options), "Restart delays must be non-negative and MaxRestartDelay at least RestartDelay.");
         }
 
-        _logger = loggerFactory?.CreateLogger<LocalTableHost>() ?? NullLogger<LocalTableHost>.Instance;
+        if (Options.LoadTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "LoadTimeout must be positive.");
+        }
+
+        _logger = loggerFactory?.CreateLogger<BindingHost>() ?? NullLogger<BindingHost>.Instance;
     }
 
-    public LocalTableHostOptions Options { get; }
+    public BindingHostOptions Options { get; }
 
     /// <summary>Tables some lease holds.</summary>
     public int TableCount
@@ -88,25 +118,41 @@ public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
         }
     }
 
-    /// <summary>A lease for the tables of one plan: compile the plan with it, wait for its tables, and dispose it when the
-    /// plan is no longer served (or was never served).</summary>
-    public LocalTableLease OpenLease()
+    /// <summary>Instances (model clients, candidate sources, connectors) some lease holds.</summary>
+    public int InstanceCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _clients.Count;
+            }
+        }
+    }
+
+    /// <summary>A lease for what one plan binds: compile the plan with it, wait for its loads, and dispose it when the plan
+    /// is no longer served (or was never served).</summary>
+    public BindingLease OpenLease()
     {
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
         }
 
-        return new LocalTableLease(this);
+        return new BindingLease(this);
     }
 
     /// <summary>
     /// Cancels every update source and waits for them to return, also those of tables released earlier that are still
-    /// stopping, at most <see cref="LocalTableHostOptions.ShutdownTimeout"/> for all of them.
+    /// stopping; cancels every instance's load and waits for the released instances to be disposed. At most
+    /// <see cref="BindingHostOptions.ShutdownTimeout"/> for all of them. An instance a lease still holds (a request of its
+    /// plan is still running, or a call it abandoned) is not disposed under it: it is disposed when that lease lets go, if
+    /// that happens within the wait, and reported otherwise.
     /// </summary>
     public async ValueTask DisposeAsync()
     {
-        List<Entry> entries;
+        List<TableEntry> entries;
+        List<ClientEntry> clients;
         lock (_gate)
         {
             if (_disposed)
@@ -115,7 +161,8 @@ public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
             }
 
             _disposed = true;
-            entries = new List<Entry>(_entries);
+            entries = new List<TableEntry>(_entries);
+            clients = new List<ClientEntry>(_clientEntries);
             _byIdentity.Clear();
         }
 
@@ -123,29 +170,60 @@ public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
         foreach (var entry in entries)
         {
             entry.Stop();
-            stopping.Add(entry.Completion); // never faults: see Entry.StoppedAsync
+            stopping.Add(entry.Completion); // never faults: see TableEntry.StoppedAsync
         }
 
+        var disposing = new List<Task>(clients.Count);
+        foreach (var client in clients)
+        {
+            client.CancelLoad();
+            disposing.Add(client.Disposed); // never faults: see ClientEntry.DisposeAsync
+        }
+
+        var all = new List<Task>(stopping);
+        all.AddRange(disposing);
         try
         {
-            await Task.WhenAll(stopping).WaitAsync(Options.ShutdownTimeout).ConfigureAwait(false);
+            await Task.WhenAll(all).WaitAsync(Options.ShutdownTimeout).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
-            var running = 0;
-            foreach (var completion in stopping)
+            var running = Pending(stopping);
+            var held = Pending(disposing);
+            try
             {
-                running += completion.IsCompleted ? 0 : 1;
-            }
+                if (running > 0)
+                {
+                    LogShutdownTimeout(_logger, running, Options.ShutdownTimeout.TotalMilliseconds);
+                }
 
-            LogShutdownTimeout(_logger, running, Options.ShutdownTimeout.TotalMilliseconds);
+                if (held > 0)
+                {
+                    LogInstancesShutdownTimeout(_logger, held, Options.ShutdownTimeout.TotalMilliseconds);
+                }
+            }
+            catch (Exception)
+            {
+                // A failing logger cannot report itself.
+            }
         }
     }
 
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 
+    private static int Pending(List<Task> tasks)
+    {
+        var pending = 0;
+        foreach (var task in tasks)
+        {
+            pending += task.IsCompleted ? 0 : 1;
+        }
+
+        return pending;
+    }
+
     /// <summary>The held table of the spec's identity with one more reference, or a new one.</summary>
-    internal Entry Acquire(LocalTableSpec spec)
+    internal TableEntry Acquire(LocalTableSpec spec)
     {
         ArgumentNullException.ThrowIfNull(spec);
         lock (_gate)
@@ -159,14 +237,14 @@ public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
 
             // New, or the held one failed its first load: a fresh table, so another load really retries. The failed one
             // stays with the leases that hold it until they let go.
-            var entry = new Entry(this, spec, new LocalFeatureTable(spec.Schema, spec.Options)) { References = 1 };
+            var entry = new TableEntry(this, spec, new LocalFeatureTable(spec.Schema, spec.Options)) { References = 1 };
             _byIdentity[spec.Identity] = entry;
             _entries.Add(entry);
             return entry;
         }
     }
 
-    internal void Release(Entry entry)
+    internal void Release(TableEntry entry)
     {
         lock (_gate)
         {
@@ -183,11 +261,18 @@ public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
 
         if (entry.Stop())
         {
-            LogStopped(_logger, entry.Spec.Name);
+            try
+            {
+                LogStopped(_logger, entry.Spec.Name);
+            }
+            catch (Exception)
+            {
+                // A failing logger cannot report itself, and must not fail the release.
+            }
         }
     }
 
-    private void Finished(Entry entry)
+    private void Finished(TableEntry entry)
     {
         lock (_gate)
         {
@@ -195,10 +280,11 @@ public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
         }
     }
 
+
     /// <summary>One table, its source's run and its readiness.</summary>
-    internal sealed class Entry
+    internal sealed class TableEntry
     {
-        private readonly LocalTableHost _host;
+        private readonly BindingHost _host;
         private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly CancellationTokenSource _stop = new();
         private readonly object _gate = new();
@@ -206,7 +292,7 @@ public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
         private Task? _run;
         private bool _stopping;
 
-        public Entry(LocalTableHost host, LocalTableSpec spec, LocalFeatureTable table)
+        public TableEntry(BindingHost host, LocalTableSpec spec, LocalFeatureTable table)
         {
             _host = host;
             Spec = spec;
@@ -243,7 +329,7 @@ public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
                 }
 
                 _ = Table.WhenLoaded.ContinueWith(
-                    static (_, state) => ((Entry)state!).Loaded(), this, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                    static (_, state) => ((TableEntry)state!).Loaded(), this, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                 _run = RunAsync();
             }
         }
@@ -419,129 +505,4 @@ public sealed partial class LocalTableHost : IAsyncDisposable, IDisposable
     [LoggerMessage(EventId = 1206, Level = LogLevel.Warning,
         Message = "A cancellation callback of the update source of local table {Table} threw; the source is stopped regardless")]
     private static partial void LogCancellationCallbacksFailed(ILogger logger, Exception exception, string table);
-}
-
-/// <summary>
-/// The tables of one plan (design 6.6): an <see cref="ILocalTableProvider"/> to compile the plan with, which takes a
-/// reference on each table from its <see cref="LocalTableHost"/>. Disposing the lease drops the references; a table no
-/// lease holds is stopped.
-/// </summary>
-public sealed class LocalTableLease : ILocalTableProvider, IDisposable
-{
-    private readonly LocalTableHost _host;
-    private readonly List<LocalTableHost.Entry> _entries = new();
-    private bool _disposed;
-
-    internal LocalTableLease(LocalTableHost host) => _host = host;
-
-    /// <summary>The leased tables, in the order the plan acquired them.</summary>
-    public IReadOnlyList<LocalFeatureTable> Tables
-    {
-        get
-        {
-            lock (_entries)
-            {
-                var tables = new List<LocalFeatureTable>(_entries.Count);
-                foreach (var entry in _entries)
-                {
-                    tables.Add(entry.Table);
-                }
-
-                return tables;
-            }
-        }
-    }
-
-    public LocalFeatureTable Acquire(LocalTableSpec spec)
-    {
-        lock (_entries)
-        {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            var entry = _host.Acquire(spec);
-            _entries.Add(entry);
-            return entry.Table;
-        }
-    }
-
-    /// <summary>
-    /// Starts the update sources of the leased tables that do not run yet, and waits until every table has completed
-    /// its first load, or one of them has failed. Returns the failures, each naming its binding and the bad file; empty
-    /// when every table is loaded (at once when the lease holds none, or the host does not load tables).
-    /// </summary>
-    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled, also before the call
-    /// when there is nothing to wait for; the loads go on.</exception>
-    public async Task<IReadOnlyList<LocalTableLoadException>> WaitLoadedAsync(CancellationToken cancellationToken = default)
-    {
-        List<LocalTableHost.Entry> entries;
-        lock (_entries)
-        {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            entries = new List<LocalTableHost.Entry>(_entries);
-        }
-
-        cancellationToken.ThrowIfCancellationRequested(); // whether or not there is anything to wait for
-
-        if (entries.Count == 0 || !_host.Options.LoadTables)
-        {
-            return Array.Empty<LocalTableLoadException>();
-        }
-
-        var pending = new List<Task>(entries.Count);
-        foreach (var entry in entries)
-        {
-            entry.Start();
-            if (!entry.Ready.IsCompletedSuccessfully)
-            {
-                pending.Add(entry.Ready);
-            }
-        }
-
-        // Stop at the first failure: the plan cannot be served, and a large table still loading should not delay the error.
-        while (pending.Count > 0)
-        {
-            var done = await Task.WhenAny(pending).WaitAsync(cancellationToken).ConfigureAwait(false);
-            if (!done.IsCompletedSuccessfully)
-            {
-                break;
-            }
-
-            pending.Remove(done);
-        }
-
-        var failures = new List<LocalTableLoadException>();
-        foreach (var entry in entries)
-        {
-            if (entry.Ready.Exception?.InnerException is LocalTableLoadException failed)
-            {
-                failures.Add(failed);
-            }
-            else if (entry.Ready.IsCanceled)
-            {
-                failures.Add(new LocalTableLoadException(entry.Spec, new OperationCanceledException("the engine's table host was stopped before the load completed")));
-            }
-        }
-
-        return failures;
-    }
-
-    public void Dispose()
-    {
-        List<LocalTableHost.Entry> entries;
-        lock (_entries)
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            _disposed = true;
-            entries = new List<LocalTableHost.Entry>(_entries);
-            _entries.Clear();
-        }
-
-        foreach (var entry in entries)
-        {
-            _host.Release(entry);
-        }
-    }
 }

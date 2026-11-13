@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
@@ -269,8 +270,8 @@ internal sealed class TestConnectorFactory(IReadOnlyDictionary<string, IFeatureS
 
     public string ConnectorType => Type;
 
-    public IFeatureSourceConnector Create(string sourceName, IReadOnlyDictionary<string, JsonElement> settings, string? baseDirectory) =>
-        connectors[sourceName];
+    public IFeatureSourceConnector Create(BindingContext context) =>
+        connectors[context.Name];
 }
 
 /// <summary>A connector whose behavior is a delegate; records every call.</summary>

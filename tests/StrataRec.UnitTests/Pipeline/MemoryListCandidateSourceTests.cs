@@ -1,4 +1,5 @@
 using System.Text.Json;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Values;
 using StrataRec.Pipeline.Sources;
 
@@ -32,7 +33,7 @@ public sealed class MemoryListCandidateSourceTests
         var dir = Directory.CreateTempSubdirectory("stratarec-list-").FullName;
         File.WriteAllText(Path.Combine(dir, "list.json"), """{ "items": [7, 8, 9] }""");
 
-        var source = new MemoryListCandidateSourceFactory().Create("s", Settings("""{ "data_file": "list.json" }"""), dir);
+        var source = new MemoryListCandidateSourceFactory().Create(new BindingContext("s", Settings("""{ "data_file": "list.json" }"""), dir, null));
         var (status, ids) = await RetrieveAsync(source);
 
         Assert.True(status.Succeeded);
@@ -46,7 +47,7 @@ public sealed class MemoryListCandidateSourceTests
         var dir = Directory.CreateTempSubdirectory("stratarec-list-").FullName;
         File.WriteAllText(Path.Combine(dir, "list.json"), """{ "items": [7, 8, 9], "fail": false }""");
 
-        var source = new MemoryListCandidateSourceFactory().Create("s", Settings("""{ "data_file": "list.json", "fail": true }"""), dir);
+        var source = new MemoryListCandidateSourceFactory().Create(new BindingContext("s", Settings("""{ "data_file": "list.json", "fail": true }"""), dir, null));
         var (status, ids) = await RetrieveAsync(source);
 
         Assert.False(status.Succeeded);

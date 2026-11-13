@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Bindings;
 using StrataRec.Experiments.Assignment;
 using StrataRec.Hosting.Workspace;
 using StrataRec.Pipeline.Planning;
@@ -38,7 +39,8 @@ public static class ServiceCollectionExtensions
     /// Registers <see cref="RecEngine"/> as a singleton <see cref="IRecEngine"/>, loading every configured pipeline
     /// from a local workspace on first use. Startup fails fast with <see cref="ConfigException"/> listing every
     /// error, so a bad configuration never serves traffic. An <see cref="IAssignmentProvider"/> registered in the
-    /// container replaces the built-in assignment. An <see cref="ILoggerFactory"/> in the container (from
+    /// container replaces the built-in assignment, and an <see cref="ISecretResolver"/> resolves the <c>secret://</c>
+    /// references of bindings (design 6.4) when plans load. An <see cref="ILoggerFactory"/> in the container (from
     /// <c>AddLogging</c>) receives the engine's event logs (design 13.2); without one the engine logs nothing. Metrics and
     /// spans need no registration: subscribe to the <c>StrataRec</c> meter and activity source.
     /// </summary>
@@ -57,7 +59,8 @@ public static class ServiceCollectionExtensions
             var environment = options.PlanEnvironment ?? new PlanEnvironment { BaseDirectory = Path.GetFullPath(options.ConfigRoot) };
             var loggerFactory = provider.GetService<ILoggerFactory>();
             var executor = new Pipeline.Execution.PipelineExecutor(logs: provider.GetService<Logging.LogPipeline>(), loggerFactory: loggerFactory);
-            var engine = new RecEngine(environment, provider.GetService<IAssignmentProvider>(), executor, loggerFactory);
+            var engine = new RecEngine(environment, provider.GetService<IAssignmentProvider>(), executor, loggerFactory,
+                secrets: provider.GetService<ISecretResolver>());
             LoadWorkspace(engine, options.ConfigRoot, options.Environment, options.Pipelines).ThrowIfErrors("Loading StrataRec configuration");
             return engine;
         });

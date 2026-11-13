@@ -8,7 +8,6 @@ using StrataRec.Artifacts.Model;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
-using StrataRec.Features.Local;
 using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Experiments.Compilation;
@@ -24,16 +23,18 @@ namespace StrataRec.Experiments.Compilation;
 /// </remarks>
 public static class PlanCompiler
 {
-    /// <param name="localTables">
-    /// Where the plan's local feature tables come from (design 6.6): the engine passes a lease of its table host, which
-    /// shares and loads them. Null gives tables that are never loaded, for compiling without serving (validate, build,
-    /// explain); requests reading them fail the features.
+    /// <param name="bindings">
+    /// Where the plan's local feature tables, clients and connectors come from (design 6.4, 6.6): the engine passes the
+    /// plan's binding lease, which shares and loads them. Null gives ones that are never loaded, for compiling without
+    /// serving (validate, build, explain): requests reading such a table fail the features, and model signatures that
+    /// need a loaded client are checked when an engine loads the plan.
     /// </param>
-    public static PlanCompilation Compile(PlanCompileRequest request, PlanEnvironment? environment = null, ILocalTableProvider? localTables = null)
+    public static PlanCompilation Compile(PlanCompileRequest request, PlanEnvironment? environment = null, IPlanBindings? bindings = null)
     {
         var started = Stopwatch.GetTimestamp();
         var view = PatchableView.Create(request.Pipeline, request.Catalog);
-        var compilation = new UnifiedCompilation(request, environment ?? new PlanEnvironment(), view, new DiagnosticBag(), buildPlan: true, localTables).Run();
+        var compilation = new UnifiedCompilation(request, environment ?? new PlanEnvironment(), view, new DiagnosticBag(), buildPlan: true,
+            bindings ?? new UnloadedBindings()).Run();
         StrataRecMetrics.PlanCompileDuration.Record(
             Stopwatch.GetElapsedTime(started).TotalSeconds, new KeyValuePair<string, object?>(StrataRecTags.Pipeline, request.Pipeline.PipelineId));
         return compilation;
@@ -44,7 +45,7 @@ public static class PlanCompiler
     /// order, as a plain pipeline without experiments. Running it equals running the unified plan with those arms.
     /// </summary>
     public static PlanCompilation CompileMerged(
-        PlanCompileRequest request, IReadOnlyList<string> armIds, PlanEnvironment? environment = null, ILocalTableProvider? localTables = null)
+        PlanCompileRequest request, IReadOnlyList<string> armIds, PlanEnvironment? environment = null, IPlanBindings? bindings = null)
     {
         var diagnostics = new DiagnosticBag();
         var view = PatchableView.Create(request.Pipeline, request.Catalog);
@@ -83,7 +84,7 @@ public static class PlanCompiler
         }
 
         var plain = UnifiedCompilation.WithoutExperiments(request);
-        return new UnifiedCompilation(plain, environment ?? new PlanEnvironment(), view, diagnostics, buildPlan: true, localTables).Run();
+        return new UnifiedCompilation(plain, environment ?? new PlanEnvironment(), view, diagnostics, buildPlan: true, bindings ?? new UnloadedBindings()).Run();
     }
 }
 
@@ -97,6 +98,7 @@ internal sealed partial class UnifiedCompilation
     private readonly PatchableView _view;
     private readonly DiagnosticBag _diagnostics;
     private readonly bool _buildPlan;
+    private readonly IPlanBindings _bindings;
     private readonly PlanBuilder _builder;
     private readonly HashSet<string> _reported = new(StringComparer.Ordinal);
     private readonly string _pipelineLabel;
@@ -111,17 +113,19 @@ internal sealed partial class UnifiedCompilation
     /// <summary>Union of add-only additions: section → name → (value, first arm).</summary>
     private readonly Dictionary<string, SortedDictionary<string, (JsonNode Value, ArmPatch Arm)>> _additions = new(StringComparer.Ordinal);
 
-    /// <param name="localTables">Only a compilation that builds the plan acquires tables; validation passes never do.</param>
+    /// <param name="bindings">One for the whole compile, its validation passes included: they compile the same nodes, so
+    /// they share its clients and signatures. Only a compilation that builds the plan builds the feature plan, so only it
+    /// acquires tables and connectors.</param>
     public UnifiedCompilation(
-        PlanCompileRequest request, PlanEnvironment environment, PatchableView view, DiagnosticBag diagnostics, bool buildPlan,
-        ILocalTableProvider? localTables = null)
+        PlanCompileRequest request, PlanEnvironment environment, PatchableView view, DiagnosticBag diagnostics, bool buildPlan, IPlanBindings bindings)
     {
         _request = request;
         _environment = environment;
         _view = view;
         _diagnostics = diagnostics;
         _buildPlan = buildPlan;
-        _builder = new PlanBuilder(environment, diagnostics, buildPlan ? localTables : null);
+        _bindings = bindings;
+        _builder = new PlanBuilder(environment, diagnostics, bindings);
         _pipelineLabel = "pipeline:" + request.Pipeline.PipelineId;
     }
 

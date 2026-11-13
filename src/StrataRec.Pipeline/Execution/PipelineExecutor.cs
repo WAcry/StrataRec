@@ -66,6 +66,14 @@ public sealed class PipelineRequest
     /// </summary>
     public RunReplay? Replay { get; init; }
 
+    /// <summary>
+    /// Told once when the run and every external call it started have ended (its request memory is returned), which may be
+    /// after the run returned: a call it abandoned at a timeout runs on inside its client. An engine passes the plan's
+    /// binding lease, so the plan's clients are not disposed while anything of the run can still call them.
+    /// </summary>
+    /// <remarks>Set, it is called exactly once per <see cref="PipelineExecutor.ExecuteAsync"/>, whatever the outcome.</remarks>
+    public IRequestEndObserver? OnEnd { get; init; }
+
     /// <summary>The seed of a request that does not set one: a hash of its id (design 3.4).</summary>
     public static long DefaultSeed(string requestId) => unchecked((long)StableHash.Hash(StableHash.SeedFromSalt(requestId)));
 }
@@ -269,7 +277,7 @@ public sealed class PipelineExecutor
     public async ValueTask<PipelineResult> ExecuteAsync(ExecutionPlan plan, PipelineRequest request, CancellationToken cancellationToken = default)
     {
         var start = Stopwatch.GetTimestamp();
-        var memory = new RequestMemory(_pool);
+        var memory = new RequestMemory(_pool, request.OnEnd); // first: from here the run owns telling OnEnd
         FeatureFetcher? fetcher = null;
         RequestState? state = null;
         var position = 0;

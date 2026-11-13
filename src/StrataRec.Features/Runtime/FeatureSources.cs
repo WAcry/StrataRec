@@ -1,7 +1,9 @@
 using System.Text.Json;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
+using StrataRec.Features.Bindings;
 using StrataRec.Features.Catalog;
 using StrataRec.Features.Connectors;
 using StrataRec.Features.Local;
@@ -113,16 +115,19 @@ internal sealed class FeatureSourceResolver
     private readonly FeatureConnectorRegistry _connectors;
     private readonly FeatureUpdateSourceRegistry _updateSources;
     private readonly ILocalTableProvider _localTables;
+    private readonly IBindingInstances _instances;
     private readonly string? _baseDirectory;
     private readonly DiagnosticBag _diagnostics;
     private readonly string _artifact;
     private readonly Dictionary<string, SourceSupply?> _resolved = new(StringComparer.Ordinal);
 
+    /// <param name="instances">Where connectors come from: the engine shares them across plans by binding identity.</param>
     public FeatureSourceResolver(
         SourceBindingArtifact bindings,
         FeatureConnectorRegistry connectors,
         FeatureUpdateSourceRegistry updateSources,
         ILocalTableProvider localTables,
+        IBindingInstances instances,
         string? baseDirectory,
         DiagnosticBag diagnostics)
     {
@@ -130,6 +135,7 @@ internal sealed class FeatureSourceResolver
         _connectors = connectors;
         _updateSources = updateSources;
         _localTables = localTables;
+        _instances = instances;
         _baseDirectory = baseDirectory;
         _diagnostics = diagnostics;
         _artifact = "bindings:" + bindings.Environment;
@@ -343,7 +349,13 @@ internal sealed class FeatureSourceResolver
         IFeatureSourceConnector connector;
         try
         {
-            connector = factory.Create(sourceName, binding.Settings, _baseDirectory);
+            var spec = BindingSpec.Create(BindingSection.Sources, sourceName, type, binding.Settings, _baseDirectory, factory, _artifact);
+            connector = _instances.Acquire(spec, factory.Create);
+        }
+        catch (BindingException ex)
+        {
+            _diagnostics.Error("CONNECTOR_CONFIG", _artifact, pointer + ex.Pointer, ex.Reason, ex.Hint);
+            return null;
         }
         catch (Exception ex) when (ex is FormatException or IOException or JsonException or InvalidOperationException)
         {
@@ -398,7 +410,7 @@ internal sealed class FeatureSourceResolver
         {
             try
             {
-                _ = factory.Create(sourceName, binding.Bootstrap!.Settings, LocalTableSpec.PinBaseDirectory(_baseDirectory));
+                _ = factory.Create(sourceName, binding.Bootstrap!.Settings, BindingContext.PinBaseDirectory(_baseDirectory));
             }
             catch (FeatureUpdateException ex)
             {

@@ -3,11 +3,12 @@ using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Assignment;
 using StrataRec.Experiments.Compilation;
-using StrataRec.Hosting.LocalTables;
+using StrataRec.Hosting.Bindings;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
 
@@ -141,8 +142,11 @@ public sealed class LoadedPipeline
     /// <summary>Content ids of the artifacts the plan was compiled from, when the loader knew them (replay bundles record them).</summary>
     public IReadOnlyDictionary<string, string> ArtifactIds { get; init; } = new Dictionary<string, string>();
 
-    /// <summary>The plan's local tables (design 6.6), held while the plan is served.</summary>
-    internal LocalTableLease? LocalTables { get; init; }
+    /// <summary>
+    /// What the plan binds (design 6.4, 6.6): its local tables, held while the plan is served, and its clients and
+    /// connectors, held until no request of the plan can still call them. Every run of the plan enters it.
+    /// </summary>
+    internal BindingLease Bindings { get; init; } = null!;
 
     /// <summary>Request-level metric tags of the plan (design 13.1), built once per loaded plan.</summary>
     internal RequestTelemetry Telemetry =>
@@ -165,14 +169,20 @@ public sealed record PlanLoadResult(
 /// In-flight requests keep the plan they started with; a plan that fails to compile never replaces the current one.
 /// </summary>
 /// <remarks>
-/// <para>Local feature tables (design 6.6) belong to <see cref="LocalTables"/>: a plan is served only once every table it
-/// reads has completed its first load, and tables whose identity a new plan shares are taken over, not loaded again.
-/// Disposing the engine stops their update sources.</para>
-/// <para><b>Lifecycle.</b> One lock orders loads, publishing and disposal. A load registers itself (with its table
+/// <para>What plans bind belongs to <see cref="Bindings"/> (design 6.4, 6.6): local feature tables, model clients,
+/// candidate sources and connectors. A plan is served only once every table it reads has completed its first load and
+/// every instance it uses has loaded; what a new plan shares by identity with the served one is taken over, not loaded
+/// again. Disposing the engine stops the tables' update sources and disposes the instances once no request can call
+/// them.</para>
+/// <para><b>Lifecycle.</b> One lock orders loads, publishing and disposal. A load registers itself (with its binding
 /// lease) under it, and publishes under it; a disposal marks the engine disposed under it and takes every registered
 /// load and every served plan. So nothing is published after a disposal, a disposal cancels the loads still running,
-/// and each lease the engine opened is returned exactly by its owner at that moment: the load until it publishes (in
+/// and each lease the engine opened is retired exactly by its owner at that moment: the load until it publishes (in
 /// its <c>finally</c> when it does not), the served plan afterwards (when it is replaced, or by the disposal).</para>
+/// <para><b>Requests.</b> Every run enters its plan's lease and leaves it when the run and every call it started have
+/// ended, so the instances of a replaced plan are disposed only after its last request, and the calls those requests
+/// abandoned at a timeout, returned. A request that finds its plan's lease retired reads the current plan again; after a
+/// disposal it throws <see cref="ObjectDisposedException"/>.</para>
 /// <para>Observability (design 13): each request gets one span (<see cref="StrataRecTracing.StartRequest"/>) and
 /// request-level metrics per pipeline and per assigned arm; plan loads are metrics and event logs. Everything is
 /// optional: without listeners or a logger factory the engine records nothing and allocates nothing for it.</para>
@@ -186,33 +196,41 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     private readonly PipelineExecutor _executor;
     private readonly IAssignmentProvider? _assignmentProvider;
     private readonly ILogger _logger;
-    private readonly bool _ownsLocalTables;
+    private readonly bool _ownsBindings;
     private bool _disposed;
 
     /// <param name="executor">Runs the plans; defaults to one sharing <paramref name="loggerFactory"/>.</param>
     /// <param name="loggerFactory">Receives plan load events (design 13.2); null logs nothing.</param>
-    /// <param name="localTables">Hosts the plans' local feature tables; null creates one the engine owns and disposes. A
-    /// host passed in is the caller's to dispose (it may serve several engines).</param>
+    /// <param name="bindings">Hosts what the plans bind (tables, clients, connectors); null creates one the engine owns and
+    /// disposes. A host passed in is the caller's to dispose (it may serve several engines), with its own secret store.</param>
+    /// <param name="secrets">The host's secret store (design 6.4 item 4) for the host the engine creates.</param>
     public RecEngine(
         PlanEnvironment? environment = null,
         IAssignmentProvider? assignmentProvider = null,
         PipelineExecutor? executor = null,
         ILoggerFactory? loggerFactory = null,
-        LocalTableHost? localTables = null)
+        BindingHost? bindings = null,
+        ISecretResolver? secrets = null)
     {
+        if (bindings is not null && secrets is not null)
+        {
+            throw new ArgumentException("A binding host passed in has its own secret store (BindingHostOptions.Secrets).", nameof(secrets));
+        }
+
         Environment = environment ?? new PlanEnvironment();
         _assignmentProvider = assignmentProvider;
         _executor = executor ?? new PipelineExecutor(loggerFactory: loggerFactory);
         _logger = loggerFactory?.CreateLogger<RecEngine>() ?? NullLogger<RecEngine>.Instance;
-        _ownsLocalTables = localTables is null;
-        LocalTables = localTables ?? new LocalTableHost(loggerFactory: loggerFactory);
+        _ownsBindings = bindings is null;
+        Bindings = bindings ?? new BindingHost(new BindingHostOptions { Secrets = secrets }, loggerFactory);
     }
 
     /// <summary>Operators, connectors and clients this binary provides.</summary>
     public PlanEnvironment Environment { get; }
 
-    /// <summary>The local feature tables of the served plans (design 6.6).</summary>
-    public LocalTableHost LocalTables { get; }
+    /// <summary>What the served plans bind: local feature tables (design 6.6), model clients, candidate sources and
+    /// connectors (design 6.4).</summary>
+    public BindingHost Bindings { get; }
 
     /// <summary>Ids of the pipelines currently served, sorted.</summary>
     public List<string> PipelineIds()
@@ -225,18 +243,21 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     public bool TryGetPipeline(string pipelineId, out LoadedPipeline pipeline) => _pipelines.TryGetValue(pipelineId, out pipeline!);
 
     /// <summary>
-    /// Compiles a plan and, when it has no errors, makes it current for its pipeline once its local tables are loaded
-    /// (<see cref="LoadAsync"/>). Blocks while new tables load; call it from a background thread (design 10.3 step 2).
+    /// Compiles a plan and, when it has no errors, makes it current for its pipeline once what it binds has loaded
+    /// (<see cref="LoadAsync"/>). Blocks while new tables and instances load; call it from a background thread (design 10.3
+    /// step 2).
     /// </summary>
     public PlanLoadResult Load(PlanCompileRequest request, IReadOnlyDictionary<string, IReadOnlyDictionary<string, int[]>>? armRanges = null, long? sequence = null) =>
         LoadAsync(request, armRanges, sequence).GetAwaiter().GetResult();
 
     /// <summary>
-    /// Compiles a plan and, when it has no errors, makes it current for its pipeline. Thread-safe. A plan that reads local
-    /// feature tables (design 6.6) becomes current only after every one of them has completed its first load; until then
-    /// the current plan keeps serving. A table that fails to load rejects the plan with a <c>LOCAL_TABLE_LOAD_FAILED</c>
-    /// error naming the binding and the bad file. Tables the current plan already holds with the same identity are taken
-    /// over at once, so a configuration change that does not touch a table never reloads it.
+    /// Compiles a plan and, when it has no errors, makes it current for its pipeline. Thread-safe. A plan becomes current
+    /// only after every local feature table it reads (design 6.6) has completed its first load and every client and
+    /// connector it uses (design 6.4) has loaded; until then the current plan keeps serving. Model signatures that need a
+    /// loaded client or I/O are looked up here, concurrently, and checked before the plan is served (design 6.9). A table
+    /// that fails to load rejects the plan with <c>LOCAL_TABLE_LOAD_FAILED</c> naming the binding and the bad file, an
+    /// instance with <c>BINDING_LOAD_FAILED</c> at its binding. What the current plan already holds with the same identity
+    /// is taken over at once, so a configuration change that does not touch a binding never reloads it.
     /// </summary>
     /// <param name="armRanges">Bucket ranges per experiment and arm (from the manifest or allocation file).</param>
     /// <param name="sequence">
@@ -245,7 +266,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// a ticket taken at the start of the call orders local loads; do not mix the two schemes for one pipeline.
     /// </param>
     /// <param name="cancellationToken">Cancels the load until the plan is applied: checked when the call starts, while it
-    /// waits for tables (the tables of other plans load on), and when it is about to publish.</param>
+    /// waits for signatures and loads (the bindings of other plans load on), and when it is about to publish.</param>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled before the plan was
     /// applied; the current plan is unchanged.</exception>
     /// <exception cref="ObjectDisposedException">The engine is disposed, or was disposed before the plan was applied.</exception>
@@ -260,7 +281,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         var load = BeginLoad(cancellationToken);
         try
         {
-            return await LoadWithTablesAsync(request, armRanges, order, load, cancellationToken).ConfigureAwait(false);
+            return await LoadWithBindingsAsync(request, armRanges, order, load, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (load.Cancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
@@ -284,7 +305,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                 throw Disposed(null);
             }
 
-            var load = new PendingLoad(LocalTables.OpenLease(), CancellationTokenSource.CreateLinkedTokenSource(cancellationToken));
+            var load = new PendingLoad(Bindings.OpenLease(), CancellationTokenSource.CreateLinkedTokenSource(cancellationToken));
             _loads.Add(load);
             return load;
         }
@@ -315,12 +336,17 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// disposal in that window.</summary>
     internal Action? Publishing { get; set; }
 
-    private async Task<PlanLoadResult> LoadWithTablesAsync(
+    private async Task<PlanLoadResult> LoadWithBindingsAsync(
         PlanCompileRequest request, IReadOnlyDictionary<string, IReadOnlyDictionary<string, int[]>>? armRanges, long order, PendingLoad load,
         CancellationToken cancellationToken)
     {
         var lease = load.Lease;
-        var compilation = PlanCompiler.Compile(request, Environment, lease);
+
+        // Model signatures that need a client loaded (or a model server asked) are awaited here, off the compile, and the
+        // plan is compiled once more with the answers (design 6.9); plans whose clients are loaded compile once.
+        var environment = Environment;
+        var compilation = await lease.CompileAsync(bindings => PlanCompiler.Compile(request, environment, bindings), load.Cancellation.Token)
+            .ConfigureAwait(false);
         var diagnostics = new DiagnosticBag();
         diagnostics.AddRange(compilation.Diagnostics);
         var pipelineId = request.Pipeline.PipelineId;
@@ -341,18 +367,19 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             }
         }
 
-        // Readiness (design 6.6 local item 6): the plan is served only once its tables hold a complete load. A disposal
-        // during the wait also stops the tables (their loads end as failures): the cancellation decides, not those.
+        // Readiness (design 6.6 local item 6): the plan is served only once its tables hold a complete load and its
+        // instances have loaded. A disposal during the wait also stops them (their loads end as failures): the
+        // cancellation decides, not those.
         var failures = await lease.WaitLoadedAsync(load.Cancellation.Token).ConfigureAwait(false);
         load.Cancellation.Token.ThrowIfCancellationRequested();
         if (failures.Count > 0)
         {
             foreach (var failure in failures)
             {
-                diagnostics.Error("LOCAL_TABLE_LOAD_FAILED", failure.Artifact, failure.Pointer, failure.Message, failure.Hint);
+                diagnostics.Error(failure.Code, failure.Artifact, failure.Pointer, failure.Message, failure.Hint);
             }
 
-            PlanLoadTelemetry.TablesFailed(_logger, pipelineId, request.ManifestId, diagnostics);
+            PlanLoadTelemetry.BindingsFailed(_logger, pipelineId, request.ManifestId, diagnostics);
             return new PlanLoadResult(pipelineId, false, request.ManifestId, plan.CompileTime, diagnostics.Items, compilation.Report);
         }
 
@@ -364,7 +391,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             Report = compilation.Report,
             Sequence = order,
             ArtifactIds = request.ArtifactIds,
-            LocalTables = lease,
+            Bindings = lease,
         };
         _ = loaded.Telemetry; // request metric tags are built with the plan, not on its first request
         Publishing?.Invoke();
@@ -410,20 +437,22 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
 
         // The replaced plan's tables that the new plan does not share are no longer used: their sources stop. Requests
         // still running on the old plan read the versions they pinned.
-        replaced?.LocalTables?.Dispose();
+        replaced?.Bindings.Dispose();
         PlanLoadTelemetry.LogApplied(_logger, plan, order);
         return new PlanLoadResult(pipelineId, true, request.ManifestId, plan.CompileTime, diagnostics.Items, compilation.Report);
     }
 
     /// <summary>
-    /// Cancels the loads still running (they throw <see cref="ObjectDisposedException"/>) and returns the table leases of
-    /// those loads and of the served plans, so the tables no other user holds stop their update sources. A table host
-    /// passed to the constructor keeps serving its other engines; one the engine created is disposed. Requests running
-    /// meanwhile keep the versions they pinned; the served plans stay readable, and no load is taken any more.
+    /// Cancels the loads still running (they throw <see cref="ObjectDisposedException"/>) and retires the binding leases of
+    /// those loads and of the served plans: the tables no other user holds stop their update sources, and the instances
+    /// no other user holds are disposed once the requests still running (and the calls they abandoned) have ended. A
+    /// binding host passed to the constructor keeps serving its other engines; one the engine created is disposed, which
+    /// waits for those disposals within its shutdown timeout. Requests running meanwhile keep the versions they pinned
+    /// and their clients; no request and no load is taken any more.
     /// </summary>
     public async ValueTask DisposeAsync()
     {
-        var leases = new List<LocalTableLease>();
+        var leases = new List<BindingLease>();
         lock (_publishGate)
         {
             if (_disposed)
@@ -442,7 +471,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
 
             foreach (var (_, pipeline) in _pipelines)
             {
-                if (pipeline.LocalTables is { } served)
+                if (pipeline.Bindings is { } served)
                 {
                     leases.Add(served);
                 }
@@ -451,19 +480,19 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
 
         foreach (var lease in leases)
         {
-            lease.Dispose(); // stopping a source runs none of its code here (LocalTableHost)
+            lease.Dispose(); // stopping a source or disposing an instance runs none of its code here (BindingHost)
         }
 
-        if (_ownsLocalTables)
+        if (_ownsBindings)
         {
-            await LocalTables.DisposeAsync().ConfigureAwait(false);
+            await Bindings.DisposeAsync().ConfigureAwait(false);
         }
     }
 
     /// <summary>A load between its start and its end (see the lifecycle remarks): its lease, and the cancellation a disposal uses.</summary>
-    private sealed class PendingLoad(LocalTableLease lease, CancellationTokenSource cancellation)
+    private sealed class PendingLoad(BindingLease lease, CancellationTokenSource cancellation)
     {
-        public LocalTableLease Lease { get; } = lease;
+        public BindingLease Lease { get; } = lease;
 
         /// <summary>Linked to the caller's token; cancelled on its own only by a disposal.</summary>
         public CancellationTokenSource Cancellation { get; } = cancellation;
@@ -493,11 +522,16 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         var timeMs = record ? request.TimeMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : request.TimeMs;
         var runs = record ? new RunCapture() : null;
         var unknown = 0;
+        LoadedPipeline? fallback = null;
         try
         {
-            if (!_pipelines.TryGetValue(request.PipelineId, out pipeline))
+            // Entered (see Enter) until the finally below; each run joins the lease for as long as its calls run.
+            pipeline = Enter(request.PipelineId, out var disposed);
+            if (pipeline is null)
             {
-                return result = Rejected(request, $"Unknown pipeline '{request.PipelineId}'.");
+                return disposed
+                    ? throw new ObjectDisposedException(nameof(RecEngine), "The engine is disposed: it takes no request.")
+                    : result = Rejected(request, $"Unknown pipeline '{request.PipelineId}'.");
             }
 
             var assignment = await AssignAsync(pipeline, request, started, cancellationToken).ConfigureAwait(false);
@@ -516,8 +550,10 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
 
             var executed = await Run(pipeline, request, arms, remaining, seed, timeMs, runs, cancellationToken).ConfigureAwait(false);
             remaining = request.Deadline - Stopwatch.GetElapsedTime(started);
+
+            // A disposal since the primary ran leaves the request with the primary's result, as when no fallback is served.
             if (executed.Succeeded || pipeline.FallbackPipeline is not { } fallbackId || fallbackId == request.PipelineId
-                || !_pipelines.TryGetValue(fallbackId, out var fallback) || remaining <= TimeSpan.Zero)
+                || remaining <= TimeSpan.Zero || (fallback = Enter(fallbackId, out _)) is null)
             {
                 degraded = executed.Degraded;
                 result = ToResult(request, pipeline, executed, unknown, request.PipelineId);
@@ -540,6 +576,9 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         }
         finally
         {
+            pipeline?.Bindings.RequestEnded();
+            fallback?.Bindings.RequestEnded();
+
             // What the caller saw (design 13.1 "实验桶"): an aborted request counts as an error, so arms whose requests
             // are slow enough to be cancelled do not look healthier.
             var failed = result is not { Succeeded: true };
@@ -607,6 +646,34 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         return (assigned, unknownIds, null);
     }
 
+    /// <summary>
+    /// The plan a pipeline serves, its binding lease entered (see the lifecycle remarks): the caller ends the entry
+    /// (<see cref="BindingLease.RequestEnded"/>) when it is done with the plan; the plan's runs join the lease meanwhile.
+    /// Null when the pipeline is not served, or when the engine is disposed (<paramref name="disposed"/>). A plan replaced
+    /// between the read and the entry is read again.
+    /// </summary>
+    private LoadedPipeline? Enter(string pipelineId, out bool disposed)
+    {
+        disposed = false;
+        while (_pipelines.TryGetValue(pipelineId, out var pipeline))
+        {
+            if (pipeline.Bindings.TryEnter())
+            {
+                return pipeline;
+            }
+
+            // Retired: replaced since the read (the next read finds the new plan), or, while still served, by a disposal.
+            if (_pipelines.TryGetValue(pipelineId, out var current) && ReferenceEquals(current, pipeline))
+            {
+                disposed = true;
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    /// <param name="pipeline">Entered by the caller (<see cref="Enter"/>); the run joins its lease until its calls end.</param>
     /// <param name="runs">Collects the run's recording on every exit; null when the request does not record.</param>
     private ValueTask<PipelineResult> Run(
         LoadedPipeline pipeline, RecRequest request, RequestArms arms, TimeSpan deadline, long? seed, long? timeMs, RunCapture? runs,
@@ -621,6 +688,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             TimeMs = timeMs,
             CaptureLogs = request.Debug?.CaptureLogs == true,
             OnRecording = runs is null ? null : runs.Add,
+            OnEnd = pipeline.Bindings.Join(), // last: the executor, called next, ends it on every outcome
         }, cancellationToken);
 
     /// <summary>The result of a request its fallback pipeline served: the primary's assignment and error, the fallback's items.</summary>

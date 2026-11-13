@@ -26,13 +26,25 @@ public sealed class SharedArrayBufferPool : IBufferPool
 }
 
 /// <summary>
+/// Told once that a request and every external call it started have ended: its <see cref="RequestMemory"/> has returned
+/// its buffers. Until then a call the request abandoned (a timeout) may still be running inside a client, so whatever the
+/// request borrowed from its plan (the plan's model clients, sources and connectors) must stay usable.
+/// </summary>
+public interface IRequestEndObserver
+{
+    /// <summary>Called on the thread of the last <see cref="RequestMemory.Release"/>, which may be a client's; must not block or throw.</summary>
+    void RequestEnded();
+}
+
+/// <summary>
 /// Per-request buffer ledger. Operators rent through it and never return buffers themselves; everything is
 /// returned at once when the request and every external I/O it started have finished (design 4.8).
 /// </summary>
 /// <remarks>
 /// <para>The holder count starts at 1 (the request itself). Each external I/O calls <see cref="Hold"/> when it starts
 /// and <see cref="Release"/> when it completes or acknowledges cancellation; the request calls <see cref="Release"/>
-/// after it has produced its result. The last release returns all buffers.</para>
+/// after it has produced its result. The last release returns all buffers and then tells the
+/// <see cref="IRequestEndObserver"/>, if any: the one moment from which nothing of the request can still run.</para>
 /// <para>The ledger is itself a pooled array of struct entries, so renting allocates nothing per buffer.</para>
 /// </remarks>
 public sealed class RequestMemory
@@ -40,14 +52,17 @@ public sealed class RequestMemory
     private const int InitialLedgerLength = 64;
 
     private readonly IBufferPool _pool;
+    private readonly IRequestEndObserver? _ended;
     private readonly object _gate = new();
     private Lease[] _leases = Array.Empty<Lease>(); // guarded by _gate until the last Release
     private int _leaseCount;
     private int _holders = 1;
     private bool _returned;
 
-    public RequestMemory(IBufferPool? pool = null)
+    /// <param name="ended">Told once, after the last <see cref="Release"/> has returned every buffer.</param>
+    public RequestMemory(IBufferPool? pool = null, IRequestEndObserver? ended = null)
     {
+        _ended = ended;
         _pool = pool ?? SharedArrayBufferPool.Instance;
     }
 
@@ -129,20 +144,27 @@ public sealed class RequestMemory
             RentedBytes = 0;
         }
 
-        // Once _returned is set no Rent touches the ledger (it checks under the lock and gives a late lease straight
-        // back), so the ledger can be walked outside the lock without copying it.
-        var leases = _leases;
-        var count = _leaseCount;
-        _leases = Array.Empty<Lease>();
-        _leaseCount = 0;
-        for (var i = 0; i < count; i++)
+        try
         {
-            leases[i].Returner.Return(_pool, leases[i].Array);
-        }
+            // Once _returned is set no Rent touches the ledger (it checks under the lock and gives a late lease straight
+            // back), so the ledger can be walked outside the lock without copying it.
+            var leases = _leases;
+            var count = _leaseCount;
+            _leases = Array.Empty<Lease>();
+            _leaseCount = 0;
+            for (var i = 0; i < count; i++)
+            {
+                leases[i].Returner.Return(_pool, leases[i].Array);
+            }
 
-        if (leases.Length > 0)
+            if (leases.Length > 0)
+            {
+                ArrayPool<Lease>.Shared.Return(leases, clearArray: true);
+            }
+        }
+        finally
         {
-            ArrayPool<Lease>.Shared.Return(leases, clearArray: true);
+            _ended?.RequestEnded(); // also when a custom pool threw: what the request borrowed must not stay borrowed
         }
 
         return 0;
