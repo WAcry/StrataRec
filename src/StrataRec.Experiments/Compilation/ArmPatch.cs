@@ -29,9 +29,6 @@ internal sealed class ArmPatch
 
     public required int LayerIndex { get; init; }
 
-    /// <summary>Traffic domain of the arm's layer, when known; arms in different domains never co-occur.</summary>
-    public string? Domain { get; init; }
-
     public required JsonObject Patch { get; init; }
 
     /// <summary>Diagnostic artifact label, e.g. <c>experiment:exp_mmr</c>.</summary>

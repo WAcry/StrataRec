@@ -183,7 +183,7 @@ public sealed class MetricsTests
                 : CandidateSourceRegistry.CreateDefault(),
         };
         var engine = new RecEngine(environment);
-        Assert.True(engine.Load(host.Request, host.Workspace.ArmRanges("home_feed", "local")).Applied);
+        Assert.True(engine.Load(host.Request).Applied);
 
         await engine.ExecuteAsync(Request("req-client-timeout"));
 
@@ -284,7 +284,7 @@ public sealed class MetricsTests
     internal static (RecEngine Engine, ExecutionPlan Plan) LoadEngine(HomeFeedTestHost host, PipelineExecutor? executor = null)
     {
         var engine = new RecEngine(host.Environment, executor: executor);
-        var load = engine.Load(host.Request, host.Workspace.ArmRanges("home_feed", "local"));
+        var load = engine.Load(host.Request);
         Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
         Assert.True(engine.TryGetPipeline("home_feed", out var loaded));
         return (engine, loaded.Plan);
@@ -541,8 +541,8 @@ public sealed class EventLogTests
         var host = HomeFeedTestHost.Load();
         var engine = new RecEngine(host.Environment, loggerFactory: logging);
 
-        Assert.True(engine.Load(host.Request, host.Workspace.ArmRanges("home_feed", "local")).Applied);
-        Assert.False(engine.Load(host.Request, host.Workspace.ArmRanges("home_feed", "local"), sequence: 0).Applied);
+        Assert.True(engine.Load(host.Request).Applied);
+        Assert.False(engine.Load(host.Request, sequence: 0).Applied);
         var broken = HomeFeedTestHost.LoadModified(root =>
         {
             var pipeline = Path.Combine(root, "pipelines", "home_feed.jsonc");

@@ -229,30 +229,49 @@ public sealed class HomeFeedEndToEndTests
     }
 
     [Fact]
-    public async Task EngineAssignsArmsAndServesThroughTheHostApi()
+    public async Task EngineServesThePlatformsArmsThroughTheHostApi()
     {
         var host = HomeFeedTestHost.Load();
         var engine = new RecEngine(host.Environment);
         var diagnostics = ServiceCollectionExtensions.LoadWorkspace(engine, host.Root, "local");
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
 
-        var assignedArms = new HashSet<string>();
-        for (var user = 0; user < 200; user++)
+        // Every combination of one arm per layer the platform may answer runs with exactly those arms.
+        var combinations = 0;
+        foreach (var freshness in ArmsOf("exp_freshness_calibration"))
         {
-            var result = await engine.ExecuteAsync(new RecRequest
+            foreach (var mmr in ArmsOf("exp_mmr_diversity"))
             {
-                PipelineId = "home_feed",
-                RequestId = "req-" + user,
-                Inputs = HomeFeedTestHost.Inputs(1001 + (user % 2), "home").Set("session_id", "s-" + user).Set("user_id", user),
-                Deadline = HomeFeedTestHost.Deadline,
-            });
+                foreach (var quality in ArmsOf("exp_quality_weight"))
+                {
+                    var arms = new[] { freshness, mmr, quality };
+                    var result = await engine.ExecuteAsync(new RecRequest
+                    {
+                        PipelineId = "home_feed",
+                        RequestId = "req-" + combinations++,
+                        Inputs = HomeFeedTestHost.Inputs(1001, "home"),
+                        Assignment = arms,
+                        Deadline = HomeFeedTestHost.Deadline,
+                    });
 
-            Assert.True(result.Succeeded, result.Error);
-            Assert.Equal(3, result.Experiments.Assigned.Count); // 100% of traffic is allocated in each layer
-            assignedArms.UnionWith(result.Experiments.Assigned);
+                    Assert.True(result.Succeeded, result.Error);
+                    Assert.Equal(arms.Order(), result.Experiments.Assigned.Order());
+                }
+            }
         }
 
-        Assert.Equal(AllArms.Order(), assignedArms.Order());
+        Assert.Equal(8, combinations);
+
+        // Without the platform's answer and without a provider, nothing assigns arms: the request runs the baseline.
+        var baseline = await engine.ExecuteAsync(new RecRequest
+        {
+            PipelineId = "home_feed", RequestId = "req-baseline", Inputs = HomeFeedTestHost.Inputs(1001, "home"), Deadline = HomeFeedTestHost.Deadline,
+        });
+
+        Assert.True(baseline.Succeeded, baseline.Error);
+        Assert.Empty(baseline.Experiments.Assigned);
+
+        static IEnumerable<string> ArmsOf(string experiment) => AllArms.Where(a => a.StartsWith(experiment + "/", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -279,7 +298,7 @@ public sealed class HomeFeedEndToEndTests
             var allocation = Path.Combine(root, "allocation", "home_feed.local.jsonc");
             File.WriteAllText(allocation, File.ReadAllText(allocation).Replace(
                 "\"exp_quality_weight\":",
-                "\"exp_conflict\": { \"layer\": \"rerank\", \"arms\": { \"control\": [0, 0], \"k\": [1, 1] } },\n    \"exp_quality_weight\":",
+                "\"exp_conflict\": { \"layer\": \"rerank\" },\n    \"exp_quality_weight\":",
                 StringComparison.Ordinal));
         });
 

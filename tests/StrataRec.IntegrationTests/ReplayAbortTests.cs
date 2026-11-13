@@ -30,7 +30,7 @@ public sealed class ReplayAbortTests
             "\"on_failure\": \"fallback:ctr_backup\"", "\"on_failure\": \"fail_request\""));
         var models = new BlockingModels();
         var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Models = new ModelClientRegistry().Add(models) });
-        Assert.True(engine.Load(host.Request, host.Workspace.ArmRanges("home_feed", "local")).Applied);
+        Assert.True(engine.Load(host.Request).Applied);
         ReplayBundle? delivered = null;
         using var cancel = new CancellationTokenSource();
 
@@ -127,7 +127,7 @@ public sealed class ReplayAbortTests
         });
         var models = new BlockingModels();
         var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Models = new ModelClientRegistry().Add(models) });
-        var load = engine.Load(host.Request, host.Workspace.ArmRanges("home_feed", "local"));
+        var load = engine.Load(host.Request);
         Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
         ReplayBundle? delivered = null;
         using var cancel = new CancellationTokenSource();

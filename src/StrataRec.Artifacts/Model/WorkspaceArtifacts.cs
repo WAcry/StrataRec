@@ -4,8 +4,7 @@ namespace StrataRec.Artifacts.Model;
 
 /// <summary>
 /// Authoring-side allocation file <c>allocation/&lt;pipeline&gt;.&lt;env&gt;.jsonc</c> (design 10.1): which artifacts
-/// make up a release, the domain/layer definitions, each experiment's layer and (for local and test environments)
-/// its arms' bucket ranges. <c>stratarec build</c> turns it into a <see cref="ReleaseManifest"/>.
+/// make up a release and each experiment's layer. <c>stratarec build</c> turns it into a <see cref="ReleaseManifest"/>.
 /// </summary>
 public sealed class AllocationArtifact
 {
@@ -21,17 +20,13 @@ public sealed class AllocationArtifact
 
     public List<string> Tables { get; init; } = new();
 
-    public AssignmentSpec Assignment { get; init; } = new();
-
     public Dictionary<string, AllocationExperiment> Experiments { get; init; } = new();
 }
 
 public sealed class AllocationExperiment
 {
+    /// <inheritdoc cref="ManifestExperiment.Layer"/>
     public required string Layer { get; init; }
-
-    /// <summary>Initial bucket ranges per arm. In production these come from the release controller's state.</summary>
-    public Dictionary<string, int[]>? Arms { get; init; }
 }
 
 /// <summary>Repository policy <c>policy.jsonc</c> (design 11.4): patchable paths, owners, log budget.</summary>

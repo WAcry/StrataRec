@@ -24,7 +24,7 @@ public sealed record LoadedArtifact<T>(T Value, JsonNode Document, string Path, 
 /// ├── bindings/&lt;environment&gt;.jsonc
 /// ├── pipelines/&lt;pipeline_id&gt;.jsonc
 /// ├── experiments/&lt;experiment_id&gt;.jsonc
-/// ├── allocation/&lt;pipeline_id&gt;.&lt;environment&gt;.jsonc   layers, salts, units, arm ranges
+/// ├── allocation/&lt;pipeline_id&gt;.&lt;environment&gt;.jsonc   catalog, bindings, tables, experiment layers
 /// └── tables/&lt;table_id&gt;.jsonc
 /// </code>
 /// File names must match the ids inside, so a path always tells you what a file defines. Every problem is reported
@@ -122,7 +122,7 @@ public sealed class ConfigWorkspace
 
     /// <summary>
     /// Assembles the compile inputs for one pipeline in one environment: the allocation file decides the catalog,
-    /// bindings, tables, traffic layout and which experiments run in which layer. Without an allocation the baseline is
+    /// bindings, tables and which experiments run in which layer. Without an allocation the baseline is
     /// compiled alone against <c>bindings/&lt;environment&gt;.jsonc</c>.
     /// </summary>
     /// <param name="extraExperiments">Experiments to include although the allocation does not list them (draft preview, design 10.7), as id → layer.</param>
@@ -263,29 +263,10 @@ public sealed class ConfigWorkspace
             Tables = tables,
             Policy = Policy?.Value ?? new PolicyArtifact(),
             Experiments = placements,
-            Assignment = allocation?.Value.Assignment,
             ManifestId = "workspace:" + pipelineId + "/" + environment,
             ArtifactIds = artifactIds,
             Today = today,
         };
-    }
-
-    /// <summary>Arm bucket ranges from the allocation file: experiment → arm → [first, last].</summary>
-    public Dictionary<string, IReadOnlyDictionary<string, int[]>> ArmRanges(string pipelineId, string environment)
-    {
-        var ranges = new Dictionary<string, IReadOnlyDictionary<string, int[]>>(StringComparer.Ordinal);
-        if (Allocations.TryGetValue(pipelineId + "/" + environment, out var allocation))
-        {
-            foreach (var (id, entry) in allocation.Value.Experiments)
-            {
-                if (entry.Arms is not null)
-                {
-                    ranges[id] = entry.Arms;
-                }
-            }
-        }
-
-        return ranges;
     }
 
     private List<string> Files(string directory)

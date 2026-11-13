@@ -24,11 +24,13 @@ public readonly struct RequestArms
     public int ArmIn(int layer) => _armByLayer is null || layer >= _armByLayer.Length ? -1 : _armByLayer[layer];
 }
 
-/// <summary>An experiment layer: arms in one layer are mutually exclusive (design 11.1).</summary>
+/// <summary>
+/// An experiment layer (design 11.1): a request is in at most one arm per layer, so the arms of one layer never run
+/// together, and arms of different layers may (every such combination is validated, design 11.5).
+/// </summary>
 /// <param name="Index">Layer index.</param>
 /// <param name="Name">Layer name.</param>
-/// <param name="Domain">Traffic domain; arms of layers in different domains are never assigned together.</param>
-public sealed record LayerInfo(int Index, string Name, string? Domain = null);
+public sealed record LayerInfo(int Index, string Name);
 
 /// <summary>An experiment in the plan.</summary>
 public sealed record ExperimentInfo(int Index, string Id, int LayerIndex, int[] ArmIndices);
@@ -220,20 +222,6 @@ public sealed class ExecutionPlan
             }
 
             byLayer[arm.LayerIndex] = arm.Index;
-        }
-
-        string? domain = null;
-        foreach (var arm in byLayer)
-        {
-            if (arm >= 0 && Layers[Arms[arm].LayerIndex].Domain is { } d)
-            {
-                if (domain is not null && domain != d)
-                {
-                    throw new ArgumentException($"The arms span traffic domains '{domain}' and '{d}', which are never assigned together (design 11.1).", nameof(armIds));
-                }
-
-                domain = d;
-            }
         }
 
         return new RequestArms(byLayer);

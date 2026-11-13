@@ -91,7 +91,7 @@ public sealed class Review4RegressionTests
     private static PlanCompileRequest With(PlanCompileRequest r, params ExperimentPlacement[] extra) => new()
     {
         Pipeline = r.Pipeline, Catalog = r.Catalog, Bindings = r.Bindings, Tables = r.Tables, Policy = r.Policy,
-        Experiments = r.Experiments.Concat(extra).ToList(), Assignment = r.Assignment, ManifestId = r.ManifestId,
+        Experiments = r.Experiments.Concat(extra).ToList(), ManifestId = r.ManifestId,
     };
 
     [Fact]

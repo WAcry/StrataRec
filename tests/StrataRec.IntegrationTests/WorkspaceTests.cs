@@ -20,7 +20,7 @@ public sealed class WorkspaceTests
         Assert.Empty(diagnostics.Items);
         Assert.NotNull(request);
         Assert.Equal(3, request!.Experiments.Count);
-        Assert.Equal(3, workspace.ArmRanges("home_feed", "local").Count);
+        Assert.Equal(new[] { "fusion", "params", "rerank" }, request.Experiments.Select(e => e.Layer).Order());
     }
 
     [Fact]
@@ -56,7 +56,6 @@ public sealed class WorkspaceTests
             {
                 Artifact = manifest.Experiments["exp_quality_weight"].Artifact,
                 Layer = "rerank",
-                Arms = manifest.Experiments["exp_mmr_diversity"].Arms,
             },
         };
         var tampered = new ReleaseManifest
@@ -64,7 +63,6 @@ public sealed class WorkspaceTests
             PipelineId = manifest.PipelineId,
             Environment = manifest.Environment,
             Artifacts = manifest.Artifacts,
-            Assignment = manifest.Assignment,
             Experiments = swapped,
         };
         var errors = new DiagnosticBag();

@@ -30,8 +30,9 @@ public sealed class RecRequest
     public required RequestInputs Inputs { get; init; }
 
     /// <summary>
-    /// Arms from an external experimentation platform as <c>experiment/arm</c> ids (design 11.1). Unknown arms are
-    /// ignored and counted. Null uses the configured <see cref="IAssignmentProvider"/> or the built-in assignment.
+    /// The arms the experimentation platform assigned to the request, as <c>experiment/arm</c> ids (design 11.1): the
+    /// caller asked the platform itself. Unknown arms are ignored and counted. Null asks the configured
+    /// <see cref="IAssignmentProvider"/>; without one the request runs the baseline.
     /// </summary>
     public IReadOnlyList<string>? Assignment { get; init; }
 
@@ -125,9 +126,6 @@ public sealed class RecResult
 public sealed class LoadedPipeline
 {
     public required ExecutionPlan Plan { get; init; }
-
-    /// <summary>Built-in assignment, or null when the manifest has no assignment section.</summary>
-    public TrafficAssigner? Assigner { get; init; }
 
     public string? FallbackPipeline { get; init; }
 
@@ -247,8 +245,8 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// (<see cref="LoadAsync"/>). Blocks while new tables and instances load; call it from a background thread (design 10.3
     /// step 2).
     /// </summary>
-    public PlanLoadResult Load(PlanCompileRequest request, IReadOnlyDictionary<string, IReadOnlyDictionary<string, int[]>>? armRanges = null, long? sequence = null) =>
-        LoadAsync(request, armRanges, sequence).GetAwaiter().GetResult();
+    public PlanLoadResult Load(PlanCompileRequest request, long? sequence = null) =>
+        LoadAsync(request, sequence).GetAwaiter().GetResult();
 
     /// <summary>
     /// Compiles a plan and, when it has no errors, makes it current for its pipeline. Thread-safe. A plan becomes current
@@ -259,7 +257,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// instance with <c>BINDING_LOAD_FAILED</c> at its binding. What the current plan already holds with the same identity
     /// is taken over at once, so a configuration change that does not touch a binding never reloads it.
     /// </summary>
-    /// <param name="armRanges">Bucket ranges per experiment and arm (from the manifest or allocation file).</param>
     /// <param name="sequence">
     /// Release order (the manifest's <c>seq</c>, design 10.2). A plan never replaces one with an equal or higher
     /// sequence, so a slow load of an older release cannot overwrite a newer one that finished first. When omitted,
@@ -272,7 +269,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// <exception cref="ObjectDisposedException">The engine is disposed, or was disposed before the plan was applied.</exception>
     public async Task<PlanLoadResult> LoadAsync(
         PlanCompileRequest request,
-        IReadOnlyDictionary<string, IReadOnlyDictionary<string, int[]>>? armRanges = null,
         long? sequence = null,
         CancellationToken cancellationToken = default)
     {
@@ -281,7 +277,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         var load = BeginLoad(cancellationToken);
         try
         {
-            return await LoadWithBindingsAsync(request, armRanges, order, load, cancellationToken).ConfigureAwait(false);
+            return await LoadWithBindingsAsync(request, order, load, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (load.Cancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
@@ -337,8 +333,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     internal Action? Publishing { get; set; }
 
     private async Task<PlanLoadResult> LoadWithBindingsAsync(
-        PlanCompileRequest request, IReadOnlyDictionary<string, IReadOnlyDictionary<string, int[]>>? armRanges, long order, PendingLoad load,
-        CancellationToken cancellationToken)
+        PlanCompileRequest request, long order, PendingLoad load, CancellationToken cancellationToken)
     {
         var lease = load.Lease;
 
@@ -354,17 +349,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         {
             PlanLoadTelemetry.CompileFailed(_logger, pipelineId, request.ManifestId, diagnostics);
             return new PlanLoadResult(pipelineId, false, request.ManifestId, TimeSpan.Zero, diagnostics.Items, compilation.Report);
-        }
-
-        TrafficAssigner? assigner = null;
-        if (request.Assignment is { } assignment)
-        {
-            assigner = TrafficAssigner.Create(assignment, plan, armRanges ?? new Dictionary<string, IReadOnlyDictionary<string, int[]>>(), diagnostics);
-            if (diagnostics.HasErrors)
-            {
-                PlanLoadTelemetry.Rejected(_logger, pipelineId, request.ManifestId, diagnostics);
-                return new PlanLoadResult(pipelineId, false, request.ManifestId, plan.CompileTime, diagnostics.Items, compilation.Report);
-            }
         }
 
         // Readiness (design 6.6 local item 6): the plan is served only once its tables hold a complete load and its
@@ -386,7 +370,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         var loaded = new LoadedPipeline
         {
             Plan = plan,
-            Assigner = assigner,
             FallbackPipeline = request.Pipeline.FallbackPipeline,
             Report = compilation.Report,
             Sequence = order,
@@ -600,8 +583,9 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     }
 
     /// <summary>
-    /// Assigns the request's arms: forced arms, the caller's external assignment, the assignment provider, or the
-    /// built-in assigner. Returns an error instead of arms when the request must be rejected.
+    /// The request's arms, from the first of: forced arms (debug), the platform's answer the caller passed
+    /// (<see cref="RecRequest.Assignment"/>), the assignment provider; otherwise none (the baseline). Returns an error
+    /// instead of arms when the request must be rejected.
     /// </summary>
     private async ValueTask<(RequestArms Arms, int Unknown, string? Error)> AssignAsync(
         LoadedPipeline pipeline, RecRequest request, long started, CancellationToken cancellationToken)
@@ -626,7 +610,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
 
         if (_assignmentProvider is null)
         {
-            return (pipeline.Assigner?.Assign(request.Inputs) ?? RequestArms.None, 0, null);
+            return (RequestArms.None, 0, null);
         }
 
         // The provider shares the end-to-end deadline: it is cancelled at the deadline, and the wait is bounded even if
@@ -721,7 +705,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         unknown = 0;
         var byLayer = new int[plan.Layers.Length];
         Array.Fill(byLayer, -1);
-        string? domain = null;
         foreach (var id in ids)
         {
             if (!plan.TryGetArm(id, out var arm) || byLayer[arm.LayerIndex] >= 0)
@@ -730,15 +713,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                 continue;
             }
 
-            // Arms from different traffic domains never co-occur (design 11.1); their combination was not validated.
-            var armDomain = plan.Layers[arm.LayerIndex].Domain;
-            if (armDomain is not null && domain is not null && armDomain != domain)
-            {
-                unknown++;
-                continue;
-            }
-
-            domain ??= armDomain;
             byLayer[arm.LayerIndex] = arm.Index;
         }
 

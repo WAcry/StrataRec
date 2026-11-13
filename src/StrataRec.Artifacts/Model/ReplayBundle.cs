@@ -78,7 +78,7 @@ public sealed class ReplayTypedValue
 /// <summary>How the request's arms were chosen.</summary>
 public sealed class ReplayAssignmentRecord
 {
-    [Description("forced (debug force_arms), external (the caller's assignment), provider, builtin or none.")]
+    [Description("forced (debug force_arms), external (the platform's answer the caller passed), provider (the engine asked the platform) or none (the baseline).")]
     public required string Source { get; init; }
 
     [Description("Assigned arms as experiment/arm.")]

@@ -15,7 +15,7 @@ public sealed class StrataRecOptions
     /// <summary>Configuration directory (design 10.1 layout). Required.</summary>
     public string ConfigRoot { get; set; } = "config";
 
-    /// <summary>Environment whose allocation and bindings are used, e.g. <c>local</c> or <c>prod-us-east</c>.</summary>
+    /// <summary>Environment whose allocation file and bindings are used, e.g. <c>local</c> or <c>prod-us-east</c>.</summary>
     public string Environment { get; set; } = "local";
 
     /// <summary>Pipelines to serve; empty serves every pipeline in the workspace.</summary>
@@ -40,7 +40,7 @@ public static class ServiceCollectionExtensions
     /// Registers <see cref="RecEngine"/> as a singleton <see cref="IRecEngine"/>, loading every configured pipeline
     /// from a local workspace on first use. Startup fails fast with <see cref="ConfigException"/> listing every
     /// error, so a bad configuration never serves traffic. An <see cref="IAssignmentProvider"/> registered in the
-    /// container replaces the built-in assignment, and an <see cref="ISecretResolver"/> resolves the <c>secret://</c>
+    /// container asks the experimentation platform for the arms of requests that do not carry them, and an <see cref="ISecretResolver"/> resolves the <c>secret://</c>
     /// references of bindings (design 6.4) when plans load. An <see cref="ILoggerFactory"/> in the container (from
     /// <c>AddLogging</c>) receives the engine's event logs (design 13.2); without one the engine logs nothing. Metrics and
     /// spans need no registration: subscribe to the <c>StrataRec</c> meter and activity source.
@@ -125,7 +125,7 @@ public static class ServiceCollectionExtensions
                 continue;
             }
 
-            var result = engine.Load(request, workspace.ArmRanges(id, environment));
+            var result = engine.Load(request);
             diagnostics.AddRange(result.Diagnostics);
         }
 

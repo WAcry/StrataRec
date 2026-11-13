@@ -365,7 +365,6 @@ public sealed partial class RecEngine
         request.Debug?.ForceArms is not null ? "forced"
         : request.Assignment is not null ? "external"
         : _assignmentProvider is not null ? "provider"
-        : pipeline.Assigner is not null ? "builtin"
         : "none";
 
     private static RecResult WithRecording(RecResult result, ReplayBundle? bundle) => bundle is null ? result : new RecResult

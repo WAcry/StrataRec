@@ -155,12 +155,6 @@ internal static partial class PlanLoadTelemetry
         LogCompileFailed(logger, pipelineId, manifestId, diagnostics.ErrorCount, FirstError(diagnostics));
     }
 
-    public static void Rejected(ILogger logger, string pipelineId, string manifestId, DiagnosticBag diagnostics)
-    {
-        Count(pipelineId, "rejected");
-        LogRejected(logger, pipelineId, manifestId, diagnostics.ErrorCount, FirstError(diagnostics));
-    }
-
     public static void BindingsFailed(ILogger logger, string pipelineId, string manifestId, DiagnosticBag diagnostics)
     {
         Count(pipelineId, "bindings_failed");
@@ -196,10 +190,6 @@ internal static partial class PlanLoadTelemetry
     [LoggerMessage(EventId = 1002, Level = LogLevel.Error,
         Message = "Plan of pipeline '{PipelineId}' from manifest '{ManifestId}' failed to compile with {ErrorCount} error(s); the current plan stays. First: {FirstError}")]
     private static partial void LogCompileFailed(ILogger logger, string pipelineId, string manifestId, int errorCount, string? firstError);
-
-    [LoggerMessage(EventId = 1003, Level = LogLevel.Error,
-        Message = "Manifest '{ManifestId}' for pipeline '{PipelineId}' rejected with {ErrorCount} error(s); the current plan stays. First: {FirstError}")]
-    private static partial void LogRejected(ILogger logger, string pipelineId, string manifestId, int errorCount, string? firstError);
 
     [LoggerMessage(EventId = 1005, Level = LogLevel.Error,
         Message = "Plan of pipeline '{PipelineId}' from manifest '{ManifestId}' not applied: {ErrorCount} local table(s) or instance(s) it binds failed to load; the current plan stays. First: {FirstError}")]

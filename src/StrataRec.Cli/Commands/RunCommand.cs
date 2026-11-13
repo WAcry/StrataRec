@@ -22,8 +22,17 @@ internal static class RunCommand
     {
         var config = CommonOptions.Config();
         var environment = CommonOptions.Environment();
-        var request = new Option<string>("--request", "-r") { Description = "Request JSON: pipeline_id, request_id, inputs, deadline_ms, time_ms, force_arms.", Required = true };
-        var arms = new Option<string[]>("--arms", "-a") { Description = "Force these arms (experiment/arm).", AllowMultipleArgumentsPerToken = true };
+        var request = new Option<string>("--request", "-r")
+        {
+            Description = "Request JSON: pipeline_id, request_id, inputs, assignment (the arms the experiment platform answered, experiment/arm), " +
+                          "deadline_ms, time_ms, seed, force_arms.",
+            Required = true,
+        };
+        var arms = new Option<string[]>("--arms", "-a")
+        {
+            Description = "Force these arms (experiment/arm), overriding the request's assignment; unknown arms fail the request.",
+            AllowMultipleArgumentsPerToken = true,
+        };
         var trace = new Option<bool>("--trace", "-t") { Description = "Include every node's outcome." };
         var logs = new Option<bool>("--logs", "-l") { Description = "Include the log batches the request's taps captured (nothing is written)." };
         var record = new Option<string?>("--record")
@@ -93,13 +102,15 @@ internal static class RunCommand
             }
         }
 
-        var forced = ExplainPlanCommand.SplitArms(arms);
-        if (forced.Count == 0 && document["force_arms"] is JsonArray forceArms)
+        if (!TryReadArms(document, "force_arms", requestPath, out var forceArms) || !TryReadArms(document, "assignment", requestPath, out var assignment))
         {
-            foreach (var arm in forceArms)
-            {
-                forced.Add(arm!.GetValue<string>());
-            }
+            return 2;
+        }
+
+        var forced = ExplainPlanCommand.SplitArms(arms);
+        if (forced.Count == 0 && forceArms is not null)
+        {
+            forced.AddRange(forceArms);
         }
 
         var request = new RecRequest
@@ -107,6 +118,7 @@ internal static class RunCommand
             PipelineId = pipelineId,
             RequestId = document["request_id"]?.GetValue<string>() ?? "cli",
             Inputs = inputs,
+            Assignment = assignment,
             Deadline = TimeSpan.FromMilliseconds(document["deadline_ms"]?.GetValue<double>() ?? 1000),
             TimeMs = document["time_ms"]?.GetValue<long>(),
             Seed = document["seed"]?.GetValue<long>(),
@@ -207,6 +219,39 @@ internal static class RunCommand
             json.WriteEndObject();
         }));
         return result.Succeeded ? 0 : 1;
+    }
+
+    /// <summary>
+    /// Reads an optional array of <c>experiment/arm</c> ids: null when the member is absent, an empty list for <c>[]</c>
+    /// (the platform answered no arms). A malformed member is reported with its pointer.
+    /// </summary>
+    private static bool TryReadArms(JsonObject document, string name, string requestPath, out List<string>? arms)
+    {
+        arms = null;
+        if (!document.TryGetPropertyValue(name, out var node) || node is null)
+        {
+            return true;
+        }
+
+        if (node is not JsonArray array)
+        {
+            Console.Error.WriteLine($"{requestPath}: /{name}: expected an array of arm ids, e.g. [\"exp_x/treatment\"].");
+            return false;
+        }
+
+        arms = new List<string>(array.Count);
+        for (var i = 0; i < array.Count; i++)
+        {
+            if (array[i] is not JsonValue value || !value.TryGetValue<string>(out var id))
+            {
+                Console.Error.WriteLine($"{requestPath}: /{name}/{i}: an arm id is a string 'experiment/arm'.");
+                return false;
+            }
+
+            arms.Add(id);
+        }
+
+        return true;
     }
 
     private static void SaveAborted(ReplayBundle bundle, string path)
