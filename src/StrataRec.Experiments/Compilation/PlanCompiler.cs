@@ -591,7 +591,9 @@ internal sealed partial class UnifiedCompilation
             }
 
             radix[li] = arms.Count + 1;
-            combinations = Math.Min(combinations * radix[li], long.MaxValue / 64);
+
+            // Saturates before it could overflow (review 18 #5): a wrapped product would slip under the limit.
+            combinations = combinations > long.MaxValue / radix[li] ? long.MaxValue : combinations * radix[li];
             li++;
         }
 
@@ -603,8 +605,9 @@ internal sealed partial class UnifiedCompilation
                 names.Add(_layers[layer]);
             }
 
+            var count = combinations == long.MaxValue ? $"more than {long.MaxValue}" : combinations.ToString(System.Globalization.CultureInfo.InvariantCulture);
             _diagnostics.Error("NODE_TOO_MANY_COMBINATIONS", _pipelineLabel, pointer,
-                $"{what} is modified by arms in layers {string.Join(", ", names)}: {combinations} combinations exceed the limit of {_request.MaxCombinationsPerNode}.",
+                $"{what} is modified by arms in layers {string.Join(", ", names)}: {count} combinations exceed the limit of {_request.MaxCombinationsPerNode}.",
                 "move some of these experiments into the same layer (their arms then exclude each other), or graduate one");
             return null;
         }
