@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Reflection.Emit;
 using System.Text.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Keys;
@@ -170,37 +172,105 @@ public sealed class RunReplayTests
         Assert.Equal(new[] { ("inputs_changed", "1"), ("not_recorded", "3") }, replay.Gaps.Select(g => (g.Reason, Assert.Single(g.Examples))));
     }
 
+    private const string CoreLib = "System.Private.CoreLib";
+    private const string Tests = "StrataRec.UnitTests";
+
     [Theory]
-    [InlineData("System.TimeoutException", "timeout", typeof(TimeoutException))]
-    [InlineData("System.OperationCanceledException", "timeout", typeof(OperationCanceledException))]
-    [InlineData("System.Threading.Tasks.TaskCanceledException", "timeout", typeof(TaskCanceledException))]
-    [InlineData("System.InvalidOperationException", "error", typeof(InvalidOperationException))]
-    [InlineData("StrataRec.UnitTests.Pipeline.RunReplayTests+TransientModelException", "error", typeof(TransientModelException))]
-    [InlineData("StrataRec.UnitTests.Pipeline.RunReplayTests+NoMessageException", "error", typeof(ReplayedCallException))] // no (string) constructor
-    [InlineData("No.Such.Exception", "error", typeof(ReplayedCallException))]
-    [InlineData("System.String", "error", typeof(ReplayedCallException))] // not an exception
-    [InlineData("System.InvalidOperationException, System.Private.CoreLib", "error", typeof(ReplayedCallException))] // never loads by assembly name
-    [InlineData("System.Collections.Generic.KeyNotFoundException[[System.String, System.Private.CoreLib]]", "error", typeof(ReplayedCallException))]
-    public void AThrownModelCall_IsThrownAgain_AsItsRecordedType(string errorType, string status, Type expected)
+    [InlineData("System.TimeoutException", CoreLib, "timeout", typeof(TimeoutException))]
+    [InlineData("System.OperationCanceledException", CoreLib, "timeout", typeof(OperationCanceledException))]
+    [InlineData("System.Threading.Tasks.TaskCanceledException", CoreLib, "timeout", typeof(TaskCanceledException))]
+    [InlineData("System.InvalidOperationException", CoreLib, "error", typeof(InvalidOperationException))]
+    [InlineData("StrataRec.UnitTests.Pipeline.RunReplayTests+TransientModelException", Tests, "error", typeof(TransientModelException))]
+    [InlineData("StrataRec.UnitTests.Pipeline.RunReplayTests+NoMessageException", Tests, "error", typeof(ReplayedCallException))] // no (string) constructor
+    [InlineData("No.Such.Exception", Tests, "error", typeof(ReplayedCallException))]
+    [InlineData("System.String", CoreLib, "error", typeof(ReplayedCallException))] // not an exception
+    [InlineData("System.InvalidOperationException", Tests, "error", typeof(ReplayedCallException))] // the name, but not of that assembly
+    [InlineData("System.InvalidOperationException, System.Private.CoreLib", CoreLib, "error", typeof(ReplayedCallException))] // a name, never a type spec
+    [InlineData("StrataRec.UnitTests.Pipeline.RunReplayTests+BackendException`1", Tests, "error", typeof(ReplayedCallException))] // open generic
+    public void AThrownModelCall_IsThrownAgain_AsItsRecordedType(string name, string assembly, string status, Type expected)
+    {
+        var thrown = Replayed(new ReplayTypeIdentity { Name = name, Assembly = assembly }, status);
+
+        Assert.Equal(expected, thrown.GetType());
+        Assert.Equal("backend said no", thrown.Message);
+        if (thrown is ReplayedCallException replayed)
+        {
+            Assert.Equal(name, replayed.OriginalType);
+        }
+    }
+
+    [Fact]
+    public void AClosedGenericException_IsThrownAgain_WhenItsDefinitionAndArgumentsAreLoaded()
+    {
+        var identity = ReplayedExceptions.Identity(typeof(BackendException<KeyValuePair<string, int>>));
+        Assert.Equal(("StrataRec.UnitTests.Pipeline.RunReplayTests+BackendException`1", Tests, 1), (identity.Name, identity.Assembly, identity.Args!.Count));
+
+        Assert.IsType<BackendException<KeyValuePair<string, int>>>(Replayed(identity));
+
+        // An argument that is not loaded, or that breaks the definition's constraint, is the type name and nothing else.
+        var missing = new ReplayTypeIdentity { Name = identity.Name, Assembly = Tests, Args = new() { new() { Name = "No.Such.Type", Assembly = Tests } } };
+        Assert.Equal("StrataRec.UnitTests.Pipeline.RunReplayTests+BackendException`1[No.Such.Type]",
+            Assert.IsType<ReplayedCallException>(Replayed(missing)).OriginalType);
+        var structOnly = ReplayedExceptions.Identity(typeof(StructException<int>));
+        var violating = new ReplayTypeIdentity { Name = structOnly.Name, Assembly = structOnly.Assembly, Args = new() { ReplayedExceptions.Identity(typeof(string)) } };
+        Assert.IsType<ReplayedCallException>(Replayed(violating));
+    }
+
+    [Fact]
+    public void AnExceptionType_IsTheOneOfTheRecordedAssembly_AndNeverGuessedAmongNamesakes()
+    {
+        // Two loaded assemblies define the same full name; the client threw the second one's.
+        var first = DefineException("ReplayNamesakeFirst", "Backend.TransientException");
+        var second = DefineException("ReplayNamesakeSecond", "Backend.TransientException");
+        Assert.IsType(second, Replayed(ReplayedExceptions.Identity(second)));
+        Assert.IsType(first, Replayed(ReplayedExceptions.Identity(first)));
+
+        // The same assembly name loaded twice, both with the type: which one the client threw cannot be told, so neither.
+        DefineException("ReplayNamesakeTwice", "Backend.TransientException");
+        var twice = DefineException("ReplayNamesakeTwice", "Backend.TransientException");
+        Assert.Equal("Backend.TransientException", Assert.IsType<ReplayedCallException>(Replayed(ReplayedExceptions.Identity(twice))).OriginalType);
+    }
+
+    [Fact]
+    public void ResolvingAnExceptionType_NeverLoadsAnAssembly()
+    {
+        // An assembly the test host can load by name (it ships next to the tests) but nothing here has loaded.
+        const string unloaded = "Microsoft.VisualStudio.CodeCoverage.Shim";
+        Assert.True(File.Exists(Path.Combine(AppContext.BaseDirectory, unloaded + ".dll")));
+        Assert.DoesNotContain(AppDomain.CurrentDomain.GetAssemblies(), a => a.GetName().Name == unloaded);
+
+        var thrown = Replayed(new ReplayTypeIdentity { Name = "Microsoft.CodeCoverage.ShimException", Assembly = unloaded });
+
+        Assert.IsType<ReplayedCallException>(thrown);
+        Assert.DoesNotContain(AppDomain.CurrentDomain.GetAssemblies(), a => a.GetName().Name == unloaded);
+    }
+
+    /// <summary>What a replay throws for a one-row model call recorded as throwing <paramref name="type"/>.</summary>
+    private static Exception Replayed(ReplayTypeIdentity? type, string status = "error")
     {
         var call = Call(1, NamedInput.FromFloat32("x", new[] { 1 }, new float[] { 10 }));
         var recorded = ModelCallOf(0, call, new long[] { 1 });
         var run = Run();
         run.ModelCalls.Add(new ReplayModelCall
         {
-            Seq = 0, Node = recorded.Node, Model = "m", BatchSize = 1, Status = status, Error = "backend said no", Threw = true, ErrorType = errorType,
+            Seq = 0, Node = recorded.Node, Model = "m", BatchSize = 1, Status = status, Error = "backend said no", Threw = true, ErrorType = type,
             Keys = recorded.Keys, InputDigests = recorded.InputDigests,
         });
         var replay = RunReplay.Create(run, "/runs/0");
+        return Assert.ThrowsAny<Exception>(() => Invoke(replay, call, 1));
+    }
 
-        var thrown = Assert.ThrowsAny<Exception>(() => Invoke(replay, call, 1));
-
-        Assert.Equal(expected, thrown.GetType());
-        Assert.Equal("backend said no", thrown.Message);
-        if (thrown is ReplayedCallException replayed)
-        {
-            Assert.Equal(errorType, replayed.OriginalType);
-        }
+    /// <summary>A dynamic assembly defining an exception type with a <c>(string message)</c> constructor.</summary>
+    private static Type DefineException(string assemblyName, string typeName)
+    {
+        var assembly = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName(assemblyName), AssemblyBuilderAccess.Run);
+        var type = assembly.DefineDynamicModule(assemblyName).DefineType(typeName, TypeAttributes.Public | TypeAttributes.Class, typeof(Exception));
+        var il = type.DefineConstructor(MethodAttributes.Public, CallingConventions.Standard, new[] { typeof(string) }).GetILGenerator();
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Ldarg_1);
+        il.Emit(OpCodes.Call, typeof(Exception).GetConstructor(new[] { typeof(string) })!);
+        il.Emit(OpCodes.Ret);
+        return type.CreateType();
     }
 
     /// <summary>A client exception an operator might handle.</summary>
@@ -208,6 +278,13 @@ public sealed class RunReplayTests
 
     /// <summary>An exception type the replay cannot create from a message.</summary>
     public sealed class NoMessageException : Exception;
+
+    /// <summary>A generic client exception.</summary>
+    public sealed class BackendException<T>(string message) : Exception(message);
+
+    /// <summary>A generic exception whose argument must be a value type.</summary>
+    public sealed class StructException<T>(string message) : Exception(message)
+        where T : struct;
 
     internal static ModelCall Call(int batch, params NamedInput[] inputs) => new() { Model = "m", Inputs = inputs, BatchSize = batch };
 

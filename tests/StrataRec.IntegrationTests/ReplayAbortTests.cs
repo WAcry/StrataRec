@@ -57,6 +57,88 @@ public sealed class ReplayAbortTests
         Assert.Equal(0, models.Calls - run.ModelCalls.Count); // the replay never called the client
     }
 
+    /// <summary>
+    /// The position running at the abort had already triggered an experiment: through a parameter its node read (the arm
+    /// changes the model version) or through its site (the arm patches only the node's timeout). The recording keeps that
+    /// exposure on the aborted node, and a replay, which stops before running the position, restores it.
+    /// </summary>
+    [Theory]
+    [InlineData("param")]
+    [InlineData("site")]
+    public async Task AnAbortedPosition_KeepsTheExposureItCaused_AndTheReplayRestoresIt(string trigger)
+    {
+        var (engine, bundle) = await RecordAbortedAtTheRanker(trigger);
+        var ranker = bundle.Runs[0].Nodes[^1];
+        Assert.Equal(("ctr_ranker", "aborted"), (ranker.Node, ranker.Outcome));
+        Assert.Equal(new[] { "exp_quality_weight" }, ranker.Triggered);
+        Assert.Equal(new[] { "exp_quality_weight" }, bundle.Result.TriggeredExperiments);
+
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(bundle)));
+
+        Assert.True(outcome.Aborted);
+        Assert.Equal(bundle.Result.TriggeredExperiments, outcome.Result.Experiments.Triggered);
+        Assert.All(bundle.Runs[0].Nodes.SkipLast(1), n => Assert.Null(n.Triggered)); // only the aborted position carries it
+    }
+
+    [Fact]
+    public async Task APositionAbortedBeforeItTriggeredAnything_IsReplayedWithoutExposure()
+    {
+        // The parameter case, as if the abort had come while ctr_ranker still fetched its features, before it read its
+        // parameters. (A caller cancelling during a fetch fails the fetch instead of aborting the request, so the bundle is
+        // edited.) Not every aborted node read its parameters: the replay restores what was recorded, nothing more.
+        var (engine, recorded) = await RecordAbortedAtTheRanker("param");
+        var bundle = JsonNode.Parse(ReplayBundleFile.Serialize(recorded))!;
+        var nodes = bundle["runs"]![0]!["nodes"]!.AsArray();
+        nodes[nodes.Count - 1]!["triggered"] = new JsonArray();
+        bundle["runs"]![0]!["result"]!["triggered_experiments"] = new JsonArray();
+        bundle["result"]!["triggered_experiments"] = new JsonArray();
+
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(bundle.ToJsonString()));
+
+        Assert.True(outcome.Aborted);
+        Assert.Empty(outcome.Result.Experiments.Triggered);
+    }
+
+    /// <summary>Records home_feed under exp_quality_weight/strong, cancelled while ctr_ranker waits for its model.</summary>
+    /// <param name="trigger"><c>param</c>: ctr_ranker reads a model version the arm overrides; <c>site</c>: the arm patches ctr_ranker's timeout.</param>
+    private static async Task<(RecEngine Engine, ReplayBundle Bundle)> RecordAbortedAtTheRanker(string trigger)
+    {
+        var host = HomeFeedTestHost.LoadModified(root =>
+        {
+            const string pipeline = "pipelines/home_feed.jsonc";
+            const string experiment = "experiments/exp_quality_weight.jsonc";
+            const string strong = "\"strong\": { \"params\": { \"quality_weight\": 0.8, \"final_top_k\": 8 } }";
+            ReplayTests.Edit(root, pipeline, "\"on_failure\": \"fallback:ctr_backup\", \"timeout_ms\": 50,", "\"on_failure\": \"fail_request\", \"timeout_ms\": 600000,");
+            if (trigger == "param")
+            {
+                ReplayTests.Edit(root, pipeline, "\"quality_weight\": { \"type\": \"float64\", \"min\": 0, \"max\": 1 }",
+                    "\"quality_weight\": { \"type\": \"float64\", \"min\": 0, \"max\": 1 }, \"model_version\": { \"type\": \"string\", \"enum\": [\"v1\", \"v2\"] }");
+                ReplayTests.Edit(root, pipeline, "\"quality_weight\": 0.3", "\"quality_weight\": 0.3, \"model_version\": \"v1\"");
+                ReplayTests.Edit(root, pipeline, "\"model\": \"ctr_model\",", "\"model\": \"ctr_model\", \"version_param\": \"model_version\",");
+                ReplayTests.Edit(root, experiment, strong, "\"strong\": { \"params\": { \"quality_weight\": 0.8, \"final_top_k\": 8, \"model_version\": \"v2\" } }");
+            }
+            else
+            {
+                ReplayTests.Edit(root, experiment, strong,
+                    "\"strong\": { \"params\": { \"quality_weight\": 0.8, \"final_top_k\": 8 }, \"nodes\": { \"ctr_ranker\": { \"timeout_ms\": 599999 } } }");
+            }
+        });
+        var models = new BlockingModels();
+        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Models = new ModelClientRegistry().Add(models) });
+        var load = engine.Load(host.Request, host.Workspace.ArmRanges("home_feed", "local"));
+        Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
+        ReplayBundle? delivered = null;
+        using var cancel = new CancellationTokenSource();
+
+        var running = engine.ExecuteAsync(WithCallback(ReplayTests.Request("req-exposed-" + trigger, 1001, "home", new[] { "exp_quality_weight/strong" },
+            deadlineMs: 600_000), bundle => delivered = bundle), cancel.Token).AsTask();
+        await models.Started.Task.WaitAsync(TimeSpan.FromSeconds(60));
+        cancel.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
+        return (engine, delivered!);
+    }
+
     [Fact]
     public async Task ACallStillInFlightAtTheAbort_IsOutstanding_AndWhatItReturnsLaterIsNotRecorded()
     {
@@ -150,6 +232,12 @@ public sealed class ReplayAbortTests
         var result = schema.RootElement.GetProperty("properties").GetProperty("result").GetProperty("properties");
         Assert.Contains("snapshot", result.GetProperty("aborted").GetProperty("description").GetString());
         Assert.Contains("outstanding", output.ToString());
+        var run = schema.RootElement.GetProperty("properties").GetProperty("runs").GetProperty("items").GetProperty("properties");
+        Assert.Contains("aborted position", run.GetProperty("nodes").GetProperty("items").GetProperty("properties").GetProperty("triggered")
+            .GetProperty("description").GetString());
+        var errorType = run.GetProperty("model_calls").GetProperty("items").GetProperty("properties").GetProperty("error_type");
+        Assert.Contains("never loaded", errorType.GetProperty("description").GetString());
+        Assert.Contains("\"assembly\"", errorType.GetRawText());
     }
 
     private static RecRequest WithCallback(RecRequest request, Action<ReplayBundle> onRecording) => new()
