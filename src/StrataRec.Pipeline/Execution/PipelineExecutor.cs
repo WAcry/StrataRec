@@ -584,7 +584,7 @@ public sealed class PipelineExecutor
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            failure = $"{ex.GetType().Name}: {ex.Message}";
+            failure = $"{ExceptionName(ex)}: {ex.Message}";
         }
 
         state.Recorder?.Attempt(node.NodeId, timedOut ? ReplayTiming.TimedOut : ReplayTiming.Ran, budgetMs);
@@ -602,6 +602,19 @@ public sealed class PipelineExecutor
         var degraded = context.DegradedReason ?? (fill.State == FeatureState.Degraded ? "degraded features: " + fill.Error : null);
         return new Attempt(degraded is null ? NodeOutcomeKind.Succeeded : NodeOutcomeKind.Degraded, degraded);
     }
+
+    /// <summary>The exception's type name for a failure detail; a replayed exception that could not be recreated keeps the recorded name.</summary>
+    private static string ExceptionName(Exception ex)
+    {
+        if (ex is ReplayedCallException { OriginalType: { } original })
+        {
+            return original[(original.LastIndexOfAny(TypeNameSeparators) + 1)..];
+        }
+
+        return ex.GetType().Name;
+    }
+
+    private static readonly char[] TypeNameSeparators = { '.', '+' };
 
     /// <summary>
     /// Validates and publishes a successful node's outputs (design 4.3, 4.6): non-finite values take the column default

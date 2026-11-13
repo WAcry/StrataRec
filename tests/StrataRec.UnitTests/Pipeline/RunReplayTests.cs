@@ -170,6 +170,43 @@ public sealed class RunReplayTests
         Assert.Equal(new[] { ("inputs_changed", "1"), ("not_recorded", "3") }, replay.Gaps.Select(g => (g.Reason, Assert.Single(g.Examples))));
     }
 
+    [Theory]
+    [InlineData("System.TimeoutException", "timeout", typeof(TimeoutException))]
+    [InlineData("System.OperationCanceledException", "timeout", typeof(OperationCanceledException))]
+    [InlineData("System.Threading.Tasks.TaskCanceledException", "timeout", typeof(TaskCanceledException))]
+    [InlineData("System.InvalidOperationException", "error", typeof(InvalidOperationException))]
+    [InlineData("StrataRec.UnitTests.Pipeline.RunReplayTests+TransientModelException", "error", typeof(TransientModelException))]
+    [InlineData("StrataRec.UnitTests.Pipeline.RunReplayTests+NoMessageException", "error", typeof(ReplayedCallException))] // no (string) constructor
+    [InlineData("No.Such.Exception", "error", typeof(ReplayedCallException))]
+    [InlineData("System.String", "error", typeof(ReplayedCallException))] // not an exception
+    public void AThrownModelCall_IsThrownAgain_AsItsRecordedType(string errorType, string status, Type expected)
+    {
+        var call = Call(1, NamedInput.FromFloat32("x", new[] { 1 }, new float[] { 10 }));
+        var recorded = ModelCallOf(0, call, new long[] { 1 });
+        var run = Run();
+        run.ModelCalls.Add(new ReplayModelCall
+        {
+            Seq = 0, Node = recorded.Node, Model = "m", BatchSize = 1, Status = status, Error = "backend said no", Threw = true, ErrorType = errorType,
+            Keys = recorded.Keys, InputDigests = recorded.InputDigests,
+        });
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var thrown = Assert.ThrowsAny<Exception>(() => Invoke(replay, call, 1));
+
+        Assert.Equal(expected, thrown.GetType());
+        Assert.Equal("backend said no", thrown.Message);
+        if (thrown is ReplayedCallException replayed)
+        {
+            Assert.Equal(errorType, replayed.OriginalType);
+        }
+    }
+
+    /// <summary>A client exception an operator might handle.</summary>
+    public sealed class TransientModelException(string message) : Exception(message);
+
+    /// <summary>An exception type the replay cannot create from a message.</summary>
+    public sealed class NoMessageException : Exception;
+
     internal static ModelCall Call(int batch, params NamedInput[] inputs) => new() { Model = "m", Inputs = inputs, BatchSize = batch };
 
     internal static string[] RowDigests(ModelCall call)

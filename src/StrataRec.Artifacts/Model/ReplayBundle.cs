@@ -258,6 +258,9 @@ public sealed class ReplayModelCall
     [Description("The client threw instead of returning a failed status; replay throws too.")]
     public bool Threw { get; init; }
 
+    [Description("Full name of the exception type the client threw, e.g. \"System.TimeoutException\". Replay throws the same type when it can create it (from its message), and a StrataRec.Pipeline.Replay.ReplayedCallException naming it otherwise.")]
+    public string? ErrorType { get; init; }
+
     public double DurationMs { get; init; }
 
     [Description("Entity id of each batch row, when the operator scored rows; outputs are matched by it on replay.")]

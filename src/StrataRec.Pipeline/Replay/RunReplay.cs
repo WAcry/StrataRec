@@ -47,8 +47,75 @@ public sealed record ReplayFieldStats(string Source, string Field, long Requeste
     public double MissingRate => Requested == 0 ? 0.0 : (double)Missing / Requested;
 }
 
-/// <summary>An exception a recorded call threw, thrown again by its replay with the original message.</summary>
-public sealed class ReplayedCallException(string message) : Exception(message);
+/// <summary>
+/// An exception a recorded call threw whose type the replay could not create again (the replaying process lacks the type,
+/// or it has no <c>(string message)</c> constructor): thrown with the original message and type name.
+/// </summary>
+public sealed class ReplayedCallException(string message, string? originalType = null) : Exception(message)
+{
+    /// <summary>Full name of the exception type the client threw in the recording; null when the bundle did not record it.</summary>
+    public string? OriginalType { get; } = originalType;
+}
+
+/// <summary>The exceptions a replay throws for recorded calls that threw (the contract of <see cref="Operators.OperatorContext.InvokeModelAsync"/>).</summary>
+internal static class ReplayedExceptions
+{
+    /// <summary>
+    /// The exception to throw for a call recorded as throwing <paramref name="typeName"/>: a <see cref="TimeoutException"/>
+    /// stays a <see cref="TimeoutException"/> and cancellation an <see cref="OperationCanceledException"/>; any other type
+    /// is created again through its public <c>(string message)</c> constructor when it resolves in this process and derives
+    /// from <see cref="Exception"/>; otherwise a <see cref="ReplayedCallException"/> carries the type name.
+    /// </summary>
+    /// <param name="timedOut">The recorded outcome was a timeout: without a type name, it is replayed as cancellation.</param>
+    public static Exception Create(string? typeName, string? message, bool timedOut, string fallbackMessage)
+    {
+        var text = message ?? fallbackMessage;
+        switch (typeName)
+        {
+            case null when timedOut:
+                return new OperationCanceledException(text);
+            case null:
+                return new ReplayedCallException(text);
+            case "System.TimeoutException":
+                return new TimeoutException(text);
+            case "System.OperationCanceledException":
+                return new OperationCanceledException(text);
+        }
+
+        if (Resolve(typeName) is { } type && typeof(Exception).IsAssignableFrom(type) && !type.IsAbstract
+            && type.GetConstructor(new[] { typeof(string) }) is { } constructor)
+        {
+            try
+            {
+                return (Exception)constructor.Invoke(new object[] { text });
+            }
+            catch (System.Reflection.TargetInvocationException)
+            {
+                // The constructor itself threw: fall back to the type name.
+            }
+        }
+
+        return new ReplayedCallException(text, typeName);
+    }
+
+    private static Type? Resolve(string typeName)
+    {
+        if (Type.GetType(typeName, throwOnError: false) is { } type)
+        {
+            return type; // the core library, or an assembly-qualified name
+        }
+
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            if (assembly.GetType(typeName, throwOnError: false) is { } found)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+}
 
 /// <summary>
 /// Replays one recorded pipeline run (design 13.4): answers feature, candidate and model calls from the recording and
@@ -277,7 +344,7 @@ public sealed class RunReplay : IFeatureCallHook
     /// (<paramref name="keys"/>: the entity of each batch row) takes the next recorded call with the same keys: when that
     /// call failed, or every row's inputs are unchanged, it is replayed as recorded; otherwise each row's output comes from
     /// whichever successful call scored that entity with the same inputs (<see cref="Synthesize"/>). A recorded failure is
-    /// returned, or thrown when the client threw (a timeout as <see cref="OperationCanceledException"/>).
+    /// returned, or thrown again when the client threw (see <see cref="ReplayedExceptions"/>).
     /// </summary>
     internal ModelStatus InvokeModel(ModelCall call, IModelOutputWriter outputs, EntityKey[]? keys)
     {
@@ -419,12 +486,8 @@ public sealed class RunReplay : IFeatureCallHook
         {
             if (entry.Threw)
             {
-                if (entry.Outcome is IoOutcome.Timeout or IoOutcome.Cancelled)
-                {
-                    throw new OperationCanceledException($"model '{entry.Model}' timed out in the recording");
-                }
-
-                throw new ReplayedCallException(entry.Error ?? $"model '{entry.Model}' threw in the recording");
+                throw ReplayedExceptions.Create(entry.ErrorType, entry.Error, entry.Outcome is IoOutcome.Timeout or IoOutcome.Cancelled,
+                    $"model '{entry.Model}' threw in the recording");
             }
 
             return ModelStatus.Failed(entry.Error ?? $"model '{entry.Model}' failed in the recording");
@@ -862,7 +925,7 @@ public sealed class RunReplay : IFeatureCallHook
                 outputs[name] = ReplayJson.Floats(values, $"{at}/outputs/{JsonPointer.Escape(name)}");
             }
 
-            var entry = new ModelEntry(call.Seq, call.Model, call.BatchSize, outcome, call.Error, call.Threw, keys, call.InputDigests.ToArray(), outputs,
+            var entry = new ModelEntry(call.Seq, call.Model, call.BatchSize, outcome, call.Error, call.Threw, call.ErrorType, keys, call.InputDigests.ToArray(), outputs,
                 new Dictionary<string, string>(call.Texts, StringComparer.Ordinal));
             if (!_modelCalls.TryGetValue((call.Model, call.Version), out var list))
             {
@@ -936,7 +999,7 @@ public sealed class RunReplay : IFeatureCallHook
     }
 
     private sealed class ModelEntry(
-        int seq, string model, int batchSize, IoOutcome outcome, string? error, bool threw, EntityKey[]? keys, string[] digests,
+        int seq, string model, int batchSize, IoOutcome outcome, string? error, bool threw, string? errorType, EntityKey[]? keys, string[] digests,
         Dictionary<string, float[]> outputs, Dictionary<string, string> texts)
     {
         public int Seq { get; } = seq;
@@ -950,6 +1013,8 @@ public sealed class RunReplay : IFeatureCallHook
         public string? Error { get; } = error;
 
         public bool Threw { get; } = threw;
+
+        public string? ErrorType { get; } = errorType;
 
         public EntityKey[]? Keys { get; } = keys;
 

@@ -125,7 +125,8 @@ internal sealed class RunRecorder : IFeatureCallHook
     }
 
     /// <summary>Records a model call; outputs are copied only from a call that answered.</summary>
-    public void ModelCall(int sequence, string node, ModelCall call, EntityKey[]? keys, IoOutcome outcome, string? error, bool threw, TimeSpan duration,
+    /// <param name="thrown">The type of the exception the client threw, or null when it returned a status.</param>
+    public void ModelCall(int sequence, string node, ModelCall call, EntityKey[]? keys, IoOutcome outcome, string? error, Type? thrown, TimeSpan duration,
         RecordingOutputWriter outputs)
     {
         var order = ModelInputDigest.NameOrder(call);
@@ -166,7 +167,8 @@ internal sealed class RunRecorder : IFeatureCallHook
             BatchSize = call.BatchSize,
             Status = IoCall.OutcomeName(outcome),
             Error = error,
-            Threw = threw,
+            Threw = thrown is not null,
+            ErrorType = thrown?.FullName,
             DurationMs = duration.TotalMilliseconds,
             Keys = keys is null ? null : ReplayJson.Keys(keys),
             InputDigests = digests,
