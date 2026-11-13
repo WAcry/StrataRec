@@ -1,0 +1,152 @@
+using System.Buffers.Binary;
+using System.IO.Hashing;
+using System.Text;
+using StrataRec.Core.Values;
+
+namespace StrataRec.Core.Hashing;
+
+/// <summary>
+/// Stable, cross-platform hashing used by traffic assignment, log sampling and <c>hash01</c> (design 5.7, 8.4, 10.2).
+/// </summary>
+/// <remarks>
+/// <para>
+/// The algorithm is XXH3-64 with seed 0 over a canonical byte encoding, so offline jobs in any language can
+/// recompute bucket assignments and sampling decisions. Every value is encoded as a one-byte tag followed by
+/// its payload:
+/// </para>
+/// <list type="bullet">
+///   <item><c>0x01</c> int64: 8 bytes little-endian.</item>
+///   <item><c>0x02</c> float64: 8 bytes little-endian IEEE 754 (−0.0 is normalized to 0.0).</item>
+///   <item><c>0x03</c> string: 4-byte little-endian UTF-8 length, then the UTF-8 bytes.</item>
+///   <item><c>0x04</c> bool: 1 byte (0 or 1).</item>
+///   <item><c>0x05</c> list index: 4 bytes little-endian (which expression in a key list matched, design 8.2).</item>
+/// </list>
+/// <para><c>hash01</c> maps the hash to [0, 1) as <c>(h &gt;&gt; 11) * 2^-53</c>.</para>
+/// </remarks>
+public static class StableHash
+{
+    private const byte TagInt64 = 0x01;
+    private const byte TagFloat64 = 0x02;
+    private const byte TagString = 0x03;
+    private const byte TagBool = 0x04;
+    private const byte TagIndex = 0x05;
+    private const double Unit = 1.0 / (1UL << 53);
+
+    /// <summary>Maps a 64-bit hash to a uniform double in [0, 1).</summary>
+    public static double ToUnit(ulong hash) => (hash >> 11) * Unit;
+
+    public static ulong Hash(long a)
+    {
+        Span<byte> buf = stackalloc byte[9];
+        WriteInt64(buf, a);
+        return XxHash3.HashToUInt64(buf);
+    }
+
+    public static ulong Hash(long a, long b)
+    {
+        Span<byte> buf = stackalloc byte[18];
+        WriteInt64(buf, a);
+        WriteInt64(buf[9..], b);
+        return XxHash3.HashToUInt64(buf);
+    }
+
+    public static ulong Hash(long a, long b, long c)
+    {
+        Span<byte> buf = stackalloc byte[27];
+        WriteInt64(buf, a);
+        WriteInt64(buf[9..], b);
+        WriteInt64(buf[18..], c);
+        return XxHash3.HashToUInt64(buf);
+    }
+
+    public static double Hash01(long a, long b) => ToUnit(Hash(a, b));
+
+    public static double Hash01(long a, long b, long c) => ToUnit(Hash(a, b, c));
+
+    /// <summary>Derives a 64-bit seed from a salt string, e.g. a layer salt <c>"home_feed/rerank/3"</c>.</summary>
+    public static long SeedFromSalt(string salt)
+    {
+        var builder = new Builder();
+        builder.Add(salt);
+        return unchecked((long)builder.Finish());
+    }
+
+    /// <summary>Incremental builder over the canonical encoding for mixed-type keys.</summary>
+    public ref struct Builder
+    {
+        private XxHash3? _hash;
+
+        private XxHash3 State => _hash ??= new XxHash3();
+
+        public void Add(long value)
+        {
+            Span<byte> buf = stackalloc byte[9];
+            WriteInt64(buf, value);
+            State.Append(buf);
+        }
+
+        public void Add(double value)
+        {
+            Span<byte> buf = stackalloc byte[9];
+            buf[0] = TagFloat64;
+            BinaryPrimitives.WriteDoubleLittleEndian(buf[1..], value == 0.0 ? 0.0 : value);
+            State.Append(buf);
+        }
+
+        public void Add(bool value)
+        {
+            Span<byte> buf = stackalloc byte[2];
+            buf[0] = TagBool;
+            buf[1] = value ? (byte)1 : (byte)0;
+            State.Append(buf);
+        }
+
+        public void Add(string value)
+        {
+            var byteCount = Encoding.UTF8.GetByteCount(value);
+            Span<byte> header = stackalloc byte[5];
+            header[0] = TagString;
+            BinaryPrimitives.WriteInt32LittleEndian(header[1..], byteCount);
+            State.Append(header);
+            if (byteCount <= 256)
+            {
+                Span<byte> utf8 = stackalloc byte[byteCount];
+                Encoding.UTF8.GetBytes(value, utf8);
+                State.Append(utf8);
+            }
+            else
+            {
+                State.Append(Encoding.UTF8.GetBytes(value));
+            }
+        }
+
+        public void AddIndex(int index)
+        {
+            Span<byte> buf = stackalloc byte[5];
+            buf[0] = TagIndex;
+            BinaryPrimitives.WriteInt32LittleEndian(buf[1..], index);
+            State.Append(buf);
+        }
+
+        /// <summary>Adds a non-missing scalar value (int64, float64, bool or string).</summary>
+        public void Add(in ScalarValue value)
+        {
+            switch (value.Kind)
+            {
+                case Types.StorageKind.Int64: Add(value.AsInt64()); break;
+                case Types.StorageKind.Float64: Add(value.AsFloat64()); break;
+                case Types.StorageKind.Bool: Add(value.AsBool()); break;
+                case Types.StorageKind.String or Types.StorageKind.Text: Add(value.AsString()); break;
+                default: throw new ArgumentException($"Value of kind {value.Kind} cannot be hashed.", nameof(value));
+            }
+        }
+
+        public ulong Finish() => _hash is null ? XxHash3.HashToUInt64(ReadOnlySpan<byte>.Empty) : _hash.GetCurrentHashAsUInt64();
+    }
+
+    private static void WriteInt64(Span<byte> destination, long value)
+    {
+        destination[0] = TagInt64;
+        BinaryPrimitives.WriteInt64LittleEndian(destination[1..], value);
+    }
+}

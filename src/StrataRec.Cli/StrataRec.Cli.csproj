@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>StrataRec.Cli</RootNamespace>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>stratarec</AssemblyName>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>stratarec</ToolCommandName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\StrataRec.Hosting\StrataRec.Hosting.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="StrataRec.UnitTests" />
+    <InternalsVisibleTo Include="StrataRec.IntegrationTests" />
+    <InternalsVisibleTo Include="StrataRec.Benchmarks" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,15 @@
+bin/
+obj/
+*.user
+*.suo
+.vs/
+.idea/
+.vscode/*
+!.vscode/extensions.json
+TestResults/
+BenchmarkDotNet.Artifacts/
+*.nupkg
+*.snupkg
+artifacts/
+/out/
+.DS_Store

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>StrataRec.Core</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Numerics.Tensors" />
+    <PackageReference Include="System.IO.Hashing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="StrataRec.UnitTests" />
+    <InternalsVisibleTo Include="StrataRec.IntegrationTests" />
+    <InternalsVisibleTo Include="StrataRec.Benchmarks" />
+  </ItemGroup>
+
+</Project>

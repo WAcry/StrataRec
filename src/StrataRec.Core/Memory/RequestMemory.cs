@@ -1,0 +1,162 @@
+using System.Buffers;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
+namespace StrataRec.Core.Memory;
+
+/// <summary>
+/// Source of large reusable buffers (design 4.8). The default implementation wraps <see cref="ArrayPool{T}.Shared"/>;
+/// hosts can provide tiered pools (for example a dedicated pool for embedding columns).
+/// </summary>
+public interface IBufferPool
+{
+    T[] Rent<T>(int minimumLength);
+
+    void Return<T>(T[] array, bool clearArray);
+}
+
+/// <summary><see cref="IBufferPool"/> backed by <see cref="ArrayPool{T}.Shared"/>.</summary>
+public sealed class SharedArrayBufferPool : IBufferPool
+{
+    public static SharedArrayBufferPool Instance { get; } = new();
+
+    public T[] Rent<T>(int minimumLength) => ArrayPool<T>.Shared.Rent(Math.Max(1, minimumLength));
+
+    public void Return<T>(T[] array, bool clearArray) => ArrayPool<T>.Shared.Return(array, clearArray);
+}
+
+/// <summary>
+/// Per-request buffer ledger. Operators rent through it and never return buffers themselves; everything is
+/// returned at once when the request and every external I/O it started have finished (design 4.8).
+/// </summary>
+/// <remarks>
+/// The holder count starts at 1 (the request itself). Each external I/O calls <see cref="Hold"/> when it starts and
+/// <see cref="Release"/> when it completes or acknowledges cancellation; the request calls <see cref="Release"/>
+/// after it has produced its result. The last release returns all buffers.
+/// </remarks>
+public sealed class RequestMemory
+{
+    private readonly IBufferPool _pool;
+    private readonly List<IRented> _rented = new();
+    private readonly object _gate = new();
+    private int _holders = 1;
+    private bool _returned;
+
+    public RequestMemory(IBufferPool? pool = null)
+    {
+        _pool = pool ?? SharedArrayBufferPool.Instance;
+    }
+
+    /// <summary>Total bytes currently rented (approximate, for metrics).</summary>
+    public long RentedBytes { get; private set; }
+
+    /// <summary>
+    /// When set, buffers are zeroed on return (used for requests that touched <c>personal</c> features, design 4.8).
+    /// </summary>
+    public bool ClearOnReturn { get; set; }
+
+    /// <summary>Rents an array of at least <paramref name="minimumLength"/> elements. Contents are unspecified.</summary>
+    public T[] Rent<T>(int minimumLength)
+    {
+        var array = _pool.Rent<T>(minimumLength);
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_returned, this);
+            _rented.Add(new Rented<T>(array));
+            if (!RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+            {
+                RentedBytes += (long)array.Length * Unsafe.SizeOf<T>();
+            }
+        }
+
+        return array;
+    }
+
+    /// <summary>Rents an array and zero-fills the first <paramref name="length"/> elements.</summary>
+    public T[] RentCleared<T>(int length)
+    {
+        var array = Rent<T>(length);
+        Array.Clear(array, 0, length);
+        return array;
+    }
+
+    /// <summary>Registers an in-flight external operation that may still write into rented buffers.</summary>
+    public void Hold()
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_returned, this);
+            _holders++;
+        }
+    }
+
+    /// <summary>Releases one holder; the last release returns every rented buffer to the pool.</summary>
+    public void Release()
+    {
+        List<IRented>? toReturn = null;
+        lock (_gate)
+        {
+            if (_holders <= 0)
+            {
+                throw new InvalidOperationException("RequestMemory released more times than it was held.");
+            }
+
+            _holders--;
+            if (_holders == 0)
+            {
+                _returned = true;
+                toReturn = new List<IRented>(_rented);
+                _rented.Clear();
+                RentedBytes = 0;
+            }
+        }
+
+        if (toReturn is not null)
+        {
+            foreach (var r in toReturn)
+            {
+                r.Return(_pool, ClearOnReturn);
+            }
+        }
+    }
+
+    public bool IsReturned
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _returned;
+            }
+        }
+    }
+
+    private interface IRented
+    {
+        void Return(IBufferPool pool, bool clear);
+    }
+
+    private sealed class Rented<T>(T[] array) : IRented
+    {
+        public void Return(IBufferPool pool, bool clear)
+        {
+            var containsRefs = RuntimeHelpers.IsReferenceOrContainsReferences<T>();
+#if STRATAREC_POISON_BUFFERS
+            if (!containsRefs && !clear)
+            {
+                // Debug/test builds fill returned buffers with a fixed pattern so use-after-return surfaces quickly.
+                Poison(array);
+            }
+#endif
+            pool.Return(array, clear || containsRefs);
+        }
+
+#if STRATAREC_POISON_BUFFERS
+        private static void Poison(T[] buffer)
+        {
+            ref var first = ref Unsafe.As<T, byte>(ref MemoryMarshal.GetArrayDataReference(buffer));
+            MemoryMarshal.CreateSpan(ref first, buffer.Length * Unsafe.SizeOf<T>()).Fill(0xCD);
+        }
+#endif
+    }
+}

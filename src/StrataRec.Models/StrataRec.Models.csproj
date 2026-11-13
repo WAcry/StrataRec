@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>StrataRec.Models</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\StrataRec.Core\StrataRec.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="StrataRec.UnitTests" />
+    <InternalsVisibleTo Include="StrataRec.IntegrationTests" />
+    <InternalsVisibleTo Include="StrataRec.Benchmarks" />
+  </ItemGroup>
+
+</Project>

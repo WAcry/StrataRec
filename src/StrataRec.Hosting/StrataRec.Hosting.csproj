@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>StrataRec.Hosting</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\StrataRec.Experiments\StrataRec.Experiments.csproj" />
+    <ProjectReference Include="..\StrataRec.Pipeline\StrataRec.Pipeline.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="StrataRec.UnitTests" />
+    <InternalsVisibleTo Include="StrataRec.IntegrationTests" />
+    <InternalsVisibleTo Include="StrataRec.Benchmarks" />
+  </ItemGroup>
+
+</Project>

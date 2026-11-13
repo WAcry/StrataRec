@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>StrataRec.Artifacts</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="StrataRec.UnitTests" />
+    <InternalsVisibleTo Include="StrataRec.IntegrationTests" />
+    <InternalsVisibleTo Include="StrataRec.Benchmarks" />
+  </ItemGroup>
+
+</Project>

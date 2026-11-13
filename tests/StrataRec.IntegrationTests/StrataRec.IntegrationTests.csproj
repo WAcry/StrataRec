@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>StrataRec.IntegrationTests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\StrataRec.Core\StrataRec.Core.csproj" />
+    <ProjectReference Include="..\..\src\StrataRec.Artifacts\StrataRec.Artifacts.csproj" />
+    <ProjectReference Include="..\..\src\StrataRec.Expressions\StrataRec.Expressions.csproj" />
+    <ProjectReference Include="..\..\src\StrataRec.Features\StrataRec.Features.csproj" />
+    <ProjectReference Include="..\..\src\StrataRec.Models\StrataRec.Models.csproj" />
+    <ProjectReference Include="..\..\src\StrataRec.Logging\StrataRec.Logging.csproj" />
+    <ProjectReference Include="..\..\src\StrataRec.Pipeline\StrataRec.Pipeline.csproj" />
+    <ProjectReference Include="..\..\src\StrataRec.Experiments\StrataRec.Experiments.csproj" />
+    <ProjectReference Include="..\..\src\StrataRec.Hosting\StrataRec.Hosting.csproj" />
+    <ProjectReference Include="..\..\src\StrataRec.Cli\StrataRec.Cli.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\samples\**\*" LinkBase="samples" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
