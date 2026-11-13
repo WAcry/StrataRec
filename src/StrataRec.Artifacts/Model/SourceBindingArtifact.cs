@@ -151,7 +151,7 @@ public sealed class CacheBinding
     public long? StaleIfErrorMs { get; init; }
 
     [Description("A cache shared by the service's instances, read on an in-process miss before the connector, e.g. " +
-        "{ \"store\": \"redis@1\", \"endpoint\": \"redis://cache:6379\" }. Only an optimisation: when it fails or is slow, " +
+        "{ \"store\": \"redis@1\", \"endpoint\": \"cache.internal:6379\" }. Only an optimisation: when it fails or is slow, " +
         "the keys go to the connector.")]
     public DistributedCacheBinding? Distributed { get; init; }
 }
@@ -160,8 +160,8 @@ public sealed class CacheBinding
 public sealed class DistributedCacheBinding
 {
     [Description("Required: store type and version, e.g. 'redis@1'. The other members are the store's own settings: for " +
-        "redis@1, 'endpoint' (redis://host:port, or rediss:// for TLS), and optionally 'key_prefix', 'user' and 'credentials' " +
-        "(a secret:// reference to the password).")]
+        "redis@1, 'endpoint' (host:port; for a cluster, any node), and optionally 'key_prefix' (default 'stratarec:'), 'user', " +
+        "'password' (a secret:// reference), 'tls' (default false) and 'database' (default 0).")]
     public string? Store { get; init; }
 
     [Description("The longest a request waits for one read of the distributed cache, in milliseconds (default: half the " +
