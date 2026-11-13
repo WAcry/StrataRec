@@ -116,9 +116,11 @@ public interface IModelClient
     /// <summary>
     /// The signature of a model version, for checking operator bindings at load time (design 6.9). It may need I/O (a
     /// model server's metadata): the engine asks only when it loads a plan, after the client's own load
-    /// (<see cref="ILoadable"/>), for every version of every model the plan's nodes may call, concurrently and within the
-    /// load's bound; a plan compiled without an engine (<c>stratarec validate</c>) asks a client that needs no load and
-    /// uses the answer only if it is immediate. Answer synchronously when you can: the plan then compiles once.
+    /// (<see cref="ILoadable"/>), for every version of every model the plan's nodes may call, concurrently, on the
+    /// thread pool (synchronous work before the first await included) and within the load's bound; the token is
+    /// cancelled when nobody waits for the answer any more, and the instance is not disposed before the method returned.
+    /// A plan compiled without an engine (<c>stratarec validate</c>) asks a client that needs no load, on its own
+    /// thread, and uses the answer only if it is immediate.
     /// </summary>
     /// <exception cref="ArgumentException">The client has no such model or version; reported at the node's <c>model</c>.
     /// A <see cref="BindingException"/> adds a hint.</exception>

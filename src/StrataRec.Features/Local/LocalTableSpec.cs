@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 
 namespace StrataRec.Features.Local;
@@ -239,7 +240,7 @@ public sealed class LocalTableLoadException : Exception
             FeatureUpdateException update => update.Location + (update.Pointer.Length == 0 ? string.Empty : " " + update.Pointer) + ": " + update.Reason,
             LocalTableFullException full => string.Create(CultureInfo.InvariantCulture,
                 $"the data needs more than max_bytes ({full.MaxBytes} B; the write would have taken the table to {full.RequiredBytes} B)"),
-            _ => inner.Message,
+            _ => ExceptionText.Of(inner),
         };
         return $"Local table {spec.Name} (source '{spec.Schema.Source}' in {spec.Artifact}) failed to load from {spec.Bootstrap.SourceType}: {reason}";
     }

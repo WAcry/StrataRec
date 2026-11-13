@@ -57,8 +57,25 @@ public sealed class BindingSpecTests
         Assert.Equal((pointer, label), (spec.Pointer, spec.Label));
     }
 
+    [Fact]
+    public void TheKeyComparesTheFactoryByReference_NeverByItsOwnEquality()
+    {
+        var a = new MutableRecord();
+        var b = new MutableRecord();
+        Assert.Equal(a, b);
+
+        var key = Spec("{}", factory: a).Key;
+        Assert.NotEqual(key, Spec("{}", factory: b).Key); // equal by value, but another factory object
+        var hash = key.GetHashCode();
+        a.Count++; // changes the record's own equality and hash
+        Assert.Equal(key, Spec("{}", factory: a).Key);
+        Assert.Equal(hash, Spec("{}", factory: a).Key.GetHashCode());
+        Assert.NotEqual(key, Spec("""{ "uri": "m.bin" }""", factory: a).Key);
+    }
+
     private static BindingSpec Spec(
-        string settings, BindingSection section = BindingSection.Models, string name = "ctr_model", string type = "my_ranker@1", string? baseDirectory = null)
+        string settings, BindingSection section = BindingSection.Models, string name = "ctr_model", string type = "my_ranker@1", string? baseDirectory = null,
+        object? factory = null)
     {
         var values = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         foreach (var property in JsonDocument.Parse(settings).RootElement.EnumerateObject())
@@ -66,6 +83,11 @@ public sealed class BindingSpecTests
             values[property.Name] = property.Value.Clone();
         }
 
-        return BindingSpec.Create(section, name, type, values, baseDirectory ?? Root, Factory, "bindings:test");
+        return BindingSpec.Create(section, name, type, values, baseDirectory ?? Root, factory ?? Factory, "bindings:test");
+    }
+
+    private sealed record MutableRecord
+    {
+        public int Count { get; set; }
     }
 }

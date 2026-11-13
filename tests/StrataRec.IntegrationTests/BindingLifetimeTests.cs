@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Features.Connectors;
@@ -103,6 +105,25 @@ public sealed class BindingLifetimeTests
         Assert.False(served.Disposed.Task.IsCompleted); // the served plan keeps serving
         Assert.Equal(instances, engine.Bindings.InstanceCount); // the rejected plan held nothing more
         Assert.True((await engine.ExecuteAsync(Request("req-still-served"))).Succeeded);
+    }
+
+    [Fact]
+    public async Task AClientWhoseLoadFailureCannotBeDescribed_IsRejected_AndNeverCalled()
+    {
+        var models = new ScriptedModels { Load = (_, _) => throw new UnreadableException() };
+        var root = Workspace(generation: 1);
+        await using var engine = new RecEngine(Environment(root, models));
+
+        var load = await engine.LoadAsync(Compile(root));
+
+        Assert.False(load.Applied);
+        var error = Assert.Single(load.Diagnostics, d => d.IsError);
+        Assert.Equal(("BINDING_LOAD_FAILED", "bindings:local", "/models/ctr_model"), (error.Code, error.Artifact, error.Pointer));
+        Assert.Contains(typeof(UnreadableException).FullName!, error.Message, StringComparison.Ordinal);
+        Assert.False((await engine.ExecuteAsync(Request("req-never-served"))).Succeeded);
+        var client = Assert.Single(models.Created);
+        Assert.Equal(0, client.Calls);
+        await client.Disposed.Task.WaitAsync(Wait); // the rejected plan returned its lease
     }
 
     [Fact]
@@ -287,6 +308,52 @@ public sealed class BindingLifetimeTests
         Assert.All(all.Where(i => i is not CountingConnectors.Connector { Name: "user_store" }), // the baseline reads no user feature
             i => Assert.True(i.Calls > 0, "every instance served a request"));
         Assert.Equal(1, models.Created[0].Loads);
+    }
+
+    [Fact]
+    public async Task AMetricCallbackThatThrowsAfterTheSwap_StillRetiresTheReplacedPlansLease()
+    {
+        // Only this test's second load reports this sequence, so tests running alongside are not affected.
+        const long Throwing = 7_160_002;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Meter == StrataRecTelemetry.Meter && instrument.Name == StrataRecMetrics.Names.PlanSequence)
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, value, _, _) =>
+        {
+            if (value == Throwing)
+            {
+                throw new InvalidOperationException("metric callback failed");
+            }
+        });
+        listener.Start();
+        var models = new ScriptedModels();
+        var connectors = new CountingConnectors();
+        var sources = new CountingSources();
+        var root = Workspace(generation: 1);
+        BindCounting(root, latencyMs: null);
+        var engine = new RecEngine(Environment(root, models, connectors, sources));
+        Assert.True((await engine.LoadAsync(Compile(root), sequence: Throwing - 1)).Applied);
+        var old = Assert.Single(models.Created);
+
+        Rebind(root, generation: 2);
+        BindCounting(root, latencyMs: 0);
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => engine.LoadAsync(Compile(root), sequence: Throwing));
+        Assert.Equal("metric callback failed", failure.Message);
+
+        // The swap happened before the callback threw: the new plan serves, and the replaced plan's lease is retired.
+        await old.Disposed.Task.WaitAsync(Wait);
+        Assert.True((await engine.ExecuteAsync(Request("req-after-the-metric-failure"))).Succeeded);
+        await engine.DisposeAsync().AsTask().WaitAsync(Wait);
+        var all = models.Created.Cast<Counted>().Concat(connectors.Created).Concat(sources.Created).ToList();
+        Assert.Equal(8, all.Count);
+        await Task.WhenAll(all.Select(i => i.Disposed.Task)).WaitAsync(Wait);
+        Assert.All(all, i => Assert.Equal((1, 0), (i.Disposals, i.LateCalls)));
+        Assert.Equal(0, engine.Bindings.InstanceCount);
     }
 
     [Fact]
@@ -475,6 +542,12 @@ public sealed class BindingLifetimeTests
                 }
             }
         }
+    }
+
+    /// <summary>A client's exception whose message cannot be read: describing it throws.</summary>
+    private sealed class UnreadableException : Exception
+    {
+        public override string Message => throw new InvalidOperationException("the message failed");
     }
 
     /// <summary>

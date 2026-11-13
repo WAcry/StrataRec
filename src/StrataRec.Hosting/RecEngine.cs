@@ -398,28 +398,39 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         long? served = null;
         LoadedPipeline? replaced = null;
         bool disposed, cancelled;
-        lock (_publishGate)
+        try
         {
-            // Checked under the lock that disposal takes, right before the current plan changes: a disposed engine never
-            // publishes again, and a cancelled load never replaces a plan.
-            disposed = _disposed;
-            cancelled = cancellationToken.IsCancellationRequested;
-            if (!disposed && !cancelled)
+            lock (_publishGate)
             {
-                if (_pipelines.TryGetValue(pipelineId, out var current) && current.Sequence >= order)
+                // Checked under the lock that disposal takes, right before the current plan changes: a disposed engine
+                // never publishes again, and a cancelled load never replaces a plan.
+                disposed = _disposed;
+                cancelled = cancellationToken.IsCancellationRequested;
+                if (!disposed && !cancelled)
                 {
-                    served = current.Sequence;
-                    diagnostics.Info("PLAN_STALE", "engine", string.Empty,
-                        $"Not applied: pipeline '{pipelineId}' already serves sequence {current.Sequence} (this load is {order}).");
-                }
-                else
-                {
-                    replaced = current;
-                    _pipelines[pipelineId] = loaded;
-                    load.Published = true; // the lease is the served plan's now
-                    PlanLoadTelemetry.Applied(plan, order); // gauges stay ordered with the swaps
+                    if (_pipelines.TryGetValue(pipelineId, out var current) && current.Sequence >= order)
+                    {
+                        served = current.Sequence;
+                        diagnostics.Info("PLAN_STALE", "engine", string.Empty,
+                            $"Not applied: pipeline '{pipelineId}' already serves sequence {current.Sequence} (this load is {order}).");
+                    }
+                    else
+                    {
+                        replaced = current;
+                        _pipelines[pipelineId] = loaded;
+                        load.Published = true; // the lease is the served plan's now
+                        PlanLoadTelemetry.Applied(plan, order); // gauges stay ordered with the swaps
+                    }
                 }
             }
+        }
+        finally
+        {
+            // Once swapped, nothing owns the replaced plan's lease but this load, whatever the telemetry above did (a
+            // metric listener's callback may throw): its tables that the new plan does not share stop their sources, and
+            // its instances go once its last request has ended. Requests still running on the old plan read the versions
+            // they pinned.
+            replaced?.Bindings.Dispose();
         }
 
         if (disposed || cancelled)
@@ -435,9 +446,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             return new PlanLoadResult(pipelineId, false, request.ManifestId, plan.CompileTime, diagnostics.Items, compilation.Report);
         }
 
-        // The replaced plan's tables that the new plan does not share are no longer used: their sources stop. Requests
-        // still running on the old plan read the versions they pinned.
-        replaced?.Bindings.Dispose();
         PlanLoadTelemetry.LogApplied(_logger, plan, order);
         return new PlanLoadResult(pipelineId, true, request.ManifestId, plan.CompileTime, diagnostics.Items, compilation.Report);
     }
