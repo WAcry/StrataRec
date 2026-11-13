@@ -18,6 +18,13 @@
 | 8.6 热路径捕获 | 没有日志管道且请求没有设置 `CaptureLogs` 时，跳过漏斗采样和探针捕获 | 捕获出来的批次没有任何消费者，只会白白占用 CPU 和内存 | `PipelineExecutor.cs` |
 | 6.7 缺失与失败 | 衍生特征的表达式抛出异常（数据层面的错误本应变成缺失值，所以这只会是缺陷）时，只让这一个特征失败，按数据源失败处理，读取它的节点也随之失败 | 异常不应越过特征拉取路径，也不应影响同一请求里的其他特征 | `Features/Runtime/FeatureFetcher.cs` |
 | 5.7 `hash01` | 表达式后端用栈上缓冲区自行写规范编码，没有复用 `StableHash.Builder`。两份实现由一致性测试锁定为逐字节相同 | 标量路径因此完全不经过数组池 | `Expressions/Runtime/Hash01.cs` |
+| 8.2 漏斗组 | 组的 `key` 只能读取请求输入（`ctx.request.*`），不能读取需要拉取的特征（`FUNNEL_KEY_FETCHED`）。`rate` 为 0 的组不计算 key | 组决定在请求开始时做出。如果 key 要等一次拉取，每个请求都会在召回之前阻塞在日志采样上（评审 4 #8） | `Pipeline/Planning/PlanBuilder.cs` `DefineFunnelGroups` |
+| 8.5 被动探针 | 上下文特征与候选特征规则相同：探针只能记录服务链路本来就会拉取的上下文特征（`TAP_FEATURE_NOT_FETCHED`），只被探针读取的上下文特征不会进入预取 | 探针不应给每个请求都增加一次拉取，无论这个请求是否被采样（评审 4 #8）。`fetch_missing` 尚未实现 | `PlanBuilder.cs` `Build` |
+| 8.3 `columns_from` | 展开的是当前臂组合下实际生效的那个模型节点变体；修改该模型节点的层也会参与探针的变体划分。探针 schema id 包含每一列解析后的表达式 | 训练日志必须记录实际服务时的输入（设计 6.9），同一个 schema id 不能对应两种列定义（评审 4 #1、#7） | `PlanCompiler.cs` `CompileTapVariants`、`PlanBuilder.CompileTap` |
+| 8.9 隐私 | `personal` 沿衍生特征传递：由 personal 特征算出的衍生特征同样是 personal。`text` 类型的节点输出，只要产出者在任一变体中读取了 personal 数据，也视为 personal。数值输出（例如模型分数）不受影响 | 别名或变换不能绕开 purpose 与 durable 的要求。设计只把这条规则扩展到 text 列；如果把所有分数都标成 personal，普通的打分日志就无法记录（评审 4 #2） | `PlanBuilder.cs` `IsPersonalFeature`、`IsPersonalText` |
+| 8.6 durable 投递 | `Submit` 返回投递结果（Queued、Spilled、Dropped、Closed）。内存队列满时调用 `DurableOverflow` 钩子落盘，批次保留原有的 `seq`；没有钩子时计入 `DurableOverflow`。sink 可以用 `LogBatchRejectedException` 声明某些批次永久不可写，这些批次不再重试，也不会阻塞后续批次 | 设计中的本地磁盘缓冲以钩子的形式提供，由宿主实现。其余情况下丢失必须可见，不能静默丢弃（评审 4 #3、#4） | `Logging/LogPipeline.cs` |
+| 12.6 / 8.8 取消 | 调用方取消或请求异常中止时，仍然发布 `$experiments` 记录和已经捕获的探针批次 | 慢请求更容易被取消，而慢往往与臂相关；丢掉这些记录会让实验分析产生偏差（评审 4 #6） | `PipelineExecutor.cs` |
+| 5.x 节点 id | 节点 id 只能是标识符（字母、数字、`_`） | 版本引用 `col.x@node` 必须能写出每一个节点；如果 id 中含 `.` 或 `-`，会被解析成字段访问或减法（评审 4 #14） | `ArmPatch.cs` `IsValidNodeId` |
 | 9.x 输出 | 输出段在所有节点之后编译 | 算子会声明隐式列（例如 `recall.primary_source`），输出需要能读到它们 | `PlanCompiler.cs` `Run` |
 | 6.9 模型输入 | 模型输入必须是列或特征的直接引用。需要变换的输入先声明成衍生特征（示例里的 `author.log_followers`） | 这是设计 6.9 训练与服务一致性的要求。实现中给出了带修复提示的错误 `MODEL_INPUT_NOT_REFERENCE` | `samples/home_feed/catalog/home_feed.jsonc` |
 
@@ -33,6 +40,8 @@
 | 13.4 / 10.8 | 回放包与回放对比 | 未实现。确定性已经具备：同一请求和计划的结果逐字节一致，端到端测试有覆盖 |
 | 10.7 | 合并前的草稿预览 | 未实现 |
 | 5.9 | 成对、列表级、生成式等扩展算子示例（`PairwiseRanker@1` 等） | 内置算子见 `stratarec operators`，共 8 个 |
+| 8.5 | `fetch_missing`：只为被采样的行、在响应返回之后补拉探针需要的特征 | 未实现。目前探针只能记录服务链路已经拉取的数据 |
+| 8.6 | 本地磁盘缓冲的具体实现（落盘格式、重启后按序号补发） | 只提供 `DurableOverflow` 钩子 |
 | 6.4 | 网络连接器（gRPC、Redis 等）和真实模型客户端 | 只有用于本地运行和测试的内存实现（`memory@1`、`memory_list@1`、`linear@1`）。接口（`IFeatureConnector`、`ICandidateSource`、`IModelClient`）已经确定 |
 | 15 | 端到端合成基准的完整规模（6 路召回、50 列、25 个基线节点、10 层 × 10 桶），以及 CI 中的回归阈值 | 已有 `PipelineBenchmarks`（示例流水线，500 和 5,000 候选）和 `ExpressionBenchmarks`。CI 只做 dry run，共享 runner 的噪声太大，不适合设阈值 |
 
@@ -43,3 +52,5 @@
 - 评审 2（特征运行时、JSON 标准实现）：10 条，全部修复（`a38e427`）。
 - 评审 3（实验、触发站点、宿主、CLI）：14 条，全部修复（`d3b2788`），回归测试见
   `tests/StrataRec.IntegrationTests/ReviewRegressionTests.cs`。
+- 评审 4（日志、评审 3 修复的复核、ColumnExpr、端到端）：16 条，全部接受。修复深度的取舍见上表；回归测试见
+  `tests/StrataRec.IntegrationTests/Review4RegressionTests.cs` 和 `tests/StrataRec.UnitTests/Logging/LoggingTests.cs`。
