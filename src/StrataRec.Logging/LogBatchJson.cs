@@ -145,8 +145,16 @@ public static class LogBatchJson
                 json.WriteStringValue(value.AsString());
                 break;
             case StorageKind.Vector:
+                var vector = value.AsVector();
+                if (!AllFinite(vector))
+                {
+                    // Same rule as scalars: a non-finite value is logged as missing (capture already does this).
+                    json.WriteNullValue();
+                    break;
+                }
+
                 json.WriteStartArray();
-                foreach (var f in value.AsVector())
+                foreach (var f in vector)
                 {
                     json.WriteNumberValue(f);
                 }
@@ -172,6 +180,19 @@ public static class LogBatchJson
                 json.WriteEndArray();
                 break;
         }
+    }
+
+    private static bool AllFinite(ReadOnlySpan<float> values)
+    {
+        foreach (var f in values)
+        {
+            if (!float.IsFinite(f))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static void WriteColumns(Utf8JsonWriter json, string name, LogColumn[] columns, Func<StorageKind, bool> kind)

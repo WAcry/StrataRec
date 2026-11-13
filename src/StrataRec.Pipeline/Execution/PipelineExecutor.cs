@@ -163,6 +163,7 @@ public sealed class PipelineExecutor
         var start = Stopwatch.GetTimestamp();
         var memory = new RequestMemory(_pool);
         FeatureFetcher? fetcher = null;
+        RequestState? state = null;
         try
         {
             var context = new ScalarValue[plan.Schema.ContextFields.Count];
@@ -189,7 +190,7 @@ public sealed class PipelineExecutor
             var bindings = new OutputBindings(plan.Schema.Columns.Count, memory);
             var deadline = start + (long)(request.Deadline.TotalSeconds * Stopwatch.Frequency);
             fetcher = new FeatureFetcher(plan.Features, table, context, bindings, parameters, memory, deadline);
-            var state = new RequestState
+            state = new RequestState
             {
                 Plan = plan,
                 RequestId = request.RequestId,
@@ -227,8 +228,25 @@ public sealed class PipelineExecutor
             }
 
             result ??= await BuildResultAsync(state, start, cancellationToken).ConfigureAwait(false);
-            PublishLogs(state, request, result);
+            PublishLogs(state, request, result, returned: true);
             return result;
+        }
+        catch (Exception ex) when (state is not null)
+        {
+            // Cancelled by the caller (or a defect): nobody receives a result, but the request was assigned, may have
+            // been exposed, and may have captured taps. Dropping those records would remove slow or failing requests
+            // from experiment analysis, biased by arm (design 8.8, 12.6). Request memory is still held here.
+            var reason = ex is OperationCanceledException ? "cancelled by the caller" : "aborted: " + ex.Message;
+            try
+            {
+                PublishLogs(state, request, Failed(plan, request, reason, start, state.Outcomes, state.Triggered, state.NonFinite), returned: false);
+            }
+            catch (Exception publishError)
+            {
+                Debug.WriteLine($"StrataRec could not publish the logs of an aborted request: {publishError.Message}");
+            }
+
+            throw;
         }
         finally
         {
@@ -694,9 +712,10 @@ public sealed class PipelineExecutor
     /// them with the result or hands them to the log pipeline. Experiment requests also emit a durable trigger record
     /// (design 8.8, 12.6).
     /// </summary>
-    private void PublishLogs(RequestState state, PipelineRequest request, PipelineResult result)
+    private void PublishLogs(RequestState state, PipelineRequest request, PipelineResult result, bool returned)
     {
-        if (state.Batches is null && (state.Plan.Experiments.Length == 0 || (_logs is null && !request.CaptureLogs)))
+        var capture = returned && request.CaptureLogs;
+        if (state.Batches is null && (state.Plan.Experiments.Length == 0 || (_logs is null && !capture)))
         {
             return;
         }
@@ -743,7 +762,7 @@ public sealed class PipelineExecutor
             batch.NodeOutcomes = outcomes;
         }
 
-        if (request.CaptureLogs)
+        if (capture)
         {
             result.LogBatches = batches;
             return;

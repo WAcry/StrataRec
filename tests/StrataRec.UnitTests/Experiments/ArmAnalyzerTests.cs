@@ -241,3 +241,16 @@ public sealed class ArmAnalyzerTests
         Assert.Contains(diagnostics.Items, d => d.Code == "PATCH_NOT_ALLOWED");
     }
 }
+
+public sealed class NodeIdTests
+{
+    [Theory]
+    [InlineData("fusion", true)]
+    [InlineData("_mmr_v2", true)]
+    [InlineData("fusion.v2", false)] // col.x@fusion.v2 would read as field access
+    [InlineData("fusion-v2", false)] // col.x@fusion-v2 would read as subtraction
+    [InlineData("2fusion", false)]
+    [InlineData("", false)]
+    public void NodeIdsAreIdentifiersSoVersionReferencesCanNameThem(string id, bool valid) =>
+        Assert.Equal(valid, StrataRec.Experiments.Compilation.ArmAnalyzer.IsValidNodeId(id));
+}

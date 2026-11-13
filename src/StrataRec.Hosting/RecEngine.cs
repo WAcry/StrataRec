@@ -230,7 +230,27 @@ public sealed class RecEngine : IRecEngine
         }
         else if (_assignmentProvider is not null)
         {
-            var ids = await _assignmentProvider.AssignAsync(request.PipelineId, request.Inputs, cancellationToken).ConfigureAwait(false);
+            // The provider shares the end-to-end deadline: it is cancelled at the deadline, and the wait is bounded
+            // even if it ignores cancellation.
+            var budget = request.Deadline - System.Diagnostics.Stopwatch.GetElapsedTime(started);
+            if (budget <= TimeSpan.Zero)
+            {
+                return Rejected(request, "deadline exceeded before assignment");
+            }
+
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(budget);
+            IReadOnlyList<string> ids;
+            try
+            {
+                ids = await _assignmentProvider.AssignAsync(request.PipelineId, request.Inputs, deadline.Token).AsTask()
+                    .WaitAsync(budget, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is TimeoutException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
+            {
+                return Rejected(request, "deadline exceeded during assignment");
+            }
+
             arms = MapExternal(pipeline.Plan, ids, out unknown);
         }
         else

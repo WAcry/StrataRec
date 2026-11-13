@@ -313,7 +313,12 @@ public sealed class PlanBuilder
     /// Call after the nodes are compiled: <c>columns_from</c> expands a compiled model node's inputs. Returns null
     /// after reporting errors.
     /// </summary>
-    public CompiledTap? CompileTap(string tapId, JsonObject definition, string artifact)
+    /// <param name="resolveNode">
+    /// Resolves a node id to the variant in effect where this tap variant runs (the unified plan compiles a tap per arm
+    /// combination, design 12.3); <c>columns_from</c> expands that variant's inputs. Defaults to the only compiled node
+    /// with the id.
+    /// </param>
+    public CompiledTap? CompileTap(string tapId, JsonObject definition, string artifact, Func<string, CompiledNode?>? resolveNode = null)
     {
         var pointer = "/log_taps/" + tapId;
         LogTapSpec spec;
@@ -430,12 +435,19 @@ public sealed class PlanBuilder
         {
             var nodeId = from.EndsWith(".inputs", StringComparison.Ordinal) ? from[..^7] : null;
             CompiledNode? model = null;
-            foreach (var n in _nodes)
+            if (nodeId is not null && resolveNode is not null)
             {
-                if (n.NodeId == nodeId)
+                model = resolveNode(nodeId);
+            }
+            else
+            {
+                foreach (var n in _nodes)
                 {
-                    model = n;
-                    break;
+                    if (n.NodeId == nodeId)
+                    {
+                        model = n;
+                        break;
+                    }
                 }
             }
 
@@ -483,7 +495,7 @@ public sealed class PlanBuilder
             }
 
             columns.Add((name, e));
-            types[name] = e.ResultType.ToString();
+            types[name] = new JsonObject { ["type"] = e.ResultType.ToString(), ["expr"] = source };
             var direct = -1;
             string? pin = null;
             for (var i = before; i < reads.Count; i++)
@@ -503,6 +515,7 @@ public sealed class PlanBuilder
         var readOutputs = new SortedSet<int>();
         var readFeatures = new SortedSet<int>();
         var readContext = new SortedSet<int>();
+        var pinnedNodes = new SortedSet<string>(StringComparer.Ordinal);
         var personal = false;
         foreach (var symbol in reads)
         {
@@ -512,23 +525,31 @@ public sealed class PlanBuilder
                 if (column.Kind == ColumnKind.Feature)
                 {
                     readFeatures.Add(column.FeatureIndex);
-                    personal |= _features[column.FeatureIndex].Definition.IsPersonal;
+                    personal |= IsPersonalFeature(column.FeatureIndex);
                 }
-                else if (column.Kind == ColumnKind.Output && symbol.FixedSlot < 0)
+                else if (column.Kind == ColumnKind.Output)
                 {
-                    readOutputs.Add(symbol.Id);
+                    personal |= IsPersonalText(symbol.Id, new HashSet<int>());
+                    if (symbol.FixedSlot < 0)
+                    {
+                        readOutputs.Add(symbol.Id);
+                    }
+                    else if (symbol.Name.LastIndexOf('@') is > 0 and var at)
+                    {
+                        pinnedNodes.Add(symbol.Name[(at + 1)..]);
+                    }
                 }
             }
             else if (symbol.Kind == SymbolKind.Context && Schema.ContextFields[symbol.Id].FeatureIndex is >= 0 and var f)
             {
                 readContext.Add(f);
-                personal |= _features[f].Definition.IsPersonal;
+                personal |= IsPersonalFeature(f);
             }
         }
 
         if (personal && (spec.Purpose is null || delivery != Logging.LogDelivery.Durable))
         {
-            _diagnostics.Error("TAP_PERSONAL", artifact, pointer, "The tap records personal features; it needs a 'purpose' and durable delivery (design 8.9).",
+            _diagnostics.Error("TAP_PERSONAL", artifact, pointer, "The tap records personal data (a personal feature, a feature derived from one, or text generated from one); it needs a 'purpose' and durable delivery (design 8.9).",
                 "add \"purpose\": \"...\" and \"delivery\": \"durable\", or drop the personal columns");
             ok = false;
         }
@@ -558,6 +579,7 @@ public sealed class PlanBuilder
             ReadContextFeatures = ToSortedArray(readContext),
             ColumnSources = columnSources.ToArray(),
             PinnedProducers = pinned.ToArray(),
+            PinnedNodes = new List<string>(pinnedNodes).ToArray(),
         };
     }
 
@@ -616,6 +638,16 @@ public sealed class PlanBuilder
             {
                 if (ExpressionCompiler.TryCompile(spec.Key[i], _scope!, new CompileOptions { RequestLevelOnly = true, AllowNullableResult = true }, out var key, out var errors))
                 {
+                    if (ReadsFetchedFeature(key) is { } feature)
+                    {
+                        // The group decision is made at request start (design 8.2), before any fetch: a fetched key
+                        // would make every request wait for I/O just to decide whether to log.
+                        _diagnostics.Error("FUNNEL_KEY_FETCHED", artifact, pointer + "/key/" + i,
+                            $"Funnel group key '{spec.Key[i]}' reads fetched feature '{feature}'; keys are evaluated at request start, before any fetch.",
+                            "key on request inputs, e.g. [\"ctx.request.user_id\", \"ctx.request.session_id\"]");
+                        continue;
+                    }
+
                     keys.Add(key);
                     continue;
                 }
@@ -638,6 +670,19 @@ public sealed class PlanBuilder
                 });
             }
         }
+    }
+
+    private string? ReadsFetchedFeature(CompiledExpression expression)
+    {
+        foreach (var symbol in expression.Reads)
+        {
+            if (FeatureIndexOf(symbol) is >= 0 and var f)
+            {
+                return _features[f].Definition.Name;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -714,6 +759,11 @@ public sealed class PlanBuilder
         var fetched = new HashSet<int>();
         var ordered = new List<CompiledNode>(timeline);
         ordered.Sort(static (a, b) => a.Order != b.Order ? a.Order!.Value.CompareTo(b.Order!.Value) : string.CompareOrdinal(a.NodeId, b.NodeId));
+        var later = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var node in ordered)
+        {
+            later.Add(node.NodeId);
+        }
 
         for (var i = 0; i < ordered.Count; i++)
         {
@@ -811,13 +861,14 @@ public sealed class PlanBuilder
                 MarkFetched(fetched, fallback.ReadFeatures);
             }
 
+            later.Remove(node.NodeId);
             if (taps is not null)
             {
                 foreach (var tap in taps)
                 {
                     if (tap.AttachAfter == node.NodeId)
                     {
-                        ValidateTap(tap, possible, fetched, artifact);
+                        ValidateTap(tap, possible, fetched, later, artifact);
                     }
                 }
             }
@@ -840,7 +891,7 @@ public sealed class PlanBuilder
             {
                 if (tap.AttachOutput)
                 {
-                    ValidateTap(tap, possible, fetched, artifact);
+                    ValidateTap(tap, possible, fetched, later, artifact);
                 }
             }
         }
@@ -863,12 +914,23 @@ public sealed class PlanBuilder
 
     /// <summary>
     /// A tap is a passive observer (design 8.3, 8.5): every output column it reads must have a producer before the
-    /// attach point, and every candidate feature must already have been fetched there.
+    /// attach point, and every candidate feature must already have been fetched there. A pinned version
+    /// (<c>col.x@node</c>) may be absent (the node is not in this plan variant: missing), but never in the future.
     /// </summary>
-    private void ValidateTap(CompiledTap tap, Dictionary<int, string> possible, HashSet<int> fetched, string artifact)
+    private void ValidateTap(CompiledTap tap, Dictionary<int, string> possible, HashSet<int> fetched, HashSet<string> later, string artifact)
     {
         var pointer = "/log_taps/" + tap.TapId;
         var where = tap.AttachOutput ? "the output" : $"'{tap.AttachAfter}'";
+        foreach (var pinned in tap.PinnedNodes)
+        {
+            if (later.Contains(pinned))
+            {
+                _diagnostics.Error("TAP_PINNED_NOT_PRODUCED", artifact, pointer,
+                    $"Tap '{tap.TapId}' reads the version written by '{pinned}', which runs after {where}.",
+                    $"attach the tap after '{pinned}', or read a version produced before {where}");
+            }
+        }
+
         foreach (var logical in tap.ReadOutputs)
         {
             if (!possible.ContainsKey(logical))
@@ -886,6 +948,24 @@ public sealed class PlanBuilder
                 _diagnostics.Error("TAP_FEATURE_NOT_FETCHED", artifact, pointer,
                     $"Tap '{tap.TapId}' reads feature '{_features[feature].Definition.Name}', which is not fetched before {where}; taps never trigger fetches.",
                     "attach the tap after a node that reads the feature");
+            }
+        }
+    }
+
+    /// <summary>Marks the features an expression reads (context or candidate), with their dependencies.</summary>
+    private void MarkSymbols(HashSet<int> fetched, CompiledExpression? expression)
+    {
+        if (expression is null)
+        {
+            return;
+        }
+
+        foreach (var symbol in expression.Reads)
+        {
+            var f = FeatureIndexOf(symbol);
+            if (f >= 0)
+            {
+                MarkFetched(fetched, new[] { f });
             }
         }
     }
@@ -954,16 +1034,60 @@ public sealed class PlanBuilder
             }
         }
 
+        log ??= LogPlan.Empty;
+
+        // Context features the serving path reads: nodes of every variant (including fallbacks and `when`), trigger
+        // sites and the output, with everything they are derived from. Only these are prefetched; taps are passive
+        // observers (design 8.5) and must not add a context fetch to every request, sampled or not.
+        var serving = new HashSet<int>();
+        foreach (var node in _nodes)
+        {
+            MarkFetched(serving, node.ReadFeatures);
+        }
+
+        foreach (var slot in timeline)
+        {
+            foreach (var condition in slot.SiteConditions)
+            {
+                MarkSymbols(serving, condition);
+            }
+        }
+
+        foreach (var (_, expression) in output.Columns)
+        {
+            MarkSymbols(serving, expression);
+        }
+
+        foreach (var slot in log.Taps)
+        {
+            var reported = new HashSet<int>();
+            foreach (var tap in slot.Variants)
+            {
+                if (tap is null)
+                {
+                    continue;
+                }
+
+                foreach (var f in tap.ReadContextFeatures)
+                {
+                    if (!serving.Contains(f) && reported.Add(f))
+                    {
+                        _diagnostics.Error("TAP_FEATURE_NOT_FETCHED", PipelineLabel, "/log_taps/" + tap.TapId,
+                            $"Tap '{tap.TapId}' reads context feature '{_features[f].Definition.Name}', which the pipeline never fetches; taps never trigger fetches.",
+                            "log a context feature a node, trigger condition or the output already reads");
+                    }
+                }
+            }
+        }
+
         var contextFeatures = new HashSet<int>();
         foreach (var f in features.Features)
         {
-            if (f.IsContext)
+            if (f.IsContext && serving.Contains(f.Index))
             {
                 contextFeatures.Add(f.Index);
             }
         }
-
-        log ??= LogPlan.Empty;
 
         return new ExecutionPlan
         {
@@ -1106,6 +1230,69 @@ public sealed class PlanBuilder
             Expression = expression,
             Dependencies = dependencies,
         });
+    }
+
+    /// <summary>
+    /// Personal per design 8.9: declared personal, or derived from a personal feature — an alias or a transformation
+    /// must not launder the restriction away.
+    /// </summary>
+    private bool IsPersonalFeature(int feature)
+    {
+        var info = _features[feature];
+        if (info.Definition.IsPersonal)
+        {
+            return true;
+        }
+
+        foreach (var dependency in info.Dependencies)
+        {
+            if (IsPersonalFeature(dependency))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// A <c>text</c> output column generated from personal data (design 8.9: e.g. a prompt containing the user's
+    /// history): some producer, in any variant, reads a personal feature or such a text column. Numeric outputs such as
+    /// model scores are not personal.
+    /// </summary>
+    private bool IsPersonalText(int logical, HashSet<int> visiting)
+    {
+        if (Schema.Columns[logical].Type.Kind != StorageKind.Text || !visiting.Add(logical))
+        {
+            return false;
+        }
+
+        foreach (var node in _nodes)
+        {
+            if (!Writes(node, logical))
+            {
+                continue;
+            }
+
+            foreach (var f in node.ReadFeatures)
+            {
+                if (IsPersonalFeature(f))
+                {
+                    return true;
+                }
+            }
+
+            foreach (var read in node.ReadColumns)
+            {
+                var column = Schema.Columns[read];
+                if (column.Kind == ColumnKind.Feature ? IsPersonalFeature(column.FeatureIndex) : IsPersonalText(read, visiting))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private int FeatureIndexOf(in Symbol symbol)

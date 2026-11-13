@@ -57,6 +57,11 @@ internal static class TapCapture
 
     private static async ValueTask<bool> SampleGroupAsync(RequestState state, CompiledFunnelGroup group, CancellationToken cancellationToken)
     {
+        if (group.Rate <= 0)
+        {
+            return false; // a disabled group samples nothing; do not even evaluate its keys
+        }
+
         for (var k = 0; k < group.Keys.Length; k++)
         {
             await EnsureContextAsync(state, group.Keys[k], cancellationToken).ConfigureAwait(false);
@@ -249,7 +254,10 @@ internal static class TapCapture
             columns[c] = new LogColumn(name, expression.ResultType, values);
             if (tap.PinnedProducers[c] is { } pinned)
             {
-                producers[name] = pinned; // col.x@node always reads that node's version
+                if (Produced(state, pinned))
+                {
+                    producers[name] = pinned; // col.x@node always reads that node's version
+                }
             }
             else if (tap.ColumnSources[c] is >= 0 and var logical && state.Bindings.Producer(logical) is >= 0 and var producer)
             {
@@ -284,9 +292,49 @@ internal static class TapCapture
         });
     }
 
-    /// <summary>Non-finite values are logged as missing, never as NaN (design 4.3, 8.7).</summary>
-    private static ScalarValue Sanitize(ScalarValue value) =>
-        value.Kind is StorageKind.Float32 or StorageKind.Float64 && !double.IsFinite(value.AsFloat64()) ? ScalarValue.Missing : value;
+    /// <summary>True when <paramref name="nodeId"/> ran and committed its outputs in this request (lineage, design 8.7).</summary>
+    private static bool Produced(RequestState state, string nodeId)
+    {
+        foreach (var outcome in state.Outcomes)
+        {
+            if (outcome.ProducedBy == nodeId && outcome.Kind is NodeOutcomeKind.Succeeded or NodeOutcomeKind.Degraded)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Non-finite values are logged as missing, never as NaN (design 4.3, 8.7). A vector with any non-finite component
+    /// is missing as a whole: a partial vector has no meaning to a training job.
+    /// </summary>
+    private static ScalarValue Sanitize(ScalarValue value)
+    {
+        if (value.IsMissing)
+        {
+            return value;
+        }
+
+        if (value.Kind is StorageKind.Float32 or StorageKind.Float64)
+        {
+            return double.IsFinite(value.AsFloat64()) ? value : ScalarValue.Missing;
+        }
+
+        if (value.Kind == StorageKind.Vector)
+        {
+            foreach (var f in value.AsVector())
+            {
+                if (!float.IsFinite(f))
+                {
+                    return ScalarValue.Missing;
+                }
+            }
+        }
+
+        return value;
+    }
 
     private static long EntityHash(Core.Tables.CandidateTable table, int row) =>
         table.KeyType == EntityKeyType.Int64 ? table.Int64Ids![row] : Core.Hashing.StableHash.SeedFromSalt(table.StringIds!.Get(row));

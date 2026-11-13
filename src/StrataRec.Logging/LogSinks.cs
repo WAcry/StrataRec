@@ -4,7 +4,8 @@ namespace StrataRec.Logging;
 
 /// <summary>
 /// Destination of encoded log batches: a message queue, object storage, a file (design 8.6). Throwing signals a
-/// failed write; durable batches are retried, best-effort ones are dropped and counted.
+/// failed write; durable batches are retried, best-effort ones are dropped and counted. Throw
+/// <see cref="LogBatchRejectedException"/> for batches that can never be written, after writing all the others.
 /// </summary>
 public interface ILogSink
 {
@@ -59,9 +60,24 @@ public sealed class JsonLinesLogSink : ILogSink, IDisposable
     public async ValueTask WriteAsync(IReadOnlyList<LogBatch> batches, CancellationToken cancellationToken)
     {
         var text = new StringBuilder();
+        List<LogBatch>? rejected = null;
+        Exception? reason = null;
         for (var i = 0; i < batches.Count; i++)
         {
-            text.Append(LogBatchJson.Encode(batches[i], indented: false)).Append('\n');
+            string line;
+            try
+            {
+                line = LogBatchJson.Encode(batches[i], indented: false);
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or FormatException)
+            {
+                // Encoding is deterministic: retrying cannot help, and must not block the batches behind this one.
+                (rejected ??= new List<LogBatch>()).Add(batches[i]);
+                reason ??= ex;
+                continue;
+            }
+
+            text.Append(line).Append('\n');
         }
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -73,6 +89,11 @@ public sealed class JsonLinesLogSink : ILogSink, IDisposable
         finally
         {
             _gate.Release();
+        }
+
+        if (rejected is not null)
+        {
+            throw new LogBatchRejectedException(rejected, reason);
         }
     }
 

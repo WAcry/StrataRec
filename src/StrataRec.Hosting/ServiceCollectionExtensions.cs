@@ -84,7 +84,9 @@ public static class ServiceCollectionExtensions
             ids.AddRange(workspace.Pipelines.Keys);
         }
 
-        // A pipeline's fallback_pipeline must be served too, or the fallback silently never happens (design 5.6).
+        // A pipeline's fallback_pipeline must be served too, or the fallback silently never happens (design 5.6). A
+        // pipeline whose fallback cannot be resolved is not loaded: it keeps its current plan, like any failed load.
+        var unresolved = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < ids.Count; i++)
         {
             if (workspace.Pipelines.TryGetValue(ids[i], out var loaded) && loaded.Value.FallbackPipeline is { } fallback && !ids.Contains(fallback))
@@ -97,12 +99,18 @@ public static class ServiceCollectionExtensions
                 {
                     diagnostics.Error("FALLBACK_PIPELINE_UNKNOWN", loaded.Path, "/fallback_pipeline", $"Fallback pipeline '{fallback}' is not in the workspace.",
                         NameSuggestions.DidYouMean(fallback, workspace.Pipelines.Keys) ?? $"create pipelines/{fallback}.jsonc or remove fallback_pipeline");
+                    unresolved.Add(ids[i]);
                 }
             }
         }
 
         foreach (var id in ids)
         {
+            if (unresolved.Contains(id))
+            {
+                continue;
+            }
+
             var request = workspace.CreateCompileRequest(id, environment, diagnostics, DateOnly.FromDateTime(DateTime.UtcNow));
             if (request is null)
             {

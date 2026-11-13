@@ -89,6 +89,30 @@ internal sealed class ArmPatch
 internal static class ArmAnalyzer
 {
     /// <summary>Stable ids of nodes, columns and parameters: they appear in pointers, expressions and logs.</summary>
+    /// <summary>
+    /// Node ids are plain identifiers (<c>[A-Za-z_][A-Za-z0-9_]*</c>): expressions name them in version references
+    /// (<c>col.score.final@fusion</c>), where a '.' or '-' would read as field access or subtraction.
+    /// </summary>
+    public static bool IsValidNodeId(string id)
+    {
+        if (id.Length == 0 || !(char.IsAsciiLetter(id[0]) || id[0] == '_'))
+        {
+            return false;
+        }
+
+        foreach (var c in id)
+        {
+            if (!(char.IsAsciiLetterOrDigit(c) || c == '_'))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public const string NodeIdHint = "node ids are identifiers (letters, digits and '_', not starting with a digit) so that 'col.<column>@<node>' can name them";
+
     public static bool IsValidId(string id)
     {
         if (id.Length == 0 || !(char.IsAsciiLetter(id[0]) || id[0] == '_'))
@@ -192,10 +216,9 @@ internal static class ArmAnalyzer
                     if (op.Kind == PatchOpKind.Add && tokens.Length == 2)
                     {
                         arm.AddedNodes.Add(tokens[1]);
-                        if (!IsValidId(tokens[1]))
+                        if (!IsValidNodeId(tokens[1]))
                         {
-                            diagnostics.Error("BAD_ID", arm.Artifact, pointer, $"'{tokens[1]}' is not a valid node id.",
-                                "node ids start with a letter or '_' and contain letters, digits, '_', '.' or '-'");
+                            diagnostics.Error("BAD_ID", arm.Artifact, pointer, $"'{tokens[1]}' is not a valid node id.", NodeIdHint);
                             arm.Valid = false;
                         }
                     }

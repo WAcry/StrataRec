@@ -181,6 +181,104 @@ public sealed class LogPipelineTests
         Assert.Equal(JsonValueKind.Null, root.GetProperty("context").GetProperty("user_id").ValueKind);
     }
 
+    // ---- Review 4 ---------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task FullDurableQueueReportsTheLossOrSpills()
+    {
+        // Finding 3: a full durable queue must not drop silently.
+        var sink = new BlockingSink();
+        var spilled = new List<LogBatch>();
+        await using (var plain = new LogPipeline(sink, new LogPipelineOptions { DurableCapacity = 1, MaxBatchesPerWrite = 1, DrainTimeout = TimeSpan.FromMilliseconds(50) }))
+        {
+            var admissions = Enumerable.Range(0, 5).Select(_ => plain.Submit(Batch("served", LogDelivery.Durable))).ToList();
+            Assert.Contains(LogAdmission.Dropped, admissions);
+            Assert.Equal(admissions.Count(a => a == LogAdmission.Dropped), plain.DurableOverflow);
+        }
+
+        await using (var spilling = new LogPipeline(sink, new LogPipelineOptions
+        {
+            DurableCapacity = 1, MaxBatchesPerWrite = 1, DrainTimeout = TimeSpan.FromMilliseconds(50),
+            DurableOverflow = batch => { lock (spilled) { spilled.Add(batch); } return true; },
+        }))
+        {
+            var admissions = Enumerable.Range(0, 5).Select(_ => spilling.Submit(Batch("served", LogDelivery.Durable))).ToList();
+            Assert.DoesNotContain(LogAdmission.Dropped, admissions);
+            Assert.Contains(LogAdmission.Spilled, admissions);
+            Assert.Equal(0, spilling.DurableOverflow);
+            Assert.All(spilled, b => Assert.True(b.Seq > 0)); // spilled batches keep their sequence number
+        }
+
+        sink.Release();
+    }
+
+    [Fact]
+    public async Task PermanentlyRejectedBatchDoesNotBlockTheDurableStream()
+    {
+        // Finding 4: one poison batch used to be retried forever, blocking everything behind it.
+        var sink = new RejectingSink(poisonTap: "poison");
+        var rejected = new List<LogBatch>();
+        await using (var pipeline = new LogPipeline(sink, new LogPipelineOptions { MaxBatchesPerWrite = 1, Rejected = (b, _) => rejected.Add(b) }))
+        {
+            pipeline.Submit(Batch("poison", LogDelivery.Durable));
+            pipeline.Submit(Batch("served", LogDelivery.Durable));
+            pipeline.Submit(Batch("served", LogDelivery.Durable));
+            await pipeline.FlushAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+            Assert.Equal(1, pipeline.Rejected);
+            Assert.Contains(pipeline.Stats(), s => s is { TapId: "poison", Delivered: 0, Dropped: 1 });
+            Assert.Contains(pipeline.Stats(), s => s is { TapId: "served", Delivered: 2, Dropped: 0 });
+        }
+
+        Assert.Equal(2, sink.Written);
+        Assert.Single(rejected);
+    }
+
+    [Fact]
+    public void NonFiniteVectorIsEncodedAsMissingInsteadOfThrowing()
+    {
+        var batch = Batch("served", LogDelivery.Durable);
+        batch = new LogBatch
+        {
+            TapId = batch.TapId, RequestId = batch.RequestId, PipelineId = batch.PipelineId, ManifestId = batch.ManifestId, SchemaId = batch.SchemaId,
+            TimeMs = batch.TimeMs, Delivery = batch.Delivery, RequestProbability = 1, Int64EntityIds = batch.Int64EntityIds, Ranks = batch.Ranks,
+            RowProbabilities = batch.RowProbabilities, Context = batch.Context,
+            Columns = new[] { new LogColumn("emb", ColumnType.Vector(2), new[] { ScalarValue.FromVector(new[] { 1f, float.NaN }), ScalarValue.FromVector(new[] { 1f, 2f }) }) },
+        };
+
+        using var document = JsonDocument.Parse(LogBatchJson.Encode(batch));
+        var emb = document.RootElement.GetProperty("nested_cols").GetProperty("emb");
+        Assert.Equal(JsonValueKind.Null, emb[0].ValueKind);
+        Assert.Equal(2f, emb[1][1].GetSingle());
+    }
+
+    [Fact]
+    public async Task JsonLinesSinkRejectsOnlyTheUnencodableBatch()
+    {
+        var writer = new StringWriter();
+        using var sink = new JsonLinesLogSink(writer);
+        var bad = Batch("bad", LogDelivery.Durable);
+        bad.Columns[0] = new LogColumn(null!, ColumnType.Float64, new[] { ScalarValue.FromFloat64(1), ScalarValue.Missing }); // malformed: no name
+
+        var thrown = await Assert.ThrowsAsync<LogBatchRejectedException>(async () =>
+            await sink.WriteAsync(new[] { Batch("a", LogDelivery.Durable), bad, Batch("b", LogDelivery.Durable) }, CancellationToken.None));
+
+        Assert.Same(bad, Assert.Single(thrown.Batches));
+        Assert.Equal(2, writer.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+    }
+
+    private sealed class RejectingSink(string poisonTap) : ILogSink
+    {
+        public int Written;
+
+        public ValueTask WriteAsync(IReadOnlyList<LogBatch> batches, CancellationToken cancellationToken)
+        {
+            var poison = batches.Where(b => b.TapId == poisonTap).ToList();
+            Interlocked.Add(ref Written, batches.Count - poison.Count);
+            return poison.Count > 0 ? throw new LogBatchRejectedException(poison) : ValueTask.CompletedTask;
+        }
+    }
+
     private sealed class FlakySink(int failures) : ILogSink
     {
         public int Attempts;

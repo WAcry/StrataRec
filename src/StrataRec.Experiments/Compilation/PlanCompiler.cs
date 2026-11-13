@@ -350,10 +350,9 @@ internal sealed partial class UnifiedCompilation
         // Baseline node ids appear in pointers and expressions (col.x@node); keep them well-formed.
         foreach (var (id, _) in _view.Nodes)
         {
-            if (!ArmAnalyzer.IsValidId(id))
+            if (!ArmAnalyzer.IsValidNodeId(id))
             {
-                _diagnostics.Error("BAD_ID", _pipelineLabel, "/nodes/" + JsonPointer.Escape(id), $"'{id}' is not a valid node id.",
-                    "node ids start with a letter or '_' and contain letters, digits, '_', '.' or '-'");
+                _diagnostics.Error("BAD_ID", _pipelineLabel, "/nodes/" + JsonPointer.Escape(id), $"'{id}' is not a valid node id.", ArmAnalyzer.NodeIdHint);
             }
         }
 
@@ -465,6 +464,30 @@ internal sealed partial class UnifiedCompilation
             {
                 var arm = arms.ArmIn(Layers[i]);
                 var local = arm >= 0 && LocalIndex[i].TryGetValue(arm, out var l) ? l : 0;
+                index = (index * Radix[i]) + local;
+            }
+
+            return index;
+        }
+
+        /// <summary>
+        /// The combination index for a set of arms (one per layer at most). Layers of this space without an arm in the
+        /// set, and arms that do not modify the item, map to "not modified".
+        /// </summary>
+        public int IndexOfArms(IReadOnlyList<ArmPatch> arms)
+        {
+            var index = 0;
+            for (var i = 0; i < Layers.Length; i++)
+            {
+                var local = 0;
+                foreach (var arm in arms)
+                {
+                    if (arm.LayerIndex == Layers[i] && LocalIndex[i].TryGetValue(arm.Index, out var l))
+                    {
+                        local = l;
+                    }
+                }
+
                 index = (index * Radix[i]) + local;
             }
 
@@ -706,7 +729,11 @@ internal sealed partial class UnifiedCompilation
         foreach (var tapId in ids)
         {
             var pointer = "/log_taps/" + JsonPointer.Escape(tapId);
-            if (BuildSpace(arm => arm.TouchedTaps.Contains(tapId), $"Tap '{tapId}'", pointer) is not { } space)
+
+            // columns_from logs a model node's inputs: the tap must vary with every layer that changes that node, or a
+            // treatment would serve one input contract while its training log records another (design 6.9, 8.3).
+            var models = ColumnsFromNodes(tapId, taps[tapId] as JsonObject);
+            if (BuildSpace(arm => arm.TouchedTaps.Contains(tapId) || TouchesAny(arm, models), $"Tap '{tapId}'", pointer) is not { } space)
             {
                 continue;
             }
@@ -747,10 +774,15 @@ internal sealed partial class UnifiedCompilation
                     continue;
                 }
 
-                var hash = ContentHash.Compute(tap);
-                if (!byHash.TryGetValue(hash, out var compiled))
+                var key = ContentHash.Compute(tap);
+                foreach (var model in models)
                 {
-                    var result = _builder.CompileTap(tapId, tap, _pipelineLabel);
+                    key += "|" + model + ":" + (_variants.TryGetValue(model, out var mv) ? mv.IndexOfArms(armsInCombination) : -1);
+                }
+
+                if (!byHash.TryGetValue(key, out var compiled))
+                {
+                    var result = _builder.CompileTap(tapId, tap, _pipelineLabel, nodeId => ResolveVariant(nodeId, armsInCombination));
                     if (result?.AttachAfter is { } after && !_variants.ContainsKey(after))
                     {
                         _diagnostics.Error("TAP_UNKNOWN_NODE", _pipelineLabel, pointer + "/attach/after", $"Tap '{tapId}' attaches after unknown node '{after}'.",
@@ -759,7 +791,7 @@ internal sealed partial class UnifiedCompilation
                     }
 
                     compiled = (result, result is null);
-                    byHash[hash] = compiled;
+                    byHash[key] = compiled;
                 }
 
                 variants.Variants[c] = compiled.Tap;
@@ -768,6 +800,47 @@ internal sealed partial class UnifiedCompilation
             }
         }
     }
+
+    /// <summary>Model nodes named by <c>columns_from</c> in the baseline tap or in any arm's patch of it.</summary>
+    private SortedSet<string> ColumnsFromNodes(string tapId, JsonObject? baseline)
+    {
+        var nodes = new SortedSet<string>(StringComparer.Ordinal);
+        Add(baseline);
+        foreach (var arm in _arms)
+        {
+            if (arm.Valid && arm.TouchedTaps.Contains(tapId) && arm.Patch["log_taps"] is JsonObject patched)
+            {
+                Add(patched[tapId] as JsonObject);
+            }
+        }
+
+        return nodes;
+
+        void Add(JsonObject? tap)
+        {
+            if (tap?["columns_from"] is JsonValue value && value.TryGetValue<string>(out var from) && from.EndsWith(".inputs", StringComparison.Ordinal))
+            {
+                nodes.Add(from[..^7]);
+            }
+        }
+    }
+
+    private static bool TouchesAny(ArmPatch arm, SortedSet<string> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            if (arm.TouchedNodes.Contains(node))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>The variant of <paramref name="nodeId"/> in effect for an arm combination, or null when absent there.</summary>
+    private CompiledNode? ResolveVariant(string nodeId, IReadOnlyList<ArmPatch> arms) =>
+        _variants.TryGetValue(nodeId, out var variants) ? variants.Variants[variants.IndexOfArms(arms)] : null;
 
     private LogPlan BuildLogPlan()
     {

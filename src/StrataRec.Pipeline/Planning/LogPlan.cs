@@ -83,6 +83,9 @@ public sealed class CompiledTap
 
     /// <summary>Log column → node of a pinned version it reads (<c>col.x@node</c>), else null.</summary>
     public required string?[] PinnedProducers { get; init; }
+
+    /// <summary>Nodes whose pinned versions any expression of the tap reads; they must not run after the attach point.</summary>
+    public string[] PinnedNodes { get; init; } = Array.Empty<string>();
 }
 
 /// <summary>Variants of one tap per arm combination of the layers that patch it (design 12.3: taps vary on their own).</summary>
