@@ -302,4 +302,45 @@ public class JsonCanonicalizerTests
 
         Assert.Throws<JsonCanonicalizationException>(() => JsonCanonicalizer.Canonicalize(node));
     }
+
+    // Review finding 9: TryGetValue<float> converts a parsed number, turning finite binary64 values beyond the float32
+    // range into +∞; only CLR-held doubles/floats can actually be non-finite.
+    [Theory]
+    [InlineData("1e100", "1e+100")]
+    [InlineData("-1e100", "-1e+100")]
+    [InlineData("3.5e38", "3.5e+38")]
+    [InlineData("1.7976931348623157e308", "1.7976931348623157e+308")]
+    public void Canonicalize_ParsedDoubleOutsideFloat32Range_IsAccepted(string literal, string expected)
+    {
+        var parsed = Jsonc.Parse("{\"x\":" + literal + "}");
+
+        Assert.Equal("{\"x\":" + expected + "}", JsonCanonicalizer.CanonicalizeToString(parsed));
+    }
+
+    [Fact]
+    public void Canonicalize_StoredClrDoubleOutsideFloat32Range_RoundTripsThroughParsing()
+    {
+        var stored = JsonCanonicalizer.Canonicalize(new JsonObject { ["x"] = 1e100 });
+
+        var reparsed = JsonCanonicalizer.Canonicalize(Jsonc.Parse(stored));
+
+        Assert.Equal(stored, reparsed);
+        Assert.Equal("{\"x\":1e+100}", Encoding.UTF8.GetString(reparsed));
+    }
+
+    [Fact]
+    public void Canonicalize_ParsedNumberBeyondBinary64_IsStillRejected()
+    {
+        var ex = Assert.Throws<JsonCanonicalizationException>(
+            () => JsonCanonicalizer.Canonicalize(Jsonc.Parse("{\"x\":1e400}")));
+
+        Assert.Equal("/x", ex.Pointer.ToString());
+    }
+
+    [Fact]
+    public void Canonicalize_ClrNonFiniteDoubleAndFloat_AreStillRejected()
+    {
+        Assert.Throws<JsonCanonicalizationException>(() => JsonCanonicalizer.Canonicalize(new JsonObject { ["d"] = double.NegativeInfinity }));
+        Assert.Throws<JsonCanonicalizationException>(() => JsonCanonicalizer.Canonicalize(new JsonObject { ["f"] = float.NaN }));
+    }
 }

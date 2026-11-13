@@ -283,6 +283,65 @@ public class JsoncTests
         Assert.Throws<InvalidOperationException>(() => options.AllowTrailingCommas = false);
     }
 
+    // Review finding 10: the byte overload must reject ill-formed UTF-8 even in unescaped string values, which
+    // Utf8JsonReader skips over without validating, just as the string overload rejects ill-formed UTF-16.
+    [Fact]
+    public void Parse_Bytes_InvalidUtf8InUnescapedString_IsRejectedWithLocation()
+    {
+        var ex = Assert.Throws<JsoncException>(() => Jsonc.Parse(new byte[] { 0x22, 0xFF, 0x22 }, FileName));
+
+        Assert.Equal(JsoncException.InvalidUnicodeCode, ex.Code);
+        Assert.Equal(FileName, ex.FileName);
+        Assert.Equal(1, ex.Line);
+        Assert.Equal(2, ex.Column);
+    }
+
+    [Fact]
+    public void Parse_Bytes_InvalidUtf8OnLaterLine_ReportsLineAndColumn()
+    {
+        // "{\n  \"é\": \"a<truncated C3>b\"\n}": a valid two-byte é before the bad sequence keeps the column in UTF-16 units.
+        var bytes = new List<byte>();
+        bytes.AddRange(Encoding.UTF8.GetBytes("{\n  \"\u00e9\": \"a"));
+        bytes.Add(0xC3);
+        bytes.AddRange(Encoding.UTF8.GetBytes("b\"\n}"));
+
+        var ex = Assert.Throws<JsoncException>(() => Jsonc.Parse(bytes.ToArray()));
+
+        Assert.Equal(JsoncException.InvalidUnicodeCode, ex.Code);
+        Assert.Equal(2, ex.Line);
+        Assert.Equal(10, ex.Column);
+    }
+
+    [Theory]
+    [InlineData(new byte[] { 0x7B, 0x22, 0x61, 0x22, 0x3A, 0x22, 0xED, 0xA0, 0x80, 0x22, 0x7D })] // {"a":"<CESU surrogate>"}
+    [InlineData(new byte[] { 0x7B, 0x22, 0x61, 0x22, 0x3A, 0x22, 0xC0, 0xAF, 0x22, 0x7D })] // {"a":"<overlong />"}
+    [InlineData(new byte[] { 0x5B, 0x22, 0x80, 0x22, 0x5D })] // ["<lone continuation byte>"]
+    public void Parse_Bytes_IllFormedUtf8Values_AreRejected(byte[] json)
+    {
+        var ex = Assert.Throws<JsoncException>(() => Jsonc.Parse(json));
+
+        Assert.Equal(JsoncException.InvalidUnicodeCode, ex.Code);
+        Assert.Equal(1, ex.Line);
+    }
+
+    [Fact]
+    public void Deserialize_Bytes_InvalidUtf8_IsRejected()
+    {
+        var bytes = new byte[] { 0x7B, 0x22, 0x6F, 0x70, 0x22, 0x3A, 0x22, 0xFE, 0x22, 0x7D }; // {"op":"<FE>"}
+
+        var ex = Assert.Throws<JsoncException>(() => Jsonc.Deserialize<NodeConfig>(bytes));
+
+        Assert.Equal(JsoncException.InvalidUnicodeCode, ex.Code);
+    }
+
+    [Fact]
+    public void Parse_Bytes_ValidMultiByteUtf8_IsAccepted()
+    {
+        var node = Jsonc.Parse(Encoding.UTF8.GetBytes("{\"k\": \"\u00e9\u4e2d\ud83d\ude00\"} // \u00e9"));
+
+        Assert.Equal("\u00e9\u4e2d\ud83d\ude00", node!["k"]!.GetValue<string>());
+    }
+
     private sealed class NodeConfig
     {
         [JsonPropertyName("op")]

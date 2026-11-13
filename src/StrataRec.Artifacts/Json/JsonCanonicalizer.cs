@@ -243,9 +243,13 @@ public static class JsonCanonicalizer
 
         private void WriteValue(JsonValue value)
         {
-            // GetValueKind reports Number for a NaN double, so non-finite CLR values must be caught first.
-            if ((value.TryGetValue(out double d) && !double.IsFinite(d)) ||
-                (value.TryGetValue(out float f) && !float.IsFinite(f)))
+            // GetValueKind reports Number for a NaN double, so non-finite CLR values must be caught first. Only values
+            // that actually hold a CLR double/float can be non-finite: a parsed (JsonElement-backed) number is JSON
+            // text, and TryGetValue<float> would *convert* it — 1e100 becomes float +∞ although it is a finite binary64
+            // value. Its range is checked by ParseNumber against binary64, which is what RFC 8785 uses.
+            if (!value.TryGetValue(out JsonElement _) &&
+                ((value.TryGetValue(out double d) && !double.IsFinite(d)) ||
+                 (value.TryGetValue(out float f) && !float.IsFinite(f))))
             {
                 throw Error(
                     "NaN and Infinity are not JSON numbers (RFC 8785 section 3.2.2.3).",
