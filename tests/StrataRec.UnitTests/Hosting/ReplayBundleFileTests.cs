@@ -10,7 +10,7 @@ public sealed class ReplayBundleFileTests
 {
     private const string Minimal = """
         {
-          "format": "stratarec.replay_bundle/3",
+          "format": "stratarec.replay_bundle/4",
           "request": { "pipeline_id": "p", "request_id": "r", "seed": 1, "time_ms": 0, "deadline_ms": 100, "assignment": { "source": "none" } },
           "manifest": { "id": "m" },
           "runs": [
@@ -139,6 +139,33 @@ public sealed class ReplayBundleFileTests
         Assert.Equal("/format", error.Pointer);
         Assert.Contains("stratarec.replay_bundle/2", error.Message);
         Assert.Contains("record the request again", error.Hint);
+    }
+
+    [Fact]
+    public void AVersion3Bundle_IsRejectedAtFormat_ItsUnknownArmCountIsNotReadAsTheIgnoredArms()
+    {
+        // Version 3 counted the ignored arms (unknown_arms); version 4 lists them with their reasons.
+        var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(Edit(b =>
+        {
+            b["format"] = "stratarec.replay_bundle/3";
+            b["request"]!["assignment"] = JsonNode.Parse("""{ "source": "builtin", "arms": [], "unknown_arms": 1 }""");
+        })));
+
+        Assert.Equal("/format", error.Pointer);
+        Assert.Contains("stratarec.replay_bundle/3", error.Message);
+        Assert.Contains("record the request again", error.Hint);
+    }
+
+    [Fact]
+    public void IgnoredArms_RoundTrip_WithTheirReasons()
+    {
+        var bundle = ReplayBundleFile.Parse(Edit(b => b["request"]!["assignment"] = JsonNode.Parse("""
+            { "source": "external", "arms": ["e/a"], "ignored": [{ "id": "f/x", "reason": "layer_conflict" }, { "id": "g/y", "reason": "unknown" }] }
+            """)));
+
+        var ignored = bundle.Request.Assignment.Ignored;
+        Assert.Equal(new[] { ("f/x", "layer_conflict"), ("g/y", "unknown") }, ignored.Select(i => (i.Id, i.Reason)));
+        Assert.Contains("\"layer_conflict\"", ReplayBundleFile.Serialize(bundle));
     }
 
     [Fact]

@@ -2,23 +2,32 @@ using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Diagnostics;
+using StrataRec.Experiments.Assignment;
 using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Hosting;
 
 /// <summary>
-/// Request-level metric tags of one served plan (design 13.1): the pipeline, and pipeline × arm for every arm of the
-/// plan. Built once when the plan is loaded, so recording a request passes cached arrays.
+/// Request-level metric tags of one served plan (design 13.1): the pipeline, pipeline × arm for every arm of the plan,
+/// and pipeline × reason for ignored arms. Built once when the plan is loaded, so recording a request passes cached
+/// arrays.
 /// </summary>
 internal sealed class RequestTelemetry
 {
     /// <summary>Requests for a pipeline the engine does not serve: no pipeline tag (the id is caller input, unbounded).</summary>
-    public static readonly RequestTelemetry Unknown = new([], []);
+    public static readonly RequestTelemetry Unknown = new([], [], [], []);
 
-    private RequestTelemetry(KeyValuePair<string, object?>[] pipeline, KeyValuePair<string, object?>[][] arms)
+    private readonly KeyValuePair<string, object?>[] _ignoredUnknown;
+    private readonly KeyValuePair<string, object?>[] _ignoredConflict;
+
+    private RequestTelemetry(
+        KeyValuePair<string, object?>[] pipeline, KeyValuePair<string, object?>[][] arms, KeyValuePair<string, object?>[] ignoredUnknown,
+        KeyValuePair<string, object?>[] ignoredConflict)
     {
         Pipeline = pipeline;
         Arms = arms;
+        _ignoredUnknown = ignoredUnknown;
+        _ignoredConflict = ignoredConflict;
     }
 
     public KeyValuePair<string, object?>[] Pipeline { get; }
@@ -35,7 +44,19 @@ internal sealed class RequestTelemetry
             arms[i] = [pipeline, new(StrataRecTags.Arm, plan.Arms[i].Id)];
         }
 
-        return new RequestTelemetry([pipeline], arms);
+        return new RequestTelemetry([pipeline], arms, Ignored(pipeline, IgnoredArmReason.Unknown), Ignored(pipeline, IgnoredArmReason.LayerConflict));
+
+        static KeyValuePair<string, object?>[] Ignored(KeyValuePair<string, object?> pipeline, IgnoredArmReason reason) =>
+            [pipeline, new(StrataRecTags.Outcome, IgnoredArm.Name(reason))];
+    }
+
+    /// <summary>Counts the platform's arm ids a request ignored, by reason; nothing to do (and nothing recorded) when none were.</summary>
+    public void RecordIgnored(IgnoredArm[] ignored)
+    {
+        foreach (var arm in ignored)
+        {
+            StrataRecMetrics.RequestArmsIgnored.Add(1, arm.Reason == IgnoredArmReason.Unknown ? _ignoredUnknown : _ignoredConflict);
+        }
     }
 
     /// <summary>Records one request once for its pipeline and once per assigned arm.</summary>
@@ -155,12 +176,6 @@ internal static partial class PlanLoadTelemetry
         LogCompileFailed(logger, pipelineId, manifestId, diagnostics.ErrorCount, FirstError(diagnostics));
     }
 
-    public static void Rejected(ILogger logger, string pipelineId, string manifestId, DiagnosticBag diagnostics)
-    {
-        Count(pipelineId, "rejected");
-        LogRejected(logger, pipelineId, manifestId, diagnostics.ErrorCount, FirstError(diagnostics));
-    }
-
     public static void BindingsFailed(ILogger logger, string pipelineId, string manifestId, DiagnosticBag diagnostics)
     {
         Count(pipelineId, "bindings_failed");
@@ -196,10 +211,6 @@ internal static partial class PlanLoadTelemetry
     [LoggerMessage(EventId = 1002, Level = LogLevel.Error,
         Message = "Plan of pipeline '{PipelineId}' from manifest '{ManifestId}' failed to compile with {ErrorCount} error(s); the current plan stays. First: {FirstError}")]
     private static partial void LogCompileFailed(ILogger logger, string pipelineId, string manifestId, int errorCount, string? firstError);
-
-    [LoggerMessage(EventId = 1003, Level = LogLevel.Error,
-        Message = "Manifest '{ManifestId}' for pipeline '{PipelineId}' rejected with {ErrorCount} error(s); the current plan stays. First: {FirstError}")]
-    private static partial void LogRejected(ILogger logger, string pipelineId, string manifestId, int errorCount, string? firstError);
 
     [LoggerMessage(EventId = 1005, Level = LogLevel.Error,
         Message = "Plan of pipeline '{PipelineId}' from manifest '{ManifestId}' not applied: {ErrorCount} local table(s) or instance(s) it binds failed to load; the current plan stays. First: {FirstError}")]

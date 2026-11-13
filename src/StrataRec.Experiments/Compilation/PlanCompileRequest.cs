@@ -19,9 +19,6 @@ public sealed class PlanCompileRequest
     /// <summary>Experiments in the manifest with their layers. Empty compiles the plain baseline.</summary>
     public IReadOnlyList<ExperimentPlacement> Experiments { get; init; } = Array.Empty<ExperimentPlacement>();
 
-    /// <summary>Traffic layout; used to know which layers share a domain and can co-occur (design 11.1, 11.5).</summary>
-    public AssignmentSpec? Assignment { get; init; }
-
     /// <summary>Content id of the manifest, or a local label.</summary>
     public string ManifestId { get; init; } = "local";
 

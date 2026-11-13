@@ -2,6 +2,7 @@
   "pipeline_id": "home_feed",
   "request_id": "req-1001",
   "inputs": { "user_id": 1001, "session_id": "s-1", "surface": "home" },
+  "assignment": ["exp_mmr_diversity/mmr", "exp_freshness_calibration/calibrated", "exp_quality_weight/strong"],
   "deadline_ms": 200,
   "time_ms": 1767225600000
 }

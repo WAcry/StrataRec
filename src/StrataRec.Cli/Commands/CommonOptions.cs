@@ -12,13 +12,13 @@ internal static class CommonOptions
 {
     public static Option<string> Config() => new("--config", "-c")
     {
-        Description = "Configuration directory (policy.jsonc, catalog/, bindings/, pipelines/, experiments/, allocation/, tables/).",
+        Description = "Configuration directory (policy.jsonc, catalog/, bindings/, pipelines/, experiments/, releases/, tables/).",
         DefaultValueFactory = _ => "config",
     };
 
     public static Option<string> Environment() => new("--env", "-e")
     {
-        Description = "Environment: selects allocation/<pipeline>.<env>.jsonc and bindings/<env>.jsonc.",
+        Description = "Environment: selects releases/<pipeline>.<env>.jsonc and bindings/<env>.jsonc.",
         DefaultValueFactory = _ => "local",
     };
 
@@ -62,23 +62,7 @@ internal static class CommonOptions
 
         var compilation = PlanCompiler.Compile(request, PlanEnvironment(workspace));
         diagnostics.AddRange(compilation.Diagnostics);
-        ValidateAssignment(workspace, request, compilation, environment, diagnostics);
         return (workspace, request, compilation);
-    }
-
-    /// <summary>
-    /// Runs the same traffic-allocation checks serving runs at load (ranges, overlaps, units, unknown arms), so a
-    /// release that serving would reject never passes validate or build.
-    /// </summary>
-    public static void ValidateAssignment(ConfigWorkspace workspace, PlanCompileRequest request, PlanCompilation compilation, string environment, DiagnosticBag diagnostics)
-    {
-        if (compilation.Plan is not { } plan || request.Assignment is not { } assignment)
-        {
-            return;
-        }
-
-        var label = workspace.Allocations.TryGetValue(request.Pipeline.PipelineId + "/" + environment, out var allocation) ? allocation.Path : "allocation";
-        Experiments.Assignment.TrafficAssigner.Create(assignment, plan, workspace.ArmRanges(request.Pipeline.PipelineId, environment), diagnostics, label);
     }
 
     private static string? SinglePipeline(ConfigWorkspace workspace, DiagnosticBag diagnostics)

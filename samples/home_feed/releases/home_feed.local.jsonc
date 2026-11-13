@@ -1,0 +1,14 @@
+// The release for local runs (design 10.1): the catalog and bindings it uses, and the layer of each experiment in flight.
+// A request is in at most one arm per layer; which arms is the experiment platform's answer (a request file's
+// "assignment"), not part of the release.
+{
+  "pipeline_id": "home_feed",
+  "environment": "local",
+  "catalog": "home_feed",
+  "bindings": "local",
+  "experiments": {
+    "exp_mmr_diversity":         { "layer": "rerank" },
+    "exp_freshness_calibration": { "layer": "fusion" },
+    "exp_quality_weight":        { "layer": "params" }
+  }
+}

@@ -7,12 +7,12 @@ using StrataRec.Core.Values;
 namespace StrataRec.Core.Hashing;
 
 /// <summary>
-/// Stable, cross-platform hashing used by traffic assignment, log sampling and <c>hash01</c> (design 5.7, 8.4, 10.2).
+/// Stable, cross-platform hashing used by log sampling, request seeds and <c>hash01</c> (design 5.7, 8.4).
 /// </summary>
 /// <remarks>
 /// <para>
 /// The algorithm is XXH3-64 with seed 0 over a canonical byte encoding, so offline jobs in any language can
-/// recompute bucket assignments and sampling decisions. Every value is encoded as a one-byte tag followed by
+/// recompute sampling decisions and <c>hash01</c> values. Every value is encoded as a one-byte tag followed by
 /// its payload:
 /// </para>
 /// <list type="bullet">
@@ -77,7 +77,7 @@ public static class StableHash
 
     public static double Hash01(long a, long b, long c) => ToUnit(Hash(a, b, c));
 
-    /// <summary>Derives a 64-bit seed from a salt string, e.g. a layer salt <c>"home_feed/rerank/3"</c>.</summary>
+    /// <summary>Derives a 64-bit seed from a salt string, e.g. a request id or a funnel group key.</summary>
     public static long SeedFromSalt(string salt)
     {
         using var builder = new Builder();

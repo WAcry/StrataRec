@@ -137,7 +137,7 @@ internal sealed partial class UnifiedCompilation
 
     private void Check(int[] combination, TimelineSlot[] timeline, Dictionary<string, TimelineSlot> fallbacks, OutputPlan output, HashSet<string> seen, CombinationReport report)
     {
-        if (!seen.Add(string.Join(",", combination)) || !CoOccur(combination))
+        if (!seen.Add(string.Join(",", combination)))
         {
             return;
         }
@@ -200,7 +200,7 @@ internal sealed partial class UnifiedCompilation
     }
 
     /// <summary>
-    /// Checks every pair of arms that can be assigned together (different layers, same domain) for path conflicts,
+    /// Checks every pair of arms that can be assigned together (any two of different layers) for path conflicts,
     /// same-order placements (errors) and interactions (warnings for review), design 11.5.
     /// </summary>
     private void ValidatePairs()
@@ -223,7 +223,7 @@ internal sealed partial class UnifiedCompilation
         {
             foreach (var b in _arms)
             {
-                if (b.Index <= a.Index || !a.Valid || !b.Valid || a.LayerIndex == b.LayerIndex || !CoOccur(a, b))
+                if (b.Index <= a.Index || !a.Valid || !b.Valid || a.LayerIndex == b.LayerIndex)
                 {
                     continue;
                 }
@@ -361,29 +361,6 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    private bool CoOccur(ArmPatch a, ArmPatch b) => a.Domain is null || b.Domain is null || a.Domain == b.Domain;
-
-    private static bool CoOccur(List<ArmPatch> arms)
-    {
-        string? domain = null;
-        foreach (var arm in arms)
-        {
-            if (arm.Domain is not { } d)
-            {
-                continue;
-            }
-
-            if (domain is not null && domain != d)
-            {
-                return false;
-            }
-
-            domain = d;
-        }
-
-        return true;
-    }
-
     /// <summary>
     /// Compiles the bare baseline on its own when arms add schema entries or parameter leaves (design 11.6): the
     /// unified schema contains every addition, so without this an addition could make an invalid baseline resolve,
@@ -408,27 +385,6 @@ internal sealed partial class UnifiedCompilation
         {
             Report(d, Array.Empty<ArmPatch>());
         }
-    }
-
-    private bool CoOccur(int[] combination)
-    {
-        string? domain = null;
-        foreach (var arm in combination)
-        {
-            if (arm < 0 || _arms[arm].Domain is not { } d)
-            {
-                continue;
-            }
-
-            if (domain is not null && domain != d)
-            {
-                return false;
-            }
-
-            domain = d;
-        }
-
-        return true;
     }
 
     private int[] NewCombination()

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -25,11 +26,12 @@ public sealed class ReplayBundle
     /// <remarks>
     /// Version 2 keeps non-finite values (version 1 wrote them as null) and digests model inputs with their element type
     /// and shape. Version 3 records a thrown exception type as an identity (name, defining assembly, type arguments);
-    /// version 2 had its full name only.
+    /// version 2 had its full name only. Version 4 records which of the platform's arm ids the request ignored and why;
+    /// version 3 had their count only, and a <c>builtin</c> assignment source that no longer exists.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/3";
+    public const string CurrentFormat = "stratarec.replay_bundle/4";
 
-    [Description("Format and version: \"stratarec.replay_bundle/3\".")]
+    [Description("Format and version: \"stratarec.replay_bundle/4\".")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -78,14 +80,25 @@ public sealed class ReplayTypedValue
 /// <summary>How the request's arms were chosen.</summary>
 public sealed class ReplayAssignmentRecord
 {
-    [Description("forced (debug force_arms), external (the caller's assignment), provider, builtin or none.")]
+    [Description("forced (debug force_arms), external (the platform's answer the caller passed), provider (the engine asked the platform) or none (the baseline).")]
     public required string Source { get; init; }
 
     [Description("Assigned arms as experiment/arm.")]
     public List<string> Arms { get; init; } = new();
 
-    [Description("External arm ids that were not in the plan and were ignored.")]
-    public int UnknownArms { get; init; }
+    [Description("Arm ids from the platform the request did not run with, and why, sorted by id.")]
+    public List<ReplayIgnoredArm> Ignored { get; init; } = new();
+}
+
+/// <summary>An arm id from the platform that the request ignored.</summary>
+public sealed class ReplayIgnoredArm
+{
+    [Description("The id as the platform sent it (experiment/arm).")]
+    public required string Id { get; init; }
+
+    [Description("unknown (the served plan has no such arm) or layer_conflict (another arm of its layer came too, so that layer ran its baseline).")]
+    [AllowedValues("unknown", "layer_conflict")]
+    public required string Reason { get; init; }
 }
 
 /// <summary>The configuration the request ran on.</summary>

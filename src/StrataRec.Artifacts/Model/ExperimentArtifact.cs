@@ -3,8 +3,8 @@ using System.Text.Json.Nodes;
 namespace StrataRec.Artifacts.Model;
 
 /// <summary>
-/// One experiment: a merge patch per arm against the patchable view (design 9.4, 11.3). Traffic allocation lives
-/// elsewhere, so ramping never changes this artifact's hash.
+/// One experiment: a merge patch per arm against the patchable view (design 9.4, 11.3). Traffic allocation is the
+/// experimentation platform's, so ramping never changes this artifact's hash.
 /// </summary>
 public sealed class ExperimentArtifact
 {

@@ -104,7 +104,6 @@ internal sealed partial class UnifiedCompilation
     private readonly string _pipelineLabel;
 
     private readonly List<string> _layers = new();
-    private readonly List<string?> _layerDomains = new();
     private readonly List<(string Id, int Layer, int[] Arms)> _experiments = new();
     private readonly List<ArmPatch> _arms = new();
     private readonly SortedDictionary<string, NodeVariants> _variants = new(StringComparer.Ordinal);
@@ -136,7 +135,6 @@ internal sealed partial class UnifiedCompilation
         Bindings = r.Bindings,
         Tables = r.Tables,
         Policy = r.Policy,
-        Assignment = r.Assignment,
         ManifestId = r.ManifestId,
         ValidateArmsIndependently = false,
         MaxCombinationsPerNode = r.MaxCombinationsPerNode,
@@ -267,7 +265,6 @@ internal sealed partial class UnifiedCompilation
             {
                 layer = _layers.Count;
                 _layers.Add(placement.Layer);
-                _layerDomains.Add(_request.Assignment is { } a && a.Layers.TryGetValue(placement.Layer, out var spec) ? spec.Domain : null);
             }
 
             var experimentIndex = _experiments.Count;
@@ -285,7 +282,6 @@ internal sealed partial class UnifiedCompilation
                     ExperimentIndex = experimentIndex,
                     ExperimentId = e.ExperimentId,
                     LayerIndex = layer,
-                    Domain = _layerDomains[layer],
                     Patch = e.Arms[name],
                     Artifact = artifact,
                     PointerPrefix = "/arms/" + JsonPointer.Escape(name),
@@ -680,11 +676,6 @@ internal sealed partial class UnifiedCompilation
         for (var c = 0; c < space.Count; c++)
         {
             var armsInCombination = ArmPatches(variants.ArmsOf(c));
-            if (!CoOccur(armsInCombination))
-            {
-                continue; // arms in different traffic domains are never assigned together
-            }
-
             var definition = Merge(baseline, armsInCombination, "nodes", nodeId);
             if (definition is null)
             {
@@ -774,11 +765,6 @@ internal sealed partial class UnifiedCompilation
             for (var c = 0; c < space.Count; c++)
             {
                 var armsInCombination = ArmPatches(variants.ArmsOf(c));
-                if (!CoOccur(armsInCombination))
-                {
-                    continue;
-                }
-
                 var definition = Merge(baseline, armsInCombination, "log_taps", tapId);
                 if (definition is null)
                 {
@@ -1198,7 +1184,7 @@ internal sealed partial class UnifiedCompilation
         var layers = new LayerInfo[_layers.Count];
         for (var i = 0; i < layers.Length; i++)
         {
-            layers[i] = new LayerInfo(i, _layers[i], _layerDomains[i]);
+            layers[i] = new LayerInfo(i, _layers[i]);
         }
 
         return layers;

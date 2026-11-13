@@ -20,7 +20,6 @@ public sealed class ReviewRegressionTests
         Tables = r.Tables,
         Policy = r.Policy,
         Experiments = r.Experiments.Concat(extra).ToList(),
-        Assignment = r.Assignment,
         ManifestId = r.ManifestId,
         MaxCombinationsChecked = maxCombinations ?? r.MaxCombinationsChecked,
     };
@@ -112,42 +111,24 @@ public sealed class ReviewRegressionTests
     }
 
     [Fact]
-    public void ImpossibleCrossDomainCombinationsAreNotCompiled()
+    public void ArmsOfDifferentLayersAreValidatedTogetherAndArmsOfOneLayerNever()
     {
-        // Finding 6: rerank deletes diversity_cap, a layer in another domain edits one of its fields.
-        var edit = new ExperimentPlacement(Experiment("""
+        // Finding 6, without traffic domains: rerank deletes diversity_cap and another experiment edits one of its fields.
+        // In its own layer the two arms may be assigned together, which is a conflict; experiments the platform keeps
+        // exclusive share a layer, whose arms are never assigned together and so are not checked together.
+        ExperimentPlacement Edit(string layer) => new(Experiment("""
             { "experiment_id": "exp_window", "pipeline_id": "home_feed", "owner": "t", "description": "d", "expires_at": "2099-01-01",
               "arms": { "control": {}, "w": { "nodes": { "diversity_cap": { "config": { "window": 4 } } } } } }
-            """), "window");
+            """), layer);
         var host = HomeFeedTestHost.Load();
 
-        var sameDomain = PlanCompiler.Compile(With(host.Request, new[] { edit }), host.Environment);
-        Assert.Contains(sameDomain.Diagnostics, d => d.Code == "PATCH_CONFLICT");
+        var ownLayer = PlanCompiler.Compile(With(host.Request, new[] { Edit("window") }), host.Environment);
+        Assert.Contains(ownLayer.Diagnostics, d => d.Code == "PATCH_CONFLICT");
 
-        var assignment = new AssignmentSpec
-        {
-            Buckets = 100,
-            DomainSplit = new DomainSplitSpec { Salt = "d", Unit = new() { "ctx.request.session_id" } },
-            Domains = new() { ["a"] = new DomainSpec { Buckets = new[] { 0, 49 } }, ["b"] = new DomainSpec { Buckets = new[] { 50, 99 } } },
-            Layers = new()
-            {
-                ["rerank"] = new LayerSpec { Domain = "a", Salt = "r", Unit = new() { "ctx.request.session_id" } },
-                ["fusion"] = new LayerSpec { Domain = "a", Salt = "f", Unit = new() { "ctx.request.session_id" } },
-                ["params"] = new LayerSpec { Domain = "a", Salt = "p", Unit = new() { "ctx.request.session_id" } },
-                ["window"] = new LayerSpec { Domain = "b", Salt = "w", Unit = new() { "ctx.request.session_id" } },
-            },
-        };
-        var split = With(host.Request, new[] { edit });
-        split = new PlanCompileRequest
-        {
-            Pipeline = split.Pipeline, Catalog = split.Catalog, Bindings = split.Bindings, Tables = split.Tables,
-            Experiments = split.Experiments, Assignment = assignment,
-        };
+        var sharedLayer = PlanCompiler.Compile(With(host.Request, new[] { Edit("rerank") }), host.Environment);
 
-        var compilation = PlanCompiler.Compile(split, host.Environment);
-
-        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
-        var plan = compilation.Plan!;
+        Assert.True(sharedLayer.Succeeded, string.Join("\n", sharedLayer.Diagnostics));
+        var plan = sharedLayer.Plan!;
         Assert.Throws<ArgumentException>(() => plan.ArmsFromIds(new[] { "exp_mmr_diversity/mmr", "exp_window/w" }));
         Assert.NotNull(plan.Timeline.Single(s => s.NodeId == "diversity_cap").Select(plan.ArmsFromIds(new[] { "exp_window/w" })));
     }
