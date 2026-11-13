@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Types;
@@ -110,6 +111,109 @@ public class FetchChunkTests
         Assert.Equal(2, hook.Recorded.Count);
         Assert.All(hook.Recorded, call => Assert.Equal(IoOutcome.Cancelled, call.Outcome));
         release.SetResult();
+        await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience);
+    }
+
+    [Fact]
+    public async Task TheWaitsEndAtTheBudget_WhileAConnectorCancellationCallbackBlocks()
+    {
+        // Both chunks answer later. The second registers a cancellation callback that blocks until the test releases it.
+        // Cancelling the shared source runs its callbacks one after another, so a wait that hung on that source would stay
+        // behind the blocked callback; the waits have a bound of their own and both chunks time out at the budget.
+        using var callbackEntered = new ManualResetEventSlim();
+        using var releaseCallback = new ManualResetEventSlim();
+        using var callbackReturned = new ManualResetEventSlim();
+        var answers = new[]
+        {
+            new TaskCompletionSource<FetchStatus>(TaskCreationOptions.RunContinuationsAsynchronously),
+            new TaskCompletionSource<FetchStatus>(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
+        var connector = new ScriptedConnector((keys, _, _, token) =>
+        {
+            var key = keys.CandidateKeys.Span[0].Int64Value;
+            if (key == 2)
+            {
+                token.Register(() =>
+                {
+                    callbackEntered.Set();
+                    releaseCallback.Wait(Patience * 2); // outlasts the test's own cap, which must fail first
+                    callbackReturned.Set();
+                });
+            }
+
+            return new ValueTask<FetchStatus>(answers[key - 1].Task);
+        });
+        var rig = new FeatureTestRig().Source("item_store", connector, timeoutMs: 100, maxBatch: 1);
+        var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+        var hook = new FeatureCallHookTests.ListHook();
+        var pool = new PoisoningPool();
+        var request = rig.NewRequest(new long[] { 1, 2 }, pool: pool, deadlineMs: 600_000, hook: hook);
+
+        try
+        {
+            var ensure = request.EnsureAsync(score).AsTask();
+            Assert.True(callbackEntered.Wait(Patience)); // the budget ran out and the callback blocks
+            var result = await ensure.WaitAsync(Patience);
+            Assert.False(callbackReturned.IsSet); // the callback still blocks
+
+            Assert.True(result.Failed);
+            Assert.Contains("timed out after 100 ms", result.Error);
+            Assert.Equal(2, hook.Recorded.Count);
+            Assert.All(hook.Recorded, call => Assert.Equal(IoOutcome.Timeout, call.Outcome));
+
+            Assert.Equal(2, request.Memory.Release()); // both connectors still run: one hold each
+            Assert.Equal(0, pool.Returned);
+        }
+        finally
+        {
+            releaseCallback.Set();
+        }
+
+        Assert.True(callbackReturned.Wait(Patience));
+        answers[0].SetResult(FetchStatus.Ok);
+        answers[1].SetResult(FetchStatus.Ok);
+        await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience);
+        Assert.True(SpinWait.SpinUntil(() => request.Memory.IsReturned, Patience));
+    }
+
+    [Fact]
+    public async Task AChunkSentAfterTheBudgetRanOut_GetsNoFreshBudget()
+    {
+        // The first chunk answers synchronously, but only once the fetch's budget has run out; the second never answers.
+        // The budget is the fetch's, counted from its start, so the second chunk's wait times out at once.
+        var never = new TaskCompletionSource<FetchStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var connector = new ScriptedConnector((keys, fields, writer, _) =>
+        {
+            if (keys.CandidateKeys.Span[0].Int64Value == 2)
+            {
+                return new ValueTask<FetchStatus>(never.Task);
+            }
+
+            var clock = Stopwatch.StartNew();
+            while (clock.ElapsedMilliseconds < 150)
+            {
+                Thread.Sleep(10);
+            }
+
+            ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 2.0);
+            return ValueTask.FromResult(FetchStatus.Ok);
+        });
+        var rig = new FeatureTestRig().Source("item_store", connector, timeoutMs: 100, maxBatch: 1);
+        var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+        var hook = new FeatureCallHookTests.ListHook();
+        var request = rig.NewRequest(new long[] { 1, 2 }, deadlineMs: 600_000, hook: hook);
+
+        var ensure = request.EnsureAsync(score);
+
+        Assert.True(ensure.IsCompleted); // no wait at all, rather than another 100 ms
+        var result = await ensure;
+        Assert.Equal(FeatureState.Degraded, result.State); // one chunk of two answered
+        var calls = hook.Recorded.OrderBy(c => c.Keys[0]).ToArray();
+        Assert.Equal(new[] { IoOutcome.Ok, IoOutcome.Timeout }, calls.Select(c => c.Outcome));
+        Assert.Contains("timed out after 100 ms", calls[1].Status.Error);
+        never.SetResult(FetchStatus.Ok);
         await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience);
     }
 
