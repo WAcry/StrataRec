@@ -6,7 +6,8 @@ namespace StrataRec.Artifacts.Model;
 
 /// <summary>
 /// Strict (de)serialization of artifact models: snake_case names, comments and trailing commas allowed (JSONC),
-/// unknown properties rejected so that typos surface as errors instead of being ignored.
+/// unknown properties rejected so that typos surface as errors instead of being ignored. A member an earlier format
+/// had is rejected with what replaced it (<see cref="RetiredMembers"/>).
 /// </summary>
 public static class ArtifactSerializer
 {
@@ -21,7 +22,7 @@ public static class ArtifactSerializer
         }
         catch (JsonException ex)
         {
-            throw new ArtifactFormatException(sourceName, ex.Path ?? "$", ex.Message, ex);
+            throw RetiredMembers.Find(typeof(T), node, sourceName) ?? new ArtifactFormatException(sourceName, ex.Path ?? "$", ex.Message, ex);
         }
     }
 
@@ -34,7 +35,7 @@ public static class ArtifactSerializer
         }
         catch (JsonException ex)
         {
-            throw new ArtifactFormatException(sourceName, ex.Path ?? "$", ex.Message, ex);
+            throw RetiredMembers.Find(typeof(T), json, sourceName) ?? new ArtifactFormatException(sourceName, ex.Path ?? "$", ex.Message, ex);
         }
     }
 
@@ -118,14 +119,22 @@ public static class ArtifactSerializer
 /// <summary>An artifact that does not match its schema.</summary>
 public sealed class ArtifactFormatException : Exception
 {
-    public ArtifactFormatException(string? source, string path, string message, Exception? inner = null)
+    public ArtifactFormatException(string? source, string path, string message, Exception? inner = null, string? hint = null)
         : base($"{source ?? "<artifact>"}: {path}: {message}", inner)
     {
         ArtifactSource = source;
         JsonPath = path;
+        Reason = message;
+        Hint = hint;
     }
 
     public string? ArtifactSource { get; }
+
+    /// <summary>What is wrong, without the source and path that <see cref="Exception.Message"/> starts with.</summary>
+    public string Reason { get; }
+
+    /// <summary>How to fix it, when the reader knows better than "see the schema".</summary>
+    public string? Hint { get; }
 
     /// <summary>Location of the problem as a JSONPath-like string from System.Text.Json.</summary>
     public string JsonPath { get; }

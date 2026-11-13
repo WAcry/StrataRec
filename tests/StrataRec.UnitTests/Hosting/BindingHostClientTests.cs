@@ -378,6 +378,10 @@ public sealed class BindingHostClientTests
 
             Assert.Equal(SignatureStatus.Failed, lookup.Status); // the client has not returned: its answer is not waited for
             Assert.Contains("within 50 ms", lookup.Error, StringComparison.Ordinal);
+
+            // The bound may end the wait before the pool even started the client's method (review 17): what follows needs
+            // the client inside it, so wait for that instead of assuming the pool started it within the 50 ms.
+            await server.Entered.Task.WaitAsync(Wait);
             Assert.True(server.Inside);
             lease.Dispose(); // the plan is rejected
             await Task.Delay(50);

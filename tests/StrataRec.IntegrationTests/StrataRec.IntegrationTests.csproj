@@ -35,4 +35,11 @@
     <None Include="..\..\samples\**\*" LinkBase="samples" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- The copy above only adds and updates files: a sample file deleted or renamed in the repository would stay in the
+       output of an existing checkout and still be read by the tests (a workspace with a leftover allocation/ directory
+       fails to load). So every build copies the samples afresh. -->
+  <Target Name="RemoveStaleSampleCopy" BeforeTargets="_CopyOutOfDateSourceItemsToOutputDirectory">
+    <RemoveDir Directories="$(OutDir)samples" />
+  </Target>
+
 </Project>

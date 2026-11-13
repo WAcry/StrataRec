@@ -63,7 +63,7 @@ public sealed class RequestAllocationTests
     {
         var host = HomeFeedTestHost.LoadModified(root => Scale(root, 250));
         var engine = new RecEngine(host.Environment);
-        Assert.True(engine.Load(host.Request, host.Workspace.ArmRanges("home_feed", "local")).Applied);
+        Assert.True(engine.Load(host.Request).Applied);
         var request = new RecRequest
         {
             PipelineId = "home_feed",

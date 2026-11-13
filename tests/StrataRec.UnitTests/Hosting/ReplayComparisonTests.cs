@@ -1,6 +1,7 @@
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Values;
+using StrataRec.Experiments.Assignment;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Replay;
 using StrataRec.Pipeline.Execution;
@@ -61,7 +62,7 @@ public sealed class ReplayComparisonTests
             Succeeded = succeeded,
             Error = succeeded ? null : "node failed",
             Items = items,
-            Experiments = new ExperimentRecord(Array.Empty<string>(), Array.Empty<string>(), 0),
+            Experiments = new ExperimentRecord(Array.Empty<string>(), Array.Empty<string>(), Array.Empty<IgnoredArm>()),
             ManifestId = "m",
             ServedBy = "p",
         };

@@ -32,6 +32,7 @@ public static class StrataRecMetrics
         public const string ArmRequestErrors = "stratarec.arm.request.errors";
         public const string ArmRequestEmpty = "stratarec.arm.request.empty";
         public const string ArmRequestDegraded = "stratarec.arm.request.degraded";
+        public const string RequestArmsIgnored = "stratarec.request.arms.ignored";
         public const string RequestMemoryRented = "stratarec.request.memory.rented";
         public const string AbandonedIo = "stratarec.io.abandoned";
         public const string NodeDuration = "stratarec.node.duration";
@@ -111,6 +112,14 @@ public static class StrataRecMetrics
 
     /// <summary><see cref="RequestDegraded"/> per assigned arm. Tags: <c>stratarec.pipeline</c>, <c>stratarec.arm</c>.</summary>
     public static readonly Counter<long> ArmRequestDegraded = Meter.CreateCounter<long>(Names.ArmRequestDegraded, "{request}", "Degraded results per assigned experiment arm.");
+
+    /// <summary>
+    /// Arm ids from the experimentation platform that a request did not run with (design 11.1): the platform and the
+    /// served release disagree, so its view of exposure is off by these. Not tagged by arm: an unknown id is platform
+    /// input, unbounded. Tags: <c>stratarec.pipeline</c>, <c>stratarec.outcome</c> = <c>unknown</c> (the served plan has
+    /// no such arm) | <c>layer_conflict</c> (two arms of one layer came, and that layer ran its baseline).
+    /// </summary>
+    public static readonly Counter<long> RequestArmsIgnored = Meter.CreateCounter<long>(Names.RequestArmsIgnored, "{arm}", "Arm ids from the experiment platform that requests ignored, by reason.");
 
     // Memory: recorded once per pipeline execution.
 
@@ -270,7 +279,7 @@ public static class StrataRecMetrics
 
     /// <summary>
     /// Plan loads (design 10.3). Tags: <c>stratarec.pipeline</c>, <c>stratarec.outcome</c> = <c>applied</c> |
-    /// <c>compile_failed</c> | <c>rejected</c> | <c>bindings_failed</c> (a local table it reads, or a client or connector it uses, failed its first load) |
+    /// <c>compile_failed</c> | <c>bindings_failed</c> (a local table it reads, or a client or connector it uses, failed its first load) |
     /// <c>stale</c>.
     /// </summary>
     public static readonly Counter<long> PlanLoads = Meter.CreateCounter<long>(Names.PlanLoads, "{load}", "Plan loads by outcome.");

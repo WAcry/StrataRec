@@ -34,8 +34,8 @@ samples/home_feed/
   bindings/local.jsonc              各环境的连接器、模型和召回源
   pipelines/home_feed.jsonc         参数、列、节点、漏斗组、探针、输出
   experiments/*.jsonc               每个实验一个文件，每个臂是一个合并补丁
-  allocation/home_feed.local.jsonc  桶、域和层（流量分配）
-  fixtures/、requests/              本地运行用的内存数据和示例请求
+  releases/home_feed.local.jsonc    发布的组成：目录、绑定和每个实验所在的层（流量分配归实验平台）
+  fixtures/、requests/              本地运行用的内存数据和示例请求（请求的 assignment 即平台给出的臂）
 ```
 
 ## 基准

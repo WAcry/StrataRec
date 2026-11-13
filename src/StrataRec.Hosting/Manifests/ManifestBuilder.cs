@@ -59,7 +59,6 @@ public static class ManifestBuilder
         }
 
         var experiments = new Dictionary<string, ManifestExperiment>(StringComparer.Ordinal);
-        var ranges = workspace.ArmRanges(pipelineId, environment);
         foreach (var placement in request.Experiments)
         {
             var id = placement.Experiment.ExperimentId;
@@ -67,7 +66,6 @@ public static class ManifestBuilder
             {
                 Artifact = await store.PutAsync(workspace.Experiments[id].Document, cancellationToken).ConfigureAwait(false),
                 Layer = placement.Layer,
-                Arms = ranges.TryGetValue(id, out var arms) ? new Dictionary<string, int[]>(arms) : null,
             };
         }
 
@@ -87,7 +85,6 @@ public static class ManifestBuilder
                 Tables = tables,
                 Policy = policy,
             },
-            Assignment = request.Assignment ?? new AssignmentSpec(),
             Experiments = experiments,
         };
     }
@@ -182,25 +179,9 @@ public static class ManifestBuilder
             Tables = tables,
             Policy = policy,
             Experiments = placements,
-            Assignment = manifest.Assignment,
             ManifestId = manifestId,
             ArtifactIds = artifactIds,
         };
-    }
-
-    /// <summary>Arm bucket ranges from a manifest: experiment → arm → [first, last].</summary>
-    public static Dictionary<string, IReadOnlyDictionary<string, int[]>> ArmRanges(ReleaseManifest manifest)
-    {
-        var ranges = new Dictionary<string, IReadOnlyDictionary<string, int[]>>(StringComparer.Ordinal);
-        foreach (var (id, entry) in manifest.Experiments)
-        {
-            if (entry.Arms is not null)
-            {
-                ranges[id] = entry.Arms;
-            }
-        }
-
-        return ranges;
     }
 
     /// <summary>Operators, connectors and clients named by the configuration (design 10.4).</summary>

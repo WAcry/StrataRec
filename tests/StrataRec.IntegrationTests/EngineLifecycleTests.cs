@@ -25,7 +25,7 @@ public sealed class EngineLifecycleTests
         var root = Workspace();
         using var host = new BindingHost();
         var engine = new RecEngine(Environment(root, sources), bindings: host);
-        var loading = engine.LoadAsync(Compile(root), ArmRanges(root));
+        var loading = engine.LoadAsync(Compile(root));
         var source = await sources.Next().WaitAsync(Wait); // the load waits for the first load of the table
 
         await engine.DisposeAsync().AsTask().WaitAsync(Wait);
@@ -35,13 +35,13 @@ public sealed class EngineLifecycleTests
         Assert.False(engine.TryGetPipeline("home_feed", out _));
         Assert.Equal(0, host.TableCount);
         await engine.DisposeAsync(); // once is enough
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.LoadAsync(Compile(root), ArmRanges(root)));
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.LoadAsync(Compile(root)));
         Assert.Equal(0, host.TableCount);
 
         // The host was passed in: the disposal left it running for its other engines.
         sources.Open();
         await using var other = new RecEngine(Environment(root, sources), bindings: host);
-        Assert.True((await other.LoadAsync(Compile(root), ArmRanges(root))).Applied);
+        Assert.True((await other.LoadAsync(Compile(root))).Applied);
         Assert.True((await other.ExecuteAsync(MetricsTests.Request("req-other"))).Succeeded);
     }
 
@@ -55,7 +55,7 @@ public sealed class EngineLifecycleTests
         var engine = new RecEngine(Environment(root, sources), bindings: host);
         engine.Publishing = () => engine.Dispose(); // the tables are loaded; the publish lock is next
 
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.LoadAsync(Compile(root), ArmRanges(root)));
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.LoadAsync(Compile(root)));
 
         Assert.False(engine.TryGetPipeline("home_feed", out _));
         Assert.Equal(0, host.TableCount);
@@ -71,8 +71,8 @@ public sealed class EngineLifecycleTests
         using var host = new BindingHost();
         var first = new RecEngine(Environment(root, sources), bindings: host);
         var second = new RecEngine(Environment(root, sources), bindings: host);
-        Assert.True((await first.LoadAsync(Compile(root), ArmRanges(root))).Applied);
-        Assert.True((await second.LoadAsync(Compile(root), ArmRanges(root))).Applied);
+        Assert.True((await first.LoadAsync(Compile(root))).Applied);
+        Assert.True((await second.LoadAsync(Compile(root))).Applied);
         var source = await sources.Next();
         Assert.Equal(1, host.TableCount); // one table, held by both
 
@@ -98,18 +98,18 @@ public sealed class EngineLifecycleTests
         var root = Workspace();
         using var host = new BindingHost();
         await using var engine = new RecEngine(Environment(root, sources), bindings: host);
-        Assert.True((await engine.LoadAsync(Compile(root), ArmRanges(root), sequence: 1)).Applied);
+        Assert.True((await engine.LoadAsync(Compile(root), sequence: 1)).Applied);
         var source = await sources.Next();
 
         // Another configuration that shares the (ready) table, so nothing has to be waited for.
         ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"coarse_k\": 30,", "\"coarse_k\": 25,");
         using var before = new CancellationTokenSource();
         before.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.LoadAsync(Compile(root), ArmRanges(root), sequence: 2, before.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.LoadAsync(Compile(root), sequence: 2, before.Token));
 
         using var late = new CancellationTokenSource();
         engine.Publishing = late.Cancel; // after compiling and waiting, right before the publish lock
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.LoadAsync(Compile(root), ArmRanges(root), sequence: 3, late.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.LoadAsync(Compile(root), sequence: 3, late.Token));
         engine.Publishing = null;
 
         Assert.True(engine.TryGetPipeline("home_feed", out var served));
@@ -117,7 +117,7 @@ public sealed class EngineLifecycleTests
         Assert.False(source.Token.IsCancellationRequested); // the served plan still holds the table: its source runs on
         Assert.Equal(1, host.TableCount);
         Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-after-cancel"))).Succeeded);
-        Assert.True((await engine.LoadAsync(Compile(root), ArmRanges(root), sequence: 4)).Applied);
+        Assert.True((await engine.LoadAsync(Compile(root), sequence: 4)).Applied);
     }
 
     [Fact]
@@ -132,10 +132,10 @@ public sealed class EngineLifecycleTests
         using var before = new CancellationTokenSource();
         before.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.LoadAsync(Compile(root), ArmRanges(root), cancellationToken: before.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.LoadAsync(Compile(root), cancellationToken: before.Token));
         using var late = new CancellationTokenSource();
         engine.Publishing = late.Cancel;
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.LoadAsync(Compile(root), ArmRanges(root), cancellationToken: late.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.LoadAsync(Compile(root), cancellationToken: late.Token));
 
         Assert.False(engine.TryGetPipeline("home_feed", out _));
         Assert.Equal(0, engine.Bindings.TableCount);
@@ -162,14 +162,14 @@ public sealed class EngineLifecycleTests
         var root = Workspace();
         var host = new BindingHost(new BindingHostOptions { ShutdownTimeout = TimeSpan.FromMilliseconds(50) });
         var engine = new RecEngine(Environment(root, sources), bindings: host);
-        Assert.True((await engine.LoadAsync(Compile(root), ArmRanges(root))).Applied);
+        Assert.True((await engine.LoadAsync(Compile(root))).Applied);
 
         try
         {
             // A changed binding: a new table, and the replaced plan's table is released by the swap. Loaded off the test
             // thread, so a swap that blocks fails the test instead of hanging it.
             ReplayTests.Edit(root, "bindings/local.jsonc", "\"max_bytes\":\"16MiB\"", "\"max_bytes\":\"32MiB\"");
-            var swap = await Task.Run(() => engine.LoadAsync(Compile(root), ArmRanges(root))).WaitAsync(Wait);
+            var swap = await Task.Run(() => engine.LoadAsync(Compile(root))).WaitAsync(Wait);
 
             Assert.True(swap.Applied);
             await entered.Task.WaitAsync(Wait);
@@ -205,9 +205,6 @@ public sealed class EngineLifecycleTests
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
         return request!;
     }
-
-    private static IReadOnlyDictionary<string, IReadOnlyDictionary<string, int[]>> ArmRanges(string root) =>
-        ConfigWorkspace.Load(root, new DiagnosticBag()).ArmRanges("home_feed", "local");
 
     /// <summary>
     /// Update sources the test drives: each run is announced (<see cref="Next"/>), loads author 100 once the gate is

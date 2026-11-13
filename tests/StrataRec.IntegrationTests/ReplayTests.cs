@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Values;
+using StrataRec.Experiments.Assignment;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Replay;
 using StrataRec.Logging;
@@ -98,29 +99,53 @@ public sealed class ReplayTests
     }
 
     [Fact]
-    public async Task ExternalAssignment_UnknownArms_AreReplayedAsRecorded()
+    public async Task ExternalAssignment_IgnoredArms_AreRecordedWithTheirReasons_AndReplayedAsRecorded()
     {
         var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
         var recorded = await engine.ExecuteAsync(new RecRequest
         {
             PipelineId = "home_feed",
-            RequestId = "req-unknown-arms",
+            RequestId = "req-ignored-arms",
             Inputs = HomeFeedTestHost.Inputs(1001, "home"),
-            Assignment = new[] { "exp_quality_weight/strong", "not_real/unknown" },
+            Assignment = new[] { "exp_quality_weight/strong", "not_real/unknown", "exp_mmr_diversity/mmr", "exp_mmr_diversity/control" },
             Deadline = HomeFeedTestHost.Deadline,
             TimeMs = 1_767_225_600_000,
             Debug = new DebugOptions { Record = true },
         });
-        Assert.Equal(1, recorded.Experiments.UnknownArms);
-        Assert.Equal(1, recorded.Recording!.Request.Assignment.UnknownArms);
+        (string, string)[] ignored = { ("exp_mmr_diversity/control", "layer_conflict"), ("exp_mmr_diversity/mmr", "layer_conflict"), ("not_real/unknown", "unknown") };
+        Assert.Equal(new[] { "exp_quality_weight/strong" }, recorded.Experiments.Assigned); // the conflicting layer ran its baseline
+        Assert.Equal(ignored, recorded.Experiments.Ignored.Select(i => (i.Id, IgnoredArm.Name(i.Reason))));
+        Assert.Equal(ignored, recorded.Recording!.Request.Assignment.Ignored.Select(i => (i.Id, i.Reason)));
 
         var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording)));
         var withArms = await engine.ReplayAsync(recorded.Recording, new ReplayOptions { Arms = new[] { "exp_quality_weight/strong" } });
 
         Assert.True(outcome.Report.Diff.Identical, Describe(outcome.Report));
         Assert.Equal(recorded.Experiments.Assigned, outcome.Result.Experiments.Assigned);
-        Assert.Equal(1, outcome.Result.Experiments.UnknownArms);
-        Assert.Equal(0, withArms.Result.Experiments.UnknownArms); // arms given to the replay replace the external assignment
+        Assert.Equal(recorded.Experiments.Ignored, outcome.Result.Experiments.Ignored);
+        Assert.Empty(withArms.Result.Experiments.Ignored); // arms given to the replay replace the external assignment
+    }
+
+    [Fact]
+    public async Task ABundleWithAnIgnoredArmReasonThisBuildDoesNotKnow_IsRejectedAtTheReason()
+    {
+        var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
+        var recorded = await engine.ExecuteAsync(new RecRequest
+        {
+            PipelineId = "home_feed",
+            RequestId = "req-bad-reason",
+            Inputs = HomeFeedTestHost.Inputs(1001, "home"),
+            Assignment = new[] { "not_real/unknown" },
+            Deadline = HomeFeedTestHost.Deadline,
+            Debug = new DebugOptions { Record = true },
+        });
+        var json = JsonNode.Parse(ReplayBundleFile.Serialize(recorded.Recording!))!;
+        json["request"]!["assignment"]!["ignored"]![0]!["reason"] = "first_wins";
+
+        var error = await Assert.ThrowsAsync<ReplayBundleException>(async () => await engine.ReplayAsync(ReplayBundleFile.Parse(json.ToJsonString())));
+
+        Assert.Equal("/request/assignment/ignored/0/reason", error.Pointer);
+        Assert.Contains("layer_conflict", error.Hint);
     }
 
     [Fact]

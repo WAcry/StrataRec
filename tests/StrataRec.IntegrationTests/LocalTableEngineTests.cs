@@ -65,7 +65,7 @@ public sealed class LocalTableEngineTests
         var host = HomeFeedTestHost.LoadModified(root => BreakLine(root, Snapshot, 3));
         await using var engine = new RecEngine(host.Environment);
 
-        var load = await engine.LoadAsync(host.Request, host.Workspace.ArmRanges("home_feed", "local"));
+        var load = await engine.LoadAsync(host.Request);
 
         Assert.False(load.Applied);
         Assert.False(engine.TryGetPipeline("home_feed", out _));
@@ -89,7 +89,7 @@ public sealed class LocalTableEngineTests
         CopySnapshot(host.Root, Snapshot, "fixtures/author_snapshot_v2");
         BreakLine(host.Root, "fixtures/author_snapshot_v2", 3);
         ReplayTests.Edit(host.Root, "bindings/local.jsonc", Snapshot + "\"", "fixtures/author_snapshot_v2\"");
-        var failed = await engine.LoadAsync(Compile(host.Root), host.Workspace.ArmRanges("home_feed", "local"));
+        var failed = await engine.LoadAsync(Compile(host.Root));
 
         Assert.False(failed.Applied);
         Assert.Contains(failed.Diagnostics, d => d.Code == "LOCAL_TABLE_LOAD_FAILED" && d.Message.Contains("author_snapshot_v2", StringComparison.Ordinal));
@@ -158,7 +158,7 @@ public sealed class LocalTableEngineTests
         // An engine for replays only (stratarec replay): its tables are never loaded, and never needed.
         var sample = HomeFeedTestHost.Load();
         await using var replayOnly = new RecEngine(sample.Environment, bindings: new BindingHost(new BindingHostOptions { Load = false }));
-        Assert.True(replayOnly.Load(sample.Request, sample.Workspace.ArmRanges("home_feed", "local")).Applied);
+        Assert.True(replayOnly.Load(sample.Request).Applied);
         var unloaded = await replayOnly.ReplayAsync(bundle);
 
         Assert.True(unloaded.Report.Diff.Identical, ReplayTests.Describe(unloaded.Report));
@@ -205,7 +205,7 @@ public sealed class LocalTableEngineTests
     private static RecEngine Load(RecEngine engine, string root)
     {
         var workspace = ConfigWorkspace.Load(root, new DiagnosticBag());
-        var load = engine.Load(Compile(root), workspace.ArmRanges("home_feed", "local"));
+        var load = engine.Load(Compile(root));
         Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
         return engine;
     }

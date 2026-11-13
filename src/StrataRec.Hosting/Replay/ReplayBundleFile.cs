@@ -45,8 +45,8 @@ public static class ReplayBundleFile
         }
         catch (ArtifactFormatException ex)
         {
-            throw new ReplayBundleException(ArtifactSerializer.JsonPathToPointer(ex.JsonPath), ex.InnerException?.Message ?? ex.Message,
-                "run 'stratarec schema replay_bundle' for the JSON Schema of a bundle");
+            throw new ReplayBundleException(ArtifactSerializer.JsonPathToPointer(ex.JsonPath), ex.Reason,
+                ex.Hint ?? "run 'stratarec schema replay_bundle' for the JSON Schema of a bundle");
         }
 
         if (bundle.Format != ReplayBundle.CurrentFormat)

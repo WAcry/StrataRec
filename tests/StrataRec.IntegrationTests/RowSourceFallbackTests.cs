@@ -140,7 +140,7 @@ public sealed class RowSourceFallbackTests
             BaseDirectory = host.Root,
             Operators = OperatorRegistry.CreateDefault().Add(new FailingRecallFactory("fails")),
         });
-        var load = engine.Load(host.Request, host.Workspace.ArmRanges("home_feed", "local"));
+        var load = engine.Load(host.Request);
         Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
         var result = await engine.ExecuteAsync(new RecRequest
         {

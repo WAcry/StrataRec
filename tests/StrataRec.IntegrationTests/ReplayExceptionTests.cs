@@ -92,7 +92,7 @@ public sealed class ReplayExceptionTests
                 ? () => new TimeoutException("backend timed out")
                 : () => new InvalidOperationException("backend refused"))),
         });
-        Assert.True(engine.Load(host.Request, host.Workspace.ArmRanges("home_feed", "local")).Applied);
+        Assert.True(engine.Load(host.Request).Applied);
 
         var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-throw-" + mode, 1001, "home", ReplayTests.ControlArms));
         Assert.Equal((false, $"node 'ctr_ranker' failed: {detail}"), (recorded.Succeeded, recorded.Error));
