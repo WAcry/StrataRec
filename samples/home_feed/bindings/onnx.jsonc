@@ -1,0 +1,23 @@
+// The local bindings with the ctr model served by ONNX Runtime in process (local_onnx@1) instead of linear@1. The model
+// file is the same network as the local weights (tests/Shared/OnnxModels.cs writes it), so both environments rank alike.
+// Run it with: stratarec run -c samples/home_feed -e onnx -r samples/home_feed/requests/user_1001.json
+{
+  "environment": "onnx",
+  "sources": {
+    "user_store":   { "connector": "memory@1", "data_file": "fixtures/users.json", "timeout_ms": 1000 },
+    "item_store":   { "connector": "memory@1", "data_file": "fixtures/items.json", "timeout_ms": 1000, "max_batch": 25 },
+    "author_store": {
+      "mode": "local",
+      "max_bytes": "16MiB",
+      "bootstrap": { "source": "snapshot_files@1", "uri": "fixtures/author_snapshot" }
+    }
+  },
+  "models": {
+    // Opened when the engine loads the plan, never on the request path; its signature comes from the file.
+    "ctr_model": { "client": "local_onnx@1", "uri": "models/ctr_model.onnx", "intra_op_threads": 1 }
+  },
+  "candidate_sources": {
+    "two_tower": { "client": "memory_list@1", "data_file": "fixtures/recall_two_tower.json" },
+    "popular":   { "client": "memory_list@1", "data_file": "fixtures/recall_popular.json" }
+  }
+}

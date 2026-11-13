@@ -3,6 +3,7 @@ using System.Text.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting.Workspace;
+using StrataRec.Models.Onnx;
 using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Cli.Commands;
@@ -36,7 +37,18 @@ internal static class CommonOptions
     public static JsonWriterOptions JsonOptions => new() { Indented = true };
 
     /// <summary>The engine environment for a workspace: fixture paths resolve against the config root.</summary>
-    public static PlanEnvironment PlanEnvironment(ConfigWorkspace workspace) => new() { BaseDirectory = workspace.Root };
+    public static PlanEnvironment PlanEnvironment(ConfigWorkspace workspace) => PlanEnvironment(workspace.Root);
+
+    /// <summary>
+    /// What this binary provides, for every command: the standard library plus <c>local_onnx@1</c>, so a workspace that
+    /// binds an ONNX model validates, explains and runs the same way in each command.
+    /// </summary>
+    /// <param name="root">The config root relative paths resolve against; null for commands that read no workspace.</param>
+    public static PlanEnvironment PlanEnvironment(string? root) => new()
+    {
+        BaseDirectory = root is null ? null : Path.GetFullPath(root),
+        Models = ModelClientRegistry.CreateDefault().Add(new OnnxModelClientFactory()),
+    };
 
     /// <summary>Loads a workspace and compiles one pipeline (with its experiments).</summary>
     public static (ConfigWorkspace Workspace, PlanCompileRequest? Request, PlanCompilation? Compilation) Compile(

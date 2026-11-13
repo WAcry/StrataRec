@@ -85,6 +85,12 @@ jobs:
       - name: Run a request
         run: dotnet run --project src/StrataRec.Cli -c Release --no-build -- run -c samples/home_feed -r samples/home_feed/requests/user_1001.json --trace
 
+      # The same request with the ctr model served by ONNX Runtime from samples/home_feed/models (local_onnx@1).
+      - name: Validate and run with the ONNX model
+        run: |
+          dotnet run --project src/StrataRec.Cli -c Release --no-build -- validate -c samples/home_feed -e onnx
+          dotnet run --project src/StrataRec.Cli -c Release --no-build -- run -c samples/home_feed -e onnx -r samples/home_feed/requests/user_1001.json
+
   benchmarks:
     # Smoke only: proves the benchmarks still build and run. Shared runners are too noisy for regression thresholds.
     name: benchmarks (dry run)

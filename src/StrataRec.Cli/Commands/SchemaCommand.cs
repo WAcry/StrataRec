@@ -43,7 +43,7 @@ internal static class SchemaCommand
         string title;
         if (kind == "operator")
         {
-            var operators = new PlanEnvironment().Operators;
+            var operators = CommonOptions.PlanEnvironment(root: null).Operators;
             if (op is null || !operators.TryGet(op, out var factory))
             {
                 error.WriteLine($"Unknown operator '{op}'. Known: {string.Join(", ", operators.Ids)}");
