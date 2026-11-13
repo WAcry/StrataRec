@@ -164,6 +164,69 @@ public class CacheReadTests
         Assert.Equal("item_store is down", failed.Error);
     }
 
+    /// <summary>
+    /// Review 19: the window is judged when the fallback is chosen, after the connector failed. TTL 1000 ms within 10%
+    /// and a 1000 ms window: a record 1200 ms old is stale for between 700 and 900 ms more. The connector fails after
+    /// 100 ms (still in the window: served) or after 10 s (past it: not served, though it was stale when the read began).
+    /// </summary>
+    [Theory]
+    [InlineData(false, 100, true)]
+    [InlineData(false, 10_000, false)]
+    [InlineData(true, 100, true)]
+    [InlineData(true, 10_000, false)]
+    public async Task AStaleRecord_IsServedOnlyIfStillInItsWindow_WhenTheConnectorHasFailed(bool distributed, long failingForMs, bool served)
+    {
+        var store = new FakeCacheStore();
+        if (distributed)
+        {
+            // Another instance wrote the record to the distributed tier; this one's table never had it.
+            var warm = new FeatureTestRig().CacheSource("item_store", ScriptedConnector.Values((_, _) => 1.0), ttlMs: 1_000, staleIfErrorMs: 1_000, distributed: store);
+            var warmClicks = warm.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store", ScalarValue.FromFloat64(-1));
+            warm.Build();
+            await warm.NewRequest([1]).EnsureAsync(warmClicks);
+            await store.WhenWrittenAsync(1);
+        }
+
+        var fail = false;
+        FeatureTestRig rig = null!;
+        var connector = new ScriptedConnector((keys, fields, writer, _) =>
+        {
+            if (fail)
+            {
+                rig.Clock.AdvanceMs(failingForMs); // the time the failing call took
+                return ValueTask.FromResult(FetchStatus.Failed("item_store is down"));
+            }
+
+            ScriptedConnector.WriteAll(keys, fields, writer, (_, _) => 1.0);
+            return ValueTask.FromResult(FetchStatus.Ok);
+        });
+        rig = new FeatureTestRig().CacheSource("item_store", connector, ttlMs: 1_000, staleIfErrorMs: 1_000, distributed: distributed ? store : null);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store", ScalarValue.FromFloat64(-1));
+        rig.Build();
+        if (!distributed)
+        {
+            await rig.NewRequest([1]).EnsureAsync(clicks);
+            rig.WriteBack("item_store");
+        }
+
+        rig.Clock.AdvanceMs(1_200);
+        fail = true;
+        var request = rig.NewRequest([1]);
+        var result = await request.EnsureAsync(clicks);
+
+        if (served)
+        {
+            Assert.Equal(FeatureState.Degraded, result.State);
+            Assert.Equal(1.0, request.Value(clicks, 0).AsFloat64());
+            Assert.Contains("1 key(s) served stale", result.Error);
+        }
+        else
+        {
+            Assert.Equal(FeatureState.Failed, result.State); // its one key got no value
+            Assert.Equal("item_store is down", result.Error);
+        }
+    }
+
     [Fact]
     public async Task AFetchThatStartedEarlier_AndAnswersLater_DoesNotReplaceWhatALaterFetchWrote()
     {
