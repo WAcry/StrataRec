@@ -179,6 +179,8 @@ public sealed class RunReplayTests
     [InlineData("StrataRec.UnitTests.Pipeline.RunReplayTests+NoMessageException", "error", typeof(ReplayedCallException))] // no (string) constructor
     [InlineData("No.Such.Exception", "error", typeof(ReplayedCallException))]
     [InlineData("System.String", "error", typeof(ReplayedCallException))] // not an exception
+    [InlineData("System.InvalidOperationException, System.Private.CoreLib", "error", typeof(ReplayedCallException))] // never loads by assembly name
+    [InlineData("System.Collections.Generic.KeyNotFoundException[[System.String, System.Private.CoreLib]]", "error", typeof(ReplayedCallException))]
     public void AThrownModelCall_IsThrownAgain_AsItsRecordedType(string errorType, string status, Type expected)
     {
         var call = Call(1, NamedInput.FromFloat32("x", new[] { 1 }, new float[] { 10 }));

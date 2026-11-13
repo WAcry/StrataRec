@@ -108,9 +108,16 @@ internal static class ReplayedExceptions
 
     private static Type? Resolve(string typeName)
     {
+        // Only types of assemblies already loaded: a recording stores Type.FullName, never an assembly-qualified name, and
+        // a bundle must not make the replaying process load an assembly.
+        if (typeName.Contains(',') || typeName.Contains('['))
+        {
+            return null;
+        }
+
         if (Type.GetType(typeName, throwOnError: false) is { } type)
         {
-            return type; // the core library, or an assembly-qualified name
+            return type; // the core library
         }
 
         foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
