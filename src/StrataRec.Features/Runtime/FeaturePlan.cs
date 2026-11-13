@@ -29,6 +29,12 @@ public sealed class FeatureRuntimeInfo
     /// <summary>Features that must be available first: derived inputs, or the foreign key of the entity.</summary>
     public int[] Dependencies { get; set; } = Array.Empty<int>();
 
+    /// <summary>
+    /// Personal data (design 8.9): declared personal, or a derived feature computed from a personal one. Buffers holding
+    /// it are cleared when the request returns them, and taps that log it need a purpose and durable delivery.
+    /// </summary>
+    public bool IsPersonal { get; internal set; }
+
     /// <summary>Fetch group of a physical feature (-1 for derived).</summary>
     public int GroupIndex { get; internal set; } = -1;
 
@@ -265,6 +271,19 @@ public sealed class FeaturePlan
 
         // Cycles are reported here; the wave computation below only has to terminate on them.
         var derivedOrder = TopologicalDerivedOrder(all, diagnostics);
+        foreach (var f in all)
+        {
+            f.IsPersonal = f.Definition.IsPersonal;
+        }
+
+        foreach (var d in derivedOrder)
+        {
+            foreach (var input in all[d].Dependencies)
+            {
+                all[d].IsPersonal |= all[input].IsPersonal;
+            }
+        }
+
         AssignWaves(all, groups);
         return new FeaturePlan(all, groups.ToArray(), derivedOrder);
     }

@@ -338,7 +338,7 @@ public sealed class FeatureFetcher
     {
         foreach (var f in features)
         {
-            if (_plan.Features[f].Definition.IsPersonal)
+            if (_plan.Features[f].IsPersonal)
             {
                 _memory.ClearOnReturn = true;
                 return;
@@ -705,7 +705,7 @@ public sealed class FeatureFetcher
             return;
         }
 
-        if (feature.Definition.IsPersonal)
+        if (feature.IsPersonal)
         {
             _memory.ClearOnReturn = true;
         }
@@ -852,7 +852,7 @@ public sealed class FeatureFetcher
                     continue;
                 }
 
-                if (info.Definition.IsPersonal)
+                if (info.IsPersonal)
                 {
                     _memory.ClearOnReturn = true;
                 }
