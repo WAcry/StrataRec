@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Threading.Tasks.Sources;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Memory;
 using StrataRec.Pipeline.Operators;
@@ -228,6 +229,47 @@ public sealed class BoundedCallTests
         Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
     }
 
+    [Theory]
+    [InlineData("in time")]
+    [InlineData("after its own timeout")]
+    [InlineData("after the caller cancelled")]
+    public async Task AClientCompletingWhileItsValueTaskBecomesATask_IsHeardOnlyIfItsBoundHasNotPassed(string when)
+    {
+        // Send returns pending; the client completes while the framework turns its ValueTask into a task, before any wait
+        // is set up. WaitAsync then returns the completed client as it is, whatever the time left or the caller, so its
+        // outcome proves nothing: the framework observes the completion itself, as an answer before Send returned.
+        using var caller = new CancellationTokenSource();
+        var memory = new RequestMemory();
+        var budget = new AttemptBudget(caller.Token, Deadline(600_000));
+        var site = new Site(memory);
+        var client = new CompletingWhileAdapted(token =>
+        {
+            if (when == "after its own timeout")
+            {
+                Assert.True(token.WaitHandle.WaitOne(Patience));
+            }
+            else if (when == "after the caller cancelled")
+            {
+                caller.Cancel();
+            }
+        });
+
+        var result = await Run(site.With(client.Send), budget, memory, timeoutMs: when == "after its own timeout" ? 10 : 300_000).AsTask().WaitAsync(Patience);
+
+        Assert.Equal((1, 1), (client.OnCompletedCalls, client.GetResultCalls)); // pending when sent; its result taken once
+        var expected = when switch
+        {
+            "in time" => (CallEnd.Answered, IoOutcome.Ok, 81, (string?)null),
+            "after its own timeout" => (CallEnd.TimedOut, IoOutcome.Timeout, 0, "timed out after 10 ms"),
+            _ => (CallEnd.Cancelled, IoOutcome.Cancelled, 0, null),
+        };
+        Assert.Equal((expected.Item1, expected.Item2, expected.Item3, expected.Item4, false), (result.End, result.Outcome, result.Value, result.Error, result.Abandoned));
+        Assert.Equal(when == "after the caller cancelled", result.Exception is OperationCanceledException { } cancelled && cancelled.CancellationToken == caller.Token);
+        Assert.Equal(result.End, Assert.Single(site.Recorded).Result.End);
+        budget.Release();
+        Assert.Equal(0, memory.Release()); // the completed client and the call site let go before the call returned
+    }
+
     [Fact]
     public async Task AClientsOwnTimeoutException_ThrownInTime_IsTheClientsFailure()
     {
@@ -449,6 +491,44 @@ public sealed class BoundedCallTests
                 _held.Set();
                 _released.Wait(Patience);
             }
+        }
+    }
+
+    /// <summary>
+    /// A client whose ValueTask is still pending when Send returns and completes with 81 while the framework turns it into
+    /// a task: AsTask registers its continuation through OnCompleted, which first runs <c>meanwhile</c> with the token the
+    /// client got, then completes. No timing is involved: by the time a wait could be set up, the client has completed.
+    /// </summary>
+    private sealed class CompletingWhileAdapted(Action<CancellationToken> meanwhile) : IValueTaskSource<int>
+    {
+        private CancellationToken _token;
+        private int _completed;
+
+        public int OnCompletedCalls { get; private set; }
+
+        public int GetResultCalls { get; private set; }
+
+        public ValueTask<int> Send(CancellationToken token)
+        {
+            _token = token;
+            return new ValueTask<int>(this, 0);
+        }
+
+        public ValueTaskSourceStatus GetStatus(short token) =>
+            Volatile.Read(ref _completed) == 1 ? ValueTaskSourceStatus.Succeeded : ValueTaskSourceStatus.Pending;
+
+        public int GetResult(short token)
+        {
+            GetResultCalls++;
+            return Volatile.Read(ref _completed) == 1 ? 81 : throw new InvalidOperationException("the result was taken before the client completed");
+        }
+
+        public void OnCompleted(Action<object?> continuation, object? state, short token, ValueTaskSourceOnCompletedFlags flags)
+        {
+            OnCompletedCalls++;
+            meanwhile(_token);
+            Volatile.Write(ref _completed, 1);
+            continuation(state);
         }
     }
 
