@@ -49,7 +49,7 @@ internal sealed class RunRecorder : IFeatureCallHook
 
     public bool Replays => false;
 
-    public int Begin(FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields)
+    public int Begin(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields)
     {
         var sequence = NextSequence();
         var requested = new List<ReplayField>(fields.Length);
@@ -114,7 +114,7 @@ internal sealed class RunRecorder : IFeatureCallHook
         });
     }
 
-    public FetchStatus Replay(FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer) =>
+    public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer) =>
         throw new InvalidOperationException("A recorder does not replay calls.");
 
     /// <summary>Registers a candidate source call about to be sent; returns its sequence for <see cref="CandidateCall"/>.</summary>

@@ -26,6 +26,8 @@ public readonly record struct FeatureCallInfo(
     TimeSpan Duration);
 
 /// <summary>Read access to what a connector wrote, for recording a completed call.</summary>
+/// <remarks>Valid only during <see cref="IFeatureCallHook.Record"/>: it is a view of one chunk of the fetch's staging,
+/// and the engine points the same object at the fetch's next chunk once the call has been recorded.</remarks>
 public interface IStagedFeatureValues
 {
     /// <summary>The value the connector wrote for (field, key), or missing when it wrote none.</summary>
@@ -52,14 +54,15 @@ public interface IFeatureCallHook
     /// holds it as in flight, so a recording taken when the request is aborted lists it as outstanding.
     /// </summary>
     /// <param name="batch">The keys; valid only during the call (they live in pooled buffers).</param>
-    int Begin(FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields);
+    int Begin(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields);
 
     /// <summary>
     /// Records a finished call. <paramref name="values"/> is non-null only when the call answered within its budget
-    /// (ok or partial); a call that timed out may still be writing, so its staging is never read.
+    /// (ok or partial); a call that timed out may still be writing, so its staging is never read. Both arguments are
+    /// valid only during this call.
     /// </summary>
     void Record(in FeatureCallInfo call, IStagedFeatureValues? values);
 
     /// <summary>Answers a call from the recording: writes recorded values into <paramref name="writer"/> and returns the recorded status.</summary>
-    FetchStatus Replay(FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer);
+    FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer);
 }

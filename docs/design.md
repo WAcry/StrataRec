@@ -756,7 +756,7 @@ public enum KeyShape { Single, Many, Cross, ContextMap }
 
 public readonly record struct EntityKey(long Int64Value, string? StringValue);
 
-public sealed class EntityKeyBatch
+public readonly struct EntityKeyBatch                          // 结构体：每个分批一次调用，不为它分配对象
 {
     public KeyShape Shape { get; init; }
     public EntityKey ContextKey { get; init; }                    // Single、Cross 使用

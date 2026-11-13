@@ -158,13 +158,13 @@ public sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    public int Begin(FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields) => 0;
+    public int Begin(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields) => 0;
 
     public void Record(in FeatureCallInfo call, IStagedFeatureValues? values)
     {
     }
 
-    public FetchStatus Replay(FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer)
+    public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer)
     {
         lock (_gate)
         {
@@ -349,7 +349,7 @@ public sealed class RunReplay : IFeatureCallHook
     internal ReplayAttemptRecord? NextAttempt(string node) =>
         _attempts.TryGetValue(node, out var attempts) && attempts.Count > 0 ? attempts.Dequeue() : null;
 
-    private FetchStatus ReplayExact(FeatureEntry entry, EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer)
+    private FetchStatus ReplayExact(FeatureEntry entry, in EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer)
     {
         var source = entry.Source;
         var rows = batch.KeyCount;

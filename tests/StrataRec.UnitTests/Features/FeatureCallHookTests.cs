@@ -115,7 +115,7 @@ public class FeatureCallHookTests
     }
 
     /// <summary>Records calls like a bundle recorder would; when replaying, answers 10 × key for every field.</summary>
-    private sealed class ListHook(bool replays = false) : IFeatureCallHook
+    internal sealed class ListHook(bool replays = false) : IFeatureCallHook
     {
         private int _sequence;
 
@@ -125,7 +125,7 @@ public class FeatureCallHookTests
 
         public TaskCompletionSource<Call> FirstRecorded { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public int Begin(FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields) => Interlocked.Increment(ref _sequence) - 1;
+        public int Begin(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields) => Interlocked.Increment(ref _sequence) - 1;
 
         public void Record(in FeatureCallInfo call, IStagedFeatureValues? values)
         {
@@ -146,12 +146,12 @@ public class FeatureCallHookTests
             FirstRecorded.TrySetResult(recordedCall);
         }
 
-        public FetchStatus Replay(FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer)
+        public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer)
         {
             ScriptedConnector.WriteAll(batch, fields, writer, (key, _) => key * 10.0);
             return FetchStatus.Ok;
         }
     }
 
-    private sealed record Call(int Sequence, string Source, long[] Keys, bool Sent, FetchStatus Status, IoOutcome Outcome, double?[]? Values);
+    internal sealed record Call(int Sequence, string Source, long[] Keys, bool Sent, FetchStatus Status, IoOutcome Outcome, double?[]? Values);
 }

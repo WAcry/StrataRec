@@ -835,8 +835,10 @@ public sealed class PipelineExecutor
     private static ValueTask EnsureContextAsync(RequestState state, CompiledExpression expression, CancellationToken cancellationToken)
     {
         List<int>? contextFeatures = null;
-        foreach (var symbol in expression.Reads)
+        var reads = expression.Reads;
+        for (var i = 0; i < reads.Count; i++) // an interface foreach would box the enumerator
         {
+            var symbol = reads[i];
             if (symbol.Kind == SymbolKind.Context && state.Plan.Schema.ContextFields[symbol.Id].FeatureIndex is >= 0 and var f)
             {
                 (contextFeatures ??= new List<int>()).Add(f);
@@ -1085,9 +1087,10 @@ public sealed class PipelineExecutor
         var outputFeatures = new List<int>();
         foreach (var (_, expression) in output.Columns)
         {
-            foreach (var symbol in expression.Reads)
+            var reads = expression.Reads;
+            for (var i = 0; i < reads.Count; i++) // an interface foreach would box the enumerator
             {
-                if (FeatureOf(plan, symbol) is >= 0 and var f)
+                if (FeatureOf(plan, reads[i]) is >= 0 and var f)
                 {
                     outputFeatures.Add(f);
                 }
@@ -1326,7 +1329,9 @@ public sealed class PipelineExecutor
     /// <summary>Validates inputs against <c>request_schema</c> and fills request-level context values.</summary>
     private static string? BindInputs(ExecutionPlan plan, PipelineRequest request, ScalarValue[] context)
     {
-        foreach (var (name, field) in plan.RequestInputs)
+        // The plan builds a Dictionary: enumerate it as one, not through the interface (a boxed enumerator per request).
+        var declared = plan.RequestInputs as Dictionary<string, ContextField> ?? new Dictionary<string, ContextField>(plan.RequestInputs);
+        foreach (var (name, field) in declared)
         {
             request.Inputs.TryGetValue(name, out var value);
             if (value.IsMissing)

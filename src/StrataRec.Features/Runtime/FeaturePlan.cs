@@ -288,29 +288,68 @@ public sealed class FeaturePlan
     /// <summary>The requested features plus everything they depend on, in dependency order.</summary>
     public List<int> Closure(IEnumerable<int> roots)
     {
-        var seen = new HashSet<int>();
-        var order = new List<int>();
-        foreach (var r in roots)
+        var order = new int[Features.Count];
+        var count = Closure(roots, order, new bool[Features.Count]);
+        var result = new List<int>(count);
+        for (var i = 0; i < count; i++)
         {
-            Visit(r);
+            result.Add(order[i]);
         }
 
-        return order;
+        return result;
+    }
 
-        void Visit(int f)
+    /// <summary>
+    /// <see cref="Closure(IEnumerable{int})"/> into caller-provided buffers (the request's rented arrays), so a request
+    /// computes its fetch closures without allocating: <paramref name="order"/> receives the closure, of the returned
+    /// length; <paramref name="seen"/> must be all false and is left marking the closure.
+    /// </summary>
+    internal int Closure(IEnumerable<int> roots, int[] order, bool[] seen)
+    {
+        var count = 0;
+        switch (roots)
         {
-            if (!seen.Add(f))
-            {
-                return;
-            }
+            // Typed loops: an interface foreach over an array or list boxes its enumerator.
+            case int[] array:
+                foreach (var r in array)
+                {
+                    Visit(r, order, seen, ref count);
+                }
 
-            foreach (var d in Features[f].Dependencies)
-            {
-                Visit(d);
-            }
+                break;
+            case List<int> list:
+                foreach (var r in list)
+                {
+                    Visit(r, order, seen, ref count);
+                }
 
-            order.Add(f);
+                break;
+            default:
+                foreach (var r in roots)
+                {
+                    Visit(r, order, seen, ref count);
+                }
+
+                break;
         }
+
+        return count;
+    }
+
+    private void Visit(int feature, int[] order, bool[] seen, ref int count)
+    {
+        if (seen[feature])
+        {
+            return;
+        }
+
+        seen[feature] = true;
+        foreach (var d in Features[feature].Dependencies)
+        {
+            Visit(d, order, seen, ref count);
+        }
+
+        order[count++] = feature;
     }
 
     /// <summary>

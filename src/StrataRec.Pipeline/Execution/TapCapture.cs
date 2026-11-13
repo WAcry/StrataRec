@@ -371,8 +371,10 @@ internal static class TapCapture
     private static ValueTask EnsureContextAsync(RequestState state, CompiledExpression expression, CancellationToken cancellationToken)
     {
         List<int>? features = null;
-        foreach (var symbol in expression.Reads)
+        var reads = expression.Reads;
+        for (var i = 0; i < reads.Count; i++) // an interface foreach would box the enumerator
         {
+            var symbol = reads[i];
             if (symbol.Kind == SymbolKind.Context && state.Plan.Schema.ContextFields[symbol.Id].FeatureIndex is >= 0 and var f)
             {
                 (features ??= new List<int>()).Add(f);
