@@ -1,4 +1,5 @@
 using StrataRec.Core.Columns;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Tables;
 using StrataRec.Core.Values;
@@ -46,6 +47,9 @@ public sealed class OperatorContext
 
     /// <summary>Time left before the request deadline.</summary>
     public TimeSpan Remaining => _state.Remaining;
+
+    /// <summary>Health and windowed failure summaries of external calls (design 13.2); null without a logger.</summary>
+    internal RequestEventLog? Events => _state.Events;
 
     internal string? FailureReason { get; private set; }
 

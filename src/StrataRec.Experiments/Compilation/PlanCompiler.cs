@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
 using StrataRec.Pipeline.Planning;
@@ -23,8 +25,12 @@ public static class PlanCompiler
 {
     public static PlanCompilation Compile(PlanCompileRequest request, PlanEnvironment? environment = null)
     {
+        var started = Stopwatch.GetTimestamp();
         var view = PatchableView.Create(request.Pipeline, request.Catalog);
-        return new UnifiedCompilation(request, environment ?? new PlanEnvironment(), view, new DiagnosticBag(), buildPlan: true).Run();
+        var compilation = new UnifiedCompilation(request, environment ?? new PlanEnvironment(), view, new DiagnosticBag(), buildPlan: true).Run();
+        StrataRecMetrics.PlanCompileDuration.Record(
+            Stopwatch.GetElapsedTime(started).TotalSeconds, new KeyValuePair<string, object?>(StrataRecTags.Pipeline, request.Pipeline.PipelineId));
+        return compilation;
     }
 
     /// <summary>

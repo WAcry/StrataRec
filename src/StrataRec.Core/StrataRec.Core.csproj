@@ -8,6 +8,9 @@
   <ItemGroup>
     <PackageReference Include="System.Numerics.Tensors" />
     <PackageReference Include="System.IO.Hashing" />
+    <!-- Observability (design 13.1, 13.2): the StrataRec Meter and ActivitySource, and ILogger for event logs. -->
+    <PackageReference Include="System.Diagnostics.DiagnosticSource" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
 
   <ItemGroup>

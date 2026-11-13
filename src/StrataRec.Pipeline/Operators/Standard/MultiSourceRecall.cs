@@ -1,4 +1,5 @@
 using StrataRec.Core.Columns;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Types;
@@ -93,7 +94,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 return null;
             }
 
-            sources[i] = new SourceEntry(names[i], bound.Value.Source, bound.Value.TimeoutMs, byName[names[i]]);
+            sources[i] = new SourceEntry(names[i], bound.Value.Source, bound.Value.TimeoutMs, byName[names[i]], new IoTarget(IoKind.CandidateSource, names[i]));
         }
 
         if (!context.TryWriteColumn("recall.sources_mask", string.Empty, ColumnType.Int64, out var mask)
@@ -107,7 +108,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         return new MultiSourceRecall(sources, mask, bestRank, bestScore, primary);
     }
 
-    private sealed record SourceEntry(string Name, ICandidateSource Source, int? TimeoutMs, ParamRef Quota);
+    private sealed record SourceEntry(string Name, ICandidateSource Source, int? TimeoutMs, ParamRef Quota, IoTarget Io);
 
     private sealed class MultiSourceRecall(SourceEntry[] sources, OutputColumn mask, OutputColumn bestRank, OutputColumn bestScore, OutputColumn primary) : Operator
     {
@@ -139,7 +140,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 var sink = new Sink(quota, context.Memory);
                 sinks[i] = sink;
                 var query = new CandidateQuery { SourceName = sources[i].Name, Limit = quota, Inputs = context.Inputs, RequestId = context.RequestId, Seed = context.Seed };
-                calls[i] = CallAsync(sources[i], query, sink, context.Memory, context.CancellationToken);
+                calls[i] = CallAsync(sources[i], query, sink, context.Memory, context.Events, context.CancellationToken);
             }
 
             var attempted = 0;
@@ -181,9 +182,12 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         /// the pool under them. The sink is closed first, so a source that adds after completing changes nothing.
         /// </remarks>
         private static async Task<CandidateSourceStatus> CallAsync(
-            SourceEntry source, CandidateQuery query, Sink sink, RequestMemory memory, CancellationToken cancellationToken)
+            SourceEntry source, CandidateQuery query, Sink sink, RequestMemory memory, RequestEventLog? events, CancellationToken cancellationToken)
         {
             memory.Hold();
+            var io = source.Io.Start();
+            var status = default(CandidateSourceStatus);
+            var outcome = IoOutcome.Timeout; // the node's budget ran out (the exception propagates) unless set below
             try
             {
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -192,20 +196,24 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                     cts.CancelAfter(timeout);
                 }
 
-                return await source.Source.RetrieveAsync(query, sink, cts.Token).ConfigureAwait(false);
+                status = await source.Source.RetrieveAsync(query, sink, cts.Token).ConfigureAwait(false);
+                outcome = status.Succeeded ? IoOutcome.Ok : IoOutcome.Error;
+                return status;
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                return CandidateSourceStatus.Failed("timed out");
+                return status = CandidateSourceStatus.Failed("timed out");
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                return CandidateSourceStatus.Failed(ex.Message);
+                outcome = IoOutcome.Error;
+                return status = CandidateSourceStatus.Failed(ex.Message);
             }
             finally
             {
                 sink.Close();
                 memory.Release();
+                io.Complete(outcome, -1, query.RequestId, status.Error, events);
             }
         }
 

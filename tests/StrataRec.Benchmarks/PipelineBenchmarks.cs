@@ -1,7 +1,10 @@
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Globalization;
 using System.Text;
 using BenchmarkDotNet.Attributes;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting.Workspace;
@@ -19,7 +22,9 @@ namespace StrataRec.Benchmarks;
 /// <para>The sample workspace is copied to a temp directory and its fixtures are regenerated at the requested size;
 /// the coarse stage keeps a tenth of the candidates for the model, as a production funnel would.</para>
 /// <para><c>Baseline</c> runs without experiments; <c>AllArms</c> forces every treatment arm (MMR re-rank, an extra
-/// calibration node, parameter overrides); <c>AllArmsWithLogs</c> also captures the funnel log taps.</para>
+/// calibration node, parameter overrides); <c>AllArmsWithLogs</c> also captures the funnel log taps.
+/// <c>BaselineMetered</c> attaches a <see cref="MeterListener"/> to every StrataRec instrument (design 13.1);
+/// <c>BaselineTraced</c> records the request span and its node and I/O spans (design 13.2).</para>
 /// <para>Run: <c>dotnet run -c Release --project tests/StrataRec.Benchmarks -- --filter '*PipelineBenchmarks*'</c>.</para>
 /// </remarks>
 [MemoryDiagnoser]
@@ -30,6 +35,8 @@ public class PipelineBenchmarks
     private RequestInputs _inputs = null!;
     private RequestArms _allArms;
     private string _root = null!;
+    private MeterListener? _meterListener;
+    private ActivityListener? _activityListener;
 
     [Params(500, 5_000)]
     public int Candidates { get; set; }
@@ -58,9 +65,42 @@ public class PipelineBenchmarks
         }
     }
 
+    [GlobalSetup(Target = nameof(BaselineMetered))]
+    public void SetupMetered()
+    {
+        Setup();
+        _meterListener = new MeterListener
+        {
+            InstrumentPublished = (instrument, listener) =>
+            {
+                if (instrument.Meter.Name == StrataRecTelemetry.Name)
+                {
+                    listener.EnableMeasurementEvents(instrument);
+                }
+            },
+        };
+        _meterListener.SetMeasurementEventCallback<long>(static (_, _, _, _) => { });
+        _meterListener.SetMeasurementEventCallback<double>(static (_, _, _, _) => { });
+        _meterListener.Start();
+    }
+
+    [GlobalSetup(Target = nameof(BaselineTraced))]
+    public void SetupTraced()
+    {
+        Setup();
+        _activityListener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == StrataRecTelemetry.Name,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+        };
+        ActivitySource.AddActivityListener(_activityListener);
+    }
+
     [GlobalCleanup]
     public void Cleanup()
     {
+        _meterListener?.Dispose();
+        _activityListener?.Dispose();
         try
         {
             Directory.Delete(_root, recursive: true);
@@ -78,6 +118,16 @@ public class PipelineBenchmarks
 
     [Benchmark]
     public int AllArmsWithLogs() => Run(_allArms, captureLogs: true).LogBatches.Count;
+
+    [Benchmark]
+    public int BaselineMetered() => Run(RequestArms.None, captureLogs: false).Items.Count;
+
+    [Benchmark]
+    public int BaselineTraced()
+    {
+        using var request = StrataRecTracing.StartRequest("home_feed", "bench");
+        return Run(RequestArms.None, captureLogs: false).Items.Count;
+    }
 
     private PipelineResult Run(RequestArms arms, bool captureLogs) => _executor.ExecuteAsync(_plan, new PipelineRequest
     {

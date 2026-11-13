@@ -1099,7 +1099,7 @@ public sealed class PlanBuilder
             }
         }
 
-        return new ExecutionPlan
+        var plan = new ExecutionPlan
         {
             PipelineId = _sources!.Pipeline.PipelineId,
             ManifestId = manifestId,
@@ -1120,6 +1120,8 @@ public sealed class PlanBuilder
             CompileTime = _clock.Elapsed,
             RequestInputs = _requestInputs!,
         };
+        _ = plan.Telemetry; // metric tags are built with the plan, not on its first request
+        return plan;
     }
 
     /// <summary>Parses a parameter value for a leaf, reporting errors at <paramref name="pointer"/>.</summary>

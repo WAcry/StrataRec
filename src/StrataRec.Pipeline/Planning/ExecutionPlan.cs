@@ -180,6 +180,12 @@ public sealed class ExecutionPlan
     /// <summary>Request inputs by name (context id and type) for validation.</summary>
     public required IReadOnlyDictionary<string, ContextField> RequestInputs { get; init; }
 
+    /// <summary>Metric tags of the plan's nodes, built once per plan (design 13.1 rule 5).</summary>
+    internal Execution.PlanTelemetry Telemetry =>
+        _telemetry ?? Interlocked.CompareExchange(ref _telemetry, Execution.PlanTelemetry.Create(this), null) ?? _telemetry!;
+
+    private Execution.PlanTelemetry? _telemetry;
+
     /// <summary>Arm index by <c>experiment/arm</c> id.</summary>
     public bool TryGetArm(string id, out ArmInfo arm)
     {

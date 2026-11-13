@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using StrataRec.Core.Columns;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Hashing;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
@@ -83,6 +85,12 @@ public sealed class PipelineResult
     /// <summary>Number of non-finite values replaced or masked at commit (metric <c>column_nonfinite_total</c>).</summary>
     public int NonFiniteValues { get; init; }
 
+    /// <summary>
+    /// The request succeeded with a node that was degraded, served by its fallback, failed and was skipped, or was skipped
+    /// for lack of time or input (metric <c>stratarec.request.degraded</c>).
+    /// </summary>
+    public bool Degraded { get; init; }
+
     /// <summary>Log batches of the request when <see cref="PipelineRequest.CaptureLogs"/> was set.</summary>
     public IReadOnlyList<Logging.LogBatch> LogBatches { get; set; } = Array.Empty<Logging.LogBatch>();
 }
@@ -135,6 +143,18 @@ internal sealed class RequestState
 
     public int NonFinite { get; set; }
 
+    /// <summary>Set by any outcome other than success or a <c>when</c> skip.</summary>
+    public bool Degraded { get; set; }
+
+    /// <summary>Windowed failure summaries and source health; null when the executor has no logger.</summary>
+    public RequestEventLog? Events { get; init; }
+
+    /// <summary>The request span is recorded: create node spans (design 13.2).</summary>
+    public bool TraceNodes { get; init; }
+
+    /// <summary>Span of the position being run, when <see cref="TraceNodes"/>.</summary>
+    public Activity? NodeSpan { get; set; }
+
     public TimeSpan Remaining => Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), DeadlineTimestamp);
 
     public EvalContext Eval => new(Table, Bindings, Context, Params, Counters);
@@ -145,17 +165,33 @@ internal sealed class RequestState
 /// position's variant, make its features available, run it with its time budget, and commit outputs only on success.
 /// CPU work runs on the request's logical thread; concurrency comes from overlapping I/O (design 5.4).
 /// </summary>
+/// <remarks>
+/// Observability (design 13): node, source, model, column and memory metrics go to <see cref="StrataRecMetrics"/>.
+/// Node and I/O spans are created only under a recorded request span (<see cref="StrataRecTracing.IsRecording"/>),
+/// which <c>RecEngine</c> starts; request-level metrics are recorded there too.
+/// </remarks>
 public sealed class PipelineExecutor
 {
     private readonly IBufferPool _pool;
     private readonly Logging.LogPipeline? _logs;
+    private readonly RequestEventLog? _events;
 
     /// <param name="pool">Buffer pool for request memory.</param>
     /// <param name="logs">Where tap batches and trigger records go; null disables persistent logging.</param>
-    public PipelineExecutor(IBufferPool? pool = null, Logging.LogPipeline? logs = null)
+    /// <param name="loggerFactory">
+    /// Receives windowed summaries of request-level failures and source health changes (design 13.2); null logs nothing.
+    /// </param>
+    public PipelineExecutor(IBufferPool? pool = null, Logging.LogPipeline? logs = null, ILoggerFactory? loggerFactory = null)
+        : this(pool, logs, loggerFactory is null ? null : new RequestEventLog(loggerFactory.CreateLogger<PipelineExecutor>()))
+    {
+    }
+
+    /// <summary>With a caller-owned event log, e.g. one a test flushes by hand.</summary>
+    internal PipelineExecutor(IBufferPool? pool, Logging.LogPipeline? logs, RequestEventLog? events)
     {
         _pool = pool ?? SharedArrayBufferPool.Instance;
         _logs = logs;
+        _events = events;
     }
 
     public async ValueTask<PipelineResult> ExecuteAsync(ExecutionPlan plan, PipelineRequest request, CancellationToken cancellationToken = default)
@@ -164,6 +200,7 @@ public sealed class PipelineExecutor
         var memory = new RequestMemory(_pool);
         FeatureFetcher? fetcher = null;
         RequestState? state = null;
+        var position = 0;
         try
         {
             var context = new ScalarValue[plan.Schema.ContextFields.Count];
@@ -189,7 +226,7 @@ public sealed class PipelineExecutor
             var table = new CandidateTable(plan.TableSchema, capacity, memory);
             var bindings = new OutputBindings(plan.Schema.Columns.Count, memory);
             var deadline = start + (long)(request.Deadline.TotalSeconds * Stopwatch.Frequency);
-            fetcher = new FeatureFetcher(plan.Features, table, context, bindings, parameters, memory, deadline);
+            fetcher = new FeatureFetcher(plan.Features, table, context, bindings, parameters, memory, deadline, request.RequestId, _events);
             state = new RequestState
             {
                 Plan = plan,
@@ -208,6 +245,8 @@ public sealed class PipelineExecutor
                 Variants = variants,
                 Triggered = new bool[plan.Experiments.Length],
                 WhenResults = new bool?[plan.Timeline.Length],
+                Events = _events,
+                TraceNodes = StrataRecTracing.IsRecording,
             };
 
             fetcher.StartContextFetch(plan.ContextFeatures, cancellationToken);
@@ -218,9 +257,10 @@ public sealed class PipelineExecutor
             }
 
             PipelineResult? result = null;
-            for (var i = 0; i < plan.Timeline.Length && result is null; i++)
+            for (; position < plan.Timeline.Length && result is null; position++)
             {
-                var error = await RunPositionAsync(state, i, cancellationToken).ConfigureAwait(false);
+                var error = await RunPositionAsync(state, position, cancellationToken).ConfigureAwait(false);
+                EndNodeSpan(state, position, null);
                 if (error is not null)
                 {
                     result = Failed(plan, request, error, start, state.Outcomes, state.Triggered, state.NonFinite);
@@ -237,21 +277,30 @@ public sealed class PipelineExecutor
             // been exposed, and may have captured taps. Dropping those records would remove slow or failing requests
             // from experiment analysis, biased by arm (design 8.8, 12.6). Request memory is still held here.
             var reason = ex is OperationCanceledException ? "cancelled by the caller" : "aborted: " + ex.Message;
+            EndNodeSpan(state, position, reason);
             try
             {
                 PublishLogs(state, request, Failed(plan, request, reason, start, state.Outcomes, state.Triggered, state.NonFinite), returned: false);
             }
             catch (Exception publishError)
             {
-                Debug.WriteLine($"StrataRec could not publish the logs of an aborted request: {publishError.Message}");
+                _events?.Report(RequestEvent.LogPublishFailed, plan.PipelineId, request.RequestId, publishError.Message);
             }
 
             throw;
         }
         finally
         {
-            // In-flight connector calls hold the memory themselves; buffers return when the last one finishes.
-            memory.Release();
+            // In-flight connector calls hold the memory themselves; buffers return when the last one finishes. Those
+            // still running now outlive the request (design 4.8).
+            var rented = memory.RentedBytes;
+            var abandoned = memory.Release();
+            var tags = plan.Telemetry.Pipeline;
+            StrataRecMetrics.RequestMemoryRented.Record(rented, tags);
+            if (abandoned > 0)
+            {
+                StrataRecMetrics.AbandonedIo.Add(abandoned, tags);
+            }
         }
     }
 
@@ -266,17 +315,24 @@ public sealed class PipelineExecutor
             return null;
         }
 
+        // Node spans exist only inside a recorded request span: an unrecorded request creates no node-level objects.
+        // The caller ends the span after the position (EndNodeSpan), so this method keeps its single state machine.
+        if (state.TraceNodes)
+        {
+            state.NodeSpan = StartNodeSpan(node);
+        }
+
         var started = Stopwatch.GetTimestamp();
         var rowsIn = state.Table.Rows.Count;
         if (!await EvaluateWhenAsync(state, position, node, cancellationToken).ConfigureAwait(false))
         {
-            Record(state, node.NodeId, NodeOutcomeKind.Skipped, "when is false", null, started, rowsIn);
+            Record(state, node, NodeOutcomeCategory.SkippedWhen, "when is false", null, started, rowsIn);
             return null;
         }
 
         if (node.MinRemainingMs is { } minRemaining && state.Remaining.TotalMilliseconds < minRemaining)
         {
-            Record(state, node.NodeId, NodeOutcomeKind.Skipped, $"less than {minRemaining} ms remaining", null, started, rowsIn);
+            Record(state, node, NodeOutcomeCategory.SkippedDeadline, $"less than {minRemaining} ms remaining", null, started, rowsIn);
             return null;
         }
 
@@ -291,7 +347,8 @@ public sealed class PipelineExecutor
         var attempt = await RunNodeAsync(state, node, reserve, cancellationToken).ConfigureAwait(false);
         if (attempt.Kind is NodeOutcomeKind.Succeeded or NodeOutcomeKind.Degraded)
         {
-            Record(state, node.NodeId, attempt.Kind, attempt.Detail, node.NodeId, started, rowsIn);
+            var category = attempt.Kind == NodeOutcomeKind.Succeeded ? NodeOutcomeCategory.Succeeded : NodeOutcomeCategory.Degraded;
+            Record(state, node, category, attempt.Detail, node.NodeId, started, rowsIn);
             if (state.Batches is not null)
             {
                 await TapCapture.AfterNodeAsync(state, node.NodeId, entered, rowsIn, cancellationToken).ConfigureAwait(false);
@@ -303,7 +360,7 @@ public sealed class PipelineExecutor
 
         if (attempt.Kind == NodeOutcomeKind.Skipped)
         {
-            Record(state, node.NodeId, NodeOutcomeKind.Skipped, attempt.Detail, null, started, rowsIn);
+            Record(state, node, NodeOutcomeCategory.SkippedInput, attempt.Detail, null, started, rowsIn);
             return null;
         }
 
@@ -311,7 +368,7 @@ public sealed class PipelineExecutor
         switch (node.OnFailure)
         {
             case FailurePolicy.Skip:
-                Record(state, node.NodeId, NodeOutcomeKind.Failed, attempt.Detail + " (skipped)", null, started, rowsIn);
+                Record(state, node, NodeOutcomeCategory.Failed, attempt.Detail + " (skipped)", null, started, rowsIn);
                 return null;
             case FailurePolicy.Fallback when state.Plan.SelectFallback(node, state.Arms) is { } fallback:
                 // A fallback site triggers only when the fallback is invoked, which is independent of the arm (design 12.6).
@@ -323,7 +380,7 @@ public sealed class PipelineExecutor
                 var fb = await RunNodeAsync(state, fallback, 0, cancellationToken).ConfigureAwait(false);
                 if (fb.Kind is NodeOutcomeKind.Succeeded or NodeOutcomeKind.Degraded)
                 {
-                    Record(state, node.NodeId, NodeOutcomeKind.Degraded, $"{attempt.Detail}; served by fallback '{fallback.NodeId}'", fallback.NodeId, started, rowsIn);
+                    Record(state, node, NodeOutcomeCategory.Fallback, $"{attempt.Detail}; served by fallback '{fallback.NodeId}'", fallback.NodeId, started, rowsIn);
                     if (state.Batches is not null)
                     {
                         await TapCapture.AfterNodeAsync(state, node.NodeId, entered, rowsIn, cancellationToken).ConfigureAwait(false);
@@ -335,14 +392,14 @@ public sealed class PipelineExecutor
 
                 if (fallback.OnFailure == FailurePolicy.Skip || fb.Kind == NodeOutcomeKind.Skipped)
                 {
-                    Record(state, node.NodeId, NodeOutcomeKind.Failed, $"{attempt.Detail}; fallback '{fallback.NodeId}': {fb.Detail} (skipped)", null, started, rowsIn);
+                    Record(state, node, NodeOutcomeCategory.Failed, $"{attempt.Detail}; fallback '{fallback.NodeId}': {fb.Detail} (skipped)", null, started, rowsIn);
                     return null;
                 }
 
-                Record(state, node.NodeId, NodeOutcomeKind.Failed, $"{attempt.Detail}; fallback '{fallback.NodeId}': {fb.Detail}", null, started, rowsIn);
+                Record(state, node, NodeOutcomeCategory.Failed, $"{attempt.Detail}; fallback '{fallback.NodeId}': {fb.Detail}", null, started, rowsIn);
                 return $"node '{node.NodeId}' failed ({attempt.Detail}) and its fallback '{fallback.NodeId}' failed ({fb.Detail})";
             default:
-                Record(state, node.NodeId, NodeOutcomeKind.Failed, attempt.Detail, null, started, rowsIn);
+                Record(state, node, NodeOutcomeCategory.Failed, attempt.Detail, null, started, rowsIn);
                 return $"node '{node.NodeId}' failed: {attempt.Detail}";
         }
     }
@@ -423,8 +480,9 @@ public sealed class PipelineExecutor
     private static string? Commit(RequestState state, CompiledNode node)
     {
         var live = state.Table.Rows.Order;
-        foreach (var output in node.Outputs)
+        for (var o = 0; o < node.Outputs.Length; o++)
         {
+            var output = node.Outputs[o];
             var column = state.Plan.Schema.Columns[output.LogicalId];
             var buffer = state.Table.TryGetSlot(output.Slot);
             if (buffer is null)
@@ -441,9 +499,11 @@ public sealed class PipelineExecutor
                 }
             }
 
-            if (ColumnValues.IsFloat(buffer))
+            if (ColumnValues.IsFloat(buffer)
+                && ColumnValues.SanitizeNonFinite(buffer, live, column.HasDefault ? column.Default : ScalarValue.Missing) is > 0 and var replaced)
             {
-                state.NonFinite += ColumnValues.SanitizeNonFinite(buffer, live, column.HasDefault ? column.Default : ScalarValue.Missing);
+                state.NonFinite += replaced;
+                StrataRecMetrics.ColumnNonFinite.Add(replaced, state.Plan.Telemetry.Nodes[node.Index].Outputs[o]);
             }
 
             if (!output.Type.Nullable && buffer.Validity is not null)
@@ -611,8 +671,122 @@ public sealed class PipelineExecutor
         return arm >= 0 && state.Plan.Arms[arm].ExperimentIndex == experimentIndex;
     }
 
-    private static void Record(RequestState state, string nodeId, NodeOutcomeKind kind, string? detail, string? producedBy, long started, int rowsIn) =>
-        state.Outcomes.Add(new NodeOutcome(nodeId, kind, detail, producedBy, Stopwatch.GetElapsedTime(started).TotalMilliseconds, rowsIn, state.Table.Rows.Count));
+    /// <summary>
+    /// Records a position's outcome: in the result, as node metrics (design 13.1: duration and rows by node only, the
+    /// category on a counter), in the windowed failure summaries (design 13.2), and on the node span.
+    /// </summary>
+    private static void Record(RequestState state, CompiledNode node, NodeOutcomeCategory category, string? detail, string? producedBy, long started, int rowsIn)
+    {
+        var elapsed = Stopwatch.GetElapsedTime(started);
+        var rowsOut = state.Table.Rows.Count;
+        var kind = category switch
+        {
+            NodeOutcomeCategory.Succeeded => NodeOutcomeKind.Succeeded,
+            NodeOutcomeCategory.Degraded or NodeOutcomeCategory.Fallback => NodeOutcomeKind.Degraded,
+            NodeOutcomeCategory.Failed => NodeOutcomeKind.Failed,
+            _ => NodeOutcomeKind.Skipped,
+        };
+        state.Outcomes.Add(new NodeOutcome(node.NodeId, kind, detail, producedBy, elapsed.TotalMilliseconds, rowsIn, rowsOut));
+        state.Degraded |= category is not (NodeOutcomeCategory.Succeeded or NodeOutcomeCategory.SkippedWhen);
+
+        var telemetry = state.Plan.Telemetry.Nodes[node.Index];
+        StrataRecMetrics.NodeOutcomes.Add(1, telemetry.Outcomes[(int)category]);
+        if (kind != NodeOutcomeKind.Skipped)
+        {
+            StrataRecMetrics.NodeDuration.Record(elapsed.TotalSeconds, telemetry.Tags);
+            StrataRecMetrics.NodeRowsIn.Record(rowsIn, telemetry.Tags);
+            StrataRecMetrics.NodeRowsOut.Record(rowsOut, telemetry.Tags);
+        }
+
+        if (category == NodeOutcomeCategory.Fallback)
+        {
+            state.Events?.Report(RequestEvent.NodeFallback, telemetry.Subject, state.RequestId, detail);
+            if (telemetry.Model is { } model)
+            {
+                StrataRecMetrics.ModelFallbacks.Add(1, model);
+            }
+        }
+        else if (category == NodeOutcomeCategory.Failed)
+        {
+            state.Events?.Report(RequestEvent.NodeFailed, telemetry.Subject, state.RequestId, detail);
+        }
+
+        if (state.NodeSpan is { IsAllDataRequested: true } span)
+        {
+            span.SetTag(StrataRecTags.Outcome, PlanTelemetry.CategoryName(category));
+            span.SetTag(StrataRecTags.RowsIn, rowsIn);
+            span.SetTag(StrataRecTags.RowsOut, rowsOut);
+            if (producedBy is not null && producedBy != node.NodeId)
+            {
+                span.SetTag(StrataRecTags.Fallback, producedBy);
+            }
+
+            if (category == NodeOutcomeCategory.Failed)
+            {
+                span.SetStatus(ActivityStatusCode.Error, detail);
+            }
+        }
+    }
+
+    private static Activity? StartNodeSpan(CompiledNode node)
+    {
+        var span = StrataRecTelemetry.ActivitySource.StartActivity(node.NodeId, ActivityKind.Internal);
+        if (span is { IsAllDataRequested: true })
+        {
+            span.SetTag(StrataRecTags.Node, node.NodeId);
+            span.SetTag(StrataRecTags.Variant, node.DefinitionHash);
+        }
+
+        return span;
+    }
+
+    /// <summary>
+    /// Ends the span of <paramref name="position"/>, if one is open, tagging the experiments triggered there (the
+    /// position's trigger sites and the parameters its node reads).
+    /// </summary>
+    private static void EndNodeSpan(RequestState state, int position, string? abortReason)
+    {
+        if (state.NodeSpan is not { } span)
+        {
+            return;
+        }
+
+        state.NodeSpan = null;
+        var slot = state.Plan.Timeline[position];
+        var node = state.Variants[position]!;
+        if (span.IsAllDataRequested)
+        {
+            if (abortReason is not null)
+            {
+                span.SetStatus(ActivityStatusCode.Error, abortReason);
+            }
+
+            List<string>? triggered = null;
+            foreach (var experiment in slot.SiteExperiments)
+            {
+                if (state.Triggered[experiment])
+                {
+                    (triggered ??= new List<string>()).Add(state.Plan.Experiments[experiment].Id);
+                }
+            }
+
+            foreach (var experiment in node.ParamExperiments)
+            {
+                var id = state.Plan.Experiments[experiment].Id;
+                if (state.Triggered[experiment] && (triggered is null || !triggered.Contains(id)))
+                {
+                    (triggered ??= new List<string>()).Add(id);
+                }
+            }
+
+            if (triggered is not null)
+            {
+                span.SetTag(StrataRecTags.ExperimentsTriggered, triggered.ToArray());
+            }
+        }
+
+        span.Dispose();
+    }
 
     private static async ValueTask<PipelineResult> BuildResultAsync(RequestState state, long start, CancellationToken cancellationToken)
     {
@@ -704,6 +878,7 @@ public sealed class PipelineExecutor
             ColumnProducers = producers,
             ElapsedMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds,
             NonFiniteValues = state.NonFinite + state.Features.NonFiniteReplaced,
+            Degraded = state.Degraded,
         };
     }
 

@@ -1,3 +1,4 @@
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 
@@ -66,6 +67,9 @@ public abstract class Operator
 
     /// <summary>Named model inputs (input name → column expression), for log taps' <c>columns_from</c> (design 6.9).</summary>
     public virtual IReadOnlyDictionary<string, string> NamedInputs => EmptyInputs;
+
+    /// <summary>The model a model-calling operator scores with; its node's fallbacks are counted per model (design 13.1).</summary>
+    internal virtual IoTarget? ModelTarget => null;
 
     private static readonly IReadOnlyDictionary<string, string> EmptyInputs = new Dictionary<string, string>();
 }
