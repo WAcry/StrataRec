@@ -1,5 +1,3 @@
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
@@ -15,20 +13,13 @@ namespace StrataRec.UnitTests.Core;
 /// </summary>
 public class UnwrittenRowsTests
 {
-    private static readonly ColumnType[] EveryKind =
-    {
-        ColumnType.Bool, ColumnType.Int32, ColumnType.Int64, ColumnType.Float32, ColumnType.Float64, ColumnType.String,
-        ColumnType.Text, ColumnType.Vector(3), ColumnType.Parse("list<int32>"), ColumnType.Parse("list<int64>"),
-        ColumnType.Parse("list<string>"),
-    };
-
     [Fact]
     public void ASlotCreatedAfterRowsWereAppended_HasNoValueOnThem_ForEveryColumnKind_EvenFromADirtyPool()
     {
         // The pool hands out arrays full of bytes that look like data and like "valid" bits.
         var memory = new RequestMemory(new DirtyPool());
         var types = new List<ColumnType> { ColumnType.Int64 };
-        types.AddRange(EveryKind);
+        types.AddRange(TableWrites.EveryStorageType.Select(ColumnType.Parse));
         var table = new CandidateTable(new TableSchema(EntityKeyType.Int64, types), 8, memory);
         table.AppendRows(new long[] { 10, 20, 30 }); // an earlier row source that writes none of these columns
 
@@ -223,25 +214,6 @@ public class UnwrittenRowsTests
             Bits.SetEach(actual, indices);
 
             Assert.Equal(expected, actual);
-        }
-    }
-
-    /// <summary>Hands out new arrays filled with 0xA5 bytes (references stay null), like a pool full of an earlier request's data.</summary>
-    private sealed class DirtyPool : IBufferPool
-    {
-        public T[] Rent<T>(int minimumLength)
-        {
-            var array = new T[Math.Max(1, minimumLength) + 3];
-            if (!RuntimeHelpers.IsReferenceOrContainsReferences<T>())
-            {
-                MemoryMarshal.CreateSpan(ref Unsafe.As<T, byte>(ref MemoryMarshal.GetArrayDataReference(array)), array.Length * Unsafe.SizeOf<T>()).Fill(0xA5);
-            }
-
-            return array;
-        }
-
-        public void Return<T>(T[] array, bool clearArray)
-        {
         }
     }
 }

@@ -144,6 +144,103 @@ public sealed class UnwrittenAndUncommittedDataTests
     }
 
     [Theory]
+    [InlineData("row source fallback after a column", "ROW_SOURCE_AFTER_COLUMN /nodes/backup", "before 'base'")]
+    [InlineData("row source fallback over a version", "ROW_SOURCE_SHADOWS_VERSION /nodes/backup", "after 'base' wrote its own version")]
+    [InlineData("row source fallback first to write", "ROW_SOURCE_BEFORE_COLUMN /nodes/seed", "later row source 'backup'")]
+    [InlineData("version of the node, later row source", "ROW_SOURCE_SHADOWS_VERSION /nodes/more", "after 'primary' wrote its own version")]
+    [InlineData("rows of the fallback, later row source", "ROW_SOURCE_BEFORE_COLUMN /nodes/backup|ROW_SOURCE_BEFORE_COLUMN /nodes/seed", "later row source 'more'")]
+    [InlineData("column fallback of a row source", "COLUMN_MULTIPLE_PRODUCERS /nodes/backup", "both 'seed' and 'backup'")]
+    [InlineData("row source fallback of a row source", "ROW_SOURCE_BEFORE_COLUMN /nodes/seed|ROW_SOURCE_BEFORE_COLUMN /nodes/seed|ROW_SOURCE_BEFORE_COLUMN /nodes/seed|ROW_SOURCE_BEFORE_COLUMN /nodes/seed", "later row source 'recall'")]
+    public void AFallbackIsChecked_AgainstWhatCameBeforeItsNode_AndWhatFollowsSeesWhatEitherMayLeave(string scenario, string expected, string mention)
+    {
+        // A fallback runs where its node failed and was rolled back, so it must pass the checks the node's own position
+        // would apply to it, whatever the node's effects (review 13). It used to be checked only for its outputs and
+        // inputs: a row source standing in for a column writer appended rows whose non-nullable columns read pooled data.
+        // Each effect is checked once: a row source fallback of a row source reports nothing twice.
+        var (columns, nodes) = scenario switch
+        {
+            "row source fallback after a column" => ("""
+                "score.x": { "type": "float64", "default": 0.0 }, "score.y": { "type": "float64?" }, "score.seen": { "type": "float64", "default": 0.0 }
+                """, """
+                "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7] } },
+                "base": { "order": 60, "op": "ExpressionScorer@1", "config": { "output_col": "score.x", "expr": "10.0" } },
+                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.y", "how": "fails" } },
+                "backup": { "role": "fallback", "op": "Rows@1", "config": { "ids": [8], "output_col": "score.y" } },
+                "seen": { "order": 80, "op": "ExpressionScorer@1", "config": { "output_col": "score.seen", "expr": "col.score.x + 1.0" } }
+                """),
+            "row source fallback over a version" => ("""
+                "score.x": { "type": "float64?", "flow": true }
+                """, """
+                "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7] } },
+                "base": { "order": 60, "op": "ExpressionScorer@1", "config": { "output_col": "score.x", "expr": "10.0" } },
+                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.x", "how": "fails" } },
+                "backup": { "role": "fallback", "op": "Rows@1", "config": { "ids": [8], "output_col": "score.x" } }
+                """),
+            "row source fallback first to write" => ("""
+                "score.y": { "type": "float64", "default": 0.0 }
+                """, """
+                "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7] } },
+                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.y", "how": "fails" } },
+                "backup": { "role": "fallback", "op": "Rows@1", "config": { "ids": [8], "output_col": "score.y" } }
+                """),
+            "version of the node, later row source" => ("""
+                "score.y": { "type": "float64?" }
+                """, """
+                "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7] } },
+                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.y", "how": "fails" } },
+                "backup": { "role": "fallback", "op": "Rows@1", "config": { "ids": [8], "output_col": "score.y" } },
+                "more": { "order": 80, "op": "Rows@1", "config": { "ids": [9], "output_col": "score.y" } }
+                """),
+            "rows of the fallback, later row source" => ("""
+                "score.y": { "type": "float64?" }, "score.z": { "type": "float64", "default": 0.0 }
+                """, """
+                "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7] } },
+                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.y", "how": "fails" } },
+                "backup": { "role": "fallback", "op": "Rows@1", "config": { "ids": [8], "output_col": "score.y" } },
+                "more": { "order": 80, "op": "Rows@1", "config": { "ids": [9], "output_col": "score.z" } }
+                """),
+            "column fallback of a row source" => ("""
+                "score.x": { "type": "float64?" }
+                """, """
+                "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7], "output_col": "score.x" } },
+                "primary": { "order": 70, "op": "Rows@1", "on_failure": "fallback:backup", "config": { "ids": [8], "output_col": "score.x" } },
+                "backup": { "role": "fallback", "op": "ExpressionScorer@1", "config": { "output_col": "score.x", "expr": "1.0" } }
+                """),
+            _ => ("", """
+                "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [1, 2] } },
+                "recall": { "order": 100, "op": "FailingRecall@1", "on_failure": "fallback:backup", "config": { "quotas_param": "quotas_r" } },
+                "backup": { "role": "fallback", "op": "MultiSourceRecall@1", "config": { "quotas_param": "quotas_t" } }
+                """),
+        };
+
+        var compilation = TryCompile(columns, nodes, """ "one": "1.0" """);
+
+        Assert.False(compilation.Succeeded);
+        var errors = compilation.Diagnostics.Where(d => d.IsError).ToList();
+        Assert.Equal(expected.Split('|'), errors.Select(d => $"{d.Code} {d.Pointer}").Order(StringComparer.Ordinal));
+        Assert.All(errors, d => Assert.Contains(mention, d.Message + " " + d.Hint, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ARowSourceFallbackOfAColumnWriter_ThatPassesTheChecks_ServesItsRows_AsInAReplay()
+    {
+        // The rules hold (no non-nullable column before it, nobody's version under it), so effects may differ: the node
+        // writes 99 into its own version of score.y and fails; the fallback appends 8 and writes the shared version.
+        var plan = Compile(""" "score.y": { "type": "float64?" } """, """
+            "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7] } },
+            "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.y", "how": "fails" } },
+            "backup": { "role": "fallback", "op": "Rows@1", "config": { "ids": [8], "output_col": "score.y" } }
+            """, """ "y": "col.score.y ?? -1.0" """);
+
+        var recorded = await Execute(plan, record: true);
+
+        Assert.True(recorded.Succeeded, recorded.Error);
+        Assert.Equal(new[] { (7L, -1.0), (8L, 0.8) }, recorded.Items.Select(i => (i.Id.Int64Value, i.Columns["y"].AsFloat64())));
+        Assert.Equal("backup", recorded.Outcomes.Single(o => o.NodeId == "primary").ProducedBy);
+        await AssertReplayAgrees(plan, recorded);
+    }
+
+    [Theory]
     [InlineData("fails")]
     [InlineData("throws")]
     [InlineData("returns late")]
