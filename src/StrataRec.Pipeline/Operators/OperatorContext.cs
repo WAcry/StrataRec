@@ -28,6 +28,9 @@ namespace StrataRec.Pipeline.Operators;
 /// <see cref="CancellationToken"/> when the client honours it, or by waiting no longer than <see cref="BudgetRemaining"/>
 /// and keeping every buffer the client may still write alive (through <see cref="RequestMemory.Hold"/>) until it completes.
 /// Such I/O is also not recorded or replayed (design 13.4).</para>
+/// <para>Nothing may write into <see cref="Table"/> once the attempt has returned: a failed attempt's appended rows are
+/// rolled back and reused by the fallback (<see cref="CandidateTable.Rollback"/>), so a late write would land on the
+/// fallback's rows. Clients called through this context write into rented buffers, never into the table.</para>
 /// </remarks>
 public sealed class OperatorContext
 {
