@@ -280,6 +280,33 @@ public class CacheReadTests
     }
 
     [Fact]
+    public async Task ARecordOfAnotherFieldSet_WhoseNamesSpellTheSameWithTabsAndNewlines_IsAMiss()
+    {
+        // Review 19: the same number of fields, and the same text once names and types are joined by tabs and newlines.
+        const string Joined = "a\tfloat64\nb", Second = "b\tfloat64\nc";
+        var store = new FakeCacheStore();
+        var writer = new FeatureTestRig().CacheSource("item_store", ScriptedConnector.Values((_, field) => field == "c" ? 22.0 : 11.0), distributed: store);
+        writer.Physical("item.left", FeatureTestRig.Item, ColumnType.Float64, "item_store", field: Joined);
+        var written = writer.Physical("item.right", FeatureTestRig.Item, ColumnType.Float64, "item_store", field: "c");
+        writer.Build();
+        await writer.NewRequest([1]).EnsureAsync(written);
+        await store.WhenWrittenAsync(1);
+
+        var connector = ScriptedConnector.Values((_, _) => 999.0);
+        var reader = new FeatureTestRig().CacheSource("item_store", connector, distributed: store);
+        var left = reader.Physical("item.left", FeatureTestRig.Item, ColumnType.Float64, "item_store", field: "a");
+        var right = reader.Physical("item.right", FeatureTestRig.Item, ColumnType.Float64, "item_store", field: Second);
+        reader.Build();
+        var request = reader.NewRequest([1]);
+        var result = await request.EnsureAsync(left, right);
+
+        Assert.Equal(FeatureState.Ok, result.State);
+        Assert.Equal((999.0, 999.0), (request.Value(left, 0).AsFloat64(), request.Value(right, 0).AsFloat64())); // not 11 and 22
+        Assert.Single(connector.Calls);
+        Assert.NotEqual(writer.Tables["item_store"].Cache!.Fingerprint, reader.Tables["item_store"].Cache!.Fingerprint);
+    }
+
+    [Fact]
     public async Task AContextCacheGroup_MissesOnce_ThenHits()
     {
         var connector = ScriptedConnector.Values((key, _) => key / 1000.0);
