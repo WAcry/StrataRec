@@ -43,9 +43,9 @@ public sealed class ScalarColumn<T> : ColumnBuffer
         CopyValidityFrom(source, sourceRow, row);
     }
 
-    protected override void GatherValues(ReadOnlySpan<int> rows)
+    protected override void GatherValues(ReadOnlySpan<int> rows, int newCapacity)
     {
-        var next = Memory.Rent<T>(Capacity);
+        var next = Memory.Rent<T>(newCapacity);
         for (var i = 0; i < rows.Length; i++)
         {
             next[i] = _values[rows[i]];

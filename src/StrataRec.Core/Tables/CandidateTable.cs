@@ -47,6 +47,7 @@ public sealed class CandidateTable
 {
     private readonly ColumnBuffer?[] _slots;
     private readonly ulong[]?[] _filled;
+    private int _totalAppended;
     private Dictionary<long, int>? _int64Index;
     private Dictionary<string, int>? _stringIndex;
 
@@ -64,11 +65,17 @@ public sealed class CandidateTable
 
     public TableSchema Schema { get; }
 
-    /// <summary>Maximum number of physical rows (sum of the plan's row-source limits).</summary>
+    /// <summary>Maximum number of rows that may ever be appended in this request (sum of the plan's row-source limits).</summary>
     public int Capacity { get; }
 
-    /// <summary>Number of physical rows ever appended (since the last Compact).</summary>
+    /// <summary>Number of physical rows currently stored (appended rows, minus rows released by Compact).</summary>
     public int PhysicalRowCount { get; private set; }
+
+    /// <summary>
+    /// Rows the slot buffers must be able to hold: the stored rows plus every row that may still be appended.
+    /// It never grows; Compact shrinks it to survivors plus the remaining append budget.
+    /// </summary>
+    public int StorageCapacity => PhysicalRowCount + FreeRows;
 
     public RowSelection Rows { get; }
 
@@ -94,7 +101,7 @@ public sealed class CandidateTable
 
     /// <summary>Returns the slot's buffer, creating it on first use.</summary>
     public ColumnBuffer GetOrCreateSlot(int slot) =>
-        _slots[slot] ??= ColumnBuffer.Create(Schema.SlotTypes[slot], Capacity, Memory);
+        _slots[slot] ??= ColumnBuffer.Create(Schema.SlotTypes[slot], Math.Max(1, StorageCapacity), Memory);
 
     /// <summary>Discards whatever was written to a slot (used when a node fails before committing).</summary>
     public void ResetSlot(int slot)
@@ -111,7 +118,7 @@ public sealed class CandidateTable
     /// <summary>Fill bitmap of a slot (allocated, all-clear, on first use).</summary>
     public Span<ulong> GetFilled(int slot)
     {
-        var words = Bits.WordCount(Capacity);
+        var words = Bits.WordCount(Math.Max(1, StorageCapacity));
         return (_filled[slot] ??= Memory.RentCleared<ulong>(words)).AsSpan(0, words);
     }
 
@@ -125,7 +132,8 @@ public sealed class CandidateTable
         }
 
         var alive = Rows.AliveBits;
-        for (var i = 0; i < alive.Length; i++)
+        var words = Math.Min(alive.Length, Bits.WordCount(Math.Max(1, StorageCapacity)));
+        for (var i = 0; i < words; i++)
         {
             if ((alive[i] & ~filled[i]) != 0)
             {
@@ -136,8 +144,8 @@ public sealed class CandidateTable
         return true;
     }
 
-    /// <summary>Remaining row capacity.</summary>
-    public int FreeRows => Capacity - PhysicalRowCount;
+    /// <summary>Rows that may still be appended in this request.</summary>
+    public int FreeRows => Capacity - _totalAppended;
 
     /// <summary>Appends rows with the given int64 keys at the end of the ranking. Returns the first new physical row.</summary>
     public int AppendRows(ReadOnlySpan<long> keys)
@@ -151,7 +159,7 @@ public sealed class CandidateTable
             _int64Index?.TryAdd(keys[i], first + i);
         }
 
-        Rows.AppendRange(first, keys.Length);
+        PublishAppended(first, keys.Length);
         return first;
     }
 
@@ -167,7 +175,7 @@ public sealed class CandidateTable
             _stringIndex?.TryAdd(keys[i], first + i);
         }
 
-        Rows.AppendRange(first, keys.Count);
+        PublishAppended(first, keys.Count);
         return first;
     }
 
@@ -212,14 +220,15 @@ public sealed class CandidateTable
         var order = Memory.Rent<int>(Math.Max(1, count));
         Rows.Order.CopyTo(order);
         var rows = order.AsSpan(0, count);
+        var newCapacity = Math.Max(1, count + FreeRows);
 
         for (var s = 0; s < _slots.Length; s++)
         {
-            _slots[s]?.Gather(rows);
+            _slots[s]?.Gather(rows, newCapacity);
             var filled = _filled[s];
             if (filled is not null)
             {
-                var next = Memory.RentCleared<ulong>(Bits.WordCount(Capacity));
+                var next = Memory.RentCleared<ulong>(Bits.WordCount(newCapacity));
                 for (var i = 0; i < rows.Length; i++)
                 {
                     if (Bits.Get(filled, rows[i]))
@@ -249,7 +258,34 @@ public sealed class CandidateTable
 
         var first = PhysicalRowCount;
         PhysicalRowCount += count;
+        _totalAppended += count;
         return first;
+    }
+
+    /// <summary>
+    /// Makes appended rows live. The key column is filled; every other existing slot marks the new rows missing and
+    /// unfilled, so values written before the append (or pooled garbage) are never read for them. A row source that
+    /// writes those columns sets them afterwards.
+    /// </summary>
+    private void PublishAppended(int first, int count)
+    {
+        Bits.SetRange(GetFilled(TableSchema.EntityIdSlot), first, count);
+        for (var s = 1; s < _slots.Length; s++)
+        {
+            var slot = _slots[s];
+            if (slot is not null)
+            {
+                Bits.ClearRange(slot.EnsureValidity(), first, count);
+            }
+
+            var filled = _filled[s];
+            if (filled is not null)
+            {
+                Bits.ClearRange(filled, first, count);
+            }
+        }
+
+        Rows.AppendRange(first, count);
     }
 
     private void RequireKeyType(EntityKeyType expected)

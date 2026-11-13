@@ -10,7 +10,7 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <!-- CS1591: public API docs are encouraged but not yet enforced. -->
-    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
 
     <Product>StrataRec</Product>

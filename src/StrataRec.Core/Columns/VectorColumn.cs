@@ -43,13 +43,18 @@ public sealed class VectorColumn : ColumnBuffer
     public override void CopyFrom(ColumnBuffer source, int sourceRow, int row)
     {
         var s = (VectorColumn)source;
+        if (s.Dimension != Dimension)
+        {
+            throw new ArgumentException($"Cannot copy a {s.Dimension}-dimensional vector into a {Dimension}-dimensional column.", nameof(source));
+        }
+
         s.Row(sourceRow).CopyTo(Row(row));
         CopyValidityFrom(source, sourceRow, row);
     }
 
-    protected override void GatherValues(ReadOnlySpan<int> rows)
+    protected override void GatherValues(ReadOnlySpan<int> rows, int newCapacity)
     {
-        var next = Memory.Rent<float>(Capacity * Dimension);
+        var next = Memory.Rent<float>(Math.Max(1, newCapacity * Dimension));
         for (var i = 0; i < rows.Length; i++)
         {
             Row(rows[i]).CopyTo(next.AsSpan(i * Dimension, Dimension));

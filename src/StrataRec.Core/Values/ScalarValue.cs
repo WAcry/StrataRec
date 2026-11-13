@@ -92,7 +92,8 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
                 return true;
             case StorageKind.Int64 when Kind == StorageKind.Float64:
                 var d = AsFloat64();
-                if (Math.Floor(d) == d && d >= long.MinValue && d <= long.MaxValue)
+                const double TwoPow63 = 9223372036854775808.0;
+                if (Math.Floor(d) == d && d >= -TwoPow63 && d < TwoPow63)
                 {
                     converted = FromInt64((long)d);
                     return true;
@@ -130,12 +131,45 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
 
     public override bool Equals(object? obj) => obj is ScalarValue other && Equals(other);
 
-    public override int GetHashCode() => Kind switch
+    public override int GetHashCode()
     {
-        StorageKind.String or StorageKind.Text => HashCode.Combine(Kind, StringComparer.Ordinal.GetHashCode((string)_ref!)),
-        StorageKind.Vector or StorageKind.ListInt64 or StorageKind.ListString => HashCode.Combine(Kind, _ref),
-        _ => HashCode.Combine(Kind, _bits),
-    };
+        switch (Kind)
+        {
+            case StorageKind.Float64:
+                return HashCode.Combine(Kind, AsFloat64().GetHashCode());
+            case StorageKind.String or StorageKind.Text:
+                return HashCode.Combine(Kind, StringComparer.Ordinal.GetHashCode((string)_ref!));
+            case StorageKind.Vector:
+                var h = new HashCode();
+                h.Add(Kind);
+                foreach (var f in AsVector())
+                {
+                    h.Add(f);
+                }
+
+                return h.ToHashCode();
+            case StorageKind.ListInt64:
+                var hl = new HashCode();
+                hl.Add(Kind);
+                foreach (var v in AsInt64List())
+                {
+                    hl.Add(v);
+                }
+
+                return hl.ToHashCode();
+            case StorageKind.ListString:
+                var hs = new HashCode();
+                hs.Add(Kind);
+                foreach (var v in AsStringList())
+                {
+                    hs.Add(v, StringComparer.Ordinal);
+                }
+
+                return hs.ToHashCode();
+            default:
+                return HashCode.Combine(Kind, _bits);
+        }
+    }
 
     public static bool operator ==(ScalarValue left, ScalarValue right) => left.Equals(right);
 

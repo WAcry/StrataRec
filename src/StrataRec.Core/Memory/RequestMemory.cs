@@ -58,10 +58,21 @@ public sealed class RequestMemory
     /// <summary>Rents an array of at least <paramref name="minimumLength"/> elements. Contents are unspecified.</summary>
     public T[] Rent<T>(int minimumLength)
     {
-        var array = _pool.Rent<T>(minimumLength);
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_returned, this);
+        }
+
+        var array = _pool.Rent<T>(minimumLength);
+        lock (_gate)
+        {
+            if (_returned)
+            {
+                // Lost a race with the final Release: give the lease back instead of leaking it.
+                _pool.Return(array, RuntimeHelpers.IsReferenceOrContainsReferences<T>());
+                throw new ObjectDisposedException(nameof(RequestMemory));
+            }
+
             _rented.Add(new Rented<T>(array));
             if (!RuntimeHelpers.IsReferenceOrContainsReferences<T>())
             {

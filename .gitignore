@@ -13,3 +13,6 @@ BenchmarkDotNet.Artifacts/
 artifacts/
 /out/
 .DS_Store
+
+# Local agent tooling (worktrees, settings)
+.claude/

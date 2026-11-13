@@ -26,7 +26,8 @@ public abstract class ColumnBuffer
 
     public ColumnType Type { get; }
 
-    public int Capacity { get; }
+    /// <summary>Number of physical rows the buffers can hold.</summary>
+    public int Capacity { get; private set; }
 
     protected RequestMemory Memory { get; }
 
@@ -73,14 +74,19 @@ public abstract class ColumnBuffer
     }
 
     /// <summary>
-    /// Rewrites the column so that new row <c>i</c> holds old row <c>rows[i]</c> (used by Compact, design 4.5).
-    /// Old arrays stay rented until the request ends.
+    /// Rewrites the column into new buffers of <paramref name="newCapacity"/> rows so that new row <c>i</c> holds old
+    /// row <c>rows[i]</c> (used by Compact, design 4.5). Old arrays stay rented until the request ends.
     /// </summary>
-    public void Gather(ReadOnlySpan<int> rows)
+    public void Gather(ReadOnlySpan<int> rows, int newCapacity)
     {
+        if (newCapacity < rows.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(newCapacity), "Capacity must hold every gathered row.");
+        }
+
         if (_validity is not null)
         {
-            var newValidity = Memory.RentCleared<ulong>(Bits.WordCount(Capacity));
+            var newValidity = Memory.RentCleared<ulong>(Bits.WordCount(newCapacity));
             for (var i = 0; i < rows.Length; i++)
             {
                 if (Bits.Get(_validity, rows[i]))
@@ -92,13 +98,15 @@ public abstract class ColumnBuffer
             _validity = newValidity;
         }
 
-        GatherValues(rows);
+        GatherValues(rows, newCapacity);
+        Capacity = newCapacity;
     }
 
     /// <summary>Copies the value (and validity) of <paramref name="sourceRow"/> in <paramref name="source"/> into <paramref name="row"/>.</summary>
     public abstract void CopyFrom(ColumnBuffer source, int sourceRow, int row);
 
-    protected abstract void GatherValues(ReadOnlySpan<int> rows);
+    /// <summary>Moves values into new buffers of <paramref name="newCapacity"/> rows; <see cref="Capacity"/> is updated afterwards.</summary>
+    protected abstract void GatherValues(ReadOnlySpan<int> rows, int newCapacity);
 
     /// <summary>Creates an empty column of the given type.</summary>
     public static ColumnBuffer Create(ColumnType type, int capacity, RequestMemory memory) => type.Kind switch

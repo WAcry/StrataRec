@@ -36,9 +36,9 @@ public sealed class TextColumn : ColumnBuffer
         CopyValidityFrom(source, sourceRow, row);
     }
 
-    protected override void GatherValues(ReadOnlySpan<int> rows)
+    protected override void GatherValues(ReadOnlySpan<int> rows, int newCapacity)
     {
-        var next = Memory.RentCleared<string?>(Capacity);
+        var next = Memory.RentCleared<string?>(newCapacity);
         for (var i = 0; i < rows.Length; i++)
         {
             next[i] = _values[rows[i]];

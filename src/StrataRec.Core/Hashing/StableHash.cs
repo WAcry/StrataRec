@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.IO.Hashing;
 using System.Text;
@@ -66,66 +67,54 @@ public static class StableHash
     /// <summary>Derives a 64-bit seed from a salt string, e.g. a layer salt <c>"home_feed/rerank/3"</c>.</summary>
     public static long SeedFromSalt(string salt)
     {
-        var builder = new Builder();
+        using var builder = new Builder();
         builder.Add(salt);
         return unchecked((long)builder.Finish());
     }
 
-    /// <summary>Incremental builder over the canonical encoding for mixed-type keys.</summary>
+    /// <summary>
+    /// Builder over the canonical encoding for mixed-type keys. Bytes accumulate in a pooled buffer and are hashed
+    /// once by <see cref="Finish"/>, so building a key does not allocate in steady state. Dispose returns the buffer.
+    /// </summary>
     public ref struct Builder
     {
-        private XxHash3? _hash;
-
-        private XxHash3 State => _hash ??= new XxHash3();
+        private byte[]? _buffer;
+        private int _length;
 
         public void Add(long value)
         {
-            Span<byte> buf = stackalloc byte[9];
-            WriteInt64(buf, value);
-            State.Append(buf);
+            var span = Reserve(9);
+            WriteInt64(span, value);
         }
 
         public void Add(double value)
         {
-            Span<byte> buf = stackalloc byte[9];
-            buf[0] = TagFloat64;
-            BinaryPrimitives.WriteDoubleLittleEndian(buf[1..], value == 0.0 ? 0.0 : value);
-            State.Append(buf);
+            var span = Reserve(9);
+            span[0] = TagFloat64;
+            BinaryPrimitives.WriteDoubleLittleEndian(span[1..], value == 0.0 ? 0.0 : value);
         }
 
         public void Add(bool value)
         {
-            Span<byte> buf = stackalloc byte[2];
-            buf[0] = TagBool;
-            buf[1] = value ? (byte)1 : (byte)0;
-            State.Append(buf);
+            var span = Reserve(2);
+            span[0] = TagBool;
+            span[1] = value ? (byte)1 : (byte)0;
         }
 
         public void Add(string value)
         {
             var byteCount = Encoding.UTF8.GetByteCount(value);
-            Span<byte> header = stackalloc byte[5];
-            header[0] = TagString;
-            BinaryPrimitives.WriteInt32LittleEndian(header[1..], byteCount);
-            State.Append(header);
-            if (byteCount <= 256)
-            {
-                Span<byte> utf8 = stackalloc byte[byteCount];
-                Encoding.UTF8.GetBytes(value, utf8);
-                State.Append(utf8);
-            }
-            else
-            {
-                State.Append(Encoding.UTF8.GetBytes(value));
-            }
+            var span = Reserve(5 + byteCount);
+            span[0] = TagString;
+            BinaryPrimitives.WriteInt32LittleEndian(span[1..], byteCount);
+            Encoding.UTF8.GetBytes(value, span[5..]);
         }
 
         public void AddIndex(int index)
         {
-            Span<byte> buf = stackalloc byte[5];
-            buf[0] = TagIndex;
-            BinaryPrimitives.WriteInt32LittleEndian(buf[1..], index);
-            State.Append(buf);
+            var span = Reserve(5);
+            span[0] = TagIndex;
+            BinaryPrimitives.WriteInt32LittleEndian(span[1..], index);
         }
 
         /// <summary>Adds a non-missing scalar value (int64, float64, bool or string).</summary>
@@ -141,7 +130,41 @@ public static class StableHash
             }
         }
 
-        public ulong Finish() => _hash is null ? XxHash3.HashToUInt64(ReadOnlySpan<byte>.Empty) : _hash.GetCurrentHashAsUInt64();
+        /// <summary>Hashes the bytes added so far. The builder can keep accumulating afterwards.</summary>
+        public readonly ulong Finish() =>
+            XxHash3.HashToUInt64(_buffer is null ? ReadOnlySpan<byte>.Empty : _buffer.AsSpan(0, _length));
+
+        /// <summary>Clears the accumulated bytes, keeping the buffer for reuse.</summary>
+        public void Reset() => _length = 0;
+
+        public void Dispose()
+        {
+            if (_buffer is not null)
+            {
+                ArrayPool<byte>.Shared.Return(_buffer);
+                _buffer = null;
+                _length = 0;
+            }
+        }
+
+        private Span<byte> Reserve(int count)
+        {
+            if (_buffer is null || _length + count > _buffer.Length)
+            {
+                var next = ArrayPool<byte>.Shared.Rent(Math.Max(64, (_length + count) * 2));
+                if (_buffer is not null)
+                {
+                    _buffer.AsSpan(0, _length).CopyTo(next);
+                    ArrayPool<byte>.Shared.Return(_buffer);
+                }
+
+                _buffer = next;
+            }
+
+            var span = _buffer.AsSpan(_length, count);
+            _length += count;
+            return span;
+        }
     }
 
     private static void WriteInt64(Span<byte> destination, long value)

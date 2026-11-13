@@ -54,9 +54,9 @@ public sealed class DictStringColumn : ColumnBuffer
         CopyValidityFrom(source, sourceRow, row);
     }
 
-    protected override void GatherValues(ReadOnlySpan<int> rows)
+    protected override void GatherValues(ReadOnlySpan<int> rows, int newCapacity)
     {
-        var next = Memory.RentCleared<int>(Capacity);
+        var next = Memory.RentCleared<int>(newCapacity);
         for (var i = 0; i < rows.Length; i++)
         {
             next[i] = _codes[rows[i]];

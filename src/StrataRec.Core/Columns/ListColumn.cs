@@ -40,14 +40,15 @@ public sealed class ListColumn<T> : ColumnBuffer
     public override void CopyFrom(ColumnBuffer source, int sourceRow, int row)
     {
         var s = (ListColumn<T>)source;
+        var valid = s.IsValid(sourceRow);
         Set(row, s.Get(sourceRow));
-        CopyValidityFrom(source, sourceRow, row);
+        SetValidity(row, valid);
     }
 
-    protected override void GatherValues(ReadOnlySpan<int> rows)
+    protected override void GatherValues(ReadOnlySpan<int> rows, int newCapacity)
     {
-        var starts = Memory.RentCleared<int>(Capacity);
-        var lengths = Memory.RentCleared<int>(Capacity);
+        var starts = Memory.RentCleared<int>(newCapacity);
+        var lengths = Memory.RentCleared<int>(newCapacity);
         for (var i = 0; i < rows.Length; i++)
         {
             starts[i] = _starts[rows[i]];
