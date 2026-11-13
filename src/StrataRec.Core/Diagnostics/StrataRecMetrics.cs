@@ -51,6 +51,9 @@ public static class StrataRecMetrics
         public const string LocalLoadDuration = "stratarec.local.load.duration";
         public const string LocalLoadFailures = "stratarec.local.load.failures";
         public const string LocalLoadLastSuccess = "stratarec.local.load.last_success";
+        public const string CacheKeys = "stratarec.cache.keys";
+        public const string CacheWrites = "stratarec.cache.writes";
+        public const string CacheEvictions = "stratarec.cache.evictions";
         public const string ModelDuration = "stratarec.model.duration";
         public const string ModelErrors = "stratarec.model.errors";
         public const string ModelFallbacks = "stratarec.model.fallbacks";
@@ -221,6 +224,36 @@ public static class StrataRecMetrics
     /// <c>stratarec.entity</c>.
     /// </summary>
     public static readonly Gauge<double> LocalLoadLastSuccess = Meter.CreateGauge<double>(Names.LocalLoadLastSuccess, "s", "Unix time of the last complete load or checkpoint of local feature tables.");
+
+    // Cache sources (design 6.6 cache): an in-process table (tier local) and optionally a distributed cache (tier
+    // distributed) in front of the connector. Tagged stratarec.source, stratarec.entity and stratarec.cache.tier.
+
+    /// <summary>
+    /// Keys a request read from a tier of a <c>cache</c> source, by what the tier had. Tags: <c>stratarec.source</c>,
+    /// <c>stratarec.entity</c>, <c>stratarec.cache.tier</c> = <c>local</c> | <c>distributed</c>, <c>stratarec.outcome</c> =
+    /// <c>hit</c> (served, within its TTL) | <c>miss</c> (no record) | <c>expired</c> (a record past its TTL, so the key went
+    /// on) | <c>stale</c> (an expired record served because the connector failed) | <c>mismatch</c> (distributed only: a
+    /// record of another field set or format, e.g. written by an instance on another catalog version) | <c>error</c>
+    /// (distributed only: the read failed or timed out, so the key went to the connector). A key goes on to the next tier
+    /// on <c>miss</c>, <c>expired</c>, <c>mismatch</c> and <c>error</c>; the connector's calls are counted as a fetch's.
+    /// The local hit ratio is <c>hit / (hit + miss + expired)</c> of tier <c>local</c>.
+    /// </summary>
+    public static readonly Counter<long> CacheKeys = Meter.CreateCounter<long>(Names.CacheKeys, "{key}", "Keys read from the tiers of cache sources, by outcome.");
+
+    /// <summary>
+    /// Records written back to a tier of a <c>cache</c> source, off the request path. Tags: <c>stratarec.source</c>,
+    /// <c>stratarec.entity</c>, <c>stratarec.cache.tier</c>, <c>stratarec.outcome</c> = <c>written</c> | <c>dropped</c> (the
+    /// tier's bounded write queue was full; the key is fetched again on its next miss) | <c>failed</c> (the write failed: a
+    /// distributed write that errored or timed out, a local write that did not fit <c>max_bytes</c> even after eviction).
+    /// </summary>
+    public static readonly Counter<long> CacheWrites = Meter.CreateCounter<long>(Names.CacheWrites, "{record}", "Records written back to the tiers of cache sources, by outcome.");
+
+    /// <summary>
+    /// Records a <c>cache</c> source's in-process table dropped to stay within <c>max_bytes</c>. Tags: <c>stratarec.source</c>,
+    /// <c>stratarec.entity</c>, <c>stratarec.outcome</c> = <c>expired</c> (past their TTL and stale-if-error window, dropped
+    /// first) | <c>oldest</c> (still usable, but written longest ago).
+    /// </summary>
+    public static readonly Counter<long> CacheEvictions = Meter.CreateCounter<long>(Names.CacheEvictions, "{record}", "Records evicted from the in-process tables of cache sources.");
 
     // Model calls: one per batch.
 

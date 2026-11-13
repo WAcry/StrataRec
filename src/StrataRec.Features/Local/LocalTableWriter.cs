@@ -78,6 +78,9 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
     public LocalTableSchema Schema => _layout.Schema;
 
+    /// <summary>The table written to (a cache's writer finds its queue there).</summary>
+    internal LocalFeatureTable Table => _table;
+
     /// <summary>Sees every version <see cref="BuildCompacted"/> builds, installed or discarded: lets a test check that a
     /// discarded copy is not kept alive. Null outside tests.</summary>
     internal Action<TableVersion>? CompactedCopyBuilt { get; set; }
@@ -195,6 +198,52 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         }
 
         Install(next);
+    }
+
+    /// <summary>
+    /// The write time to pass to <see cref="Compact"/> so that it drops the oldest-written records of a <c>cache</c> table
+    /// and frees at least <paramref name="recordBytes"/> of their bytes (records written at the same time go together);
+    /// <see cref="long.MaxValue"/> when even all of them hold less.
+    /// </summary>
+    internal long WriteTimeCutoff(long recordBytes)
+    {
+        var version = _version;
+        var index = version.Index;
+        var entries = index.Entries;
+        var writtenAt = new long[index.Count];
+        var lengths = new int[index.Count];
+        var count = 0;
+        for (var s = 0; s < index.SlotCount; s++)
+        {
+            var position = entries[(2 * s) + 1];
+            if (position == 0)
+            {
+                continue;
+            }
+
+            var page = version.PageOf(position);
+            var offset = (int)position;
+            if ((page[offset + RecordLayout.FlagsOffset] & RecordLayout.TombstoneFlag) != 0)
+            {
+                continue;
+            }
+
+            writtenAt[count] = BinaryPrimitives.ReadInt64LittleEndian(page.AsSpan(offset + RecordLayout.VersionOffset));
+            lengths[count++] = BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(offset + RecordLayout.LengthOffset));
+        }
+
+        Array.Sort(writtenAt, lengths, 0, count);
+        long freed = 0;
+        for (var i = 0; i < count; i++)
+        {
+            freed += lengths[i];
+            if (freed >= recordBytes)
+            {
+                return writtenAt[i] == long.MaxValue ? long.MaxValue : writtenAt[i] + 1;
+            }
+        }
+
+        return long.MaxValue;
     }
 
     // ---------------------------------------------------------------------------------------------------------------

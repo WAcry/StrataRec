@@ -4,6 +4,7 @@ using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
+using StrataRec.Features.Cache;
 using StrataRec.Features.Catalog;
 using StrataRec.Features.Local;
 using StrataRec.Features.Runtime;
@@ -796,7 +797,7 @@ public class LocalFeatureTableTests
     [Fact]
     public void CacheTable_DropsRecordsWrittenBeforeACutoff()
     {
-        var table = Table(mode: LocalTableMode.Cache);
+        var table = Table(mode: LocalTableMode.Cache, options: new LocalFeatureTableOptions { Cache = new CacheTableOptions { TtlMs = 1000 } });
         for (var id = 1; id <= 10; id++)
         {
             // The version of a cache record is its write time.

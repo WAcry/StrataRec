@@ -22,6 +22,7 @@ public class LocalBindingTests
         ["lookup"] = "\"context\"",
         ["max_bytes"] = "\"1MiB\"",
         ["bootstrap"] = """{ "source": "snapshot_files@1", "uri": "x" }""",
+        ["cache"] = """{ "ttl_ms": 1000 }""",
     };
 
     [Fact]
@@ -159,7 +160,7 @@ public class LocalBindingTests
     [Fact]
     public void UnknownMode_IsAnErrorAtTheMode()
     {
-        var error = Assert.Single(Errors(Build(Binding("""{ "mode": "cache", "max_bytes": "1MiB" }"""))));
+        var error = Assert.Single(Errors(Build(Binding("""{ "mode": "stream", "max_bytes": "1MiB" }"""))));
 
         Assert.Equal(("SOURCE_MODE_UNSUPPORTED", "/sources/item_store/mode"), (error.Code, error.Pointer));
         Assert.Contains("'local'", error.Hint);

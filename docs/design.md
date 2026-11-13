@@ -182,7 +182,7 @@ sequenceDiagram
     participant Pipe as 日志管道
 
     Host->>Engine: ExecuteAsync(RecRequest)
-    Engine->>Engine: 固定当前计划，分配实验桶，构建参数快照，漏斗组采样
+    Engine->>Engine: 固定当前计划，映射实验平台的分配，构建参数快照，漏斗组采样
     par 请求级特征预取
         Engine->>Sources: 拉取上下文特征
     and 召回
@@ -220,7 +220,7 @@ public sealed class RecRequest
     public required string PipelineId { get; init; }
     public required string RequestId { get; init; }
     public required RequestInputs Inputs { get; init; }   // 按 request_schema 校验的强类型输入
-    public IReadOnlyList<string>? Assignment { get; init; } // 实验平台分配的桶（experiment/arm）；为空时问 IAssignmentProvider，都没有就只跑基线
+    public IReadOnlyList<string>? Assignment { get; init; } // 实验平台分配的桶（experiment/arm）；null 时问 IAssignmentProvider，没有它就只跑基线；空列表表示平台没有分配桶
     public required TimeSpan Deadline { get; init; }
     public DebugOptions? Debug { get; init; }             // trace、explain、回放捕获、草稿；由宿主授权
 }
@@ -692,8 +692,12 @@ internal sealed class RequestMemory
   "sources": {
     "user_profile": {
       "mode": "cache",
-      "connector": "redis_hash@1", "endpoint": "redis://user-profile:6379", "timeout_ms": 15,
-      "cache": { "ttl_ms": 60000, "stale_if_error_ms": 600000, "max_bytes": "512MiB" }
+      "connector": "profile_service@1", "endpoint": "dns:///user-profile:8080", "timeout_ms": 15,
+      "max_bytes": "512MiB",
+      "cache": {
+        "ttl_ms": 60000, "stale_if_error_ms": 600000,
+        "distributed": { "store": "redis@1", "endpoint": "feature-cache.internal:6379", "password": "secret://feature-cache" }
+      }
     },
     "item_store": {
       "mode": "local",
@@ -800,7 +804,7 @@ public interface IFeatureBatchWriter
 
 **按上下文拉取的交叉特征。** 需要存储的交叉特征几乎都是交互类特征，天然稀疏：一个用户只和几十到几百个物品有过交互。绑定中声明 `"lookup": "context"` 的数据源按用户组织：每个用户一个键，值是按候选键排序的稀疏表（候选键数组加定长记录）。连接器只用上下文键发起一次请求，引擎把它当作上下文特征，在请求开始时与召回并发拉取（第 6.8 节）；响应写进以响应中候选键为键的暂存区，候选确定后由回填按键匹配，表中没有的候选按合法缺失处理（第 6.7 节）。存储端应限制每个用户保留的条目数，例如最近 1,000 次交互。稠密的交叉信号（例如向量点积）用衍生特征计算，不需要存储。
 
-**Redis 参考连接器。** `redis_hash@1` 和 `redis_blob@1` 基于 StackExchange.Redis：
+**读 Redis 的连接器。** 特征存在 Redis 里时，读取它的连接器由使用方按自己的存储格式实现（例如 `redis_hash@1`、`redis_blob@1`）；框架内置的 Redis 只用作 `cache` 的分布式层（第 6.6 节）。基于 StackExchange.Redis 实现时：
 
 1. 每个 endpoint 一个 `ConnectionMultiplexer`，进程启动时创建，所有请求共享。它在一条连接上多路复用全部命令，同时发出的命令自动合成流水线。
 2. **一批键用 `MGET`。** 每条命令最多 100 个键，超出时拆成多条并发发出，拆分本身几乎没有额外开销。逐键发送 `GET` 时，客户端要为每个键创建一条命令和一个 `Task`，服务端也要逐条分派。一次本机测量中，每批 500 个键：值为 150 字节时，逐键 `GET` 的客户端 CPU 约为 `MGET` 的 15 倍，Redis 的 CPU 约为 2.8 倍；值为 2 KB 时，客户端 CPU 约为 4 倍。`redis_hash@1` 对每个实体发一条 `HMGET`，同一批实体的命令一起发出。
@@ -809,7 +813,7 @@ public interface IFeatureBatchWriter
 5. 共享连接上的大值会阻塞排在它后面的命令。单个值应控制在几十 KB 以内，更大的值使用单独的 multiplexer。
 6. 命令发出后不能撤回。超时之后才到达的响应不再写入暂存区，连接器只释放它占用的缓冲区（第 4.8 节）。
 
-Redis 在这里是特征存储，由离线任务或流式任务写入，引擎只读取。需要在进程内缓存时使用 `cache` 供给方式（第 6.6 节）。
+Redis 在这里是特征存储，由离线任务或流式任务写入，引擎只读取。需要在进程内缓存时使用 `cache` 供给方式（第 6.6 节）；`cache` 的分布式层也可以是 Redis（`redis@1`），那里 Redis 是多个实例共享的缓存，由引擎写入，不是特征的来源。
 
 ### 6.6 供给方式与本地特征表
 
@@ -818,7 +822,7 @@ Redis 在这里是特征存储，由离线任务或流式任务写入，引擎�
 | `mode` | 数据怎么进来 | 请求路径上的 I/O | 新鲜度 | 适合 |
 | :--- | :--- | :--- | :--- | :--- |
 | `fetch`（默认） | 每个请求向远程数据源拉取 | 每次 | 最新 | 实体数量没有上限、短时间内很少重复读取的数据，例如交叉特征 |
-| `cache` | 未命中时拉取，结果写进本地特征表，按 TTL 过期 | 只在未命中时 | 落后不超过 `ttl_ms` | 同一个键在短时间内被反复读取，例如热门物品、同一用户的连续请求 |
+| `cache` | 未命中时先查可选的分布式层（Redis），再向远程数据源拉取，结果写回，按 TTL 过期 | 只在本地未命中时 | 落后不超过 `ttl_ms` | 同一个键在短时间内被反复读取，例如热门物品、同一用户的连续请求 |
 | `local` | 后台加载快照、消费更新流，写进本地特征表 | 无 | 取决于更新流的延迟 | 实体集合有限、能整体放进内存，例如物品和创作者 |
 
 供给方式只影响值从哪里来、有多新。特征的类型、默认值和缺失语义都由特征目录决定，节点、表达式和探针看到的值与供给方式无关。所以性能优化是绑定层面的决定：数据源先以 `fetch` 上线，再根据指标（每个数据源的耗时、每请求的键数、`cache` 的命中率）把热点数据源改成 `cache` 或 `local`，流水线和实验都不需要修改。
@@ -849,11 +853,11 @@ internal sealed class TableVersion
 
 **`cache` 的语义。**
 
-1. 命中且未过期的键直接读取。未命中或已过期的键合并成一次远程拉取，按 `fetch` 的规则发起（第 5.4 节）；结果写进暂存区、回填到候选表，同时交给写线程写入本地特征表。
+1. 命中且未过期的键直接读取。其余的键先查分布式层（`cache.distributed`，可选，例如多个服务实例共享的 Redis）；那里也没有的键合并成一次远程拉取，按 `fetch` 的规则发起（第 5.4 节），拉取表的全部字段，不只是这个节点要的，因为写回的必须是完整记录。结果写进暂存区、回填到候选表，同时交给后台写线程写回：分布式层来的只写本地表，远程来的写两层。分布式层只是优化，它出错或超时时这些键直接去远程，等待算在数据源的预算里，默认最多用一半。
 2. 远程存储确认没有值的键也写进表，记为一条全部缺失的记录。否则没有特征的新物品每次都会穿透到远程。
 3. 每个键的实际 TTL 在 `ttl_ms` 上下浮动 10%，浮动量由键的哈希决定。同一时刻写入的大量热门键因此不会同时过期、一起打到远程。
-4. 远程拉取失败时，如果表中有过期时间不超过 `stale_if_error_ms` 的记录，就使用它，节点结果为 `Degraded`；否则按依赖失败处理（第 6.7 节）。`ttl_ms` 和 `stale_if_error_ms` 分别对应 HTTP 缓存的 `max-age`（RFC 9111）和 `stale-if-error`（RFC 5861）。
-5. 容量由 `max_bytes` 限制。压实时先丢弃过期的记录；仍然超出时，按写入时间丢弃最早的记录。读取不记录访问时间，读路径保持纯读：热门的键每次过期后都会被重新拉取、重新写入，自然留在表里；只写过一次的冷键最先被丢弃。
+4. 远程拉取失败时，如果本地表或分布式层有过期时间不超过 `stale_if_error_ms` 的记录（取较新的），就使用它，节点结果为 `Degraded`；一个键都没有拿到值时按依赖失败处理（第 6.7 节）。`ttl_ms` 和 `stale_if_error_ms` 分别对应 HTTP 缓存的 `max-age`（RFC 9111）和 `stale-if-error`（RFC 5861）。
+5. 本地表的容量由 `max_bytes` 限制。压实时先丢弃过了 `stale_if_error_ms` 窗口的记录（窗口内的过期记录还要用来兜底）；仍然超过上限的四分之三时，按写入时间丢弃最早的记录，免得下一次写入又触发淘汰。读取不记录访问时间，读路径保持纯读：热门的键每次过期后都会被重新拉取、重新写入，自然留在表里；只写过一次的冷键最先被丢弃。
 
 **`local` 的语义。**
 
@@ -2102,7 +2106,7 @@ MMR 实验的 `mmr` 桶删除 `diversity_cap`、在第 550 位新增 `mmr_divers
 | :--- | :--- |
 | 节点 | 耗时分布、输入与输出行数、各种节点结果的次数（成功、跳过及原因、失败、走后备） |
 | 数据源 | 耗时、错误、缺失比例、每请求键数 |
-| 本地特征表 | 命中率与过期率（`cache`）、更新流延迟与每秒更新数（`local`）、记录数、字节数、压实耗时、写入队列丢弃数 |
+| 本地特征表 | 每层的键数按结果（命中、未命中、过期、兜底、出错、记录不匹配）、写回次数与丢弃数、淘汰数（`cache`）；更新流延迟与每秒更新数（`local`）；记录数、字节数、压实耗时 |
 | 模型调用 | 耗时、错误、后备比例；生成类调用的输出 token 数，成对类调用的比较对数 |
 | 列 | 非有限值次数 `column_nonfinite_total{node,column}`、超出存储范围（`int32`、`list<int32>`）次数 `column_out_of_range_total{node,column}` |
 | 实验桶 | 请求级的延迟、错误率、空结果率、降级率（用于健康门禁和实验护栏） |
@@ -2245,7 +2249,7 @@ stratarec/
 │   ├── StrataRec.Llm/                 # 生成式与大模型类算子、Mustache 提示词渲染
 │   ├── StrataRec.Connectors.Kafka/    # kafka@1 更新流来源（第 6.6 节）
 │   ├── StrataRec.Metrics.VictoriaMetrics/ # VictoriaMetrics 对数分桶（vmrange）指标导出（第 13.1 节）
-│   └── StrataRec.Connectors.Redis/    # redis_hash@1、redis_blob@1 等参考连接器（基于 StackExchange.Redis）；同目录下还有内存表与 gRPC 特征服务连接器
+│   └── StrataRec.Redis/               # redis@1：cache 供给方式的分布式层（基于 StackExchange.Redis），核心包不依赖它
 ├── control-plane/               # 发布控制器、manifest 校验、草稿服务的参考实现
 ├── schemas/                     # 各类产物的 JSON Schema，由 StrataRec.Artifacts 生成并提交
 ├── samples/                     # 基于公开数据集（如 MovieLens）的端到端示例

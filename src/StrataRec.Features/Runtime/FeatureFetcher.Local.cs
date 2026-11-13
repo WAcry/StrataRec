@@ -47,17 +47,19 @@ public sealed partial class FeatureFetcher
     private bool ReadsLocally(FetchGroup group) => group.Supply.Mode switch
     {
         SupplyMode.Fetch => false,
-        SupplyMode.Local => _hook is not { Replays: true },
+        SupplyMode.Local or SupplyMode.Cache => _hook is not { Replays: true },
     };
 
     /// <summary>
     /// Whether a prefetch (design 5.4) may start the group. A local group is read synchronously by the node that needs
     /// it, for the rows live then, so it is never prefetched; nor under replay, whose answer must take the same rows' keys.
     /// </summary>
+    /// <remarks>A cache group is read like a local one (its misses are resolved before the read completes), so the same
+    /// holds for it: never prefetched. Its misses therefore wait for the node that needs them; see design 6.6.</remarks>
     private static bool Prefetches(FetchGroup group) => group.Supply.Mode switch
     {
         SupplyMode.Fetch => true,
-        SupplyMode.Local => false,
+        SupplyMode.Local or SupplyMode.Cache => false,
     };
 
     /// <summary>The group's table version for this request, pinned on its first read.</summary>
@@ -67,8 +69,11 @@ public sealed partial class FeatureFetcher
         return pins[group.Index] ??= group.Supply.Table!.Table.Pin();
     }
 
-    /// <summary>Reads every local group of <paramref name="groups"/> for the members of <paramref name="member"/> still unfilled.</summary>
-    private void ReadLocalGroups(IndexList groups, bool[] member)
+    /// <summary>
+    /// Reads every local and cache group of <paramref name="groups"/> for the members of <paramref name="member"/> still
+    /// unfilled. A cache read that misses leaves its misses resolving (<see cref="TakeCacheRead"/>).
+    /// </summary>
+    private void ReadLocalGroups(IndexList groups, bool[] member, CancellationToken cancellationToken)
     {
         for (var g = 0; g < groups.Count; g++)
         {
@@ -82,7 +87,17 @@ public sealed partial class FeatureFetcher
             var count = SelectNeeded(group, member, skipInFlight: false, selected);
             if (count > 0 && !FailIfKeyFailed(group, selected.AsSpan(0, count)))
             {
-                ReadLocal(group, selected.AsSpan(0, count));
+                switch (group.Supply.Mode)
+                {
+                    case SupplyMode.Local:
+                        ReadLocal(group, selected.AsSpan(0, count));
+                        break;
+                    case SupplyMode.Cache:
+                        ReadCached(group, selected.AsSpan(0, count), cancellationToken);
+                        break;
+                    case SupplyMode.Fetch:
+                        throw new InvalidOperationException("A fetched group is not read locally.");
+                }
             }
         }
     }
@@ -174,7 +189,7 @@ public sealed partial class FeatureFetcher
             rowRecords[i] = entries[i] < 0 ? default : keyRecords[entries[i]];
         }
 
-        return new LocalReadBatch(rows.AsSpan(0, count), rowRecords, indexed ? keys : null, keyRecords, found);
+        return new LocalReadBatch(rows.AsSpan(0, count), entries.AsSpan(0, count), rowRecords, indexed ? keys : null, keyRecords, found);
     }
 
     /// <summary>
@@ -288,8 +303,11 @@ public sealed partial class FeatureFetcher
     /// the request with the other context features. A missing context key gives every feature its absent value, as for
     /// a fetch.
     /// </summary>
-    private void ReadLocalContext(IndexList closure, bool[] member)
+    /// <returns>The cache reads that missed, resolving: <see cref="CompleteCachedContextAsync"/> completes them.</returns>
+    private CacheRead? ReadLocalContext(IndexList closure, bool[] member, CancellationToken cancellationToken)
     {
+        CacheRead? first = null;
+        CacheRead? last = null;
         var seen = _memory.RentCleared<bool>(Math.Max(1, _plan.Groups.Count));
         for (var c = 0; c < closure.Count; c++)
         {
@@ -316,17 +334,32 @@ public sealed partial class FeatureFetcher
                 }
             }
 
-            ReadLocalContext(group, selected.AsSpan(0, count));
+            if (ReadLocalContext(group, selected.AsSpan(0, count), cancellationToken) is { } read)
+            {
+                if (last is null)
+                {
+                    first = read;
+                }
+                else
+                {
+                    last.Next = read;
+                }
+
+                last = read;
+            }
         }
+
+        return first;
     }
 
-    private void ReadLocalContext(FetchGroup group, ReadOnlySpan<int> features)
+    private CacheRead? ReadLocalContext(FetchGroup group, ReadOnlySpan<int> features, CancellationToken cancellationToken)
     {
         var local = group.Supply.Table!;
-        if (!local.Table.IsLoaded)
+        var cache = local.Table.Cache;
+        if (cache is null && !local.Table.IsLoaded)
         {
-            FailNotLoaded(local, features);
-            return;
+            FailNotLoaded(local, features); // a cache table needs no load: an empty cache only misses
+            return null;
         }
 
         var value = group.ContextKeyId >= 0 ? _context[group.ContextKeyId] : ScalarValue.Missing;
@@ -338,14 +371,27 @@ public sealed partial class FeatureFetcher
                 StoreContext(_plan.Features[f], ScalarValue.Missing);
             }
 
-            return;
+            return null;
         }
 
         var started = _hook is null ? 0 : Stopwatch.GetTimestamp();
         var version = Pin(group);
         var key = ToKey(value);
         var record = version.Find(key); // a key of the other type is not found
+        if (cache is not null)
+        {
+            return ReadCachedContext(group, features, version, key, record, started, cancellationToken);
+        }
+
         CountKeys(local.Table, record.Found ? 1 : 0, record.Found ? 0 : 1);
+        StoreLocalContext(group, features, version, key, record, started);
+        return null;
+    }
+
+    /// <summary>Publishes the values of a context key's record (or of no record) and records the read.</summary>
+    private void StoreLocalContext(FetchGroup group, ReadOnlySpan<int> features, TableVersion version, in EntityKey key, in LocalRecordRef record, long started)
+    {
+        var local = group.Supply.Table!;
         foreach (var f in features)
         {
             var info = _plan.Features[f];
@@ -448,9 +494,11 @@ public sealed partial class FeatureFetcher
     private readonly ref struct LocalReadBatch
     {
         public LocalReadBatch(
-            ReadOnlySpan<int> rows, ReadOnlySpan<LocalRecordRef> rowRecords, EntityKeyIndex? keys, ReadOnlySpan<LocalRecordRef> keyRecords, int found)
+            ReadOnlySpan<int> rows, ReadOnlySpan<int> rowKeys, ReadOnlySpan<LocalRecordRef> rowRecords, EntityKeyIndex? keys,
+            ReadOnlySpan<LocalRecordRef> keyRecords, int found)
         {
             Rows = rows;
+            RowKeys = rowKeys;
             RowRecords = rowRecords;
             Keys = keys;
             KeyRecords = keyRecords;
@@ -458,6 +506,9 @@ public sealed partial class FeatureFetcher
         }
 
         public ReadOnlySpan<int> Rows { get; }
+
+        /// <summary>Per row, its key's entry in <see cref="Keys"/> (and <see cref="KeyRecords"/>), or -1 for a row without a key.</summary>
+        public ReadOnlySpan<int> RowKeys { get; }
 
         public ReadOnlySpan<LocalRecordRef> RowRecords { get; }
 

@@ -407,8 +407,16 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
         {
             if (!_ready.Task.IsCompleted)
             {
-                var version = Table.Pin();
-                LogLoaded(_host._logger, Spec.Name, Spec.Bootstrap.SourceType, version.RecordCount, version.Bytes);
+                try
+                {
+                    var version = Table.Pin();
+                    LogLoaded(_host._logger, Spec.Name, Spec.Bootstrap.SourceType, version.RecordCount, version.Bytes);
+                }
+                catch (Exception)
+                {
+                    // A failing logger cannot report itself, and must not keep the plans waiting for a table that loaded.
+                }
+
                 _ready.TrySetResult();
             }
         }
@@ -467,7 +475,15 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
 
                 failures = Table.Completions == before ? failures + 1 : 1; // a run that made progress resets the backoff
                 var delay = Backoff(failures);
-                LogRestarting(_host._logger, failure, Spec.Name, Table.Position.ToString(), delay.TotalMilliseconds, failures);
+                try
+                {
+                    LogRestarting(_host._logger, failure, Spec.Name, Table.Position.ToString(), delay.TotalMilliseconds, failures);
+                }
+                catch (Exception)
+                {
+                    // A failing logger cannot report itself, and must not end the restarts: the table would go stale unnoticed.
+                }
+
                 try
                 {
                     await Task.Delay(delay, token).ConfigureAwait(false);
