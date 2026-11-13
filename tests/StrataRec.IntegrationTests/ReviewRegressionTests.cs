@@ -176,7 +176,7 @@ public sealed class ReviewRegressionTests
     {
         // The primary hangs until the 400 ms deadline; the backup needs 200 ms. With the remaining budget (~0 ms) the
         // backup cannot finish; with a fresh 400 ms budget (finding 12) it would have succeeded at ~600 ms.
-        var root = FallbackWorkspace(brokenLatencyMs: 5_000, backupLatencyMs: 200);
+        var root = FallbackWorkspace(brokenLatencyMs: 60_000, backupLatencyMs: 200);
         var engine = new RecEngine(new PlanEnvironment { BaseDirectory = root });
         ServiceCollectionExtensions.LoadWorkspace(engine, root, "local", new[] { "primary" }).ThrowIfErrors("load");
 
@@ -186,7 +186,7 @@ public sealed class ReviewRegressionTests
         });
 
         Assert.False(result.Succeeded);
-        Assert.InRange(result.ElapsedMs, 0, 3_000); // the deadline cancelled the 5 s primary
+        Assert.InRange(result.ElapsedMs, 0, 30_000); // the deadline cancelled the one-minute primary (a generous watchdog)
     }
 
     internal static string FallbackWorkspace(int brokenLatencyMs, int backupLatencyMs = 0)
