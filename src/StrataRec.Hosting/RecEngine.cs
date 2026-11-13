@@ -647,37 +647,93 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             return (RequestArms.None, Array.Empty<IgnoredArm>(), null);
         }
 
-        // The provider shares the end-to-end deadline: it is cancelled at the deadline, and the wait is bounded even if
-        // it ignores cancellation.
+        // The provider shares the end-to-end deadline. It is called inline on the request's thread, as connectors and
+        // models are (BoundedCall): what it does before it returns is not bounded. Its asynchronous part is: its token is
+        // cancelled at the deadline, and the wait ends there even if it ignores the token (review 18 #2).
         var budget = request.Deadline - Stopwatch.GetElapsedTime(started);
         if (budget <= TimeSpan.Zero)
         {
             return (RequestArms.None, Array.Empty<IgnoredArm>(), "deadline exceeded before assignment");
         }
 
+        const string Late = "deadline exceeded during assignment";
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(budget);
+        var context = new AssignmentContext
+        {
+            PipelineId = request.PipelineId,
+            RequestId = request.RequestId,
+            Inputs = request.Inputs,
+            Layers = pipeline.Layout.Layers,
+            Experiments = pipeline.Layout.Experiments,
+            Arms = pipeline.Layout.Arms,
+        };
+        ValueTask<IReadOnlyList<string>> answer;
+        try
+        {
+            answer = _assignmentProvider.AssignAsync(context, deadline.Token);
+        }
+        catch (Exception ex)
+        {
+            answer = ValueTask.FromException<IReadOnlyList<string>>(ex);
+        }
+
         IReadOnlyList<string> ids;
         try
         {
-            var context = new AssignmentContext
+            if (!answer.IsCompleted)
             {
-                PipelineId = request.PipelineId,
-                RequestId = request.RequestId,
-                Inputs = request.Inputs,
-                Layers = pipeline.Layout.Layers,
-                Experiments = pipeline.Layout.Experiments,
-                Arms = pipeline.Layout.Arms,
-            };
-            ids = await _assignmentProvider.AssignAsync(context, deadline.Token).AsTask().WaitAsync(budget, cancellationToken).ConfigureAwait(false);
+                var provider = answer.AsTask();
+                var left = request.Deadline - Stopwatch.GetElapsedTime(started);
+                var wait = provider.WaitAsync(left <= TimeSpan.Zero ? TimeSpan.Zero : left, cancellationToken);
+                if (!(wait.IsCompleted && provider.IsCompleted))
+                {
+                    // A wait that was set up ends with whoever came first: the provider, the deadline or the caller.
+                    ids = await wait.ConfigureAwait(false);
+                    return Resolve(pipeline.Plan, ids);
+                }
+
+                // WaitAsync hands back a completed provider as it is, whatever the time or the caller: judged below.
+                answer = new ValueTask<IReadOnlyList<string>>(provider);
+            }
+
+            // An answer the engine observes complete, with no wait to say who came first (a synchronous return, or one
+            // before the wait was set up), is judged now, as BoundedCall judges a client: the caller's cancellation first,
+            // then the deadline (passed by the clock, or by the timer that cancels the provider's token).
+            if (cancellationToken.IsCancellationRequested || deadline.IsCancellationRequested || Stopwatch.GetElapsedTime(started) >= request.Deadline)
+            {
+                Discard(answer);
+                cancellationToken.ThrowIfCancellationRequested();
+                return (RequestArms.None, Array.Empty<IgnoredArm>(), Late);
+            }
+
+            ids = answer.GetAwaiter().GetResult();
         }
         catch (Exception ex) when (ex is TimeoutException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {
-            return (RequestArms.None, Array.Empty<IgnoredArm>(), "deadline exceeded during assignment");
+            return (RequestArms.None, Array.Empty<IgnoredArm>(), Late);
         }
 
-        var assigned = ExternalArms.Resolve(pipeline.Plan.Layers, pipeline.Plan.Arms, ids, out var ignoredIds);
-        return (assigned, ignoredIds, null);
+        return Resolve(pipeline.Plan, ids);
+
+        static (RequestArms, IgnoredArm[], string?) Resolve(ExecutionPlan plan, IReadOnlyList<string> answered)
+        {
+            var assigned = ExternalArms.Resolve(plan.Layers, plan.Arms, answered, out var ignoredIds);
+            return (assigned, ignoredIds, null);
+        }
+
+        // Consumes, once (as a source-backed ValueTask requires), an answer that came too late; what it holds is dropped.
+        static void Discard(ValueTask<IReadOnlyList<string>> late)
+        {
+            try
+            {
+                _ = late.GetAwaiter().GetResult();
+            }
+            catch (Exception)
+            {
+                // Dropped with the answer: the request ended before it was observed.
+            }
+        }
     }
 
     /// <summary>
