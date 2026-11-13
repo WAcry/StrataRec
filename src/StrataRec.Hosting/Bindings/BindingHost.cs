@@ -83,7 +83,7 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
     private readonly object _gate = new();
     private readonly Dictionary<string, TableEntry> _byIdentity = new(StringComparer.Ordinal);
     private readonly HashSet<TableEntry> _entries = new(); // every entry whose source may still run, for shutdown
-    private readonly Dictionary<(object Factory, string Identity), ClientEntry> _clients = new();
+    private readonly Dictionary<BindingKey, ClientEntry> _clients = new();
     private readonly HashSet<ClientEntry> _clientEntries = new(); // every instance not yet disposed, for shutdown
     private readonly ILogger _logger;
     private bool _disposed;

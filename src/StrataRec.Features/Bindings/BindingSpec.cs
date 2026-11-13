@@ -38,6 +38,7 @@ public sealed class BindingSpec
         Artifact = artifact;
         Pointer = "/" + SectionName(section) + "/" + JsonPointer.Escape(name);
         Identity = ComputeIdentity(section, name, type, settings, baseDirectory);
+        Key = new BindingKey(factory, Identity);
     }
 
     /// <param name="section">Where the binding is.</param>
@@ -97,6 +98,9 @@ public sealed class BindingSpec
     /// a rotated secret keeps the instance, which resolves its secrets when it loads.</remarks>
     public string Identity { get; }
 
+    /// <summary>What an instance is shared by: <see cref="Identity"/> and the <see cref="Factory"/> object.</summary>
+    public BindingKey Key { get; }
+
     /// <summary>The section's member name in the bindings artifact.</summary>
     public static string SectionName(BindingSection section) => section switch
     {
@@ -128,6 +132,37 @@ public sealed class BindingSpec
         };
         return JsonCanonicalizer.CanonicalizeToString(identity);
     }
+}
+
+/// <summary>
+/// The key of every collection of shared instances (<see cref="BindingSpec.Key"/>): the spec's identity, and its factory
+/// compared by reference. Instances are shared only between plans that would have created them with the same factory
+/// object, so the factory's own <c>Equals</c> and <c>GetHashCode</c> are never used: a factory with value equality (a
+/// record) would get another factory's instances, and one whose hash changes as it creates (a record with a counter)
+/// would lose its own entries. One type, so no collection can compare factories another way.
+/// </summary>
+public readonly struct BindingKey : IEquatable<BindingKey>
+{
+    internal BindingKey(object factory, string identity)
+    {
+        Factory = factory;
+        Identity = identity;
+    }
+
+    public object Factory { get; }
+
+    public string Identity { get; }
+
+    public static bool operator ==(BindingKey left, BindingKey right) => left.Equals(right);
+
+    public static bool operator !=(BindingKey left, BindingKey right) => !left.Equals(right);
+
+    public bool Equals(BindingKey other) => ReferenceEquals(Factory, other.Factory) && string.Equals(Identity, other.Identity, StringComparison.Ordinal);
+
+    public override bool Equals(object? obj) => obj is BindingKey other && Equals(other);
+
+    public override int GetHashCode() =>
+        HashCode.Combine(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(Factory), Identity is null ? 0 : StringComparer.Ordinal.GetHashCode(Identity));
 }
 
 /// <summary>

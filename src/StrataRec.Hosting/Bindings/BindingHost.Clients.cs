@@ -18,7 +18,7 @@ public sealed partial class BindingHost
         where T : class
     {
         ArgumentNullException.ThrowIfNull(spec);
-        var key = (spec.Factory, spec.Identity);
+        var key = spec.Key;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -70,7 +70,7 @@ public sealed partial class BindingHost
                 return;
             }
 
-            var key = (entry.Spec.Factory, entry.Spec.Identity);
+            var key = entry.Spec.Key;
             if (_clients.TryGetValue(key, out var held) && held == entry)
             {
                 _clients.Remove(key);

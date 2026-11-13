@@ -44,7 +44,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
     private readonly List<BindingHost.TableEntry> _tables = new();
     private readonly Dictionary<string, BindingHost.TableEntry> _tablesByIdentity = new(StringComparer.Ordinal);
     private readonly List<BindingHost.ClientEntry> _clients = new();
-    private readonly Dictionary<(object Factory, string Identity), BindingHost.ClientEntry> _clientsByKey = new();
+    private readonly Dictionary<BindingKey, BindingHost.ClientEntry> _clientsByKey = new();
     private readonly Dictionary<object, BindingHost.ClientEntry> _clientsByInstance = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<IModelClient, Dictionary<(string Model, string? Version), Task<SignatureLookup>>> _signatures =
         new(ReferenceEqualityComparer.Instance);
@@ -115,7 +115,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
         where T : class
     {
         ArgumentNullException.ThrowIfNull(spec);
-        var key = (spec.Factory, spec.Identity);
+        var key = spec.Key;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);

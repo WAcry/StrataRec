@@ -388,6 +388,39 @@ public sealed class BindingHostClientTests
         Assert.Equal("value-of-ctr-token", instance.Credential!.Reveal());
     }
 
+    [Fact]
+    public async Task FactoriesThatAreEqualButDistinct_NeverShareAnInstance()
+    {
+        await using var host = new BindingHost();
+        var a = new ValueFactory("test");
+        var b = new ValueFactory("test");
+        Assert.Equal(a, b); // a record: equal by value
+        using var first = host.OpenLease();
+        using var second = host.OpenLease();
+
+        var fromA = first.Acquire(Spec(a), a.Create);
+        var fromB = second.Acquire(Spec(b), b.Create);
+
+        Assert.NotSame(fromA, fromB); // instances are shared only by the same factory object
+        Assert.Equal(2, host.InstanceCount);
+    }
+
+    [Fact]
+    public async Task AFactoryWhoseHashChangesAsItCreates_StillReleasesWhatItCreated()
+    {
+        await using var host = new BindingHost();
+        var factory = new CountingRecordFactory(); // a record whose Created count is part of its equality and hash
+        var lease = host.OpenLease();
+        var first = lease.Acquire(Spec(factory), factory.Create);
+        var second = lease.Acquire(Spec(factory, """{ "uri": "other.bin" }"""), factory.Create);
+        Assert.Equal((2, 2), (factory.Created, host.InstanceCount));
+
+        lease.Dispose();
+
+        await Task.WhenAll(first.Disposed.Task, second.Disposed.Task).WaitAsync(Wait);
+        Assert.Equal(0, host.InstanceCount); // both entries were found again, although the factory's hash changed
+    }
+
     private static Instance Loaded(BindingLease lease, Factory factory, string settings = """{ "uri": "m.bin" }""")
     {
         var instance = lease.Acquire(Spec(factory, settings), factory.Create);
@@ -418,6 +451,24 @@ public sealed class BindingHostClientTests
             var instance = new Instance(context);
             CreatedQueue.Enqueue(instance);
             return instance;
+        }
+    }
+
+    /// <summary>A factory with value equality: two with the same kind are equal, and neither may get the other's instances.</summary>
+    private sealed record ValueFactory(string Kind)
+    {
+        public Instance Create(BindingContext context) => new(context);
+    }
+
+    /// <summary>A record factory with mutable state: every creation changes its equality and its hash.</summary>
+    private sealed record CountingRecordFactory
+    {
+        public int Created { get; private set; }
+
+        public Instance Create(BindingContext context)
+        {
+            Created++;
+            return new Instance(context);
         }
     }
 

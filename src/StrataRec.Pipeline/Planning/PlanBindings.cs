@@ -75,7 +75,7 @@ public interface IPlanBindings : ILocalTableProvider, IBindingInstances
 public sealed class UnloadedBindings : IPlanBindings
 {
     private readonly Dictionary<string, LocalFeatureTable> _tables = new(StringComparer.Ordinal);
-    private readonly Dictionary<(object Factory, string Identity), object> _instances = new();
+    private readonly Dictionary<BindingKey, object> _instances = new();
 
     public LocalFeatureTable Acquire(LocalTableSpec spec)
     {
@@ -93,10 +93,10 @@ public sealed class UnloadedBindings : IPlanBindings
         where T : class
     {
         ArgumentNullException.ThrowIfNull(spec);
-        if (!_instances.TryGetValue((spec.Factory, spec.Identity), out var instance))
+        if (!_instances.TryGetValue(spec.Key, out var instance))
         {
             instance = create(spec.Context(null)); // never loaded, so it never resolves a secret
-            _instances[(spec.Factory, spec.Identity)] = instance;
+            _instances[spec.Key] = instance;
         }
 
         return (T)instance;
