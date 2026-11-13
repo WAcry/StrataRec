@@ -127,9 +127,11 @@ public interface ICandidateSource
 
 /// <summary>Creates candidate sources for bindings of one client type.</summary>
 /// <remarks>
-/// The engine creates one source per binding identity and shares it across plans, so a source lives as long as some
-/// plan uses it. <see cref="Create"/> only reads the settings; a source that must connect first implements
-/// <see cref="ILoadable"/>, and one holding resources implements <see cref="IAsyncDisposable"/> or <see cref="IDisposable"/>.
+/// The engine creates one source per binding identity and shares it across plans and their concurrent requests, so a
+/// source lives as long as some plan uses it. <see cref="Create"/> only reads the settings; a source that must connect
+/// first implements <see cref="ILoadable"/>, and one holding resources implements <see cref="IAsyncDisposable"/> or
+/// <see cref="IDisposable"/>: the engine disposes it once nothing can call it any more. The whole lifetime contract is on
+/// <see cref="BindingContext"/>.
 /// </remarks>
 public interface ICandidateSourceFactory
 {

@@ -128,10 +128,12 @@ public interface IFeatureSourceConnector
 
 /// <summary>Creates connectors for bindings of one connector type.</summary>
 /// <remarks>
-/// The engine creates one connector per binding identity and shares it across plans (see
+/// The engine creates one connector per binding identity and shares it across plans and their concurrent requests (see
 /// <see cref="Bindings.BindingSpec.Identity"/>), so a connector lives as long as some plan uses it, not one plan.
 /// <see cref="Create"/> only reads the settings; a connector that must connect or resolve credentials first implements
-/// <see cref="ILoadable"/>, and one holding resources implements <see cref="IAsyncDisposable"/> or <see cref="IDisposable"/>.
+/// <see cref="ILoadable"/>, and one holding resources implements <see cref="IAsyncDisposable"/> or <see cref="IDisposable"/>:
+/// the engine disposes it once nothing can call it any more. The whole lifetime contract is on
+/// <see cref="BindingContext"/>.
 /// </remarks>
 public interface IFeatureConnectorFactory
 {

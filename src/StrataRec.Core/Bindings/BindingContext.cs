@@ -4,11 +4,43 @@ namespace StrataRec.Core.Bindings;
 
 /// <summary>
 /// What a factory gets to create the instance one binding names (design 6.4): a model client, a candidate source or a
-/// feature connector. The engine shares that instance with every plan whose binding is the same, so a factory only reads
-/// its settings here and does no I/O: what needs I/O (a model file, a connection, a secret) happens in
-/// <see cref="ILoadable.LoadAsync"/>, when an engine loads a plan that uses the instance, never while a plan compiles
-/// (<c>stratarec validate</c> creates instances without loading them, so it needs neither the files nor the network).
+/// feature connector, built in or written by the user. The remarks are the lifetime contract of every such instance:
+/// what the engine guarantees, and what the implementation must do.
 /// </summary>
+/// <remarks>
+/// <para><b>Create.</b> The factory's <c>Create</c> is called when a plan is compiled and nothing holds a usable instance
+/// of the binding yet: when an engine loads the first plan with this binding, when a plan follows one whose instance
+/// failed its load, and by every compile that does not serve (<c>stratarec validate</c>, <c>build</c>,
+/// <c>explain-plan</c>), whose instances are never loaded, never called and never disposed. Two plans loading at once
+/// may both create one; the extra one is disposed without being loaded or called. So <c>Create</c> only reads and checks
+/// the settings: no I/O, no connections, threads or anything else that needs releasing. It may run on several threads at
+/// once. Throw <see cref="BindingException"/> with the setting's pointer and a hint for a wrong setting.</para>
+/// <para><b>Sharing.</b> One instance serves every plan of the engine whose binding has the same identity: section,
+/// logical name, type, all of the binding's own <see cref="Settings"/> and the <see cref="BaseDirectory"/>, from the
+/// same factory object. A plan swap that leaves the binding unchanged keeps the instance, loaded; changing any of its
+/// settings creates a new one, loaded before the new plan serves. What the framework itself interprets, such as
+/// <c>timeout_ms</c>, is not part of the identity. All requests of all those plans
+/// call the one instance concurrently: it must be thread-safe.</para>
+/// <para><b>Load.</b> An instance that needs I/O before it serves implements <see cref="ILoadable"/>: that is where it
+/// reads files, connects and resolves its secrets (<see cref="SecretReference(string)"/>). The engine calls it at most
+/// once, on the thread pool, bounded and cancellable, and serves no plan with the instance before it completed. Nothing
+/// on the request path waits for I/O the load could have done.</para>
+/// <para><b>Calls.</b> The request calls (<c>InvokeAsync</c>, <c>FetchAsync</c>, <c>RetrieveAsync</c>) and model
+/// signature lookups come only after the load completed. The engine may stop waiting for a call at its timeout and
+/// cancel its token; the instance stays alive until the call has returned, so a call that ignores its token only delays
+/// the disposal.</para>
+/// <para><b>Dispose.</b> An instance that holds resources implements <see cref="IAsyncDisposable"/> (preferred) or
+/// <see cref="IDisposable"/>. The engine disposes it exactly once, on the thread pool, when no served plan uses it any
+/// more (its plans were replaced or rejected, or the engine is disposed) and nothing can call it: no request of those
+/// plans runs, no call they abandoned and no signature lookup is still inside the instance, and its load (if started)
+/// has returned. No call starts after the disposal begins. It may come without a load (the engine loads nothing, as
+/// for replay, or the instance was the extra one) or after a failed load, so it must release whatever was acquired so
+/// far. An instance whose load or call never returns is never disposed, which engine shutdown reports after its
+/// timeout.</para>
+/// <para><b>Errors and secrets.</b> Errors are configuration diagnostics at the binding; a <see cref="BindingException"/>
+/// points at the setting and carries a hint. Never put a secret's value in a message, an exception or a log:
+/// <see cref="Secret"/> formats as <c>[secret]</c>, and only <see cref="Secret.Reveal"/> reads it.</para>
+/// </remarks>
 public sealed class BindingContext
 {
     /// <param name="name">The logical name, e.g. <c>ctr_ranker</c>.</param>

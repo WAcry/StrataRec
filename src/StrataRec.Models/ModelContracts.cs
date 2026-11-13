@@ -129,10 +129,11 @@ public interface IModelClient
 
 /// <summary>Creates <see cref="IModelClient"/> instances for bindings of one client type.</summary>
 /// <remarks>
-/// The engine creates one client per binding identity and shares it across plans, so a client lives as long as some
-/// plan uses it, not one plan. <see cref="Create"/> only reads the settings; a client that must load a model or connect
-/// first implements <see cref="ILoadable"/>, and one holding resources implements <see cref="IAsyncDisposable"/> or
-/// <see cref="IDisposable"/>: the engine disposes it once nothing can call it any more.
+/// The engine creates one client per binding identity and shares it across plans and their concurrent requests, so a
+/// client lives as long as some plan uses it, not one plan. <see cref="Create"/> only reads the settings; a client that
+/// must load a model or connect first implements <see cref="ILoadable"/>, and one holding resources implements
+/// <see cref="IAsyncDisposable"/> or <see cref="IDisposable"/>: the engine disposes it once nothing can call it any more.
+/// The whole lifetime contract is on <see cref="BindingContext"/>.
 /// </remarks>
 public interface IModelClientFactory
 {

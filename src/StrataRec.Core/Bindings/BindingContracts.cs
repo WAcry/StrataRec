@@ -2,19 +2,17 @@ namespace StrataRec.Core.Bindings;
 
 /// <summary>
 /// An instance created from a binding (model client, candidate source, feature connector) that must do I/O before it can
-/// serve: read a model file, open a connection, resolve its credentials. The engine calls <see cref="LoadAsync"/> once per
-/// instance, off the request path, when it loads the first plan that uses the instance, and serves that plan only after
-/// it completed; plans that share the instance later find it loaded. An instance without this interface serves as
-/// created.
+/// serve: read a model file, open a connection, resolve its credentials. The engine calls <see cref="LoadAsync"/> at most
+/// once per instance, on the thread pool (a load may block), when it loads the first plan that uses the instance, and
+/// serves that plan only after it completed; plans that share the instance later find it loaded. An instance without
+/// this interface serves as created. The whole lifetime contract is on <see cref="BindingContext"/>.
 /// </summary>
 /// <remarks>
 /// <para>The engine bounds the load (<c>BindingHostOptions.LoadTimeout</c>) and cancels its token when the instance is no
-/// longer wanted (the plan was rejected, the engine is disposed). A failed or timed-out load rejects the plans that need
-/// the instance, with an error at the binding; the instance is then never handed out again, so the next load of the
-/// same binding creates a new instance and really retries. Throw <see cref="BindingException"/> to say which setting is
-/// wrong and how to fix it.</para>
-/// <para>The engine disposes the instance (<see cref="IAsyncDisposable"/> or <see cref="IDisposable"/>) only after its load
-/// returned, and only once no served plan uses it and no request of a replaced plan can still call it.</para>
+/// longer wanted (the plan was rejected, the engine is disposed); honour it, since the instance is disposed only after
+/// the load returned. A failed or timed-out load rejects the plans that need the instance, with an error at the binding;
+/// the instance is then never handed out again, so the next load of the same binding creates a new instance and really
+/// retries. Throw <see cref="BindingException"/> to say which setting is wrong and how to fix it.</para>
 /// </remarks>
 public interface ILoadable
 {
