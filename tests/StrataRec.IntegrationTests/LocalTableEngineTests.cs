@@ -96,6 +96,7 @@ public sealed class LocalTableEngineTests
         Assert.Same(current, AuthorTable(engine));
         var during = await engine.ExecuteAsync(MetricsTests.Request("req-during"));
         Assert.True(during.Succeeded, during.Error);
+        LiveRunAssert.SameNodeOutcomes(before, during);
         Assert.Equal(Items(before), Items(during));
 
         // Fixed: the same release loads now (a failed table is never reused, so this really loads again).
@@ -147,7 +148,8 @@ public sealed class LocalTableEngineTests
         var changed = HomeFeedTestHost.LoadModified(root => ScaleFollowers(root, 10));
         var (changedEngine, _) = MetricsTests.LoadEngine(changed);
         var live = await changedEngine.ExecuteAsync(ReplayTests.Request("req-local-live", 1001, "home", ReplayTests.ControlArms));
-        Assert.NotEqual(Items(recorded), Items(live)); // the table matters to the result
+        LiveRunAssert.SameNodeOutcomes(recorded, live);
+        Assert.NotEqual(Items(recorded), Items(live)); // the same decisions: the table matters to the result
         var replayed = await changedEngine.ReplayAsync(bundle);
 
         Assert.True(replayed.Report.Diff.Identical, ReplayTests.Describe(replayed.Report));
@@ -173,7 +175,7 @@ public sealed class LocalTableEngineTests
         var fetched = HomeFeedTestHost.LoadModified(root =>
         {
             File.WriteAllText(Path.Combine(root, "fixtures", "authors.json"), MemoryJson(Path.Combine(root, Snapshot, "part-0000.jsonl")));
-            SampleBindings.Rebind(root, "author_store", """{ "connector": "memory@1", "data_file": "fixtures/authors.json", "timeout_ms": 5000 }""");
+            SampleBindings.Rebind(root, "author_store", $$"""{ "connector": "memory@1", "data_file": "fixtures/authors.json", "timeout_ms": {{HomeFeedTestHost.UntimedMs}} }""");
         });
         var (local, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
         var (remote, _) = MetricsTests.LoadEngine(fetched);
@@ -184,6 +186,7 @@ public sealed class LocalTableEngineTests
 
         Assert.True(fromTable.Succeeded, fromTable.Error);
         Assert.True(fromFetch.Succeeded, fromFetch.Error);
+        LiveRunAssert.SameNodeOutcomes(fromFetch, fromTable);
         Assert.Equal(Items(fromFetch), Items(fromTable));
 
         // Recorded alike too: one call with the same keys and the stored values (missing where there is no record).

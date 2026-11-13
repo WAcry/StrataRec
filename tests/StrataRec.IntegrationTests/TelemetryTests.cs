@@ -221,26 +221,18 @@ public sealed class MetricsTests
         }
     }
 
-    /// <summary>Makes the model or both candidate sources take 5 s; with a 50 ms timeout, or with none shorter than the request.</summary>
+    /// <summary>
+    /// Makes the model or both candidate sources take 5 s; with a 50 ms timeout of their own (in their bindings), or with
+    /// none shorter than the request (the untimed sample's).
+    /// </summary>
     internal static void SlowDown(string root, string what, bool tightTimeout)
     {
         var bindings = Path.Combine(root, "bindings", "local.jsonc");
         var text = File.ReadAllText(bindings);
-        var edited = what == "model"
-            ? text.Replace("\"client\": \"linear@1\",", "\"client\": \"linear@1\", \"latency_ms\": 5000,", StringComparison.Ordinal)
-            : text.Replace("\"client\": \"memory_list@1\",",
-                "\"client\": \"memory_list@1\", \"latency_ms\": 5000," + (tightTimeout ? " \"timeout_ms\": 50," : string.Empty), StringComparison.Ordinal);
+        var client = what == "model" ? "\"client\": \"linear@1\"," : "\"client\": \"memory_list@1\",";
+        var edited = text.Replace(client, client + " \"latency_ms\": 5000," + (tightTimeout ? " \"timeout_ms\": 50," : string.Empty), StringComparison.Ordinal);
         Assert.NotEqual(text, edited);
         File.WriteAllText(bindings, edited);
-        if (what == "model" && !tightTimeout)
-        {
-            // ctr_ranker's own 50 ms budget would cut the call before the caller does.
-            var pipeline = Path.Combine(root, "pipelines", "home_feed.jsonc");
-            var source = File.ReadAllText(pipeline);
-            var relaxed = source.Replace("\"timeout_ms\": 50,", "\"timeout_ms\": 5000,", StringComparison.Ordinal);
-            Assert.NotEqual(source, relaxed);
-            File.WriteAllText(pipeline, relaxed);
-        }
     }
 
     [Fact]
@@ -297,7 +289,7 @@ public sealed class MetricsTests
         RequestId = requestId,
         Inputs = HomeFeedTestHost.Inputs(1001, "home"),
         Assignment = Arms,
-        Deadline = TimeSpan.FromSeconds(5),
+        Deadline = HomeFeedTestHost.Deadline,
         TimeMs = 1_767_225_600_000,
         Debug = new DebugOptions { Trace = true },
     };
@@ -311,8 +303,9 @@ public sealed class MetricsTests
         File.WriteAllText(bindings, edited);
     }
 
-    /// <summary>Binds <c>author_store</c> (local in the sample) to a fetched source that fails every call.</summary>
-    internal static void FailAuthorStore(string root) => SampleBindings.Rebind(root, "author_store", """{ "connector": "memory@1", "data": {}, "fail": true }""");
+    /// <summary>Binds <c>author_store</c> (local in the sample) to a fetched source that fails every call, never by timing out.</summary>
+    internal static void FailAuthorStore(string root) =>
+        SampleBindings.Rebind(root, "author_store", $$"""{ "connector": "memory@1", "data": {}, "fail": true, "timeout_ms": {{HomeFeedTestHost.UntimedMs}} }""");
 
     /// <summary>Design 13.1 label rules: bounded string tags only; durations never carry outcomes; arms only on request-level instruments.</summary>
     private static void AssertTagRules(IEnumerable<Measured> measurements)
@@ -563,7 +556,7 @@ public sealed class EventLogTests
     {
         RequestId = "req-" + i,
         Inputs = HomeFeedTestHost.Inputs(1001, "home"),
-        Deadline = TimeSpan.FromSeconds(5),
+        Deadline = HomeFeedTestHost.Deadline,
         TimeMs = 1_767_225_600_000,
     };
 }

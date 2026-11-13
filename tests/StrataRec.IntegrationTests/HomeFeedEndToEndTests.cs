@@ -20,7 +20,7 @@ public sealed class HomeFeedEndToEndTests
     [Fact]
     public void SampleCompilesWithOnlyTheExpectedInteractionWarning()
     {
-        var compilation = HomeFeedTestHost.Load().Compile();
+        var compilation = HomeFeedTestHost.Load(SampleTiming.AsWritten).Compile();
 
         Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
         Assert.DoesNotContain(compilation.Diagnostics, d => d.IsError);
@@ -66,6 +66,7 @@ public sealed class HomeFeedEndToEndTests
         Assert.True(first.Succeeded, first.Error);
         Assert.Equal(10, first.Items.Count);
         Assert.Equal(Enumerable.Range(1, 10), first.Items.Select(i => i.Rank));
+        LiveRunAssert.SameNodeOutcomes(first, second);
         Assert.Equal(Describe(first), Describe(second));
         Assert.All(first.Items, item => Assert.False(item.Columns["score"].IsMissing));
         Assert.Equal("fusion", first.ColumnProducers["score"]);
@@ -107,6 +108,7 @@ public sealed class HomeFeedEndToEndTests
                         var actual = await executor.ExecuteAsync(unified, HomeFeedTestHost.NewRequest(user, surface, unified.ArmsFromIds(arms)));
                         var expected = await executor.ExecuteAsync(reference.Plan!, HomeFeedTestHost.NewRequest(user, surface));
                         Assert.True(actual.Succeeded, actual.Error);
+                        LiveRunAssert.SameNodeOutcomes(expected, actual);
                         Assert.Equal(Describe(expected), Describe(actual));
                     }
                 }
@@ -229,8 +231,9 @@ public sealed class HomeFeedEndToEndTests
     [Fact]
     public async Task EngineAssignsArmsAndServesThroughTheHostApi()
     {
-        var engine = new RecEngine(HomeFeedTestHost.Load().Environment);
-        var diagnostics = ServiceCollectionExtensions.LoadWorkspace(engine, Samples.HomeFeed, "local");
+        var host = HomeFeedTestHost.Load();
+        var engine = new RecEngine(host.Environment);
+        var diagnostics = ServiceCollectionExtensions.LoadWorkspace(engine, host.Root, "local");
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
 
         var assignedArms = new HashSet<string>();
@@ -241,7 +244,7 @@ public sealed class HomeFeedEndToEndTests
                 PipelineId = "home_feed",
                 RequestId = "req-" + user,
                 Inputs = HomeFeedTestHost.Inputs(1001 + (user % 2), "home").Set("session_id", "s-" + user).Set("user_id", user),
-                Deadline = TimeSpan.FromSeconds(5),
+                Deadline = HomeFeedTestHost.Deadline,
             });
 
             Assert.True(result.Succeeded, result.Error);

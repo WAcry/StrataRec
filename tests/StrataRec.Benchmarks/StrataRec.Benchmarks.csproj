@@ -12,6 +12,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\Shared\*.cs" LinkBase="Shared" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\StrataRec.Core\StrataRec.Core.csproj" />
     <ProjectReference Include="..\..\src\StrataRec.Artifacts\StrataRec.Artifacts.csproj" />
     <ProjectReference Include="..\..\src\StrataRec.Expressions\StrataRec.Expressions.csproj" />

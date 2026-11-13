@@ -22,7 +22,9 @@ namespace StrataRec.IntegrationTests;
 /// <remarks>
 /// The clients here ignore cancellation and answer on a dedicated thread once the test opens their gate, so whether a
 /// request waited for one is not a question of timing: it returned while the gate was closed, or the test fails after
-/// <see cref="Patience"/>. They run alone because the abandoned-I/O count is a process-wide metric.
+/// <see cref="Patience"/>. The tests of ctr_ranker's own 50 ms budget load the sample as written
+/// (<see cref="SampleTiming.AsWritten"/>); the others give the untimed sample the budget they are about. They run alone
+/// because the abandoned-I/O count is a process-wide metric.
 /// </remarks>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class BoundedWaitTests
@@ -33,7 +35,7 @@ public sealed class BoundedWaitTests
     public async Task AModelIgnoringCancellation_IsCutOffAtTheNodeBudget_AndTheFallbackServes_WhileTheModelHoldsTheMemory()
     {
         using var capture = new MetricCapture();
-        var host = HomeFeedTestHost.Load(); // ctr_ranker: timeout_ms 50, fallback ctr_backup
+        var host = HomeFeedTestHost.Load(SampleTiming.AsWritten); // ctr_ranker: timeout_ms 50, fallback ctr_backup
         using var models = new GatedModels();
         var pool = new CountingPool();
         var engine = Engine(host, pool, models: models);
@@ -67,9 +69,9 @@ public sealed class BoundedWaitTests
     [Fact]
     public async Task TheRequestDeadline_BoundsTheWaitForAModelIgnoringCancellation()
     {
-        // No node timeout: the node's budget is what is left of the request (design 5.6).
+        // The untimed node timeout is longer than the request: the node's budget is what is left of it (design 5.6).
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
-            "\"on_failure\": \"fallback:ctr_backup\", \"timeout_ms\": 50,", "\"on_failure\": \"fail_request\","));
+            "\"on_failure\": \"fallback:ctr_backup\"", "\"on_failure\": \"fail_request\""));
         using var models = new GatedModels();
         var pool = new CountingPool();
         var engine = Engine(host, pool, models: models);
@@ -92,7 +94,7 @@ public sealed class BoundedWaitTests
     {
         using var capture = new MetricCapture();
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
-            "\"on_failure\": \"fallback:ctr_backup\", \"timeout_ms\": 50,", "\"on_failure\": \"fail_request\", \"timeout_ms\": 600000,"));
+            "\"on_failure\": \"fallback:ctr_backup\"", "\"on_failure\": \"fail_request\""));
         using var models = new GatedModels();
         var pool = new CountingPool();
         var engine = Engine(host, pool, models: models);
@@ -163,7 +165,7 @@ public sealed class BoundedWaitTests
     {
         // The client answers synchronously, but only once the node's budget has cancelled its token. The answer came after
         // the call's bound (the node's deadline): it is not heard, so the call is a timeout as the request saw it.
-        var engine = Engine(HomeFeedTestHost.Load(), new CountingPool(), models: new LateModels());
+        var engine = Engine(HomeFeedTestHost.Load(SampleTiming.AsWritten), new CountingPool(), models: new LateModels());
 
         var result = await engine.ExecuteAsync(Request("req-late")).AsTask().WaitAsync(Patience);
 
@@ -178,6 +180,7 @@ public sealed class BoundedWaitTests
 
         // Served exactly as when the model fails outright.
         var failed = await Engine(HomeFeedTestHost.LoadModified(MetricsTests.FailModel), new CountingPool()).ExecuteAsync(Request("req-late"));
+        LiveRunAssert.SameNodeOutcomes(failed, result, "ctr_ranker");
         Assert.Equal(Items(failed), Items(result));
 
         await AssertReplaysAtOnce(engine, result.Recording, "ctr_ranker", "fallback", ranker.Detail);

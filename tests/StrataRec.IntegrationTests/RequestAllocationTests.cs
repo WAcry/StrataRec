@@ -70,7 +70,7 @@ public sealed class RequestAllocationTests
             RequestId = "req-alloc",
             Inputs = HomeFeedTestHost.Inputs(1001, "home"),
             Assignment = new[] { "exp_quality_weight/control", "exp_mmr_diversity/control" },
-            Deadline = TimeSpan.FromSeconds(5),
+            Deadline = HomeFeedTestHost.Deadline,
             TimeMs = 1_767_225_600_000,
         };
         var quiet = MeasureBest(() => engine.ExecuteAsync(request), r => r.Items.Count);

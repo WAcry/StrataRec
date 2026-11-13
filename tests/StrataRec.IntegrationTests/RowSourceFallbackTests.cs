@@ -82,6 +82,7 @@ public sealed class RowSourceFallbackTests
         Assert.True(failing.Succeeded, failing.Error);
         Assert.Equal(("extra_backup", "gave up after appending; served by fallback 'extra_backup'"),
             (failing.Trace!.Single(n => n.NodeId == "extra").ProducedBy, failing.Trace!.Single(n => n.NodeId == "extra").Detail));
+        LiveRunAssert.SameNodeOutcomes(reference, failing, "extra");
         Assert.Contains(failing.Items, i => i.Id.Int64Value == 43); // the id both returned
         Assert.DoesNotContain(failing.Items, i => i.Id.Int64Value == 42); // the failed primary's own
         Assert.Equal(Served(reference.Items), Served(failing.Items));
@@ -146,7 +147,7 @@ public sealed class RowSourceFallbackTests
             PipelineId = "home_feed",
             RequestId = "req-extra",
             Inputs = HomeFeedTestHost.Inputs(1001, "explore"),
-            Deadline = TimeSpan.FromSeconds(600),
+            Deadline = HomeFeedTestHost.Deadline,
             TimeMs = 1_767_225_600_000,
             Debug = new DebugOptions { Record = true, Trace = true, ForceArms = ReplayTests.ControlArms },
         }).AsTask().WaitAsync(Patience);

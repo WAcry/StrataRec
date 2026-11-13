@@ -10,29 +10,24 @@ public sealed class ReplayCliTests
     [Fact]
     public async Task RecordReplayAndCompare_FromTheCommandLine()
     {
+        // The untimed sample, request files included: this test is about the commands, not the budgets.
+        var sample = HomeFeedTestHost.SampleRoot();
         var bundles = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
-        var requests = Directory.CreateTempSubdirectory("stratarec-requests-").FullName;
         foreach (var name in new[] { "user_1001", "anonymous" })
         {
-            // The sample requests allow 200 ms. A cold run on a busy two-core CI runner can exceed that, the request fails
-            // and `run` exits 1; this test is about the commands, not the deadline.
-            var request = Path.Combine(requests, name + ".json");
-            var sample = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(Samples.HomeFeed, "requests", name + ".json")))!;
-            sample["deadline_ms"] = 30_000;
-            File.WriteAllText(request, sample.ToJsonString());
-            Assert.Equal(0, await RunCommand.RunAsync(Samples.HomeFeed, "local", request, Array.Empty<string>(), false, TextWriter.Null, CancellationToken.None,
-                recordPath: Path.Combine(bundles, name + ".json")));
+            Assert.Equal(0, await RunCommand.RunAsync(sample, "local", Path.Combine(sample, "requests", name + ".json"), Array.Empty<string>(), false, TextWriter.Null,
+                CancellationToken.None, recordPath: Path.Combine(bundles, name + ".json")));
         }
 
         // One bundle, text: the result and the diff against the recording.
         var text = new StringWriter();
-        Assert.Equal(0, await ReplayCommand.RunAsync(Samples.HomeFeed, "local", Path.Combine(bundles, "user_1001.json"), Array.Empty<string>(), "text",
+        Assert.Equal(0, await ReplayCommand.RunAsync(sample, "local", Path.Combine(bundles, "user_1001.json"), Array.Empty<string>(), "text",
             expectIdentical: true, text, CancellationToken.None));
         Assert.Contains("identical to the recorded result", text.ToString());
 
         // A directory, JSON: every bundle with its report.
         var json = new StringWriter();
-        Assert.Equal(0, await ReplayCommand.RunAsync(Samples.HomeFeed, "local", bundles, Array.Empty<string>(), "json", expectIdentical: true, json,
+        Assert.Equal(0, await ReplayCommand.RunAsync(sample, "local", bundles, Array.Empty<string>(), "json", expectIdentical: true, json,
             CancellationToken.None));
         using (var replay = JsonDocument.Parse(json.ToString()))
         {
@@ -51,7 +46,7 @@ public sealed class ReplayCliTests
             CancellationToken.None));
 
         var compare = new StringWriter();
-        Assert.Equal(0, await CompareCommand.RunAsync(Samples.HomeFeed, candidate, "local", bundles, Array.Empty<string>(), 10, "score", "json", compare,
+        Assert.Equal(0, await CompareCommand.RunAsync(sample, candidate, "local", bundles, Array.Empty<string>(), 10, "score", "json", compare,
             CancellationToken.None));
         using (var report = JsonDocument.Parse(compare.ToString()))
         {
@@ -65,7 +60,7 @@ public sealed class ReplayCliTests
         }
 
         var table = new StringWriter();
-        Assert.Equal(0, await CompareCommand.RunAsync(Samples.HomeFeed, candidate, "local", bundles, Array.Empty<string>(), 10, "score", "text", table,
+        Assert.Equal(0, await CompareCommand.RunAsync(sample, candidate, "local", bundles, Array.Empty<string>(), 10, "score", "text", table,
             CancellationToken.None));
         Assert.Contains("Recorded-mode comparison of 2 bundle(s)", table.ToString());
         Assert.Contains("candidate gap", table.ToString());
@@ -78,7 +73,7 @@ public sealed class ReplayCliTests
         File.WriteAllText(bundle, $$"""{ "format": "{{ReplayBundle.CurrentFormat}}", "request": {} }""");
 
         var output = new StringWriter();
-        var exit = await ReplayCommand.RunAsync(Samples.HomeFeed, "local", bundle, Array.Empty<string>(), "json", false, output, CancellationToken.None);
+        var exit = await ReplayCommand.RunAsync(HomeFeedTestHost.SampleRoot(), "local", bundle, Array.Empty<string>(), "json", false, output, CancellationToken.None);
 
         Assert.Equal(2, exit);
         using var report = JsonDocument.Parse(output.ToString());
@@ -93,7 +88,7 @@ public sealed class ReplayCliTests
         File.WriteAllText(Path.Combine(directory, "b-valid.json"), MinimalBundle("[]"));
 
         var output = new StringWriter();
-        var exit = await ReplayCommand.RunAsync(Samples.HomeFeed, "local", directory, Array.Empty<string>(), "json", false, output, CancellationToken.None);
+        var exit = await ReplayCommand.RunAsync(HomeFeedTestHost.SampleRoot(), "local", directory, Array.Empty<string>(), "json", false, output, CancellationToken.None);
 
         Assert.Equal(2, exit);
         using var report = JsonDocument.Parse(output.ToString());
@@ -111,7 +106,7 @@ public sealed class ReplayCliTests
         var empty = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
         var output = new StringWriter();
 
-        var exit = await ReplayCommand.RunAsync(Samples.HomeFeed, "local", empty, Array.Empty<string>(), "json", false, output, CancellationToken.None);
+        var exit = await ReplayCommand.RunAsync(HomeFeedTestHost.SampleRoot(), "local", empty, Array.Empty<string>(), "json", false, output, CancellationToken.None);
 
         Assert.Equal(2, exit);
         using var report = JsonDocument.Parse(output.ToString());
@@ -137,7 +132,7 @@ public sealed class ReplayCliTests
         }
 
         var output = new StringWriter();
-        var exit = await CompareCommand.RunAsync(Samples.HomeFeed, Samples.HomeFeed, "local", directory, Array.Empty<string>(), 10, "score", "json", output,
+        var exit = await CompareCommand.RunAsync(HomeFeedTestHost.SampleRoot(), HomeFeedTestHost.SampleRoot(), "local", directory, Array.Empty<string>(), 10, "score", "json", output,
             CancellationToken.None);
 
         Assert.Equal(exitCode, exit);
