@@ -39,6 +39,44 @@ public sealed class RunReplayTests
         Assert.Equal((6L, 2L), (stats.Requested, stats.Missing));
     }
 
+    [Fact]
+    public void FieldsFetchedInSeparateCalls_AreSynthesizedTogether_WhenTheConfigurationRequestsThemInOneCall()
+    {
+        // The recording fetched a and b of key 1 in two calls; the replayed plan groups them into one. Neither recorded
+        // call is this call, so both values come from the value index, and neither recorded call is consumed.
+        var run = Run();
+        run.FeatureCalls.Add(Feature(0, "[1]", ("a", "int64", "[10]")));
+        run.FeatureCalls.Add(Feature(1, "[1]", ("b", "int64", "[20]")));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var (merged, staging) = Fetch(replay, new long[] { 1 }, ("a", "int64"), ("b", "int64"));
+        var (alone, single) = Fetch(replay, new long[] { 1 }, ("a", "int64")); // the first recorded call, exactly
+
+        Assert.Equal(FetchOutcome.Ok, merged.Outcome);
+        Assert.Equal((10L, 20L), (staging.Get(0, 0).AsInt64(), staging.Get(1, 0).AsInt64()));
+        Assert.Equal((FetchOutcome.Ok, 10L), (alone.Outcome, single.Get(0, 0).AsInt64()));
+        Assert.Empty(replay.Gaps);
+        Assert.All(replay.FieldStats, s => Assert.Equal(0, s.Missing));
+    }
+
+    [Fact]
+    public void ASynthesizedValue_IsTakenFromTheCallThatReturnedIt_NotFromALaterPartialCallThatLostTheKey()
+    {
+        var run = Run();
+        run.FeatureCalls.Add(Feature(0, "[1]", ("a", "int64", "[7]")));
+        var partial = Feature(1, "[1, 2]", ("a", "int64", "[null, 5]"));
+        run.FeatureCalls.Add(new ReplayFeatureCall
+        {
+            Seq = partial.Seq, Source = partial.Source, Entity = partial.Entity, Shape = partial.Shape, Keys = partial.Keys, Status = "partial",
+            FailedKeys = 1, Fields = partial.Fields, Values = partial.Values,
+        });
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var (_, staging) = Fetch(replay, new long[] { 2, 1 }, ("a", "int64"));
+
+        Assert.Equal((5L, 7L), (staging.Get(0, 0).AsInt64(), staging.Get(0, 1).AsInt64()));
+    }
+
     internal static ReplayRunRecord Run() => new()
     {
         PipelineId = "p",

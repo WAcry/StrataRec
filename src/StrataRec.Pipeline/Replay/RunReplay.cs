@@ -345,8 +345,9 @@ public sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// The first unconsumed recorded call with the same source, entity, shape and keys; one carrying every requested
-    /// field is preferred over one that carries only some.
+    /// The first unconsumed recorded call with the same source, entity, shape and keys that carries every requested
+    /// field. A call carrying only some is not this call: its other fields may well be in other successful calls (the
+    /// configuration regrouped the fetch), so the call is synthesized value by value instead, and nothing is consumed.
     /// </summary>
     private FeatureEntry? TakeFeatureCall(string source, string entity, KeyShape shape, in EntityKey context, ReadOnlySpan<EntityKey> keys, CompiledFieldBinding[] fields)
     {
@@ -355,30 +356,19 @@ public sealed class RunReplay : IFeatureCallHook
             return null;
         }
 
-        FeatureEntry? partialMatch = null;
         foreach (var entry in candidates)
         {
             if (entry.Consumed || entry.Source != source || entry.Entity != entity || entry.Shape != shape || entry.Context != context
-                || !entry.Keys.AsSpan().SequenceEqual(keys))
+                || !entry.Keys.AsSpan().SequenceEqual(keys) || !HasFields(entry, fields))
             {
                 continue;
             }
 
-            if (HasFields(entry, fields))
-            {
-                entry.Consumed = true;
-                return entry;
-            }
-
-            partialMatch ??= entry;
+            entry.Consumed = true;
+            return entry;
         }
 
-        if (partialMatch is not null)
-        {
-            partialMatch.Consumed = true;
-        }
-
-        return partialMatch;
+        return null;
 
         static bool HasFields(FeatureEntry entry, CompiledFieldBinding[] fields)
         {
@@ -785,7 +775,11 @@ public sealed class RunReplay : IFeatureCallHook
 
                 for (var f = 0; f < names.Length; f++)
                 {
-                    byField[names[f]] = values[f][r];
+                    // A value another call returned wins over a missing one: a partial call leaves its failed keys missing.
+                    if (!byField.TryGetValue(names[f], out var existing) || existing.IsMissing)
+                    {
+                        byField[names[f]] = values[f][r];
+                    }
                 }
             }
         }
