@@ -247,6 +247,10 @@ public sealed class MmrDiversifierConfig
 /// <c>MmrDiversifier@1</c>: maximal marginal relevance rerank of the top <c>window</c> rows (RowOrder):
 /// repeatedly picks <c>argmax λ·score − (1−λ)·max cosine(selected)</c>.
 /// </summary>
+/// <remarks>
+/// The formula is real-valued, so scores are read as float64: int64 scores beyond 2^53 lose their last bits here, unlike
+/// in <c>TopK@1</c>, which compares them exactly. Equal values keep their incoming rank order.
+/// </remarks>
 public sealed class MmrDiversifierFactory : IOperatorFactory
 {
     public OperatorDescriptor Descriptor { get; } = new("MmrDiversifier", 1, Effects.RowOrder, typeof(MmrDiversifierConfig),
