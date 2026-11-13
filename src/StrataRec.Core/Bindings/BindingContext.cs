@@ -106,7 +106,7 @@ public sealed class BindingContext
         }
 
         throw new BindingException(pointer, error!,
-            $"give the {what} as a path relative to the configuration directory, an absolute path, or a file:// URI such as file:///models/ctr.onnx");
+            $"give the {what} as a path relative to the configuration directory, an absolute path, or a file:// URI such as file:///data/items.json");
     }
 
     /// <summary>A setting name or map key as an RFC 6901 reference token (<c>~</c> as <c>~0</c>, <c>/</c> as <c>~1</c>), to build

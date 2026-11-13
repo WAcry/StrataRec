@@ -22,7 +22,6 @@
     <ProjectReference Include="..\..\src\StrataRec.Expressions\StrataRec.Expressions.csproj" />
     <ProjectReference Include="..\..\src\StrataRec.Features\StrataRec.Features.csproj" />
     <ProjectReference Include="..\..\src\StrataRec.Models\StrataRec.Models.csproj" />
-    <ProjectReference Include="..\..\src\StrataRec.Models.Onnx\StrataRec.Models.Onnx.csproj" />
     <ProjectReference Include="..\..\src\StrataRec.Logging\StrataRec.Logging.csproj" />
     <ProjectReference Include="..\..\src\StrataRec.Pipeline\StrataRec.Pipeline.csproj" />
     <ProjectReference Include="..\..\src\StrataRec.Experiments\StrataRec.Experiments.csproj" />

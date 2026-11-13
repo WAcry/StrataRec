@@ -10,7 +10,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\StrataRec.Hosting\StrataRec.Hosting.csproj" />
-    <ProjectReference Include="..\StrataRec.Models.Onnx\StrataRec.Models.Onnx.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -138,7 +138,7 @@ internal static class ReplayCommand
         // A replay answers every external call and local read from the recording (design 13.4), so the engine loads no table
         // and no client: replaying needs neither their data, their model files, their snapshot files nor their secrets.
         var engine = new RecEngine(
-            CommonOptions.PlanEnvironment(config),
+            new PlanEnvironment { BaseDirectory = Path.GetFullPath(config) },
             bindings: new BindingHost(new BindingHostOptions { Load = false }));
         var diagnostics = ServiceCollectionExtensions.LoadWorkspace(engine, config, environment);
         if (diagnostics.HasErrors)

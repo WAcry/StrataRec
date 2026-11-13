@@ -13,8 +13,8 @@ public sealed class BindingContextTests
     private static readonly string Root = Path.Combine(Path.GetTempPath(), "stratarec-config");
 
     [Theory]
-    [InlineData("models/ctr.onnx", "models/ctr.onnx")]
-    [InlineData("./models/../models/ctr.onnx", "models/ctr.onnx")]
+    [InlineData("models/ctr.bin", "models/ctr.bin")]
+    [InlineData("./models/../models/ctr.bin", "models/ctr.bin")]
     public void ARelativePath_ResolvesAgainstTheConfigRoot(string uri, string expected)
     {
         var context = Context($$"""{ "uri": "{{uri}}" }""");
@@ -25,7 +25,7 @@ public sealed class BindingContextTests
     [Fact]
     public void AFileUriAndAnAbsolutePath_NameTheSameFile()
     {
-        var absolute = Path.Combine(Path.GetTempPath(), "elsewhere", "ctr.onnx");
+        var absolute = Path.Combine(Path.GetTempPath(), "elsewhere", "ctr.bin");
         var context = Context($$"""{ "uri": {{JsonSerializer.Serialize(new Uri(absolute).AbsoluteUri)}}, "path": {{JsonSerializer.Serialize(absolute)}} }""");
 
         Assert.Equal(absolute, context.LocalFile("uri", "model file"));
@@ -33,7 +33,7 @@ public sealed class BindingContextTests
     }
 
     [Theory]
-    [InlineData("""{ "uri": "s3://bucket/ctr.onnx" }""", "is not a local path")]
+    [InlineData("""{ "uri": "s3://bucket/ctr.bin" }""", "is not a local path")]
     [InlineData("""{ "uri": 7 }""", "'uri' is required")]
     [InlineData("""{ }""", "'uri' is required")]
     public void AFileSettingThatIsNotLocal_IsAnErrorAtTheSetting_WithAHint(string settings, string reason)

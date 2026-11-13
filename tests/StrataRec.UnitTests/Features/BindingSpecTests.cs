@@ -12,29 +12,29 @@ public sealed class BindingSpecTests
     [Fact]
     public void TheIdentityIsCanonical_SoMemberOrderAndSpacingDoNotMatter()
     {
-        var a = Spec("""{ "uri": "m.onnx", "intra_op_threads": 2, "versions": { "1": "a.onnx", "2": "b.onnx" } }""");
-        var b = Spec("""{"versions":{"2":"b.onnx","1":"a.onnx"},"intra_op_threads":2.0,"uri":"m.onnx"}""");
+        var a = Spec("""{ "uri": "m.bin", "pool_size": 2, "versions": { "1": "a.bin", "2": "b.bin" } }""");
+        var b = Spec("""{"versions":{"2":"b.bin","1":"a.bin"},"pool_size":2.0,"uri":"m.bin"}""");
 
         Assert.Equal(a.Identity, b.Identity);
     }
 
     [Theory]
-    [InlineData("""{ "uri": "other.onnx" }""")] // any setting
-    [InlineData("""{ "uri": "m.onnx", "added_later": true }""")] // a setting nobody listed
+    [InlineData("""{ "uri": "other.bin" }""")] // any setting
+    [InlineData("""{ "uri": "m.bin", "added_later": true }""")] // a setting nobody listed
     public void EverySettingIsPartOfTheIdentity(string settings)
     {
-        Assert.NotEqual(Spec("""{ "uri": "m.onnx" }""").Identity, Spec(settings).Identity);
+        Assert.NotEqual(Spec("""{ "uri": "m.bin" }""").Identity, Spec(settings).Identity);
     }
 
     [Fact]
     public void TheSectionNameTypeAndBaseDirectory_ArePartOfTheIdentity()
     {
-        var spec = Spec("""{ "uri": "m.onnx" }""");
+        var spec = Spec("""{ "uri": "m.bin" }""");
 
-        Assert.NotEqual(spec.Identity, Spec("""{ "uri": "m.onnx" }""", section: BindingSection.CandidateSources).Identity);
-        Assert.NotEqual(spec.Identity, Spec("""{ "uri": "m.onnx" }""", name: "ctr_other").Identity);
-        Assert.NotEqual(spec.Identity, Spec("""{ "uri": "m.onnx" }""", type: "local_onnx@2").Identity);
-        Assert.NotEqual(spec.Identity, Spec("""{ "uri": "m.onnx" }""", baseDirectory: Path.Combine(Root, "other")).Identity);
+        Assert.NotEqual(spec.Identity, Spec("""{ "uri": "m.bin" }""", section: BindingSection.CandidateSources).Identity);
+        Assert.NotEqual(spec.Identity, Spec("""{ "uri": "m.bin" }""", name: "ctr_other").Identity);
+        Assert.NotEqual(spec.Identity, Spec("""{ "uri": "m.bin" }""", type: "my_ranker@2").Identity);
+        Assert.NotEqual(spec.Identity, Spec("""{ "uri": "m.bin" }""", baseDirectory: Path.Combine(Root, "other")).Identity);
     }
 
     [Fact]
@@ -47,9 +47,9 @@ public sealed class BindingSpecTests
     }
 
     [Theory]
-    [InlineData(BindingSection.Models, "/models/ctr~1model", "model 'ctr/model' (local_onnx@1)")]
-    [InlineData(BindingSection.CandidateSources, "/candidate_sources/ctr~1model", "candidate source 'ctr/model' (local_onnx@1)")]
-    [InlineData(BindingSection.Sources, "/sources/ctr~1model", "feature source 'ctr/model' (local_onnx@1)")]
+    [InlineData(BindingSection.Models, "/models/ctr~1model", "model 'ctr/model' (my_ranker@1)")]
+    [InlineData(BindingSection.CandidateSources, "/candidate_sources/ctr~1model", "candidate source 'ctr/model' (my_ranker@1)")]
+    [InlineData(BindingSection.Sources, "/sources/ctr~1model", "feature source 'ctr/model' (my_ranker@1)")]
     public void ThePointerAndLabelNameTheBinding(BindingSection section, string pointer, string label)
     {
         var spec = Spec("{}", section: section, name: "ctr/model");
@@ -58,7 +58,7 @@ public sealed class BindingSpecTests
     }
 
     private static BindingSpec Spec(
-        string settings, BindingSection section = BindingSection.Models, string name = "ctr_model", string type = "local_onnx@1", string? baseDirectory = null)
+        string settings, BindingSection section = BindingSection.Models, string name = "ctr_model", string type = "my_ranker@1", string? baseDirectory = null)
     {
         var values = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         foreach (var property in JsonDocument.Parse(settings).RootElement.EnumerateObject())

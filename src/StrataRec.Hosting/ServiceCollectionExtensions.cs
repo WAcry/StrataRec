@@ -23,10 +23,7 @@ public sealed class StrataRecOptions
 
     /// <summary>
     /// Operators, connectors and clients; register custom ones here. Defaults to the standard library with fixture
-    /// paths resolved against <see cref="ConfigRoot"/>. ONNX models (<c>local_onnx@1</c>) need the StrataRec.Models.Onnx
-    /// package, which brings ONNX Runtime's native libraries: <c>Models =
-    /// ModelClientRegistry.CreateDefault().Add(new OnnxModelClientFactory())</c>, with <c>BaseDirectory</c> set to the
-    /// config root.
+    /// paths resolved against <see cref="ConfigRoot"/>.
     /// </summary>
     public PlanEnvironment? PlanEnvironment { get; set; }
 

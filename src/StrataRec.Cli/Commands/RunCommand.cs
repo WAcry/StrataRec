@@ -54,7 +54,7 @@ internal static class RunCommand
 
         var pipelineId = document["pipeline_id"]?.GetValue<string>();
         // The engine loads the workspace's local feature tables (design 6.6) before it serves; disposing it stops their sources.
-        await using var engine = new RecEngine(CommonOptions.PlanEnvironment(config));
+        await using var engine = new RecEngine(new PlanEnvironment { BaseDirectory = Path.GetFullPath(config) });
         var diagnostics = ServiceCollectionExtensions.LoadWorkspace(engine, config, environment, pipelineId is null ? null : new[] { pipelineId });
         if (diagnostics.HasErrors || pipelineId is null || !engine.TryGetPipeline(pipelineId, out var pipeline))
         {

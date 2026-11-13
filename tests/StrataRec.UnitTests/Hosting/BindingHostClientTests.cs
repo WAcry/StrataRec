@@ -30,8 +30,8 @@ public sealed class BindingHostClientTests
 
         var first = a.Acquire(Spec(factory), factory.Create);
         Assert.Same(first, a.Acquire(Spec(factory), factory.Create)); // a lease takes each identity once
-        Assert.Same(first, b.Acquire(Spec(factory, """{ "uri": "m.onnx" }"""), factory.Create));
-        Assert.NotSame(first, b.Acquire(Spec(factory, """{ "uri": "other.onnx" }"""), factory.Create));
+        Assert.Same(first, b.Acquire(Spec(factory, """{ "uri": "m.bin" }"""), factory.Create));
+        Assert.NotSame(first, b.Acquire(Spec(factory, """{ "uri": "other.bin" }"""), factory.Create));
         var other = new Factory();
         Assert.NotSame(first, b.Acquire(Spec(other), other.Create)); // another registry never shares
 
@@ -68,13 +68,13 @@ public sealed class BindingHostClientTests
         var factory = new Factory();
         var failed = host.OpenLease();
         var broken = failed.Acquire(Spec(factory), factory.Create);
-        broken.FailLoad(new BindingException("/uri", "The model file 'm.onnx' does not exist.", "check the path"));
+        broken.FailLoad(new BindingException("/uri", "The model file 'm.bin' does not exist.", "check the path"));
 
         var failure = Assert.Single(await failed.WaitLoadedAsync().WaitAsync(Wait));
 
         Assert.Equal(("BINDING_LOAD_FAILED", "bindings:test", "/models/ctr_model/uri", "check the path"),
             (failure.Code, failure.Artifact, failure.Pointer, failure.Hint));
-        Assert.Equal("The model 'ctr_model' (test@1) failed to load: The model file 'm.onnx' does not exist.", failure.Message);
+        Assert.Equal("The model 'ctr_model' (test@1) failed to load: The model file 'm.bin' does not exist.", failure.Message);
         Assert.Contains(logs.Entries, e => e.EventId == 1208);
 
         using var retry = host.OpenLease();
@@ -204,7 +204,7 @@ public sealed class BindingHostClientTests
         var instance = loading.Acquire(Spec(factory), factory.Create);
         var waiting = loading.WaitLoadedAsync();
         await instance.LoadStarted.Task.WaitAsync(Wait);
-        var used = Loaded(held, factory, """{ "uri": "used.onnx" }""");
+        var used = Loaded(held, factory, """{ "uri": "used.bin" }""");
         Assert.True(held.TryEnter()); // a request still runs on the plan
 
         loading.Dispose();
@@ -326,7 +326,7 @@ public sealed class BindingHostClientTests
         await using var host = new BindingHost(new BindingHostOptions { Secrets = store });
         var factory = new Factory();
         using var lease = host.OpenLease();
-        var instance = lease.Acquire(Spec(factory, """{ "uri": "m.onnx", "credentials": "secret://ctr-token" }"""), factory.Create);
+        var instance = lease.Acquire(Spec(factory, """{ "uri": "m.bin", "credentials": "secret://ctr-token" }"""), factory.Create);
         instance.OnLoad = async token => instance.Credential = await instance.Context.SecretReference("credentials")!.ResolveAsync(token);
         instance.FinishLoad();
 
@@ -334,7 +334,7 @@ public sealed class BindingHostClientTests
         Assert.Equal("value-of-ctr-token", instance.Credential!.Reveal());
     }
 
-    private static Instance Loaded(BindingLease lease, Factory factory, string settings = """{ "uri": "m.onnx" }""")
+    private static Instance Loaded(BindingLease lease, Factory factory, string settings = """{ "uri": "m.bin" }""")
     {
         var instance = lease.Acquire(Spec(factory, settings), factory.Create);
         instance.FinishLoad();
@@ -342,7 +342,7 @@ public sealed class BindingHostClientTests
         return instance;
     }
 
-    private static BindingSpec Spec(Factory factory, string settings = """{ "uri": "m.onnx" }""")
+    private static BindingSpec Spec(Factory factory, string settings = """{ "uri": "m.bin" }""")
     {
         var values = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         foreach (var property in JsonDocument.Parse(settings).RootElement.EnumerateObject())

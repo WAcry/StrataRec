@@ -17,7 +17,7 @@ internal static class OperatorsCommand
 
     internal static int Run(string format, TextWriter output)
     {
-        var environment = CommonOptions.PlanEnvironment(root: null);
+        var environment = new PlanEnvironment();
         if (format == "json")
         {
             output.WriteLine(Output.ToJson(json =>

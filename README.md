@@ -18,7 +18,6 @@ dotnet run --project src/StrataRec.Cli -- validate     -c samples/home_feed
 dotnet run --project src/StrataRec.Cli -- explain-plan -c samples/home_feed
 dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r samples/home_feed/requests/user_1001.json --trace --logs
 dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r samples/home_feed/requests/user_1001.json --record bundles/1001.json
-dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -e onnx -r samples/home_feed/requests/user_1001.json   # ctr 模型由 ONNX Runtime 在进程内运行
 dotnet run --project src/StrataRec.Cli -- replay       -c samples/home_feed -b bundles   # 用录制的 I/O 重现并对比；compare --baseline 对比两份配置
 dotnet run --project src/StrataRec.Cli -- schema pipeline          # 各类产物的 JSON Schema
 dotnet run --project src/StrataRec.Cli -- operators                # 算子及其声明的效果
@@ -32,8 +31,7 @@ dotnet run --project src/StrataRec.Cli -- operators                # 算子及�
 samples/home_feed/
   policy.jsonc                      实验可以修改哪些路径
   catalog/home_feed.jsonc           实体与特征（物理特征和衍生特征）
-  bindings/local.jsonc              各环境的连接器、模型和召回源（onnx.jsonc 相同，只是 ctr 模型用 local_onnx@1）
-  models/ctr_model.onnx             onnx 环境的模型文件，由 tests/Shared/OnnxModels.cs 生成，与 local 的线性权重相同
+  bindings/local.jsonc              各环境的连接器、模型和召回源
   pipelines/home_feed.jsonc         参数、列、节点、漏斗组、探针、输出
   experiments/*.jsonc               每个实验一个文件，每个臂是一个合并补丁
   allocation/home_feed.local.jsonc  桶、域和层（流量分配）

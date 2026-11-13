@@ -42,7 +42,7 @@ public sealed class BindingSpec
 
     /// <param name="section">Where the binding is.</param>
     /// <param name="name">The logical name, e.g. <c>ctr_ranker</c>.</param>
-    /// <param name="type">The client or connector type, e.g. <c>local_onnx@1</c>.</param>
+    /// <param name="type">The client or connector type, e.g. <c>linear@1</c>.</param>
     /// <param name="settings">The binding's own settings, passed to the factory.</param>
     /// <param name="baseDirectory">Where relative paths resolve (relative: against the current directory; null: the current
     /// directory); pinned now (<see cref="BindingContext.PinBaseDirectory"/>), it is part of the identity.</param>
@@ -76,7 +76,7 @@ public sealed class BindingSpec
     /// <summary>The binding's pointer in <see cref="Artifact"/>, e.g. <c>/models/ctr_backup</c>.</summary>
     public string Pointer { get; }
 
-    /// <summary>How messages name the instance, e.g. <c>model 'ctr_backup' (local_onnx@1)</c>.</summary>
+    /// <summary>How messages name the instance, e.g. <c>model 'ctr_backup' (linear@1)</c>.</summary>
     public string Label => Section switch
     {
         BindingSection.Models => "model",

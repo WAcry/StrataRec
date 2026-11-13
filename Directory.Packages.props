@@ -13,8 +13,6 @@
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.15" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.15" />
     <PackageVersion Include="System.CommandLine" Version="2.0.15" />
-    <!-- local_onnx@1 (StrataRec.Models.Onnx only): the CPU build, with native libraries for every runtime it ships. -->
-    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.30.0" />
     <!-- Build-time analyzers -->
     <!-- 3.3.4, not 5.x: 5.x references Roslyn 4.12 and fails with CS9057 on the .NET 8 SDK's compiler (4.11).
          3.3.4 enforces RS0030 the same way on SDK 8 and newer (CI builds with both). -->
