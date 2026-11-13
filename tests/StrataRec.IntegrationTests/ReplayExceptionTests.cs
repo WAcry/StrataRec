@@ -63,7 +63,7 @@ public sealed class ReplayExceptionTests
         });
         Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
 
-        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-catch", 1001, "home", arms: null, deadlineMs: 30_000));
+        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-catch", 1001, "home", arms: null));
         Assert.True(recorded.Succeeded, recorded.Error);
         Assert.Equal(10, recorded.Items.Count);
         var call = Assert.Single(recorded.Recording!.Runs[0].ModelCalls);
@@ -83,7 +83,7 @@ public sealed class ReplayExceptionTests
     public async Task ANodeFailedByAThrowingClient_FailsWithTheSameDetailOnReplay(string mode, string detail)
     {
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
-            "\"on_failure\": \"fallback:ctr_backup\", \"timeout_ms\": 50,", "\"on_failure\": \"fail_request\", \"timeout_ms\": 30000,"));
+            "\"on_failure\": \"fallback:ctr_backup\"", "\"on_failure\": \"fail_request\""));
         var engine = new RecEngine(new PlanEnvironment
         {
             BaseDirectory = host.Root,
@@ -93,7 +93,7 @@ public sealed class ReplayExceptionTests
         });
         Assert.True(engine.Load(host.Request, host.Workspace.ArmRanges("home_feed", "local")).Applied);
 
-        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-throw-" + mode, 1001, "home", ReplayTests.ControlArms, deadlineMs: 30_000));
+        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-throw-" + mode, 1001, "home", ReplayTests.ControlArms));
         Assert.Equal((false, $"node 'ctr_ranker' failed: {detail}"), (recorded.Succeeded, recorded.Error));
 
         var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!)));

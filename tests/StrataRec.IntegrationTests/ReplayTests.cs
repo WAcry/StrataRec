@@ -72,7 +72,7 @@ public sealed class ReplayTests
         Assert.Equal("30", run.Params["coarse_k"].Value!.Value.GetRawText());
         var recall = run.Nodes.Single(n => n.Node == "recall");
         Assert.Equal("succeeded", recall.Outcome);
-        Assert.InRange(recall.RemainingMs!.Value, 1, 5000);
+        Assert.InRange(recall.RemainingMs!.Value, 1, HomeFeedTestHost.UntimedMs);
         Assert.Equal(ReplayTiming.Ran, Assert.Single(recall.Attempts).Timing);
 
         // Candidate calls with the returned candidates, feature calls with the values per key, model outputs per row.
@@ -107,7 +107,7 @@ public sealed class ReplayTests
             RequestId = "req-unknown-arms",
             Inputs = HomeFeedTestHost.Inputs(1001, "home"),
             Assignment = new[] { "exp_quality_weight/strong", "not_real/unknown" },
-            Deadline = TimeSpan.FromSeconds(30),
+            Deadline = HomeFeedTestHost.Deadline,
             TimeMs = 1_767_225_600_000,
             Debug = new DebugOptions { Record = true },
         });
@@ -139,7 +139,7 @@ public sealed class ReplayTests
                 "\"score\": \"col.score.final\", \"embedding_present\": \"has(col.item.embedding)\", \"undefined\": \"0.0 / 0.0\",");
         });
         var (engine, _) = MetricsTests.LoadEngine(host);
-        var recorded = await engine.ExecuteAsync(Request("req-non-finite", 1001, "home", ControlArms, deadlineMs: 30_000));
+        var recorded = await engine.ExecuteAsync(Request("req-non-finite", 1001, "home", ControlArms));
         Assert.True(recorded.Succeeded, recorded.Error);
         Assert.True(recorded.Items.Single(i => i.Id.Int64Value == 1).Columns["embedding_present"].AsBool());
         Assert.All(recorded.Items, i => Assert.True(double.IsNaN(i.Columns["undefined"].AsFloat64())));
@@ -176,17 +176,18 @@ public sealed class ReplayTests
     [Fact]
     public async Task RecordedTimeouts_ReplayAsTimeouts_WithTheSameDecisions_WithoutWaiting()
     {
-        // popular and the CTR model would take a minute; the source's 20 ms timeout and the node's 50 ms timeout cut
-        // them off, ctr_ranker falls back to ctr_backup, and diversity_cap is skipped for want of 10 s (deadline 5 s).
+        // popular and the CTR model would take a minute; the source's 20 ms timeout and the sample's own 50 ms node
+        // timeout cut them off, ctr_ranker falls back to ctr_backup, and diversity_cap is skipped for want of 10 s
+        // (deadline 5 s).
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             Edit(root, "bindings/local.jsonc", "\"data_file\": \"fixtures/recall_popular.json\"",
                 "\"data_file\": \"fixtures/recall_popular.json\", \"latency_ms\": 60000, \"timeout_ms\": 20");
             Edit(root, "bindings/local.jsonc", "\"client\": \"linear@1\",", "\"client\": \"linear@1\", \"latency_ms\": 60000,");
             Edit(root, "pipelines/home_feed.jsonc", "\"order\": 520,", "\"order\": 520, \"min_remaining_ms\": 10000,");
-        });
+        }, SampleTiming.AsWritten);
         var (engine, _) = MetricsTests.LoadEngine(host);
-        var recorded = await engine.ExecuteAsync(Request("req-slow", 1001, "home", ControlArms));
+        var recorded = await engine.ExecuteAsync(Request("req-slow", 1001, "home", ControlArms, deadlineMs: 5_000));
         Assert.True(recorded.Succeeded, recorded.Error);
 
         var run = recorded.Recording!.Runs[0];
@@ -363,7 +364,8 @@ public sealed class ReplayTests
         Assert.Empty(same.FeatureMissing);
     }
 
-    internal static RecRequest Request(string requestId, long? userId, string surface, IReadOnlyList<string>? arms, bool captureLogs = false, int deadlineMs = 5000) => new()
+    internal static RecRequest Request(
+        string requestId, long? userId, string surface, IReadOnlyList<string>? arms, bool captureLogs = false, int deadlineMs = HomeFeedTestHost.UntimedMs) => new()
     {
         PipelineId = "home_feed",
         RequestId = requestId,

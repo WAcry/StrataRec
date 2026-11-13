@@ -7,6 +7,7 @@ using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting.LocalTables;
 using StrataRec.Hosting.Workspace;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Testing;
 
 namespace StrataRec.Benchmarks;
 
@@ -27,6 +28,10 @@ public enum FeatureSupply
 /// The home_feed sample copied to a temp directory with its fixtures regenerated for a candidate count, compiled with
 /// its local tables loaded as the engine loads them before serving a plan.
 /// </summary>
+/// <remarks>
+/// The copy is untimed (<see cref="SampleBudgets.Relax"/>): a benchmark measures the pipeline's work, and a budget hit by
+/// a cold first request on a busy runner would measure a fallback instead (or fail the setup check).
+/// </remarks>
 internal static class HomeFeedBenchWorkspace
 {
     public const int Authors = 300;
@@ -36,6 +41,7 @@ internal static class HomeFeedBenchWorkspace
     {
         var root = Directory.CreateTempSubdirectory("stratarec-bench-").FullName;
         CopyDirectory(FindSample(), root);
+        SampleBudgets.Relax(root);
         Scale(root, candidates, supply);
         return root;
     }
@@ -95,8 +101,8 @@ internal static class HomeFeedBenchWorkspace
         switch (supply)
         {
             case FeatureSupply.Fetch:
-                Rebind(root, "item_store", """{ "connector": "memory@1", "data_file": "fixtures/items.json", "max_batch": 100000 }""");
-                Rebind(root, "author_store", """{ "connector": "memory@1", "data_file": "fixtures/authors.json", "max_batch": 100000 }""");
+                Rebind(root, "item_store", $$"""{ "connector": "memory@1", "data_file": "fixtures/items.json", "max_batch": 100000, "timeout_ms": {{SampleBudgets.UntimedMs}} }""");
+                Rebind(root, "author_store", $$"""{ "connector": "memory@1", "data_file": "fixtures/authors.json", "max_batch": 100000, "timeout_ms": {{SampleBudgets.UntimedMs}} }""");
                 break;
             case FeatureSupply.Local:
                 Rebind(root, "item_store", """{ "mode": "local", "max_bytes": "256MiB", "bootstrap": { "source": "snapshot_files@1", "uri": "fixtures/item_snapshot" } }""");

@@ -197,7 +197,7 @@ public sealed class ReviewRegressionTests
             Directory.CreateDirectory(Path.Combine(root, dir));
         }
 
-        File.Copy(Path.Combine(Samples.HomeFeed, "fixtures", "recall_popular.json"), Path.Combine(root, "fixtures", "recall_popular.json"));
+        File.Copy(Path.Combine(HomeFeedTestHost.SampleRoot(), "fixtures", "recall_popular.json"), Path.Combine(root, "fixtures", "recall_popular.json"));
         File.WriteAllText(Path.Combine(root, "catalog", "c.jsonc"), """{ "catalog_id": "c" }""");
         File.WriteAllText(Path.Combine(root, "bindings", "local.jsonc"), $$"""
             { "environment": "local",

@@ -17,8 +17,8 @@ namespace StrataRec.IntegrationTests;
 /// cancellation still reaches the caller, calls in flight are outstanding, and a replay stops where the recording did.
 /// </summary>
 /// <remarks>
-/// Nothing here depends on timing: the caller cancels once the model client says it has started, and the deadlines are
-/// far longer than any run.
+/// Nothing here depends on timing: the caller cancels once the model client says it has started, and the untimed sample's
+/// budgets and deadlines (<see cref="HomeFeedTestHost.UntimedMs"/>) are far longer than any run.
 /// </remarks>
 public sealed class ReplayAbortTests
 {
@@ -26,14 +26,14 @@ public sealed class ReplayAbortTests
     public async Task ARequestCancelledDuringAModelCall_DeliversItsBundle_AndReplaysItsDecisionsUpToTheAbort()
     {
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
-            "\"on_failure\": \"fallback:ctr_backup\", \"timeout_ms\": 50,", "\"on_failure\": \"fail_request\", \"timeout_ms\": 600000,"));
+            "\"on_failure\": \"fallback:ctr_backup\"", "\"on_failure\": \"fail_request\""));
         var models = new BlockingModels();
         var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Models = new ModelClientRegistry().Add(models) });
         Assert.True(engine.Load(host.Request, host.Workspace.ArmRanges("home_feed", "local")).Applied);
         ReplayBundle? delivered = null;
         using var cancel = new CancellationTokenSource();
 
-        var running = engine.ExecuteAsync(WithCallback(ReplayTests.Request("req-cancelled", 1001, "home", ReplayTests.ControlArms, deadlineMs: 600_000),
+        var running = engine.ExecuteAsync(WithCallback(ReplayTests.Request("req-cancelled", 1001, "home", ReplayTests.ControlArms),
             bundle => delivered = bundle), cancel.Token).AsTask();
         await models.Started.Task.WaitAsync(TimeSpan.FromSeconds(60));
         cancel.Cancel();
@@ -100,7 +100,8 @@ public sealed class ReplayAbortTests
     }
 
     /// <summary>Records home_feed under exp_quality_weight/strong, cancelled while ctr_ranker waits for its model.</summary>
-    /// <param name="trigger"><c>param</c>: ctr_ranker reads a model version the arm overrides; <c>site</c>: the arm patches ctr_ranker's timeout.</param>
+    /// <param name="trigger"><c>param</c>: ctr_ranker reads a model version the arm overrides; <c>site</c>: the arm patches ctr_ranker's timeout
+    /// (to another untimed value).</param>
     private static async Task<(RecEngine Engine, ReplayBundle Bundle)> RecordAbortedAtTheRanker(string trigger)
     {
         var host = HomeFeedTestHost.LoadModified(root =>
@@ -108,7 +109,7 @@ public sealed class ReplayAbortTests
             const string pipeline = "pipelines/home_feed.jsonc";
             const string experiment = "experiments/exp_quality_weight.jsonc";
             const string strong = "\"strong\": { \"params\": { \"quality_weight\": 0.8, \"final_top_k\": 8 } }";
-            ReplayTests.Edit(root, pipeline, "\"on_failure\": \"fallback:ctr_backup\", \"timeout_ms\": 50,", "\"on_failure\": \"fail_request\", \"timeout_ms\": 600000,");
+            ReplayTests.Edit(root, pipeline, "\"on_failure\": \"fallback:ctr_backup\"", "\"on_failure\": \"fail_request\"");
             if (trigger == "param")
             {
                 ReplayTests.Edit(root, pipeline, "\"quality_weight\": { \"type\": \"float64\", \"min\": 0, \"max\": 1 }",
@@ -120,7 +121,7 @@ public sealed class ReplayAbortTests
             else
             {
                 ReplayTests.Edit(root, experiment, strong,
-                    "\"strong\": { \"params\": { \"quality_weight\": 0.8, \"final_top_k\": 8 }, \"nodes\": { \"ctr_ranker\": { \"timeout_ms\": 599999 } } }");
+                    $"\"strong\": {{ \"params\": {{ \"quality_weight\": 0.8, \"final_top_k\": 8 }}, \"nodes\": {{ \"ctr_ranker\": {{ \"timeout_ms\": {HomeFeedTestHost.UntimedMs + 1} }} }} }}");
             }
         });
         var models = new BlockingModels();
@@ -130,8 +131,8 @@ public sealed class ReplayAbortTests
         ReplayBundle? delivered = null;
         using var cancel = new CancellationTokenSource();
 
-        var running = engine.ExecuteAsync(WithCallback(ReplayTests.Request("req-exposed-" + trigger, 1001, "home", new[] { "exp_quality_weight/strong" },
-            deadlineMs: 600_000), bundle => delivered = bundle), cancel.Token).AsTask();
+        var running = engine.ExecuteAsync(WithCallback(ReplayTests.Request("req-exposed-" + trigger, 1001, "home", new[] { "exp_quality_weight/strong" }),
+            bundle => delivered = bundle), cancel.Token).AsTask();
         await models.Started.Task.WaitAsync(TimeSpan.FromSeconds(60));
         cancel.Cancel();
 
@@ -149,7 +150,7 @@ public sealed class ReplayAbortTests
         ReplayBundle? delivered = null;
         using var cancel = new CancellationTokenSource();
 
-        var running = engine.ExecuteAsync(WithCallback(ReplayTests.Request("req-stuck", 1001, "home", arms: null, deadlineMs: 600_000),
+        var running = engine.ExecuteAsync(WithCallback(ReplayTests.Request("req-stuck", 1001, "home", arms: null),
             bundle => delivered = bundle), cancel.Token).AsTask();
         await stuck.Started.Task.WaitAsync(TimeSpan.FromSeconds(60));
         cancel.Cancel();
@@ -183,7 +184,7 @@ public sealed class ReplayAbortTests
         var stuck = new StuckClient();
         var engine = WithStuckScorer(stuck, awaitCall: false);
 
-        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-in-flight", 1001, "home", arms: null, deadlineMs: 600_000))
+        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-in-flight", 1001, "home", arms: null))
             .AsTask().WaitAsync(TimeSpan.FromSeconds(60));
 
         Assert.Equal("node 'ctr_ranker' failed: left non-nullable column 'score.ctr' without a value on 30 of 30 live rows", recorded.Error);
@@ -202,7 +203,7 @@ public sealed class ReplayAbortTests
     public async Task ARunAbortedBetweenPositions_ReplaysThePositionsItFinished_AndStopsAtTheNextOne()
     {
         var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
-        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-between", 1001, "home", ReplayTests.ControlArms, deadlineMs: 30_000));
+        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-between", 1001, "home", ReplayTests.ControlArms));
         Assert.True(recorded.Succeeded, recorded.Error);
 
         // The same request as if it had been aborted right after its third position (e.g. while publishing that node).
@@ -236,7 +237,7 @@ public sealed class ReplayAbortTests
         var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
         ReplayBundle? delivered = null;
 
-        var result = await engine.ExecuteAsync(WithCallback(ReplayTests.Request("req-returned", 1001, "home", ReplayTests.ControlArms, deadlineMs: 30_000), bundle =>
+        var result = await engine.ExecuteAsync(WithCallback(ReplayTests.Request("req-returned", 1001, "home", ReplayTests.ControlArms), bundle =>
         {
             delivered = bundle;
             throw new InvalidOperationException("the host's sink is down");

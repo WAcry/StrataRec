@@ -30,6 +30,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\Shared\*.cs" LinkBase="Shared" />
     <None Include="..\..\samples\**\*" LinkBase="samples" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

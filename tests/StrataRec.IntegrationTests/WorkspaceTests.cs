@@ -9,7 +9,7 @@ public sealed class WorkspaceTests
     public void SampleWorkspaceLoadsWithoutDiagnostics()
     {
         var diagnostics = new DiagnosticBag();
-        var workspace = ConfigWorkspace.Load(Samples.HomeFeed, diagnostics);
+        var workspace = ConfigWorkspace.Load(HomeFeedTestHost.SampleRoot(SampleTiming.AsWritten), diagnostics);
 
         Assert.Empty(diagnostics.Items);
         Assert.Equal(new[] { "home_feed" }, workspace.Pipelines.Keys);
@@ -27,7 +27,7 @@ public sealed class WorkspaceTests
     public void AssemblyErrorsAbortTheRequestInsteadOfDroppingTheExperiment()
     {
         var diagnostics = new DiagnosticBag();
-        var workspace = ConfigWorkspace.Load(Samples.HomeFeed, diagnostics);
+        var workspace = ConfigWorkspace.Load(HomeFeedTestHost.SampleRoot(SampleTiming.AsWritten), diagnostics);
         var request = workspace.CreateCompileRequest("home_feed", "local", diagnostics,
             extraExperiments: new Dictionary<string, string> { ["exp_missing"] = "rerank" });
 
@@ -39,7 +39,7 @@ public sealed class WorkspaceTests
     public async Task ManifestRoundTripsAndRejectsMislabeledArtifacts()
     {
         var diagnostics = new DiagnosticBag();
-        var workspace = ConfigWorkspace.Load(Samples.HomeFeed, diagnostics);
+        var workspace = ConfigWorkspace.Load(HomeFeedTestHost.SampleRoot(SampleTiming.AsWritten), diagnostics);
         var store = new StrataRec.Artifacts.Storage.InMemoryArtifactStore();
         var manifest = await StrataRec.Hosting.Manifests.ManifestBuilder.BuildAsync(workspace, "home_feed", "local", store, diagnostics);
         Assert.NotNull(manifest);
