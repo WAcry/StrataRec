@@ -59,6 +59,41 @@ public class FeatureCallHookTests
         Assert.Null(call.Values); // the late write is never recorded
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnAbandonedCall_HoldsTheRequestMemoryOnce_AndIsRecordedFromLiveBuffers(bool record)
+    {
+        // A prefetch nobody awaits is still running when the request releases its memory: one external operation is
+        // abandoned, recorded or not. The recording reads the keys and staging after the request has let go of them.
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var connector = new ScriptedConnector(async (keys, fields, writer, _) =>
+        {
+            await release.Task; // ignores cancellation
+            ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 2.0);
+            return FetchStatus.Ok;
+        });
+        var rig = new FeatureTestRig().Source("item_store", connector, timeoutMs: 600_000);
+        var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+        var hook = record ? new ListHook() : null;
+        var request = rig.NewRequest(new long[] { 1, 2 }, pool: new PoisoningPool(), deadlineMs: 600_000, hook: hook);
+
+        request.Fetcher.Prefetch(new[] { score }, CancellationToken.None);
+        var abandoned = request.Memory.Release(); // the request returns without awaiting the prefetch
+
+        Assert.Equal(1, abandoned);
+        release.SetResult();
+        if (hook is not null)
+        {
+            var call = await hook.FirstRecorded.Task.WaitAsync(TimeSpan.FromSeconds(60));
+            Assert.Equal(new long[] { 1, 2 }, call.Keys);
+            Assert.Equal(new double?[] { 2.0, 4.0 }, call.Values);
+        }
+
+        await request.Fetcher.WhenIoCompleteAsync();
+    }
+
     [Fact]
     public async Task ReplayingHook_AnswersCalls_AndTheConnectorIsNeverCalled()
     {
@@ -88,6 +123,8 @@ public class FeatureCallHookTests
 
         public ConcurrentQueue<Call> Recorded { get; } = new();
 
+        public TaskCompletionSource<Call> FirstRecorded { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public int NextSequence() => Interlocked.Increment(ref _sequence) - 1;
 
         public void Record(in FeatureCallInfo call, IStagedFeatureValues? values)
@@ -104,7 +141,9 @@ public class FeatureCallHookTests
                 }
             }
 
-            Recorded.Enqueue(new Call(call.Sequence, call.Group.SourceName, keys, call.Sent, call.Status, call.Outcome, recorded));
+            var recordedCall = new Call(call.Sequence, call.Group.SourceName, keys, call.Sent, call.Status, call.Outcome, recorded);
+            Recorded.Enqueue(recordedCall);
+            FirstRecorded.TrySetResult(recordedCall);
         }
 
         public FetchStatus Replay(FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer)
