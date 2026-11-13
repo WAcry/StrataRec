@@ -8,6 +8,7 @@ using StrataRec.Expressions.Vectorized;
 namespace StrataRec.UnitTests.Expressions;
 
 /// <summary>The vectorized backend: row domains, reads, destinations, allocation and thread safety (design 7.7).</summary>
+[Collection(AllocationMeasurement.Name)]
 public class BackendTests
 {
     private const double Sentinel = 12345.0;

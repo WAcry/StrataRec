@@ -10,6 +10,7 @@ namespace StrataRec.UnitTests.Features;
 /// A candidate fetch must not allocate per key (design 4.8, 15): the key set, its index and the per-chunk arrays are
 /// rented from the request memory, and <c>memory@1</c> looks int64 keys up without formatting them.
 /// </summary>
+[Collection(AllocationMeasurement.Name)]
 public class FeatureFetchAllocationTests
 {
     [Fact]

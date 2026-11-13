@@ -3,6 +3,7 @@ using StrataRec.Core.Memory;
 
 namespace StrataRec.UnitTests.Core;
 
+[Collection(AllocationMeasurement.Name)]
 public class EntityKeyIndexTests
 {
     // Mirrors EntityKeyIndex's home slot (Fibonacci hashing) so tests can build keys that collide on purpose. If the

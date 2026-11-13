@@ -11,6 +11,7 @@ namespace StrataRec.UnitTests.Expressions;
 /// </summary>
 /// <remarks><see cref="ExprAssert.Rows"/> checks each expected value three ways: full-range (zero-copy column reads),
 /// gather (one row at a time) and the reference interpreter.</remarks>
+[Collection(AllocationMeasurement.Name)]
 public class ListInt32Tests
 {
     private const long Above = 2147483648;   // int.MaxValue + 1: an unchecked narrowing gives int.MinValue
