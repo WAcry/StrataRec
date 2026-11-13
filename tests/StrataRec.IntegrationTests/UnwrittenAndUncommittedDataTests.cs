@@ -221,6 +221,49 @@ public sealed class UnwrittenAndUncommittedDataTests
         Assert.All(errors, d => Assert.Contains(mention, d.Message + " " + d.Hint, StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("row source shares an order", "ORDER_DEPENDENCY /nodes/score_x/order")]
+    [InlineData("row source fallback shares an order", "ORDER_DEPENDENCY /nodes/score_x/order")]
+    [InlineData("fallback reads what the other writes", "ORDER_DEPENDENCY /nodes/score_x/order")]
+    [InlineData("independent fallback", null)]
+    public void NodesSharingAnOrder_AreIndependentInEveryBranch_FallbacksIncluded(string scenario, string? expected)
+    {
+        // Nodes of one order run in an unspecified relative order (design 5.3), so neither may have row effects or read
+        // what the other writes. A position runs its node or its fallback: a fallback that appends rows, or reads the other
+        // node's column, used to pass because only the node was checked, and the result then depended on node names
+        // (review 15).
+        var primary = scenario switch
+        {
+            "row source shares an order" => """
+                "primary": { "order": 70, "op": "Rows@1", "config": { "ids": [8], "output_col": "score.y" } }
+                """,
+            "row source fallback shares an order" => """
+                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.y", "how": "fails" } },
+                "backup": { "role": "fallback", "op": "Rows@1", "config": { "ids": [8], "output_col": "score.y" } }
+                """,
+            "fallback reads what the other writes" => """
+                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.y", "how": "fails" } },
+                "backup": { "role": "fallback", "op": "ExpressionScorer@1", "config": { "output_col": "score.y", "expr": "(col.score.x ?? 0.0) + 1.0" } }
+                """,
+            _ => """
+                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.y", "how": "fails" } },
+                "backup": { "role": "fallback", "op": "ExpressionScorer@1", "config": { "output_col": "score.y", "expr": "1.0" } }
+                """,
+        };
+
+        var compilation = TryCompile("""
+            "score.x": { "type": "float64?" }, "score.y": { "type": "float64?" }
+            """, """
+            "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7] } },
+            """ + primary + """
+            ,
+            "score_x": { "order": 70, "op": "ExpressionScorer@1", "config": { "output_col": "score.x", "expr": "10.0" } }
+            """, """ "x": "col.score.x ?? -1.0" """);
+
+        var errors = compilation.Diagnostics.Where(d => d.IsError).Select(d => $"{d.Code} {d.Pointer}").ToList();
+        Assert.Equal(expected is null ? Array.Empty<string>() : new[] { expected }, errors);
+    }
+
     [Fact]
     public async Task ARowSourceFallbackOfAColumnWriter_ThatPassesTheChecks_ServesItsRows_AsInAReplay()
     {
