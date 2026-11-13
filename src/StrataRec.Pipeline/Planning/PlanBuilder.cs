@@ -833,33 +833,45 @@ public sealed class PlanBuilder
             var unskippable = node.When is null && node.MinRemainingMs is null
                 && (node.OnFailure == FailurePolicy.FailRequest || (fallback is not null && fallback.OnFailure == FailurePolicy.FailRequest));
 
-            if (IsRowSource(node))
+            // Either the node or, when it fails, its fallback runs here. A failed node is rolled back, so it is not the
+            // fallback's predecessor: both are checked against the state before this position, and the state after it is
+            // what either may leave. They may differ in effects; a fallback produces exactly the node's columns, so the
+            // checks for one effect depend only on that state and those columns. Each runs once, for a branch with the
+            // effect (the node itself when both have it), and errors point at that branch.
+            var appender = IsRowSource(node) ? node : fallback is not null && IsRowSource(fallback) ? fallback : null;
+            var rewriter = !IsRowSource(node) ? node : fallback is not null && !IsRowSource(fallback) ? fallback : null;
+            if (appender is not null)
             {
-                ValidateRowSource(node, possible, versions, rowSources, artifact);
-                rowSources.Add(node);
-            }
-
-            foreach (var producer in fallback is null ? new[] { node } : new[] { node, fallback })
-            {
-                if (!IsRowSource(producer))
-                {
-                    foreach (var o in producer.Outputs)
-                    {
-                        versions[o.LogicalId] = producer.NodeId;
-                    }
-                }
+                ValidateRowSource(appender, possible, versions, rowSources, artifact);
             }
 
             foreach (var output2 in node.Outputs)
             {
                 var column = schema.Columns[output2.LogicalId];
-                if (possible.TryGetValue(output2.LogicalId, out var previous) && !column.Flow && !IsRowSource(node))
+                if (rewriter is not null && possible.TryGetValue(output2.LogicalId, out var previous) && !column.Flow)
                 {
-                    _diagnostics.Error("COLUMN_MULTIPLE_PRODUCERS", artifact, node.Pointer,
-                        $"Column '{column.Name}' is produced by both '{previous}' and '{node.NodeId}' on the same path.",
+                    _diagnostics.Error("COLUMN_MULTIPLE_PRODUCERS", artifact, rewriter.Pointer,
+                        $"Column '{column.Name}' is produced by both '{previous}' and '{rewriter.NodeId}' on the same path.",
                         "declare it with \"flow\": true to allow rewriting, or write a new column");
                 }
+            }
 
+            // The state after this position: rows either branch may have appended, versions either may have written.
+            if (appender is not null)
+            {
+                rowSources.Add(appender);
+            }
+
+            if (rewriter is not null)
+            {
+                foreach (var o in rewriter.Outputs)
+                {
+                    versions[o.LogicalId] = rewriter.NodeId;
+                }
+            }
+
+            foreach (var output2 in node.Outputs)
+            {
                 possible[output2.LogicalId] = node.NodeId;
                 if (unskippable)
                 {
