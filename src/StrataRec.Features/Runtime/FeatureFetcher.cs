@@ -627,36 +627,38 @@ public sealed partial class FeatureFetcher
             TaskScheduler.Default));
 
         // The wait decides the status; the call is completed once, after it (as BoundedCall does): completing inside the
-        // try would complete it again from the catch when the completion itself throws (a hook that fails, say).
-        var status = default(FetchStatus);
-        IoOutcome? outcome = null;
-        var observeNow = false;
+        // try would complete it again from the catch when the completion itself throws (a hook that fails, say). The
+        // outer finally covers the wait, the classification and the completion alike: the call site is done however any
+        // of them ends, so a diagnostic that throws (an exception whose Message throws) never keeps the memory held.
         try
         {
-            // The wait has its own bound — the time left before the fetch's deadline, and the caller's token — and does
-            // not wait on the connectors' token: cancelling that one runs the connectors' callbacks synchronously, one
-            // after another, so a callback that blocks would hold every wait behind it. The deadline is the fetch's, so a
-            // chunk sent later gets no fresh budget. The wait ends with a TimeoutException or the caller's cancellation,
-            // even when the connector ignores both; Classify tells them apart by the caller's token.
-            var remaining = Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), cancellation.DeadlineTimestamp);
-            var wait = task.WaitAsync(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, cancellationToken);
-
-            // WaitAsync found the task complete (it did between the check in ConnectorCall and here) and returned it without
-            // comparing anything with the bound: no wait was installed to decide, so it is observed now.
-            observeNow = ReferenceEquals(wait, task);
-            if (!observeNow)
+            var status = default(FetchStatus);
+            IoOutcome? outcome = null;
+            var observeNow = false;
+            try
             {
-                status = await wait.ConfigureAwait(false);
-            }
-        }
-        catch (Exception ex)
-        {
-            status = Failure(group, ex, budgetMs, cancellationToken);
-            outcome = Classify(ex, cancellationToken);
-        }
+                // The wait has its own bound — the time left before the fetch's deadline, and the caller's token — and does
+                // not wait on the connectors' token: cancelling that one runs the connectors' callbacks synchronously, one
+                // after another, so a callback that blocks would hold every wait behind it. The deadline is the fetch's, so
+                // a chunk sent later gets no fresh budget. The wait ends with a TimeoutException or the caller's
+                // cancellation, even when the connector ignores both; Classify tells them apart by the caller's token.
+                var remaining = Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), cancellation.DeadlineTimestamp);
+                var wait = task.WaitAsync(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, cancellationToken);
 
-        try
-        {
+                // WaitAsync found the task complete (it did between the check in ConnectorCall and here) and returned it
+                // without comparing anything with the bound: no wait was installed to decide, so it is observed now.
+                observeNow = ReferenceEquals(wait, task);
+                if (!observeNow)
+                {
+                    status = await wait.ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex)
+            {
+                status = Failure(group, ex, budgetMs, cancellationToken);
+                outcome = Classify(ex, cancellationToken);
+            }
+
             return observeNow
                 ? Observed(io, group, batch, fields, writer, budgetMs, sequence, new ValueTask<FetchStatus>(task), cancellation, cancellationToken)
                 : Completed(io, group, batch, fields, writer, sequence, status, outcome);
