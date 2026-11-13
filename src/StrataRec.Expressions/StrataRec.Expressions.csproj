@@ -10,6 +10,13 @@
 
   <ItemGroup>
     <PackageReference Include="System.Numerics.Tensors" />
+    <!-- hash01 encodes mixed-type keys and hashes them with XXH3 without per-row allocation. -->
+    <PackageReference Include="System.IO.Hashing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Production code must not use LINQ (per-call allocations); see AGENTS.md. -->
+    <Using Remove="System.Linq" />
   </ItemGroup>
 
   <ItemGroup>
