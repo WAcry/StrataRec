@@ -345,7 +345,7 @@ public sealed class BoundedCallTests
         {
             client = token;
             return ValueTask.FromResult(value);
-        }), budget, memory, timeoutMs: 50);
+        }), budget, memory, timeoutMs: 300_000); // its own, shorter than the node's: a token source of its own
 
         Assert.True(pending.IsCompletedSuccessfully);
         var result = await pending;
@@ -599,7 +599,7 @@ public sealed class BoundedCallAllocationTests
         // The token source is created before the call is sent, so that the client's token carries the timeout. About
         // 160 B on .NET 8: the linked source, its registration on the node token and the timer. Bounded, so that anything
         // more per call shows up here.
-        var bytes = BytesPerCall(timeoutMs: 1_000, calls: 2_000);
+        var bytes = BytesPerCall(timeoutMs: 300_000, calls: 2_000);
 
         Assert.InRange(bytes, 1, 256);
     }

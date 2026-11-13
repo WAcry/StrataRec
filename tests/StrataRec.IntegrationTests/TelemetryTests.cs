@@ -32,7 +32,9 @@ public sealed class MetricsTests
         using var capture = new MetricCapture();
         var (engine, plan) = LoadEngine(HomeFeedTestHost.Load());
 
+        var watch = Stopwatch.StartNew();
         var result = await engine.ExecuteAsync(Request("req-metrics"));
+        watch.Stop();
 
         Assert.True(result.Succeeded, result.Error);
         AssertTagRules(capture.Measurements);
@@ -47,7 +49,8 @@ public sealed class MetricsTests
         // Request level: once for the pipeline, once per assigned arm (and nowhere else).
         var request = Assert.Single(capture.Of(StrataRecMetrics.Names.RequestDuration));
         Assert.True(TagsEqual(request, pipeline));
-        Assert.InRange(request.Value, 1e-6, 5);
+        // In seconds, and measured around the execution: no fixed bound a slow machine could pass.
+        Assert.InRange(request.Value, result.ElapsedMs / 1000, watch.Elapsed.TotalSeconds);
         var perArm = capture.Of(StrataRecMetrics.Names.ArmRequestDuration);
         Assert.Equal(Arms.Order(), perArm.Select(m => Tag(m, StrataRecTags.Arm)).Order());
         Assert.All(perArm, m => Assert.Equal(request.Value, m.Value));
@@ -62,7 +65,8 @@ public sealed class MetricsTests
         foreach (var node in trace)
         {
             var tags = new Dictionary<string, object?> { [StrataRecTags.Pipeline] = "home_feed", [StrataRecTags.Node] = node.NodeId };
-            Assert.InRange(Assert.Single(capture.Of(StrataRecMetrics.Names.NodeDuration), m => TagsEqual(m, tags)).Value, 0, 5);
+            var seconds = Assert.Single(capture.Of(StrataRecMetrics.Names.NodeDuration), m => TagsEqual(m, tags)).Value;
+            Assert.InRange(seconds, (node.DurationMs / 1000) - 1e-9, (node.DurationMs / 1000) + 1e-9); // the trace's time, in seconds
             Assert.Equal(node.RowsIn, Assert.Single(capture.Of(StrataRecMetrics.Names.NodeRowsIn), m => TagsEqual(m, tags)).Value);
             Assert.Equal(node.RowsOut, Assert.Single(capture.Of(StrataRecMetrics.Names.NodeRowsOut), m => TagsEqual(m, tags)).Value);
         }
@@ -125,7 +129,8 @@ public sealed class MetricsTests
         using (var capture = new MetricCapture())
         {
             var (engine, _) = LoadEngine(HomeFeedTestHost.LoadModified(root => SlowDown(root, slow, tightTimeout: false)));
-            using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+            var node = slow == "model" ? "ctr_ranker" : "recall";
+            using var cancel = new CancelOnceCallStarts(slow == "model" ? "model ctr_model" : "recall popular", TimeSpan.FromMilliseconds(300));
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await engine.ExecuteAsync(Request("req-cancelled"), cancel.Token));
 
@@ -140,9 +145,9 @@ public sealed class MetricsTests
             Assert.Single(capture.Of(StrataRecMetrics.Names.RequestErrors)); // the request itself failed
 
             // Review 6 #5: the node the caller cut off still has its outcome, duration and rows.
-            var node = slow == "model" ? "ctr_ranker" : "recall";
             Assert.Single(capture.Of(StrataRecMetrics.Names.NodeOutcomes), m => Tag(m, StrataRecTags.Node) == node && Tag(m, StrataRecTags.Outcome) == "aborted");
-            Assert.InRange(Assert.Single(capture.Of(StrataRecMetrics.Names.NodeDuration), m => Tag(m, StrataRecTags.Node) == node).Value, 0.2, 5);
+            // Cut off 300 ms after its slow call started, in seconds; the upper bound is a generous watchdog.
+            Assert.InRange(Assert.Single(capture.Of(StrataRecMetrics.Names.NodeDuration), m => Tag(m, StrataRecTags.Node) == node).Value, 0.2, 30);
             Assert.Single(capture.Of(StrataRecMetrics.Names.NodeRowsIn), m => Tag(m, StrataRecTags.Node) == node);
         }
 
@@ -224,15 +229,15 @@ public sealed class MetricsTests
     }
 
     /// <summary>
-    /// Makes the model or both candidate sources take 5 s; with a 50 ms timeout of their own (in their bindings), or with
-    /// none shorter than the request (the untimed sample's).
+    /// Makes the model or both candidate sources take a minute, longer than any test waits for them; with a 50 ms timeout
+    /// of their own (in their bindings), or with none shorter than the request (the untimed sample's).
     /// </summary>
     internal static void SlowDown(string root, string what, bool tightTimeout)
     {
         var bindings = Path.Combine(root, "bindings", "local.jsonc");
         var text = File.ReadAllText(bindings);
         var client = what == "model" ? "\"client\": \"linear@1\"," : "\"client\": \"memory_list@1\",";
-        var edited = text.Replace(client, client + " \"latency_ms\": 5000," + (tightTimeout ? " \"timeout_ms\": 50," : string.Empty), StringComparison.Ordinal);
+        var edited = text.Replace(client, client + " \"latency_ms\": 60000," + (tightTimeout ? " \"timeout_ms\": 50," : string.Empty), StringComparison.Ordinal);
         Assert.NotEqual(text, edited);
         File.WriteAllText(bindings, edited);
     }
@@ -442,7 +447,7 @@ public sealed class TracingTests
         // Review 6 #8: the release and the arms are known before execution; an abort must not erase them.
         using var spans = new SpanCapture();
         var (engine, plan) = MetricsTests.LoadEngine(HomeFeedTestHost.LoadModified(root => MetricsTests.SlowDown(root, "model", tightTimeout: false)));
-        using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+        using var cancel = new CancelOnceCallStarts("model ctr_model", TimeSpan.FromMilliseconds(300));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await engine.ExecuteAsync(MetricsTests.Request("req-aborted"), cancel.Token));
 

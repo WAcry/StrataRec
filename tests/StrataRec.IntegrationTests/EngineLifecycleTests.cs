@@ -126,7 +126,7 @@ public sealed class EngineLifecycleTests
         var root = HomeFeedTestHost.LoadModified(root =>
         {
             File.WriteAllText(Path.Combine(root, "fixtures", "authors.json"), "{}");
-            SampleBindings.Rebind(root, "author_store", """{ "connector": "memory@1", "data_file": "fixtures/authors.json", "timeout_ms": 1000 }""");
+            SampleBindings.Rebind(root, "author_store", $$"""{ "connector": "memory@1", "data_file": "fixtures/authors.json", "timeout_ms": {{HomeFeedTestHost.UntimedMs}} }""");
         }).Root;
         await using var engine = new RecEngine(new PlanEnvironment { BaseDirectory = root });
         using var before = new CancellationTokenSource();
