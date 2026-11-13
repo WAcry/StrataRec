@@ -1164,7 +1164,7 @@ public sealed class PipelineExecutor
             Succeeded = true,
             Items = items,
             Outcomes = state.Outcomes,
-            AssignedArms = AssignedArmIds(plan, state.Arms),
+            AssignedArms = plan.ArmIds(state.Arms),
             TriggeredExperiments = TriggeredIds(plan, state.Triggered),
             ColumnProducers = producers,
             ElapsedMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds,
@@ -1296,28 +1296,13 @@ public sealed class PipelineExecutor
             Error = error,
             Items = Array.Empty<RankedItem>(),
             Outcomes = outcomes,
-            AssignedArms = AssignedArmIds(plan, request.Arms),
+            AssignedArms = plan.ArmIds(request.Arms),
             TriggeredExperiments = TriggeredIds(plan, triggered),
             ColumnProducers = new Dictionary<string, string>(),
             ElapsedMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds,
             NonFiniteValues = nonFinite,
             OutOfRangeValues = outOfRange,
         };
-
-    private static List<string> AssignedArmIds(ExecutionPlan plan, in RequestArms arms)
-    {
-        var ids = new List<string>();
-        for (var layer = 0; layer < arms.LayerCount; layer++)
-        {
-            var arm = arms.ArmIn(layer);
-            if (arm >= 0)
-            {
-                ids.Add(plan.Arms[arm].Id);
-            }
-        }
-
-        return ids;
-    }
 
     private static List<string> TriggeredIds(ExecutionPlan plan, bool[] triggered)
     {

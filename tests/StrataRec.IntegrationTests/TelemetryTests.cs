@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
+using StrataRec.Experiments.Assignment;
 using StrataRec.Hosting;
 using StrataRec.Logging;
 using StrataRec.Models;
@@ -122,6 +123,69 @@ public sealed class MetricsTests
         Assert.Equal(1, ignored.Where(m => Tag(m, StrataRecTags.Outcome) == "unknown").Sum(m => m.Value));
         Assert.Equal(2, ignored.Where(m => Tag(m, StrataRecTags.Outcome) == "layer_conflict").Sum(m => m.Value));
         Assert.Equal(new[] { "exp_quality_weight/strong" }, capture.Of(StrataRecMetrics.Names.ArmRequestDuration).Select(m => Tag(m, StrataRecTags.Arm)));
+    }
+
+    [Fact]
+    public async Task ARequestAssignedThenOutOfBudget_ReportsTheArmsAndIgnoredIdsItsMetricsCounted()
+    {
+        // Review 18 #3: the rejection after assignment said nothing was assigned or ignored, while the per-arm error and
+        // the ignored ids were already counted. A zero deadline is spent by the time assignment returns, deterministically.
+        using var capture = new MetricCapture();
+        var (engine, plan) = LoadEngine(HomeFeedTestHost.Load());
+
+        var result = await engine.ExecuteAsync(new RecRequest
+        {
+            PipelineId = "home_feed",
+            RequestId = "req-assigned-out-of-budget",
+            Inputs = HomeFeedTestHost.Inputs(1001, "home"),
+            Assignment = new[] { "exp_ramped_early/t", "exp_mmr_diversity/mmr", "exp_mmr_diversity/control", "exp_quality_weight/strong" },
+            Deadline = TimeSpan.Zero,
+            Debug = new DebugOptions { Record = true },
+        });
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("assignment took the whole budget", result.Error);
+        Assert.Equal(new[] { "exp_quality_weight/strong" }, result.Experiments.Assigned);
+        Assert.Empty(result.Experiments.Triggered);
+        Assert.Equal(
+            new[]
+            {
+                new IgnoredArm("exp_mmr_diversity/control", IgnoredArmReason.LayerConflict),
+                new IgnoredArm("exp_mmr_diversity/mmr", IgnoredArmReason.LayerConflict),
+                new IgnoredArm("exp_ramped_early/t", IgnoredArmReason.Unknown),
+            },
+            result.Experiments.Ignored);
+        Assert.Equal(plan.ManifestId, result.ManifestId);
+        Assert.Null(result.Recording); // nothing ran: nothing to replay
+
+        // The metrics say the same.
+        AssertTagRules(capture.Measurements);
+        var ignored = capture.Of(StrataRecMetrics.Names.RequestArmsIgnored);
+        Assert.Equal(1, ignored.Where(m => Tag(m, StrataRecTags.Outcome) == "unknown").Sum(m => m.Value));
+        Assert.Equal(2, ignored.Where(m => Tag(m, StrataRecTags.Outcome) == "layer_conflict").Sum(m => m.Value));
+        Assert.Single(capture.Of(StrataRecMetrics.Names.RequestErrors));
+        Assert.Equal(result.Experiments.Assigned, capture.Of(StrataRecMetrics.Names.ArmRequestErrors).Select(m => Tag(m, StrataRecTags.Arm)));
+    }
+
+    [Fact]
+    public async Task ARequestRejectedBeforeAssignment_HasAnEmptyRecord()
+    {
+        var (engine, _) = LoadEngine(HomeFeedTestHost.Load());
+
+        var result = await engine.ExecuteAsync(new RecRequest
+        {
+            PipelineId = "home_feed",
+            RequestId = "req-bad-force",
+            Inputs = HomeFeedTestHost.Inputs(1001, "home"),
+            Assignment = new[] { "exp_quality_weight/strong" },
+            Deadline = HomeFeedTestHost.Deadline,
+            Debug = new DebugOptions { ForceArms = new[] { "exp_nope/t" } },
+        });
+
+        Assert.False(result.Succeeded);
+        Assert.Empty(result.Experiments.Assigned);
+        Assert.Empty(result.Experiments.Ignored);
+        Assert.Equal(string.Empty, result.ManifestId);
     }
 
     [Fact]

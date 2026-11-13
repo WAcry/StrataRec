@@ -87,6 +87,11 @@ public sealed class DebugOptions
 }
 
 /// <summary>Assignment and trigger record of a request (design 12.6).</summary>
+/// <remarks>
+/// A request rejected before its arms are decided (unknown pipeline, invalid forced arms, a provider past the deadline)
+/// has an empty record. One rejected after (out of budget before execution) carries its assigned and ignored arms, which
+/// the metrics already counted, and no triggered experiment.
+/// </remarks>
 /// <param name="Assigned">Assigned arms (<c>experiment/arm</c>) for intent-to-treat analysis.</param>
 /// <param name="Triggered">Experiments whose site the request reached, for triggered analysis.</param>
 /// <param name="Ignored">
@@ -563,7 +568,9 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             var remaining = request.Deadline - Stopwatch.GetElapsedTime(started);
             if (remaining <= TimeSpan.Zero)
             {
-                return result = Rejected(request, "deadline exceeded before execution (assignment took the whole budget)");
+                // The arms were decided and the ignored ids counted: the record says so, as the metric does (review 18 #3).
+                return result = Rejected(request, "deadline exceeded before execution (assignment took the whole budget)",
+                    new ExperimentRecord(pipeline.Plan.ArmIds(arms), Array.Empty<string>(), ignored), pipeline.Plan.ManifestId);
             }
 
             var executed = await Run(pipeline, request, arms, remaining, seed, timeMs, runs, cancellationToken).ConfigureAwait(false);
@@ -749,13 +756,14 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         ElapsedMs = result.ElapsedMs,
     };
 
-    private static RecResult Rejected(RecRequest request, string error) => new()
+    /// <summary>A request that did not run: before assignment nothing is known about it; after, its arms and release are.</summary>
+    private static RecResult Rejected(RecRequest request, string error, ExperimentRecord? experiments = null, string? manifestId = null) => new()
     {
         Succeeded = false,
         Error = error,
         Items = Array.Empty<RankedItem>(),
-        Experiments = new ExperimentRecord(Array.Empty<string>(), Array.Empty<string>(), Array.Empty<IgnoredArm>()),
-        ManifestId = string.Empty,
+        Experiments = experiments ?? new ExperimentRecord(Array.Empty<string>(), Array.Empty<string>(), Array.Empty<IgnoredArm>()),
+        ManifestId = manifestId ?? string.Empty,
         ServedBy = request.PipelineId,
     };
 }

@@ -107,7 +107,7 @@ internal sealed class RequestTelemetry
                 if (plan is not null)
                 {
                     activity.SetTag(StrataRecTags.ManifestId, plan.ManifestId);
-                    activity.SetTag(StrataRecTags.ArmsAssigned, ArmIds(plan, arms));
+                    activity.SetTag(StrataRecTags.ArmsAssigned, plan.ArmIds(arms).ToArray());
                 }
             }
             else
@@ -126,21 +126,6 @@ internal sealed class RequestTelemetry
         }
 
         activity.Dispose();
-    }
-
-    private static string[] ArmIds(ExecutionPlan plan, in RequestArms arms)
-    {
-        var ids = new List<string>(arms.LayerCount);
-        for (var layer = 0; layer < arms.LayerCount; layer++)
-        {
-            var arm = arms.ArmIn(layer);
-            if (arm >= 0 && arm < plan.Arms.Length)
-            {
-                ids.Add(plan.Arms[arm].Id);
-            }
-        }
-
-        return ids.ToArray();
     }
 
     /// <summary>Exporters recognize arrays (not lists) as array attributes.</summary>
