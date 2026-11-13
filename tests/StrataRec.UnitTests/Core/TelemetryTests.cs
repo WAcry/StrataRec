@@ -117,35 +117,43 @@ public sealed class RequestEventLogTests
     }
 
     [Fact]
-    public async Task AllFailedCalls_RecordedWhileFlushing_NeverReadAsRecovery()
+    public void AllFailedCalls_RecordedWhileFlushing_NeverReadAsRecovery()
     {
         // Review 6 #3: a call and its failure counted separately could land in different windows, so a window of only
-        // failed calls looked healthy ("recovered") or held more failures than calls.
+        // failed calls looked healthy ("recovered") or held more failures than calls. Producers run on dedicated threads
+        // with a fixed amount of work, so a busy thread pool (CI) cannot leave the windows empty.
         var logger = new ListLogger();
         using var events = new RequestEventLog(logger, autoFlush: false);
         var target = new IoTarget(IoKind.FeatureSource, "store");
-        using var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
 
-        var producers = new Task[Math.Max(2, Environment.ProcessorCount - 1)];
+        var producers = new Thread[2];
         for (var p = 0; p < producers.Length; p++)
         {
-            producers[p] = Task.Run(() =>
+            producers[p] = new Thread(() =>
             {
-                while (!stop.IsCancellationRequested)
+                for (var i = 0; i < 500_000; i++)
                 {
                     events.RecordIo(target, IoOutcome.Error, "req", "down");
                 }
-            });
+            }) { IsBackground = true };
+            producers[p].Start();
         }
 
-        while (!stop.IsCancellationRequested)
+        var flushes = 0;
+        while (producers[0].IsAlive || producers[1].IsAlive)
         {
             events.Flush();
+            flushes++;
         }
 
-        await Task.WhenAll(producers);
+        foreach (var producer in producers)
+        {
+            producer.Join();
+        }
+
         events.Flush();
 
+        Assert.True(flushes > 1, "no flush overlapped the producers");
         Assert.DoesNotContain(logger.Entries, e => e.EventId.Id == 2003); // recovered
         var failing = Assert.Single(logger.Entries, e => e.EventId.Id == 2002);
         Assert.Equal(failing.State["Calls"], failing.State["Failures"]);
