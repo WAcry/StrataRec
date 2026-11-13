@@ -15,7 +15,9 @@ namespace StrataRec.Experiments.Assignment;
 /// engine does not move it to the thread pool. What the provider does before it returns its <see cref="ValueTask{T}"/> is
 /// therefore not bounded: the request waits for it however long it takes. Do the platform's I/O asynchronously, or answer
 /// quickly from a local SDK. The asynchronous part shares the request's deadline: its token is cancelled at the deadline,
-/// and a provider still pending then is not waited for (the request fails as past its deadline).</para>
+/// and a provider still pending then is not waited for (the request fails as past its deadline). A provider the request
+/// stops waiting for, at the deadline or because the caller cancelled, has its token cancelled, and the token stays
+/// valid until the provider ends, so a provider that ends on its token always ends.</para>
 /// <para>An answer is used only if the engine observes it before the deadline and before the caller cancels. One it sees
 /// only later, such as a synchronous answer after blocking past the deadline, is dropped: the request fails as past its
 /// deadline, or is cancelled.</para>

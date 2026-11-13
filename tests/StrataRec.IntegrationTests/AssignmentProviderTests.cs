@@ -152,6 +152,103 @@ public sealed class AssignmentProviderTests
         Assert.Empty(result.Experiments.Ignored);
     }
 
+    /// <summary>
+    /// Ends only when its token is cancelled: the provider that token is for. If the engine let go of the token without
+    /// cancelling it, this provider would never end, holding whatever it holds.
+    /// </summary>
+    private sealed class TokenOnlyProvider : IAssignmentProvider
+    {
+        private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Ended => _ended.Task;
+
+        public async ValueTask<IReadOnlyList<string>> AssignAsync(AssignmentContext context, CancellationToken cancellationToken)
+        {
+            try
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+                return ProviderArms;
+            }
+            finally
+            {
+                _ended.TrySetResult();
+            }
+        }
+    }
+
+    /// <summary>Waits for a provider the engine abandoned to end, with a watchdog: one whose token is never cancelled never does.</summary>
+    private static async Task AssertEnds(TokenOnlyProvider provider)
+    {
+        var ended = await Task.WhenAny(provider.Ended, Task.Delay(TimeSpan.FromSeconds(30)));
+        Assert.True(ReferenceEquals(ended, provider.Ended), "the abandoned provider's token was never cancelled");
+    }
+
+    /// <summary>Timers that fire as soon as they are started: the wait for the provider ends before anything else can.</summary>
+    private sealed class ImmediateTimers : TimeProvider
+    {
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            if (dueTime != Timeout.InfiniteTimeSpan)
+            {
+                ThreadPool.QueueUserWorkItem(_ => callback(state));
+            }
+
+            return new Stopped();
+        }
+
+        private sealed class Stopped : ITimer
+        {
+            public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+
+            public void Dispose()
+            {
+            }
+
+            public ValueTask DisposeAsync() => default;
+        }
+    }
+
+    [Fact]
+    public async Task AProviderAbandonedAtTheWaitsTimeout_SeesItsTokenCancelled()
+    {
+        // Review 18 #2, follow-up: the wait and the timer that cancels the provider's token both aim at the deadline, and
+        // the wait can end first. Disposing the source then stopped that timer: the token was never cancelled. Here the
+        // wait's timer fires at once and the deadline's is a minute away, so the order is fixed.
+        var provider = new TokenOnlyProvider();
+        var host = HomeFeedTestHost.Load();
+        var engine = new RecEngine(host.Environment, provider) { AssignmentWaitTimers = new ImmediateTimers() };
+        Assert.True(engine.Load(host.Request).Applied);
+
+        var result = await engine.ExecuteAsync(Request("req-wait-abandons"));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("deadline exceeded during assignment", result.Error);
+        await AssertEnds(provider);
+    }
+
+    [Fact]
+    public async Task AProviderAbandonedForTheCallersCancellation_SeesItsTokenCancelled()
+    {
+        // Review 18 #2, follow-up: when the caller cancels, the wait's own registration on the caller's token can end the
+        // request (inline, in Cancel) before the registration that cancels the provider's linked token runs; disposing the
+        // source then removed that registration, and the provider's token was never cancelled.
+        using var caller = new CancellationTokenSource();
+        var provider = new TokenOnlyProvider();
+        var host = HomeFeedTestHost.Load();
+        var engine = new RecEngine(host.Environment, provider);
+        Assert.True(engine.Load(host.Request).Applied);
+
+        var request = engine.ExecuteAsync(Request("req-caller-abandons"), caller.Token).AsTask();
+        Assert.False(request.IsCompleted); // waiting for the provider
+
+        // From a thread without a synchronization context, as in a server: xUnit's would keep the request's continuation
+        // out of Cancel, hiding the order above.
+        await Task.Run(caller.Cancel);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
+        await AssertEnds(provider);
+    }
+
     private static RecRequest Request(string requestId, IReadOnlyList<string>? assignment = null, IReadOnlyList<string>? force = null) => new()
     {
         PipelineId = "home_feed",

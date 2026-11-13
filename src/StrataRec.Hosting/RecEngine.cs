@@ -657,64 +657,80 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         }
 
         const string Late = "deadline exceeded during assignment";
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(budget);
-        var context = new AssignmentContext
-        {
-            PipelineId = request.PipelineId,
-            RequestId = request.RequestId,
-            Inputs = request.Inputs,
-            Layers = pipeline.Layout.Layers,
-            Experiments = pipeline.Layout.Experiments,
-            Arms = pipeline.Layout.Arms,
-        };
-        ValueTask<IReadOnlyList<string>> answer;
+        var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task<IReadOnlyList<string>>? pending = null; // the provider, once it did not answer synchronously
         try
         {
-            answer = _assignmentProvider.AssignAsync(context, deadline.Token);
-        }
-        catch (Exception ex)
-        {
-            answer = ValueTask.FromException<IReadOnlyList<string>>(ex);
-        }
-
-        IReadOnlyList<string> ids;
-        try
-        {
-            if (!answer.IsCompleted)
+            deadline.CancelAfter(budget);
+            var context = new AssignmentContext
             {
-                var provider = answer.AsTask();
-                var left = request.Deadline - Stopwatch.GetElapsedTime(started);
-                var wait = provider.WaitAsync(left <= TimeSpan.Zero ? TimeSpan.Zero : left, cancellationToken);
-                if (!(wait.IsCompleted && provider.IsCompleted))
-                {
-                    // A wait that was set up ends with whoever came first: the provider, the deadline or the caller.
-                    ids = await wait.ConfigureAwait(false);
-                    return Resolve(pipeline.Plan, ids);
-                }
-
-                // WaitAsync hands back a completed provider as it is, whatever the time or the caller: judged below.
-                answer = new ValueTask<IReadOnlyList<string>>(provider);
+                PipelineId = request.PipelineId,
+                RequestId = request.RequestId,
+                Inputs = request.Inputs,
+                Layers = pipeline.Layout.Layers,
+                Experiments = pipeline.Layout.Experiments,
+                Arms = pipeline.Layout.Arms,
+            };
+            ValueTask<IReadOnlyList<string>> answer;
+            try
+            {
+                answer = _assignmentProvider.AssignAsync(context, deadline.Token);
+            }
+            catch (Exception ex)
+            {
+                answer = ValueTask.FromException<IReadOnlyList<string>>(ex);
             }
 
-            // An answer the engine observes complete, with no wait to say who came first (a synchronous return, or one
-            // before the wait was set up), is judged now, as BoundedCall judges a client: the caller's cancellation first,
-            // then the deadline (passed by the clock, or by the timer that cancels the provider's token).
-            if (cancellationToken.IsCancellationRequested || deadline.IsCancellationRequested || Stopwatch.GetElapsedTime(started) >= request.Deadline)
+            IReadOnlyList<string> ids;
+            try
             {
-                Discard(answer);
-                cancellationToken.ThrowIfCancellationRequested();
+                if (!answer.IsCompleted)
+                {
+                    pending = answer.AsTask();
+                    var left = request.Deadline - Stopwatch.GetElapsedTime(started);
+                    var wait = pending.WaitAsync(left <= TimeSpan.Zero ? TimeSpan.Zero : left, AssignmentWaitTimers, cancellationToken);
+                    if (!(wait.IsCompleted && pending.IsCompleted))
+                    {
+                        // A wait that was set up ends with whoever came first: the provider, the deadline or the caller.
+                        ids = await wait.ConfigureAwait(false);
+                        return Resolve(pipeline.Plan, ids);
+                    }
+
+                    // WaitAsync hands back a completed provider as it is, whatever the time or the caller: judged below.
+                    answer = new ValueTask<IReadOnlyList<string>>(pending);
+                }
+
+                // An answer the engine observes complete, with no wait to say who came first (a synchronous return, or one
+                // before the wait was set up), is judged now, as BoundedCall judges a client: the caller's cancellation
+                // first, then the deadline (passed by the clock, or by the timer that cancels the provider's token).
+                if (cancellationToken.IsCancellationRequested || deadline.IsCancellationRequested || Stopwatch.GetElapsedTime(started) >= request.Deadline)
+                {
+                    Discard(answer);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return (RequestArms.None, Array.Empty<IgnoredArm>(), Late);
+                }
+
+                ids = answer.GetAwaiter().GetResult();
+            }
+            catch (Exception ex) when (ex is TimeoutException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
+            {
                 return (RequestArms.None, Array.Empty<IgnoredArm>(), Late);
             }
 
-            ids = answer.GetAwaiter().GetResult();
+            return Resolve(pipeline.Plan, ids);
         }
-        catch (Exception ex) when (ex is TimeoutException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
+        finally
         {
-            return (RequestArms.None, Array.Empty<IgnoredArm>(), Late);
+            // A provider that has ended no longer needs its token; one still running keeps it until it ends.
+            if (pending is { IsCompleted: false })
+            {
+                _ = AbandonProviderAsync(deadline, pending, request.PipelineId, request.RequestId);
+            }
+            else
+            {
+                deadline.Dispose();
+            }
         }
-
-        return Resolve(pipeline.Plan, ids);
 
         static (RequestArms, IgnoredArm[], string?) Resolve(ExecutionPlan plan, IReadOnlyList<string> answered)
         {
@@ -735,6 +751,42 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             }
         }
     }
+
+    /// <summary>
+    /// The timers of the wait for a pending assignment provider; the system's. A test ends that wait before the timer that
+    /// cancels the provider's token, as the wait can in production: both aim at the deadline, each rounded to whole
+    /// milliseconds and started at a different moment.
+    /// </summary>
+    internal TimeProvider AssignmentWaitTimers { get; init; } = TimeProvider.System;
+
+    /// <summary>
+    /// The engine stopped waiting for a provider that is still running (the deadline, or the caller): its token is
+    /// cancelled now and stays valid until the provider ends, as a client's token does in the shared waits (decisions,
+    /// invariant 3). Disposing the source at once could leave the token never cancelled: the wait may end before the
+    /// source's timer fires, and a caller's cancellation may end the request, inline in Cancel, before the registration
+    /// that cancels the linked token has run, and disposing removes it. The callbacks run on the pool, so one that blocks
+    /// does not hold the request; one that throws is logged. A provider that never ends keeps its source.
+    /// </summary>
+    private async Task AbandonProviderAsync(CancellationTokenSource deadline, Task provider, string pipelineId, string requestId)
+    {
+        var callbacks = deadline.CancelAsync();
+        try
+        {
+            await callbacks.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            LogProviderCancellationCallbacksFailed(_logger, callbacks.Exception ?? ex, pipelineId, requestId);
+        }
+
+        await provider.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        _ = provider.Exception; // a late failure nobody awaits any more
+        deadline.Dispose();
+    }
+
+    [LoggerMessage(EventId = 1102, Level = LogLevel.Warning,
+        Message = "A cancellation callback of the assignment provider's token threw (pipeline '{PipelineId}', request '{RequestId}'); the request is not affected")]
+    private static partial void LogProviderCancellationCallbacksFailed(ILogger logger, Exception exception, string pipelineId, string requestId);
 
     /// <summary>
     /// The plan a pipeline serves, its binding lease entered (see the lifecycle remarks): the caller ends the entry
