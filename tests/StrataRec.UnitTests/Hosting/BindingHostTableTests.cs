@@ -173,6 +173,40 @@ public class BindingHostTableTests
         await stopped.Task.WaitAsync(Wait);
     }
 
+    [Theory]
+    [InlineData(1201)] // loaded: the plans waiting for the table must still be released
+    [InlineData(1203)] // restarting: the source must still be restarted
+    public async Task ALoggerThatThrows_ChangesNeitherTheLoadNorTheRestarts(int failingEvent)
+    {
+        var logs = new ListLoggerFactory(throwOn: failingEvent);
+        var host = new BindingHost(new BindingHostOptions { RestartDelay = TimeSpan.FromMilliseconds(1) }, logs);
+        var restarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new ScriptedSource(
+            (_, writer, _) =>
+            {
+                writer.BeginReload();
+                Write(writer, 1, 1.0);
+                writer.CompleteReload(UpdatePosition.Single(5));
+                throw new IOException("connection reset");
+            },
+            async (_, _, token) =>
+            {
+                restarted.SetResult();
+                await WaitForCancellation(token, stopped);
+            });
+        using var lease = host.OpenLease();
+        var table = lease.Acquire(Spec(source));
+
+        Assert.Empty(await lease.WaitLoadedAsync().WaitAsync(Wait));
+        await restarted.Task.WaitAsync(Wait);
+        await logs.Thrown.Task.WaitAsync(Wait); // the logger did throw on that event
+        Assert.Equal(1.0, Read(table, 1));
+
+        await host.DisposeAsync();
+        await stopped.Task.WaitAsync(Wait);
+    }
+
     [Fact]
     public async Task DisposingTheHost_CancelsEverySource_AndWaitsForThem()
     {
