@@ -1,3 +1,4 @@
+using StrataRec.Artifacts.Json;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Types;
@@ -32,6 +33,12 @@ public sealed class ModelScorerConfig
 /// <c>ModelScorer@1</c> (ColumnWriter): pointwise scoring through <see cref="IModelClient"/>. Rows are split into
 /// batches called concurrently; outputs commit only when every batch succeeds (design 4.6, 6.9).
 /// </summary>
+/// <remarks>
+/// Each batch sends one float32 tensor of shape [rows] per mapped input and reads one float32 per row from each mapped
+/// output, so every model version the node may use must declare exactly the mapped inputs, and those inputs and the
+/// mapped outputs as float32 [-1]; this is checked at load time. The <c>[batch, dim]</c> inputs of design 6.9 are not
+/// supported yet.
+/// </remarks>
 public sealed class ModelScorerFactory : IOperatorFactory
 {
     public OperatorDescriptor Descriptor { get; } = new("ModelScorer", 1, Effects.ColumnWriter, typeof(ModelScorerConfig),
@@ -97,7 +104,7 @@ public sealed class ModelScorerFactory : IOperatorFactory
         for (var i = 0; i < inputNames.Count; i++)
         {
             var source = config.Inputs[inputNames[i]];
-            var expr = context.CompileExpression(source, "/inputs/" + inputNames[i], CompileOptions.Score);
+            var expr = context.CompileExpression(source, "/inputs/" + JsonPointer.Escape(inputNames[i]), CompileOptions.Score);
             if (expr is null)
             {
                 ok = false;
@@ -106,7 +113,7 @@ public sealed class ModelScorerFactory : IOperatorFactory
 
             if (expr.Reads.Count != 1 || !string.Equals(expr.Reads[0].Name, source.Trim(), StringComparison.Ordinal))
             {
-                context.Error("/inputs/" + inputNames[i], "MODEL_INPUT_NOT_REFERENCE",
+                context.Error("/inputs/" + JsonPointer.Escape(inputNames[i]), "MODEL_INPUT_NOT_REFERENCE",
                     $"Model input '{inputNames[i]}' must be a plain column or context reference, not an expression.",
                     "define the transformation as a derived feature so training and serving share one definition (design 6.9)");
                 ok = false;
@@ -121,7 +128,7 @@ public sealed class ModelScorerFactory : IOperatorFactory
         var outputs = new (string Name, OutputColumn Column)[outputNames.Count];
         for (var i = 0; i < outputNames.Count; i++)
         {
-            if (!context.TryWriteColumn(config.Outputs[outputNames[i]], "/outputs/" + outputNames[i], null, out var column))
+            if (!context.TryWriteColumn(config.Outputs[outputNames[i]], "/outputs/" + JsonPointer.Escape(outputNames[i]), null, out var column))
             {
                 ok = false;
                 continue;
@@ -129,7 +136,7 @@ public sealed class ModelScorerFactory : IOperatorFactory
 
             if (!column.Type.IsFloat)
             {
-                context.Error("/outputs/" + outputNames[i], "COLUMN_TYPE_MISMATCH", $"Model output column '{column.Name}' must be float32 or float64.");
+                context.Error("/outputs/" + JsonPointer.Escape(outputNames[i]), "COLUMN_TYPE_MISMATCH", $"Model output column '{column.Name}' must be float32 or float64.");
                 ok = false;
             }
 
@@ -154,22 +161,10 @@ public sealed class ModelScorerFactory : IOperatorFactory
                 return null;
             }
 
-            foreach (var (name, _) in inputs)
+            foreach (var problem in ScorerSignature.Check($"Model '{config.Model}' version '{version ?? "default"}'", config.Inputs, config.Outputs, signature))
             {
-                if (signature.FindInput(name) is null)
-                {
-                    context.Error("/inputs/" + name, "MODEL_SIGNATURE", $"Model '{config.Model}' version '{version ?? "default"}' has no input '{name}'.");
-                    ok = false;
-                }
-            }
-
-            foreach (var (name, _) in outputs)
-            {
-                if (signature.FindOutput(name) is null)
-                {
-                    context.Error("/outputs/" + name, "MODEL_SIGNATURE", $"Model '{config.Model}' version '{version ?? "default"}' has no output '{name}'.");
-                    ok = false;
-                }
+                context.Error(problem.ConfigKey, problem.Code, problem.Message, problem.Hint);
+                ok = false;
             }
         }
 
