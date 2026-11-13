@@ -56,7 +56,7 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
             AbortOnConnectFail = false,
             BacklogPolicy = BacklogPolicy.FailFast,
             ClientName = "stratarec",
-            ConnectTimeout = 5000,
+            ConnectTimeout = 2000,
             AsyncTimeout = CommandTimeoutMs,
             SyncTimeout = CommandTimeoutMs,
             DefaultDatabase = _settings.Database,
