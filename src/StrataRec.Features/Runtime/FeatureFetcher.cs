@@ -63,6 +63,7 @@ public sealed class FeatureFetcher
     private readonly List<PendingFetch> _pending = new();
     private readonly List<Task> _io = new(); // guarded by lock (_io): connector completions and the context fetch
     private readonly ExpressionCounters _counters;
+    private readonly IFeatureCallHook? _hook;
     private Task? _contextTask;
     private int _nonFiniteReplaced;
 
@@ -70,6 +71,7 @@ public sealed class FeatureFetcher
     /// reports one total per event; null gives the fetcher counters of its own.</param>
     /// <param name="requestId">Sample request id for failure summaries (design 13.2).</param>
     /// <param name="events">Source health and failure summaries; null when the engine has no logger.</param>
+    /// <param name="hook">Records every connector call, or answers them from a recording (design 13.4); null for ordinary requests.</param>
     public FeatureFetcher(
         FeaturePlan plan,
         CandidateTable table,
@@ -80,7 +82,8 @@ public sealed class FeatureFetcher
         long deadlineTimestamp,
         ExpressionCounters? counters = null,
         string? requestId = null,
-        RequestEventLog? events = null)
+        RequestEventLog? events = null,
+        IFeatureCallHook? hook = null)
     {
         _plan = plan;
         _table = table;
@@ -92,6 +95,7 @@ public sealed class FeatureFetcher
         _counters = counters ?? new ExpressionCounters();
         _requestId = requestId;
         _events = events;
+        _hook = hook;
         _state = new FeatureState[plan.Features.Count];
         _errors = new string?[plan.Features.Count];
     }
@@ -438,15 +442,16 @@ public sealed class FeatureFetcher
         var budget = BudgetMs(group);
         for (var c = 0; c < chunkCount; c++)
         {
+            var offset = c * chunkSize;
+            var count = Math.Min(chunkSize, keyCount - offset);
             if (budget <= 0)
             {
                 chunks[c] = null;
                 calls[c] = NoTimeLeft;
+                RecordUnsent(group, group.Shape, contextKey, all.AsMemory(offset, count), fields);
                 continue;
             }
 
-            var offset = c * chunkSize;
-            var count = Math.Min(chunkSize, keyCount - offset);
             var staging = new StagingBuffer(fields, count, _memory);
             chunks[c] = staging;
             var batch = new EntityKeyBatch { Shape = group.Shape, ContextKey = contextKey, CandidateKeys = all.AsMemory(offset, count) };
@@ -466,8 +471,51 @@ public sealed class FeatureFetcher
     /// this method), because a connector that ignores cancellation may still be writing into
     /// <paramref name="writer"/> (design 4.8). Never throws: failures become <see cref="FetchOutcome.Failed"/>.
     /// </remarks>
-    private async Task<FetchStatus> CallAsync(
+    private Task<FetchStatus> CallAsync(
         FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields, StagingBuffer writer, int budgetMs, CancellationToken cancellationToken)
+    {
+        if (_hook is null)
+        {
+            return ConnectorCallAsync(group, batch, fields, writer, budgetMs, 0, cancellationToken);
+        }
+
+        // A replayed call answers at once from the recording: no connector, no wait, no metrics or health (design 13.4).
+        return _hook.Replays
+            ? Task.FromResult(_hook.Replay(group, batch, fields, writer))
+            : RecordedCallAsync(group, batch, fields, writer, budgetMs, cancellationToken);
+    }
+
+    /// <summary>
+    /// A connector call of a recorded request. The extra hold keeps the keys and the staging buffer rented until the call
+    /// is recorded: a prefetch nobody awaits may finish after the request returned, when its lease is already released.
+    /// </summary>
+    private async Task<FetchStatus> RecordedCallAsync(
+        FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields, StagingBuffer writer, int budgetMs, CancellationToken cancellationToken)
+    {
+        var sequence = _hook!.NextSequence();
+        _memory.Hold();
+        try
+        {
+            return await ConnectorCallAsync(group, batch, fields, writer, budgetMs, sequence, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _memory.Release();
+        }
+    }
+
+    /// <summary>Records a chunk the request had no time left to send, so a replay fails it the same way.</summary>
+    private void RecordUnsent(FetchGroup group, KeyShape shape, EntityKey contextKey, ReadOnlyMemory<EntityKey> keys, CompiledFieldBinding[] fields)
+    {
+        if (_hook is { Replays: false } recorder)
+        {
+            var batch = new EntityKeyBatch { Shape = shape, ContextKey = contextKey, CandidateKeys = keys };
+            recorder.Record(new FeatureCallInfo(group, batch, fields, recorder.NextSequence(), false, NoTimeLeft.Result, IoOutcome.Timeout, TimeSpan.Zero), null);
+        }
+    }
+
+    private async Task<FetchStatus> ConnectorCallAsync(
+        FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields, StagingBuffer writer, int budgetMs, int sequence, CancellationToken cancellationToken)
     {
         _memory.Hold();
         var io = group.Io.Start();
@@ -481,18 +529,18 @@ public sealed class FeatureFetcher
         catch (Exception ex)
         {
             lease.Dispose(); // threw before returning a task: the connector is no longer writing
-            return Completed(io, batch, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken));
+            return Completed(io, group, batch, fields, writer, sequence, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken));
         }
 
         if (call.IsCompleted)
         {
             try
             {
-                return Completed(io, batch, call.GetAwaiter().GetResult());
+                return Completed(io, group, batch, fields, writer, sequence, call.GetAwaiter().GetResult());
             }
             catch (Exception ex)
             {
-                return Completed(io, batch, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken));
+                return Completed(io, group, batch, fields, writer, sequence, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken));
             }
             finally
             {
@@ -514,23 +562,34 @@ public sealed class FeatureFetcher
 
         try
         {
-            return Completed(io, batch, await task.WaitAsync(TimeSpan.FromMilliseconds(budgetMs), cancellationToken).ConfigureAwait(false));
+            var status = await task.WaitAsync(TimeSpan.FromMilliseconds(budgetMs), cancellationToken).ConfigureAwait(false);
+            return Completed(io, group, batch, fields, writer, sequence, status);
         }
         catch (Exception ex)
         {
-            return Completed(io, batch, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken));
+            return Completed(io, group, batch, fields, writer, sequence, Failure(group, ex, budgetMs, cancellationToken), Classify(ex, cancellationToken));
         }
     }
 
-    /// <summary>Records a finished call (metrics, source health, span) and passes its status through.</summary>
-    private FetchStatus Completed(in IoCall io, EntityKeyBatch batch, FetchStatus status, IoOutcome? outcome = null)
+    /// <summary>
+    /// Records a finished call (metrics, source health, span; and the call itself when the request records) and passes its
+    /// status through. Staged values are recorded only for a call that answered within its budget.
+    /// </summary>
+    private FetchStatus Completed(
+        in IoCall io, FetchGroup group, EntityKeyBatch batch, CompiledFieldBinding[] fields, StagingBuffer writer, int sequence, FetchStatus status,
+        IoOutcome? outcome = null)
     {
-        io.Complete(outcome ?? status.Outcome switch
+        var result = outcome ?? status.Outcome switch
         {
             FetchOutcome.Failed => IoOutcome.Error,
             FetchOutcome.Partial => IoOutcome.Partial,
             _ => IoOutcome.Ok,
-        }, batch.KeyCount, _requestId, status.Error, _events);
+        };
+        var duration = _hook is null ? TimeSpan.Zero : io.Elapsed;
+        io.Complete(result, batch.KeyCount, _requestId, status.Error, _events);
+        _hook?.Record(
+            new FeatureCallInfo(group, batch, fields, sequence, true, status, result, duration),
+            result is IoOutcome.Ok or IoOutcome.Partial ? writer : null);
         return status;
     }
 
@@ -845,6 +904,7 @@ public sealed class FeatureFetcher
                 if (budget <= 0)
                 {
                     fetches.Add(new ContextFetch(features, null, NoTimeLeft));
+                    RecordUnsent(group, group.Shape, ToKey(v), default, fields);
                     continue;
                 }
 
@@ -993,7 +1053,11 @@ public sealed class FeatureFetcher
         if (count > 0)
         {
             Interlocked.Add(ref _nonFiniteReplaced, count);
-            StrataRecMetrics.ColumnNonFinite.Add(count, feature.NonFiniteTags);
+            if (_hook is not { Replays: true })
+            {
+                // A replay is not traffic: it records no metrics (design 13.4).
+                StrataRecMetrics.ColumnNonFinite.Add(count, feature.NonFiniteTags);
+            }
         }
     }
 

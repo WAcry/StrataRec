@@ -1,6 +1,7 @@
 using StrataRec.Core.Columns;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Types;
+using StrataRec.Core.Values;
 using StrataRec.Features.Connectors;
 
 namespace StrataRec.Features.Runtime;
@@ -21,7 +22,7 @@ namespace StrataRec.Features.Runtime;
 /// <para>The "written" bitmaps of all fields share one rented block, field f starting at bit f × <c>_bitsPerField</c>:
 /// a fetch with a small <c>max_batch</c> creates a buffer per chunk, and a rent per field per chunk adds up.</para>
 /// </remarks>
-internal sealed class StagingBuffer : IFeatureBatchWriter
+internal sealed class StagingBuffer : IFeatureBatchWriter, IStagedFeatureValues
 {
     private readonly ColumnBuffer[] _fields;
     private readonly ulong[] _written;
@@ -47,6 +48,9 @@ internal sealed class StagingBuffer : IFeatureBatchWriter
 
     /// <summary>True when the connector wrote a value for this field and key (and did not withdraw it).</summary>
     public bool HasValue(int fieldIndex, int keyIndex) => Bits.Get(_written, WrittenBit(fieldIndex, keyIndex));
+
+    public ScalarValue Get(int fieldIndex, int keyIndex) =>
+        HasValue(fieldIndex, keyIndex) ? ColumnValues.Get(_fields[fieldIndex], keyIndex) : ScalarValue.Missing;
 
     public Memory<T> GetValues<T>(int fieldIndex)
         where T : unmanaged => _fields[fieldIndex] switch

@@ -126,7 +126,7 @@ internal sealed class FeatureTestRig
         return Plan;
     }
 
-    public TestRequest NewRequest(long[] candidates, long? userId = null, IBufferPool? pool = null, int deadlineMs = 10_000)
+    public TestRequest NewRequest(long[] candidates, long? userId = null, IBufferPool? pool = null, int deadlineMs = 10_000, IFeatureCallHook? hook = null)
     {
         var memory = new RequestMemory(pool);
         var table = new CandidateTable(new TableSchema(EntityKeyType.Int64, _slots), Math.Max(1, candidates.Length), memory);
@@ -142,7 +142,7 @@ internal sealed class FeatureTestRig
         }
 
         var deadline = Stopwatch.GetTimestamp() + (deadlineMs * Stopwatch.Frequency / 1000);
-        var fetcher = new FeatureFetcher(Plan, table, context, new OutputBindings(1, memory), Array.Empty<ScalarValue>(), memory, deadline);
+        var fetcher = new FeatureFetcher(Plan, table, context, new OutputBindings(1, memory), Array.Empty<ScalarValue>(), memory, deadline, hook: hook);
         return new TestRequest(Plan, fetcher, table, memory, context);
     }
 

@@ -1,4 +1,6 @@
 using System.Text.Json;
+using StrataRec.Core.Keys;
+using StrataRec.Core.Memory;
 using StrataRec.Core.Values;
 
 namespace StrataRec.Pipeline.Sources;
@@ -35,6 +37,68 @@ public readonly record struct CandidateSourceStatus(bool Succeeded, string? Erro
     public static CandidateSourceStatus Ok => new(true);
 
     public static CandidateSourceStatus Failed(string error) => new(false, error);
+}
+
+/// <summary>
+/// The sink an operator passes to <see cref="Operators.OperatorContext.RetrieveAsync"/>: one source's results in rank order,
+/// capped at the quota (excess is dropped and counted, design 4.8). The buffers are rented from the request memory at the
+/// quota, which the table's capacity already accounts for.
+/// </summary>
+/// <remarks>
+/// Closed by the framework when the source call completes, before the call releases the request memory: a source that
+/// adds after completing (which it must not) changes nothing and never writes into returned buffers. Being a framework
+/// type lets the call site record what a source returned, and refill it from a recording, for every operator.
+/// </remarks>
+public sealed class CandidateBuffer : ICandidateSink
+{
+    private readonly EntityKey[] _keys;
+    private readonly double[] _scores;
+    private int _count;
+    private bool _closed;
+
+    public CandidateBuffer(int limit, RequestMemory memory)
+    {
+        Limit = limit;
+        _keys = memory.Rent<EntityKey>(limit);
+        _scores = memory.Rent<double>(limit);
+    }
+
+    /// <summary>The most candidates kept; also the <see cref="CandidateQuery.Limit"/> to ask for.</summary>
+    public int Limit { get; }
+
+    public int Count => _count;
+
+    public ReadOnlySpan<EntityKey> Keys => _keys.AsSpan(0, _count);
+
+    /// <summary>Scores of <see cref="Keys"/>; a non-finite score is stored as 0.</summary>
+    public ReadOnlySpan<double> Scores => _scores.AsSpan(0, _count);
+
+    /// <summary>Candidates dropped because the buffer was full.</summary>
+    public int Truncated { get; private set; }
+
+    public void Add(long entityId, double score) => Add(EntityKey.FromInt64(entityId), score);
+
+    public void Add(string entityId, double score) => Add(EntityKey.FromString(entityId), score);
+
+    internal void Add(EntityKey key, double score)
+    {
+        if (Volatile.Read(ref _closed))
+        {
+            return;
+        }
+
+        if (_count >= Limit)
+        {
+            Truncated++;
+            return;
+        }
+
+        _keys[_count] = key;
+        _scores[_count] = double.IsFinite(score) ? score : 0.0;
+        _count++;
+    }
+
+    internal void Close() => Volatile.Write(ref _closed, true);
 }
 
 /// <summary>A retrieval backend: ANN index, collaborative filtering, trending lists… (design 1.4). Thread-safe.</summary>

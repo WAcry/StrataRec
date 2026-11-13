@@ -19,6 +19,8 @@ public static class Program
         root.Add(BuildCommand.Create());
         root.Add(ExplainPlanCommand.Create());
         root.Add(RunCommand.Create());
+        root.Add(ReplayCommand.Create());
+        root.Add(CompareCommand.Create());
         root.Add(SchemaCommand.Create());
         root.Add(OperatorsCommand.Create());
         return root;

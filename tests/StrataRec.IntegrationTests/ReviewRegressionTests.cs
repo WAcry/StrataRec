@@ -189,7 +189,7 @@ public sealed class ReviewRegressionTests
         Assert.InRange(result.ElapsedMs, 0, 3_000); // the deadline cancelled the 5 s primary
     }
 
-    private static string FallbackWorkspace(int brokenLatencyMs, int backupLatencyMs = 0)
+    internal static string FallbackWorkspace(int brokenLatencyMs, int backupLatencyMs = 0)
     {
         var root = Directory.CreateTempSubdirectory("stratarec-fallback-").FullName;
         foreach (var dir in new[] { "catalog", "bindings", "pipelines", "fixtures" })

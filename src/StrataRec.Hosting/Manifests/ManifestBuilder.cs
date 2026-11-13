@@ -153,6 +153,27 @@ public static class ManifestBuilder
             return null;
         }
 
+        var artifactIds = new SortedDictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["pipeline:" + pipeline.PipelineId] = manifest.Artifacts.Pipeline,
+            ["catalog:" + catalog.CatalogId] = manifest.Artifacts.Catalog,
+            ["bindings:" + bindings.Environment] = manifest.Artifacts.Bindings,
+        };
+        if (manifest.Artifacts.Policy is { } policyArtifact)
+        {
+            artifactIds["policy"] = policyArtifact;
+        }
+
+        foreach (var (name, id) in manifest.Artifacts.Tables)
+        {
+            artifactIds["table:" + name] = id;
+        }
+
+        foreach (var (name, entry) in manifest.Experiments)
+        {
+            artifactIds["experiment:" + name] = entry.Artifact;
+        }
+
         return new PlanCompileRequest
         {
             Pipeline = pipeline,
@@ -163,6 +184,7 @@ public static class ManifestBuilder
             Experiments = placements,
             Assignment = manifest.Assignment,
             ManifestId = manifestId,
+            ArtifactIds = artifactIds,
         };
     }
 

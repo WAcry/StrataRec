@@ -1,10 +1,14 @@
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
+using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Tables;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
+using StrataRec.Models;
 using StrataRec.Pipeline.Execution;
+using StrataRec.Pipeline.Replay;
+using StrataRec.Pipeline.Sources;
 
 namespace StrataRec.Pipeline.Operators;
 
@@ -119,11 +123,155 @@ public sealed class OperatorContext
         return _state.Table.AppendRows(keys);
     }
 
+    /// <summary>
+    /// Calls a candidate source for this node the way the framework calls every external dependency: holds the request
+    /// memory until the source completes (design 4.8), applies <paramref name="timeoutMs"/> within the node's budget,
+    /// records duration, errors, health and a span through <paramref name="target"/> (design 13.1, 13.2), closes the
+    /// buffer, and records the call or answers it from a recording when the request records or replays (design 13.4).
+    /// Custom operators that call sources through it are recorded and replayed like the built-in ones.
+    /// </summary>
+    /// <returns>
+    /// The source's status. A source failure, exception or own timeout becomes a failed status; only the node's budget
+    /// running out or the caller cancelling throws <see cref="OperationCanceledException"/>.
+    /// </returns>
+    public async Task<CandidateSourceStatus> RetrieveAsync(ICandidateSource source, IoTarget target, int? timeoutMs, CandidateQuery query, CandidateBuffer buffer)
+    {
+        if (_state.Replay is { } replay)
+        {
+            var replayed = replay.Retrieve(NodeId, target.Name, query, buffer);
+            buffer.Close();
+            return replayed;
+        }
+
+        var recorder = _state.Recorder;
+        var sequence = recorder?.NextSequence() ?? 0;
+        var memory = _state.Memory;
+        memory.Hold();
+        var io = target.Start();
+        var status = default(CandidateSourceStatus);
+        var outcome = IoOutcome.Timeout; // the node's budget ran out (the exception propagates) unless set below
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken);
+            if (timeoutMs is { } timeout)
+            {
+                cts.CancelAfter(timeout);
+            }
+
+            status = await source.RetrieveAsync(query, buffer, cts.Token).ConfigureAwait(false);
+            outcome = status.Succeeded ? IoOutcome.Ok : IoOutcome.Error;
+            return status;
+        }
+        catch (OperationCanceledException) when (!CancellationToken.IsCancellationRequested)
+        {
+            return status = CandidateSourceStatus.Failed("timed out");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A client's own transport timeout is a timeout, as for feature sources.
+            outcome = ex is TimeoutException ? IoOutcome.Timeout : IoOutcome.Error;
+            return status = CandidateSourceStatus.Failed(ex.Message);
+        }
+        finally
+        {
+            // Closed before the memory is released: a source adding after it completed cannot write into returned buffers.
+            buffer.Close();
+
+            // A call cut off by the caller is not the source's fault: neither timed nor counted against its health.
+            if (outcome == IoOutcome.Timeout && _state.CallerCancellation.IsCancellationRequested)
+            {
+                outcome = IoOutcome.Cancelled;
+            }
+
+            var duration = recorder is null ? TimeSpan.Zero : io.Elapsed;
+            io.Complete(outcome, -1, query.RequestId, status.Error, _state.Events);
+            recorder?.CandidateCall(sequence, NodeId, target.Name, query.Limit, outcome, status.Error, duration, buffer);
+            memory.Release();
+        }
+    }
+
+    /// <summary>
+    /// Calls a model for this node the way the framework calls every external dependency: holds the request memory until
+    /// the client completes (design 4.8), records duration, errors, health and a span through <paramref name="target"/>,
+    /// and records the call or answers it from a recording when the request records or replays (design 13.4).
+    /// </summary>
+    /// <param name="rows">
+    /// Physical rows of the batch, one per entry of the leading dimension of row-wise inputs and outputs; a recording
+    /// keys each row's output by the row's entity id, so a replay matches outputs per entity even when the batches
+    /// differ. Empty for calls whose outputs are not per row; those are matched by their whole input.
+    /// </param>
+    /// <param name="cancellationToken">The node's token, or one linked to it with the model's own timeout.</param>
+    /// <returns>The client's status. Exceptions, including cancellation, propagate to the operator.</returns>
+    public async Task<ModelStatus> InvokeModelAsync(
+        IModelClient client, IoTarget target, ModelCall call, IModelOutputWriter outputs, ReadOnlyMemory<int> rows, CancellationToken cancellationToken)
+    {
+        if (_state.Replay is { } replay)
+        {
+            return replay.InvokeModel(call, outputs, KeysOf(rows));
+        }
+
+        var recorder = _state.Recorder;
+        var sequence = recorder?.NextSequence() ?? 0;
+        var recording = recorder is null ? null : new RecordingOutputWriter(outputs);
+        var memory = _state.Memory;
+        memory.Hold();
+        var io = target.Start();
+        var outcome = IoOutcome.Error;
+        string? error = null;
+        var threw = false;
+        try
+        {
+            var status = await client.InvokeAsync(call, (IModelOutputWriter?)recording ?? outputs, cancellationToken).ConfigureAwait(false);
+            (outcome, error) = status.Succeeded ? (IoOutcome.Ok, null) : (IoOutcome.Error, status.Error);
+            return status;
+        }
+        catch (OperationCanceledException)
+        {
+            // The model timeout or the node's budget, unless the caller gave up on the request.
+            outcome = _state.CallerCancellation.IsCancellationRequested ? IoOutcome.Cancelled : IoOutcome.Timeout;
+            threw = true;
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // A client's own transport timeout is a timeout, as for feature sources.
+            outcome = ex is TimeoutException ? IoOutcome.Timeout : IoOutcome.Error;
+            error = ex.Message;
+            threw = true;
+            throw;
+        }
+        finally
+        {
+            var duration = recorder is null ? TimeSpan.Zero : io.Elapsed;
+            io.Complete(outcome, -1, RequestId, error, _state.Events);
+            recorder?.ModelCall(sequence, NodeId, call, KeysOf(rows), outcome, error, threw, duration, recording!);
+            memory.Release();
+        }
+    }
+
     /// <summary>Marks the result as Degraded (completed with partial or stale inputs, design 5.6).</summary>
     public void ReportDegraded(string reason) => DegradedReason ??= reason;
 
     /// <summary>Fails the node without throwing; the engine applies <c>on_failure</c>.</summary>
     public void Fail(string reason) => FailureReason ??= reason;
+
+    /// <summary>Entity ids of a batch's rows; computed only for requests that record or replay (no per-row work otherwise).</summary>
+    private EntityKey[]? KeysOf(ReadOnlyMemory<int> rows)
+    {
+        if (rows.IsEmpty)
+        {
+            return null;
+        }
+
+        var span = rows.Span;
+        var keys = new EntityKey[span.Length];
+        for (var i = 0; i < span.Length; i++)
+        {
+            keys[i] = _state.Table.GetKey(span[i]);
+        }
+
+        return keys;
+    }
 
     private void Require(Effects effect, string operation)
     {

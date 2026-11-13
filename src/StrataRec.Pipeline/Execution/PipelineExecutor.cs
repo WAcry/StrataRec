@@ -10,8 +10,10 @@ using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
 using StrataRec.Features.Runtime;
+using StrataRec.Artifacts.Model;
 using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.Pipeline.Execution;
 
@@ -37,6 +39,23 @@ public sealed class PipelineRequest
     /// previews, replays and local runs never write persistent logs (design 8.6 item 6).
     /// </summary>
     public bool CaptureLogs { get; init; }
+
+    /// <summary>
+    /// Record the run for a replay bundle (design 13.4): <see cref="PipelineResult.Recording"/> then holds every external
+    /// call, node decision and the sampling. Requests that do not record pay nothing for the feature but a null check per
+    /// external call and node.
+    /// </summary>
+    public bool Record { get; init; }
+
+    /// <summary>
+    /// Replay a recorded run instead of calling sources and models (design 13.4): external calls are answered from the
+    /// recording and timing decisions come from it, not from the clock. A replay never writes persistent logs and records
+    /// no metrics, event logs or spans. Use <see cref="RunReplay.Deadline"/> as <see cref="Deadline"/>.
+    /// </summary>
+    public RunReplay? Replay { get; init; }
+
+    /// <summary>The seed of a request that does not set one: a hash of its id (design 3.4).</summary>
+    public static long DefaultSeed(string requestId) => unchecked((long)StableHash.Hash(StableHash.SeedFromSalt(requestId)));
 }
 
 public enum NodeOutcomeKind : byte
@@ -100,6 +119,9 @@ public sealed class PipelineResult
 
     /// <summary>Log batches of the request when <see cref="PipelineRequest.CaptureLogs"/> was set.</summary>
     public IReadOnlyList<Logging.LogBatch> LogBatches { get; set; } = Array.Empty<Logging.LogBatch>();
+
+    /// <summary>The run's recording when <see cref="PipelineRequest.Record"/> was set (design 13.4).</summary>
+    public ReplayRunRecord? Recording { get; set; }
 }
 
 /// <summary>Mutable per-request state shared by the executor and operator contexts.</summary>
@@ -181,6 +203,12 @@ internal sealed class RequestState
     /// <summary>The fallback node run for the current position, for its span's variant and experiment attribution.</summary>
     public CompiledNode? PositionFallback { get; set; }
 
+    /// <summary>Records the run for a replay bundle; null unless the request asked for it (design 13.4).</summary>
+    public RunRecorder? Recorder { get; init; }
+
+    /// <summary>Answers external calls and timing decisions from a recording; null unless the request is a replay.</summary>
+    public RunReplay? Replay { get; init; }
+
     public TimeSpan Remaining => Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), DeadlineTimestamp);
 
     public EvalContext Eval => new(Table, Bindings, Context, Params, Counters);
@@ -227,13 +255,27 @@ public sealed class PipelineExecutor
         FeatureFetcher? fetcher = null;
         RequestState? state = null;
         var position = 0;
+
+        // A replay is not traffic: no metrics, event logs or spans (its timings are not real, and the recorded request
+        // was already counted), and never a persistent log (design 8.6 item 6).
+        var replay = request.Replay;
+        // A replay that records keeps its node decisions, parameters and result (its calls are answered, not recorded),
+        // which is what a replay report compares with the original run.
+        var recorder = request.Record ? new RunRecorder() : null;
+        var events = replay is null ? _events : null;
         try
         {
             var context = new ScalarValue[plan.Schema.ContextFields.Count];
             var inputError = BindInputs(plan, request, context);
             if (inputError is not null)
             {
-                return Failed(plan, request, inputError, start, Array.Empty<NodeOutcome>(), Array.Empty<bool>());
+                var rejected = Failed(plan, request, inputError, start, Array.Empty<NodeOutcome>(), Array.Empty<bool>());
+                if (recorder is not null)
+                {
+                    rejected.Recording = recorder.Build(plan, request, null, rejected, LogDestination(request));
+                }
+
+                return rejected;
             }
 
             var parameters = plan.Params.Snapshot(request.Arms);
@@ -254,7 +296,8 @@ public sealed class PipelineExecutor
             var deadline = start + (long)(request.Deadline.TotalSeconds * Stopwatch.Frequency);
             // One set of counters per request: operator expressions and derived features count into the same totals.
             var counters = new ExpressionCounters();
-            fetcher = new FeatureFetcher(plan.Features, table, context, bindings, parameters, memory, deadline, counters, request.RequestId, _events);
+            fetcher = new FeatureFetcher(plan.Features, table, context, bindings, parameters, memory, deadline, counters, request.RequestId, events,
+                (IFeatureCallHook?)replay ?? recorder);
             state = new RequestState
             {
                 Plan = plan,
@@ -274,12 +317,14 @@ public sealed class PipelineExecutor
                 Variants = variants,
                 Triggered = new bool[plan.Experiments.Length],
                 WhenResults = new bool?[plan.Timeline.Length],
-                Events = _events,
-                TraceNodes = StrataRecTracing.IsRecording,
+                Events = events,
+                TraceNodes = replay is null && StrataRecTracing.IsRecording,
+                Recorder = recorder,
+                Replay = replay,
             };
 
             fetcher.StartContextFetch(plan.ContextFeatures, cancellationToken);
-            if (_logs is not null || request.CaptureLogs)
+            if (_logs is not null || request.CaptureLogs || replay is not null)
             {
                 // Without a consumer every captured batch would be discarded: skip sampling and capture entirely.
                 await TapCapture.SelectAsync(state, cancellationToken).ConfigureAwait(false);
@@ -297,6 +342,11 @@ public sealed class PipelineExecutor
             }
 
             result ??= await BuildResultAsync(state, request, start, cancellationToken).ConfigureAwait(false);
+            if (recorder is not null)
+            {
+                result.Recording = recorder.Build(plan, request, parameters, result, LogDestination(request));
+            }
+
             PublishLogs(state, request, result, returned: true);
             return result;
         }
@@ -318,7 +368,7 @@ public sealed class PipelineExecutor
             }
             catch (Exception publishError)
             {
-                _events?.Report(RequestEvent.LogPublishFailed, plan.PipelineId, request.RequestId, publishError.Message);
+                events?.Report(RequestEvent.LogPublishFailed, plan.PipelineId, request.RequestId, publishError.Message);
             }
 
             throw;
@@ -329,16 +379,19 @@ public sealed class PipelineExecutor
             // still running now outlive the request (design 4.8).
             var rented = memory.RentedBytes;
             var abandoned = memory.Release();
-            var tags = plan.Telemetry.Pipeline;
-            StrataRecMetrics.RequestMemoryRented.Record(rented, tags);
-            if (abandoned > 0)
+            if (replay is null)
             {
-                StrataRecMetrics.AbandonedIo.Add(abandoned, tags);
-            }
+                var tags = plan.Telemetry.Pipeline;
+                StrataRecMetrics.RequestMemoryRented.Record(rented, tags);
+                if (abandoned > 0)
+                {
+                    StrataRecMetrics.AbandonedIo.Add(abandoned, tags);
+                }
 
-            if (state?.Counters.OutOfRange is > 0 and var outOfRange)
-            {
-                StrataRecMetrics.ColumnOutOfRange.Add(outOfRange, tags);
+                if (state?.Counters.OutOfRange is > 0 and var outOfRange)
+                {
+                    StrataRecMetrics.ColumnOutOfRange.Add(outOfRange, tags);
+                }
             }
         }
     }
@@ -373,10 +426,16 @@ public sealed class PipelineExecutor
             return null;
         }
 
-        if (node.MinRemainingMs is { } minRemaining && state.Remaining.TotalMilliseconds < minRemaining)
+        if (node.MinRemainingMs is not null || state.Recorder is not null)
         {
-            Record(state, node, NodeOutcomeCategory.SkippedDeadline, $"less than {minRemaining} ms remaining", null, started, rowsIn);
-            return null;
+            // A replay compares with the time that was left in the recording, not with its own clock (design 5.7 item 5).
+            var remainingMs = state.Replay?.RemainingMs(node.NodeId) ?? state.Remaining.TotalMilliseconds;
+            state.Recorder?.Remaining(remainingMs);
+            if (node.MinRemainingMs is { } minRemaining && remainingMs < minRemaining)
+            {
+                Record(state, node, NodeOutcomeCategory.SkippedDeadline, $"less than {minRemaining} ms remaining", null, started, rowsIn);
+                return null;
+            }
         }
 
         int[]? entered = null;
@@ -469,8 +528,27 @@ public sealed class PipelineExecutor
 
         var remainingMs = state.Remaining.TotalMilliseconds - reserveMs;
         var budgetMs = node.TimeoutMs is { } timeout ? Math.Min(timeout, remainingMs) : remainingMs;
-        if (budgetMs <= 0)
+        if (state.Replay is { } replay)
         {
+            // Whether the attempt had time to start, and whether it ran out of time, comes from the recording: the replay
+            // makes the same timeout, fallback and skip decisions without waiting (design 5.7 item 5, 13.4).
+            var recorded = replay.NextAttempt(node.NodeId);
+            if (recorded?.Timing == ReplayTiming.DeadlineExceeded)
+            {
+                state.Recorder?.Attempt(node.NodeId, ReplayTiming.DeadlineExceeded, recorded.BudgetMs ?? budgetMs);
+                return new Attempt(NodeOutcomeKind.Failed, "deadline exceeded");
+            }
+
+            if (recorded?.Timing == ReplayTiming.TimedOut)
+            {
+                MarkParamTriggers(state, node);
+                state.Recorder?.Attempt(node.NodeId, ReplayTiming.TimedOut, recorded.BudgetMs ?? budgetMs);
+                return new Attempt(NodeOutcomeKind.Failed, $"timed out after {recorded.BudgetMs ?? budgetMs:0} ms");
+            }
+        }
+        else if (budgetMs <= 0)
+        {
+            state.Recorder?.Attempt(node.NodeId, ReplayTiming.DeadlineExceeded, budgetMs);
             return new Attempt(NodeOutcomeKind.Failed, "deadline exceeded");
         }
 
@@ -483,9 +561,14 @@ public sealed class PipelineExecutor
         }
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cts.CancelAfter(TimeSpan.FromMilliseconds(budgetMs));
+        if (state.Replay is null)
+        {
+            cts.CancelAfter(TimeSpan.FromMilliseconds(budgetMs));
+        }
+
         var context = new OperatorContext(state, node.NodeId, node.Effects, cts.Token);
         string? failure;
+        var timedOut = false;
         try
         {
             // The operator is about to read its parameters: that is exposure, whether it then succeeds or fails
@@ -496,12 +579,15 @@ public sealed class PipelineExecutor
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            timedOut = true;
             failure = $"timed out after {budgetMs:0} ms";
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             failure = $"{ex.GetType().Name}: {ex.Message}";
         }
+
+        state.Recorder?.Attempt(node.NodeId, timedOut ? ReplayTiming.TimedOut : ReplayTiming.Ran, budgetMs);
 
         if (failure is not null)
         {
@@ -547,7 +633,10 @@ public sealed class PipelineExecutor
                 && ColumnValues.SanitizeNonFinite(buffer, live, column.HasDefault ? column.Default : ScalarValue.Missing) is > 0 and var replaced)
             {
                 state.NonFinite += replaced;
-                StrataRecMetrics.ColumnNonFinite.Add(replaced, state.Plan.Telemetry.Nodes[node.Index].Outputs[o]);
+                if (state.Replay is null)
+                {
+                    StrataRecMetrics.ColumnNonFinite.Add(replaced, state.Plan.Telemetry.Nodes[node.Index].Outputs[o]);
+                }
             }
 
             if (!output.Type.Nullable && buffer.Validity is not null)
@@ -731,8 +820,14 @@ public sealed class PipelineExecutor
             NodeOutcomeCategory.Failed or NodeOutcomeCategory.Aborted => NodeOutcomeKind.Failed,
             _ => NodeOutcomeKind.Skipped,
         };
-        state.Outcomes.Add(new NodeOutcome(node.NodeId, kind, detail, producedBy, elapsed.TotalMilliseconds, rowsIn, rowsOut));
+        var outcome = new NodeOutcome(node.NodeId, kind, detail, producedBy, elapsed.TotalMilliseconds, rowsIn, rowsOut);
+        state.Outcomes.Add(outcome);
         state.Degraded |= category is not (NodeOutcomeCategory.Succeeded or NodeOutcomeCategory.SkippedWhen);
+        state.Recorder?.Position(outcome, PlanTelemetry.CategoryName(category));
+        if (state.Replay is not null)
+        {
+            return; // a replay records no metrics, event logs or spans
+        }
 
         var telemetry = state.Plan.Telemetry.Nodes[node.Index];
         StrataRecMetrics.NodeOutcomes.Add(1, telemetry.Outcomes[(int)category]);
@@ -955,12 +1050,12 @@ public sealed class PipelineExecutor
     {
         // A capturing request (draft preview, debug run) never writes to the persistent logs, even when it is aborted
         // and nobody receives its captures (design 8.6 item 6): forced arms must not contaminate experiment data.
-        if (request.CaptureLogs && !returned)
+        if ((request.CaptureLogs || request.Replay is not null) && !returned)
         {
             return;
         }
 
-        var capture = request.CaptureLogs;
+        var capture = request.CaptureLogs || request.Replay is not null;
         if (state.Batches is null && (state.Plan.Experiments.Length == 0 || (_logs is null && !capture)))
         {
             return;
@@ -1022,6 +1117,10 @@ public sealed class PipelineExecutor
             }
         }
     }
+
+    /// <summary>Where the run's log batches go, as a bundle records it.</summary>
+    private string LogDestination(PipelineRequest request) =>
+        request.CaptureLogs ? "captured" : _logs is not null ? "pipeline" : "none";
 
     private static int[] FirstRows(CandidateTable table, int limit)
     {
@@ -1118,7 +1217,7 @@ public sealed class PipelineExecutor
         }
 
         context[PlanSchema.RequestIdContext] = ScalarValue.FromString(request.RequestId);
-        context[PlanSchema.RequestSeedContext] = ScalarValue.FromInt64(request.Seed ?? unchecked((long)StableHash.Hash(StableHash.SeedFromSalt(request.RequestId))));
+        context[PlanSchema.RequestSeedContext] = ScalarValue.FromInt64(request.Seed ?? PipelineRequest.DefaultSeed(request.RequestId));
         context[PlanSchema.RequestTimeContext] = ScalarValue.FromInt64(request.TimeMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         return null;
     }

@@ -49,6 +49,7 @@ internal static class TapCapture
             }
         }
 
+        state.Recorder?.Sampling(sampled, taps);
         if (any)
         {
             state.Taps = taps;

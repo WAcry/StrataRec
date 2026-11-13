@@ -1,4 +1,6 @@
 using System.CommandLine;
+using System.ComponentModel;
+using System.Reflection;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
 using StrataRec.Artifacts.Model;
@@ -22,11 +24,12 @@ internal static class SchemaCommand
         ("policy", typeof(PolicyArtifact)),
         ("table", typeof(DataTableArtifact)),
         ("manifest", typeof(ReleaseManifest)),
+        ("replay_bundle", typeof(ReplayBundle)),
     };
 
     public static Command Create()
     {
-        var kind = new Argument<string>("kind") { Description = "pipeline, catalog, bindings, experiment, allocation, policy, table, manifest, or operator." };
+        var kind = new Argument<string>("kind") { Description = "pipeline, catalog, bindings, experiment, allocation, policy, table, manifest, replay_bundle, or operator." };
         var op = new Argument<string?>("operator") { Description = "Operator id for 'operator', e.g. TopK@1.", Arity = ArgumentArity.ZeroOrOne };
         var command = new Command("schema", "Print the JSON Schema of an artifact type or an operator's config.") { kind, op };
         command.SetAction(parse => Run(parse.GetValue(kind)!, parse.GetValue(op), Console.Out, Console.Error));
@@ -74,14 +77,42 @@ internal static class SchemaCommand
             title = type.Name;
         }
 
-        var schema = JsonSchemaExporter.GetJsonSchemaAsNode(ArtifactSerializer.Options, type, new JsonSchemaExporterOptions { TreatNullObliviousAsNonNullable = true });
+        var schema = JsonSchemaExporter.GetJsonSchemaAsNode(ArtifactSerializer.Options, type, new JsonSchemaExporterOptions
+        {
+            TreatNullObliviousAsNonNullable = true,
+            TransformSchemaNode = Describe,
+        });
         if (schema is JsonObject obj)
         {
             obj.Insert(0, "$schema", "https://json-schema.org/draft/2020-12/schema");
             obj.Insert(1, "title", title);
         }
 
-        output.WriteLine(schema.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        output.WriteLine(schema.ToJsonString(new System.Text.Json.JsonSerializerOptions
+        {
+            WriteIndented = true,
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping, // descriptions stay readable
+        }));
         return 0;
+    }
+
+    /// <summary>Adds a type's or property's <see cref="DescriptionAttribute"/> as the schema's <c>description</c>.</summary>
+    private static JsonNode Describe(JsonSchemaExporterContext context, JsonNode schema)
+    {
+        ICustomAttributeProvider? provider = context.PropertyInfo is { } property ? property.AttributeProvider : context.TypeInfo.Type;
+        string? description = null;
+        foreach (var attribute in provider?.GetCustomAttributes(typeof(DescriptionAttribute), inherit: true) ?? Array.Empty<object>())
+        {
+            description = ((DescriptionAttribute)attribute).Description;
+        }
+
+        if (description is null)
+        {
+            return schema;
+        }
+
+        var described = schema as JsonObject ?? new JsonObject(); // `true` (any value) becomes {} with a description
+        described.Insert(0, "description", description);
+        return described;
     }
 }
