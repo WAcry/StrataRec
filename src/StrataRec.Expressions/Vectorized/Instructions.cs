@@ -475,6 +475,8 @@ internal sealed class FloatBinaryInstr(IrOp op, ExprType type, Opnd left, Opnd r
 
         if (a.IsScalar)
         {
+            // Commutative ops take the scalar second. With two NaN operands that may pick the other NaN's payload,
+            // which nothing observes: hash01 hashes every NaN alike (Optimizer remarks).
             var s = ScalarF(ref f, a);
             var y = f.GetF(b.Index);
             switch (op)

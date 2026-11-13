@@ -12,7 +12,10 @@ namespace StrataRec.Expressions.Ir;
 /// </summary>
 /// <remarks>Every rewrite is exact for all inputs, including NaN, ±∞, ±0 and missing values, so the optimized program
 /// is bit-identical to the unoptimized one (the differential tests run the reference interpreter on the
-/// unoptimized IR).</remarks>
+/// unoptimized IR) — except for the sign and payload of a NaN, which IEEE 754 does not pin down for domain errors
+/// and which no expression can observe: comparisons treat every NaN alike, columns store NaN as non-finite, and
+/// <c>hash01</c> hashes every NaN as one canonical NaN (<see cref="Core.Hashing.StableHash.CanonicalFloat64Bits"/>).
+/// </remarks>
 internal sealed class Optimizer
 {
     private readonly Dictionary<IrNode, IrNode> _memo = new(ReferenceEqualityComparer.Instance);
@@ -142,8 +145,8 @@ internal sealed class Optimizer
 
     /// <summary>
     /// <c>(-a) * s</c> → <c>a * (-s)</c> and <c>(-a) / s</c> → <c>a / (-s)</c> when <c>s</c> is invariant: IEEE
-    /// multiplication and division are sign-symmetric, so the result is identical while the negation moves out of the
-    /// per-row loop (e.g. <c>exp(-age / param.half_life)</c>).
+    /// multiplication and division are sign-symmetric, so the result is identical (up to the sign of a NaN, see the
+    /// class remarks) while the negation moves out of the per-row loop (e.g. <c>exp(-age / param.half_life)</c>).
     /// </summary>
     private IrNode MoveNegationToInvariant(IrNode node)
     {

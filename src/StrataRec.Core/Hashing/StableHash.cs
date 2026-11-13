@@ -17,7 +17,10 @@ namespace StrataRec.Core.Hashing;
 /// </para>
 /// <list type="bullet">
 ///   <item><c>0x01</c> int64: 8 bytes little-endian.</item>
-///   <item><c>0x02</c> float64: 8 bytes little-endian IEEE 754 (−0.0 is normalized to 0.0).</item>
+///   <item><c>0x02</c> float64: 8 bytes little-endian IEEE 754, canonicalized by <see cref="CanonicalFloat64Bits"/>:
+///   −0.0 is written as 0.0 and every NaN as the quiet NaN <c>0x7FF8000000000000</c>. IEEE 754 leaves the sign and
+///   payload of a NaN produced by a domain error (<c>sqrt(-1)</c>, <c>0/0</c>) to the hardware and the operand order, so
+///   an optimizer or SIMD rewrite may change them; the hash must not.</item>
 ///   <item><c>0x03</c> string: 4-byte little-endian UTF-8 length, then the UTF-8 bytes.</item>
 ///   <item><c>0x04</c> bool: 1 byte (0 or 1).</item>
 ///   <item><c>0x05</c> list index: 4 bytes little-endian (which expression in a key list matched, design 8.2).</item>
@@ -33,8 +36,18 @@ public static class StableHash
     private const byte TagIndex = 0x05;
     private const double Unit = 1.0 / (1UL << 53);
 
+    /// <summary>The one NaN the canonical encoding writes: the positive quiet NaN <c>0x7FF8000000000000</c>.</summary>
+    public const long CanonicalNaNBits = 0x7FF8000000000000;
+
     /// <summary>Maps a 64-bit hash to a uniform double in [0, 1).</summary>
     public static double ToUnit(ulong hash) => (hash >> 11) * Unit;
+
+    /// <summary>
+    /// The IEEE 754 bits that encode <paramref name="value"/> after tag <c>0x02</c>: −0.0 becomes 0.0 and every NaN
+    /// becomes <see cref="CanonicalNaNBits"/>. Every writer of the canonical encoding must go through this method.
+    /// </summary>
+    public static long CanonicalFloat64Bits(double value) =>
+        double.IsNaN(value) ? CanonicalNaNBits : value == 0.0 ? 0L : BitConverter.DoubleToInt64Bits(value);
 
     public static ulong Hash(long a)
     {
@@ -91,7 +104,7 @@ public static class StableHash
         {
             var span = Reserve(9);
             span[0] = TagFloat64;
-            BinaryPrimitives.WriteDoubleLittleEndian(span[1..], value == 0.0 ? 0.0 : value);
+            BinaryPrimitives.WriteInt64LittleEndian(span[1..], CanonicalFloat64Bits(value));
         }
 
         public void Add(bool value)

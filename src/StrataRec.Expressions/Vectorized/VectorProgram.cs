@@ -376,18 +376,19 @@ internal static class DestinationWriter
         }
     }
 
+    /// <remarks>
+    /// The destination may be a column the expression itself reads (an in-place update such as <c>col.a ?? [7]</c>
+    /// written into <c>col.a</c>). Every instruction has run before this method, and the lazy vector/list results it
+    /// resolves per lane only look at the same row of their sources, so writing a row never changes another row's
+    /// inputs. The exception is a row's own validity bit, which a lazy <c>??</c> uses as its selection mask (zero-copy
+    /// from the column in full-range mode): list, vector and string destinations are therefore written row by row,
+    /// reading the lane before updating that row's validity. Scalar results are already materialized in registers
+    /// (or are the column's own array, row for row), so their values are copied first and validity follows.
+    /// </remarks>
     public static void Write(ref Frame f, int root, ExprType type, ReadOnlySpan<int> rows, ColumnBuffer destination)
     {
         var valid = f.Validity(Opnd.Node(root));
         var allValid = valid.IsConstant && valid.Fill == ulong.MaxValue;
-        if (!allValid || destination.Validity is not null)
-        {
-            for (var k = 0; k < rows.Length; k++)
-            {
-                destination.SetValidity(rows[k], allValid || valid.Get(f.Identity ? rows[k] : k));
-            }
-        }
-
         var identity = f.Identity;
         switch (destination)
         {
@@ -466,7 +467,15 @@ internal static class DestinationWriter
 
             default:
                 WriteReferenceKinds(ref f, root, valid, allValid, rows, destination);
-                break;
+                return;
+        }
+
+        if (!allValid || destination.Validity is not null)
+        {
+            for (var k = 0; k < rows.Length; k++)
+            {
+                destination.SetValidity(rows[k], allValid || valid.Get(identity ? rows[k] : k));
+            }
         }
     }
 
@@ -489,6 +498,9 @@ internal static class DestinationWriter
         }
     }
 
+    /// <summary>Writes value and validity of each row in one step: the lane is read first, then <c>Set</c> marks the
+    /// row present (or <c>SetMissing</c> marks it missing), so an aliased mask still holds this row's old bit when read
+    /// (see <see cref="Write"/>).</summary>
     private static void WriteReferenceKinds(ref Frame f, int root, WordView valid, bool allValid, ReadOnlySpan<int> rows, ColumnBuffer destination)
     {
         var node = Opnd.Node(root);
@@ -498,6 +510,7 @@ internal static class DestinationWriter
             var lane = f.Identity ? row : k;
             if (!allValid && !valid.Get(lane))
             {
+                destination.SetMissing(row);
                 continue;
             }
 
