@@ -145,11 +145,27 @@ public sealed class LoadedPipeline
     /// </summary>
     internal BindingLease Bindings { get; init; } = null!;
 
+    /// <summary>The plan's experiment metadata as read-only views, built with the plan: every provider call passes these.</summary>
+    internal PlanLayout Layout { get; init; } = null!;
+
     /// <summary>Request-level metric tags of the plan (design 13.1), built once per loaded plan.</summary>
     internal RequestTelemetry Telemetry =>
         _telemetry ?? Interlocked.CompareExchange(ref _telemetry, RequestTelemetry.Create(Plan), null) ?? _telemetry!;
 
     private RequestTelemetry? _telemetry;
+}
+
+/// <summary>
+/// Read-only views of a plan's layers, experiments and arms (<see cref="AssignmentContext"/>), built once per plan so
+/// that asking the assignment provider allocates no views.
+/// </summary>
+internal sealed class PlanLayout(ExecutionPlan plan)
+{
+    public IReadOnlyList<LayerInfo> Layers { get; } = Array.AsReadOnly(plan.Layers);
+
+    public IReadOnlyList<ExperimentInfo> Experiments { get; } = Array.AsReadOnly(plan.Experiments);
+
+    public IReadOnlyList<ArmInfo> Arms { get; } = Array.AsReadOnly(plan.Arms);
 }
 
 /// <summary>Outcome of a plan load (design 10.3 step 5: applied or rejected).</summary>
@@ -375,6 +391,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             Sequence = order,
             ArtifactIds = request.ArtifactIds,
             Bindings = lease,
+            Layout = new PlanLayout(plan),
         };
         _ = loaded.Telemetry; // request metric tags are built with the plan, not on its first request
         Publishing?.Invoke();
@@ -626,8 +643,16 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         IReadOnlyList<string> ids;
         try
         {
-            ids = await _assignmentProvider.AssignAsync(request.PipelineId, request.Inputs, deadline.Token).AsTask()
-                .WaitAsync(budget, cancellationToken).ConfigureAwait(false);
+            var context = new AssignmentContext
+            {
+                PipelineId = request.PipelineId,
+                RequestId = request.RequestId,
+                Inputs = request.Inputs,
+                Layers = pipeline.Layout.Layers,
+                Experiments = pipeline.Layout.Experiments,
+                Arms = pipeline.Layout.Arms,
+            };
+            ids = await _assignmentProvider.AssignAsync(context, deadline.Token).AsTask().WaitAsync(budget, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is TimeoutException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {

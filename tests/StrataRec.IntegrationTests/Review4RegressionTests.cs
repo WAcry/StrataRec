@@ -33,7 +33,7 @@ public sealed class Review4RegressionTests
 
     private sealed class SlowProvider(TimeSpan delay, bool honorCancellation) : IAssignmentProvider
     {
-        public async ValueTask<IReadOnlyList<string>> AssignAsync(string pipelineId, RequestInputs inputs, CancellationToken cancellationToken)
+        public async ValueTask<IReadOnlyList<string>> AssignAsync(AssignmentContext context, CancellationToken cancellationToken)
         {
             await Task.Delay(delay, honorCancellation ? cancellationToken : CancellationToken.None);
             return Array.Empty<string>();
