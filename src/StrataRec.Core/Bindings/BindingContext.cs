@@ -109,8 +109,9 @@ public sealed class BindingContext
             $"give the {what} as a path relative to the configuration directory, an absolute path, or a file:// URI such as file:///models/ctr.onnx");
     }
 
-    /// <summary>An RFC 6901 reference token: <c>~</c> as <c>~0</c>, <c>/</c> as <c>~1</c>.</summary>
-    internal static string EscapePointerToken(string token) => token.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal);
+    /// <summary>A setting name or map key as an RFC 6901 reference token (<c>~</c> as <c>~0</c>, <c>/</c> as <c>~1</c>), to build
+    /// the pointer of a <see cref="BindingException"/>.</summary>
+    public static string EscapePointerToken(string token) => token.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal);
 }
 
 /// <summary>

@@ -67,7 +67,6 @@ public sealed class LinearModelClient : IModelClient
 
     private ModelSignature Signature()
     {
-
         var dyn = new[] { -1 };
         var inputSpecs = new TensorSpec[_inputs.Count];
         for (var i = 0; i < inputSpecs.Length; i++)
