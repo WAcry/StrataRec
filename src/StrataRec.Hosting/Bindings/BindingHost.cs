@@ -451,7 +451,15 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
                 if (!Table.IsLoaded)
                 {
                     var error = new LocalTableLoadException(Spec, failure);
-                    LogFirstLoadFailed(_host._logger, failure, Spec.Name, Spec.Artifact, Spec.Pointer, error.Message);
+                    try
+                    {
+                        LogFirstLoadFailed(_host._logger, failure, Spec.Name, Spec.Artifact, Spec.Pointer, error.Message);
+                    }
+                    catch (Exception)
+                    {
+                        // A failing logger cannot report itself, and must not keep the plans waiting from the failure.
+                    }
+
                     _ready.TrySetException(error);
                     return; // never handed out again (see Acquire), so never restarted
                 }

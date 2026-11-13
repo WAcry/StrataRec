@@ -1,4 +1,5 @@
 using StrataRec.Core.Bindings;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Features.Bindings;
 using StrataRec.Features.Local;
 using StrataRec.Models;
@@ -43,7 +44,7 @@ public readonly record struct SignatureLookup(SignatureStatus Status, ModelSigna
     {
         BindingException binding => new(SignatureStatus.Failed, null, binding.Reason, binding.Hint),
         OperationCanceledException => new(SignatureStatus.Failed, null, "The signature lookup was cancelled.", null),
-        _ => new(SignatureStatus.Failed, null, exception.Message, null),
+        _ => new(SignatureStatus.Failed, null, ExceptionText.Of(exception), null),
     };
 }
 

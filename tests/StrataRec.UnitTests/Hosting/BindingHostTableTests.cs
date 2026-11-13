@@ -101,6 +101,19 @@ public class BindingHostTableTests
     }
 
     [Fact]
+    public async Task AFirstLoadFailureWhoseMessageCannotBeRead_StillFailsTheLoad()
+    {
+        using var host = new BindingHost();
+        using var lease = host.OpenLease();
+        lease.Acquire(Spec(new ScriptedSource((_, _, _) => throw new UnreadableException())));
+
+        var failure = Assert.Single(await lease.WaitLoadedAsync().WaitAsync(TimeSpan.FromSeconds(30)));
+
+        Assert.Equal("LOCAL_TABLE_LOAD_FAILED", failure.Code);
+        Assert.Contains(typeof(UnreadableException).FullName!, failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ASourceThatReturnsWithoutLoading_FailsTheFirstLoad()
     {
         using var host = new BindingHost();
@@ -399,6 +412,12 @@ public class BindingHostTableTests
         {
             returned.TrySetResult();
         }
+    }
+
+    /// <summary>A source's exception whose message cannot be read: describing it throws.</summary>
+    private sealed class UnreadableException : Exception
+    {
+        public override string Message => throw new InvalidOperationException("the message failed");
     }
 
     /// <summary>A factory that hands out one given source.</summary>

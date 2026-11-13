@@ -389,6 +389,37 @@ public sealed class BindingHostClientTests
     }
 
     [Fact]
+    public async Task ALoadFailureWhoseMessageCannotBeRead_StillFailsThePlan_AtTheBinding()
+    {
+        await using var host = new BindingHost();
+        var factory = new Factory();
+        using var lease = host.OpenLease();
+        var broken = lease.Acquire(Spec(factory), factory.Create);
+        lease.Acquire(Spec(factory, """{ "uri": "slow.bin" }"""), factory.Create); // still loading when the other fails
+        broken.FailLoad(new UnreadableException());
+
+        var failure = Assert.Single(await lease.WaitLoadedAsync().WaitAsync(Wait)); // stops early only with a failure to show
+
+        Assert.Equal(("BINDING_LOAD_FAILED", "bindings:test", "/models/ctr_model"), (failure.Code, failure.Artifact, failure.Pointer));
+        Assert.Contains(typeof(UnreadableException).FullName!, failure.Message, StringComparison.Ordinal);
+        Assert.IsType<UnreadableException>(failure.Exception.InnerException);
+    }
+
+    [Fact]
+    public async Task ASignatureFailureWhoseMessageCannotBeRead_IsAFailedLookup()
+    {
+        await using var host = new BindingHost();
+        var server = new ModelServer(Task.FromException(new UnreadableException()));
+        using var lease = host.OpenLease();
+
+        var lookup = await lease.CompileAsync(bindings =>
+            bindings.Signature(bindings.Acquire(Spec(server), server.Create), "ctr_model", null)).WaitAsync(Wait);
+
+        Assert.Equal(SignatureStatus.Failed, lookup.Status);
+        Assert.Contains(typeof(UnreadableException).FullName!, lookup.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task FactoriesThatAreEqualButDistinct_NeverShareAnInstance()
     {
         await using var host = new BindingHost();
@@ -452,6 +483,12 @@ public sealed class BindingHostClientTests
             CreatedQueue.Enqueue(instance);
             return instance;
         }
+    }
+
+    /// <summary>An implementation's exception whose message cannot be read: describing it throws.</summary>
+    private sealed class UnreadableException : Exception
+    {
+        public override string Message => throw new InvalidOperationException("the message failed");
     }
 
     /// <summary>A factory with value equality: two with the same kind are equal, and neither may get the other's instances.</summary>

@@ -1,5 +1,6 @@
 using System.Globalization;
 using StrataRec.Core.Bindings;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Memory;
 using StrataRec.Features.Bindings;
 using StrataRec.Features.Local;
@@ -298,6 +299,8 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
         }
 
         // Stop at the first failure: the plan cannot be served, and a large table still loading should not delay the error.
+        // Every load that ended other than successfully is a failure below, whatever it ended with, so stopping early
+        // always has a failure to show and the plan is never served without its loads.
         while (pending.Count > 0)
         {
             var done = await Task.WhenAny(pending).WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -314,11 +317,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
         {
             foreach (var entry in tables)
             {
-                var failure = entry.Ready.Exception?.InnerException as LocalTableLoadException
-                              ?? (entry.Ready.IsCanceled
-                                  ? new LocalTableLoadException(entry.Spec, new OperationCanceledException("the engine's binding host was stopped before the load completed"))
-                                  : null);
-                if (failure is not null)
+                if (TableFailure(entry) is { } failure)
                 {
                     failures.Add(new BindingLoadFailure("LOCAL_TABLE_LOAD_FAILED", failure.Artifact, failure.Pointer, failure.Message, failure.Hint, failure));
                 }
@@ -327,11 +326,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
 
         for (var i = 0; i < clients.Count; i++)
         {
-            var failure = ready[i].Exception?.InnerException as BindingLoadException
-                          ?? (ready[i].IsCanceled
-                              ? new BindingLoadException(clients[i].Spec, "the engine's binding host was stopped before the load completed", string.Empty, null, null)
-                              : null);
-            if (failure is not null)
+            if (ClientFailure(clients[i].Spec, ready[i]) is { } failure)
             {
                 failures.Add(new BindingLoadFailure("BINDING_LOAD_FAILED", failure.Artifact, failure.Pointer, failure.Message, failure.Hint, failure));
             }
@@ -339,6 +334,25 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
 
         return failures;
     }
+
+    /// <summary>The failure of a table's first load that has ended other than successfully, whatever it ended with; null otherwise.</summary>
+    private static LocalTableLoadException? TableFailure(BindingHost.TableEntry entry) => entry.Ready switch
+    {
+        { IsCompletedSuccessfully: true } or { IsCompleted: false } => null,
+        { IsCanceled: true } => new LocalTableLoadException(entry.Spec, new OperationCanceledException("the engine's binding host was stopped before the load completed")),
+        var faulted => faulted.Exception!.InnerException as LocalTableLoadException
+                       ?? new LocalTableLoadException(entry.Spec, faulted.Exception.InnerException ?? faulted.Exception),
+    };
+
+    /// <summary>The failure of an instance's load that has ended other than successfully, whatever it ended with; null otherwise.</summary>
+    private static BindingLoadException? ClientFailure(BindingSpec spec, Task ready) => ready switch
+    {
+        { IsCompletedSuccessfully: true } or { IsCompleted: false } => null,
+        { IsCanceled: true } => new BindingLoadException(spec, "the engine's binding host was stopped before the load completed", string.Empty, null, null),
+        var faulted => faulted.Exception!.InnerException as BindingLoadException
+                       ?? new BindingLoadException(spec, ExceptionText.Of(faulted.Exception.InnerException ?? faulted.Exception), string.Empty, null,
+                           faulted.Exception.InnerException),
+    };
 
     /// <summary>
     /// A request of the lease's plan starts: false once the lease is retired (its plan was replaced, so the caller reads

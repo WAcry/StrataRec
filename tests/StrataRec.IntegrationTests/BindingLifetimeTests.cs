@@ -108,6 +108,25 @@ public sealed class BindingLifetimeTests
     }
 
     [Fact]
+    public async Task AClientWhoseLoadFailureCannotBeDescribed_IsRejected_AndNeverCalled()
+    {
+        var models = new ScriptedModels { Load = (_, _) => throw new UnreadableException() };
+        var root = Workspace(generation: 1);
+        await using var engine = new RecEngine(Environment(root, models));
+
+        var load = await engine.LoadAsync(Compile(root));
+
+        Assert.False(load.Applied);
+        var error = Assert.Single(load.Diagnostics, d => d.IsError);
+        Assert.Equal(("BINDING_LOAD_FAILED", "bindings:local", "/models/ctr_model"), (error.Code, error.Artifact, error.Pointer));
+        Assert.Contains(typeof(UnreadableException).FullName!, error.Message, StringComparison.Ordinal);
+        Assert.False((await engine.ExecuteAsync(Request("req-never-served"))).Succeeded);
+        var client = Assert.Single(models.Created);
+        Assert.Equal(0, client.Calls);
+        await client.Disposed.Task.WaitAsync(Wait); // the rejected plan returned its lease
+    }
+
+    [Fact]
     public async Task AnEngineDisposalDuringAClientsLoad_CancelsIt_AndDisposesTheClientOnceTheLoadReturns()
     {
         var models = new ScriptedModels();
@@ -523,6 +542,12 @@ public sealed class BindingLifetimeTests
                 }
             }
         }
+    }
+
+    /// <summary>A client's exception whose message cannot be read: describing it throws.</summary>
+    private sealed class UnreadableException : Exception
+    {
+        public override string Message => throw new InvalidOperationException("the message failed");
     }
 
     /// <summary>

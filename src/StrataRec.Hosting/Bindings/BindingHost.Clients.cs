@@ -1,6 +1,7 @@
 using System.Globalization;
 using Microsoft.Extensions.Logging;
 using StrataRec.Core.Bindings;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Features.Bindings;
 
 namespace StrataRec.Hosting.Bindings;
@@ -202,7 +203,7 @@ public sealed partial class BindingHost
             {
                 throw Failure(ex is BindingException binding
                     ? new BindingLoadException(Spec, binding.Reason, binding.Pointer, binding.Hint, binding)
-                    : new BindingLoadException(Spec, ex.Message, string.Empty, null, ex));
+                    : new BindingLoadException(Spec, ExceptionText.Of(ex), string.Empty, null, ex));
             }
 
             try
