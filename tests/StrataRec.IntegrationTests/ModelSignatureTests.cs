@@ -1,5 +1,6 @@
 using System.Text.Json;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Bindings;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Models;
 using StrataRec.Pipeline.Planning;
@@ -93,13 +94,14 @@ public sealed class ModelSignatureTests
     {
         public string ClientType => LinearModelClientFactory.Type;
 
-        public IModelClient Create(string modelName, IReadOnlyDictionary<string, JsonElement> settings) => new Client(signature);
+        public IModelClient Create(BindingContext context) => new Client(signature);
 
         private sealed class Client(Func<string?, ModelSignature> signature) : IModelClient
         {
             public string ClientType => LinearModelClientFactory.Type;
 
-            public ModelSignature GetSignature(string model, string? version) => signature(version);
+            public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
+                ValueTask.FromResult(signature(version));
 
             public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
                 throw new InvalidOperationException("not called at load time");

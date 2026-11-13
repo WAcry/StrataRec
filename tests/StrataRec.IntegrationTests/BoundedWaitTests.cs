@@ -1,5 +1,6 @@
 using System.Text.Json;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Memory;
 using StrataRec.Hosting;
@@ -295,13 +296,14 @@ public sealed class BoundedWaitTests
 
         public string ClientType => _inner.ClientType;
 
-        public IModelClient Create(string modelName, IReadOnlyDictionary<string, JsonElement> settings) => new Client(_inner.Create(modelName, settings), this);
+        public IModelClient Create(BindingContext context) => new Client(_inner.Create(context), this);
 
         private sealed class Client(IModelClient inner, GatedModels owner) : IModelClient
         {
             public string ClientType => inner.ClientType;
 
-            public ModelSignature GetSignature(string model, string? version) => inner.GetSignature(model, version);
+            public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
+                inner.GetSignatureAsync(model, version, cancellationToken);
 
             public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
                 owner.Later(() => inner.InvokeAsync(call, outputs, CancellationToken.None).AsTask().GetAwaiter().GetResult(), s => (s.Succeeded, s.Error));
@@ -318,10 +320,10 @@ public sealed class BoundedWaitTests
 
         public string ClientType => _inner.ClientType;
 
-        public ICandidateSource Create(string sourceName, IReadOnlyDictionary<string, JsonElement> settings, string? baseDirectory)
+        public ICandidateSource Create(BindingContext context)
         {
-            var source = _inner.Create(sourceName, settings, baseDirectory);
-            return sourceName == gated ? new Source(source, this) : source;
+            var source = _inner.Create(context);
+            return context.Name == gated ? new Source(source, this) : source;
         }
 
         private sealed class Source(ICandidateSource inner, GatedSources owner) : ICandidateSource
@@ -343,13 +345,14 @@ public sealed class BoundedWaitTests
 
         public string ClientType => _inner.ClientType;
 
-        public IModelClient Create(string modelName, IReadOnlyDictionary<string, JsonElement> settings) => new Client(_inner.Create(modelName, settings));
+        public IModelClient Create(BindingContext context) => new Client(_inner.Create(context));
 
         private sealed class Client(IModelClient inner) : IModelClient
         {
             public string ClientType => inner.ClientType;
 
-            public ModelSignature GetSignature(string model, string? version) => inner.GetSignature(model, version);
+            public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
+                inner.GetSignatureAsync(model, version, cancellationToken);
 
             public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
             {

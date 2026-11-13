@@ -1,6 +1,6 @@
 using BenchmarkDotNet.Attributes;
 using StrataRec.Core.Values;
-using StrataRec.Hosting.LocalTables;
+using StrataRec.Hosting.Bindings;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
 
@@ -24,7 +24,7 @@ public class FeatureSupplyBenchmarks
     private PipelineExecutor _executor = null!;
     private RequestInputs _inputs = null!;
     private string _root = null!;
-    private LocalTableHost _tables = null!;
+    private BindingHost _tables = null!;
 
     [Params(500, 5_000)]
     public int Candidates { get; set; }
@@ -36,7 +36,7 @@ public class FeatureSupplyBenchmarks
     public void Setup()
     {
         _root = HomeFeedBenchWorkspace.Create(Candidates, Supply);
-        _tables = new LocalTableHost();
+        _tables = new BindingHost();
         _plan = HomeFeedBenchWorkspace.Compile(_root, _tables);
         _executor = new PipelineExecutor();
         _inputs = new RequestInputs().Set("user_id", 1001L).Set("session_id", "s-1001").Set("surface", "home");

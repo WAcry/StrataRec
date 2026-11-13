@@ -4,7 +4,7 @@ using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Features.Local;
 using StrataRec.Hosting;
-using StrataRec.Hosting.LocalTables;
+using StrataRec.Hosting.Bindings;
 using StrataRec.Hosting.Workspace;
 using StrataRec.Pipeline.Planning;
 
@@ -23,8 +23,8 @@ public sealed class EngineLifecycleTests
     {
         var sources = new GatedSources();
         var root = Workspace();
-        using var host = new LocalTableHost();
-        var engine = new RecEngine(Environment(root, sources), localTables: host);
+        using var host = new BindingHost();
+        var engine = new RecEngine(Environment(root, sources), bindings: host);
         var loading = engine.LoadAsync(Compile(root), ArmRanges(root));
         var source = await sources.Next().WaitAsync(Wait); // the load waits for the first load of the table
 
@@ -40,7 +40,7 @@ public sealed class EngineLifecycleTests
 
         // The host was passed in: the disposal left it running for its other engines.
         sources.Open();
-        await using var other = new RecEngine(Environment(root, sources), localTables: host);
+        await using var other = new RecEngine(Environment(root, sources), bindings: host);
         Assert.True((await other.LoadAsync(Compile(root), ArmRanges(root))).Applied);
         Assert.True((await other.ExecuteAsync(MetricsTests.Request("req-other"))).Succeeded);
     }
@@ -51,8 +51,8 @@ public sealed class EngineLifecycleTests
         var sources = new GatedSources();
         sources.Open();
         var root = Workspace();
-        using var host = new LocalTableHost();
-        var engine = new RecEngine(Environment(root, sources), localTables: host);
+        using var host = new BindingHost();
+        var engine = new RecEngine(Environment(root, sources), bindings: host);
         engine.Publishing = () => engine.Dispose(); // the tables are loaded; the publish lock is next
 
         await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.LoadAsync(Compile(root), ArmRanges(root)));
@@ -68,9 +68,9 @@ public sealed class EngineLifecycleTests
         var sources = new GatedSources();
         sources.Open();
         var root = Workspace();
-        using var host = new LocalTableHost();
-        var first = new RecEngine(Environment(root, sources), localTables: host);
-        var second = new RecEngine(Environment(root, sources), localTables: host);
+        using var host = new BindingHost();
+        var first = new RecEngine(Environment(root, sources), bindings: host);
+        var second = new RecEngine(Environment(root, sources), bindings: host);
         Assert.True((await first.LoadAsync(Compile(root), ArmRanges(root))).Applied);
         Assert.True((await second.LoadAsync(Compile(root), ArmRanges(root))).Applied);
         var source = await sources.Next();
@@ -96,8 +96,8 @@ public sealed class EngineLifecycleTests
         var sources = new GatedSources();
         sources.Open();
         var root = Workspace();
-        using var host = new LocalTableHost();
-        await using var engine = new RecEngine(Environment(root, sources), localTables: host);
+        using var host = new BindingHost();
+        await using var engine = new RecEngine(Environment(root, sources), bindings: host);
         Assert.True((await engine.LoadAsync(Compile(root), ArmRanges(root), sequence: 1)).Applied);
         var source = await sources.Next();
 
@@ -138,7 +138,7 @@ public sealed class EngineLifecycleTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.LoadAsync(Compile(root), ArmRanges(root), cancellationToken: late.Token));
 
         Assert.False(engine.TryGetPipeline("home_feed", out _));
-        Assert.Equal(0, engine.LocalTables.TableCount);
+        Assert.Equal(0, engine.Bindings.TableCount);
     }
 
     [Fact]
@@ -160,8 +160,8 @@ public sealed class EngineLifecycleTests
             }
         };
         var root = Workspace();
-        var host = new LocalTableHost(new LocalTableHostOptions { ShutdownTimeout = TimeSpan.FromMilliseconds(50) });
-        var engine = new RecEngine(Environment(root, sources), localTables: host);
+        var host = new BindingHost(new BindingHostOptions { ShutdownTimeout = TimeSpan.FromMilliseconds(50) });
+        var engine = new RecEngine(Environment(root, sources), bindings: host);
         Assert.True((await engine.LoadAsync(Compile(root), ArmRanges(root))).Applied);
 
         try

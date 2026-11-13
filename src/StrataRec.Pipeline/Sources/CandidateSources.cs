@@ -1,4 +1,5 @@
 using System.Text.Json;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Values;
@@ -125,11 +126,21 @@ public interface ICandidateSource
 }
 
 /// <summary>Creates candidate sources for bindings of one client type.</summary>
+/// <remarks>
+/// The engine creates one source per binding identity and shares it across plans and their concurrent requests, so a
+/// source lives as long as some plan uses it. <see cref="Create"/> only reads the settings; a source that must connect
+/// first implements <see cref="ILoadable"/>, and one holding resources implements <see cref="IAsyncDisposable"/> or
+/// <see cref="IDisposable"/>: the engine disposes it once nothing can call it any more. The whole lifetime contract is on
+/// <see cref="BindingContext"/>.
+/// </remarks>
 public interface ICandidateSourceFactory
 {
     string ClientType { get; }
 
-    ICandidateSource Create(string sourceName, IReadOnlyDictionary<string, JsonElement> settings, string? baseDirectory);
+    /// <param name="context">The source's logical name, the binding's own settings, the base directory relative files
+    /// resolve against and the host's secret store.</param>
+    /// <exception cref="BindingException">The settings are wrong: at the setting's pointer, with a hint.</exception>
+    ICandidateSource Create(BindingContext context);
 }
 
 /// <summary>
@@ -252,8 +263,12 @@ public sealed class MemoryListCandidateSourceFactory : ICandidateSourceFactory
 
     public string ClientType => Type;
 
-    public ICandidateSource Create(string sourceName, IReadOnlyDictionary<string, JsonElement> settings, string? baseDirectory)
+    /// <remarks>A test fixture: it reads its data file here, at create time, so it needs no load.</remarks>
+    public ICandidateSource Create(BindingContext context)
     {
+        var sourceName = context.Name;
+        var settings = context.Settings;
+
         // The data file supplies the list object; settings in the binding itself (latency_ms, fail, ...) override it,
         // so fault injection works the same with or without a data file.
         JsonDocument? fileDoc = null;
@@ -262,10 +277,7 @@ public sealed class MemoryListCandidateSourceFactory : ICandidateSourceFactory
             if (settings.TryGetValue("data_file", out var file))
             {
                 var path = file.GetString() ?? throw new FormatException($"Candidate source '{sourceName}': data_file must be a string.");
-                if (!Path.IsPathRooted(path) && baseDirectory is not null)
-                {
-                    path = Path.Combine(baseDirectory, path);
-                }
+                path = Path.Combine(context.BaseDirectory, path); // a rooted path stays as it is
 
                 fileDoc = JsonDocument.Parse(File.ReadAllText(path), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
                 if (fileDoc.RootElement.ValueKind != JsonValueKind.Object)

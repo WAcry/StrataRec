@@ -14,14 +14,26 @@ internal static class SampleBindings
     /// </remarks>
     public static void Rebind(string root, string source, string binding)
     {
-        var path = Path.Combine(root, "bindings", "local.jsonc");
-        var document = (JsonObject)Jsonc.Parse(File.ReadAllBytes(path), path)!;
-        var sources = (JsonObject)document["sources"]!;
-        Assert.True(sources.ContainsKey(source), $"the sample binds no source '{source}'");
         var replacement = (JsonObject)JsonNode.Parse(binding)!;
         Assert.True(replacement.ContainsKey("timeout_ms") || (replacement["mode"]?.GetValue<string>() ?? "fetch") != "fetch",
             $"give the fetched binding of '{source}' a timeout_ms: {HomeFeedTestHost.UntimedMs}, or the budget the test is about");
-        sources[source] = replacement;
+        Replace(root, "sources", source, replacement);
+    }
+
+    /// <summary>Replaces the binding of model <paramref name="model"/> in <c>bindings/local.jsonc</c>.</summary>
+    public static void RebindModel(string root, string model, string binding) => Replace(root, "models", model, JsonNode.Parse(binding)!);
+
+    /// <summary>Replaces the binding of candidate source <paramref name="source"/> in <c>bindings/local.jsonc</c>.</summary>
+    public static void RebindCandidateSource(string root, string source, string binding) =>
+        Replace(root, "candidate_sources", source, JsonNode.Parse(binding)!);
+
+    private static void Replace(string root, string section, string name, JsonNode binding)
+    {
+        var path = Path.Combine(root, "bindings", "local.jsonc");
+        var document = (JsonObject)Jsonc.Parse(File.ReadAllBytes(path), path)!;
+        var bindings = (JsonObject)document[section]!;
+        Assert.True(bindings.ContainsKey(name), $"the sample binds nothing named '{name}' in {section}");
+        bindings[name] = binding;
         File.WriteAllText(path, document.ToJsonString());
     }
 }

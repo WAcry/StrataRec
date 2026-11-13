@@ -5,7 +5,7 @@ using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Features.Local;
-using StrataRec.Hosting.LocalTables;
+using StrataRec.Hosting.Bindings;
 
 namespace StrataRec.UnitTests.Hosting;
 
@@ -14,14 +14,14 @@ namespace StrataRec.UnitTests.Hosting;
 /// release and shutdown. Sources are scripted run by run and signal through task completion sources, so nothing here
 /// depends on timing.
 /// </summary>
-public class LocalTableHostTests
+public class BindingHostTableTests
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(30);
 
     [Fact]
     public async Task SpecsWithTheSameIdentity_ShareOneTable_LoadedOnce()
     {
-        using var host = new LocalTableHost();
+        using var host = new BindingHost();
         var first = new ScriptedSource(Load(1));
         var second = new ScriptedSource(Load(2));
         using var a = host.OpenLease();
@@ -44,7 +44,7 @@ public class LocalTableHostTests
     [Fact]
     public async Task ReleasingTheLastLease_StopsTheSource()
     {
-        using var host = new LocalTableHost();
+        using var host = new BindingHost();
         var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var source = new ScriptedSource(async (_, writer, token) =>
         {
@@ -70,7 +70,7 @@ public class LocalTableHostTests
     public async Task AFirstLoadFailure_NamesTheBindingAndTheFile_AndTheNextLeaseRetriesWithANewTable()
     {
         var logs = new ListLoggerFactory();
-        using var host = new LocalTableHost(loggerFactory: logs);
+        using var host = new BindingHost(loggerFactory: logs);
         var source = new ScriptedSource(
             (_, writer, _) =>
             {
@@ -83,7 +83,8 @@ public class LocalTableHostTests
 
         var failure = Assert.Single(await failed.WaitLoadedAsync());
 
-        Assert.Equal(("item_store/item", "bindings:test", "/sources/item_store"), (failure.Table, failure.Artifact, failure.Pointer));
+        Assert.Equal(("LOCAL_TABLE_LOAD_FAILED", "item_store/item", "bindings:test", "/sources/item_store"),
+            (failure.Code, Assert.IsType<LocalTableLoadException>(failure.Exception).Table, failure.Artifact, failure.Pointer));
         Assert.Contains("/data/items/part-0000.jsonl:3 /fields/score: expected a number", failure.Message);
         Assert.Equal("write the field as a JSON number", failure.Hint);
         Assert.False(failedTable.IsLoaded);
@@ -102,7 +103,7 @@ public class LocalTableHostTests
     [Fact]
     public async Task ASourceThatReturnsWithoutLoading_FailsTheFirstLoad()
     {
-        using var host = new LocalTableHost();
+        using var host = new BindingHost();
         using var lease = host.OpenLease();
         lease.Acquire(Spec(new ScriptedSource((_, _, _) => Task.CompletedTask)));
 
@@ -115,7 +116,7 @@ public class LocalTableHostTests
     public async Task ASourceThatFailsAfterLoading_RestartsFromThePosition_WithADelayThatDoublesUntilItMakesProgress()
     {
         var logs = new ListLoggerFactory();
-        var host = new LocalTableHost(new LocalTableHostOptions { RestartDelay = TimeSpan.FromMilliseconds(1), MaxRestartDelay = TimeSpan.FromMilliseconds(3) }, logs);
+        var host = new BindingHost(new BindingHostOptions { RestartDelay = TimeSpan.FromMilliseconds(1), MaxRestartDelay = TimeSpan.FromMilliseconds(3) }, logs);
         var lastRun = new TaskCompletionSource<UpdatePosition>(TaskCreationOptions.RunContinuationsAsynchronously);
         var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var starts = new ConcurrentQueue<UpdatePosition>();
@@ -162,7 +163,7 @@ public class LocalTableHostTests
     [Fact]
     public async Task DisposingTheHost_CancelsEverySource_AndWaitsForThem()
     {
-        var host = new LocalTableHost();
+        var host = new BindingHost();
         var returned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var loading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var source = new ScriptedSource(async (_, _, token) =>
@@ -189,7 +190,7 @@ public class LocalTableHostTests
     public async Task ACancellationCallbackThatBlocks_HoldsUpNeitherTheRelease_NorShutdownPastItsTimeout(bool releasedFirst)
     {
         var logs = new ListLoggerFactory();
-        var host = new LocalTableHost(new LocalTableHostOptions { ShutdownTimeout = TimeSpan.FromMilliseconds(50) }, logs);
+        var host = new BindingHost(new BindingHostOptions { ShutdownTimeout = TimeSpan.FromMilliseconds(50) }, logs);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var returned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var gate = new ManualResetEventSlim();
@@ -238,7 +239,7 @@ public class LocalTableHostTests
     public async Task ACancellationCallbackThatThrows_IsLogged_AndFailsNeitherTheReleaseNorShutdown(bool releasedFirst)
     {
         var logs = new ListLoggerFactory();
-        var host = new LocalTableHost(loggerFactory: logs);
+        var host = new BindingHost(loggerFactory: logs);
         var returned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var source = new ScriptedSource(async (_, writer, token) =>
         {
@@ -271,7 +272,7 @@ public class LocalTableHostTests
         // The failed callback is logged (event 1206), and here that log throws too. The stop must still wait for the run:
         // a shutdown that returned now would let the caller free what the source is still cleaning up (review 14).
         var logs = new ListLoggerFactory(throwOn: 1206);
-        var host = new LocalTableHost(new LocalTableHostOptions { ShutdownTimeout = TimeSpan.FromSeconds(30) }, logs);
+        var host = new BindingHost(new BindingHostOptions { ShutdownTimeout = TimeSpan.FromSeconds(30) }, logs);
         var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var returned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -314,7 +315,7 @@ public class LocalTableHostTests
     [Fact]
     public async Task WaitLoaded_HonoursItsToken_AlsoWhenThereIsNothingToWaitFor()
     {
-        using var host = new LocalTableHost();
+        using var host = new BindingHost();
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
         using var empty = host.OpenLease();
@@ -326,7 +327,7 @@ public class LocalTableHostTests
         Assert.True(table.IsLoaded);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => lease.WaitLoadedAsync(cancelled.Token)); // ready already
 
-        using var unloaded = new LocalTableHost(new LocalTableHostOptions { LoadTables = false });
+        using var unloaded = new BindingHost(new BindingHostOptions { Load = false });
         using var never = unloaded.OpenLease();
         never.Acquire(Spec(new ScriptedSource(Load(1))));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => never.WaitLoadedAsync(cancelled.Token));
@@ -335,7 +336,7 @@ public class LocalTableHostTests
     [Fact]
     public async Task AHostThatDoesNotLoadTables_NeverRunsASource()
     {
-        using var host = new LocalTableHost(new LocalTableHostOptions { LoadTables = false });
+        using var host = new BindingHost(new BindingHostOptions { Load = false });
         var source = new ScriptedSource(Load(1));
         using var lease = host.OpenLease();
         var table = lease.Acquire(Spec(source));

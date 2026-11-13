@@ -237,7 +237,7 @@ public static class StrataRecMetrics
 
     /// <summary>
     /// Plan loads (design 10.3). Tags: <c>stratarec.pipeline</c>, <c>stratarec.outcome</c> = <c>applied</c> |
-    /// <c>compile_failed</c> | <c>rejected</c> | <c>tables_failed</c> (a local table it reads failed its first load) |
+    /// <c>compile_failed</c> | <c>rejected</c> | <c>bindings_failed</c> (a local table it reads, or a client or connector it uses, failed its first load) |
     /// <c>stale</c>.
     /// </summary>
     public static readonly Counter<long> PlanLoads = Meter.CreateCounter<long>(Names.PlanLoads, "{load}", "Plan loads by outcome.");

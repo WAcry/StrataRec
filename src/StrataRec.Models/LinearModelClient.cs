@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using StrataRec.Core.Bindings;
 
 namespace StrataRec.Models;
 
@@ -47,18 +48,25 @@ public sealed class LinearModelClient : IModelClient
 
     public string ClientType => LinearModelClientFactory.Type;
 
-    public ModelSignature GetSignature(string model, string? version)
+    /// <summary>Answers at once: the signature follows from the settings.</summary>
+    public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken)
     {
         if (!string.Equals(model, _modelName, StringComparison.Ordinal))
         {
-            throw new ArgumentException($"This client serves model '{_modelName}', not '{model}'.", nameof(model));
+            return ValueTask.FromException<ModelSignature>(new ArgumentException($"This client serves model '{_modelName}', not '{model}'.", nameof(model)));
         }
 
         if (version is not null && _versions is not null && !_versions.Contains(version))
         {
-            throw new ArgumentException($"Model '{model}' has no version '{version}'. Known: {string.Join(", ", _versions)}.", nameof(version));
+            return ValueTask.FromException<ModelSignature>(
+                new ArgumentException($"Model '{model}' has no version '{version}'. Known: {string.Join(", ", _versions)}.", nameof(version)));
         }
 
+        return new ValueTask<ModelSignature>(Signature());
+    }
+
+    private ModelSignature Signature()
+    {
         var dyn = new[] { -1 };
         var inputSpecs = new TensorSpec[_inputs.Count];
         for (var i = 0; i < inputSpecs.Length; i++)
@@ -149,8 +157,10 @@ public sealed class LinearModelClientFactory : IModelClientFactory
 
     public string ClientType => Type;
 
-    public IModelClient Create(string modelName, IReadOnlyDictionary<string, JsonElement> settings)
+    public IModelClient Create(BindingContext context)
     {
+        var modelName = context.Name;
+        var settings = context.Settings;
         if (!settings.TryGetValue("outputs", out var outputsElement) || outputsElement.ValueKind != JsonValueKind.Object)
         {
             throw new FormatException($"Model '{modelName}': linear@1 requires an 'outputs' object.");

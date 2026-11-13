@@ -245,6 +245,7 @@ public sealed class OperatorCompileContext
         return result;
     }
 
+    /// <summary>The client bound to model <paramref name="name"/>, shared with every plan of the same binding (design 6.4).</summary>
     public (IModelClient Client, int? TimeoutMs)? Model(string name, string configKey)
     {
         if (_clients.TryGetModel(name, out var client, out var timeout, out var error, out var hint))
@@ -252,10 +253,35 @@ public sealed class OperatorCompileContext
             return (client, timeout);
         }
 
-        Error(configKey, "MODEL_UNBOUND", error!, hint);
+        Unbound(configKey, "MODEL_UNBOUND", error, hint);
         return null;
     }
 
+    /// <summary>
+    /// The signature of one version of a model the node calls (from <see cref="Model"/>), for checking the node's config
+    /// against it at load time (design 6.9). Null when the node cannot be checked against it now: an error at
+    /// <paramref name="configKey"/> when the client has no such version (then <see cref="HasErrors"/> is set), nothing
+    /// when the engine is still loading the client (it compiles the plan again with the answer) or when the plan is
+    /// compiled without loading its clients (<c>validate</c>: the engine checks it when it loads the plan).
+    /// </summary>
+    public ModelSignature? ModelSignature(IModelClient client, string model, string? version, string configKey)
+    {
+        var lookup = _clients.Signature(client, model, version);
+        return lookup.Status switch
+        {
+            SignatureStatus.Known => lookup.Signature,
+            SignatureStatus.Failed => SignatureFailed(configKey, lookup.Error!, lookup.Hint),
+            SignatureStatus.Pending or SignatureStatus.Unchecked => null,
+        };
+    }
+
+    private ModelSignature? SignatureFailed(string configKey, string message, string? hint)
+    {
+        Error(configKey, "MODEL_SIGNATURE", message, hint);
+        return null;
+    }
+
+    /// <summary>The source bound to candidate source <paramref name="name"/>, shared like <see cref="Model"/>.</summary>
     public (ICandidateSource Source, int? TimeoutMs)? CandidateSource(string name, string configKey)
     {
         if (_clients.TryGetCandidateSource(name, out var source, out var timeout, out var error, out var hint))
@@ -263,8 +289,20 @@ public sealed class OperatorCompileContext
             return (source, timeout);
         }
 
-        Error(configKey, "CANDIDATE_SOURCE_UNBOUND", error!, hint);
+        Unbound(configKey, "CANDIDATE_SOURCE_UNBOUND", error, hint);
         return null;
+    }
+
+    /// <summary>A binding the node cannot use; a null error was reported at the binding's setting already.</summary>
+    private void Unbound(string configKey, string code, string? error, string? hint)
+    {
+        if (error is null)
+        {
+            HasErrors = true;
+            return;
+        }
+
+        Error(configKey, code, error, hint);
     }
 
     public void Error(string configKey, string code, string message, string? hint = null)

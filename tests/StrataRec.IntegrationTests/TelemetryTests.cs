@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Hosting;
 using StrataRec.Logging;
@@ -197,13 +198,14 @@ public sealed class MetricsTests
     {
         public string ClientType => inner.ClientType;
 
-        public IModelClient Create(string modelName, IReadOnlyDictionary<string, JsonElement> settings) => new Client(inner.Create(modelName, settings));
+        public IModelClient Create(BindingContext context) => new Client(inner.Create(context));
 
         private sealed class Client(IModelClient inner) : IModelClient
         {
             public string ClientType => inner.ClientType;
 
-            public ModelSignature GetSignature(string model, string? version) => inner.GetSignature(model, version);
+            public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
+                inner.GetSignatureAsync(model, version, cancellationToken);
 
             public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
                 throw new TimeoutException("backend timed out");
@@ -214,8 +216,8 @@ public sealed class MetricsTests
     {
         public string ClientType => inner.ClientType;
 
-        public ICandidateSource Create(string sourceName, IReadOnlyDictionary<string, JsonElement> settings, string? baseDirectory) =>
-            new Source(inner.Create(sourceName, settings, baseDirectory));
+        public ICandidateSource Create(BindingContext context) =>
+            new Source(inner.Create(context));
 
         private sealed class Source(ICandidateSource inner) : ICandidateSource
         {

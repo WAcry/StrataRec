@@ -1,4 +1,4 @@
-using System.Text.Json;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 
@@ -127,12 +127,20 @@ public interface IFeatureSourceConnector
 }
 
 /// <summary>Creates connectors for bindings of one connector type.</summary>
+/// <remarks>
+/// The engine creates one connector per binding identity and shares it across plans and their concurrent requests (see
+/// <see cref="Bindings.BindingSpec.Identity"/>), so a connector lives as long as some plan uses it, not one plan.
+/// <see cref="Create"/> only reads the settings; a connector that must connect or resolve credentials first implements
+/// <see cref="ILoadable"/>, and one holding resources implements <see cref="IAsyncDisposable"/> or <see cref="IDisposable"/>:
+/// the engine disposes it once nothing can call it any more. The whole lifetime contract is on
+/// <see cref="BindingContext"/>.
+/// </remarks>
 public interface IFeatureConnectorFactory
 {
     string ConnectorType { get; }
 
-    /// <param name="sourceName">Logical source name, e.g. <c>item_store</c>.</param>
-    /// <param name="settings">Connector-specific binding settings.</param>
-    /// <param name="baseDirectory">Directory relative file references resolve against (the config root), if any.</param>
-    IFeatureSourceConnector Create(string sourceName, IReadOnlyDictionary<string, JsonElement> settings, string? baseDirectory);
+    /// <param name="context">The source's logical name (e.g. <c>item_store</c>), its connector settings, the base directory
+    /// relative files resolve against and the host's secret store.</param>
+    /// <exception cref="BindingException">The settings are wrong: at the setting's pointer, with a hint.</exception>
+    IFeatureSourceConnector Create(BindingContext context);
 }

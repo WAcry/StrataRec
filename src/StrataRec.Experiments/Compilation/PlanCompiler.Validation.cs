@@ -351,7 +351,7 @@ internal sealed partial class UnifiedCompilation
             var merged = _view.Apply(arm.Patch, scratch, arm.Artifact, arm.PointerPrefix);
             if (merged is not null)
             {
-                new UnifiedCompilation(plain, _environment, merged, scratch, buildPlan: false).Run();
+                new UnifiedCompilation(plain, _environment, merged, scratch, buildPlan: false, _bindings).Run();
             }
 
             foreach (var d in scratch.Items)
@@ -403,7 +403,7 @@ internal sealed partial class UnifiedCompilation
         }
 
         var scratch = new DiagnosticBag();
-        new UnifiedCompilation(WithoutExperiments(_request), _environment, _view, scratch, buildPlan: false).Run();
+        new UnifiedCompilation(WithoutExperiments(_request), _environment, _view, scratch, buildPlan: false, _bindings).Run();
         foreach (var d in scratch.Items)
         {
             Report(d, Array.Empty<ArmPatch>());

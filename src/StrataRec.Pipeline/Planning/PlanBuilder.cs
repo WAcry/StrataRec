@@ -80,7 +80,7 @@ public sealed class SchemaSources
 public sealed class PlanBuilder
 {
     private readonly PlanEnvironment _environment;
-    private readonly ILocalTableProvider _localTables;
+    private readonly IPlanBindings _bindings;
     private readonly DiagnosticBag _diagnostics;
     private readonly List<CompiledNode> _nodes = new();
     private readonly List<FeatureRuntimeInfo> _features = new();
@@ -92,13 +92,13 @@ public sealed class PlanBuilder
     private SchemaSources? _sources;
     private Dictionary<string, ContextField>? _requestInputs;
 
-    /// <param name="localTables">Where the plan's local tables come from (design 6.6); null gives tables that are never
-    /// loaded, for compiling without serving.</param>
-    public PlanBuilder(PlanEnvironment environment, DiagnosticBag diagnostics, ILocalTableProvider? localTables = null)
+    /// <param name="bindings">Where the plan's local tables, clients and connectors come from (design 6.4, 6.6): an
+    /// engine's lease shares and loads them; null gives ones that are never loaded, for compiling without serving.</param>
+    public PlanBuilder(PlanEnvironment environment, DiagnosticBag diagnostics, IPlanBindings? bindings = null)
     {
         _environment = environment;
         _diagnostics = diagnostics;
-        _localTables = localTables ?? UnloadedLocalTables.Instance;
+        _bindings = bindings ?? new UnloadedBindings();
     }
 
     public DiagnosticBag Diagnostics => _diagnostics;
@@ -131,7 +131,7 @@ public sealed class PlanBuilder
         var schema = new PlanSchema(keyType);
         _schema = schema;
         _scope = schema.CreateScope();
-        _clients = new ClientResolver(sources.Bindings, _environment.Models, _environment.CandidateSources, _environment.BaseDirectory);
+        _clients = new ClientResolver(sources.Bindings, _environment.Models, _environment.CandidateSources, _environment.BaseDirectory, _bindings, _diagnostics);
 
         // Request inputs.
         _requestInputs = new Dictionary<string, ContextField>(StringComparer.Ordinal);
@@ -1075,7 +1075,8 @@ public sealed class PlanBuilder
             _diagnostics,
             _environment.BaseDirectory,
             _environment.UpdateSources,
-            _localTables);
+            _bindings,
+            _bindings);
     }
 
     /// <summary>Assembles the final plan. Call after every node, the output and the feature plan are compiled.</summary>

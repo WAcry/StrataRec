@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting;
@@ -313,13 +314,14 @@ public sealed class ReplayAbortTests
 
         public string ClientType => _inner.ClientType;
 
-        public IModelClient Create(string modelName, IReadOnlyDictionary<string, JsonElement> settings) => new Client(_inner.Create(modelName, settings), this);
+        public IModelClient Create(BindingContext context) => new Client(_inner.Create(context), this);
 
         private sealed class Client(IModelClient inner, BlockingModels owner) : IModelClient
         {
             public string ClientType => inner.ClientType;
 
-            public ModelSignature GetSignature(string model, string? version) => inner.GetSignature(model, version);
+            public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
+                inner.GetSignatureAsync(model, version, cancellationToken);
 
             public async ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
             {
@@ -346,7 +348,8 @@ public sealed class ReplayAbortTests
 
         public string ClientType => "stuck";
 
-        public ModelSignature GetSignature(string model, string? version) => new(Array.Empty<TensorSpec>(), Array.Empty<TensorSpec>());
+        public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new ModelSignature(Array.Empty<TensorSpec>(), Array.Empty<TensorSpec>()));
 
         public async ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
         {

@@ -3,6 +3,7 @@ using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Expressions;
+using StrataRec.Features.Bindings;
 using StrataRec.Features.Catalog;
 using StrataRec.Features.Connectors;
 using StrataRec.Features.Local;
@@ -143,6 +144,7 @@ public sealed class FeaturePlan
     /// </summary>
     /// <param name="updateSources">Update-source factories for local bindings; null has the built-in ones.</param>
     /// <param name="localTables">Where local tables come from; null gives tables that are never loaded (compiling without serving).</param>
+    /// <param name="instances">Where connectors come from; null creates them for this plan alone.</param>
     public static FeaturePlan Create(
         IReadOnlyList<FeatureRuntimeInfo> features,
         SourceBindingArtifact bindings,
@@ -151,7 +153,8 @@ public sealed class FeaturePlan
         DiagnosticBag diagnostics,
         string? baseDirectory,
         FeatureUpdateSourceRegistry? updateSources = null,
-        ILocalTableProvider? localTables = null)
+        ILocalTableProvider? localTables = null,
+        IBindingInstances? instances = null)
     {
         var byName = new Dictionary<string, FeatureRuntimeInfo>(StringComparer.Ordinal);
         var grouped = new SortedDictionary<(string Source, string Entity), List<FeatureRuntimeInfo>>(GroupKeyComparer.Instance);
@@ -176,7 +179,7 @@ public sealed class FeaturePlan
         var groups = new List<FetchGroup>();
         var resolver = new FeatureSourceResolver(
             bindings, connectors, updateSources ?? FeatureUpdateSourceRegistry.CreateDefault(), localTables ?? UnloadedLocalTables.Instance,
-            baseDirectory, diagnostics);
+            instances ?? UnsharedInstances.Instance, baseDirectory, diagnostics);
 
         foreach (var (groupKey, memberList) in grouped)
         {

@@ -1,4 +1,4 @@
-using System.Text.Json;
+using StrataRec.Core.Bindings;
 
 namespace StrataRec.Models;
 
@@ -113,18 +113,34 @@ public interface IModelClient
     /// <summary>Client type and version, e.g. <c>grpc_tensor@1</c>.</summary>
     string ClientType { get; }
 
-    /// <summary>Signature of a model version; used at load time to check operator bindings.</summary>
-    ModelSignature GetSignature(string model, string? version);
+    /// <summary>
+    /// The signature of a model version, for checking operator bindings at load time (design 6.9). It may need I/O (a
+    /// model server's metadata): the engine asks only when it loads a plan, after the client's own load
+    /// (<see cref="ILoadable"/>), for every version of every model the plan's nodes may call, concurrently and within the
+    /// load's bound; a plan compiled without an engine (<c>stratarec validate</c>) asks a client that needs no load and
+    /// uses the answer only if it is immediate. Answer synchronously when you can: the plan then compiles once.
+    /// </summary>
+    /// <exception cref="ArgumentException">The client has no such model or version; reported at the node's <c>model</c>.
+    /// A <see cref="BindingException"/> adds a hint.</exception>
+    ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken);
 
     ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken);
 }
 
 /// <summary>Creates <see cref="IModelClient"/> instances for bindings of one client type.</summary>
+/// <remarks>
+/// The engine creates one client per binding identity and shares it across plans and their concurrent requests, so a
+/// client lives as long as some plan uses it, not one plan. <see cref="Create"/> only reads the settings; a client that
+/// must load a model or connect first implements <see cref="ILoadable"/>, and one holding resources implements
+/// <see cref="IAsyncDisposable"/> or <see cref="IDisposable"/>: the engine disposes it once nothing can call it any more.
+/// The whole lifetime contract is on <see cref="BindingContext"/>.
+/// </remarks>
 public interface IModelClientFactory
 {
     string ClientType { get; }
 
-    /// <param name="modelName">Logical model name from the bindings artifact.</param>
-    /// <param name="settings">Client-specific settings from the binding.</param>
-    IModelClient Create(string modelName, IReadOnlyDictionary<string, JsonElement> settings);
+    /// <param name="context">The logical model name, the binding's own settings, the base directory relative files
+    /// resolve against and the host's secret store.</param>
+    /// <exception cref="BindingException">The settings are wrong: at the setting's pointer, with a hint.</exception>
+    IModelClient Create(BindingContext context);
 }

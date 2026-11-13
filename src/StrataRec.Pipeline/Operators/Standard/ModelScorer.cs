@@ -150,15 +150,11 @@ public sealed class ModelScorerFactory : IOperatorFactory
 
         foreach (var version in versions)
         {
-            ModelSignature signature;
-            try
+            // Null when it cannot be checked now: an error (reported), or the engine checks it at load (see ModelSignature).
+            if (context.ModelSignature(bound.Value.Client, config.Model, version, "/model") is not { } signature)
             {
-                signature = bound.Value.Client.GetSignature(config.Model, version);
-            }
-            catch (ArgumentException ex)
-            {
-                context.Error("/model", "MODEL_SIGNATURE", ex.Message);
-                return null;
+                ok &= !context.HasErrors;
+                continue;
             }
 
             foreach (var problem in ScorerSignature.Check($"Model '{config.Model}' version '{version ?? "default"}'", config.Inputs, config.Outputs, signature))

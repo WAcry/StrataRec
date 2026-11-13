@@ -1,4 +1,7 @@
+using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Bindings;
+using StrataRec.Features.Bindings;
 using StrataRec.Models;
 using StrataRec.Pipeline.Sources;
 
@@ -48,8 +51,10 @@ public sealed class CandidateSourceRegistry
 }
 
 /// <summary>
-/// Binds logical model and candidate-source names to client instances using the environment's bindings
-/// (design 6.4). Instances are created once per plan and cached.
+/// Binds logical model and candidate-source names to client instances using the environment's bindings (design 6.4).
+/// The instances come from the plan's <see cref="IPlanBindings"/>: an engine shares them across plans by binding identity
+/// (<see cref="BindingSpec.Identity"/>), so a plan swap never creates or loads a client again; each name is resolved once
+/// per compile pass and cached here.
 /// </summary>
 public sealed class ClientResolver
 {
@@ -57,19 +62,32 @@ public sealed class ClientResolver
     private readonly ModelClientRegistry _models;
     private readonly CandidateSourceRegistry _sources;
     private readonly string? _baseDirectory;
+    private readonly IPlanBindings _instances;
+    private readonly DiagnosticBag _diagnostics;
+    private readonly string _artifact;
     private readonly Dictionary<string, (IModelClient Client, int? TimeoutMs)> _modelCache = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (ICandidateSource Source, int? TimeoutMs)> _sourceCache = new(StringComparer.Ordinal);
 
-    public ClientResolver(SourceBindingArtifact bindings, ModelClientRegistry models, CandidateSourceRegistry sources, string? baseDirectory)
+    /// <param name="instances">Where instances (and model signatures) come from.</param>
+    /// <param name="diagnostics">Receives errors in a binding's settings, at the setting.</param>
+    public ClientResolver(
+        SourceBindingArtifact bindings, ModelClientRegistry models, CandidateSourceRegistry sources, string? baseDirectory, IPlanBindings instances,
+        DiagnosticBag diagnostics)
     {
         _bindings = bindings;
         _models = models;
         _sources = sources;
         _baseDirectory = baseDirectory;
+        _instances = instances;
+        _diagnostics = diagnostics;
+        _artifact = "bindings:" + bindings.Environment;
     }
 
     public SourceBindingArtifact Bindings => _bindings;
 
+    /// <summary>The client bound to model <paramref name="name"/>.</summary>
+    /// <returns>False with an error for the caller to report at its own config key, or with a null error when the
+    /// binding's settings are wrong, which is reported here, at the setting in the bindings artifact.</returns>
     public bool TryGetModel(string name, out IModelClient client, out int? timeoutMs, out string? error, out string? hint)
     {
         hint = null;
@@ -98,7 +116,13 @@ public sealed class ClientResolver
 
         try
         {
-            client = factory.Create(name, binding.Settings);
+            client = _instances.Acquire(BindingSpec.Create(BindingSection.Models, name, binding.Client, binding.Settings, _baseDirectory, factory, _artifact), factory.Create);
+        }
+        catch (BindingException ex)
+        {
+            ReportSettings("MODEL_CONFIG", BindingSection.Models, name, ex);
+            error = null;
+            return false;
         }
         catch (Exception ex) when (ex is FormatException or InvalidOperationException or System.Text.Json.JsonException or KeyNotFoundException)
         {
@@ -112,6 +136,10 @@ public sealed class ClientResolver
         return true;
     }
 
+    /// <summary>The signature of a version of a model this resolver handed out (see <see cref="IPlanBindings.Signature"/>).</summary>
+    public SignatureLookup Signature(IModelClient client, string model, string? version) => _instances.Signature(client, model, version);
+
+    /// <inheritdoc cref="TryGetModel"/>
     public bool TryGetCandidateSource(string name, out ICandidateSource source, out int? timeoutMs, out string? error, out string? hint)
     {
         hint = null;
@@ -140,7 +168,14 @@ public sealed class ClientResolver
 
         try
         {
-            source = factory.Create(name, binding.Settings, _baseDirectory);
+            source = _instances.Acquire(
+                BindingSpec.Create(BindingSection.CandidateSources, name, binding.Client, binding.Settings, _baseDirectory, factory, _artifact), factory.Create);
+        }
+        catch (BindingException ex)
+        {
+            ReportSettings("CANDIDATE_SOURCE_CONFIG", BindingSection.CandidateSources, name, ex);
+            error = null;
+            return false;
         }
         catch (Exception ex) when (ex is FormatException or InvalidOperationException or IOException or System.Text.Json.JsonException or KeyNotFoundException)
         {
@@ -153,4 +188,7 @@ public sealed class ClientResolver
         error = null;
         return true;
     }
+
+    private void ReportSettings(string code, BindingSection section, string name, BindingException ex) =>
+        _diagnostics.Error(code, _artifact, "/" + BindingSpec.SectionName(section) + "/" + JsonPointer.Escape(name) + ex.Pointer, ex.Reason, ex.Hint);
 }

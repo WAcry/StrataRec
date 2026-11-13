@@ -738,6 +738,8 @@ internal sealed class RequestMemory
 
 绑定中的 `timeout_ms` 是单次调用的上限；节点自己的时间预算（第 5.6 节）更短时，以节点预算为准。
 
+模型客户端、召回源和连接器（内置的或使用方写的）是绑定的实例，与本地特征表一样按身份（类型、设置、基准目录）在计划之间共享：在计划开始服务之前加载，在没有服务中的计划使用、也没有请求还能调用它们时释放（取舍见 `decisions.md`“绑定的实例”）。凭据只写成 `secret://<名字>` 的引用，实例加载时由宿主注册的 `ISecretResolver` 解析，值不出现在诊断、日志和回放包里。
+
 ### 6.5 实体键与批量形态
 
 特征拉取有三种键的形态：
@@ -969,7 +971,8 @@ flowchart LR
 public interface IModelClient
 {
     string ClientType { get; }                                   // 例如 "grpc_tensor@1"、"local_onnx@1"
-    ModelSignature GetSignature(string model, string? version);  // 加载期使用：输入输出的名字、元素类型和形状
+    ValueTask<ModelSignature> GetSignatureAsync(                 // 加载期使用：输入输出的名字、元素类型和形状
+        string model, string? version, CancellationToken cancellationToken);
 
     ValueTask<ModelStatus> InvokeAsync(
         ModelCall call,                 // 模型名、版本、命名输入、调用选项
@@ -1025,7 +1028,7 @@ public sealed class ModelCall
 
 1. **绑定由算子负责。** `ModelScorer@1` 把存活行按 `batch_size` 分批，为每批构造形状为 `[batch]` 或 `[batch, dim]` 的输入张量，上下文特征广播到每一行，并发调用模型，把输出写进自己的槽位。所有批次都成功后才提交输出（第 4.6 节）；任何一批失败，节点结果为 `Failed`，不会留下一半来自主模型、一半来自后备模型的列。
 2. **`inputs` 就是模型的特征契约。** 它是模型输入名到列的映射，引擎按原值传给模型。归一化、分桶这类变换要么放在模型内部，要么显式定义为衍生特征，保证训练和服务只有一份定义。所有输入都必须是非可空类型；可空特征需要先用衍生特征或默认值消解。
-3. **版本与签名。** 模型版本由参数 `ctr_model_version` 决定，换版本的实验只需要一个参数补丁；输入特征不同的新模型通过节点补丁上线。参数 Schema 用枚举列出允许的版本，加载期对每个版本调用 `GetSignature`，检查它的输入输出与 `inputs`、`outputs` 一致。
+3. **版本与签名。** 模型版本由参数 `ctr_model_version` 决定，换版本的实验只需要一个参数补丁；输入特征不同的新模型通过节点补丁上线。参数 Schema 用枚举列出允许的版本，加载期对每个版本调用 `GetSignatureAsync`，检查它的输入输出与 `inputs`、`outputs` 一致。签名可能要等客户端加载（读模型文件）或询问模型服务，所以是异步的：引擎加载计划时并发地取所有签名，取到之后再检查，只在加载时做，不在请求路径上（取舍见 `decisions.md`“绑定的实例”）。
 4. **后备模型。** `ctr_backup` 是 `role: fallback` 的节点，绑定到本地客户端，产出相同的列。主节点的预算和后备预留见第 5.6 节；后备节点的特征和主节点一起拉取（第 6.8 节），失败时不需要额外的往返。
 5. **训练-服务一致性。** 探针可以写 `"columns_from": "ctr_ranker.inputs"`，记录的正好是送进模型的那些值（第 8.3 节）。训练数据从这份日志生成时，训练和服务使用同一份特征值。两种情况会打破这一点：主节点失败、由后备模型打分；或者日志在投递中丢失。探针信封中的 `column_producers` 记录每个分数列实际由哪个节点产出，持久投递的批次带连续序号（第 8.6 节），训练管道可以据此过滤后备样本、发现丢失。
 6. **同一个接口支持其他范式。** 成对排序、列表级重排、生成式召回和大模型重排使用同一个 `IModelClient`，区别只在算子如何构造输入、如何解释输出（第 5.9 节）。

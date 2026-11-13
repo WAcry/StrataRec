@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Globalization;
 using System.Text.Json;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 
@@ -303,8 +304,10 @@ public sealed class MemoryFeatureConnectorFactory : IFeatureConnectorFactory
 
     public string ConnectorType => Type;
 
-    public IFeatureSourceConnector Create(string sourceName, IReadOnlyDictionary<string, JsonElement> settings, string? baseDirectory)
+    /// <remarks>A test fixture: it reads its data file here, at create time, so it needs no load.</remarks>
+    public IFeatureSourceConnector Create(BindingContext context)
     {
+        var settings = context.Settings;
         JsonElement data;
         if (settings.TryGetValue("data", out var inline))
         {
@@ -312,11 +315,8 @@ public sealed class MemoryFeatureConnectorFactory : IFeatureConnectorFactory
         }
         else if (settings.TryGetValue("data_file", out var file))
         {
-            var path = file.GetString() ?? throw new FormatException($"Source '{sourceName}': data_file must be a string.");
-            if (!Path.IsPathRooted(path) && baseDirectory is not null)
-            {
-                path = Path.Combine(baseDirectory, path);
-            }
+            var path = file.GetString() ?? throw new FormatException($"Source '{context.Name}': data_file must be a string.");
+            path = Path.Combine(context.BaseDirectory, path); // a rooted path stays as it is
 
             using var doc = JsonDocument.Parse(File.ReadAllText(path), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
             data = doc.RootElement.Clone();

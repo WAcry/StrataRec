@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting;
@@ -144,7 +145,8 @@ public sealed class ReplayExceptionTests
         {
             public string ClientType => "flaky";
 
-            public ModelSignature GetSignature(string model, string? version) => new(Array.Empty<TensorSpec>(), Array.Empty<TensorSpec>());
+            public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new ModelSignature(Array.Empty<TensorSpec>(), Array.Empty<TensorSpec>()));
 
             public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
                 throw exception("the model is warming up");
@@ -166,13 +168,14 @@ public sealed class ReplayExceptionTests
 
         public string ClientType => _inner.ClientType;
 
-        public IModelClient Create(string modelName, IReadOnlyDictionary<string, JsonElement> settings) => new Client(_inner.Create(modelName, settings), exception);
+        public IModelClient Create(BindingContext context) => new Client(_inner.Create(context), exception);
 
         private sealed class Client(IModelClient inner, Func<Exception> exception) : IModelClient
         {
             public string ClientType => inner.ClientType;
 
-            public ModelSignature GetSignature(string model, string? version) => inner.GetSignature(model, version);
+            public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
+                inner.GetSignatureAsync(model, version, cancellationToken);
 
             public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) => throw exception();
         }
