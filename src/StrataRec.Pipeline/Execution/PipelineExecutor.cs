@@ -296,7 +296,7 @@ public sealed class PipelineExecutor
                 }
             }
 
-            result ??= await BuildResultAsync(state, start, cancellationToken).ConfigureAwait(false);
+            result ??= await BuildResultAsync(state, request, start, cancellationToken).ConfigureAwait(false);
             PublishLogs(state, request, result, returned: true);
             return result;
         }
@@ -844,7 +844,7 @@ public sealed class PipelineExecutor
         }
     }
 
-    private static async ValueTask<PipelineResult> BuildResultAsync(RequestState state, long start, CancellationToken cancellationToken)
+    private static async ValueTask<PipelineResult> BuildResultAsync(RequestState state, PipelineRequest request, long start, CancellationToken cancellationToken)
     {
         var plan = state.Plan;
         var output = plan.Output;
@@ -861,13 +861,15 @@ public sealed class PipelineExecutor
         var rows = FirstRows(state.Table, limit);
         var count = rows.Length;
 
-        // Output expressions may read features (design 3.4); make sure they are present for the returned rows.
+        // Output expressions may read features (design 3.4); make sure they are present for the returned rows. A feature
+        // that failed (a source failure, or a non-nullable derived int32 that did not fit) cannot be served as typed:
+        // expressions compiled against it skip validity checks. The request fails, as a node reading it would.
         var outputFeatures = new List<int>();
         foreach (var (_, expression) in output.Columns)
         {
             foreach (var symbol in expression.Reads)
             {
-                if (symbol.Kind == SymbolKind.Column && plan.Schema.Columns[symbol.Id].FeatureIndex is >= 0 and var f)
+                if (FeatureOf(plan, symbol) is >= 0 and var f)
                 {
                     outputFeatures.Add(f);
                 }
@@ -876,7 +878,12 @@ public sealed class PipelineExecutor
 
         if (outputFeatures.Count > 0)
         {
-            await state.Features.EnsureAsync(outputFeatures, cancellationToken).ConfigureAwait(false);
+            var fill = await state.Features.EnsureAsync(outputFeatures, cancellationToken).ConfigureAwait(false);
+            if (fill.Failed)
+            {
+                return Failed(plan, request, "output reads a feature that failed: " + fill.Error, start, state.Outcomes, state.Triggered,
+                    state.NonFinite + state.Features.NonFiniteReplaced, state.Counters.OutOfRange);
+            }
         }
 
         var values = new ScalarValue[output.Columns.Length][];
@@ -1021,6 +1028,14 @@ public sealed class PipelineExecutor
         var order = table.Rows.Order;
         return order[..Math.Min(limit, order.Length)].ToArray();
     }
+
+    /// <summary>The feature a column or context symbol reads, or -1.</summary>
+    internal static int FeatureOf(ExecutionPlan plan, Symbol symbol) => symbol.Kind switch
+    {
+        SymbolKind.Column => plan.Schema.Columns[symbol.Id].FeatureIndex,
+        SymbolKind.Context => plan.Schema.ContextFields[symbol.Id].FeatureIndex,
+        _ => -1,
+    };
 
     private static PipelineResult Failed(
         ExecutionPlan plan, PipelineRequest request, string error, long start, IReadOnlyList<NodeOutcome> outcomes, bool[] triggered, int nonFinite = 0,

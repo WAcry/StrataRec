@@ -3,6 +3,7 @@ using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
+using StrataRec.Features.Runtime;
 using StrataRec.Logging;
 using StrataRec.Pipeline.Planning;
 
@@ -175,14 +176,18 @@ internal static class TapCapture
         var count = 0;
         if (tap.Filter is { } filter && rows.Length > 0)
         {
-            var keep = ColumnBuffer.Create(filter.ResultType, capacity, memory);
-            filter.Evaluate(eval, rows, keep);
-            for (var i = 0; i < rows.Length; i++)
+            // A filter reading a failed feature is missing for every row, which a filter treats as false.
+            if (!ReadsFailedFeature(state, filter))
             {
-                var v = ColumnValues.Get(keep, rows[i]);
-                if (!v.IsMissing && v.AsBool())
+                var keep = ColumnBuffer.Create(filter.ResultType, capacity, memory);
+                filter.Evaluate(eval, rows, keep);
+                for (var i = 0; i < rows.Length; i++)
                 {
-                    positions[count++] = i;
+                    var v = ColumnValues.Get(keep, rows[i]);
+                    if (!v.IsMissing && v.AsBool())
+                    {
+                        positions[count++] = i;
+                    }
                 }
             }
         }
@@ -241,7 +246,11 @@ internal static class TapCapture
         {
             var (name, expression) = tap.Columns[c];
             var values = new ScalarValue[count];
-            if (count > 0)
+            if (count > 0 && ReadsFailedFeature(state, expression))
+            {
+                Array.Fill(values, ScalarValue.Missing);
+            }
+            else if (count > 0)
             {
                 var buffer = ColumnBuffer.Create(expression.ResultType, capacity, memory);
                 expression.Evaluate(eval, selectedRows, buffer);
@@ -338,6 +347,25 @@ internal static class TapCapture
 
     private static long EntityHash(Core.Tables.CandidateTable table, int row) =>
         table.KeyType == EntityKeyType.Int64 ? table.Int64Ids![row] : Core.Hashing.StableHash.SeedFromSalt(table.StringIds!.Get(row));
+
+    /// <summary>
+    /// True when <paramref name="expression"/> reads a feature that failed in this request. Its storage may hold rows that
+    /// are invalid under a non-nullable type, which the expression would read without checking validity (review 6). A
+    /// tap never fails the request, so such a column is logged as missing.
+    /// </summary>
+    private static bool ReadsFailedFeature(RequestState state, CompiledExpression expression)
+    {
+        var reads = expression.Reads;
+        for (var i = 0; i < reads.Count; i++)
+        {
+            if (PipelineExecutor.FeatureOf(state.Plan, reads[i]) is >= 0 and var f && state.Features.GetState(f) == FeatureState.Failed)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static ValueTask EnsureContextAsync(RequestState state, CompiledExpression expression, CancellationToken cancellationToken)
     {

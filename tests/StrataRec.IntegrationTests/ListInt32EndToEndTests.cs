@@ -56,6 +56,73 @@ public class ListInt32EndToEndTests
     }
 
     [Theory]
+    [InlineData("int32", "col.entity_id * 1500000000")]
+    [InlineData("list<int32>", "col.entity_id > 1 ? [3000000000] : [7]")]
+    public async Task OutputReadingAFailedDerivedFeature_FailsTheRequest(string type, string expr)
+    {
+        // Review 6 #1 (verification): a non-nullable derived feature whose value did not fit fails; an output expression
+        // reading it directly must not serve the invalid storage as a present value.
+        var root = Workspace();
+        File.WriteAllText(Path.Combine(root, "catalog", "c.jsonc"), $$"""
+            { "catalog_id": "c",
+              "entities": { "item": { "scope": "candidate", "key": "col.entity_id", "key_type": "int64" } },
+              "derived_features": { "item.narrow": { "type": "{{type}}", "expr": "{{expr}}" } } }
+            """);
+        var pipeline = Path.Combine(root, "pipelines", "p.jsonc");
+        File.WriteAllText(pipeline, File.ReadAllText(pipeline).Replace("\"tags_n\": \"col.out.tags_n\" }", "\"tags_n\": \"col.out.tags_n\", \"narrow\": \"col.item.narrow\" }", StringComparison.Ordinal));
+        var plan = Compile(root);
+
+        var result = await new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
+        {
+            RequestId = "r", Inputs = new RequestInputs(), Deadline = TimeSpan.FromSeconds(5), TimeMs = 1_767_225_600_000,
+        });
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("output reads a feature that failed", result.Error);
+        Assert.Contains("item.narrow", result.Error);
+        Assert.Empty(result.Items);
+    }
+
+    [Fact]
+    public async Task TapReadingAFailedDerivedFeature_LogsItMissing_AndAFilterOnItKeepsNothing()
+    {
+        // A tap never fails the request; it must not log invalid storage as values either.
+        var root = Workspace();
+        File.WriteAllText(Path.Combine(root, "catalog", "c.jsonc"), """
+            { "catalog_id": "c",
+              "entities": { "item": { "scope": "candidate", "key": "col.entity_id", "key_type": "int64" } },
+              "derived_features": { "item.narrow": { "type": "int32", "expr": "col.entity_id * 1500000000" } } }
+            """);
+        var pipeline = Path.Combine(root, "pipelines", "p.jsonc");
+        var text = File.ReadAllText(pipeline)
+            .Replace("\"out.tags_n\": { \"type\": \"list<int32>?\" }",
+                "\"out.tags_n\": { \"type\": \"list<int32>?\" }, \"out.narrow\": { \"type\": \"int32?\" }", StringComparison.Ordinal)
+            .Replace("\"tags_n\": { \"order\": 230,",
+                "\"narrow\": { \"order\": 240, \"op\": \"ExpressionScorer@1\", \"on_failure\": \"skip\", \"config\": { \"output_col\": \"out.narrow\", \"expr\": \"col.item.narrow\" } },\n\"tags_n\": { \"order\": 230,", StringComparison.Ordinal)
+            .Replace("\"output\": {",
+                "\"funnel_groups\": { \"all\": { \"key\": [\"ctx.request.id\"], \"rate\": 1.0 } },\n" +
+                "\"log_taps\": {\n" +
+                "  \"values\":   { \"group\": \"all\", \"attach\": { \"output\": true }, \"columns\": { \"narrow\": \"col.item.narrow\", \"id32\": \"col.out.id32\" } },\n" +
+                "  \"filtered\": { \"group\": \"all\", \"attach\": { \"output\": true }, \"rows\": { \"filter\": \"col.item.narrow > 0\" }, \"columns\": { \"id32\": \"col.out.id32\" } } },\n" +
+                "\"output\": {", StringComparison.Ordinal);
+        File.WriteAllText(pipeline, text);
+        var plan = Compile(root);
+
+        var result = await new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
+        {
+            RequestId = "r", Inputs = new RequestInputs(), Deadline = TimeSpan.FromSeconds(5), TimeMs = 1_767_225_600_000, CaptureLogs = true,
+        });
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Contains(result.Outcomes, t => t.NodeId == "narrow" && t.Kind == NodeOutcomeKind.Failed);
+        var values = Assert.Single(result.LogBatches, b => b.TapId == "values");
+        Assert.Equal(3, values.RowCount);
+        Assert.All(Assert.Single(values.Columns, c => c.Name == "narrow").Values, v => Assert.True(v.IsMissing, v.ToString()));
+        Assert.Contains(Assert.Single(values.Columns, c => c.Name == "id32").Values, v => !v.IsMissing); // other columns unaffected
+        Assert.DoesNotContain(result.LogBatches, b => b.TapId == "filtered" && b.RowCount > 0);
+    }
+
+    [Theory]
     [InlineData("n32", 3_000_000_000L, null)]
     [InlineData("tags32", null, 3_000_000_000L)]
     public async Task RequestInputOutsideItsDeclaredInt32Type_IsRejected(string input, long? scalar, long? element)
