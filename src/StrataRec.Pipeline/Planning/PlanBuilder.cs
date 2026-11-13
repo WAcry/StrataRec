@@ -764,6 +764,11 @@ public sealed class PlanBuilder
     /// reads has a producer that cannot be skipped before it; fixed columns have one producer per path; row sources keep
     /// every non-nullable column covered (<see cref="ValidateRowSource"/>); nodes sharing an order are independent.
     /// </summary>
+    /// <remarks>
+    /// Each rule here looks at a few nodes and taps; <see cref="DataFlowScopes"/> says which, for a caller that cannot
+    /// check every arm combination. A new rule needs its scope there, or past that limit it is not checked for the
+    /// combinations of three layers and more.
+    /// </remarks>
     public void ValidateDataFlow(
         IReadOnlyList<CompiledNode> timeline,
         IReadOnlyDictionary<string, CompiledNode> fallbacks,
@@ -947,6 +952,207 @@ public sealed class PlanBuilder
                     }
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// The scope of every rule <see cref="ValidateDataFlow"/> checks, given every variant each node and tap may take
+    /// (design 11.5 check 3): one rule applied to one subject, and the nodes and taps whose variants decide it. Nothing
+    /// else does, so checking every combination of the variants of a scope's nodes and taps checks that rule as
+    /// completely as checking every combination at all; a caller that cannot afford the whole space checks scope by scope.
+    /// </summary>
+    /// <remarks>
+    /// <para>Nullability exempts a column only from the producer a reader needs; every other rule applies to it. A
+    /// position runs its node or that node's fallback, so a scope holds both: the fallbacks of its nodes, and the nodes
+    /// that fall back to a fallback in it.</para>
+    /// <para>The rules and what decides them: a reader's non-nullable column (the reader and the column's producers);
+    /// one producer per path and row sources' shadowing (the producers); row sources keeping a non-nullable column
+    /// covered (a row source and the producers); independence of nodes that may share an order (the two nodes); a
+    /// fallback's existence and outputs (the node); a tap's columns, features and pinned versions (the tap, the nodes it
+    /// attaches after, and the producers, feature readers or pinned node).</para>
+    /// </remarks>
+    /// <param name="nodes">Node id → the variants it takes in some combination (timeline nodes and fallbacks).</param>
+    /// <param name="taps">Tap id → the variants it takes in some combination.</param>
+    public List<DataFlowScope> DataFlowScopes(IReadOnlyDictionary<string, List<CompiledNode>> nodes, IReadOnlyDictionary<string, List<CompiledTap>> taps)
+    {
+        var schema = Schema;
+        var producers = new SortedDictionary<int, SortedSet<string>>();
+        var readers = new SortedDictionary<int, SortedSet<string>>();
+        var featureReaders = new Dictionary<int, SortedSet<string>>();
+        var rowSources = new SortedSet<string>(StringComparer.Ordinal);
+        var fallbacksOf = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+        var referrers = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+        var orders = new SortedDictionary<string, (HashSet<int> Orders, string Pointer)>(StringComparer.Ordinal);
+        foreach (var (id, variants) in nodes)
+        {
+            foreach (var node in variants)
+            {
+                foreach (var output in node.Outputs)
+                {
+                    Add(producers, output.LogicalId, id);
+                }
+
+                foreach (var logical in node.RequiredOutputs)
+                {
+                    Add(readers, logical, id);
+                }
+
+                var fetched = new HashSet<int>();
+                MarkFetched(fetched, node.ReadFeatures);
+                foreach (var feature in fetched)
+                {
+                    Add(featureReaders, feature, id);
+                }
+
+                if (IsRowSource(node))
+                {
+                    rowSources.Add(id);
+                }
+
+                if (node.OnFailure == FailurePolicy.Fallback && node.FallbackNodeId is { } fallback)
+                {
+                    Add(fallbacksOf, id, fallback);
+                    Add(referrers, fallback, id);
+                }
+
+                if (node.Order is { } order)
+                {
+                    if (!orders.TryGetValue(id, out var entry))
+                    {
+                        entry = (new HashSet<int>(), node.Pointer);
+                        orders[id] = entry;
+                    }
+
+                    entry.Orders.Add(order);
+                }
+            }
+        }
+
+        var none = new SortedSet<string>(StringComparer.Ordinal);
+        var scopes = new List<DataFlowScope>();
+        void Scope(string subject, string pointer, SortedSet<string> involved, string? tap = null)
+        {
+            // A position is its node or its fallback: close over both directions until nothing is added.
+            var closed = new SortedSet<string>(involved, StringComparer.Ordinal);
+            var pending = new Queue<string>(involved);
+            while (pending.TryDequeue(out var id))
+            {
+                foreach (var related in new[] { fallbacksOf.GetValueOrDefault(id), referrers.GetValueOrDefault(id) })
+                {
+                    foreach (var other in related ?? none)
+                    {
+                        if (closed.Add(other))
+                        {
+                            pending.Enqueue(other);
+                        }
+                    }
+                }
+            }
+
+            scopes.Add(new DataFlowScope(subject, pointer, closed, tap is null ? Array.Empty<string>() : new[] { tap }));
+        }
+
+        SortedSet<string> With(SortedSet<string>? set, IEnumerable<string> more)
+        {
+            var union = new SortedSet<string>(set ?? none, StringComparer.Ordinal);
+            union.UnionWith(more);
+            return union;
+        }
+
+        var columns = new SortedSet<int>(producers.Keys);
+        columns.UnionWith(readers.Keys);
+        foreach (var logical in columns)
+        {
+            var column = schema.Columns[logical];
+            producers.TryGetValue(logical, out var produced);
+            if (produced is not null)
+            {
+                Scope($"the producers of column '{column.Name}'", column.Pointer, produced);
+                if (!column.Type.Nullable)
+                {
+                    foreach (var rowSource in rowSources)
+                    {
+                        Scope($"column '{column.Name}' and row source '{rowSource}'", column.Pointer, With(produced, new[] { rowSource }));
+                    }
+                }
+            }
+
+            foreach (var reader in readers.GetValueOrDefault(logical) ?? none)
+            {
+                Scope($"column '{column.Name}' read by '{reader}'", column.Pointer, With(produced, new[] { reader }));
+            }
+        }
+
+        var ordered = new List<(string Id, HashSet<int> Orders, string Pointer)>();
+        foreach (var (id, (set, pointer)) in orders)
+        {
+            ordered.Add((id, set, pointer));
+        }
+
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            for (var j = i + 1; j < ordered.Count; j++)
+            {
+                if (ordered[i].Orders.Overlaps(ordered[j].Orders))
+                {
+                    Scope($"nodes '{ordered[i].Id}' and '{ordered[j].Id}' at one order", ordered[i].Pointer + "/order",
+                        new SortedSet<string>(StringComparer.Ordinal) { ordered[i].Id, ordered[j].Id });
+                }
+            }
+        }
+
+        foreach (var (id, _) in fallbacksOf)
+        {
+            Scope($"node '{id}' and its fallback", nodes[id][0].Pointer + "/on_failure", new SortedSet<string>(StringComparer.Ordinal) { id });
+        }
+
+        foreach (var (tapId, variants) in taps)
+        {
+            var attach = new SortedSet<string>(StringComparer.Ordinal);
+            var pinned = new SortedSet<string>(StringComparer.Ordinal);
+            var reads = new SortedSet<int>();
+            var features = new SortedSet<int>();
+            foreach (var tap in variants)
+            {
+                if (tap.AttachAfter is { } after)
+                {
+                    attach.Add(after);
+                }
+
+                pinned.UnionWith(tap.PinnedNodes);
+                reads.UnionWith(tap.ReadOutputs);
+                features.UnionWith(tap.ReadFeatures);
+            }
+
+            var pointer = "/log_taps/" + tapId;
+            foreach (var node in pinned)
+            {
+                Scope($"tap '{tapId}' reading the version of '{node}'", pointer, With(attach, new[] { node }), tapId);
+            }
+
+            foreach (var logical in reads)
+            {
+                Scope($"tap '{tapId}' reading '{schema.Columns[logical].Name}'", pointer, With(attach, producers.GetValueOrDefault(logical) ?? none), tapId);
+            }
+
+            foreach (var feature in features)
+            {
+                Scope($"tap '{tapId}' reading feature '{_features[feature].Definition.Name}'", pointer,
+                    With(attach, featureReaders.GetValueOrDefault(feature) ?? none), tapId);
+            }
+        }
+
+        return scopes;
+
+        static void Add<TKey>(IDictionary<TKey, SortedSet<string>> map, TKey key, string id)
+        {
+            if (!map.TryGetValue(key, out var set))
+            {
+                set = new SortedSet<string>(StringComparer.Ordinal);
+                map[key] = set;
+            }
+
+            set.Add(id);
         }
     }
 
@@ -1605,3 +1811,10 @@ public sealed class PlanBuilder
         return array;
     }
 }
+
+/// <summary>One data-flow rule applied to one subject, and the nodes and taps whose variants decide it (<see cref="PlanBuilder.DataFlowScopes"/>).</summary>
+/// <param name="Subject">What the rule is about, for a message, e.g. <c>the producers of column 'x'</c>.</param>
+/// <param name="Pointer">Where the subject is declared: a column, a node or a tap.</param>
+/// <param name="Nodes">Node ids (timeline nodes and fallbacks) whose variants decide the rule.</param>
+/// <param name="Taps">Tap ids whose variants decide it.</param>
+public sealed record DataFlowScope(string Subject, string Pointer, IReadOnlyCollection<string> Nodes, IReadOnlyCollection<string> Taps);

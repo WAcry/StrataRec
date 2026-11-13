@@ -19,8 +19,9 @@ internal sealed partial class UnifiedCompilation
     /// Data-flow check per arm combination (design 11.5 check 3): every non-nullable column read has an unskippable
     /// producer before it, fixed columns have one producer per path, same-order nodes are independent. All
     /// combinations of the layers that touch nodes are enumerated when there are at most
-    /// <see cref="PlanCompileRequest.MaxCombinationsChecked"/>; otherwise every single arm, every co-occurring pair, and
-    /// for each non-nullable column every combination of the layers that touch its producers and readers.
+    /// <see cref="PlanCompileRequest.MaxCombinationsChecked"/>. Otherwise every single arm and every pair, and for each
+    /// rule of the check every combination of the layers that decide it (<see cref="PlanBuilder.DataFlowScopes"/>);
+    /// a rule whose layers have more combinations than the limit is an error, never left unchecked.
     /// </summary>
     private void ValidateCombinations(TimelineSlot[] timeline, Dictionary<string, TimelineSlot> fallbacks, OutputPlan output, CombinationReport report)
     {
@@ -89,50 +90,90 @@ internal sealed partial class UnifiedCompilation
             }
         }
 
-        // Per column: the layers that can change who produces or reads it (design 11.5 check 3).
-        var columnLayers = new Dictionary<int, SortedSet<int>>();
-        foreach (var (_, v) in _variants)
+        // Per rule: every combination of the layers that decide it (design 11.5 check 3). A rule depends only on the
+        // variants of its scope, so this checks it as completely as the whole space would; scopes within two layers are
+        // covered by the singles and pairs above.
+        var nodes = new Dictionary<string, List<CompiledNode>>(StringComparer.Ordinal);
+        foreach (var (id, v) in _variants)
         {
-            foreach (var node in v.Variants)
-            {
-                if (node is null)
-                {
-                    continue;
-                }
-
-                foreach (var o in node.Outputs)
-                {
-                    AddLayers(columnLayers, o.LogicalId, v.Layers);
-                }
-
-                foreach (var r in node.RequiredOutputs)
-                {
-                    AddLayers(columnLayers, r, v.Layers);
-                }
-            }
+            nodes[id] = Compiled(v.Variants);
         }
 
-        foreach (var (logical, layers) in columnLayers)
+        var taps = new Dictionary<string, List<CompiledTap>>(StringComparer.Ordinal);
+        foreach (var (id, t) in _taps)
         {
-            var column = _builder.Schema.Columns[logical];
-            if (column.Type.Nullable || layers.Count < 3)
+            taps[id] = Compiled(t.Variants);
+        }
+
+        var enumerated = new HashSet<string>(StringComparer.Ordinal);
+        var reported = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var scope in _builder.DataFlowScopes(nodes, taps))
+        {
+            var layers = new SortedSet<int>();
+            foreach (var id in scope.Nodes)
             {
-                continue; // nullable columns need no producer; one or two layers are covered by singles and pairs
+                if (_variants.TryGetValue(id, out var v))
+                {
+                    layers.UnionWith(v.Layers);
+                }
             }
 
-            var list = new List<int>(layers);
-            if (Product(choices, list) > _request.MaxCombinationsChecked)
+            foreach (var id in scope.Taps)
             {
-                // Without a complete check the plan could leave a non-nullable column without a producer for some
-                // assignment (design 11.5 check 3), so it is rejected rather than published on a warning.
-                _diagnostics.Error("COMBINATION_CHECK_LIMIT", _pipelineLabel, column.Pointer,
-                    $"Column '{column.Name}' is affected by arms in {list.Count} layers ({Product(choices, list)} combinations, limit {_request.MaxCombinationsChecked}); not every combination can be checked for a missing producer.",
-                    "put experiments that change producers or readers of this column into fewer layers, or graduate some of them");
+                layers.UnionWith(_taps[id].Layers);
+            }
+
+            if (layers.Count < 3)
+            {
                 continue;
             }
 
-            Enumerate(choices, list, combination => Check(combination, timeline, fallbacks, output, seen, report));
+            var list = new List<int>(layers);
+            var product = Product(choices, list);
+            if (product > _request.MaxCombinationsChecked)
+            {
+                // Without a complete check some assignment could run a plan this rule rejects, so the plan is rejected
+                // rather than published on a warning.
+                if (reported.Add(scope.Pointer))
+                {
+                    var names = new List<string>(list.Count);
+                    foreach (var layer in list)
+                    {
+                        names.Add(_layers[layer]);
+                    }
+
+                    _diagnostics.Error("COMBINATION_CHECK_LIMIT", _pipelineLabel, scope.Pointer,
+                        $"The data flow of {scope.Subject} depends on arms in {list.Count} layers ({string.Join(", ", names)}): " +
+                        $"{(product == long.MaxValue ? "too many" : product.ToString(System.Globalization.CultureInfo.InvariantCulture))} combinations, " +
+                        $"more than the {_request.MaxCombinationsChecked} that can be checked.",
+                        "put experiments that change these nodes into fewer layers (arms of one layer never run together), or graduate some of them");
+                }
+
+                continue;
+            }
+
+            if (enumerated.Add(string.Join(",", list)))
+            {
+                Enumerate(choices, list, combination => Check(combination, timeline, fallbacks, output, seen, report));
+            }
         }
+    }
+
+    /// <summary>The distinct variants of a space (combinations share deduplicated variants), without "absent".</summary>
+    private static List<T> Compiled<T>(T?[] variants)
+        where T : class
+    {
+        var compiled = new List<T>();
+        var seen = new HashSet<T>(ReferenceEqualityComparer.Instance);
+        foreach (var variant in variants)
+        {
+            if (variant is not null && seen.Add(variant))
+            {
+                compiled.Add(variant);
+            }
+        }
+
+        return compiled;
     }
 
     private void Check(int[] combination, TimelineSlot[] timeline, Dictionary<string, TimelineSlot> fallbacks, OutputPlan output, HashSet<string> seen, CombinationReport report)
@@ -438,20 +479,6 @@ internal sealed partial class UnifiedCompilation
             {
                 return;
             }
-        }
-    }
-
-    private static void AddLayers(Dictionary<int, SortedSet<int>> map, int logical, int[] layers)
-    {
-        if (!map.TryGetValue(logical, out var set))
-        {
-            set = new SortedSet<int>();
-            map[logical] = set;
-        }
-
-        foreach (var layer in layers)
-        {
-            set.Add(layer);
         }
     }
 }

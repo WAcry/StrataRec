@@ -230,4 +230,23 @@ public sealed class ExecutionPlan
 
         return new RequestArms(byLayer);
     }
+
+    /// <summary>
+    /// The <c>experiment/arm</c> ids of a request's arms, in layer order: what a request reports as assigned
+    /// (<c>ExperimentRecord.Assigned</c>), whether its pipeline ran or not.
+    /// </summary>
+    public List<string> ArmIds(in RequestArms arms)
+    {
+        var ids = new List<string>(arms.LayerCount);
+        for (var layer = 0; layer < arms.LayerCount; layer++)
+        {
+            var arm = arms.ArmIn(layer);
+            if (arm >= 0)
+            {
+                ids.Add(Arms[arm].Id);
+            }
+        }
+
+        return ids;
+    }
 }
