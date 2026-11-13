@@ -85,11 +85,16 @@ public sealed class LocalBindingCliTests
         var schema = JsonNode.Parse(output.ToString())!;
         var binding = FindObjectWithProperty(schema, "max_bytes")!;
         var properties = binding["properties"]!;
-        Assert.Equal("""["fetch","local",null]""", properties["mode"]!["enum"]!.ToJsonString());
+        Assert.Equal("""["fetch","local","cache",null]""", properties["mode"]!["enum"]!.ToJsonString());
         Assert.Equal("^[0-9]+(B|KiB|MiB|GiB|TiB)$", properties["max_bytes"]!["pattern"]!.GetValue<string>());
         Assert.Contains("Mode local", properties["bootstrap"]!["description"]!.GetValue<string>());
         Assert.Null(binding["additionalProperties"]); // connector settings
         Assert.Null(properties["bootstrap"]!["additionalProperties"]); // the update source's own settings
+        var cache = FindObjectWithProperty(properties["cache"], "ttl_ms")!;
+        Assert.False(cache["additionalProperties"]!.GetValue<bool>()); // the engine's own settings: a typo is an error
+        Assert.Contains("stale_if_error_ms", cache["properties"]!.AsObject().Select(p => p.Key));
+        var distributed = FindObjectWithProperty(cache, "store")!;
+        Assert.Null(distributed["additionalProperties"]); // the store's own settings
     }
 
     private static JsonObject? FindObjectWithProperty(JsonNode? node, string property)

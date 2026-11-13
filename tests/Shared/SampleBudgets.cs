@@ -94,7 +94,9 @@ internal static class SampleBudgets
             }
 
             var name = reader.GetString()!;
-            if (!name.EndsWith("_ms", StringComparison.Ordinal) || name == "time_ms") // time_ms: a request's clock, not a budget
+            // time_ms: a request's clock; ttl_ms and stale_if_error_ms: how long a cache serves a value. None is a budget:
+            // a slow machine cannot exceed them into a fallback, at most into a fetch the cache would have saved.
+            if (!name.EndsWith("_ms", StringComparison.Ordinal) || name is "time_ms" or "ttl_ms" or "stale_if_error_ms")
             {
                 continue;
             }
@@ -156,7 +158,7 @@ internal static class SampleBudgets
 
         foreach (var group in plan.Features.Groups)
         {
-            if (group.Supply.Mode == SupplyMode.Fetch && group.Supply.TimeoutMs < UntimedMs)
+            if (group.Supply.Mode is SupplyMode.Fetch or SupplyMode.Cache && group.Supply.TimeoutMs < UntimedMs) // a cache's misses are fetched
             {
                 tight.Add($"feature source '{group.SourceName}': timeout {group.Supply.TimeoutMs} ms (without timeout_ms, the framework's default)");
             }

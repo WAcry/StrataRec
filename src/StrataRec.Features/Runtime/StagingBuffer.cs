@@ -162,6 +162,9 @@ internal sealed class StagingArea
         return (ListColumn<T>)slot;
     }
 
+    /// <summary>The list buffer of one chunk, or null when the chunk wrote no value of the field; indexed by the chunk-local key.</summary>
+    internal ColumnBuffer? ListBuffer(int fieldIndex, int chunk) => _lists![(CheckField(fieldIndex) * ChunkCount) + chunk];
+
     internal void SetBit(int bit) => Bits.Set(_written, bit);
 
     internal void ClearBit(int bit) => Bits.Clear(_written, bit);

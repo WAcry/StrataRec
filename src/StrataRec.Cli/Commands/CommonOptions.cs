@@ -2,8 +2,10 @@ using System.CommandLine;
 using System.Text.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Experiments.Compilation;
+using StrataRec.Features.Cache;
 using StrataRec.Hosting.Workspace;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Redis;
 
 namespace StrataRec.Cli.Commands;
 
@@ -36,7 +38,15 @@ internal static class CommonOptions
     public static JsonWriterOptions JsonOptions => new() { Indented = true };
 
     /// <summary>The engine environment for a workspace: fixture paths resolve against the config root.</summary>
-    public static PlanEnvironment PlanEnvironment(ConfigWorkspace workspace) => new() { BaseDirectory = workspace.Root };
+    public static PlanEnvironment PlanEnvironment(ConfigWorkspace workspace) => PlanEnvironment(workspace.Root);
+
+    /// <summary>The engine environment for a config root: what this binary provides (the built-in registries and
+    /// <c>redis@1</c> for distributed caches), with relative paths resolving against the root.</summary>
+    public static PlanEnvironment PlanEnvironment(string configRoot) => new()
+    {
+        BaseDirectory = Path.GetFullPath(configRoot),
+        CacheStores = new FeatureCacheStoreRegistry().AddRedis(),
+    };
 
     /// <summary>Loads a workspace and compiles one pipeline (with its experiments).</summary>
     public static (ConfigWorkspace Workspace, PlanCompileRequest? Request, PlanCompilation? Compilation) Compile(

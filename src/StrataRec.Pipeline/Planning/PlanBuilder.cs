@@ -6,6 +6,7 @@ using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
+using StrataRec.Features.Cache;
 using StrataRec.Features.Catalog;
 using StrataRec.Features.Connectors;
 using StrataRec.Features.Local;
@@ -24,6 +25,15 @@ public sealed class PlanEnvironment
     /// <summary>Update sources that load <c>local</c> feature tables (design 6.6), keyed by type like <see cref="Connectors"/>.</summary>
     public FeatureUpdateSourceRegistry UpdateSources { get; init; } = FeatureUpdateSourceRegistry.CreateDefault();
 
+    /// <summary>
+    /// Distributed cache stores of <c>cache</c> bindings (<c>cache.distributed.store</c>, design 6.6), keyed by type.
+    /// Empty by default: StrataRec.Redis adds <c>redis@1</c>.
+    /// </summary>
+    public FeatureCacheStoreRegistry CacheStores { get; init; } = new();
+
+    /// <summary>The clock of <c>cache</c> tables (write times and expiry); tests pass one they move by hand.</summary>
+    public TimeProvider Clock { get; init; } = TimeProvider.System;
+
     public ModelClientRegistry Models { get; init; } = ModelClientRegistry.CreateDefault();
 
     public CandidateSourceRegistry CandidateSources { get; init; } = CandidateSourceRegistry.CreateDefault();
@@ -37,6 +47,7 @@ public sealed class PlanEnvironment
         var caps = new List<string>(Operators.Ids);
         caps.AddRange(Connectors.Types);
         caps.AddRange(UpdateSources.Types);
+        caps.AddRange(CacheStores.Types);
         caps.AddRange(Models.Types);
         caps.AddRange(CandidateSources.Types);
         caps.Add(ExpressionCompiler.FunctionSetCapability);
@@ -1079,7 +1090,9 @@ public sealed class PlanBuilder
             _environment.BaseDirectory,
             _environment.UpdateSources,
             _bindings,
-            _bindings);
+            _bindings,
+            _environment.CacheStores,
+            _environment.Clock);
     }
 
     /// <summary>Assembles the final plan. Call after every node, the output and the feature plan are compiled.</summary>

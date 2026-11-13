@@ -4,6 +4,7 @@ using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Expressions;
 using StrataRec.Features.Bindings;
+using StrataRec.Features.Cache;
 using StrataRec.Features.Catalog;
 using StrataRec.Features.Connectors;
 using StrataRec.Features.Local;
@@ -144,7 +145,9 @@ public sealed class FeaturePlan
     /// </summary>
     /// <param name="updateSources">Update-source factories for local bindings; null has the built-in ones.</param>
     /// <param name="localTables">Where local tables come from; null gives tables that are never loaded (compiling without serving).</param>
-    /// <param name="instances">Where connectors come from; null creates them for this plan alone.</param>
+    /// <param name="instances">Where connectors and distributed cache stores come from; null creates them for this plan alone.</param>
+    /// <param name="cacheStores">Distributed cache store factories for cache bindings; null has none.</param>
+    /// <param name="clock">The clock of the cache tables the plan creates; null is the system clock.</param>
     public static FeaturePlan Create(
         IReadOnlyList<FeatureRuntimeInfo> features,
         SourceBindingArtifact bindings,
@@ -154,7 +157,9 @@ public sealed class FeaturePlan
         string? baseDirectory,
         FeatureUpdateSourceRegistry? updateSources = null,
         ILocalTableProvider? localTables = null,
-        IBindingInstances? instances = null)
+        IBindingInstances? instances = null,
+        FeatureCacheStoreRegistry? cacheStores = null,
+        TimeProvider? clock = null)
     {
         var byName = new Dictionary<string, FeatureRuntimeInfo>(StringComparer.Ordinal);
         var grouped = new SortedDictionary<(string Source, string Entity), List<FeatureRuntimeInfo>>(GroupKeyComparer.Instance);
@@ -178,8 +183,8 @@ public sealed class FeaturePlan
 
         var groups = new List<FetchGroup>();
         var resolver = new FeatureSourceResolver(
-            bindings, connectors, updateSources ?? FeatureUpdateSourceRegistry.CreateDefault(), localTables ?? UnloadedLocalTables.Instance,
-            instances ?? UnsharedInstances.Instance, baseDirectory, diagnostics);
+            bindings, connectors, updateSources ?? FeatureUpdateSourceRegistry.CreateDefault(), cacheStores ?? new FeatureCacheStoreRegistry(),
+            localTables ?? UnloadedLocalTables.Instance, instances ?? UnsharedInstances.Instance, baseDirectory, clock ?? TimeProvider.System, diagnostics);
 
         foreach (var (groupKey, memberList) in grouped)
         {
