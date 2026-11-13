@@ -494,9 +494,9 @@ public sealed class FeatureFetcher
 
     /// <summary>
     /// Runs one connector call, waiting for it at most <paramref name="budgetMs"/> — the source timeout or the time
-    /// left before the request deadline, whichever is less, after which <paramref name="cancellation"/> fires.
-    /// Cancellation is only a request to the connector, so the wait itself is bounded: a result arriving later is
-    /// rejected as a timeout and its staging is never read.
+    /// left before the request deadline, whichever is less — counted from the start of the fetch; the connector's token,
+    /// from <paramref name="cancellation"/>, is cancelled then too. Cancellation is only a request to the connector, so
+    /// the wait itself is bounded: a result arriving later is rejected as a timeout and its staging is never read.
     /// </summary>
     /// <remarks>
     /// <para>The call's hold on the request memory lasts until the connector really completes, because a connector that
@@ -612,9 +612,13 @@ public sealed class FeatureFetcher
 
         try
         {
-            // The fetch's token fires at the budget or with the caller's token: the wait ends then, even when the
-            // connector ignores it. Classify tells the two apart by the caller's token.
-            var status = await task.WaitAsync(cancellation.Token).ConfigureAwait(false);
+            // The wait has its own bound — the time left before the fetch's deadline, and the caller's token — and does
+            // not wait on the connectors' token: cancelling that one runs the connectors' callbacks synchronously, one
+            // after another, so a callback that blocks would hold every wait behind it. The deadline is the fetch's, so a
+            // chunk sent later gets no fresh budget. The wait ends with a TimeoutException or the caller's cancellation,
+            // even when the connector ignores both; Classify tells them apart by the caller's token.
+            var remaining = Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), cancellation.DeadlineTimestamp);
+            var status = await task.WaitAsync(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, cancellationToken).ConfigureAwait(false);
             return Completed(io, group, batch, fields, writer, sequence, status);
         }
         catch (Exception ex)
@@ -1248,9 +1252,10 @@ public sealed class FeatureFetcher
     private readonly record struct ContextFetch(int[] Features, StagingBuffer? Staging, ValueTask<FetchStatus> Call);
 
     /// <summary>
-    /// The cancellation of one fetch: a single source for all its chunks, linked to the caller's token and cancelled at
-    /// the fetch's budget, which the chunks share. A fetch of hundreds of chunks therefore creates one source and one
-    /// timer rather than two timers and a source per chunk (one for the connector's token, one for the wait).
+    /// The cancellation of one fetch: a single source for all its chunks' connectors, linked to the caller's token and
+    /// cancelled at the fetch's budget, which the chunks share. A fetch of hundreds of chunks therefore creates one source
+    /// and one timer rather than a source and a timer per chunk. It also fixes the fetch's absolute deadline, by which
+    /// an asynchronous call's wait is bounded on its own (see <see cref="AwaitConnectorAsync"/>).
     /// </summary>
     /// <remarks>
     /// Reference-counted: the starting fetch holds one reference until every chunk has been sent, and each sent chunk one
@@ -1265,12 +1270,17 @@ public sealed class FeatureFetcher
 
         public FetchCancellation(CancellationToken caller, int budgetMs)
         {
+            DeadlineTimestamp = Stopwatch.GetTimestamp() + budgetMs * Stopwatch.Frequency / 1000;
             _source = CancellationTokenSource.CreateLinkedTokenSource(caller);
             _source.CancelAfter(budgetMs);
             Token = _source.Token; // read once: the property throws once the source is disposed
         }
 
+        /// <summary>The connectors' token: cancelled at the budget or with the caller's token.</summary>
         public CancellationToken Token { get; }
+
+        /// <summary>When the fetch's budget runs out, as a <see cref="Stopwatch"/> timestamp.</summary>
+        public long DeadlineTimestamp { get; }
 
         /// <summary>A chunk is about to be sent.</summary>
         public void AddCall() => Interlocked.Increment(ref _references);
