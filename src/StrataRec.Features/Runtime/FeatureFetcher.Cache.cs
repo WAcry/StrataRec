@@ -472,7 +472,7 @@ public sealed partial class FeatureFetcher
     {
         IoOutcome.Timeout => $"distributed cache of source '{read.Group.SourceName}' timed out after {read.StoreBudgetMs} ms",
         IoOutcome.Cancelled => $"distributed cache of source '{read.Group.SourceName}' was cancelled",
-        _ => $"distributed cache of source '{read.Group.SourceName}' failed: {ex?.Message}",
+        _ => $"distributed cache of source '{read.Group.SourceName}' failed: {(ex is null ? "(no exception)" : ExceptionText.Of(ex))}",
     };
 
     /// <summary>
