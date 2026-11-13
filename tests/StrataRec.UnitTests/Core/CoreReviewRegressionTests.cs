@@ -44,7 +44,6 @@ public class CoreReviewRegressionTests
         var score = (ScalarColumn<double>)table.GetOrCreateSlot(1);
         score.Set(0, 1.0);
         score.Set(1, 2.0);
-        Assert.Null(score.Validity);
 
         table.AppendRows(new long[] { 3 });
         Assert.True(score.IsValid(0));

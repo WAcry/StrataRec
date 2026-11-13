@@ -53,6 +53,28 @@ public static class Bits
         }
     }
 
+    /// <summary>
+    /// Sets the bit of every index in <paramref name="indices"/> (any order, repeats allowed). Consecutive indices in one
+    /// word are gathered in a register and stored once, so a run of ascending rows does not wait on its own stores.
+    /// </summary>
+    public static void SetEach(Span<ulong> words, ReadOnlySpan<int> indices)
+    {
+        var i = 0;
+        while (i < indices.Length)
+        {
+            var word = indices[i] >> 6;
+            var bits = 0UL;
+            do
+            {
+                bits |= 1UL << indices[i];
+                i++;
+            }
+            while (i < indices.Length && indices[i] >> 6 == word);
+
+            words[word] |= bits;
+        }
+    }
+
     /// <summary>Clears bits [start, start + count).</summary>
     public static void ClearRange(Span<ulong> words, int start, int count)
     {

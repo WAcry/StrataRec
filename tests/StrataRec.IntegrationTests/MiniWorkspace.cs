@@ -17,6 +17,16 @@ internal static class MiniWorkspace
         string candidateSources, string pipeline, CandidateSourceRegistry? sources = null, IReadOnlyDictionary<string, string>? files = null,
         OperatorRegistry? operators = null)
     {
+        var compilation = TryCompile(candidateSources, pipeline, sources, files, operators);
+        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
+        return compilation.Plan!;
+    }
+
+    /// <summary>Like <see cref="Compile"/>, for a pipeline that may fail validation; the workspace itself must load.</summary>
+    public static PlanCompilation TryCompile(
+        string candidateSources, string pipeline, CandidateSourceRegistry? sources = null, IReadOnlyDictionary<string, string>? files = null,
+        OperatorRegistry? operators = null)
+    {
         var root = Directory.CreateTempSubdirectory("stratarec-mini-").FullName;
         foreach (var dir in new[] { "catalog", "bindings", "pipelines" })
         {
@@ -43,8 +53,6 @@ internal static class MiniWorkspace
             CandidateSources = sources ?? CandidateSourceRegistry.CreateDefault(),
             Operators = operators ?? OperatorRegistry.CreateDefault(),
         };
-        var compilation = PlanCompiler.Compile(request!, environment);
-        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
-        return compilation.Plan!;
+        return PlanCompiler.Compile(request!, environment);
     }
 }

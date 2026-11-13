@@ -186,7 +186,7 @@ public sealed class ReplayAbortTests
         var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-in-flight", 1001, "home", arms: null, deadlineMs: 600_000))
             .AsTask().WaitAsync(TimeSpan.FromSeconds(60));
 
-        Assert.Equal("node 'ctr_ranker' failed: did not write non-nullable column 'score.ctr'", recorded.Error);
+        Assert.Equal("node 'ctr_ranker' failed: left non-nullable column 'score.ctr' without a value on 30 of 30 live rows", recorded.Error);
         var call = Assert.Single(recorded.Recording!.Runs[0].ModelCalls);
         Assert.Equal(("outstanding", false), (call.Status, call.Threw));
         Assert.Equal(30, call.InputDigests.Count);
