@@ -293,14 +293,22 @@ public class BackendTests
                 compiled.Evaluate(f.Context, some, destination);
             }
 
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var i = 0; i < 100; i++)
+            // Best of three rounds: a one-time lazy initialization or tier-up can land in a round, but a steady-state
+            // allocation shows up in every round.
+            var allocated = long.MaxValue;
+            for (var round = 0; round < 3 && allocated != 0; round++)
             {
-                compiled.Evaluate(f.Context, f.Table.Rows.Order, destination);
-                compiled.Evaluate(f.Context, some, destination);
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                for (var i = 0; i < 100; i++)
+                {
+                    compiled.Evaluate(f.Context, f.Table.Rows.Order, destination);
+                    compiled.Evaluate(f.Context, some, destination);
+                }
+
+                allocated = Math.Min(allocated, GC.GetAllocatedBytesForCurrentThread() - before);
             }
 
-            Assert.True(GC.GetAllocatedBytesForCurrentThread() == before, $"'{source}' allocated {GC.GetAllocatedBytesForCurrentThread() - before} bytes");
+            Assert.True(allocated == 0, $"'{source}' allocated {allocated} bytes per 100 evaluations");
         }
     }
 

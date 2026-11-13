@@ -45,7 +45,7 @@
       "order": 400, "op": "ModelScorer@1", "on_failure": "fallback:ctr_backup", "timeout_ms": 50,
       "config": {
         "model": "ctr_model",
-        "inputs": { "smoothed_ctr": "col.item.smoothed_ctr", "log_followers": "log1p(col.author.followers)" },
+        "inputs": { "smoothed_ctr": "col.item.smoothed_ctr", "log_followers": "col.author.log_followers" },
         "outputs": { "p_click": "score.ctr" }
       }
     },

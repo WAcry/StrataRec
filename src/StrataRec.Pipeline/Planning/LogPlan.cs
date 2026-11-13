@@ -80,6 +80,9 @@ public sealed class CompiledTap
 
     /// <summary>Log column → logical column it reads directly (for <c>column_producers</c>), or -1.</summary>
     public required int[] ColumnSources { get; init; }
+
+    /// <summary>Log column → node of a pinned version it reads (<c>col.x@node</c>), else null.</summary>
+    public required string?[] PinnedProducers { get; init; }
 }
 
 /// <summary>Variants of one tap per arm combination of the layers that patch it (design 12.3: taps vary on their own).</summary>

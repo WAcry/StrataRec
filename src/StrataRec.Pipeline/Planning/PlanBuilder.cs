@@ -471,6 +471,7 @@ public sealed class PlanBuilder
 
         var columns = new List<(string, CompiledExpression)>();
         var columnSources = new List<int>();
+        var pinned = new List<string?>();
         var types = new JsonObject();
         foreach (var (name, (source, columnPointer)) in sources)
         {
@@ -484,15 +485,19 @@ public sealed class PlanBuilder
             columns.Add((name, e));
             types[name] = e.ResultType.ToString();
             var direct = -1;
+            string? pin = null;
             for (var i = before; i < reads.Count; i++)
             {
                 if (reads[i] is { Kind: SymbolKind.Column } r && Schema.Columns[r.Id].Kind == ColumnKind.Output)
                 {
                     direct = direct == -1 ? r.Id : -2;
+                    var at = r.Name.LastIndexOf('@');
+                    pin = r.FixedSlot >= 0 && at > 0 ? r.Name[(at + 1)..] : null;
                 }
             }
 
             columnSources.Add(direct >= 0 ? direct : -1);
+            pinned.Add(direct >= 0 ? pin : null);
         }
 
         var readOutputs = new SortedSet<int>();
@@ -552,6 +557,7 @@ public sealed class PlanBuilder
             ReadFeatures = ToSortedArray(readFeatures),
             ReadContextFeatures = ToSortedArray(readContext),
             ColumnSources = columnSources.ToArray(),
+            PinnedProducers = pinned.ToArray(),
         };
     }
 

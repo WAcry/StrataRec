@@ -20,6 +20,8 @@
     "author.followers":    { "type": "float32", "source": "author_store", "field": "a_followers", "default": 0.0 }
   },
   "derived_features": {
-    "item.smoothed_ctr": { "type": "float32", "expr": "(col.item.clicks_7d + 10.0) / (col.item.impressions_7d + 100.0)" }
+    "item.smoothed_ctr":    { "type": "float32", "expr": "(col.item.clicks_7d + 10.0) / (col.item.impressions_7d + 100.0)" },
+    // Model inputs are plain references; transformations live here so training and serving share them (design 6.9).
+    "author.log_followers": { "type": "float32", "expr": "log1p(col.author.followers)" }
   }
 }

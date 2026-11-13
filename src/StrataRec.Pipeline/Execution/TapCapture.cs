@@ -247,7 +247,11 @@ internal static class TapCapture
             }
 
             columns[c] = new LogColumn(name, expression.ResultType, values);
-            if (tap.ColumnSources[c] is >= 0 and var logical && state.Bindings.Producer(logical) is >= 0 and var producer)
+            if (tap.PinnedProducers[c] is { } pinned)
+            {
+                producers[name] = pinned; // col.x@node always reads that node's version
+            }
+            else if (tap.ColumnSources[c] is >= 0 and var logical && state.Bindings.Producer(logical) is >= 0 and var producer)
             {
                 producers[name] = state.Plan.Nodes[producer].NodeId;
             }

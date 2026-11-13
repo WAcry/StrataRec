@@ -133,7 +133,6 @@ internal sealed partial class UnifiedCompilation
         start = _diagnostics.Count;
         var sources = BuildSchemaSources();
         _builder.DefineSchema(sources);
-        var output = _builder.CompileOutput();
         SettleAdditions(start);
 
         start = _diagnostics.Count;
@@ -141,6 +140,11 @@ internal sealed partial class UnifiedCompilation
         Settle(start, Array.Empty<ArmPatch>());
 
         CompileVariants();
+
+        // After the nodes: operators declare implicit columns (e.g. recall.*) that the output may read.
+        start = _diagnostics.Count;
+        var output = _builder.CompileOutput();
+        Settle(start, Array.Empty<ArmPatch>());
         CompileTapVariants();
         var (timeline, fallbacks) = BuildSlots();
 

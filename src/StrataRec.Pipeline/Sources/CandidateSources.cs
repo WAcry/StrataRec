@@ -56,8 +56,8 @@ public interface ICandidateSourceFactory
 /// <remarks>
 /// Settings: <c>"items"</c> — array of ids or <c>{"id": …, "score": …}</c> objects (scores default to a descending
 /// ramp); or <c>"by_input": "user_id"</c> with <c>"lists": {"&lt;input value&gt;": [...], "*": [...]}</c>
-/// (<c>"*"</c> is the fallback). Also <c>"data_file"</c> to load the same object from a file, plus <c>"latency_ms"</c>
-/// and <c>"fail"</c> for fault injection.
+/// (<c>"*"</c> is the fallback). Also <c>"data_file"</c> to load the same object from a file (settings in the binding
+/// override the file's), plus <c>"latency_ms"</c> and <c>"fail"</c> for fault injection.
 /// </remarks>
 public sealed class MemoryListCandidateSource : ICandidateSource
 {
@@ -172,32 +172,59 @@ public sealed class MemoryListCandidateSourceFactory : ICandidateSourceFactory
 
     public ICandidateSource Create(string sourceName, IReadOnlyDictionary<string, JsonElement> settings, string? baseDirectory)
     {
-        if (settings.TryGetValue("data_file", out var file))
+        // The data file supplies the list object; settings in the binding itself (latency_ms, fail, ...) override it,
+        // so fault injection works the same with or without a data file.
+        JsonDocument? fileDoc = null;
+        try
         {
-            var path = file.GetString() ?? throw new FormatException($"Candidate source '{sourceName}': data_file must be a string.");
-            if (!Path.IsPathRooted(path) && baseDirectory is not null)
+            if (settings.TryGetValue("data_file", out var file))
             {
-                path = Path.Combine(baseDirectory, path);
+                var path = file.GetString() ?? throw new FormatException($"Candidate source '{sourceName}': data_file must be a string.");
+                if (!Path.IsPathRooted(path) && baseDirectory is not null)
+                {
+                    path = Path.Combine(baseDirectory, path);
+                }
+
+                fileDoc = JsonDocument.Parse(File.ReadAllText(path), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+                if (fileDoc.RootElement.ValueKind != JsonValueKind.Object)
+                {
+                    throw new FormatException($"Candidate source '{sourceName}': data_file '{path}' must contain a JSON object.");
+                }
             }
 
-            using var doc = JsonDocument.Parse(File.ReadAllText(path), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
-            return MemoryListCandidateSource.Create(doc.RootElement.Clone());
-        }
-
-        using var buffer = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(buffer))
-        {
-            writer.WriteStartObject();
-            foreach (var (key, value) in settings)
+            using var buffer = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(buffer))
             {
-                writer.WritePropertyName(key);
-                value.WriteTo(writer);
+                writer.WriteStartObject();
+                if (fileDoc is not null)
+                {
+                    foreach (var property in fileDoc.RootElement.EnumerateObject())
+                    {
+                        if (!settings.ContainsKey(property.Name))
+                        {
+                            property.WriteTo(writer);
+                        }
+                    }
+                }
+
+                foreach (var (key, value) in settings)
+                {
+                    if (key != "data_file")
+                    {
+                        writer.WritePropertyName(key);
+                        value.WriteTo(writer);
+                    }
+                }
+
+                writer.WriteEndObject();
             }
 
-            writer.WriteEndObject();
+            using var settingsDoc = JsonDocument.Parse(buffer.ToArray());
+            return MemoryListCandidateSource.Create(settingsDoc.RootElement.Clone());
         }
-
-        using var settingsDoc = JsonDocument.Parse(buffer.ToArray());
-        return MemoryListCandidateSource.Create(settingsDoc.RootElement.Clone());
+        finally
+        {
+            fileDoc?.Dispose();
+        }
     }
 }
