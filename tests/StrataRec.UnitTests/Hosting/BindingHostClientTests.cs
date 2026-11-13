@@ -267,17 +267,13 @@ public sealed class BindingHostClientTests
     [Fact]
     public async Task ASignatureThatDoesNotArriveInTime_FailsTheSecondCompile_WithAHint()
     {
+        // A client without a load, so the timeout under test bounds only the lookup, however slow the machine is.
         await using var host = new BindingHost(new BindingHostOptions { LoadTimeout = TimeSpan.FromMilliseconds(50) });
-        var factory = new Factory { SignatureNeverAnswers = true };
+        var server = new ModelServer(new TaskCompletionSource().Task); // never answers; honours the cancellation
         using var lease = host.OpenLease();
 
         var lookup = await lease.CompileAsync(bindings =>
-        {
-            var client = bindings.Acquire(Spec(factory), factory.Create);
-            var lookup = bindings.Signature(client, "ctr_model", "2");
-            client.FinishLoad();
-            return lookup;
-        }).WaitAsync(Wait);
+            bindings.Signature(bindings.Acquire(Spec(server), server.Create), "ctr_model", "2")).WaitAsync(Wait);
 
         Assert.Equal(SignatureStatus.Failed, lookup.Status);
         Assert.Contains("within 50 ms", lookup.Error, StringComparison.Ordinal);
@@ -285,26 +281,53 @@ public sealed class BindingHostClientTests
     }
 
     [Fact]
-    public async Task ASignatureLookupStillRunningWhenItsLeaseRetires_KeepsTheInstanceUntilTheClientAnswers()
+    public async Task ALookupThatAnswersDuringTheFirstCompile_StillGetsASecondCompile()
     {
-        await using var host = new BindingHost(new BindingHostOptions { LoadTimeout = TimeSpan.FromMilliseconds(50) });
-        var factory = new Factory();
-        var lease = host.OpenLease();
+        // The baseline pass is answered Pending and an arm pass of the same compile finds the answer: that compile checked
+        // some passes and not others, so it must not count, although nothing is pending once it returns.
+        await using var host = new BindingHost();
         var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Instance? client = null;
+        var server = new ModelServer(answer.Task);
+        using var lease = host.OpenLease();
+        var compiles = new List<SignatureStatus>();
 
         var lookup = await lease.CompileAsync(bindings =>
         {
+            var client = bindings.Acquire(Spec(server), server.Create);
+            var baseline = bindings.Signature(client, "ctr_model", null);
+            compiles.Add(baseline.Status);
+            answer.TrySetResult();
+            Assert.True(SpinWait.SpinUntil(() => bindings.Signature(client, "ctr_model", null).Status == SignatureStatus.Known, Wait)); // an arm
+            return baseline;
+        }).WaitAsync(Wait);
+
+        Assert.Equal([SignatureStatus.Pending, SignatureStatus.Known], compiles);
+        Assert.Equal(SignatureStatus.Known, lookup.Status);
+        Assert.Equal(1, server.Lookups);
+    }
+
+    [Fact]
+    public async Task ASignatureLookupStillRunningWhenItsLeaseRetires_KeepsTheInstanceUntilTheClientAnswers()
+    {
+        await using var host = new BindingHost();
+        var factory = new Factory();
+        var lease = host.OpenLease();
+        var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancel = new CancellationTokenSource();
+        Instance? client = null;
+
+        var compiling = lease.CompileAsync(bindings =>
+        {
             client = bindings.Acquire(Spec(factory), factory.Create);
             client.SignatureGate = answer.Task; // a model server that ignores the cancellation
-            var lookup = bindings.Signature(client, "ctr_model", null);
             client.FinishLoad();
-            return lookup;
-        }).WaitAsync(Wait);
-        Assert.Equal(SignatureStatus.Failed, lookup.Status);
-        Assert.True(SpinWait.SpinUntil(() => client!.SignatureCalls == 1, Wait));
+            return bindings.Signature(client, "ctr_model", null);
+        }, cancel.Token);
+        Assert.True(SpinWait.SpinUntil(() => client?.SignatureCalls == 1, Wait));
 
-        lease.Dispose(); // the plan is rejected
+        cancel.Cancel(); // the engine's load is cancelled...
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => compiling.WaitAsync(Wait));
+        lease.Dispose(); // ...and returns its lease
         Assert.True(SpinWait.SpinUntil(() => client!.SignatureToken.IsCancellationRequested, Wait)); // the lookup is cancelled...
         await Task.Delay(50);
         Assert.False(client!.Disposed.Task.IsCompleted); // ...and the client is not disposed under it
@@ -373,7 +396,7 @@ public sealed class BindingHostClientTests
         return instance;
     }
 
-    private static BindingSpec Spec(Factory factory, string settings = """{ "uri": "m.bin" }""")
+    private static BindingSpec Spec(object factory, string settings = """{ "uri": "m.bin" }""")
     {
         var values = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         foreach (var property in JsonDocument.Parse(settings).RootElement.EnumerateObject())
@@ -390,18 +413,41 @@ public sealed class BindingHostClientTests
 
         public List<Instance> Created => CreatedQueue.ToList();
 
-        public bool SignatureNeverAnswers { get; init; }
-
         public Instance Create(BindingContext context)
         {
-            var instance = new Instance(context, SignatureNeverAnswers);
+            var instance = new Instance(context);
             CreatedQueue.Enqueue(instance);
             return instance;
         }
     }
 
+    /// <summary>
+    /// A client without a load whose signature only its model server knows: each lookup answers once
+    /// <paramref name="answer"/> completes, or is cancelled. Its own factory (one instance).
+    /// </summary>
+    private sealed class ModelServer(Task answer) : IModelClient
+    {
+        private int _lookups;
+
+        public string ClientType => "server@1";
+
+        public int Lookups => Volatile.Read(ref _lookups);
+
+        public ModelServer Create(BindingContext context) => this;
+
+        public async ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _lookups);
+            await answer.WaitAsync(cancellationToken);
+            return Instance.Signature();
+        }
+
+        public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(ModelStatus.Ok);
+    }
+
     /// <summary>A loadable, disposable model client whose load the test finishes or fails.</summary>
-    private sealed class Instance(BindingContext context, bool signatureNeverAnswers) : IModelClient, ILoadable, IAsyncDisposable
+    private sealed class Instance(BindingContext context) : IModelClient, ILoadable, IAsyncDisposable
     {
         private readonly TaskCompletionSource _load = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _loads;
@@ -470,11 +516,6 @@ public sealed class BindingHostClientTests
 
                 SignatureToken = cancellationToken;
                 Interlocked.Increment(ref _signatureCalls);
-                if (signatureNeverAnswers)
-                {
-                    await Task.Delay(Timeout.Infinite, cancellationToken);
-                }
-
                 if (SignatureGate is not null)
                 {
                     await SignatureGate; // ignores the cancellation
@@ -503,7 +544,7 @@ public sealed class BindingHostClientTests
             return ThrowOnDispose ? ValueTask.FromException(new InvalidOperationException("dispose failed")) : ValueTask.CompletedTask;
         }
 
-        private static ModelSignature Signature() =>
+        public static ModelSignature Signature() =>
             new([new TensorSpec("x", TensorElementType.Float32, [-1])], [new TensorSpec("p_click", TensorElementType.Float32, [-1])]);
     }
 

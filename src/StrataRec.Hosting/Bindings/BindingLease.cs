@@ -50,6 +50,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
         new(ReferenceEqualityComparer.Instance);
     private CancellationTokenSource? _lookups;
     private bool _lookupsWaited;
+    private bool _answeredPending;
     private bool _disposed;
     private int _state;
     private int _clientsReleased;
@@ -197,11 +198,15 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
             return answer.Result; // LookupAsync never faults
         }
 
-        return Volatile.Read(ref _lookupsWaited)
-            ? new SignatureLookup(SignatureStatus.Failed, null,
+        if (Volatile.Read(ref _lookupsWaited))
+        {
+            return new SignatureLookup(SignatureStatus.Failed, null,
                 string.Create(CultureInfo.InvariantCulture, $"The client did not return the signature within {_host.Options.LoadTimeout.TotalMilliseconds} ms."),
-                "check the model server, or raise BindingHostOptions.LoadTimeout")
-            : SignatureLookup.Pending;
+                "check the model server, or raise BindingHostOptions.LoadTimeout");
+        }
+
+        Volatile.Write(ref _answeredPending, true); // this compile skipped a check, so it cannot be the one that counts
+        return SignatureLookup.Pending;
     }
 
     /// <summary>
@@ -222,20 +227,27 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
             _lookups ??= CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         }
 
+        // Whether the compile skipped a check decides, not whether lookups are still pending afterwards: a lookup that was
+        // pending for one pass (the baseline) may have answered before the next (an arm), and that compile checked some
+        // passes and not others.
+        Volatile.Write(ref _answeredPending, false);
         var compilation = compile(this);
-        var pending = PendingLookups();
-        if (pending.Count == 0)
+        if (!Volatile.Read(ref _answeredPending))
         {
             return compilation;
         }
 
-        try
+        var pending = PendingLookups();
+        if (pending.Count > 0)
         {
-            await Task.WhenAll(pending).WaitAsync(_host.Options.LoadTimeout, cancellationToken).ConfigureAwait(false);
-        }
-        catch (TimeoutException)
-        {
-            // The second compile reports what is still unanswered.
+            try
+            {
+                await Task.WhenAll(pending).WaitAsync(_host.Options.LoadTimeout, cancellationToken).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                // The second compile reports what is still unanswered.
+            }
         }
 
         Volatile.Write(ref _lookupsWaited, true);
