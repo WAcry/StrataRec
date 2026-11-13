@@ -12,7 +12,7 @@ public sealed class ModelClientRegistry
 {
     private readonly Dictionary<string, IModelClientFactory> _factories = new(StringComparer.Ordinal);
 
-    public static ModelClientRegistry CreateDefault() => new ModelClientRegistry().Add(new LinearModelClientFactory());
+    public static ModelClientRegistry CreateDefault() => new ModelClientRegistry().Add(new LinearModelClientFactory()).Add(new RandomModelClientFactory());
 
     public IEnumerable<string> Types => SortedKeys(_factories);
 
