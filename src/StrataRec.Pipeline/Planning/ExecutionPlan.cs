@@ -204,7 +204,11 @@ public sealed class ExecutionPlan
         return false;
     }
 
-    /// <summary>Builds <see cref="RequestArms"/> from <c>experiment/arm</c> ids (forced arms, external assignment).</summary>
+    /// <summary>
+    /// Builds <see cref="RequestArms"/> from <c>experiment/arm</c> ids strictly: an unknown id or two arms of one layer
+    /// throw. For forced arms, replays and tools, which must run exactly what they name; the arms an experimentation
+    /// platform sends are resolved leniently instead (<c>ExternalArms</c>), which ignores what it cannot apply.
+    /// </summary>
     public RequestArms ArmsFromIds(IEnumerable<string> armIds)
     {
         var byLayer = new int[Layers.Length];

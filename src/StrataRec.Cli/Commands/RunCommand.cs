@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Values;
+using StrataRec.Experiments.Assignment;
 using StrataRec.Features.Catalog;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Replay;
@@ -161,6 +162,16 @@ internal static class RunCommand
             json.WriteStartObject("experiments");
             WriteStrings(json, "assigned", result.Experiments.Assigned);
             WriteStrings(json, "triggered", result.Experiments.Triggered);
+            json.WriteStartArray("ignored");
+            foreach (var ignored in result.Experiments.Ignored)
+            {
+                json.WriteStartObject();
+                json.WriteString("id", ignored.Id);
+                json.WriteString("reason", IgnoredArm.Name(ignored.Reason));
+                json.WriteEndObject();
+            }
+
+            json.WriteEndArray();
             json.WriteEndObject();
             json.WriteStartArray("items");
             foreach (var item in result.Items)

@@ -17,8 +17,9 @@ namespace StrataRec.Experiments.Assignment;
 public interface IAssignmentProvider
 {
     /// <summary>
-    /// Returns the request's arms as <c>experiment/arm</c> ids (<see cref="ArmInfo.Id"/>). Ids the served plan does not
-    /// have are ignored and counted.
+    /// Returns the request's arms as <c>experiment/arm</c> ids (<see cref="ArmInfo.Id"/>), in any order. What the request
+    /// cannot run with is ignored, counted and reported, never an error (<see cref="ExternalArms"/>): an id the served
+    /// plan does not have, and two arms of one layer (that layer then runs its baseline).
     /// </summary>
     ValueTask<IReadOnlyList<string>> AssignAsync(AssignmentContext context, CancellationToken cancellationToken);
 }

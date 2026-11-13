@@ -31,8 +31,10 @@ public sealed class RecRequest
 
     /// <summary>
     /// The arms the experimentation platform assigned to the request, as <c>experiment/arm</c> ids (design 11.1): the
-    /// caller asked the platform itself. Unknown arms are ignored and counted. Null asks the configured
-    /// <see cref="IAssignmentProvider"/>; without one the request runs the baseline.
+    /// caller asked the platform itself. Arms the request cannot run with are ignored, counted and reported in
+    /// <see cref="ExperimentRecord.Ignored"/> (<see cref="ExternalArms"/> has the rules). An empty list is the platform's
+    /// answer "no arms". Null asks the configured <see cref="IAssignmentProvider"/>; without one the request runs the
+    /// baseline.
     /// </summary>
     public IReadOnlyList<string>? Assignment { get; init; }
 
@@ -51,7 +53,10 @@ public sealed class RecRequest
 /// <summary>Debugging controls (design 13.3), authorized by the host.</summary>
 public sealed class DebugOptions
 {
-    /// <summary>Arms to force (<c>experiment/arm</c>), overriding assignment. Unknown arms fail the request.</summary>
+    /// <summary>
+    /// Arms to force (<c>experiment/arm</c>), overriding assignment. Strict, unlike the platform's arms: an unknown arm or
+    /// two arms of one layer fail the request.
+    /// </summary>
     public IReadOnlyList<string>? ForceArms { get; init; }
 
     /// <summary>Include per-node outcomes in <see cref="RecResult.Trace"/>.</summary>
@@ -84,8 +89,12 @@ public sealed class DebugOptions
 /// <summary>Assignment and trigger record of a request (design 12.6).</summary>
 /// <param name="Assigned">Assigned arms (<c>experiment/arm</c>) for intent-to-treat analysis.</param>
 /// <param name="Triggered">Experiments whose site the request reached, for triggered analysis.</param>
-/// <param name="UnknownArms">External arms that are not in the current plan (ignored).</param>
-public sealed record ExperimentRecord(IReadOnlyList<string> Assigned, IReadOnlyList<string> Triggered, int UnknownArms);
+/// <param name="Ignored">
+/// Arm ids the platform sent that the request did not run with, and why (<see cref="ExternalArms"/>), sorted by id;
+/// empty when every id applied. A request that ignores arms is still served: the platform's view of its exposure and
+/// this record differ, which is what offline analysis needs to see.
+/// </param>
+public sealed record ExperimentRecord(IReadOnlyList<string> Assigned, IReadOnlyList<string> Triggered, IReadOnlyList<IgnoredArm> Ignored);
 
 /// <summary>The result of a request.</summary>
 public sealed class RecResult
@@ -529,7 +538,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         var seed = record ? request.Seed ?? PipelineRequest.DefaultSeed(request.RequestId) : request.Seed;
         var timeMs = record ? request.TimeMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : request.TimeMs;
         var runs = record ? new RunCapture() : null;
-        var unknown = 0;
+        IReadOnlyList<IgnoredArm> ignored = Array.Empty<IgnoredArm>();
         LoadedPipeline? fallback = null;
         try
         {
@@ -549,7 +558,8 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             }
 
             arms = assignment.Arms;
-            unknown = assignment.Unknown;
+            ignored = assignment.Ignored;
+            pipeline.Telemetry.RecordIgnored(assignment.Ignored);
             var remaining = request.Deadline - Stopwatch.GetElapsedTime(started);
             if (remaining <= TimeSpan.Zero)
             {
@@ -564,22 +574,22 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                 || remaining <= TimeSpan.Zero || (fallback = Enter(fallbackId, out _)) is null)
             {
                 degraded = executed.Degraded;
-                result = ToResult(request, pipeline, executed, unknown, request.PipelineId);
+                result = ToResult(request, pipeline, executed, ignored, request.PipelineId);
                 return result = record ? Recorded(request, pipeline, seed!.Value, timeMs!.Value, result, executed, null) : result;
             }
 
             // The pipeline failed: serve its fallback pipeline, without experiments, within what is left (design 5.6).
             degraded = true;
             var served = await Run(fallback, request, RequestArms.None, remaining, seed, timeMs, runs, cancellationToken).ConfigureAwait(false);
-            var converted = ToResult(request, fallback, served, unknown, fallbackId);
-            result = Combine(request, executed, converted, served, unknown, fallbackId);
+            var converted = ToResult(request, fallback, served, ignored, fallbackId);
+            result = Combine(request, executed, converted, served, ignored, fallbackId);
             return result = record ? Recorded(request, pipeline, seed!.Value, timeMs!.Value, result, executed, served) : result;
         }
         catch (Exception) when (runs is { Runs.Count: > 0 } && pipeline is not null)
         {
             // Aborted while (or after) a pipeline ran: the caller gets the exception, the recording callback the bundle of
             // what ran up to the abort. Nothing here waits for calls still in flight.
-            Deliver(request, AbortedBundle(request, pipeline, seed!.Value, timeMs!.Value, runs.Runs, unknown));
+            Deliver(request, AbortedBundle(request, pipeline, seed!.Value, timeMs!.Value, runs.Runs, ignored));
             throw;
         }
         finally
@@ -604,30 +614,30 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// (<see cref="RecRequest.Assignment"/>), the assignment provider; otherwise none (the baseline). Returns an error
     /// instead of arms when the request must be rejected.
     /// </summary>
-    private async ValueTask<(RequestArms Arms, int Unknown, string? Error)> AssignAsync(
+    private async ValueTask<(RequestArms Arms, IgnoredArm[] Ignored, string? Error)> AssignAsync(
         LoadedPipeline pipeline, RecRequest request, long started, CancellationToken cancellationToken)
     {
         if (request.Debug?.ForceArms is { } forced)
         {
             try
             {
-                return (pipeline.Plan.ArmsFromIds(forced), 0, null);
+                return (pipeline.Plan.ArmsFromIds(forced), Array.Empty<IgnoredArm>(), null);
             }
             catch (ArgumentException ex)
             {
-                return (RequestArms.None, 0, ex.Message);
+                return (RequestArms.None, Array.Empty<IgnoredArm>(), ex.Message);
             }
         }
 
         if (request.Assignment is { } external)
         {
-            var arms = MapExternal(pipeline.Plan, external, out var unknown);
-            return (arms, unknown, null);
+            var arms = ExternalArms.Resolve(pipeline.Plan.Layers, pipeline.Plan.Arms, external, out var ignored);
+            return (arms, ignored, null);
         }
 
         if (_assignmentProvider is null)
         {
-            return (RequestArms.None, 0, null);
+            return (RequestArms.None, Array.Empty<IgnoredArm>(), null);
         }
 
         // The provider shares the end-to-end deadline: it is cancelled at the deadline, and the wait is bounded even if
@@ -635,7 +645,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         var budget = request.Deadline - Stopwatch.GetElapsedTime(started);
         if (budget <= TimeSpan.Zero)
         {
-            return (RequestArms.None, 0, "deadline exceeded before assignment");
+            return (RequestArms.None, Array.Empty<IgnoredArm>(), "deadline exceeded before assignment");
         }
 
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -656,11 +666,11 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         }
         catch (Exception ex) when (ex is TimeoutException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {
-            return (RequestArms.None, 0, "deadline exceeded during assignment");
+            return (RequestArms.None, Array.Empty<IgnoredArm>(), "deadline exceeded during assignment");
         }
 
-        var assigned = MapExternal(pipeline.Plan, ids, out var unknownIds);
-        return (assigned, unknownIds, null);
+        var assigned = ExternalArms.Resolve(pipeline.Plan.Layers, pipeline.Plan.Arms, ids, out var ignoredIds);
+        return (assigned, ignoredIds, null);
     }
 
     /// <summary>
@@ -710,12 +720,13 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         }, cancellationToken);
 
     /// <summary>The result of a request its fallback pipeline served: the primary's assignment and error, the fallback's items.</summary>
-    private static RecResult Combine(RecRequest request, PipelineResult executed, RecResult converted, PipelineResult served, int unknown, string fallbackId) => new()
+    private static RecResult Combine(
+        RecRequest request, PipelineResult executed, RecResult converted, PipelineResult served, IReadOnlyList<IgnoredArm> ignored, string fallbackId) => new()
     {
         Succeeded = converted.Succeeded,
         Error = $"pipeline '{request.PipelineId}' failed: {executed.Error}" + (served.Succeeded ? string.Empty : $"; fallback '{fallbackId}' failed: {served.Error}"),
         Items = converted.Items,
-        Experiments = new ExperimentRecord(executed.AssignedArms, executed.TriggeredExperiments, unknown),
+        Experiments = new ExperimentRecord(executed.AssignedArms, executed.TriggeredExperiments, ignored),
         ManifestId = converted.ManifestId,
         ServedBy = fallbackId,
         ColumnProducers = converted.ColumnProducers,
@@ -724,32 +735,12 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         ElapsedMs = executed.ElapsedMs + served.ElapsedMs,
     };
 
-    /// <summary>Maps external arm ids; unknown ids and second arms in one layer are ignored and counted (design 11.1).</summary>
-    private static RequestArms MapExternal(ExecutionPlan plan, IReadOnlyList<string> ids, out int unknown)
-    {
-        unknown = 0;
-        var byLayer = new int[plan.Layers.Length];
-        Array.Fill(byLayer, -1);
-        foreach (var id in ids)
-        {
-            if (!plan.TryGetArm(id, out var arm) || byLayer[arm.LayerIndex] >= 0)
-            {
-                unknown++;
-                continue;
-            }
-
-            byLayer[arm.LayerIndex] = arm.Index;
-        }
-
-        return new RequestArms(byLayer);
-    }
-
-    private static RecResult ToResult(RecRequest request, LoadedPipeline pipeline, PipelineResult result, int unknown, string servedBy) => new()
+    private static RecResult ToResult(RecRequest request, LoadedPipeline pipeline, PipelineResult result, IReadOnlyList<IgnoredArm> ignored, string servedBy) => new()
     {
         Succeeded = result.Succeeded,
         Error = result.Error,
         Items = result.Items,
-        Experiments = new ExperimentRecord(result.AssignedArms, result.TriggeredExperiments, unknown),
+        Experiments = new ExperimentRecord(result.AssignedArms, result.TriggeredExperiments, ignored),
         ManifestId = pipeline.Plan.ManifestId,
         ServedBy = servedBy,
         ColumnProducers = result.ColumnProducers,
@@ -763,7 +754,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         Succeeded = false,
         Error = error,
         Items = Array.Empty<RankedItem>(),
-        Experiments = new ExperimentRecord(Array.Empty<string>(), Array.Empty<string>(), 0),
+        Experiments = new ExperimentRecord(Array.Empty<string>(), Array.Empty<string>(), Array.Empty<IgnoredArm>()),
         ManifestId = string.Empty,
         ServedBy = request.PipelineId,
     };

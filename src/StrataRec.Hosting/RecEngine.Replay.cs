@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Values;
+using StrataRec.Experiments.Assignment;
 using StrataRec.Hosting.Replay;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
@@ -103,9 +104,9 @@ public sealed partial class RecEngine
                     plan.ManifestId);
             }
 
-            // The external arms the recorded request ignored as unknown are part of its assignment record; arms passed to
-            // the replay replace that assignment, so it then has none.
-            var unknown = options?.Arms is null ? recordedRequest.Assignment.UnknownArms : 0;
+            // The platform's arms the recorded request ignored are part of its assignment record; arms passed to the replay
+            // replace that assignment, so it then has none.
+            var ignored = options?.Arms is null ? IgnoredArms(recordedRequest.Assignment) : Array.Empty<IgnoredArm>();
             var started = Stopwatch.GetTimestamp();
             var replayed = new RunCapture(); // the replayed runs' recordings, also of a run that stops where its recording was aborted
             RecResult result;
@@ -117,7 +118,7 @@ public sealed partial class RecEngine
                 if (executed.Succeeded || pipeline.FallbackPipeline is not { } fallbackId || fallbackId == request.PipelineId
                     || (fallback = Enter(fallbackId, out _)) is null)
                 {
-                    result = ToResult(request, pipeline, executed, unknown, request.PipelineId);
+                    result = ToResult(request, pipeline, executed, ignored, request.PipelineId);
                 }
                 else if (fallbackRecord is null && primaryRecord is { Result.Succeeded: false } failed)
                 {
@@ -125,7 +126,7 @@ public sealed partial class RecEngine
                     // it was aborted first.
                     notes.Add($"the recording did not run fallback pipeline '{fallbackId}' ({(failed.Result.Aborted ? "it was aborted" : "no time was left")}); " +
                         "neither does the replay");
-                    result = ToResult(request, pipeline, executed, unknown, request.PipelineId);
+                    result = ToResult(request, pipeline, executed, ignored, request.PipelineId);
                 }
                 else
                 {
@@ -137,14 +138,14 @@ public sealed partial class RecEngine
 
                     var served = await _executor.ExecuteAsync(fallback.Plan, ReplayRequest(request, RequestArms.None, fallbackReplay, replayed, fallback), cancellationToken)
                         .ConfigureAwait(false);
-                    result = Combine(request, executed, ToResult(request, fallback, served, unknown, fallbackId), served, unknown, fallbackId);
+                    result = Combine(request, executed, ToResult(request, fallback, served, ignored, fallbackId), served, ignored, fallbackId);
                 }
             }
             catch (ReplayAbortedException ex)
             {
                 // The recorded request was aborted: the replay stops where the recording does and reports that, not a result.
                 aborted = ex.Message;
-                result = AbortedResult(request, replayed.Runs, unknown, ex.Message);
+                result = AbortedResult(request, replayed.Runs, ignored, ex.Message);
             }
 
             var elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
@@ -177,7 +178,7 @@ public sealed partial class RecEngine
     };
 
     /// <summary>The result of a replay that stopped where its recording was aborted: a failure with the recorded reason and no items.</summary>
-    private static RecResult AbortedResult(RecRequest request, List<ReplayRunRecord> replayed, int unknown, string reason)
+    private static RecResult AbortedResult(RecRequest request, List<ReplayRunRecord> replayed, IReadOnlyList<IgnoredArm> ignored, string reason)
     {
         var primary = replayed.Count > 0 ? replayed[0] : null;
         var last = replayed.Count > 0 ? replayed[^1] : null;
@@ -186,7 +187,7 @@ public sealed partial class RecEngine
             Succeeded = false,
             Error = reason,
             Items = Array.Empty<RankedItem>(),
-            Experiments = new ExperimentRecord(primary?.Arms ?? new List<string>(), primary?.Result.TriggeredExperiments ?? new List<string>(), unknown),
+            Experiments = new ExperimentRecord(primary?.Arms ?? new List<string>(), primary?.Result.TriggeredExperiments ?? new List<string>(), ignored),
             ManifestId = last?.ManifestId ?? string.Empty,
             ServedBy = last?.PipelineId ?? request.PipelineId,
         };
@@ -403,7 +404,7 @@ public sealed partial class RecEngine
         var bundle = new ReplayBundle
         {
             Format = ReplayBundle.CurrentFormat,
-            Request = RequestRecord(request, pipeline, seed, timeMs, result.Experiments.Assigned, result.Experiments.UnknownArms),
+            Request = RequestRecord(request, pipeline, seed, timeMs, result.Experiments.Assigned, result.Experiments.Ignored),
             Manifest = ManifestRecord(pipeline),
             Runs = runs,
             Result = new ReplayResultRecord
@@ -427,7 +428,8 @@ public sealed partial class RecEngine
     /// The bundle of a request aborted while or after a pipeline ran: every run recorded so far (the last one aborted, as a
     /// snapshot taken at the abort) and an aborted result.
     /// </summary>
-    private ReplayBundle AbortedBundle(RecRequest request, LoadedPipeline pipeline, long seed, long timeMs, List<ReplayRunRecord> runs, int unknown)
+    private ReplayBundle AbortedBundle(
+        RecRequest request, LoadedPipeline pipeline, long seed, long timeMs, List<ReplayRunRecord> runs, IReadOnlyList<IgnoredArm> ignored)
     {
         var primary = runs[0];
         var last = runs[^1];
@@ -441,7 +443,7 @@ public sealed partial class RecEngine
         return new ReplayBundle
         {
             Format = ReplayBundle.CurrentFormat,
-            Request = RequestRecord(request, pipeline, seed, timeMs, primary.Arms, unknown),
+            Request = RequestRecord(request, pipeline, seed, timeMs, primary.Arms, ignored),
             Manifest = ManifestRecord(pipeline),
             Runs = new List<ReplayRunRecord>(runs),
             Result = new ReplayResultRecord
@@ -457,7 +459,8 @@ public sealed partial class RecEngine
         };
     }
 
-    private ReplayRequestRecord RequestRecord(RecRequest request, LoadedPipeline pipeline, long seed, long timeMs, IReadOnlyList<string> arms, int unknown)
+    private ReplayRequestRecord RequestRecord(
+        RecRequest request, LoadedPipeline pipeline, long seed, long timeMs, IReadOnlyList<string> arms, IReadOnlyList<IgnoredArm> ignored)
     {
         var inputs = new Dictionary<string, ReplayTypedValue>(StringComparer.Ordinal);
         foreach (var (name, value) in request.Inputs)
@@ -486,9 +489,44 @@ public sealed partial class RecEngine
             {
                 Source = AssignmentSource(pipeline, request),
                 Arms = new List<string>(arms),
-                UnknownArms = unknown,
+                Ignored = IgnoredRecords(ignored),
             },
         };
+    }
+
+    private static List<ReplayIgnoredArm> IgnoredRecords(IReadOnlyList<IgnoredArm> ignored)
+    {
+        var records = new List<ReplayIgnoredArm>(ignored.Count);
+        foreach (var arm in ignored)
+        {
+            records.Add(new ReplayIgnoredArm { Id = arm.Id, Reason = IgnoredArm.Name(arm.Reason) });
+        }
+
+        return records;
+    }
+
+    /// <summary>The ignored arms a bundle recorded.</summary>
+    /// <exception cref="ReplayBundleException">A reason this build does not know.</exception>
+    private static IgnoredArm[] IgnoredArms(ReplayAssignmentRecord assignment)
+    {
+        if (assignment.Ignored.Count == 0)
+        {
+            return Array.Empty<IgnoredArm>();
+        }
+
+        var ignored = new IgnoredArm[assignment.Ignored.Count];
+        for (var i = 0; i < ignored.Length; i++)
+        {
+            var record = assignment.Ignored[i];
+            if (!IgnoredArm.TryParse(record.Reason, out var reason))
+            {
+                throw new ReplayBundleException($"/request/assignment/ignored/{i}/reason", $"unknown reason '{record.Reason}'", "a reason is unknown or layer_conflict");
+            }
+
+            ignored[i] = new IgnoredArm(record.Id, reason);
+        }
+
+        return ignored;
     }
 
     private static ReplayManifestRecord ManifestRecord(LoadedPipeline pipeline) => new()

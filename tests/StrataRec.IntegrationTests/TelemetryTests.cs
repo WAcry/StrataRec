@@ -56,6 +56,7 @@ public sealed class MetricsTests
         Assert.All(perArm, m => Assert.Equal(request.Value, m.Value));
         Assert.Empty(capture.Of(StrataRecMetrics.Names.RequestErrors));
         Assert.Empty(capture.Of(StrataRecMetrics.Names.ArmRequestErrors));
+        Assert.Empty(capture.Of(StrataRecMetrics.Names.RequestArmsIgnored)); // every arm the platform sent applied
 
         // Nodes: one outcome per position with a node, duration and rows for each that ran, matching the trace.
         var trace = result.Trace!;
@@ -97,6 +98,30 @@ public sealed class MetricsTests
 
         // Memory.
         Assert.True(Assert.Single(capture.Of(StrataRecMetrics.Names.RequestMemoryRented)).Value > 0);
+    }
+
+    [Fact]
+    public async Task ThePlatformsArmsARequestIgnored_AreCountedByReason_NeverByTheirIds()
+    {
+        using var capture = new MetricCapture();
+        var (engine, _) = LoadEngine(HomeFeedTestHost.Load());
+
+        var result = await engine.ExecuteAsync(new RecRequest
+        {
+            PipelineId = "home_feed",
+            RequestId = "req-ignored",
+            Inputs = HomeFeedTestHost.Inputs(1001, "home"),
+            Assignment = new[] { "exp_ramped_early/t", "exp_mmr_diversity/mmr", "exp_mmr_diversity/control", "exp_quality_weight/strong" },
+            Deadline = HomeFeedTestHost.Deadline,
+        });
+
+        Assert.True(result.Succeeded, result.Error);
+        AssertTagRules(capture.Measurements);
+        var ignored = capture.Of(StrataRecMetrics.Names.RequestArmsIgnored);
+        Assert.All(ignored, m => Assert.Equal("home_feed", Tag(m, StrataRecTags.Pipeline)));
+        Assert.Equal(1, ignored.Where(m => Tag(m, StrataRecTags.Outcome) == "unknown").Sum(m => m.Value));
+        Assert.Equal(2, ignored.Where(m => Tag(m, StrataRecTags.Outcome) == "layer_conflict").Sum(m => m.Value));
+        Assert.Equal(new[] { "exp_quality_weight/strong" }, capture.Of(StrataRecMetrics.Names.ArmRequestDuration).Select(m => Tag(m, StrataRecTags.Arm)));
     }
 
     [Fact]
