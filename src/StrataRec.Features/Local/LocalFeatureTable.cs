@@ -97,7 +97,7 @@ public sealed class LocalFeatureTable
         }
 
         _current = new TableVersion(
-            layout, Options.StringKeyHasher ?? StringKeyHashes.Default, Options.PageSize, generation: 0, Options.InitialCapacity, expectedBytes: 0);
+            layout, Options.StringKeyHasher ?? StringKeyHashes.Default, Options.PageSize, generation: 0, Options.InitialCapacity);
         if (_current.Bytes > Options.MaxBytes)
         {
             // Every write checks the limit, so the empty table must be within it too.

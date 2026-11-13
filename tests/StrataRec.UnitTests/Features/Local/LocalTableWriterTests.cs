@@ -1,4 +1,5 @@
 using StrataRec.Core.Keys;
+using StrataRec.Core.Types;
 using StrataRec.Features.Local;
 using static StrataRec.UnitTests.Features.Local.LocalTableTestSupport;
 
@@ -195,23 +196,7 @@ public class LocalTableWriterTests
             builder.Commit();
         }
 
-        // Without a limit, compacting before the last write gives the smallest table that holds the result.
-        var reference = new LocalFeatureTable(Schema(), new LocalFeatureTableOptions { PageSize = 4096 });
-        Setup(reference.Writer);
-        reference.Writer.Compact();
-        Last(reference.Writer);
-        var needed = reference.Pin().Bytes;
-
-        Assert.Equal(needed, BytesAfter(needed, w => { Setup(w); Last(w); }));
-
-        // One byte less: the write compacts, still does not fit (first is new again), and fails with the content unchanged.
-        var table = new LocalFeatureTable(Schema(), new LocalFeatureTableOptions { MaxBytes = needed - 1, PageSize = 4096 });
-        Setup(table.Writer);
-        Assert.Throws<LocalTableFullException>(() => Last(table.Writer));
-        var version = table.Pin();
-        Assert.True(version.Bytes <= needed - 1);
-        Assert.False(version.Find(2L).Found);
-        Assert.Equal("b", version.Read(table.Schema.FieldIndex("s"), version.Find(1L)).AsString());
+        AssertRechargedAfterCompaction(Setup, Last, lastKey: 2);
     }
 
     [Fact]
@@ -227,7 +212,7 @@ public class LocalTableWriterTests
     public void MaxBytes_RechargesASingleStringAfterACompactionDropsIt()
     {
         // As above with one string value (the writer's fast path). Keys 2-8 fill the index to its limit, so the last write
-        // also grows the index and the table before it is smaller than the limit.
+        // also grows the index.
         var first = new string('f', 600);
         void Setup(IFeatureTableWriter writer)
         {
@@ -239,21 +224,7 @@ public class LocalTableWriterTests
             }
         }
 
-        void Last(IFeatureTableWriter writer) => WriteString(writer, 9, 1, first);
-
-        var reference = new LocalFeatureTable(Schema(), new LocalFeatureTableOptions { PageSize = 4096 });
-        Setup(reference.Writer);
-        reference.Writer.Compact();
-        Last(reference.Writer);
-        var needed = reference.Pin().Bytes;
-        Assert.Equal(needed, BytesAfter(needed, w => { Setup(w); Last(w); }));
-
-        var table = new LocalFeatureTable(Schema(), new LocalFeatureTableOptions { MaxBytes = needed - 1, PageSize = 4096 });
-        Setup(table.Writer);
-        Assert.Throws<LocalTableFullException>(() => Last(table.Writer));
-        Assert.True(table.Pin().Bytes <= needed - 1);
-        Assert.False(table.Pin().Find(9L).Found);
-        Assert.Equal(8, table.Pin().RecordCount);
+        AssertRechargedAfterCompaction(Setup, w => WriteString(w, 9, 1, first), lastKey: 9);
     }
 
     [Fact]
@@ -267,6 +238,201 @@ public class LocalTableWriterTests
         var empty = new LocalFeatureTable(Schema()).Pin().Bytes;
         Assert.Equal(empty, new LocalFeatureTable(Schema(), new LocalFeatureTableOptions { MaxBytes = empty }).Pin().Bytes);
         Assert.Throws<ArgumentOutOfRangeException>(() => new LocalFeatureTable(Schema(), new LocalFeatureTableOptions { MaxBytes = empty - 1 }));
+    }
+
+    /// <summary>Text lengths whose chars end just before, at and after the staging buffer's growth points (256 bytes, then
+    /// sizes that are not multiples of 8, where a list's aligned start would land past the end).</summary>
+    public static IEnumerable<object[]> EmptyListsAfterText()
+    {
+        foreach (var list in new[] { "li32", "li64", "ls" })
+        {
+            foreach (var chars in new[] { 0, 1, 127, 128, 129, 130, 255, 256, 257, 258, 259, 1000, 1001 })
+            {
+                yield return new object[] { list, chars };
+            }
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(EmptyListsAfterText))]
+    public void EmptyList_AfterTextOfAnyLength_IsKept_AndIsNotMissing(string list, int textChars)
+    {
+        // Codex review 9, item 6: after a text that grew the staging buffer to a size that is not a multiple of 8, an
+        // empty list's aligned start was past the buffer's end and Commit threw.
+        var schema = Schema(fields: new[]
+        {
+            new LocalTableField("t", ColumnType.Text),
+            new LocalTableField("li32", ColumnType.ListInt32),
+            new LocalTableField("li64", ColumnType.ListInt64),
+            new LocalTableField("ls", ColumnType.ListString),
+        });
+        var table = new LocalFeatureTable(schema);
+        var field = schema.FieldIndex(list);
+        var text = new string('x', textChars);
+
+        var builder = table.Writer.Begin(1L, 1);
+        builder.SetString(0, text);
+        builder.StartList(field);
+        Assert.True(builder.Commit());
+        builder = table.Writer.Begin(2L, 1);
+        builder.SetString(0, text);
+        builder.SetMissing(field);
+        Assert.True(builder.Commit());
+
+        var version = table.Pin();
+        var empty = version.Read(field, version.Find(1L));
+        Assert.False(empty.IsMissing);
+        Assert.Equal(0, list == "ls" ? empty.AsStringList().ToArray().Length : empty.AsInt64List().ToArray().Length);
+        Assert.True(version.Read(field, version.Find(2L)).IsMissing);
+        Assert.Equal(text, version.Read(0, version.Find(1L)).AsString());
+        Assert.Equal(text, version.Read(0, version.Find(2L)).AsString());
+    }
+
+    [Fact]
+    public void FailedWrite_LeavesTheTableAsItWas_ThoughACompactionWasTried()
+    {
+        // Codex review 9, item 3: the write needs a compaction to have a chance, the compacted copy cannot make room for
+        // it, and the write fails. The copy must not be published: same version, bytes and generation.
+        var schema = Schema(fields: new[] { new LocalTableField("t", ColumnType.Text) });
+        var table = new LocalFeatureTable(schema, new LocalFeatureTableOptions { PageSize = 4096, MaxBytes = 42304, CompactionMinBytes = long.MaxValue });
+        for (var key = 1; key <= 18; key++)
+        {
+            WriteText(table.Writer, key, 1, key % 2 == 1 ? 1268 : 756);
+        }
+
+        WriteText(table.Writer, 2, 2, 756);
+        var before = table.Pin();
+        Assert.Equal(42304, before.Bytes);
+        Assert.True(before.SupersededBytes > 0);
+
+        Assert.Throws<LocalTableFullException>(() => WriteText(table.Writer, 999, 1, 10_000));
+        var after = table.Pin();
+        Assert.Same(before, after);
+        Assert.Equal(42304, after.Bytes);
+        Assert.Equal(before.Generation, after.Generation);
+        Assert.Equal(0, table.Compactions);
+        Assert.Equal(18, after.RecordCount);
+        Assert.False(after.Find(999L).Found);
+        Assert.Equal(new string('t', 756), after.Read(0, after.Find(2L)).AsString());
+
+        // An explicit compaction fits (the records are packed in their old order) and is published.
+        table.Writer.Compact();
+        Assert.NotSame(before, table.Pin());
+        Assert.True(table.Pin().Bytes < before.Bytes);
+        Assert.Equal(18, table.Pin().RecordCount);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void MaxBytes_HoldsAfterEveryOperation_AndAFailedOneChangesNothing(int seed)
+    {
+        // Random updates of 40 keys near the limit (which the budget path's compactions keep the table under), automatic
+        // compactions (small CompactionMinBytes), explicit ones, and now and then a record too large for the limit, which
+        // tries a compaction and must fail without a trace. A failure from the table being full is fine too; whatever
+        // happens, the table never exceeds the limit and a failed operation changes nothing.
+        var schema = Schema(fields: new[]
+        {
+            new LocalTableField("t", ColumnType.Text),
+            new LocalTableField("s", ColumnType.String),
+            new LocalTableField("li32", ColumnType.ListInt32),
+        });
+        var options = new LocalFeatureTableOptions { PageSize = 1024, MaxBytes = 34_000, CompactionMinBytes = 512 };
+        var table = new LocalFeatureTable(schema, options);
+        var model = new Dictionary<long, (string Text, string String, int[] List)>();
+        var random = new Random(seed);
+        var failures = 0;
+        var tooLarge = 0;
+        for (var op = 1; op <= 3000; op++)
+        {
+            var before = table.Pin();
+            var bytes = before.Bytes;
+            try
+            {
+                if (op % 101 == 0)
+                {
+                    table.Writer.Compact();
+                }
+                else
+                {
+                    var key = 1 + random.Next(40);
+                    var chars = op % 37 == 0 ? 20_000 : random.Next(300);
+                    tooLarge += op % 37 == 0 ? 1 : 0;
+                    var value = (new string((char)('a' + random.Next(26)), chars), "s" + random.Next(60), Sequence32(random.Next(20)));
+                    var builder = table.Writer.Begin(key, op);
+                    builder.SetString(0, value.Item1);
+                    builder.SetString(1, value.Item2);
+                    builder.SetInt32List(2, value.Item3);
+                    builder.Commit();
+                    model[key] = value;
+                }
+            }
+            catch (LocalTableFullException)
+            {
+                failures++;
+                Assert.Same(before, table.Pin());
+                Assert.Equal(bytes, table.Pin().Bytes);
+                Assert.Equal(before.Generation, table.Pin().Generation);
+            }
+
+            Assert.True(table.Pin().Bytes <= options.MaxBytes, $"operation {op}: {table.Pin().Bytes} bytes");
+        }
+
+        Assert.InRange(failures, tooLarge, tooLarge + 300);
+        Assert.True(table.Compactions > 0);
+        var version = table.Pin();
+        Assert.Equal(model.Count, version.RecordCount);
+        foreach (var (key, (text, value, list)) in model)
+        {
+            var record = version.Find(key);
+            Assert.Equal(text, version.Read(0, record).AsString());
+            Assert.Equal(value, version.Read(1, record).AsString());
+            Assert.Equal(list.Select(x => (long)x).ToArray(), version.Read(2, record).AsInt64List().ToArray());
+        }
+    }
+
+    private static void WriteText(IFeatureTableWriter writer, long key, long version, int chars)
+    {
+        var builder = writer.Begin(key, version);
+        builder.SetString(0, new string('t', chars));
+        Assert.True(builder.Commit());
+    }
+
+    /// <summary>
+    /// <paramref name="last"/> reuses a string only a superseded record of <paramref name="setup"/> holds. Below what it
+    /// needs both without a compaction and after one, the write compacts, finds that the copy (which dropped the string,
+    /// so the write adds it again) does not make room, and fails with the table unchanged. A writer that kept the string's
+    /// charge from before the compaction would take the copy and end above the limit.
+    /// </summary>
+    private static void AssertRechargedAfterCompaction(Action<IFeatureTableWriter> setup, Action<IFeatureTableWriter> last, long lastKey)
+    {
+        var plain = new LocalFeatureTable(Schema(), new LocalFeatureTableOptions { PageSize = 4096 });
+        setup(plain.Writer);
+        last(plain.Writer);
+        var withoutCompaction = plain.Pin().Bytes;
+        Assert.Equal(0, plain.Compactions);
+
+        var compacted = new LocalFeatureTable(Schema(), new LocalFeatureTableOptions { PageSize = 4096 });
+        setup(compacted.Writer);
+        compacted.Writer.Compact();
+        last(compacted.Writer);
+        var afterCompaction = compacted.Pin().Bytes;
+
+        // With room for the write as it is, it takes exactly that.
+        Assert.Equal(withoutCompaction, BytesAfter(withoutCompaction, w => { setup(w); last(w); }));
+
+        var limit = Math.Min(withoutCompaction, afterCompaction) - 1;
+        var table = new LocalFeatureTable(Schema(), new LocalFeatureTableOptions { MaxBytes = limit, PageSize = 4096 });
+        setup(table.Writer);
+        var before = table.Pin();
+        Assert.True(before.SupersededBytes > 0);
+        Assert.Throws<LocalTableFullException>(() => last(table.Writer));
+        Assert.Same(before, table.Pin());
+        Assert.Equal(before.Generation, table.Pin().Generation);
+        Assert.Equal(0, table.Compactions);
+        Assert.False(table.Pin().Find(lastKey).Found);
+        Assert.Equal("b", before.Read(table.Schema.FieldIndex("s"), before.Find(1L)).AsString());
     }
 
     private static long BytesAfter(long maxBytes, Action<IFeatureTableWriter> write)

@@ -81,6 +81,9 @@ public sealed class MemoryFeatureUpdateSource : IFeatureUpdateSource
 
             foreach (var update in batch)
             {
+                // Updates applied before a cancellation stay; the position is not advanced past them, so a rerun from the
+                // table's position applies them again, which versions make harmless.
+                cancellationToken.ThrowIfCancellationRequested();
                 Apply(update, next, writer);
                 next++;
             }

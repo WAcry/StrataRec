@@ -22,7 +22,9 @@ namespace StrataRec.Features.Local;
 /// <para>Compaction runs here, synchronously: when superseded records make up more than half of the record bytes (and at
 /// least <see cref="LocalFeatureTableOptions.CompactionMinBytes"/>), or when a write would pass <c>max_bytes</c> and
 /// superseded records could be freed. It copies the current record of every key, tombstones included, into a new version
-/// and publishes it whole. Updates wait while it runs.</para>
+/// built aside (<see cref="BuildCompacted"/>), which is published whole only when it fits <c>max_bytes</c> (with the
+/// pending write, when the write asked for it); otherwise it is dropped and the table stays as it was. Updates wait
+/// while it runs.</para>
 /// </remarks>
 public sealed class LocalTableWriter : IFeatureTableWriter
 {
@@ -31,7 +33,8 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     private readonly LocalFeatureTableOptions _options;
     private TableVersion _version; // where writes go: the table's current version, or the one a reload is building
     private bool _reloading;
-    private long _generation;
+    private long _generation;          // of the newest version installed; a version built and discarded does not count
+    private long _autoCompactionDeclined; // superseded bytes when an automatic compaction did not fit, see MaybeCompact
 
     // The record being built. A builder is valid while _open and its token equals _token.
     private int _token;
@@ -47,8 +50,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     private int _slot;
     private readonly byte[] _fixed;
     private readonly ulong[] _written;
-    private byte[] _pending = new byte[256];
-    private int _pendingUsed;
+    private readonly PendingBuffer _pending = new();
     private long[] _newStrings = new long[16]; // scratch set of the record's new strings, see NewStringBytes
     private int _lookedUpField = -1;           // a string field NewStringBytes looked up: its code in _lookedUpIn, or -1 if new
     private int _lookedUpCode;
@@ -129,7 +131,9 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             throw new InvalidOperationException("A reload is already in progress; complete or abort it first.");
         }
 
-        _version = NewVersion(expectedKeys: 0, expectedBytes: 0);
+        _version = NewVersion(expectedKeys: 0);
+        _generation = _version.Generation;
+        _autoCompactionDeclined = 0;
         _reloading = true;
     }
 
@@ -154,6 +158,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         if (_reloading)
         {
             _version = _table.Pin();
+            _autoCompactionDeclined = 0;
             _reloading = false;
         }
     }
@@ -163,6 +168,8 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     /// A <c>cache</c> table can drop the records written before <paramref name="dropWrittenBefore"/> on the way (expired
     /// beyond any use; phase 2 decides the cutoff).
     /// </summary>
+    /// <exception cref="LocalTableFullException">The compacted copy would not fit <c>max_bytes</c> (laying records out
+    /// anew can leave more of the pages' tails empty); it is discarded and the table is unchanged.</exception>
     public void Compact(long dropWrittenBefore = long.MinValue)
     {
         Discard();
@@ -171,7 +178,13 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             throw new InvalidOperationException("Only cache tables drop records by write time; a local table's versions are event versions.");
         }
 
-        CompactCore(dropWrittenBefore);
+        var next = BuildCompacted(dropWrittenBefore);
+        if (next.Bytes > _options.MaxBytes)
+        {
+            throw new LocalTableFullException(Schema, _options.MaxBytes, next.Bytes);
+        }
+
+        Install(next);
     }
 
     // ---------------------------------------------------------------------------------------------------------------
@@ -240,8 +253,8 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             throw KindMismatch(field, "StartList");
         }
 
-        _pendingUsed = RecordLayout.Align(_pendingUsed, 8);
-        _pendingStart[field] = _pendingUsed;
+        _pending.Reserve(0, 8, out var start); // the items follow contiguously
+        _pendingStart[field] = start;
         _pendingCount[field] = 0;
         _openList = field;
         MarkWritten(field, valid: true);
@@ -250,16 +263,14 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     internal void AddInt32Item(int token, int field, int value)
     {
         CheckListItem(token, field, StorageKind.ListInt32, "AddInt32Item");
-        var at = Reserve(4); // before reading _pending: Reserve may replace it (see Reserve)
-        Unsafe.WriteUnaligned(ref _pending[at], value);
+        MemoryMarshal.Write(_pending.Reserve(4, 4, out _), in value);
         _pendingCount[field]++;
     }
 
     internal void AddInt64Item(int token, int field, long value)
     {
         CheckListItem(token, field, StorageKind.ListInt64, "AddInt64Item");
-        var at = Reserve(8);
-        Unsafe.WriteUnaligned(ref _pending[at], value);
+        MemoryMarshal.Write(_pending.Reserve(8, 8, out _), in value);
         _pendingCount[field]++;
     }
 
@@ -267,9 +278,10 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     internal void AddStringItem(int token, int field, ReadOnlySpan<char> item)
     {
         CheckListItem(token, field, StorageKind.ListString, "AddStringItem");
-        var at = Reserve(RecordLayout.Align(4 + (2 * item.Length), 4));
-        Unsafe.WriteUnaligned(ref _pending[at], item.Length);
-        item.CopyTo(MemoryMarshal.Cast<byte, char>(_pending.AsSpan(at + 4, 2 * item.Length)));
+        var staged = _pending.Reserve(RecordLayout.Align(4 + (2 * item.Length), 4), 4, out _);
+        var length = item.Length;
+        MemoryMarshal.Write(staged, in length);
+        item.CopyTo(MemoryMarshal.Cast<byte, char>(staged.Slice(4, 2 * item.Length)));
         _pendingCount[field]++;
     }
 
@@ -318,7 +330,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             if (_layout.Kinds[f] == StorageKind.String && Bits.Get(_written, f) && FixedValid(f))
             {
                 // NewStringBytes may have looked this value up already, in this very version (nothing was added since).
-                var chars = MemoryMarshal.Cast<byte, char>(_pending.AsSpan(_pendingStart[f], 2 * _pendingCount[f]));
+                var chars = MemoryMarshal.Cast<byte, char>(_pending.Read(_pendingStart[f], 2 * _pendingCount[f]));
                 var code = f == _lookedUpField && ReferenceEquals(_lookedUpIn, _version)
                     ? (_lookedUpCode >= 0 ? _lookedUpCode : _version.AddString(new string(chars)))
                     : Encode(chars);
@@ -358,7 +370,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
                 }
                 else
                 {
-                    _pending.AsSpan(_pendingStart[f], count * elementSize).CopyTo(page.AsSpan(offset + cursor));
+                    _pending.Read(_pendingStart[f], count * elementSize).CopyTo(page.AsSpan(offset + cursor));
                 }
             }
             else
@@ -402,7 +414,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         _ignored = _oldPosition != 0 && ExistingVersion() >= version;
         Array.Clear(_fixed);
         Array.Clear(_written);
-        _pendingUsed = 0;
+        _pending.Clear();
         _openList = -1;
         _lookedUpField = -1;
         _lookedUpIn = null;
@@ -522,12 +534,14 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
     /// <summary>
     /// Enforces <c>max_bytes</c>: the table's size after this write (a new page, index growth, new strings) must fit.
-    /// When it would not, superseded records are compacted away first; if it still would not, the write fails and the
-    /// table is unchanged. The charge is exactly what the write then adds, so the limit holds to the byte.
+    /// When it would not and superseded records could be freed, a compacted copy is built aside and the write charged
+    /// against it; the copy is installed only if the write then fits. Otherwise the write fails and the table is
+    /// unchanged: same version, same generation. The charge is exactly what the write then adds, so the limit holds to the
+    /// byte.
     /// </summary>
     private void EnsureBudget(int recordBytes, bool newKey, bool strings)
     {
-        var required = Required(recordBytes, newKey, strings);
+        var required = Required(_version, recordBytes, newKey, strings);
         if (required <= _options.MaxBytes)
         {
             return;
@@ -535,21 +549,25 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
         if (_version.SupersededBytes > 0)
         {
-            // Recomputed against the compacted version: its dictionary keeps only strings still in use, so a string this
-            // record shares with a superseded record only is new again.
-            CompactCore(long.MinValue);
-            required = Required(recordBytes, newKey, strings);
-            if (required <= _options.MaxBytes)
+            // Charged against the compacted copy: its dictionary keeps only strings still in use, so a string this record
+            // shares with a superseded record only is new again; and its pages are laid out anew.
+            var compacted = BuildCompacted(long.MinValue);
+            var afterCompaction = Required(compacted, recordBytes, newKey, strings);
+            if (afterCompaction <= _options.MaxBytes)
             {
+                Install(compacted);
                 return;
             }
+
+            required = Math.Min(required, afterCompaction);
         }
 
         throw new LocalTableFullException(Schema, _options.MaxBytes, required);
     }
 
-    private long Required(int recordBytes, bool newKey, bool strings) =>
-        _version.Bytes + _version.PageGrowthBytes(recordBytes) + _version.IndexGrowthBytes(newKey) + (strings ? NewStringBytes() : 0);
+    /// <summary>The size <paramref name="version"/> would have after this write.</summary>
+    private long Required(TableVersion version, int recordBytes, bool newKey, bool strings) =>
+        version.Bytes + version.PageGrowthBytes(recordBytes) + version.IndexGrowthBytes(newKey) + (strings ? NewStringBytes(version) : 0);
 
     /// <summary>
     /// What the record's strings add to the dictionary of the version being written: each distinct value of its written
@@ -558,7 +576,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     /// does at commit (fields kept from the old record already have codes). Allocates only when a record brings more
     /// strings than any record before it.
     /// </summary>
-    private long NewStringBytes()
+    private long NewStringBytes(TableVersion version)
     {
         _lookedUpField = -1;
         var fields = _layout.DictionaryFields;
@@ -581,11 +599,11 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         if (candidates == 1 && _layout.Kinds[single] == StorageKind.String)
         {
             // The common case, one string value: nothing to repeat, so no set; the lookup is kept for Encode.
-            var chars = MemoryMarshal.Cast<byte, char>(_pending.AsSpan(_pendingStart[single], 2 * _pendingCount[single]));
-            _lookedUpCode = _version.FindString(chars);
+            var chars = MemoryMarshal.Cast<byte, char>(_pending.Read(_pendingStart[single], 2 * _pendingCount[single]));
+            _lookedUpCode = version.FindString(chars);
             _lookedUpField = single;
-            _lookedUpIn = _version;
-            return _lookedUpCode >= 0 ? 0 : _version.StringAdditionBytes(1, TableVersion.StringObjectBytes(chars.Length));
+            _lookedUpIn = version;
+            return _lookedUpCode >= 0 ? 0 : version.StringAdditionBytes(1, TableVersion.StringObjectBytes(chars.Length));
         }
 
         // An open-addressing set of the new strings found so far, as (pending offset + 1) << 32 | length; at most half full.
@@ -608,27 +626,27 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
             if (_layout.Kinds[f] == StorageKind.String)
             {
-                CountNewString(set, _pendingStart[f], _pendingCount[f], ref count, ref objectBytes);
+                CountNewString(version, set, _pendingStart[f], _pendingCount[f], ref count, ref objectBytes);
             }
             else if (_layout.Kinds[f] == StorageKind.ListString)
             {
                 var at = _pendingStart[f];
                 for (var i = 0; i < _pendingCount[f]; i++)
                 {
-                    var length = Unsafe.ReadUnaligned<int>(ref _pending[at]);
-                    CountNewString(set, at + 4, length, ref count, ref objectBytes);
+                    var length = MemoryMarshal.Read<int>(_pending.Read(at, 4));
+                    CountNewString(version, set, at + 4, length, ref count, ref objectBytes);
                     at += RecordLayout.Align(4 + (2 * length), 4);
                 }
             }
         }
 
-        return _version.StringAdditionBytes(count, objectBytes);
+        return version.StringAdditionBytes(count, objectBytes);
     }
 
-    private void CountNewString(Span<long> set, int offset, int length, ref int count, ref long objectBytes)
+    private void CountNewString(TableVersion version, Span<long> set, int offset, int length, ref int count, ref long objectBytes)
     {
-        var chars = MemoryMarshal.Cast<byte, char>(_pending.AsSpan(offset, 2 * length));
-        if (_version.FindString(chars) >= 0)
+        var chars = MemoryMarshal.Cast<byte, char>(_pending.Read(offset, 2 * length));
+        if (version.FindString(chars) >= 0)
         {
             return;
         }
@@ -647,56 +665,89 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
             var seenLength = (int)(uint)entry;
             if (seenLength == length
-                && MemoryMarshal.Cast<byte, char>(_pending.AsSpan((int)(entry >> 32) - 1, 2 * seenLength)).SequenceEqual(chars))
+                && MemoryMarshal.Cast<byte, char>(_pending.Read((int)(entry >> 32) - 1, 2 * seenLength)).SequenceEqual(chars))
             {
                 return; // repeated within the record: one dictionary string
             }
         }
     }
 
+    /// <summary>
+    /// The automatic compaction (design 6.6 local item 4): when superseded records are more than half of the record bytes.
+    /// It runs after a write that already succeeded, so a compacted copy that would not fit <c>max_bytes</c> is simply
+    /// discarded; it is tried again only once twice as many bytes are superseded, not after every write.
+    /// </summary>
     private void MaybeCompact()
     {
         var superseded = _version.SupersededBytes;
-        if (superseded > 0 && superseded >= _options.CompactionMinBytes && superseded * 2 > _version.RecordBytes)
+        if (superseded > 0 && superseded >= _options.CompactionMinBytes && superseded * 2 > _version.RecordBytes
+            && superseded >= 2 * _autoCompactionDeclined)
         {
-            CompactCore(long.MinValue);
+            var next = BuildCompacted(long.MinValue);
+            if (next.Bytes <= _options.MaxBytes)
+            {
+                Install(next);
+            }
+            else
+            {
+                _autoCompactionDeclined = superseded;
+            }
         }
     }
 
     /// <summary>
-    /// Builds a new version from the current record (or tombstone) of every key and publishes it whole (design 6.6,
-    /// item 4). Records are self-contained byte ranges, so each is copied as is; only string codes are re-encoded into the
-    /// new version's dictionary, which therefore keeps only strings still in use. Tombstones are kept: dropping one would
-    /// let an older update of the deleted key, delivered late, bring it back.
+    /// The one compaction routine (design 6.6, item 4): builds, aside, a version holding the current record (or
+    /// tombstone) of every key, and returns it unpublished. Nothing else changes, so a caller that finds the result too
+    /// large just drops it; <see cref="Install"/> makes it current.
     /// </summary>
-    private void CompactCore(long dropWrittenBefore)
+    /// <remarks>
+    /// Records are self-contained byte ranges, so each is copied as is; only string codes are re-encoded into the new
+    /// version's dictionary, which therefore keeps only strings still in use. Tombstones are kept: dropping one would let
+    /// an older update of the deleted key, delivered late, bring it back. Records are copied in their old page order and
+    /// packed: each new page is just large enough for the records still to come (up to the largest page size). Copying in
+    /// index-slot order instead would mix record sizes and can leave more of each page's tail empty, which can make the
+    /// copy larger than the original.
+    /// </remarks>
+    private TableVersion BuildCompacted(long dropWrittenBefore)
     {
         var old = _version;
         var oldIndex = old.Index;
-        var next = NewVersion(oldIndex.Count, old.RecordBytes - old.SupersededBytes);
-        var codeMap = new int[old.StringCount];
-        Array.Fill(codeMap, -1);
-        var strings = old.Strings;
         var entries = oldIndex.Entries;
+        var positions = new long[oldIndex.Count];
+        var slots = new int[oldIndex.Count];
+        var live = 0;
         for (var s = 0; s < oldIndex.SlotCount; s++)
         {
             var position = entries[(2 * s) + 1];
-            if (position == 0)
+            if (position != 0)
             {
-                continue;
+                positions[live] = position;
+                slots[live] = s;
+                live++;
             }
+        }
 
-            var page = old.PageOf(position);
-            var offset = (int)position;
+        Array.Sort(positions, slots, 0, live); // a position is (page + 1) << 32 | offset: page order
+        var next = NewVersion(live);
+        var codeMap = new int[old.StringCount];
+        Array.Fill(codeMap, -1);
+        var strings = old.Strings;
+        var remaining = old.RecordBytes - old.SupersededBytes;
+        for (var i = 0; i < live; i++)
+        {
+            var page = old.PageOf(positions[i]);
+            var offset = (int)positions[i];
             var length = BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(offset + RecordLayout.LengthOffset));
             var tombstone = (page[offset + RecordLayout.FlagsOffset] & RecordLayout.TombstoneFlag) != 0;
             if (!tombstone && dropWrittenBefore != long.MinValue
                 && BinaryPrimitives.ReadInt64LittleEndian(page.AsSpan(offset + RecordLayout.VersionOffset)) < dropWrittenBefore)
             {
+                remaining -= length;
                 continue;
             }
 
-            var copyPosition = next.Reserve(length, out var copy);
+            var copyPosition = next.Reserve(length, out var copy, packFor: remaining);
+            remaining -= length;
             var copyOffset = (int)copyPosition;
             page.AsSpan(offset, length).CopyTo(copy.AsSpan(copyOffset));
             if (!tombstone)
@@ -704,12 +755,21 @@ public sealed class LocalTableWriter : IFeatureTableWriter
                 RemapStrings(copy, copyOffset, next, strings, codeMap);
             }
 
-            next.Index.InsertUnpublished(entries[2 * s], copyPosition);
+            next.Index.InsertUnpublished(entries[2 * slots[i]], copyPosition);
             next.AddRecordBytes(length);
             next.AddRecords(tombstone ? 0 : 1, tombstone ? 1 : 0);
         }
 
+        return next;
+    }
+
+    /// <summary>Makes a version from <see cref="BuildCompacted"/> the one written to, and current unless a reload is
+    /// building it.</summary>
+    private void Install(TableVersion next)
+    {
         _version = next;
+        _generation = next.Generation;
+        _autoCompactionDeclined = 0;
         if (!_reloading)
         {
             // Release: the new version's pages, index and dictionary are complete before a reader can pin it.
@@ -756,8 +816,8 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         }
     }
 
-    private TableVersion NewVersion(int expectedKeys, long expectedBytes) =>
-        new(_layout, _version.Hasher, _options.PageSize, ++_generation, expectedKeys, expectedBytes);
+    private TableVersion NewVersion(int expectedKeys) =>
+        new(_layout, _version.Hasher, _options.PageSize, _generation + 1, expectedKeys);
 
     /// <summary>Statistics of a published write: its bytes, the bytes of the record or tombstone it replaced, and counts.</summary>
     private void Account(int size, byte[]? oldPage, bool newKey, bool tombstone)
@@ -795,8 +855,8 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         var at = _pendingStart[field];
         for (var i = 0; i < codes.Length; i++)
         {
-            var length = Unsafe.ReadUnaligned<int>(ref _pending[at]);
-            codes[i] = Encode(MemoryMarshal.Cast<byte, char>(_pending.AsSpan(at + 4, 2 * length)));
+            var length = MemoryMarshal.Read<int>(_pending.Read(at, 4));
+            codes[i] = Encode(MemoryMarshal.Cast<byte, char>(_pending.Read(at + 4, 2 * length)));
             at += RecordLayout.Align(4 + (2 * length), 4);
         }
     }
@@ -814,25 +874,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
     private int AppendChars(ReadOnlySpan<char> value)
     {
-        var at = Reserve(2 * value.Length);
-        value.CopyTo(MemoryMarshal.Cast<byte, char>(_pending.AsSpan(at, 2 * value.Length)));
-        return at;
-    }
-
-    /// <summary>
-    /// Bytes at the end of the pending buffer (list items are appended in place, so the open list stays contiguous).
-    /// May replace <see cref="_pending"/>: call it first and index the field afterwards, never in one expression such as
-    /// <c>_pending[Reserve(n)]</c>, where C# reads the field (the old array) before the call.
-    /// </summary>
-    private int Reserve(int bytes)
-    {
-        if (_pendingUsed + bytes > _pending.Length)
-        {
-            Array.Resize(ref _pending, Math.Max(_pending.Length * 2, _pendingUsed + bytes));
-        }
-
-        var at = _pendingUsed;
-        _pendingUsed += bytes;
+        value.CopyTo(MemoryMarshal.Cast<byte, char>(_pending.Reserve(2 * value.Length, 2, out var at)));
         return at;
     }
 
@@ -933,6 +975,46 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         }
     }
 
+    /// <summary>
+    /// Where the record being built stages its variable-length values until commit: the chars of <c>string</c> and
+    /// <c>text</c> values and the elements of lists. Its cursor moves only in <see cref="Reserve"/>, which aligns it,
+    /// makes room (growing, and so replacing, the array) and returns the reserved bytes. Callers write through that span
+    /// and read back by offset, so none can hold the array across a growth or take an offset past its end.
+    /// </summary>
+    private sealed class PendingBuffer
+    {
+        private byte[] _bytes = new byte[256];
+        private int _used;
+
+        /// <summary>Starts a new record: what was staged before is dropped.</summary>
+        public void Clear() => _used = 0;
+
+        /// <summary>
+        /// <paramref name="bytes"/> bytes at the next multiple of <paramref name="alignment"/> (a power of two), starting
+        /// at <paramref name="offset"/>. Room is made even for 0 bytes, so the offset of an empty value is inside the array.
+        /// Reservations of one list are contiguous, since each element's size is a multiple of its alignment.
+        /// </summary>
+        public Span<byte> Reserve(int bytes, int alignment, out int offset)
+        {
+            var start = RecordLayout.Align(_used, alignment);
+            var end = (long)start + bytes;
+            if (end > _bytes.Length)
+            {
+                if (end > Array.MaxLength)
+                {
+                    throw new InvalidOperationException($"A record's variable-length values take more than {Array.MaxLength} bytes.");
+                }
+
+                Array.Resize(ref _bytes, (int)Math.Min(Array.MaxLength, Math.Max(2L * _bytes.Length, end)));
+            }
+
+            _used = (int)end;
+            offset = start;
+            return _bytes.AsSpan(start, bytes);
+        }
+
+        public ReadOnlySpan<byte> Read(int offset, int length) => _bytes.AsSpan(offset, length);
+    }
 }
 
 /// <summary>
