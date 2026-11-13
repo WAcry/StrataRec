@@ -5,32 +5,43 @@ using StrataRec.Features.Connectors;
 namespace StrataRec.Features.Runtime;
 
 /// <summary>
-/// The dense, key-ordered staging area of one fetch (design 4.5, 6.5). Each field is a column buffer indexed by
-/// key index; a "found" bitmap records which keys the response contained.
+/// The dense, key-ordered staging area of one connector call (design 4.5, 6.5). Each field is a column buffer indexed
+/// by key index, plus a "written" bitmap per field.
 /// </summary>
+/// <remarks>
+/// <para>Validity is per field and starts all-clear: value arrays are pooled and hold whatever a previous request left,
+/// so only a value the connector explicitly wrote may be read. A key-level "found" bit is deliberately absent — a
+/// connector that fails half-way through a record, or reports a partial result, must not make the record's unwritten
+/// fields look valid.</para>
+/// <para>Not thread-safe, and it does not need to be: each <c>max_batch</c> chunk gets its own buffer, so concurrent
+/// chunks never share bitmaps, string dictionaries or list arenas. A buffer is read only after its call completed
+/// within the time budget; a timed-out call may keep writing into it, but it is never read and stays rented until
+/// the call really finishes.</para>
+/// </remarks>
 internal sealed class StagingBuffer : IFeatureBatchWriter
 {
     private readonly ColumnBuffer[] _fields;
-    private readonly ulong[] _found;
+    private readonly ulong[][] _written;
 
-    public StagingBuffer(IReadOnlyList<CompiledFieldBinding> fields, int keyCount, RequestMemory memory)
+    public StagingBuffer(ReadOnlySpan<CompiledFieldBinding> fields, int keyCount, RequestMemory memory)
     {
         KeyCount = keyCount;
-        _fields = new ColumnBuffer[fields.Count];
-        for (var i = 0; i < fields.Count; i++)
+        var rows = Math.Max(1, keyCount);
+        _fields = new ColumnBuffer[fields.Length];
+        _written = new ulong[fields.Length][];
+        for (var i = 0; i < fields.Length; i++)
         {
-            _fields[i] = ColumnBuffer.Create(fields[i].Type.AsNonNullable(), Math.Max(1, keyCount), memory);
+            _fields[i] = ColumnBuffer.Create(fields[i].Type.AsNonNullable(), rows, memory);
+            _written[i] = memory.RentCleared<ulong>(Bits.WordCount(rows));
         }
-
-        _found = memory.RentCleared<ulong>(Bits.WordCount(Math.Max(1, keyCount)));
     }
 
     public int KeyCount { get; }
 
     public ColumnBuffer Field(int fieldIndex) => _fields[fieldIndex];
 
-    /// <summary>True when the key was found and the field has a value.</summary>
-    public bool HasValue(int fieldIndex, int keyIndex) => Bits.Get(_found, keyIndex) && _fields[fieldIndex].IsValid(keyIndex);
+    /// <summary>True when the connector wrote a value for this field and key (and did not withdraw it).</summary>
+    public bool HasValue(int fieldIndex, int keyIndex) => Bits.Get(_written[fieldIndex], keyIndex);
 
     public Memory<T> GetValues<T>(int fieldIndex)
         where T : unmanaged => _fields[fieldIndex] switch
@@ -41,47 +52,51 @@ internal sealed class StagingBuffer : IFeatureBatchWriter
                 $"Field {fieldIndex} has type {other.Type}; GetValues<{typeof(T).Name}> does not match it."),
         };
 
-    public void SetFound(int keyIndex) => Bits.Set(_found, keyIndex);
+    public void SetValid(int fieldIndex, int keyIndex)
+    {
+        CheckKey(keyIndex);
+        Bits.Set(_written[fieldIndex], keyIndex);
+    }
 
-    public void SetMissing(int fieldIndex, int keyIndex) => _fields[fieldIndex].SetMissing(keyIndex);
+    public void SetMissing(int fieldIndex, int keyIndex)
+    {
+        CheckKey(keyIndex);
+        Bits.Clear(_written[fieldIndex], keyIndex);
+    }
 
     public void SetString(int fieldIndex, int keyIndex, string value)
     {
+        CheckKey(keyIndex);
         switch (_fields[fieldIndex])
         {
             case DictStringColumn d: d.Set(keyIndex, value); break;
             case TextColumn t: t.Set(keyIndex, value); break;
             default: throw new InvalidOperationException($"Field {fieldIndex} is not a string or text field.");
         }
+
+        Bits.Set(_written[fieldIndex], keyIndex);
     }
 
-    public void SetInt64List(int fieldIndex, int keyIndex, ReadOnlySpan<long> value) =>
-        ((ListColumn<long>)_fields[fieldIndex]).Set(keyIndex, value);
-
-    public void SetStringList(int fieldIndex, int keyIndex, ReadOnlySpan<string> value) =>
-        ((ListColumn<string>)_fields[fieldIndex]).Set(keyIndex, value);
-}
-
-/// <summary>Writes into a window <c>[offset, offset + count)</c> of a larger staging buffer (for max_batch splitting).</summary>
-internal sealed class StagingWindow(StagingBuffer inner, int offset, int count) : IFeatureBatchWriter
-{
-    public int KeyCount => count;
-
-    public Memory<T> GetValues<T>(int fieldIndex)
-        where T : unmanaged
+    public void SetInt64List(int fieldIndex, int keyIndex, ReadOnlySpan<long> value)
     {
-        var all = inner.GetValues<T>(fieldIndex);
-        var perKey = all.Length / Math.Max(1, inner.KeyCount);
-        return all.Slice(offset * perKey, count * perKey);
+        CheckKey(keyIndex);
+        ((ListColumn<long>)_fields[fieldIndex]).Set(keyIndex, value);
+        Bits.Set(_written[fieldIndex], keyIndex);
     }
 
-    public void SetFound(int keyIndex) => inner.SetFound(offset + keyIndex);
+    public void SetStringList(int fieldIndex, int keyIndex, ReadOnlySpan<string> value)
+    {
+        CheckKey(keyIndex);
+        ((ListColumn<string>)_fields[fieldIndex]).Set(keyIndex, value);
+        Bits.Set(_written[fieldIndex], keyIndex);
+    }
 
-    public void SetMissing(int fieldIndex, int keyIndex) => inner.SetMissing(fieldIndex, offset + keyIndex);
-
-    public void SetString(int fieldIndex, int keyIndex, string value) => inner.SetString(fieldIndex, offset + keyIndex, value);
-
-    public void SetInt64List(int fieldIndex, int keyIndex, ReadOnlySpan<long> value) => inner.SetInt64List(fieldIndex, offset + keyIndex, value);
-
-    public void SetStringList(int fieldIndex, int keyIndex, ReadOnlySpan<string> value) => inner.SetStringList(fieldIndex, offset + keyIndex, value);
+    private void CheckKey(int keyIndex)
+    {
+        // The bitmaps are rented and may be longer than KeyCount; an out-of-range key must not mark a phantom value.
+        if ((uint)keyIndex >= (uint)KeyCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(keyIndex), keyIndex, $"The batch has {KeyCount} keys.");
+        }
+    }
 }

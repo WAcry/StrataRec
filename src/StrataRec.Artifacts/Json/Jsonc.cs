@@ -1,8 +1,10 @@
+using System.Buffers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
+using System.Text.Unicode;
 
 namespace StrataRec.Artifacts.Json;
 
@@ -19,7 +21,11 @@ namespace StrataRec.Artifacts.Json;
 ///     RFC 8259 section 4 leaves their meaning undefined and I-JSON (RFC 7493 section 2.3) forbids them; silently
 ///     keeping the last one would hide copy-paste mistakes in configuration.
 ///   </item>
-///   <item>String escapes that produce unpaired UTF-16 surrogates (RFC 7493 section 2.1).</item>
+///   <item>
+///     Text that is not valid Unicode: ill-formed UTF-8 in byte input (anywhere, including unescaped string values),
+///     unpaired surrogates in string input, and string escapes that produce unpaired UTF-16 surrogates
+///     (RFC 8259 section 8.1, RFC 7493 section 2.1).
+///   </item>
 ///   <item>
 ///     Anything that is not a JSON number in number position: <c>NaN</c>, <c>Infinity</c>, hexadecimal, leading
 ///     <c>+</c> or leading zeros. Quoted numbers are not converted to numbers by <see cref="Deserialize{T}(string, string?)"/>.
@@ -164,6 +170,20 @@ public static class Jsonc
     /// </summary>
     private static void Validate(ReadOnlySpan<byte> json, string? fileName)
     {
+        // Utf8JsonReader finds the end of an unescaped string without validating its UTF-8, and JsonNode keeps such
+        // values lazily, so invalid bytes would surface only when a value is read, far from this diagnostic boundary.
+        // Checking the whole input up front (vectorized) also makes byte input as strict as string input, whose
+        // encoding to UTF-8 already rejects unpaired surrogates.
+        if (!Utf8.IsValid(json))
+        {
+            var here = PositionOf(json, FirstInvalidUtf8Offset(json));
+            throw new JsoncException(
+                JsoncException.InvalidUnicodeCode,
+                "The input is not valid UTF-8.",
+                fileName, here.Line, here.Column, here.BytePositionInLine,
+                hint: "save the file as UTF-8; escape binary data (for example as base64) instead of embedding raw bytes");
+        }
+
         var reader = new Utf8JsonReader(json, _readerOptions);
 
         // Key sets indexed by the depth of the object that owns them; reused across sibling objects.
@@ -220,6 +240,23 @@ public static class Jsonc
                 hint: "use a complete surrogate pair such as \\ud83d\\ude00, or write the character directly",
                 innerException: ex);
         }
+    }
+
+    /// <summary>Byte offset of the first ill-formed UTF-8 sequence (cold path: only called once validation failed).</summary>
+    private static int FirstInvalidUtf8Offset(ReadOnlySpan<byte> json)
+    {
+        var offset = 0;
+        while (offset < json.Length)
+        {
+            if (Rune.DecodeFromUtf8(json[offset..], out _, out var consumed) != OperationStatus.Done)
+            {
+                return offset;
+            }
+
+            offset += consumed;
+        }
+
+        return json.Length;
     }
 
     private static JsoncException SyntaxError(ReadOnlySpan<byte> json, string? fileName, JsonException ex)

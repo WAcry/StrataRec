@@ -27,24 +27,34 @@ public readonly record struct CompiledFieldBinding(string Field, int FieldIndex,
 
 /// <summary>
 /// Dense staging area the connector decodes into, ordered by the batch's keys and independent of table rows
-/// (design 6.5). Every key starts as "not found"; connectors call <see cref="SetFound"/> for keys present in the
-/// response and <see cref="SetMissing"/> for individual absent fields.
+/// (design 6.5).
 /// </summary>
+/// <remarks>
+/// <para>Validity is tracked per field and key, and every (field, key) starts as missing: only values the connector
+/// actually wrote are ever read. A key absent from the response needs no call. Values written through
+/// <see cref="GetValues{T}"/> count once <see cref="SetValid"/> is called for that field and key; call it after the
+/// value is fully decoded, so a record that fails half-way never exposes an unwritten (pooled) value.
+/// <see cref="SetString"/>, <see cref="SetInt64List"/> and <see cref="SetStringList"/> mark their value present
+/// themselves. A connector reporting <see cref="FetchOutcome.Partial"/> therefore needs no extra bookkeeping.</para>
+/// <para>A writer is used by exactly one connector call (each <c>max_batch</c> chunk gets its own), so implementations
+/// may write from any one thread at a time without synchronization.</para>
+/// </remarks>
 public interface IFeatureBatchWriter
 {
     int KeyCount { get; }
 
     /// <summary>
     /// Native value buffer of a fixed-size field, indexed by key: <c>bool</c>, <c>int</c> (int32), <c>long</c>,
-    /// <c>float</c> (float32 and vectors, length KeyCount × dimension) or <c>double</c>.
+    /// <c>float</c> (float32 and vectors, length KeyCount × dimension) or <c>double</c>. Writes become visible only
+    /// through <see cref="SetValid"/>.
     /// </summary>
     Memory<T> GetValues<T>(int fieldIndex)
         where T : unmanaged;
 
-    /// <summary>Marks a key as present in the response (all of its fields hold values unless set missing).</summary>
-    void SetFound(int keyIndex);
+    /// <summary>Marks the value of one field of one key, written through <see cref="GetValues{T}"/>, as present.</summary>
+    void SetValid(int fieldIndex, int keyIndex);
 
-    /// <summary>Marks one field of a found key as absent.</summary>
+    /// <summary>Marks one field of one key as absent (withdrawing a value set earlier, if any).</summary>
     void SetMissing(int fieldIndex, int keyIndex);
 
     /// <summary>Writes a <c>string</c> or <c>text</c> field value.</summary>
@@ -85,6 +95,12 @@ public interface IFeatureSourceConnector
     /// Fetches <paramref name="fields"/> for <paramref name="keys"/> and decodes them straight into
     /// <paramref name="writer"/>. Must not write after it returns or after cancellation is acknowledged.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="fields"/> holds only the fields the request needs at this point (late materialization,
+    /// design 6.8), so the same source may be called again later for other fields of the same keys. The engine stops
+    /// waiting at the source timeout or the request deadline, whichever comes first, and discards whatever the call
+    /// writes afterwards; the writer's buffers stay rented until the call actually completes (design 4.8).
+    /// </remarks>
     ValueTask<FetchStatus> FetchAsync(
         EntityKeyBatch keys,
         ReadOnlyMemory<CompiledFieldBinding> fields,

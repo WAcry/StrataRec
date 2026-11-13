@@ -110,22 +110,37 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
             return;
         }
 
-        writer.SetFound(keyIndex);
+        // Fields start missing; each value is marked present only after it decoded, so a record that throws half-way
+        // never exposes a field it did not write.
         foreach (var field in fields)
         {
             if (!record.TryGetProperty(field.Field, out var v) || v.ValueKind == JsonValueKind.Null)
             {
-                writer.SetMissing(field.FieldIndex, keyIndex);
                 continue;
             }
 
             switch (field.Type.Kind)
             {
-                case StorageKind.Bool: writer.GetValues<bool>(field.FieldIndex).Span[keyIndex] = v.GetBoolean(); break;
-                case StorageKind.Int32: writer.GetValues<int>(field.FieldIndex).Span[keyIndex] = v.GetInt32(); break;
-                case StorageKind.Int64: writer.GetValues<long>(field.FieldIndex).Span[keyIndex] = v.GetInt64(); break;
-                case StorageKind.Float32: writer.GetValues<float>(field.FieldIndex).Span[keyIndex] = v.GetSingle(); break;
-                case StorageKind.Float64: writer.GetValues<double>(field.FieldIndex).Span[keyIndex] = v.GetDouble(); break;
+                case StorageKind.Bool:
+                    writer.GetValues<bool>(field.FieldIndex).Span[keyIndex] = v.GetBoolean();
+                    writer.SetValid(field.FieldIndex, keyIndex);
+                    break;
+                case StorageKind.Int32:
+                    writer.GetValues<int>(field.FieldIndex).Span[keyIndex] = v.GetInt32();
+                    writer.SetValid(field.FieldIndex, keyIndex);
+                    break;
+                case StorageKind.Int64:
+                    writer.GetValues<long>(field.FieldIndex).Span[keyIndex] = v.GetInt64();
+                    writer.SetValid(field.FieldIndex, keyIndex);
+                    break;
+                case StorageKind.Float32:
+                    writer.GetValues<float>(field.FieldIndex).Span[keyIndex] = v.GetSingle();
+                    writer.SetValid(field.FieldIndex, keyIndex);
+                    break;
+                case StorageKind.Float64:
+                    writer.GetValues<double>(field.FieldIndex).Span[keyIndex] = v.GetDouble();
+                    writer.SetValid(field.FieldIndex, keyIndex);
+                    break;
                 case StorageKind.String or StorageKind.Text: writer.SetString(field.FieldIndex, keyIndex, v.GetString()!); break;
                 case StorageKind.Vector:
                     var dim = field.Type.Dimension;
@@ -141,9 +156,9 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
                         n++;
                     }
 
-                    if (n != dim)
+                    if (n == dim)
                     {
-                        writer.SetMissing(field.FieldIndex, keyIndex);
+                        writer.SetValid(field.FieldIndex, keyIndex);
                     }
 
                     break;

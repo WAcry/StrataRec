@@ -32,10 +32,20 @@ public sealed class FeatureRuntimeInfo
     /// <summary>Fetch group of a physical feature (-1 for derived).</summary>
     public int GroupIndex { get; internal set; } = -1;
 
-    /// <summary>Field index inside the group's staging buffer.</summary>
+    /// <summary>Position of the feature among its group's members (<see cref="FetchGroup.Fields"/>).</summary>
     public int FieldIndex { get; internal set; } = -1;
 
-    /// <summary>Fetch wave: 0 when keyed by <c>entity_id</c>/context, n+1 when keyed by a wave-n foreign key.</summary>
+    /// <summary>
+    /// Scheduling wave, derived from the dependency graph (design 6.8 step 3). For a physical candidate feature, the
+    /// wave its fetch runs in: 0 when keyed by <c>entity_id</c>/context, w + 1 when keyed by a feature that becomes
+    /// available in wave w. For a derived feature, the wave after whose fetches it is computed: the latest wave of its
+    /// inputs, or -1 when it needs no candidate fetch at all (only <c>entity_id</c>, request inputs or context
+    /// features), in which case it is computed before wave 0.
+    /// </summary>
+    /// <remarks>
+    /// This places a derived foreign key after its own inputs and strictly before the groups keyed by it; treating
+    /// every derived key as "wave 1" would fetch those groups before the key exists.
+    /// </remarks>
     public int Wave { get; internal set; }
 
     public bool IsContext => Definition.IsContext;
@@ -43,7 +53,13 @@ public sealed class FeatureRuntimeInfo
     public bool IsDerived => Definition.IsDerived;
 }
 
-/// <summary>Features fetched together: one source × one entity (design 6.8: same source within a wave is merged).</summary>
+/// <summary>
+/// Features that can be fetched together: one source × one entity (design 6.8: same source within a wave is merged).
+/// </summary>
+/// <remarks>
+/// A group is the unit of merging, not of fetching: each fetch carries only the members the request needs at that
+/// point (late materialization), so other members can be fetched later, for other rows, or never.
+/// </remarks>
 public sealed class FetchGroup
 {
     public required int Index { get; init; }
@@ -84,6 +100,10 @@ public sealed class FeaturePlan
         Features = features;
         Groups = groups;
         DerivedOrder = derivedOrder;
+        foreach (var g in groups)
+        {
+            MaxWave = Math.Max(MaxWave, g.Wave);
+        }
     }
 
     public IReadOnlyList<FeatureRuntimeInfo> Features { get; }
@@ -93,19 +113,8 @@ public sealed class FeaturePlan
     /// <summary>Derived features in dependency order.</summary>
     public IReadOnlyList<int> DerivedOrder { get; }
 
-    public int MaxWave
-    {
-        get
-        {
-            var max = 0;
-            foreach (var g in Groups)
-            {
-                max = Math.Max(max, g.Wave);
-            }
-
-            return max;
-        }
-    }
+    /// <summary>Highest fetch wave of any group (0 when nothing is keyed by a feature).</summary>
+    public int MaxWave { get; }
 
     /// <summary>
     /// Builds the plan: groups physical features by (source, entity), creates connectors from the bindings and
@@ -248,23 +257,15 @@ public sealed class FeaturePlan
             groups.Add(group);
         }
 
-        // Waves: wave(group) = 0 for entity_id/context keys, otherwise wave of the key feature's group + 1.
         var all = new FeatureRuntimeInfo[features.Count];
         for (var i = 0; i < all.Length; i++)
         {
             all[i] = features[i];
         }
 
-        foreach (var group in groups)
-        {
-            group.Wave = WaveOf(group, groups, all, depth: 0);
-            foreach (var f in group.FeatureIndices)
-            {
-                all[f].Wave = group.Wave;
-            }
-        }
-
+        // Cycles are reported here; the wave computation below only has to terminate on them.
         var derivedOrder = TopologicalDerivedOrder(all, diagnostics);
+        AssignWaves(all, groups);
         return new FeaturePlan(all, groups.ToArray(), derivedOrder);
     }
 
@@ -296,20 +297,65 @@ public sealed class FeaturePlan
         }
     }
 
-    private static int WaveOf(FetchGroup group, List<FetchGroup> groups, FeatureRuntimeInfo[] features, int depth)
+    /// <summary>
+    /// Assigns <see cref="FeatureRuntimeInfo.Wave"/> to every feature and <see cref="FetchGroup.Wave"/> to every group
+    /// from the full dependency graph: ready(physical) = wave of its group = 0 for <c>entity_id</c>/context keys,
+    /// otherwise ready(key) + 1; ready(derived) = max ready(input), or -1 without candidate fetch inputs; context
+    /// features are -1 (they are fetched with the request, before any candidate wave).
+    /// </summary>
+    internal static void AssignWaves(FeatureRuntimeInfo[] features, IReadOnlyList<FetchGroup> groups)
     {
-        if (group.KeyFeatureIndex < 0 || depth > 16)
+        const int Unknown = int.MinValue;
+        var ready = new int[features.Length];
+        Array.Fill(ready, Unknown);
+        var visiting = new bool[features.Length];
+        for (var f = 0; f < features.Length; f++)
         {
-            return 0;
+            features[f].Wave = ReadyWave(f);
         }
 
-        var keyFeature = features[group.KeyFeatureIndex];
-        if (keyFeature.IsDerived || keyFeature.GroupIndex < 0)
+        foreach (var group in groups)
         {
-            return 1;
+            group.Wave = group.KeyFeatureIndex < 0 ? 0 : Math.Max(0, ReadyWave(group.KeyFeatureIndex) + 1);
         }
 
-        return WaveOf(groups[keyFeature.GroupIndex], groups, features, depth + 1) + 1;
+        int ReadyWave(int f)
+        {
+            if (ready[f] != Unknown)
+            {
+                return ready[f];
+            }
+
+            if (visiting[f])
+            {
+                return -1; // a cycle (already reported as FEATURE_CYCLE / ENTITY_KEY_CYCLE); the plan is rejected anyway
+            }
+
+            visiting[f] = true;
+            var info = features[f];
+            int wave;
+            if (info.IsContext)
+            {
+                wave = -1;
+            }
+            else if (info.IsDerived)
+            {
+                wave = -1;
+                foreach (var d in info.Dependencies)
+                {
+                    wave = Math.Max(wave, ReadyWave(d));
+                }
+            }
+            else
+            {
+                var key = info.GroupIndex >= 0 ? groups[info.GroupIndex].KeyFeatureIndex : -1;
+                wave = key < 0 ? 0 : Math.Max(0, ReadyWave(key) + 1);
+            }
+
+            visiting[f] = false;
+            ready[f] = wave;
+            return wave;
+        }
     }
 
     private static int[] TopologicalDerivedOrder(FeatureRuntimeInfo[] features, DiagnosticBag diagnostics)
