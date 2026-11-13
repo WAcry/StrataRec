@@ -23,18 +23,24 @@ internal static class LiveRunAssert
     private static List<(string Node, string Outcome)> Describe(IReadOnlyList<NodeOutcome> outcomes) =>
         outcomes.Select(o => (o.NodeId, Outcome(o.Kind.ToString(), o.NodeId, o.ProducedBy, o.Detail))).ToList();
 
+    /// <summary>
+    /// The decisions of an engine result: which pipeline served it, and the outcome of every node of that pipeline's run.
+    /// A trace carries only the served run, so a recording is compared by its served run too; a request whose primary
+    /// pipeline failed differs from one it served in the first entry (review 15).
+    /// </summary>
     private static List<(string Node, string Outcome)> Describe(RecResult result)
     {
+        var served = new List<(string Node, string Outcome)> { ("(served by)", result.ServedBy) };
         if (result.Trace is { } trace)
         {
-            return Describe(trace);
+            served.AddRange(Describe(trace));
+            return served;
         }
 
         Assert.True(result.Recording is not null, "compare the node outcomes of a request that traces (DebugOptions.Trace) or records");
-        return result.Recording.Runs
-            .SelectMany(run => run.Nodes.Select(n => (Node: run.Role == "primary" ? n.Node : run.PipelineId + ":" + n.Node, n)))
-            .Select(x => (x.Node, Outcome(Kind(x.n.Outcome), x.n.Node, x.n.ProducedBy, x.n.Detail)))
-            .ToList();
+        var run = result.Recording.Runs.Last(r => r.PipelineId == result.ServedBy);
+        served.AddRange(run.Nodes.Select(n => (n.Node, Outcome(Kind(n.Outcome), n.Node, n.ProducedBy, n.Detail))));
+        return served;
     }
 
     /// <summary>A recording keeps the outcome category (<c>fallback</c>, <c>skipped_when</c>); a trace reports its kind. The
