@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using StrataRec.Features.Runtime;
+using StrataRec.Hosting;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Testing;
@@ -70,6 +71,44 @@ public sealed class SampleTimingTests
         Assert.Contains("\n  ctr_ranker: Succeeded → Degraded by ctr_backup (", error.Message);
         Assert.Single(error.Message.Split('\n'), line => line.StartsWith("  ", StringComparison.Ordinal)); // only that node differs
         LiveRunAssert.SameNodeOutcomes(served, fellBack, except: "ctr_ranker");
+    }
+
+    [Fact]
+    public async Task ATracedRunAndARecordedRun_CompareByTheirDecisions()
+    {
+        // A trace reports kinds (Degraded by ctr_backup), a recording categories (fallback by ctr_backup): the same
+        // decisions compare equal across the two, both when the ranker serves and when its fallback does (review 14).
+        var (serving, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
+        var (fallingBack, _) = MetricsTests.LoadEngine(HomeFeedTestHost.LoadModified(MetricsTests.FailModel));
+        var servedTrace = await serving.ExecuteAsync(Traced("req-trace"));
+        var servedRecording = await serving.ExecuteAsync(ReplayTests.Request("req-record", 1001, "home", ReplayTests.ControlArms));
+        var fellBackTrace = await fallingBack.ExecuteAsync(Traced("req-trace-fallback"));
+        var fellBackRecording = await fallingBack.ExecuteAsync(ReplayTests.Request("req-record-fallback", 1001, "home", ReplayTests.ControlArms));
+        Assert.Null(servedRecording.Trace);
+        Assert.Null(servedTrace.Recording);
+        Assert.Contains(fellBackRecording.Recording!.Runs[0].Nodes, n => n.Node == "ctr_ranker" && n.Outcome == "fallback");
+
+        LiveRunAssert.SameNodeOutcomes(servedTrace, servedRecording);
+        LiveRunAssert.SameNodeOutcomes(servedRecording, servedTrace);
+        LiveRunAssert.SameNodeOutcomes(fellBackTrace, fellBackRecording);
+
+        var error = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => LiveRunAssert.SameNodeOutcomes(servedTrace, fellBackRecording));
+        Assert.Contains("\n  ctr_ranker: Succeeded → Degraded by ctr_backup (", error.Message);
+        Assert.Single(error.Message.Split('\n'), line => line.StartsWith("  ", StringComparison.Ordinal));
+
+        static RecRequest Traced(string requestId)
+        {
+            var recorded = ReplayTests.Request(requestId, 1001, "home", ReplayTests.ControlArms);
+            return new RecRequest
+            {
+                PipelineId = recorded.PipelineId,
+                RequestId = recorded.RequestId,
+                Inputs = recorded.Inputs,
+                Deadline = recorded.Deadline,
+                TimeMs = recorded.TimeMs,
+                Debug = new DebugOptions { Trace = true, ForceArms = ReplayTests.ControlArms },
+            };
+        }
     }
 
     private static (int? TimeoutMs, string? Fallback) Ranker(ExecutionPlan plan)

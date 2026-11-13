@@ -51,6 +51,34 @@ internal sealed class PlanTelemetry
 
     public static string CategoryName(NodeOutcomeCategory category) => CategoryNames[(int)category];
 
+    /// <summary>The category of a <see cref="CategoryName"/> (a recording's node outcome); false for an unknown name.</summary>
+    public static bool TryParseCategory(string name, out NodeOutcomeCategory category)
+    {
+        for (var i = 0; i < CategoryNames.Length; i++)
+        {
+            if (string.Equals(CategoryNames[i], name, StringComparison.Ordinal))
+            {
+                category = (NodeOutcomeCategory)i;
+                return true;
+            }
+        }
+
+        category = default;
+        return false;
+    }
+
+    /// <summary>
+    /// The <see cref="NodeOutcomeKind"/> a result and a trace report for a category. Recordings and metrics keep the
+    /// category; this is the one mapping between the two, so a comparison of either kind of run goes through it.
+    /// </summary>
+    public static NodeOutcomeKind Kind(NodeOutcomeCategory category) => category switch
+    {
+        NodeOutcomeCategory.Succeeded => NodeOutcomeKind.Succeeded,
+        NodeOutcomeCategory.Degraded or NodeOutcomeCategory.Fallback => NodeOutcomeKind.Degraded,
+        NodeOutcomeCategory.Failed or NodeOutcomeCategory.Aborted => NodeOutcomeKind.Failed,
+        NodeOutcomeCategory.SkippedWhen or NodeOutcomeCategory.SkippedDeadline or NodeOutcomeCategory.SkippedInput => NodeOutcomeKind.Skipped,
+    };
+
     public static PlanTelemetry Create(ExecutionPlan plan)
     {
         var pipeline = plan.PipelineId;

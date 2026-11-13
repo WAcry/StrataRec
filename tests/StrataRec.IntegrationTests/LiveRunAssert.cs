@@ -33,8 +33,16 @@ internal static class LiveRunAssert
         Assert.True(result.Recording is not null, "compare the node outcomes of a request that traces (DebugOptions.Trace) or records");
         return result.Recording.Runs
             .SelectMany(run => run.Nodes.Select(n => (Node: run.Role == "primary" ? n.Node : run.PipelineId + ":" + n.Node, n)))
-            .Select(x => (x.Node, Outcome(x.n.Outcome, x.n.Node, x.n.ProducedBy, x.n.Detail)))
+            .Select(x => (x.Node, Outcome(Kind(x.n.Outcome), x.n.Node, x.n.ProducedBy, x.n.Detail)))
             .ToList();
+    }
+
+    /// <summary>A recording keeps the outcome category (<c>fallback</c>, <c>skipped_when</c>); a trace reports its kind. The
+    /// engine's own mapping makes the two comparable; the detail and the producer still tell the categories apart.</summary>
+    private static string Kind(string category)
+    {
+        Assert.True(PlanTelemetry.TryParseCategory(category, out var parsed), $"unknown outcome category '{category}' in the recording");
+        return PlanTelemetry.Kind(parsed).ToString();
     }
 
     private static string Outcome(string kind, string node, string? producedBy, string? detail) =>

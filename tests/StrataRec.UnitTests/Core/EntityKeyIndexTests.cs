@@ -303,6 +303,44 @@ public class EntityKeyIndexTests
     }
 
     [Fact]
+    public void Reset_BackToStrings_ChecksEveryStringArray_WhenThePoolRoundsThemDifferently()
+    {
+        // A pool may hand out more than asked, differently per element type: here string arrays come back with at least
+        // 64 entries while the hash array (int) is exact. After the index grew for int64 keys, switching back to strings
+        // must not take the long string array as proof that the hash array fits too (review 14).
+        var index = new EntityKeyIndex(EntityKeyType.String, 0, new RequestMemory(new StringRoundingPool(64)));
+        Assert.True(index.TryAdd("first", 0));
+
+        index.Reset(EntityKeyType.Int64, 32);
+        Assert.True(index.TryAdd(1L, 1));
+
+        index.Reset(EntityKeyType.String, 32);
+        for (var i = 0; i < 32; i++)
+        {
+            Assert.True(index.TryAdd("k" + i, i));
+        }
+
+        for (var i = 0; i < 32; i++)
+        {
+            Assert.True(index.TryGetValue("k" + i, out var value));
+            Assert.Equal(i, value);
+        }
+
+        Assert.Equal(32, index.Count);
+    }
+
+    /// <summary>Rents string arrays of at least <c>stringLength</c> entries and every other array at the exact length.</summary>
+    private sealed class StringRoundingPool(int stringLength) : IBufferPool
+    {
+        public T[] Rent<T>(int minimumLength) =>
+            new T[typeof(T) == typeof(string) ? Math.Max(minimumLength, stringLength) : Math.Max(1, minimumLength)];
+
+        public void Return<T>(T[] array, bool clearArray)
+        {
+        }
+    }
+
+    [Fact]
     public void ArgumentsAreValidated()
     {
         var memory = new RequestMemory();
