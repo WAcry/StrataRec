@@ -79,15 +79,18 @@ public sealed class MemoryFeatureUpdateSource : IFeatureUpdateSource
                 completed = _completed;
             }
 
+            // Cancellation is checked before every update and once more before the checkpoint and the return, so a
+            // cancellation that arrives while an update is applied (the last one included) still ends the run with
+            // OperationCanceledException. Updates applied before it stay; the position is not advanced past them, so a
+            // rerun from the table's position applies them again, which versions make harmless.
             foreach (var update in batch)
             {
-                // Updates applied before a cancellation stay; the position is not advanced past them, so a rerun from the
-                // table's position applies them again, which versions make harmless.
                 cancellationToken.ThrowIfCancellationRequested();
                 Apply(update, next, writer);
                 next++;
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             if (batch.Length > 0)
             {
                 writer.Checkpoint(UpdatePosition.Single(next));
