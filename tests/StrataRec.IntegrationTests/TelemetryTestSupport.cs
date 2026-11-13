@@ -99,24 +99,26 @@ internal sealed class MetricCapture : IDisposable
 }
 
 /// <summary>
-/// Cancels <see cref="Token"/> a fixed time after a node starts (its span starts), for a test about a request the caller
-/// cuts off in that node. A timer started with the request fires in an earlier node whenever the nodes before it are slow,
-/// as on a busy machine; this one cannot fire before that node runs.
+/// Cancels <see cref="Token"/> a fixed time after an external call starts, for a test about a request the caller cuts off
+/// while that call is in flight. The call's span (<c>model ctr_model</c>, <c>recall popular</c>) is started by the
+/// framework right before it invokes the client, so this is the moment a gated client would report that it was entered,
+/// with the clients under test left as they are. A timer started with the request fires in an earlier node whenever the
+/// nodes before it are slow, as on a busy machine; this one cannot fire before the call is made.
 /// </summary>
-internal sealed class CancelInNode : IDisposable
+internal sealed class CancelOnceCallStarts : IDisposable
 {
     private readonly CancellationTokenSource _cancel = new();
     private readonly ActivityListener _listener;
 
-    public CancelInNode(string node, TimeSpan after)
+    public CancelOnceCallStarts(string call, TimeSpan after)
     {
         _listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == StrataRecTelemetry.Name,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded, // node spans exist
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded, // call spans exist
             ActivityStarted = span =>
             {
-                if (span.OperationName == node)
+                if (span.OperationName == call)
                 {
                     _cancel.CancelAfter(after);
                 }

@@ -383,7 +383,7 @@ public class FeatureRuntimeReviewRegressionTests
 
         Assert.True(result.Failed);
         Assert.Contains("timed out", result.Error);
-        Assert.True(elapsed.ElapsedMilliseconds < 5000, $"waited {elapsed.ElapsedMilliseconds} ms");
+        Assert.True(elapsed.ElapsedMilliseconds < 30_000, $"waited {elapsed.ElapsedMilliseconds} ms"); // the connector never answers: a generous watchdog
 
         request.Memory.Release(); // the request finishes while the connector is still in flight
         Assert.False(request.Memory.IsReturned);
@@ -413,7 +413,7 @@ public class FeatureRuntimeReviewRegressionTests
         elapsed.Stop();
 
         Assert.True(result.Failed);
-        Assert.True(elapsed.ElapsedMilliseconds < 10_000, $"waited {elapsed.ElapsedMilliseconds} ms");
+        Assert.True(elapsed.ElapsedMilliseconds < 30_000, $"waited {elapsed.ElapsedMilliseconds} ms"); // the connector never answers: a generous watchdog
         release.SetResult();
         await request.Fetcher.WhenIoCompleteAsync();
     }

@@ -337,9 +337,11 @@ public class FetchChunkTests
             "tag" => "late",
             _ => new long[64],
         };
+        var hook = new DecisionHook();
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
-            if (keys.CandidateKeys.Span[0].Int64Value == 1)
+            var first = keys.CandidateKeys.Span[0].Int64Value;
+            if (first == 1)
             {
                 return OnThread(start, () =>
                 {
@@ -370,6 +372,7 @@ public class FetchChunkTests
                     }
                 }
 
+                hook.Answered(first);
                 return FetchStatus.Ok;
             });
         });
@@ -379,21 +382,21 @@ public class FetchChunkTests
         var history = rig.Physical("item.history", FeatureTestRig.Item, ColumnType.ListInt64, "item_store");
         rig.Build();
         var pool = new PoisoningPool();
-        var hook = new DecisionHook();
         var request = rig.NewRequest(Enumerable.Range(1, Chunks * MaxBatch).Select(i => (long)i).ToArray(), pool: pool, hook: hook);
         using var caller = new CancellationTokenSource();
 
         var ensure = request.Fetcher.EnsureAsync(new[] { score, tag, history }, caller.Token).AsTask();
         start.Set();
-        await hook.WhenDecided(Chunks - 1).WaitAsync(Patience); // every chunk but the hung one is decided
+        await hook.WhenDecided(Chunks - 1, Patience); // every chunk but the hung one
         Assert.True(abandonedWrote.Wait(Patience));
         caller.Cancel();
         var result = await ensure.WaitAsync(Patience); // returns at once, the first chunk still running
 
-        Assert.Equal(FeatureState.Degraded, result.State);
-        Assert.Contains("was cancelled", result.Error);
-        Assert.Equal((Chunks, Chunks), (hook.Decided, hook.Outcomes.Count)); // each decided once
-        Assert.All(hook.Outcomes, call => Assert.Equal(call.Key == 1 ? IoOutcome.Cancelled : IoOutcome.Ok, call.Value));
+        // The controls are the chunks the fetch accepted, not the ones that merely finished their work; every message
+        // carries each chunk's outcome and timing, so a failure explains itself.
+        Assert.True(result.State == FeatureState.Degraded && result.Error!.Contains("was cancelled", StringComparison.Ordinal), $"{result.State}, {result.Error}; {hook.Describe()}");
+        Assert.True(hook.Decided == Chunks && hook.Outcomes.Count == Chunks, $"each chunk is decided once; {hook.Describe()}");
+        Assert.True(hook.Outcomes.All(call => call.Value.Outcome == (call.Key == 1 ? IoOutcome.Cancelled : IoOutcome.Ok)), hook.Describe());
         for (var row = 0; row < Chunks * MaxBatch; row++)
         {
             long key = row + 1;
@@ -406,6 +409,7 @@ public class FetchChunkTests
                 continue;
             }
 
+            Assert.True(request.IsFilled(score, row) && !request.Value(score, row).IsMissing, $"key {key} has no value; {hook.Describe()}");
             Assert.Equal(key * 0.5, request.Value(score, row).AsFloat64());
             Assert.Equal("t" + key, request.Value(tag, row).AsString());
             Assert.Equal(new[] { key, key + 1, key + 2 }, request.Value(history, row).AsInt64List());
@@ -495,34 +499,52 @@ public class FetchChunkTests
     }
 
     /// <summary>
-    /// Records the outcome of each call by its first key, and tells when a number of calls has been decided: what a test
-    /// waits for before it cuts off the calls still running, instead of hoping a budget runs out after the others.
+    /// Records each call's outcome by its first key and when the fetch decided it, and tells when a number of calls has
+    /// been decided: what a test waits for before it cuts off the calls still running, instead of hoping a budget runs out
+    /// after the others. <see cref="Describe"/> puts it all in a failure message.
     /// </summary>
     private sealed class DecisionHook : IFeatureCallHook
     {
+        private readonly long _created = Stopwatch.GetTimestamp();
+        private readonly ConcurrentDictionary<long, long> _answered = new();
         private readonly List<(int Count, TaskCompletionSource Reached)> _awaited = new();
         private int _decided;
 
-        public ConcurrentDictionary<long, IoOutcome> Outcomes { get; } = new();
+        public ConcurrentDictionary<long, (IoOutcome Outcome, long At)> Outcomes { get; } = new();
 
         /// <summary>Calls recorded, counting a call recorded twice twice.</summary>
         public int Decided => Volatile.Read(ref _decided);
 
         public bool Replays => false;
 
-        public Task WhenDecided(int count)
+        /// <summary>Notes that the connector's call for <paramref name="key"/> has done its work and is about to return.</summary>
+        public void Answered(long key) => _answered[key] = Stopwatch.GetTimestamp();
+
+        public async Task WhenDecided(int count, TimeSpan patience)
         {
+            Task reached;
             lock (_awaited)
             {
                 if (_decided >= count)
                 {
-                    return Task.CompletedTask;
+                    return;
                 }
 
-                var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                _awaited.Add((count, reached));
-                return reached.Task;
+                var source = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _awaited.Add((count, source));
+                reached = source.Task;
             }
+
+            Assert.True(await Task.WhenAny(reached, Task.Delay(patience)) == reached, $"{Decided} of {count} calls decided after {patience}; {Describe()}");
+        }
+
+        public string Describe()
+        {
+            var keys = new SortedSet<long>(Outcomes.Keys);
+            keys.UnionWith(_answered.Keys);
+            return string.Join("; ", keys.Select(key =>
+                $"key {key}: " + (_answered.TryGetValue(key, out var answered) ? $"answered at {Ms(answered)} ms, " : string.Empty) +
+                (Outcomes.TryGetValue(key, out var decided) ? $"{decided.Outcome} at {Ms(decided.At)} ms" : "undecided")));
         }
 
         public int Begin(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields) => 0;
@@ -531,7 +553,7 @@ public class FetchChunkTests
         {
             lock (_awaited)
             {
-                Outcomes[call.Batch.CandidateKeys.Span[0].Int64Value] = call.Outcome;
+                Outcomes[call.Batch.CandidateKeys.Span[0].Int64Value] = (call.Outcome, Stopwatch.GetTimestamp());
                 _decided++;
                 foreach (var (count, reached) in _awaited)
                 {
@@ -545,5 +567,7 @@ public class FetchChunkTests
 
         public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer) =>
             throw new NotSupportedException();
+
+        private string Ms(long timestamp) => Stopwatch.GetElapsedTime(_created, timestamp).TotalMilliseconds.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
     }
 }
