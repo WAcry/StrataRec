@@ -1,0 +1,87 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build-test:
+    name: build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore StrataRec.sln
+
+      - name: Build (warnings are errors)
+        run: dotnet build StrataRec.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test StrataRec.sln -c Release --no-build --logger "trx;LogFilePrefix=results" --results-directory TestResults
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: TestResults
+
+  sample:
+    # The same static checks a configuration change would run, plus one local request (design 10.1).
+    name: validate and run the sample workspace
+    runs-on: ubuntu-latest
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build the CLI
+        run: dotnet build src/StrataRec.Cli -c Release
+
+      - name: Validate
+        run: dotnet run --project src/StrataRec.Cli -c Release --no-build -- validate -c samples/home_feed
+
+      - name: Explain the plan
+        run: dotnet run --project src/StrataRec.Cli -c Release --no-build -- explain-plan -c samples/home_feed
+
+      - name: Run a request
+        run: dotnet run --project src/StrataRec.Cli -c Release --no-build -- run -c samples/home_feed -r samples/home_feed/requests/user_1001.json --trace
+
+  benchmarks:
+    # Smoke only: proves the benchmarks still build and run. Shared runners are too noisy for regression thresholds.
+    name: benchmarks (dry run)
+    runs-on: ubuntu-latest
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Dry run
+        run: dotnet run -c Release --project tests/StrataRec.Benchmarks -- --filter '*' --job dry

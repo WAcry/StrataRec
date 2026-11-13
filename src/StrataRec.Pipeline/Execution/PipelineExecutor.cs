@@ -210,7 +210,11 @@ public sealed class PipelineExecutor
             };
 
             fetcher.StartContextFetch(plan.ContextFeatures, cancellationToken);
-            await TapCapture.SelectAsync(state, cancellationToken).ConfigureAwait(false);
+            if (_logs is not null || request.CaptureLogs)
+            {
+                // Without a consumer every captured batch would be discarded: skip sampling and capture entirely.
+                await TapCapture.SelectAsync(state, cancellationToken).ConfigureAwait(false);
+            }
 
             PipelineResult? result = null;
             for (var i = 0; i < plan.Timeline.Length && result is null; i++)
