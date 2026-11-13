@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Features.Local;
@@ -322,6 +323,53 @@ public class LocalTableWriterTests
         Assert.Equal(18, table.Pin().RecordCount);
     }
 
+    [Fact]
+    public void RejectedWrite_DoesNotKeepTheDiscardedCompactedCopyAlive()
+    {
+        // Codex review 11, item 3: the write's one string is looked up in the compacted copy built to make room for it;
+        // the copy does not make room, the write fails, and the lookup cache kept the whole copy alive (40 KB here, a
+        // second table at real size) until the next Begin, which a source stopped by the failure may never call.
+        var schema = Schema(fields: new[] { new LocalTableField("t", ColumnType.Text), new LocalTableField("s", ColumnType.String) });
+        var options = new LocalFeatureTableOptions { PageSize = 4096, MaxBytes = 46448, CompactionMinBytes = long.MaxValue };
+        var table = new LocalFeatureTable(schema, options);
+        FillTextAndCategory(table.Writer);
+        var before = table.Pin();
+        Assert.Equal(46448, before.Bytes);
+        Assert.True(before.SupersededBytes > 0);
+
+        var copy = FailWriteThatNeedsACompaction(table.Writer);
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        Assert.False(copy.IsAlive, "the writer keeps the compacted copy of a rejected write alive");
+        Assert.Same(before, table.Pin());
+        Assert.Equal((46448L, before.Generation, 0L), (table.Pin().Bytes, table.Pin().Generation, table.Compactions));
+        Assert.False(table.Pin().Find(999L).Found);
+    }
+
+    [Fact]
+    public void ExplicitCompaction_ThatWouldNotFit_IsRejected_AndTheTableIsUnchanged()
+    {
+        // Codex review 11 (docs): a compacted copy can be larger than the table, so the guard that rejects it is reachable.
+        // The table: key 1's empty text in a small first page, key 2's 80 KB of text in a page of its own. The copy opens
+        // its first page for all the bytes still to copy (a whole 64 KiB page), puts key 1 in it, and key 2 does not fit:
+        // it takes a second page, and the first stays almost empty.
+        var schema = Schema(fields: new[] { new LocalTableField("t", ColumnType.Text) });
+        var table = new LocalFeatureTable(schema, new LocalFeatureTableOptions { PageSize = 65536, MaxBytes = 84632, CompactionMinBytes = long.MaxValue });
+        WriteText(table.Writer, 1, 1, 0);
+        WriteText(table.Writer, 2, 1, 40_000);
+        var before = table.Pin();
+        Assert.Equal(84632, before.Bytes);
+
+        var full = Assert.Throws<LocalTableFullException>(() => table.Writer.Compact());
+
+        Assert.Equal((84632L, 146072L), (full.MaxBytes, full.RequiredBytes));
+        Assert.Same(before, table.Pin());
+        Assert.Equal((84632L, before.Generation, 0L), (table.Pin().Bytes, table.Pin().Generation, table.Compactions));
+        Assert.Equal(new string('t', 40_000), before.Read(0, before.Find(2L)).AsString());
+    }
+
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
@@ -433,6 +481,45 @@ public class LocalTableWriterTests
         Assert.Equal(0, table.Compactions);
         Assert.False(table.Pin().Find(lastKey).Found);
         Assert.Equal("b", before.Read(table.Schema.FieldIndex("s"), before.Find(1L)).AsString());
+    }
+
+    /// <summary>20 records of 1,000 chars of text sharing one category, then key 1 again: one superseded record.</summary>
+    private static void FillTextAndCategory(IFeatureTableWriter writer)
+    {
+        for (var key = 1; key <= 20; key++)
+        {
+            WriteTextAndCategory(writer, key, 1, 1_000);
+        }
+
+        WriteTextAndCategory(writer, 1, 2, 7);
+    }
+
+    private static void WriteTextAndCategory(IFeatureTableWriter writer, long key, long version, int chars)
+    {
+        var builder = writer.Begin(key, version);
+        builder.SetString(writer.Schema.FieldIndex("t"), new string('t', chars));
+        builder.SetString(writer.Schema.FieldIndex("s"), "category");
+        builder.Commit();
+    }
+
+    /// <summary>A write of a million chars that fails after a compaction was tried; a weak reference to the copy it built.
+    /// Not inlined, so no local of this frame keeps the copy alive in the caller.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference FailWriteThatNeedsACompaction(LocalTableWriter writer)
+    {
+        WeakReference? copy = null;
+        writer.CompactedCopyBuilt = version => copy = new WeakReference(version);
+        try
+        {
+            Assert.Throws<LocalTableFullException>(() => WriteTextAndCategory(writer, 999, 1, 1_000_000));
+        }
+        finally
+        {
+            writer.CompactedCopyBuilt = null;
+        }
+
+        Assert.NotNull(copy);
+        return copy;
     }
 
     private static long BytesAfter(long maxBytes, Action<IFeatureTableWriter> write)
