@@ -26,6 +26,7 @@ dotnet run --project src/StrataRec.Cli -- --help
 | `StrataRec.Expressions` | `ColumnExpr`：解析、类型与可空性检查、IR、向量化后端 |
 | `StrataRec.Features` | 特征目录、拉取规划、连接器、暂存与回填 |
 | `StrataRec.Models` | `IModelClient` 契约与内置客户端 |
+| `StrataRec.Models.Onnx` | `local_onnx@1`（ONNX Runtime）；唯一带原生依赖的项目，引擎的其他包不引用它 |
 | `StrataRec.Logging` | 漏斗组、探针、协调采样、异步日志管道 |
 | `StrataRec.Pipeline` | 节点模型、效果、算子、执行器 |
 | `StrataRec.Experiments` | 流量分配、补丁校验、足迹、联合计划、触发 |
