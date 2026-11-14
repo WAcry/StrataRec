@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Diagnostics;
+using StrataRec.Core.Keys;
 using StrataRec.Core.Threading;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Assignment;
@@ -138,6 +139,19 @@ public sealed class DebugOptions
     /// without recording. A request rejected or aborted before any pipeline ran has nothing to replay and no bundle.
     /// </remarks>
     public Action<ReplayBundle>? OnRecording { get; init; }
+
+    /// <summary>
+    /// Candidates to explain (design 13.3), as entity ids of the pipeline's key type: <see cref="RecResult.Explanation"/>
+    /// then says, for each, where it ended (returned, past the limit, dropped by which node, never recalled) and its state
+    /// after every node of the run that served: live or not, its rank, the values of the columns the node read and wrote,
+    /// and the operator's reason where it gives one. At most <see cref="MaxExplainIds"/>; ids of the other key type or
+    /// more ids than that fail the request with <see cref="RecErrorKind.InvalidRequest"/> before anything runs. Costs
+    /// nothing when null; when set, work and memory grow with ids × nodes, not with the candidates.
+    /// </summary>
+    public IReadOnlyList<EntityKey>? ExplainIds { get; init; }
+
+    /// <summary>The most ids <see cref="ExplainIds"/> may hold.</summary>
+    public const int MaxExplainIds = ExplainTargets.MaxCount;
 }
 
 /// <summary>Assignment and trigger record of a request (design 12.6).</summary>
@@ -202,6 +216,12 @@ public sealed class RecResult
     /// to <see cref="DebugOptions.OnRecording"/>.
     /// </summary>
     public ReplayBundle? Recording { get; init; }
+
+    /// <summary>
+    /// The explained candidates when <see cref="DebugOptions.ExplainIds"/> was set and a pipeline ran: those of the run that
+    /// served the result (<see cref="RunExplanation.PipelineId"/>, the fallback pipeline when it served); null otherwise.
+    /// </summary>
+    public RunExplanation? Explanation { get; init; }
 
     public double ElapsedMs { get; init; }
 }
@@ -641,6 +661,13 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                 return result = Rejected(request, RecErrorKind.InvalidRequest, RequestSchema.Describe(invalid), pointer: invalid.Pointer);
             }
 
+            // A debug option, like forced arms: the caller's mistake, without a pointer into the body.
+            if (request.Debug?.ExplainIds is { } explainIds
+                && ExplainTargets.Check(explainIds, pipeline.Plan.TableSchema.KeyType, request.PipelineId) is { } explainError)
+            {
+                return result = Rejected(request, RecErrorKind.InvalidRequest, explainError);
+            }
+
             var assignment = await AssignAsync(pipeline, request, started, cancellationToken).ConfigureAwait(false);
             if (assignment.Error is { } assignmentError)
             {
@@ -932,6 +959,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             Seed = seed,
             TimeMs = timeMs,
             CaptureLogs = request.Debug?.CaptureLogs == true,
+            ExplainIds = request.Debug?.ExplainIds,
             OnRecording = runs is null ? null : runs.Add,
             OnEnd = pipeline.Bindings.Join(), // last: the executor, called next, ends it on every outcome
         }, cancellationToken);
@@ -984,6 +1012,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         ColumnProducers = converted.ColumnProducers,
         Trace = converted.Trace,
         LogBatches = converted.LogBatches,
+        Explanation = converted.Explanation, // of the run that served
         ElapsedMs = executed.ElapsedMs + served.ElapsedMs,
     };
 
@@ -1000,6 +1029,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         ColumnProducers = result.ColumnProducers,
         Trace = request.Debug?.Trace == true ? result.Outcomes : null,
         LogBatches = request.Debug?.CaptureLogs == true ? result.LogBatches : null,
+        Explanation = result.Explanation,
         ElapsedMs = result.ElapsedMs,
     };
 

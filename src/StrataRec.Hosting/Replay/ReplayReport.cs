@@ -13,6 +13,13 @@ public sealed class ReplayOptions
 {
     /// <summary>Arms to run with (<c>experiment/arm</c>) instead of the recorded assignment.</summary>
     public IReadOnlyList<string>? Arms { get; init; }
+
+    /// <summary>
+    /// Candidates to explain in the replayed run (design 13.3), as for a request (<see cref="DebugOptions.ExplainIds"/>):
+    /// <see cref="ReplayOutcome.Result"/> then carries the explanations. Ids the replayed plan cannot take (the other key
+    /// type, more than <see cref="DebugOptions.MaxExplainIds"/>) reject the replay as an invalid request.
+    /// </summary>
+    public IReadOnlyList<EntityKey>? ExplainIds { get; init; }
 }
 
 /// <summary>A replayed request: the result the configuration produced from the recording, and how it differs.</summary>

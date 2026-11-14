@@ -74,6 +74,14 @@ public sealed class PipelineRequest
     /// <remarks>Set, it is called exactly once per <see cref="PipelineExecutor.ExecuteAsync"/>, whatever the outcome.</remarks>
     public IRequestEndObserver? OnEnd { get; init; }
 
+    /// <summary>
+    /// Candidates to explain (design 13.3): <see cref="PipelineResult.Explanation"/> then has, for each, its state after
+    /// every node. At most <see cref="ExplainTargets.MaxCount"/>, or the run fails as with invalid inputs; repeated ids are
+    /// explained once, and an id of the other key type is never found (a host checks ids first with
+    /// <see cref="ExplainTargets.Check"/>). Null, the default, costs nothing but a null check per node.
+    /// </summary>
+    public IReadOnlyList<EntityKey>? ExplainIds { get; init; }
+
     /// <summary>The seed of a request that does not set one: a hash of its id (design 3.4).</summary>
     public static long DefaultSeed(string requestId) => unchecked((long)StableHash.Hash(StableHash.SeedFromSalt(requestId)));
 }
@@ -142,6 +150,9 @@ public sealed class PipelineResult
 
     /// <summary>The run's recording when <see cref="PipelineRequest.Record"/> was set (design 13.4).</summary>
     public ReplayRunRecord? Recording { get; set; }
+
+    /// <summary>The explained candidates when <see cref="PipelineRequest.ExplainIds"/> was set (design 13.3); null otherwise.</summary>
+    public RunExplanation? Explanation { get; set; }
 }
 
 /// <summary>Mutable per-request state shared by the executor and operator contexts.</summary>
@@ -235,6 +246,9 @@ internal sealed class RequestState
     /// <summary>Answers external calls and timing decisions from a recording; null unless the request is a replay.</summary>
     public RunReplay? Replay { get; init; }
 
+    /// <summary>Follows the candidates the request explains; null unless it asked to (design 13.3).</summary>
+    public CandidateExplainer? Explainer { get; init; }
+
     public TimeSpan Remaining => Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), DeadlineTimestamp);
 
     public EvalContext Eval => new(Table, Bindings, Context, Params, Counters);
@@ -292,7 +306,7 @@ public sealed class PipelineExecutor
         try
         {
             var context = new ScalarValue[plan.Schema.ContextFields.Count];
-            var inputError = BindInputs(plan, request, context);
+            var inputError = (request.ExplainIds is { } explainIds ? ExplainTargets.TooMany(explainIds.Count) : null) ?? BindInputs(plan, request, context);
             if (inputError is not null)
             {
                 var rejected = Failed(plan, request, inputError, start, Array.Empty<NodeOutcome>(), Array.Empty<bool>());
@@ -359,6 +373,7 @@ public sealed class PipelineExecutor
                 TraceNodes = replay is null && StrataRecTracing.IsRecording,
                 Recorder = recorder,
                 Replay = replay,
+                Explainer = request.ExplainIds is { } explain ? new CandidateExplainer(explain) : null,
             };
 
             fetcher.StartContextFetch(plan.ContextFeatures, cancellationToken);
@@ -386,6 +401,11 @@ public sealed class PipelineExecutor
             }
 
             result ??= await BuildResultAsync(state, request, start, cancellationToken).ConfigureAwait(false);
+            if (state.Explainer is { } explainer)
+            {
+                result.Explanation = explainer.Build(plan.PipelineId, result.Succeeded, result.Items.Count);
+            }
+
             if (recorder is not null)
             {
                 result.Recording = recorder.Build(plan, request, parameters, result, LogDestination(request));
@@ -523,6 +543,7 @@ public sealed class PipelineExecutor
         if (!await EvaluateWhenAsync(state, position, node, cancellationToken).ConfigureAwait(false))
         {
             Record(state, node, NodeOutcomeCategory.SkippedWhen, "when is false", null, started, rowsIn);
+            state.Explainer?.Skipped(node.NodeId, "when is false");
             return null;
         }
 
@@ -534,6 +555,7 @@ public sealed class PipelineExecutor
             if (node.MinRemainingMs is { } minRemaining && remainingMs < minRemaining)
             {
                 Record(state, node, NodeOutcomeCategory.SkippedDeadline, $"less than {minRemaining} ms remaining", null, started, rowsIn);
+                state.Explainer?.Skipped(node.NodeId, $"less than {minRemaining} ms remaining");
                 return null;
             }
         }
@@ -609,7 +631,33 @@ public sealed class PipelineExecutor
 
     private readonly record struct Attempt(NodeOutcomeKind Kind, string? Detail);
 
-    private static async ValueTask<Attempt> RunNodeAsync(RequestState state, CompiledNode node, int reserveMs, CancellationToken cancellationToken)
+    /// <summary>Runs one attempt of a node; for a request that explains candidates, also records the attempt's step (design 13.3).</summary>
+    private static ValueTask<Attempt> RunNodeAsync(RequestState state, CompiledNode node, int reserveMs, CancellationToken cancellationToken)
+    {
+        return state.Explainer is null ? AttemptAsync(state, node, reserveMs, cancellationToken) : Explained(state, node, reserveMs, cancellationToken);
+
+        static async ValueTask<Attempt> Explained(RequestState state, CompiledNode node, int reserveMs, CancellationToken cancellationToken)
+        {
+            var attempt = await AttemptAsync(state, node, reserveMs, cancellationToken).ConfigureAwait(false);
+            var explainer = state.Explainer!;
+            switch (attempt.Kind)
+            {
+                case NodeOutcomeKind.Skipped:
+                    explainer.Skipped(node.NodeId, attempt.Detail);
+                    break;
+                case NodeOutcomeKind.Failed:
+                    explainer.RolledBack(node.NodeId, attempt.Detail);
+                    break;
+                default:
+                    explainer.Ran(state, node);
+                    break;
+            }
+
+            return attempt;
+        }
+    }
+
+    private static async ValueTask<Attempt> AttemptAsync(RequestState state, CompiledNode node, int reserveMs, CancellationToken cancellationToken)
     {
         // Runtime protection (design 11.5 step 4): a required input with no producer skips the node.
         foreach (var logical in node.RequiredOutputs)
@@ -679,9 +727,12 @@ public sealed class PipelineExecutor
                 timedOut = true;
                 failure = $"timed out after {budgetMs:0} ms";
             }
-            else
+            else if ((failure = context.FailureReason) is null)
             {
-                failure = context.FailureReason ?? Commit(state, node);
+                // An explained request sees the attempt as the operator left it, before its outputs are committed: the
+                // operator explains itself reading the versions it read (CandidateExplainer.Observe).
+                state.Explainer?.Observe(state, node);
+                failure = Commit(state, node);
             }
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -783,6 +834,7 @@ public sealed class PipelineExecutor
         if (node.Compact == CompactMode.Always || (node.Compact == CompactMode.Auto && state.Table.LiveRatio < 0.5))
         {
             state.Table.Compact();
+            state.Explainer?.Compacted(); // rows moved: the explained ones are followed, not looked up again
         }
 
         if (node.FetchBarrier)

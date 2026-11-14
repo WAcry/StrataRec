@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
@@ -25,8 +27,24 @@ public sealed class ExpressionFilterFactory : IOperatorFactory
         return predicate is null ? null : new ExpressionFilter(predicate);
     }
 
-    private sealed class ExpressionFilter(CompiledExpression predicate) : Operator
+    private sealed class ExpressionFilter(CompiledExpression predicate) : Operator, IExplainableOperator
     {
+        /// <summary>The predicate and its value for each row it tested (design 13.3).</summary>
+        public void Explain(ExplainContext context)
+        {
+            var values = context.Evaluate(predicate);
+            for (var t = 0; t < context.Count; t++)
+            {
+                if (!context.WasAlive(t))
+                {
+                    continue;
+                }
+
+                context.Term(t, "predicate", values[t]);
+                context.Reason(t, context.IsAlive(t) ? $"kept: {predicate.Source} is true" : $"dropped: {predicate.Source} is false");
+            }
+        }
+
         public override ValueTask ExecuteAsync(OperatorContext context)
         {
             var rows = context.LiveRows;
@@ -180,8 +198,61 @@ public sealed class CompositeMultiplierScorerFactory : IOperatorFactory
         CompiledExpression baseExpr,
         (string Name, CompiledExpression Expr)[] multipliers,
         (string Name, CompiledExpression Expr)[] addends,
-        OutputColumn output) : Operator
+        OutputColumn output) : Operator, IExplainableOperator
     {
+        /// <summary>
+        /// The base utility, each multiplier and each addend for a scored row (design 13.3 item 3), and the score they make
+        /// in the operator's order: the base, times each multiplier, plus each addend, in float64.
+        /// </summary>
+        public void Explain(ExplainContext context)
+        {
+            var terms = new ScalarValue[1 + multipliers.Length + addends.Length][];
+            terms[0] = context.Evaluate(baseExpr);
+            for (var m = 0; m < multipliers.Length; m++)
+            {
+                terms[1 + m] = context.Evaluate(multipliers[m].Expr);
+            }
+
+            for (var a = 0; a < addends.Length; a++)
+            {
+                terms[1 + multipliers.Length + a] = context.Evaluate(addends[a].Expr);
+            }
+
+            for (var t = 0; t < context.Count; t++)
+            {
+                if (!context.IsAlive(t))
+                {
+                    continue;
+                }
+
+                var text = new StringBuilder();
+                var score = Term(context, t, "base", terms[0][t], text);
+                for (var m = 0; m < multipliers.Length; m++)
+                {
+                    text.Append(" × ");
+                    score *= Term(context, t, "multiplier." + multipliers[m].Name, terms[1 + m][t], text);
+                }
+
+                for (var a = 0; a < addends.Length; a++)
+                {
+                    text.Append(" + ");
+                    score += Term(context, t, "addend." + addends[a].Name, terms[1 + multipliers.Length + a][t], text);
+                }
+
+                context.Reason(t, $"{output.Name} = {text} = {Format(score)}");
+            }
+        }
+
+        private static double Term(ExplainContext context, int target, string name, in ScalarValue value, StringBuilder text)
+        {
+            context.Term(target, name, value);
+            var number = value.IsMissing ? double.NaN : value.AsFloat64(); // score terms are non-nullable float64
+            text.Append(Format(number));
+            return number;
+        }
+
+        private static string Format(double value) => value.ToString("R", CultureInfo.InvariantCulture);
+
         public override ValueTask ExecuteAsync(OperatorContext context)
         {
             var rows = context.LiveRows;

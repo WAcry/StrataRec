@@ -49,7 +49,7 @@ public sealed partial class RecEngine
             Deadline = RunReplay.Deadline,
             Seed = recordedRequest.Seed,
             TimeMs = recordedRequest.TimeMs,
-            Debug = new DebugOptions { Trace = true, CaptureLogs = true },
+            Debug = new DebugOptions { Trace = true, CaptureLogs = true, ExplainIds = options?.ExplainIds },
         };
         var recordedArms = primaryRecord?.Arms ?? recordedRequest.Assignment.Arms;
         if (Enter(recordedRequest.PipelineId, out var disposed) is not { } pipeline)
@@ -87,6 +87,12 @@ public sealed partial class RecEngine
             {
                 var rejected = Rejected(request, RecErrorKind.InvalidRequest, RequestSchema.Describe(invalid), pointer: invalid.Pointer);
                 return Outcome(bundle, rejected, null, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null, notes, 0, plan.ManifestId);
+            }
+
+            if (options?.ExplainIds is { } explainIds && ExplainTargets.Check(explainIds, plan.TableSchema.KeyType, request.PipelineId) is { } explainError)
+            {
+                return Outcome(bundle, Rejected(request, RecErrorKind.InvalidRequest, explainError), null, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null,
+                    notes, 0, plan.ManifestId);
             }
 
             var known = new List<string>();
@@ -191,6 +197,7 @@ public sealed partial class RecEngine
         Seed = request.Seed,
         TimeMs = request.TimeMs,
         CaptureLogs = true,
+        ExplainIds = request.Debug?.ExplainIds,
         OnRecording = replayed.Add,
         Replay = replay,
         OnEnd = pipeline.Bindings.Join(), // last: the executor, called next, ends it on every outcome
@@ -404,6 +411,7 @@ public sealed partial class RecEngine
         Trace = result.Trace,
         LogBatches = result.LogBatches,
         Recording = bundle,
+        Explanation = result.Explanation,
         ElapsedMs = result.ElapsedMs,
     };
 
