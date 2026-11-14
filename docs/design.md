@@ -2185,9 +2185,9 @@ trace 只在调试请求中生成，内容不做屏蔽（第 8.9 节）。
 
 命令行工具：
 
-1. **`stratarec replay --bundle <file> --manifest <sha>`**：在指定配置上重现请求，输出结果、trace 和与原始结果的差异。
-2. **`stratarec explain-plan --manifest <sha> --arms a,b`**：打印指定桶组合下的有效节点列表、每个节点合并后的配置和参数值。
-3. **`stratarec diff`**：按桶组合对两个 manifest 做语义对比（节点、配置、参数、探针），代替逐行比较 JSON。
+1. **`stratarec replay --bundle <file> --store <dir>`**：在每个包录制时的 manifest 上重现请求，输出结果、trace 和与原始结果的差异；`--manifest <sha>` 或 `-c <工作区>` 指定别的配置。
+2. **`stratarec explain-plan --manifest <sha> --store <dir> --arms a,b`**：打印指定桶组合下的有效节点列表、每个节点合并后的配置、参数值、探针和输出。
+3. **`stratarec diff --from <ref> --to <ref>`**：按桶组合对两份配置（manifest 或工作区）做语义对比（节点、配置、参数、探针），代替逐行比较 JSON；`--to` 是 manifest 时 `--from` 默认取它的 `previous`。
 
 ## 14. 安全与资源防护
 
