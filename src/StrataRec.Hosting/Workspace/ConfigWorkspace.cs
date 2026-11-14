@@ -103,16 +103,6 @@ public sealed class ConfigWorkspace
             }
         }
 
-        if (Directory.Exists(Path.Combine(workspace.Root, "allocation")))
-        {
-            // Its files are not read: compiling the baseline without the experiments they list would serve a different
-            // release without saying so.
-            diagnostics.Error("ALLOCATION_DIRECTORY_RENAMED", "allocation/", string.Empty,
-                "The directory was renamed to releases/: traffic allocation (ratios, ramping, salts, holdouts) is the experiment platform's, " +
-                "and a release file only composes the release (catalog, bindings, tables, each experiment's layer).",
-                "move allocation/<pipeline>.<env>.jsonc to releases/ and remove its \"assignment\" section and the experiments' \"arms\" ranges");
-        }
-
         foreach (var file in workspace.Files("releases"))
         {
             if (workspace.Read<ReleaseArtifact>(file, diagnostics) is { } a

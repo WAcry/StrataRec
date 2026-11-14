@@ -97,32 +97,6 @@ public sealed class WorkspaceTests
     }
 
     [Fact]
-    public void AnAllocationDirectoryFailsTheLoadSayingItWasRenamed()
-    {
-        // A workspace written for the built-in assigner must not load as the baseline alone, its experiments dropped.
-        var root = Directory.CreateTempSubdirectory("stratarec-ws-").FullName;
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(root, "allocation"));
-            File.WriteAllText(Path.Combine(root, "allocation", "p.local.jsonc"), """{ "pipeline_id": "p", "environment": "local" }""");
-
-            var diagnostics = new DiagnosticBag();
-            ConfigWorkspace.Load(root, diagnostics);
-
-            var error = Assert.Single(diagnostics.Items);
-            Assert.Equal("ALLOCATION_DIRECTORY_RENAMED", error.Code);
-            Assert.True(error.IsError);
-            Assert.Contains("releases/", error.Message);
-            Assert.Contains("experiment platform", error.Message);
-            Assert.Contains("releases/", error.Hint);
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Fact]
     public void SchemaErrorsPointIntoTheFile()
     {
         var root = Directory.CreateTempSubdirectory("stratarec-ws-").FullName;
