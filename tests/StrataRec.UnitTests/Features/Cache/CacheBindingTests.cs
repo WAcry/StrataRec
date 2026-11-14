@@ -91,6 +91,41 @@ public class CacheBindingTests
         Assert.Equal(TimeSpan.FromTicks(LocalTableCache.MaxRetentionMs * TimeSpan.TicksPerMillisecond), timeToLive);
     }
 
+    /// <summary>
+    /// Review 21 #1: at the longest retention the binding accepts, the clock steps back during the fetch, so the record's
+    /// write time is ahead of the clock when it is written back. It counts as written now, as when it is read: the time to
+    /// live is the retention, where it used to be a millisecond more, overflowing to a negative one the store rejects.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(86_400_000)]
+    public async Task AtTheLongestRetention_ARecordWrittenAheadOfTheClock_IsKeptForTheRetention(long stepBackMs)
+    {
+        const long Ttl = 1_000;
+        var stale = LocalTableCache.MaxRetentionMs - LocalTableCache.MaxLifetime(Ttl);
+        var store = new FakeCacheStore();
+        FeatureTestRig? rig = null;
+        var stepped = 0;
+        rig = new FeatureTestRig().CacheSource("item_store", ScriptedConnector.Values((_, _) =>
+        {
+            if (Interlocked.Exchange(ref stepped, 1) == 0)
+            {
+                rig!.Clock.AdvanceMs(-stepBackMs); // after the fetch took its write time, before the write-back
+            }
+
+            return 1.0;
+        }), ttlMs: Ttl, staleIfErrorMs: stale, distributed: store);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+
+        Assert.Equal(FeatureState.Ok, (await rig.NewRequest([1]).EnsureAsync(clicks)).State);
+
+        await store.WhenWrittenAsync(1);
+        Assert.True(store.TryGet("item_store:item:1", out _, out var timeToLive));
+        Assert.Equal(TimeSpan.FromTicks(LocalTableCache.MaxRetentionMs * TimeSpan.TicksPerMillisecond), timeToLive);
+    }
+
     [Fact]
     public void ATtlWhoseLifetimeAloneIsLongerThanATimeToLive_IsAnErrorAtTheTtl_WhenThereIsADistributedTier()
     {
