@@ -70,6 +70,11 @@ public readonly struct NamedInput
 }
 
 /// <summary>Per-call options.</summary>
+/// <param name="Seed">The request's seed (<c>ctx.request.seed</c>), for a client that samples (design 5.9 rule 5).</param>
+/// <param name="MaxOutputTokens">
+/// The most tokens a generative model may produce for this call (design 5.9 rule 2); a client that stops there says so with
+/// <see cref="ModelStatus.Truncated"/>. Null for calls that generate nothing.
+/// </param>
 public readonly record struct ModelCallOptions(long? Seed = null, int? MaxOutputTokens = null);
 
 /// <summary>A request to a model: named inputs in, named outputs out (design 6.9).</summary>
@@ -97,9 +102,21 @@ public interface IModelOutputWriter
 }
 
 /// <summary>Outcome of a model call.</summary>
+/// <remarks>
+/// A generative client reports what it knows about its output with the optional properties, e.g.
+/// <c>ModelStatus.Ok with { OutputTokens = 37, Truncated = false }</c>. The engine counts them for every model call
+/// (<c>stratarec.model.output_tokens</c>, <c>stratarec.model.truncated</c>) and records them with the call, so a replay
+/// returns the status the request saw.
+/// </remarks>
 public readonly record struct ModelStatus(bool Succeeded, string? Error = null)
 {
     public static ModelStatus Ok => new(true);
+
+    /// <summary>Tokens the model generated for this call, when the client knows; null otherwise (and for scoring models).</summary>
+    public int? OutputTokens { get; init; }
+
+    /// <summary>The model stopped at <see cref="ModelCallOptions.MaxOutputTokens"/>: its text output may be cut short.</summary>
+    public bool Truncated { get; init; }
 
     public static ModelStatus Failed(string error) => new(false, error);
 }

@@ -440,7 +440,10 @@ public sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    /// <summary>Replays a recorded call as it was: its failure, or every output it returned.</summary>
+    /// <summary>
+    /// Replays a recorded call as it was: its failure, or every output it returned, with the generation details its status
+    /// had (tokens, truncation), so the operator decides and reports as the request did.
+    /// </summary>
     private static ModelStatus Answer(ModelEntry entry, IModelOutputWriter outputs)
     {
         if (entry.Outcome != IoOutcome.Ok)
@@ -451,7 +454,11 @@ public sealed class RunReplay : IFeatureCallHook
                     $"model '{entry.Model}' threw in the recording");
             }
 
-            return ModelStatus.Failed(entry.Error ?? $"model '{entry.Model}' failed in the recording");
+            return ModelStatus.Failed(entry.Error ?? $"model '{entry.Model}' failed in the recording") with
+            {
+                OutputTokens = entry.OutputTokens,
+                Truncated = entry.Truncated,
+            };
         }
 
         foreach (var (name, values) in entry.Outputs)
@@ -464,7 +471,7 @@ public sealed class RunReplay : IFeatureCallHook
             outputs.SetText(name, text);
         }
 
-        return ModelStatus.Ok;
+        return ModelStatus.Ok with { OutputTokens = entry.OutputTokens, Truncated = entry.Truncated };
     }
 
     /// <summary>
@@ -897,7 +904,7 @@ public sealed class RunReplay : IFeatureCallHook
             }
 
             var entry = new ModelEntry(call.Seq, call.Model, call.BatchSize, outcome, call.Error, call.Threw, call.ErrorType, keys, call.InputDigests.ToArray(), outputs,
-                new Dictionary<string, string>(call.Texts, StringComparer.Ordinal));
+                new Dictionary<string, string>(call.Texts, StringComparer.Ordinal), call.OutputTokens, call.Truncated == true);
             if (!_modelCalls.TryGetValue((call.Model, call.Version), out var list))
             {
                 list = new List<ModelEntry>();
@@ -971,7 +978,7 @@ public sealed class RunReplay : IFeatureCallHook
 
     private sealed class ModelEntry(
         int seq, string model, int batchSize, IoOutcome outcome, string? error, bool threw, ReplayTypeIdentity? errorType, EntityKey[]? keys, string[] digests,
-        Dictionary<string, float[]> outputs, Dictionary<string, string> texts)
+        Dictionary<string, float[]> outputs, Dictionary<string, string> texts, int? outputTokens, bool truncated)
     {
         public int Seq { get; } = seq;
 
@@ -994,6 +1001,10 @@ public sealed class RunReplay : IFeatureCallHook
         public Dictionary<string, float[]> Outputs { get; } = outputs;
 
         public Dictionary<string, string> Texts { get; } = texts;
+
+        public int? OutputTokens { get; } = outputTokens;
+
+        public bool Truncated { get; } = truncated;
 
         public bool Consumed { get; set; }
     }

@@ -207,7 +207,11 @@ internal sealed class RunRecorder : IFeatureCallHook
 
     /// <summary>Records a finished model call; outputs are copied only from a call that answered.</summary>
     /// <param name="thrown">The type of the exception the client threw, or null when it returned a status.</param>
-    public void ModelCall(int sequence, IoOutcome outcome, string? error, Type? thrown, TimeSpan duration, RecordingOutputWriter outputs)
+    /// <param name="status">
+    /// The status the client returned (default when it did not answer): its generation details are recorded, so a replay
+    /// returns the same status and the operator reports the same (a truncated answer, design 13.4 item 7).
+    /// </param>
+    public void ModelCall(int sequence, IoOutcome outcome, string? error, Type? thrown, TimeSpan duration, RecordingOutputWriter outputs, in ModelStatus status)
     {
         if (Begun(_pendingModels, sequence) is not { } begun)
         {
@@ -245,6 +249,8 @@ internal sealed class RunRecorder : IFeatureCallHook
             InputDigests = begun.InputDigests,
             Outputs = floats,
             Texts = texts,
+            OutputTokens = status.OutputTokens,
+            Truncated = status.Truncated ? true : null,
         });
     }
 

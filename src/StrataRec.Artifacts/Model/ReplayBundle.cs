@@ -292,7 +292,14 @@ public sealed class ReplayModelCall
     [Description("Output → flat float32 values, batch_size × values per row; NaN and ±∞ are the strings \"NaN\", \"Infinity\" and \"-Infinity\".")]
     public Dictionary<string, JsonElement> Outputs { get; init; } = new();
 
+    [Description("Output → text, for models that generate text (a recorded answer is replayed as it was, design 13.4 item 7).")]
     public Dictionary<string, string> Texts { get; init; } = new();
+
+    [Description("Tokens the model generated, when its client reported them; absent otherwise (and in bundles recorded before it was recorded).")]
+    public int? OutputTokens { get; init; }
+
+    [Description("True when the model stopped at the call's max_output_tokens, so its text may be cut short; absent otherwise.")]
+    public bool? Truncated { get; init; }
 }
 
 /// <summary>

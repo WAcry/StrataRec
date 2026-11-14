@@ -12,7 +12,10 @@ namespace StrataRec.Pipeline.Replay;
 /// <see cref="ModelCall.BatchSize"/>); a row's digest covers its slice of each row-wise input and every other input whole,
 /// since a shared input (a user vector, a text prompt) affects every row. Each input contributes its name, element type
 /// and shape, so the same values in another layout do not collide; the batch dimension of a row-wise input is left out,
-/// so the same row in a differently sized batch has the same digest.
+/// so the same row in a differently sized batch has the same digest. A call's <see cref="ModelCallOptions.MaxOutputTokens"/>
+/// is part of every digest when it is set: a generative model answers differently under another limit, so a recorded
+/// answer is not served to a call with another one. The seed is not: it is the request's, which the bundle replays.
+/// Calls without a limit hash as before, so older recordings keep matching.
 /// </remarks>
 internal static class ModelInputDigest
 {
@@ -22,6 +25,7 @@ internal static class ModelInputDigest
         var builder = default(StableHash.Builder);
         try
         {
+            AddOptions(ref builder, call.Options);
             var inputs = call.Inputs.Span;
             foreach (var i in order)
             {
@@ -43,6 +47,7 @@ internal static class ModelInputDigest
         try
         {
             builder.Add(call.BatchSize);
+            AddOptions(ref builder, call.Options);
             var inputs = call.Inputs.Span;
             foreach (var i in order)
             {
@@ -76,6 +81,16 @@ internal static class ModelInputDigest
     /// <summary>The input's leading dimension is the batch: each row has its own slice.</summary>
     public static bool IsRowWise(in NamedInput input, int batch) =>
         batch > 0 && input.ElementType != TensorElementType.Text && input.Shape is { Length: > 0 } shape && shape[0] == batch;
+
+    /// <summary>The options that change what a model answers for the same inputs; nothing for a call that sets none.</summary>
+    private static void AddOptions(ref StableHash.Builder builder, in ModelCallOptions options)
+    {
+        if (options.MaxOutputTokens is { } max)
+        {
+            builder.Add("max_output_tokens");
+            builder.Add(max);
+        }
+    }
 
     /// <param name="row">The row whose digest is being built; -1 hashes every input whole.</param>
     private static void AddInput(ref StableHash.Builder builder, in NamedInput input, int batch, int row)
