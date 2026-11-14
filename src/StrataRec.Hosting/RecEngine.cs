@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using StrataRec.Artifacts.Model;
@@ -14,10 +15,58 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Hosting;
 
-/// <summary>The one method a host calls (design 3.4). Transport, authentication and threading belong to the host.</summary>
+/// <summary>
+/// What a host calls (design 3.4): <see cref="ExecuteAsync"/>, and two read-only questions a transport needs before it
+/// can build a request, so a host needs no concrete engine. Transport, authentication and threading belong to the host.
+/// </summary>
 public interface IRecEngine
 {
+    /// <summary>
+    /// Runs a request on the plan its pipeline serves now. Failures are results, not exceptions:
+    /// <see cref="RecResult.ErrorKind"/> says whose they are. Throws only when the caller cancels, when the engine is
+    /// disposed, or on a defect.
+    /// </summary>
     ValueTask<RecResult> ExecuteAsync(RecRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>Ids of the pipelines served now, sorted (ordinal); a load or a disposal changes them.</summary>
+    IReadOnlyList<string> PipelineIds();
+
+    /// <summary>
+    /// The request schema of the plan a pipeline serves now, to read a request's inputs with
+    /// (<see cref="RequestSchema.TryRead"/>); false for a pipeline not served. A plan loaded between this call and
+    /// <see cref="ExecuteAsync"/> may declare other inputs: the engine checks the inputs again against the plan it runs, and
+    /// its answer (<see cref="RecErrorKind.InvalidRequest"/>) is the one that counts.
+    /// </summary>
+    bool TryGetRequestSchema(string pipelineId, [NotNullWhen(true)] out RequestSchema? schema);
+}
+
+/// <summary>
+/// Whose a failed request is, so a host can answer without parsing <see cref="RecResult.Error"/>: over HTTP, 404, 400,
+/// 504 and 500.
+/// </summary>
+public enum RecErrorKind
+{
+    /// <summary>The request succeeded (perhaps served by its fallback pipeline: <see cref="RecResult.ServedBy"/>).</summary>
+    None = 0,
+
+    /// <summary>The engine serves no pipeline of that id. Nothing ran.</summary>
+    UnknownPipeline,
+
+    /// <summary>
+    /// The caller's mistake: inputs the pipeline's <c>request_schema</c> rejects (<see cref="RecResult.ErrorPointer"/> says
+    /// which), or forced arms that are unknown or conflict (<see cref="DebugOptions.ForceArms"/>). Checked before anything
+    /// runs: no assignment is asked for and no fallback pipeline serves it.
+    /// </summary>
+    InvalidRequest,
+
+    /// <summary>The deadline was spent before the pipeline could start (by the assignment provider). Nothing ran.</summary>
+    DeadlineExceeded,
+
+    /// <summary>
+    /// The pipeline ran and failed, and so did its fallback pipeline or there was none (or no time left for it): the
+    /// service's failure, not the caller's.
+    /// </summary>
+    Failed,
 }
 
 /// <summary>A recommendation request.</summary>
@@ -27,7 +76,11 @@ public sealed class RecRequest
 
     public required string RequestId { get; init; }
 
-    /// <summary>Inputs validated against the pipeline's <c>request_schema</c>.</summary>
+    /// <summary>
+    /// Inputs by the pipeline's <c>request_schema</c>: read them from JSON with <see cref="RequestSchema.TryRead"/>
+    /// (<see cref="IRecEngine.TryGetRequestSchema"/>). The engine checks them against the plan it runs before anything
+    /// else; inputs it rejects fail the request with <see cref="RecErrorKind.InvalidRequest"/>.
+    /// </summary>
     public required RequestInputs Inputs { get; init; }
 
     /// <summary>
@@ -89,9 +142,9 @@ public sealed class DebugOptions
 
 /// <summary>Assignment and trigger record of a request (design 12.6).</summary>
 /// <remarks>
-/// A request rejected before its arms are decided (unknown pipeline, invalid forced arms, a provider past the deadline)
-/// has an empty record. One rejected after (out of budget before execution) carries its assigned and ignored arms, which
-/// the metrics already counted, and no triggered experiment.
+/// A request rejected before its arms are decided (unknown pipeline, inputs the request schema rejects, invalid forced
+/// arms, a provider past the deadline) has an empty record. One rejected after (out of budget before execution) carries
+/// its assigned and ignored arms, which the metrics already counted, and no triggered experiment.
 /// </remarks>
 /// <param name="Assigned">Assigned arms (<c>experiment/arm</c>) for intent-to-treat analysis.</param>
 /// <param name="Triggered">Experiments whose site the request reached, for triggered analysis.</param>
@@ -102,12 +155,28 @@ public sealed class DebugOptions
 /// </param>
 public sealed record ExperimentRecord(IReadOnlyList<string> Assigned, IReadOnlyList<string> Triggered, IReadOnlyList<IgnoredArm> Ignored);
 
-/// <summary>The result of a request.</summary>
+/// <summary>The result of a request. Write it as JSON with <see cref="RecResultJson"/>.</summary>
 public sealed class RecResult
 {
+    /// <summary>The request's id (<see cref="RecRequest.RequestId"/>), so a result can be logged or written on its own.</summary>
+    public required string RequestId { get; init; }
+
     public required bool Succeeded { get; init; }
 
+    /// <summary><see cref="RecErrorKind.None"/> exactly when <see cref="Succeeded"/>; otherwise whose the failure is.</summary>
+    public RecErrorKind ErrorKind { get; init; }
+
+    /// <summary>
+    /// What went wrong, for people: the failure, or for a request its fallback pipeline served, why the requested pipeline
+    /// failed.
+    /// </summary>
     public string? Error { get; init; }
+
+    /// <summary>
+    /// For <see cref="RecErrorKind.InvalidRequest"/> caused by an input, the input's JSON pointer relative to a request body
+    /// of the shape <c>{ "inputs": { … } }</c>, e.g. <c>/inputs/user_id</c>; null otherwise.
+    /// </summary>
+    public string? ErrorPointer { get; init; }
 
     public required IReadOnlyList<RankedItem> Items { get; init; }
 
@@ -261,12 +330,19 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// connectors (design 6.4).</summary>
     public BindingHost Bindings { get; }
 
-    /// <summary>Ids of the pipelines currently served, sorted.</summary>
-    public List<string> PipelineIds()
+    /// <inheritdoc/>
+    public IReadOnlyList<string> PipelineIds()
     {
         var ids = new List<string>(_pipelines.Keys);
         ids.Sort(StringComparer.Ordinal);
         return ids;
+    }
+
+    /// <inheritdoc/>
+    public bool TryGetRequestSchema(string pipelineId, [NotNullWhen(true)] out RequestSchema? schema)
+    {
+        schema = _pipelines.TryGetValue(pipelineId, out var pipeline) ? pipeline.Plan.RequestSchema : null;
+        return schema is not null;
     }
 
     public bool TryGetPipeline(string pipelineId, out LoadedPipeline pipeline) => _pipelines.TryGetValue(pipelineId, out pipeline!);
@@ -554,13 +630,21 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             {
                 return disposed
                     ? throw new ObjectDisposedException(nameof(RecEngine), "The engine is disposed: it takes no request.")
-                    : result = Rejected(request, $"Unknown pipeline '{request.PipelineId}'.");
+                    : result = Rejected(request, RecErrorKind.UnknownPipeline, $"Unknown pipeline '{request.PipelineId}'.");
+            }
+
+            // The caller's mistakes first, against the plan this request runs (a host may have read the inputs with an
+            // older one): nothing is asked of the assignment provider for a request that cannot run, and the fallback
+            // pipeline, which stands in for a pipeline that failed, does not serve it.
+            if (pipeline.Plan.RequestSchema.Check(request.Inputs) is { } invalid)
+            {
+                return result = Rejected(request, RecErrorKind.InvalidRequest, RequestSchema.Describe(invalid), pointer: invalid.Pointer);
             }
 
             var assignment = await AssignAsync(pipeline, request, started, cancellationToken).ConfigureAwait(false);
             if (assignment.Error is { } assignmentError)
             {
-                return result = Rejected(request, assignmentError);
+                return result = Rejected(request, assignment.ErrorKind, assignmentError);
             }
 
             arms = assignment.Arms;
@@ -570,11 +654,11 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             if (remaining <= TimeSpan.Zero)
             {
                 // The arms were decided and the ignored ids counted: the record says so, as the metric does (review 18 #3).
-                return result = Rejected(request, "deadline exceeded before execution (assignment took the whole budget)",
+                return result = Rejected(request, RecErrorKind.DeadlineExceeded, "deadline exceeded before execution (assignment took the whole budget)",
                     new ExperimentRecord(pipeline.Plan.ArmIds(arms), Array.Empty<string>(), ignored), pipeline.Plan.ManifestId);
             }
 
-            var executed = await Run(pipeline, request, arms, remaining, seed, timeMs, runs, cancellationToken).ConfigureAwait(false);
+            var executed = await Run(pipeline, request, request.Inputs, arms, remaining, seed, timeMs, runs, cancellationToken).ConfigureAwait(false);
             remaining = request.Deadline - Stopwatch.GetElapsedTime(started);
 
             // A disposal since the primary ran leaves the request with the primary's result, as when no fallback is served.
@@ -586,9 +670,11 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                 return result = record ? Recorded(request, pipeline, seed!.Value, timeMs!.Value, result, executed, null) : result;
             }
 
-            // The pipeline failed: serve its fallback pipeline, without experiments, within what is left (design 5.6).
+            // The pipeline failed: serve its fallback pipeline, without experiments, within what is left (design 5.6), with
+            // the inputs it declares (FallbackInputs).
             degraded = true;
-            var served = await Run(fallback, request, RequestArms.None, remaining, seed, timeMs, runs, cancellationToken).ConfigureAwait(false);
+            var served = await Run(fallback, request, FallbackInputs(request.Inputs, fallback.Plan.RequestSchema), RequestArms.None, remaining, seed, timeMs, runs,
+                cancellationToken).ConfigureAwait(false);
             var converted = ToResult(request, fallback, served, ignored, fallbackId);
             result = Combine(request, executed, converted, served, ignored, fallbackId);
             return result = record ? Recorded(request, pipeline, seed!.Value, timeMs!.Value, result, executed, served) : result;
@@ -622,30 +708,30 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// (<see cref="RecRequest.Assignment"/>), the assignment provider; otherwise none (the baseline). Returns an error
     /// instead of arms when the request must be rejected.
     /// </summary>
-    private async ValueTask<(RequestArms Arms, IgnoredArm[] Ignored, string? Error)> AssignAsync(
+    private async ValueTask<(RequestArms Arms, IgnoredArm[] Ignored, string? Error, RecErrorKind ErrorKind)> AssignAsync(
         LoadedPipeline pipeline, RecRequest request, long started, CancellationToken cancellationToken)
     {
         if (request.Debug?.ForceArms is { } forced)
         {
             try
             {
-                return (pipeline.Plan.ArmsFromIds(forced), Array.Empty<IgnoredArm>(), null);
+                return (pipeline.Plan.ArmsFromIds(forced), Array.Empty<IgnoredArm>(), null, RecErrorKind.None);
             }
             catch (ArgumentException ex)
             {
-                return (RequestArms.None, Array.Empty<IgnoredArm>(), ex.Message);
+                return (RequestArms.None, Array.Empty<IgnoredArm>(), ex.Message, RecErrorKind.InvalidRequest);
             }
         }
 
         if (request.Assignment is { } external)
         {
             var arms = ExternalArms.Resolve(pipeline.Plan.Layers, pipeline.Plan.Arms, external, out var ignored);
-            return (arms, ignored, null);
+            return (arms, ignored, null, RecErrorKind.None);
         }
 
         if (_assignmentProvider is null)
         {
-            return (RequestArms.None, Array.Empty<IgnoredArm>(), null);
+            return (RequestArms.None, Array.Empty<IgnoredArm>(), null, RecErrorKind.None);
         }
 
         // The provider shares the end-to-end deadline. It is called inline on the request's thread, as connectors and
@@ -656,7 +742,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         var budget = request.Deadline - Stopwatch.GetElapsedTime(started);
         if (budget <= TimeSpan.Zero)
         {
-            return (RequestArms.None, Array.Empty<IgnoredArm>(), "deadline exceeded before assignment");
+            return (RequestArms.None, Array.Empty<IgnoredArm>(), "deadline exceeded before assignment", RecErrorKind.DeadlineExceeded);
         }
 
         const string Late = "deadline exceeded during assignment";
@@ -713,14 +799,14 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                 {
                     Discard(answer);
                     cancellationToken.ThrowIfCancellationRequested();
-                    return (RequestArms.None, Array.Empty<IgnoredArm>(), Late);
+                    return (RequestArms.None, Array.Empty<IgnoredArm>(), Late, RecErrorKind.DeadlineExceeded);
                 }
 
                 ids = answer.GetAwaiter().GetResult();
             }
             catch (Exception ex) when (ex is TimeoutException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
             {
-                return (RequestArms.None, Array.Empty<IgnoredArm>(), Late);
+                return (RequestArms.None, Array.Empty<IgnoredArm>(), Late, RecErrorKind.DeadlineExceeded);
             }
 
             return Resolve(pipeline.Plan, ids);
@@ -738,10 +824,10 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             }
         }
 
-        static (RequestArms, IgnoredArm[], string?) Resolve(ExecutionPlan plan, IReadOnlyList<string> answered)
+        static (RequestArms, IgnoredArm[], string?, RecErrorKind) Resolve(ExecutionPlan plan, IReadOnlyList<string> answered)
         {
             var assigned = ExternalArms.Resolve(plan.Layers, plan.Arms, answered, out var ignoredIds);
-            return (assigned, ignoredIds, null);
+            return (assigned, ignoredIds, null, RecErrorKind.None);
         }
 
         // Consumes, once (as a source-backed ValueTask requires), an answer that came too late; what it holds is dropped.
@@ -835,12 +921,12 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// <param name="pipeline">Entered by the caller (<see cref="Enter"/>); the run joins its lease until its calls end.</param>
     /// <param name="runs">Collects the run's recording on every exit; null when the request does not record.</param>
     private ValueTask<PipelineResult> Run(
-        LoadedPipeline pipeline, RecRequest request, RequestArms arms, TimeSpan deadline, long? seed, long? timeMs, RunCapture? runs,
+        LoadedPipeline pipeline, RecRequest request, RequestInputs inputs, RequestArms arms, TimeSpan deadline, long? seed, long? timeMs, RunCapture? runs,
         CancellationToken cancellationToken) =>
         _executor.ExecuteAsync(pipeline.Plan, new PipelineRequest
         {
             RequestId = request.RequestId,
-            Inputs = request.Inputs,
+            Inputs = inputs,
             Arms = arms,
             Deadline = deadline,
             Seed = seed,
@@ -850,11 +936,46 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             OnEnd = pipeline.Bindings.Join(), // last: the executor, called next, ends it on every outcome
         }, cancellationToken);
 
+    /// <summary>
+    /// The inputs of a request that falls back (design 5.6): those the fallback pipeline declares. The caller wrote the
+    /// request for the pipeline it named, and its inputs passed that pipeline's schema; a fallback typically uses fewer
+    /// signals (a popularity list needs no user), and need not declare inputs it does not read. What it declares it checks
+    /// as any pipeline does: an input it requires that the request lacks, or of another type, fails the fallback, and the
+    /// request with <see cref="RecErrorKind.Failed"/> (the configuration's mistake, not the caller's). Allocates only when
+    /// the request has an input the fallback does not declare.
+    /// </summary>
+    internal static RequestInputs FallbackInputs(RequestInputs inputs, RequestSchema fallback)
+    {
+        var undeclared = 0;
+        foreach (var (name, _) in inputs)
+        {
+            undeclared += fallback.Contains(name) ? 0 : 1;
+        }
+
+        if (undeclared == 0)
+        {
+            return inputs;
+        }
+
+        var declared = new RequestInputs(inputs.Count - undeclared);
+        foreach (var (name, value) in inputs)
+        {
+            if (fallback.Contains(name))
+            {
+                declared.Set(name, value);
+            }
+        }
+
+        return declared;
+    }
+
     /// <summary>The result of a request its fallback pipeline served: the primary's assignment and error, the fallback's items.</summary>
     private static RecResult Combine(
         RecRequest request, PipelineResult executed, RecResult converted, PipelineResult served, IReadOnlyList<IgnoredArm> ignored, string fallbackId) => new()
     {
+        RequestId = request.RequestId,
         Succeeded = converted.Succeeded,
+        ErrorKind = converted.Succeeded ? RecErrorKind.None : RecErrorKind.Failed,
         Error = $"pipeline '{request.PipelineId}' failed: {executed.Error}" + (served.Succeeded ? string.Empty : $"; fallback '{fallbackId}' failed: {served.Error}"),
         Items = converted.Items,
         Experiments = new ExperimentRecord(executed.AssignedArms, executed.TriggeredExperiments, ignored),
@@ -868,7 +989,9 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
 
     private static RecResult ToResult(RecRequest request, LoadedPipeline pipeline, PipelineResult result, IReadOnlyList<IgnoredArm> ignored, string servedBy) => new()
     {
+        RequestId = request.RequestId,
         Succeeded = result.Succeeded,
+        ErrorKind = result.Succeeded ? RecErrorKind.None : RecErrorKind.Failed,
         Error = result.Error,
         Items = result.Items,
         Experiments = new ExperimentRecord(result.AssignedArms, result.TriggeredExperiments, ignored),
@@ -881,10 +1004,14 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     };
 
     /// <summary>A request that did not run: before assignment nothing is known about it; after, its arms and release are.</summary>
-    private static RecResult Rejected(RecRequest request, string error, ExperimentRecord? experiments = null, string? manifestId = null) => new()
+    private static RecResult Rejected(
+        RecRequest request, RecErrorKind kind, string error, ExperimentRecord? experiments = null, string? manifestId = null, string? pointer = null) => new()
     {
+        RequestId = request.RequestId,
         Succeeded = false,
+        ErrorKind = kind,
         Error = error,
+        ErrorPointer = pointer,
         Items = Array.Empty<RankedItem>(),
         Experiments = experiments ?? new ExperimentRecord(Array.Empty<string>(), Array.Empty<string>(), Array.Empty<IgnoredArm>()),
         ManifestId = manifestId ?? string.Empty,

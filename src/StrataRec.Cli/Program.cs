@@ -1,30 +1,28 @@
-using System.CommandLine;
-using StrataRec.Cli.Commands;
+using StrataRec.CommandLine;
+using StrataRec.Features.Cache;
+using StrataRec.Llm;
+using StrataRec.Pipeline.Operators;
+using StrataRec.Pipeline.Planning;
+using StrataRec.Redis;
 
 namespace StrataRec.Cli;
 
 /// <summary>
-/// <c>stratarec</c>: create, validate, build, explain, diff and run configurations locally (design 10.1, 13.4). Output is plain text
-/// for humans or <c>--format json</c> for CI and agents; the exit code is 0 on success, 1 on configuration errors and
-/// 2 on usage errors; <c>diff</c> follows diff(1): 0 when nothing differs, 1 when something does, 2 on any error.
+/// <c>stratarec</c>: create, validate, build, explain, diff and run configurations locally (design 10.1, 13.4), with the
+/// components this tool ships. The commands are <see cref="StrataRecCommandLine"/>'s; a binary with components of its
+/// own runs the same commands with them.
 /// </summary>
 public static class Program
 {
-    public static Task<int> Main(string[] args) => CreateRootCommand().Parse(args).InvokeAsync();
+    public static Task<int> Main(string[] args) => StrataRecCommandLine.InvokeAsync(args, CreateEnvironment());
 
-    internal static RootCommand CreateRootCommand()
+    /// <summary>
+    /// What the tool provides to plans: the built-in registries, <c>redis@1</c> for distributed caches and the
+    /// generative operators of StrataRec.Llm. <c>operators</c> and <c>schema</c> list exactly these.
+    /// </summary>
+    public static PlanEnvironment CreateEnvironment() => new()
     {
-        var root = new RootCommand("StrataRec: columnar recommendation pipelines with multi-layer experiments.");
-        root.Add(InitCommand.Create());
-        root.Add(ValidateCommand.Create());
-        root.Add(BuildCommand.Create());
-        root.Add(ExplainPlanCommand.Create());
-        root.Add(RunCommand.Create());
-        root.Add(ReplayCommand.Create());
-        root.Add(CompareCommand.Create());
-        root.Add(DiffCommand.Create());
-        root.Add(SchemaCommand.Create());
-        root.Add(OperatorsCommand.Create());
-        return root;
-    }
+        Operators = OperatorRegistry.CreateDefault().AddLlm(),
+        CacheStores = new FeatureCacheStoreRegistry().AddRedis(),
+    };
 }

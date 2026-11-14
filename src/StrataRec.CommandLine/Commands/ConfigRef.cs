@@ -8,7 +8,7 @@ using StrataRec.Hosting.Bindings;
 using StrataRec.Hosting.Manifests;
 using StrataRec.Hosting.Workspace;
 
-namespace StrataRec.Cli.Commands;
+namespace StrataRec.CommandLine.Commands;
 
 /// <summary>What a <see cref="ConfigRef"/> names.</summary>
 internal enum ConfigRefKind
@@ -42,11 +42,14 @@ internal sealed class ConfigRef
 {
     private const string StoreHint = "pass --store <dir>, the artifact store 'stratarec build --store' uploaded the manifest and its artifacts to";
 
-    private ConfigRef(ConfigRefKind kind, string text, string? store)
+    private readonly Pipeline.Planning.PlanEnvironment _provided;
+
+    private ConfigRef(ConfigRefKind kind, string text, string? store, Pipeline.Planning.PlanEnvironment provided)
     {
         Kind = kind;
         Text = text;
         Store = store;
+        _provided = provided;
     }
 
     public ConfigRefKind Kind { get; }
@@ -68,20 +71,21 @@ internal sealed class ConfigRef
     public override string ToString() => Text;
 
     /// <summary>A workspace directory (<c>-c</c>); whether it exists is reported when it loads, as a workspace error.</summary>
-    public static ConfigRef Workspace(string directory) => new(ConfigRefKind.Workspace, directory, null);
+    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
+    public static ConfigRef Workspace(string directory, Pipeline.Planning.PlanEnvironment provided) => new(ConfigRefKind.Workspace, directory, null, provided);
 
     /// <summary>
     /// A ref of any kind (<c>diff --from/--to</c>, <c>compare --baseline</c>): a content id, an existing directory (a
     /// workspace) or an existing file (a manifest). Returns null after reporting a usage error under <paramref name="option"/>.
     /// </summary>
-    public static ConfigRef? Parse(string text, string? store, string option, DiagnosticBag diagnostics)
+    public static ConfigRef? Parse(string text, string? store, string option, DiagnosticBag diagnostics, Pipeline.Planning.PlanEnvironment provided)
     {
         if (!text.StartsWith(ContentHash.Prefix, StringComparison.Ordinal) && Directory.Exists(text))
         {
-            return Workspace(text);
+            return Workspace(text, provided);
         }
 
-        return ParseManifest(text, store, option, diagnostics, workspaceAllowed: true);
+        return ParseManifest(text, store, option, diagnostics, workspaceAllowed: true, provided);
     }
 
     /// <summary>
@@ -89,7 +93,8 @@ internal sealed class ConfigRef
     /// both; neither is <paramref name="fallback"/> (the default workspace <c>config</c>), or null when the command has
     /// another meaning for neither (replay on the recorded manifests). Returns null after reporting a usage error.
     /// </summary>
-    public static (ConfigRef? Ref, bool Ok) Select(string? config, string? manifest, string? store, string? fallback, DiagnosticBag diagnostics)
+    public static (ConfigRef? Ref, bool Ok) Select(
+        string? config, string? manifest, string? store, string? fallback, DiagnosticBag diagnostics, Pipeline.Planning.PlanEnvironment provided)
     {
         if (config is not null && manifest is not null)
         {
@@ -100,15 +105,16 @@ internal sealed class ConfigRef
 
         if (manifest is not null)
         {
-            var parsed = ParseManifest(manifest, store, "--manifest", diagnostics, workspaceAllowed: false);
+            var parsed = ParseManifest(manifest, store, "--manifest", diagnostics, workspaceAllowed: false, provided);
             return (parsed, parsed is not null);
         }
 
         var directory = config ?? fallback;
-        return (directory is null ? null : Workspace(directory), true);
+        return (directory is null ? null : Workspace(directory, provided), true);
     }
 
-    private static ConfigRef? ParseManifest(string text, string? store, string option, DiagnosticBag diagnostics, bool workspaceAllowed)
+    private static ConfigRef? ParseManifest(
+        string text, string? store, string option, DiagnosticBag diagnostics, bool workspaceAllowed, Pipeline.Planning.PlanEnvironment provided)
     {
         ConfigRefKind kind;
         if (text.StartsWith(ContentHash.Prefix, StringComparison.Ordinal))
@@ -158,7 +164,7 @@ internal sealed class ConfigRef
             return null;
         }
 
-        return new ConfigRef(kind, text, store);
+        return new ConfigRef(kind, text, store, provided);
     }
 
     /// <summary>
@@ -166,7 +172,7 @@ internal sealed class ConfigRef
     /// root, so they resolve against the current directory, as for a host that sets no base directory; only bindings that
     /// read a local file when created (the <c>memory@1</c> and <c>memory_list@1</c> fixtures) need one.
     /// </summary>
-    public Pipeline.Planning.PlanEnvironment PlanEnvironment() => CommonOptions.PlanEnvironment(Kind == ConfigRefKind.Workspace ? Text : null);
+    public Pipeline.Planning.PlanEnvironment PlanEnvironment() => CommonOptions.ForRoot(_provided, Kind == ConfigRefKind.Workspace ? Text : null);
 
     /// <summary>
     /// The compile request of one pipeline: in a workspace, the one <paramref name="pipeline"/> names (or the only one) in

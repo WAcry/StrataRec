@@ -59,7 +59,7 @@ public sealed partial class RecEngine
                 throw new ObjectDisposedException(nameof(RecEngine), "The engine is disposed: it replays no request.");
             }
 
-            var rejected = Rejected(request, $"Unknown pipeline '{recordedRequest.PipelineId}'.");
+            var rejected = Rejected(request, RecErrorKind.UnknownPipeline, $"Unknown pipeline '{recordedRequest.PipelineId}'.");
             return Outcome(bundle, rejected, null, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null, notes, 0, "<none>");
         }
 
@@ -100,7 +100,7 @@ public sealed partial class RecEngine
             }
             catch (ArgumentException ex)
             {
-                return Outcome(bundle, Rejected(request, ex.Message), null, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null, notes, 0,
+                return Outcome(bundle, Rejected(request, RecErrorKind.InvalidRequest, ex.Message), null, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null, notes, 0,
                     plan.ManifestId);
             }
 
@@ -113,7 +113,7 @@ public sealed partial class RecEngine
             string? aborted = null;
             try
             {
-                var executed = await _executor.ExecuteAsync(plan, ReplayRequest(request, arms, primaryReplay, replayed, pipeline), cancellationToken)
+                var executed = await _executor.ExecuteAsync(plan, ReplayRequest(request, request.Inputs, arms, primaryReplay, replayed, pipeline), cancellationToken)
                     .ConfigureAwait(false);
                 if (executed.Succeeded || pipeline.FallbackPipeline is not { } fallbackId || fallbackId == request.PipelineId
                     || (fallback = Enter(fallbackId, out _)) is null)
@@ -144,7 +144,8 @@ public sealed partial class RecEngine
                         fallbackReplay = RunReplay.Empty();
                     }
 
-                    var served = await _executor.ExecuteAsync(fallback.Plan, ReplayRequest(request, RequestArms.None, fallbackReplay, replayed, fallback), cancellationToken)
+                    var fallbackInputs = FallbackInputs(request.Inputs, fallback.Plan.RequestSchema); // as the request did (ExecuteAsync)
+                    var served = await _executor.ExecuteAsync(fallback.Plan, ReplayRequest(request, fallbackInputs, RequestArms.None, fallbackReplay, replayed, fallback), cancellationToken)
                         .ConfigureAwait(false);
                     result = Combine(request, executed, ToResult(request, fallback, served, ignored, fallbackId), served, ignored, fallbackId);
                 }
@@ -171,10 +172,11 @@ public sealed partial class RecEngine
 
     /// <param name="replayed">Collects the replayed run's recording: its node decisions and parameters, for the report.</param>
     /// <param name="pipeline">Entered by the caller; the run joins its lease.</param>
-    private static PipelineRequest ReplayRequest(RecRequest request, RequestArms arms, RunReplay replay, RunCapture replayed, LoadedPipeline pipeline) => new()
+    private static PipelineRequest ReplayRequest(
+        RecRequest request, RequestInputs inputs, RequestArms arms, RunReplay replay, RunCapture replayed, LoadedPipeline pipeline) => new()
     {
         RequestId = request.RequestId,
-        Inputs = request.Inputs,
+        Inputs = inputs,
         Arms = arms,
         Deadline = RunReplay.Deadline,
         Seed = request.Seed,
@@ -192,7 +194,9 @@ public sealed partial class RecEngine
         var last = replayed.Count > 0 ? replayed[^1] : null;
         return new RecResult
         {
+            RequestId = request.RequestId,
             Succeeded = false,
+            ErrorKind = RecErrorKind.Failed,
             Error = reason,
             Items = Array.Empty<RankedItem>(),
             Experiments = new ExperimentRecord(primary?.Arms ?? new List<string>(), primary?.Result.TriggeredExperiments ?? new List<string>(), ignored),
@@ -274,7 +278,7 @@ public sealed partial class RecEngine
         {
             var pointer = "/request/inputs/" + JsonPointer.Escape(name);
             var value = ReplayJson.Value(typed.Value, ReplayJson.Type(typed.Type, pointer + "/type"), pointer + "/value");
-            if (!plan.RequestInputs.ContainsKey(name))
+            if (!plan.RequestSchema.Contains(name))
             {
                 notes.Add($"input '{name}' is not declared in the replayed request_schema; replayed without it");
                 continue;
@@ -378,8 +382,11 @@ public sealed partial class RecEngine
 
     private static RecResult WithRecording(RecResult result, ReplayBundle? bundle) => bundle is null ? result : new RecResult
     {
+        RequestId = result.RequestId,
         Succeeded = result.Succeeded,
+        ErrorKind = result.ErrorKind,
         Error = result.Error,
+        ErrorPointer = result.ErrorPointer,
         Items = result.Items,
         Experiments = result.Experiments,
         ManifestId = result.ManifestId,
@@ -478,9 +485,10 @@ public sealed partial class RecEngine
                 continue;
             }
 
-            // The declared type when the value has it; otherwise its own (the request failed validation, as recorded).
-            var type = pipeline.Plan.RequestInputs.TryGetValue(name, out var field) && value.TryConvert(field.InputType, out _)
-                ? field.InputType
+            // The declared type: a request records only once its inputs passed the plan's schema (ExecuteAsync checks them
+            // first). The value's own type remains for a caller of this method that did not check.
+            var type = pipeline.Plan.RequestSchema.TryGetType(name, out var declared) && value.TryConvert(declared, out _)
+                ? declared
                 : ReplayJson.TypeOf(value);
             inputs[name] = ReplayJson.Typed(type, value);
         }

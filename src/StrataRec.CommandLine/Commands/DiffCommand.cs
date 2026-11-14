@@ -6,7 +6,7 @@ using StrataRec.Artifacts.Model;
 using StrataRec.Hosting.Plans;
 using StrataRec.Pipeline.Planning;
 
-namespace StrataRec.Cli.Commands;
+namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
 /// <c>stratarec diff</c> (design 13.4 item 3): the semantic difference of two configurations by arm combination, from
@@ -23,7 +23,7 @@ internal static class DiffCommand
         "A pointer is RFC 6901 into the combination's plan: /nodes/<id>/..., /params/<leaf>, /taps/<id>/..., /funnel_groups/<group>/..., /output/... " +
         "(explain-plan --arms --format json shows the same members). Only combinations that differ are listed; 'compared' names every one compared.";
 
-    public static Command Create()
+    public static Command Create(PlanEnvironment provided)
     {
         var from = new Option<string?>("--from")
         {
@@ -43,24 +43,26 @@ internal static class DiffCommand
             AllowMultipleArgumentsPerToken = true,
         };
         var command = new Command("diff", Description) { from, to, store, environment, pipeline, format, arms };
-        command.SetAction((parse, cancellationToken) => RunAsync(parse.GetValue(from), parse.GetValue(to)!, parse.GetValue(store), parse.GetValue(environment)!,
-            parse.GetValue(pipeline), parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(format)!, Console.Out, cancellationToken));
+        command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(from), parse.GetValue(to)!, parse.GetValue(store),
+            parse.GetValue(environment)!, parse.GetValue(pipeline), parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(format)!,
+            parse.InvocationConfiguration.Output, cancellationToken, parse.InvocationConfiguration.Error));
         return command;
     }
 
     /// <param name="from">The configuration before; null for the <c>previous</c> manifest of <paramref name="to"/>.</param>
     /// <param name="errors">Where diagnostics go; standard error by default.</param>
+    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
     internal static async Task<int> RunAsync(
-        string? from, string to, string? store, string environment, string? pipeline, string[] armArgs, string format, TextWriter output,
+        PlanEnvironment provided, string? from, string to, string? store, string environment, string? pipeline, string[] armArgs, string format, TextWriter output,
         CancellationToken cancellationToken, TextWriter? errors = null)
     {
         errors ??= Console.Error;
         var diagnostics = new DiagnosticBag();
-        var toRef = ConfigRef.Parse(to, store, "--to", diagnostics);
-        var fromRef = from is null ? null : ConfigRef.Parse(from, store, "--from", diagnostics);
+        var toRef = ConfigRef.Parse(to, store, "--to", diagnostics, provided);
+        var fromRef = from is null ? null : ConfigRef.Parse(from, store, "--from", diagnostics, provided);
         if (toRef is not null && from is null)
         {
-            fromRef = await PreviousAsync(toRef, store, diagnostics, cancellationToken).ConfigureAwait(false);
+            fromRef = await PreviousAsync(provided, toRef, store, diagnostics, cancellationToken).ConfigureAwait(false);
         }
 
         if (toRef is null || fromRef is null || diagnostics.HasErrors)
@@ -114,7 +116,7 @@ internal static class DiffCommand
     }
 
     /// <summary>The manifest <paramref name="to"/> names as <c>previous</c> (design 10.2: kept for audit and diff), in the same store.</summary>
-    private static async Task<ConfigRef?> PreviousAsync(ConfigRef to, string? store, DiagnosticBag diagnostics, CancellationToken cancellationToken)
+    private static async Task<ConfigRef?> PreviousAsync(PlanEnvironment provided, ConfigRef to, string? store, DiagnosticBag diagnostics, CancellationToken cancellationToken)
     {
         if (!to.IsManifest)
         {
@@ -142,7 +144,7 @@ internal static class DiffCommand
             return null;
         }
 
-        return ConfigRef.Parse(previous, store, "/previous", diagnostics);
+        return ConfigRef.Parse(previous, store, "/previous", diagnostics, provided);
     }
 
     /// <summary>Compiles one side; its diagnostics are labelled with the side (<c>--from</c>, <c>--to</c>), which both sides' artifacts share.</summary>

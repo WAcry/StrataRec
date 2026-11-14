@@ -2,7 +2,7 @@ using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Hosting.Workspace;
 
-namespace StrataRec.Cli.Commands;
+namespace StrataRec.CommandLine.Commands;
 
 /// <summary>Where a diagnostic is in a file, as a terminal or editor opens it.</summary>
 /// <param name="File">The file, as reachable from the current directory: the workspace directory as given, then its workspace-relative path.</param>

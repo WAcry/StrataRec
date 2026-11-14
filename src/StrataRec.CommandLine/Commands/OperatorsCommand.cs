@@ -2,22 +2,23 @@ using System.CommandLine;
 using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Planning;
 
-namespace StrataRec.Cli.Commands;
+namespace StrataRec.CommandLine.Commands;
 
 /// <summary><c>stratarec operators</c>: the operators, connectors and clients this binary provides (design 10.4).</summary>
 internal static class OperatorsCommand
 {
-    public static Command Create()
+    public static Command Create(PlanEnvironment provided)
     {
         var format = CommonOptions.Format();
         var command = new Command("operators", "List operators (with effects) and other capabilities of this binary.") { format };
-        command.SetAction(parse => Run(parse.GetValue(format)!, Console.Out));
+        command.SetAction(parse => Run(provided, parse.GetValue(format)!, parse.InvocationConfiguration.Output));
         return command;
     }
 
-    internal static int Run(string format, TextWriter output)
+    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
+    internal static int Run(PlanEnvironment provided, string format, TextWriter output)
     {
-        var environment = CommonOptions.PlanEnvironment(configRoot: null);
+        var environment = provided;
         if (format == "json")
         {
             output.WriteLine(Output.ToJson(json =>

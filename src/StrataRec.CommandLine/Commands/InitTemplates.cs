@@ -1,4 +1,4 @@
-namespace StrataRec.Cli.Commands;
+namespace StrataRec.CommandLine.Commands;
 
 /// <summary>One file <c>stratarec init</c> writes.</summary>
 /// <param name="Path">Relative to the workspace root, with <c>/</c> separators.</param>

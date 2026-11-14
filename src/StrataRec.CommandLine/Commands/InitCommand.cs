@@ -1,7 +1,7 @@
 using System.CommandLine;
 using StrataRec.Artifacts.Model;
 
-namespace StrataRec.Cli.Commands;
+namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
 /// <c>stratarec init</c>: writes a new workspace (<see cref="InitTemplates"/>) that validates without warnings and runs
@@ -39,7 +39,8 @@ internal static class InitCommand
         {
             directory, pipeline, force,
         };
-        command.SetAction(parse => Run(parse.GetValue(directory), parse.GetValue(pipeline)!, parse.GetValue(force), Console.Out, Console.Error));
+        command.SetAction(parse => Run(parse.GetValue(directory), parse.GetValue(pipeline)!, parse.GetValue(force), parse.InvocationConfiguration.Output,
+            parse.InvocationConfiguration.Error));
         return command;
     }
 

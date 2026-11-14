@@ -9,7 +9,7 @@ using StrataRec.Hosting.Replay;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Pipeline.Replay;
 
-namespace StrataRec.Cli.Commands;
+namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
 /// <c>stratarec replay</c> (design 13.4): re-executes recorded requests with their recorded external responses and timing
@@ -19,7 +19,7 @@ namespace StrataRec.Cli.Commands;
 /// </summary>
 internal static class ReplayCommand
 {
-    public static Command Create()
+    public static Command Create(PlanEnvironment provided)
     {
         var config = CommonOptions.ConfigOrManifest();
         var manifest = CommonOptions.Manifest();
@@ -39,9 +39,9 @@ internal static class ReplayCommand
         {
             config, manifest, store, environment, format, bundle, arms, expectIdentical,
         };
-        command.SetAction((parse, cancellationToken) => RunAsync(parse.GetValue(config), parse.GetValue(environment)!, parse.GetValue(bundle)!,
-            parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(format)!, parse.GetValue(expectIdentical), Console.Out, cancellationToken,
-            parse.GetValue(manifest), parse.GetValue(store)));
+        command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(config), parse.GetValue(environment)!, parse.GetValue(bundle)!,
+            parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(format)!, parse.GetValue(expectIdentical), parse.InvocationConfiguration.Output,
+            cancellationToken, parse.GetValue(manifest), parse.GetValue(store), parse.InvocationConfiguration.Error));
         return command;
     }
 
@@ -49,20 +49,21 @@ internal static class ReplayCommand
     /// <paramref name="store"/> is given, else the workspace <c>config</c>.</param>
     /// <param name="manifest">A manifest id or file (<c>--manifest</c>), read with <paramref name="store"/>.</param>
     /// <param name="errors">Where diagnostics and per-bundle errors go; standard error by default.</param>
+    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
     internal static async Task<int> RunAsync(
-        string? config, string environment, string bundlePath, string[] armArgs, string format, bool expectIdentical, TextWriter output, CancellationToken cancellationToken,
+        PlanEnvironment provided, string? config, string environment, string bundlePath, string[] armArgs, string format, bool expectIdentical, TextWriter output, CancellationToken cancellationToken,
         string? manifest = null, string? store = null, TextWriter? errors = null)
     {
         errors ??= Console.Error;
         var diagnostics = new DiagnosticBag();
-        var (reference, ok) = ConfigRef.Select(config, manifest, store, store is null ? "config" : null, diagnostics);
+        var (reference, ok) = ConfigRef.Select(config, manifest, store, store is null ? "config" : null, diagnostics, provided);
         if (!ok)
         {
             Output.Diagnostics(diagnostics.Items, format, errors);
             return 2;
         }
 
-        await using var engines = await ReplayEngines.CreateAsync(reference, store, environment, format, errors, cancellationToken).ConfigureAwait(false);
+        await using var engines = await ReplayEngines.CreateAsync(provided, reference, store, environment, format, errors, cancellationToken).ConfigureAwait(false);
         if (engines is null)
         {
             return 1;

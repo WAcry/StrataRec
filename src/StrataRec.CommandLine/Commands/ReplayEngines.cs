@@ -2,7 +2,7 @@ using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Hosting;
 
-namespace StrataRec.Cli.Commands;
+namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
 /// The engines bundles replay on (design 13.4). A bundle's runs name every pipeline its request ran, the primary and, when
@@ -36,10 +36,13 @@ internal sealed class ReplayEngines : IAsyncDisposable
     private readonly string? _store;
     private readonly string _environment;
     private readonly TextWriter _errors;
+    private readonly Pipeline.Planning.PlanEnvironment _provided;
     private readonly Dictionary<string, Resolution> _engines = new(StringComparer.Ordinal);
 
-    private ReplayEngines(ConfigRef? named, RecEngine? workspace, string? namedPipeline, string? store, string environment, TextWriter errors)
+    private ReplayEngines(
+        Pipeline.Planning.PlanEnvironment provided, ConfigRef? named, RecEngine? workspace, string? namedPipeline, string? store, string environment, TextWriter errors)
     {
+        _provided = provided;
         _named = named;
         _workspace = workspace;
         _namedPipeline = namedPipeline;
@@ -53,12 +56,14 @@ internal sealed class ReplayEngines : IAsyncDisposable
     /// null, for the manifests the bundles recorded, read from <paramref name="store"/> as bundles ask for them. Null after
     /// printing the errors of a configuration that does not load.
     /// </summary>
+    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>), for the manifests bundles name.</param>
     public static async Task<ReplayEngines?> CreateAsync(
-        ConfigRef? reference, string? store, string environment, string format, TextWriter errors, CancellationToken cancellationToken)
+        Pipeline.Planning.PlanEnvironment provided, ConfigRef? reference, string? store, string environment, string format, TextWriter errors,
+        CancellationToken cancellationToken)
     {
         if (reference is null)
         {
-            return new ReplayEngines(null, null, null, store, environment, errors);
+            return new ReplayEngines(provided, null, null, null, store, environment, errors);
         }
 
         var diagnostics = new DiagnosticBag();
@@ -73,11 +78,11 @@ internal sealed class ReplayEngines : IAsyncDisposable
 
         if (!reference.IsManifest)
         {
-            return new ReplayEngines(reference, engine, null, store ?? reference.Store, environment, errors);
+            return new ReplayEngines(provided, reference, engine, null, store ?? reference.Store, environment, errors);
         }
 
         // The named manifest alone serves the bundles whose request did not fail over to another pipeline.
-        var engines = new ReplayEngines(reference, null, pipeline, reference.Store, environment, errors);
+        var engines = new ReplayEngines(provided, reference, null, pipeline, reference.Store, environment, errors);
         engines._engines[Key([(pipeline, reference.Text)])] = new Resolution(engine, null, null);
         return engines;
     }
@@ -235,7 +240,7 @@ internal sealed class ReplayEngines : IAsyncDisposable
         {
             foreach (var (pipeline, source) in configurations)
             {
-                var reference = source == _named?.Text ? _named : ConfigRef.Parse(source, _store, "manifest", diagnostics);
+                var reference = source == _named?.Text ? _named : ConfigRef.Parse(source, _store, "manifest", diagnostics, _provided);
                 if (reference is null)
                 {
                     return Failed(pipeline, source, diagnostics);

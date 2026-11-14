@@ -4,22 +4,20 @@ using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Values;
-using StrataRec.Experiments.Assignment;
-using StrataRec.Features.Catalog;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Replay;
-using StrataRec.Hosting.Workspace;
 using StrataRec.Pipeline.Planning;
 
-namespace StrataRec.Cli.Commands;
+namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
 /// <c>stratarec run</c>: executes a request against a workspace locally (fixtures via <c>memory@1</c> and friends) and
-/// prints the result as JSON: items, assignment and trigger record, and with <c>--trace</c> every node's outcome.
+/// prints the result as JSON (<see cref="RecResultJson"/>, the document a service answers with): items, assignment and
+/// trigger record, and with <c>--trace</c> every node's outcome and the node that produced each output column.
 /// </summary>
 internal static class RunCommand
 {
-    public static Command Create()
+    public static Command Create(PlanEnvironment provided)
     {
         var config = CommonOptions.Config();
         var environment = CommonOptions.Environment();
@@ -34,7 +32,7 @@ internal static class RunCommand
             Description = "Force these arms (experiment/arm), overriding the request file's force_arms and assignment; unknown arms fail the request.",
             AllowMultipleArgumentsPerToken = true,
         };
-        var trace = new Option<bool>("--trace", "-t") { Description = "Include every node's outcome." };
+        var trace = new Option<bool>("--trace", "-t") { Description = "Include every node's outcome, and the node that produced each output column." };
         var logs = new Option<bool>("--logs", "-l") { Description = "Include the log batches the request's taps captured (nothing is written)." };
         var record = new Option<string?>("--record")
         {
@@ -54,40 +52,49 @@ internal static class RunCommand
             }
         });
         var command = new Command("run", "Execute a request locally and print the result as JSON.") { config, environment, request, arms, trace, logs, record, deadline };
-        command.SetAction((parse, cancellationToken) => RunAsync(parse.GetValue(config)!, parse.GetValue(environment)!, parse.GetValue(request)!,
-            parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(trace), Console.Out, cancellationToken, parse.GetValue(logs), parse.GetValue(record),
-            parse.GetValue(deadline)));
+        command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(config)!, parse.GetValue(environment)!, parse.GetValue(request)!,
+            parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(trace), parse.InvocationConfiguration.Output, cancellationToken, parse.GetValue(logs),
+            parse.GetValue(record), parse.GetValue(deadline), parse.InvocationConfiguration.Error));
         return command;
     }
 
+    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
+    /// <param name="errors">Where diagnostics and progress go; standard error by default.</param>
     internal static async Task<int> RunAsync(
-        string config, string environment, string requestPath, string[] arms, bool trace, TextWriter output, CancellationToken cancellationToken, bool logs = false,
-        string? recordPath = null, int? deadlineMs = null)
+        PlanEnvironment provided, string config, string environment, string requestPath, string[] arms, bool trace, TextWriter output,
+        CancellationToken cancellationToken, bool logs = false, string? recordPath = null, int? deadlineMs = null, TextWriter? errors = null)
     {
+        errors ??= Console.Error;
+
         // Mistakes in the request file are reported like configuration errors, at file:line:column.
         var problems = new DiagnosticBag();
         var locator = DiagnosticLocator.ForWorkspace(config).AddFile(requestPath);
         var file = await ReadRequestAsync(requestPath, problems, cancellationToken).ConfigureAwait(false);
         if (file is null)
         {
-            Output.Diagnostics(problems.Items, "text", Console.Error, locator: locator);
+            Output.Diagnostics(problems.Items, "text", errors, locator: locator);
             return 2;
         }
 
         var pipelineId = file.PipelineId;
         // The engine loads the workspace's local feature tables (design 6.6) before it serves; disposing it stops their sources.
-        await using var engine = new RecEngine(CommonOptions.PlanEnvironment(config));
-        var diagnostics = ServiceCollectionExtensions.LoadWorkspace(engine, config, environment, new[] { pipelineId });
-        if (diagnostics.HasErrors || !engine.TryGetPipeline(pipelineId, out var pipeline))
+        await using var engine = new RecEngine(CommonOptions.ForRoot(provided, config));
+        var diagnostics = await ServiceCollectionExtensions.LoadWorkspaceAsync(engine, config, environment, new[] { pipelineId }, cancellationToken).ConfigureAwait(false);
+        if (diagnostics.HasErrors || !engine.TryGetRequestSchema(pipelineId, out var schema))
         {
-            Output.Diagnostics(diagnostics.Items, "text", Console.Error, locator: locator);
+            Output.Diagnostics(diagnostics.Items, "text", errors, locator: locator);
             return 1;
         }
 
-        var inputs = ReadInputs(file, pipeline.Plan.RequestInputs, requestPath, problems);
-        if (problems.HasErrors)
+        // The inputs as a service reads them (RequestSchema.TryRead): the same rules and words, here at file:line:column.
+        if (!schema.TryRead(file.Inputs ?? default, out var inputs, out var inputErrors))
         {
-            Output.Diagnostics(problems.Items, "text", Console.Error, locator: locator);
+            foreach (var error in inputErrors)
+            {
+                problems.Error("REQUEST_INVALID", requestPath, error.Pointer, error.Message, error.Hint);
+            }
+
+            Output.Diagnostics(problems.Items, "text", errors, locator: locator);
             return 2;
         }
 
@@ -112,7 +119,7 @@ internal static class RunCommand
                 CaptureLogs = logs,
                 Record = recordPath is not null,
                 // A request cancelled with Ctrl-C returns no result: its bundle comes through the callback.
-                OnRecording = recordPath is null ? null : bundle => SaveAborted(bundle, recordPath),
+                OnRecording = recordPath is null ? null : bundle => SaveAborted(bundle, recordPath, errors),
             },
         };
 
@@ -121,8 +128,8 @@ internal static class RunCommand
         if (!result.Succeeded && deadlineMs is null && System.Diagnostics.Stopwatch.GetElapsedTime(started) >= request.Deadline * 0.9)
         {
             // A one-shot process compiles what it runs on its first request: the deadline may be spent on that.
-            Console.Error.WriteLine($"the request used its whole deadline ({request.Deadline.TotalMilliseconds} ms); the first request of a process " +
-                                    "includes compiling the code it runs. Rerun with --deadline-ms 5000 to rule out the clock.");
+            errors.WriteLine($"the request used its whole deadline ({request.Deadline.TotalMilliseconds} ms); the first request of a process " +
+                             "includes compiling the code it runs. Rerun with --deadline-ms 5000 to rule out the clock.");
         }
 
         if (recordPath is not null)
@@ -130,101 +137,24 @@ internal static class RunCommand
             if (result.Recording is { } bundle)
             {
                 ReplayBundleFile.Save(bundle, recordPath);
-                Console.Error.WriteLine($"recorded {request.RequestId} to {recordPath}");
+                errors.WriteLine($"recorded {request.RequestId} to {recordPath}");
             }
             else
             {
-                Console.Error.WriteLine($"nothing recorded: the request was rejected before execution ({result.Error})");
+                errors.WriteLine($"nothing recorded: the request was rejected before execution ({result.Error})");
             }
         }
 
-        output.WriteLine(Output.ToJson(json =>
-        {
-            json.WriteStartObject();
-            json.WriteBoolean("succeeded", result.Succeeded);
-            if (result.Error is not null)
-            {
-                json.WriteString("error", result.Error);
-            }
-
-            json.WriteString("served_by", result.ServedBy);
-            json.WriteString("manifest", result.ManifestId);
-            json.WriteStartObject("experiments");
-            WriteStrings(json, "assigned", result.Experiments.Assigned);
-            WriteStrings(json, "triggered", result.Experiments.Triggered);
-            json.WriteStartArray("ignored");
-            foreach (var ignored in result.Experiments.Ignored)
-            {
-                json.WriteStartObject();
-                json.WriteString("id", ignored.Id);
-                json.WriteString("reason", IgnoredArm.Name(ignored.Reason));
-                json.WriteEndObject();
-            }
-
-            json.WriteEndArray();
-            json.WriteEndObject();
-            json.WriteStartArray("items");
-            foreach (var item in result.Items)
-            {
-                json.WriteStartObject();
-                json.WriteNumber("rank", item.Rank);
-                json.WriteString("id", item.Id.ToString());
-                foreach (var (name, value) in item.Columns)
-                {
-                    json.WritePropertyName(name);
-                    Output.WriteValue(json, value);
-                }
-
-                json.WriteEndObject();
-            }
-
-            json.WriteEndArray();
-            if (result.Trace is { } outcomes)
-            {
-                json.WriteStartArray("trace");
-                foreach (var outcome in outcomes)
-                {
-                    json.WriteStartObject();
-                    json.WriteString("node", outcome.NodeId);
-                    json.WriteString("outcome", outcome.Kind.ToString().ToLowerInvariant());
-                    if (outcome.Detail is not null)
-                    {
-                        json.WriteString("detail", outcome.Detail);
-                    }
-
-                    if (outcome.ProducedBy is not null && outcome.ProducedBy != outcome.NodeId)
-                    {
-                        json.WriteString("produced_by", outcome.ProducedBy);
-                    }
-
-                    json.WriteNumber("ms", Math.Round(outcome.DurationMs, 3));
-                    json.WriteNumber("rows_in", outcome.RowsIn);
-                    json.WriteNumber("rows_out", outcome.RowsOut);
-                    json.WriteEndObject();
-                }
-
-                json.WriteEndArray();
-            }
-
-            if (result.LogBatches is { } batches)
-            {
-                json.WriteStartArray("logs");
-                foreach (var batch in batches)
-                {
-                    Logging.LogBatchJson.Write(json, batch);
-                }
-
-                json.WriteEndArray();
-            }
-
-            json.WriteEndObject();
-        }));
+        // The document a service answers with (RecResultJson), plus the lineage --trace asks for.
+        var options = new RecResultJsonOptions { IncludeColumnProducers = trace };
+        output.WriteLine(Output.ToJson(json => RecResultJson.Write(json, result, options)));
         return result.Succeeded ? 0 : 1;
     }
 
     /// <summary>
     /// Reads and binds the request file strictly, like an artifact (<see cref="ArtifactSerializer.TryBind{T}"/>): a
-    /// misspelled member is an error with a did-you-mean rather than a key silently ignored. Null after reporting.
+    /// misspelled member is an error with a did-you-mean rather than a key silently ignored, and a member given twice is
+    /// an error at its line (<see cref="Jsonc"/>) rather than one of the two values. Null after reporting.
     /// </summary>
     private static async Task<RequestFile?> ReadRequestAsync(string requestPath, DiagnosticBag problems, CancellationToken cancellationToken)
     {
@@ -251,6 +181,14 @@ internal static class RunCommand
             return null;
         }
 
+        // A required member written as null binds (it is present): it names no pipeline.
+        if (string.IsNullOrEmpty(file.PipelineId))
+        {
+            problems.Error("REQUEST_INVALID", requestPath, "/pipeline_id",
+                $"'pipeline_id' must name a pipeline, got {(file.PipelineId is null ? "null" : "an empty string")}.",
+                "give the id of the pipeline to run, e.g. \"pipeline_id\": \"home_feed\"");
+        }
+
         CheckArms(file.ForceArms, "/force_arms", requestPath, problems);
         CheckArms(file.Assignment, "/assignment", requestPath, problems);
         if (file.DeadlineMs is <= 0)
@@ -275,46 +213,6 @@ internal static class RunCommand
         }
     }
 
-    /// <summary>The request's inputs, each checked against the pipeline's request_schema and reported where it is written.</summary>
-    private static RequestInputs ReadInputs(RequestFile file, IReadOnlyDictionary<string, ContextField> declared, string requestPath, DiagnosticBag problems)
-    {
-        var inputs = new RequestInputs();
-        if (file.Inputs is null)
-        {
-            return inputs;
-        }
-
-        foreach (var (name, value) in file.Inputs)
-        {
-            var pointer = "/inputs/" + JsonPointer.Escape(name);
-            if (!declared.TryGetValue(name, out var field))
-            {
-                var names = new List<string>(declared.Keys);
-                names.Sort(StringComparer.Ordinal);
-                problems.Error("REQUEST_INVALID", requestPath, pointer, $"Input '{name}' is not declared in the request_schema of pipeline '{file.PipelineId}'.",
-                    NameSuggestions.DidYouMean(name, names) ??
-                    (names.Count > 0 ? "declared inputs: " + string.Join(", ", names) : "the pipeline declares no inputs; declare it under /request_schema"));
-                continue;
-            }
-
-            if (value is null)
-            {
-                continue; // missing, as if absent
-            }
-
-            if (!ConfigValues.TryToScalar(value, field.InputType, out var scalar, out var error))
-            {
-                problems.Error("REQUEST_INVALID", requestPath, pointer, $"Input '{name}' {error}.",
-                    $"the request_schema of pipeline '{file.PipelineId}' declares it as '{field.InputType}'");
-                continue;
-            }
-
-            inputs.Set(name, scalar);
-        }
-
-        return inputs;
-    }
-
     /// <summary>The request file of <c>stratarec run</c>.</summary>
     private sealed class RequestFile
     {
@@ -325,7 +223,7 @@ internal static class RunCommand
         public string? RequestId { get; init; }
 
         /// <summary>Values for the pipeline's request_schema, by name.</summary>
-        public JsonObject? Inputs { get; init; }
+        public JsonElement? Inputs { get; init; }
 
         /// <summary>The arms the experiment platform answered, as "experiment/arm"; [] is the answer "no arms".</summary>
         public List<string>? Assignment { get; init; }
@@ -343,7 +241,7 @@ internal static class RunCommand
         public long? Seed { get; init; }
     }
 
-    private static void SaveAborted(ReplayBundle bundle, string path)
+    private static void SaveAborted(ReplayBundle bundle, string path, TextWriter errors)
     {
         if (!bundle.Result.Aborted)
         {
@@ -353,22 +251,11 @@ internal static class RunCommand
         try
         {
             ReplayBundleFile.Save(bundle, path);
-            Console.Error.WriteLine($"recorded aborted request {bundle.Request.RequestId} to {path}");
+            errors.WriteLine($"recorded aborted request {bundle.Request.RequestId} to {path}");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Console.Error.WriteLine($"{path}: {ex.Message}");
+            errors.WriteLine($"{path}: {ex.Message}");
         }
-    }
-
-    private static void WriteStrings(Utf8JsonWriter json, string name, IReadOnlyList<string> values)
-    {
-        json.WriteStartArray(name);
-        foreach (var v in values)
-        {
-            json.WriteStringValue(v);
-        }
-
-        json.WriteEndArray();
     }
 }

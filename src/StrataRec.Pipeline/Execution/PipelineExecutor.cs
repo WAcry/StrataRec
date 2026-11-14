@@ -1322,40 +1322,15 @@ public sealed class PipelineExecutor
         return ids;
     }
 
-    /// <summary>Validates inputs against <c>request_schema</c> and fills request-level context values.</summary>
+    /// <summary>
+    /// Validates inputs against <c>request_schema</c> (<see cref="RequestSchema"/>: the rules and words hosts and the engine
+    /// use) and fills request-level context values.
+    /// </summary>
     private static string? BindInputs(ExecutionPlan plan, PipelineRequest request, ScalarValue[] context)
     {
-        // The plan builds a Dictionary: enumerate it as one, not through the interface (a boxed enumerator per request).
-        var declared = plan.RequestInputs as Dictionary<string, ContextField> ?? new Dictionary<string, ContextField>(plan.RequestInputs);
-        foreach (var (name, field) in declared)
+        if (plan.RequestSchema.Bind(request.Inputs, context) is { } error)
         {
-            request.Inputs.TryGetValue(name, out var value);
-            if (value.IsMissing)
-            {
-                if (!field.Type.Nullable)
-                {
-                    return $"request input '{name}' ({field.InputType}) is required";
-                }
-
-                context[field.Id] = ScalarValue.Missing;
-                continue;
-            }
-
-            // Validated against the declared type (an int32 must fit), held in its promoted form.
-            if (!value.TryConvert(field.InputType, out var converted))
-            {
-                return $"request input '{name}' must be {field.InputType}, got {value}";
-            }
-
-            context[field.Id] = converted;
-        }
-
-        foreach (var (name, _) in request.Inputs)
-        {
-            if (!plan.RequestInputs.ContainsKey(name))
-            {
-                return $"request input '{name}' is not declared in request_schema";
-            }
+            return RequestSchema.Describe(error);
         }
 
         context[PlanSchema.RequestIdContext] = ScalarValue.FromString(request.RequestId);

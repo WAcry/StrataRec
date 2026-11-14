@@ -3,8 +3,9 @@ using System.Globalization;
 using System.Text.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Hosting.Replay;
+using StrataRec.Pipeline.Planning;
 
-namespace StrataRec.Cli.Commands;
+namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
 /// <c>stratarec compare</c>: the recorded-mode comparison of design 10.8. Replays every bundle on a baseline and a
@@ -14,7 +15,7 @@ namespace StrataRec.Cli.Commands;
 /// </summary>
 internal static class CompareCommand
 {
-    public static Command Create()
+    public static Command Create(PlanEnvironment provided)
     {
         var candidate = CommonOptions.ConfigOrManifest();
         candidate.Description = "Candidate configuration directory; default 'config'. Not with --manifest.";
@@ -41,17 +42,18 @@ internal static class CompareCommand
         {
             candidate, manifest, store, environment, format, baseline, bundles, arms, topK, score,
         };
-        command.SetAction((parse, cancellationToken) => RunAsync(parse.GetValue(baseline)!, parse.GetValue(candidate), parse.GetValue(environment)!,
+        command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(baseline)!, parse.GetValue(candidate), parse.GetValue(environment)!,
             parse.GetValue(bundles)!, parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(topK), parse.GetValue(score)!, parse.GetValue(format)!,
-            Console.Out, cancellationToken, parse.GetValue(manifest), parse.GetValue(store)));
+            parse.InvocationConfiguration.Output, cancellationToken, parse.GetValue(manifest), parse.GetValue(store), parse.InvocationConfiguration.Error));
         return command;
     }
 
     /// <param name="baselineRef">A workspace directory, manifest id or manifest file (<see cref="ConfigRef.Parse"/>).</param>
     /// <param name="candidateConfig">The candidate workspace (<c>-c</c>); with <paramref name="candidateManifest"/> null too, the workspace <c>config</c>.</param>
     /// <param name="errors">Where diagnostics go; standard error by default.</param>
+    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
     internal static async Task<int> RunAsync(
-        string baselineRef, string? candidateConfig, string environment, string bundlePath, string[] armArgs, int topK, string scoreColumn, string format,
+        PlanEnvironment provided, string baselineRef, string? candidateConfig, string environment, string bundlePath, string[] armArgs, int topK, string scoreColumn, string format,
         TextWriter output, CancellationToken cancellationToken, string? candidateManifest = null, string? store = null, TextWriter? errors = null)
     {
         errors ??= Console.Error;
@@ -62,8 +64,8 @@ internal static class CompareCommand
         }
 
         var diagnostics = new DiagnosticBag();
-        var baselineConfig = ConfigRef.Parse(baselineRef, store, "--baseline", diagnostics);
-        var (candidateRef, ok) = ConfigRef.Select(candidateConfig, candidateManifest, store, "config", diagnostics);
+        var baselineConfig = ConfigRef.Parse(baselineRef, store, "--baseline", diagnostics, provided);
+        var (candidateRef, ok) = ConfigRef.Select(candidateConfig, candidateManifest, store, "config", diagnostics, provided);
         if (baselineConfig is null || !ok)
         {
             Output.Diagnostics(diagnostics.Items, format, errors);
@@ -72,8 +74,8 @@ internal static class CompareCommand
 
         // Each side resolves a bundle's pipelines as replay does: a fallback pipeline the request ran comes from the side's
         // workspace, or from the manifest it recorded when the side is a manifest (ReplayEngines).
-        await using var baseline = await ReplayEngines.CreateAsync(baselineConfig, store, environment, format, errors, cancellationToken).ConfigureAwait(false);
-        await using var candidate = await ReplayEngines.CreateAsync(candidateRef!, store, environment, format, errors, cancellationToken).ConfigureAwait(false);
+        await using var baseline = await ReplayEngines.CreateAsync(provided, baselineConfig, store, environment, format, errors, cancellationToken).ConfigureAwait(false);
+        await using var candidate = await ReplayEngines.CreateAsync(provided, candidateRef!, store, environment, format, errors, cancellationToken).ConfigureAwait(false);
         if (baseline is null || candidate is null)
         {
             return 1;
@@ -106,7 +108,7 @@ internal static class CompareCommand
 
         if (pairs.Count == 0)
         {
-            Console.Error.WriteLine($"{bundlePath}: no replay bundles found.");
+            errors.WriteLine($"{bundlePath}: no replay bundles found.");
         }
 
         var report = ReplayComparison.Compare(pairs, topK, scoreColumn, Manifest(pairs, static p => p.Baseline), Manifest(pairs, static p => p.Candidate));

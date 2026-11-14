@@ -46,6 +46,35 @@ public static class JsonWords
         }
     }
 
+    /// <summary>
+    /// <see cref="Value(JsonNode?)"/> for a value read without building nodes (a request body read once); the same words
+    /// for the same JSON. An absent value (<see cref="JsonValueKind.Undefined"/>) is <c>nothing</c>; a string whose escapes
+    /// are not Unicode (an unpaired surrogate, which System.Text.Json parses and refuses to read) is quoted as written.
+    /// </summary>
+    public static string Value(in JsonElement element) => element.ValueKind switch
+    {
+        JsonValueKind.Null => "null",
+        JsonValueKind.Object => "an object",
+        JsonValueKind.Array => "an array",
+        JsonValueKind.String => "the string " + QuoteString(element),
+        JsonValueKind.Number => "the number " + Cut(element.GetRawText()),
+        JsonValueKind.True => "true",
+        JsonValueKind.False => "false",
+        _ => "nothing",
+    };
+
+    private static string QuoteString(in JsonElement element)
+    {
+        try
+        {
+            return Quote(element.GetString()!);
+        }
+        catch (InvalidOperationException)
+        {
+            return Cut(element.GetRawText()); // the escapes as written, already in quotes
+        }
+    }
+
     /// <summary>A kind of token, for a reader that only knows the token: <c>a number</c>, <c>an object</c>, …</summary>
     public static string Token(JsonTokenType token) => token switch
     {
