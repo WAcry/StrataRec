@@ -41,7 +41,7 @@ internal static class RevokeCommand
         var format = CommonOptions.Format();
         var command = new Command("revoke", "Emergency stop (design 10.6): publish at once what is published without the experiments, revoking every earlier " +
             "manifest, so a node that restarts does not bring them back either. Exits with 1 when nothing is published, an experiment is not released, or the " +
-            "store cannot be read, and 2 on usage errors.")
+            "store cannot be read or written, and 2 on usage errors.")
         {
             experiments, store, pipeline, environment, format,
         };
@@ -78,8 +78,18 @@ internal static class RevokeCommand
             return 1;
         }
 
-        var (outcome, code) = await RevokeAsync(experiments, pointers, path, new FileSystemArtifactStore(storeRoot), pipelineId, environment, diagnostics,
-            cancellationToken).ConfigureAwait(false);
+        Outcome? outcome;
+        int code;
+        try
+        {
+            (outcome, code) = await RevokeAsync(experiments, pointers, path, new FileSystemArtifactStore(storeRoot), pipelineId, environment, diagnostics,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Output.StoreUnwritable(ex, diagnostics); // what it reads is reported where it is read
+            (outcome, code) = (null, 1);
+        }
         if (diagnostics.Items.Count > 0)
         {
             Output.Diagnostics(diagnostics.Items, format, errors);

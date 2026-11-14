@@ -289,6 +289,40 @@ internal static class Output
     /// </summary>
     public static string Compact(System.Text.Json.Nodes.JsonNode? value) => Artifacts.Json.JsonCanonicalizer.CanonicalizeToString(value);
 
+    /// <summary>
+    /// Writes a file the command line names (<c>build --manifest</c>, <c>run --record</c>), creating its directory as
+    /// <c>init</c> and <c>schema --out</c> do. What cannot be written is OUTPUT_UNWRITABLE at <paramref name="option"/>, with
+    /// what the system said, not an exception and its stack (review 43). False when it was not written.
+    /// </summary>
+    public static bool WriteFile(string option, string path, Action<string> write, DiagnosticBag diagnostics)
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(Path.GetFullPath(path));
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            write(path);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            diagnostics.Error("OUTPUT_UNWRITABLE", option, string.Empty, $"Cannot write '{path}': {ex.Message}",
+                $"check that this process may write there, or pass another {option}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// A store that cannot be written (build, publish and revoke write it; a node only reads it): STORE_UNWRITABLE at
+    /// <c>--store</c> with what the system said, which names the path, not an exception and its stack (review 43).
+    /// </summary>
+    public static void StoreUnwritable(Exception ex, DiagnosticBag diagnostics) =>
+        diagnostics.Error("STORE_UNWRITABLE", "--store", string.Empty, ex.Message,
+            "check that this process may write the store, and that its blobs/ and pointers/ and the directories in them are directories");
+
     public static string ToJson(Action<Utf8JsonWriter> write)
     {
         using var stream = new MemoryStream();

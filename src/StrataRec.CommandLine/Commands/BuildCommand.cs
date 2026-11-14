@@ -59,8 +59,8 @@ internal static class BuildCommand
             Arity = ArgumentArity.OneOrMore,
             AllowMultipleArgumentsPerToken = true,
         };
-        var command = new Command("build", "Validate, upload artifacts by content hash and emit a release manifest. Exits with 1 when the configuration has errors " +
-            "or releases a revoked experiment unchanged.") { config, environment, pipeline, store, manifest, seq, restore };
+        var command = new Command("build", "Validate, upload artifacts by content hash and emit a release manifest. Exits with 1 when the configuration has errors, " +
+            "releases a revoked experiment unchanged, or the store or the --manifest file cannot be written.") { config, environment, pipeline, store, manifest, seq, restore };
         command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(config)!, parse.GetValue(environment)!, parse.GetValue(pipeline),
             parse.GetValue(store)!, parse.GetValue(manifest), parse.GetValue(seq), parse.InvocationConfiguration.Output, cancellationToken,
             parse.InvocationConfiguration.Error, parse.GetValue(restore)));
@@ -117,25 +117,36 @@ internal static class BuildCommand
             published = pointed;
         }
 
-        var manifest = published is { } current
-            ? await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, store, diagnostics, next, current.Manifest.MinAcceptedSeq,
-                current.Id, cancellationToken).ConfigureAwait(false)
-            : await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, store, diagnostics, seq ?? 1, cancellationToken: cancellationToken).ConfigureAwait(false);
+        ReleaseManifest? manifest;
+        var manifestId = string.Empty;
+        var unchanged = false;
+        try
+        {
+            manifest = published is { } current
+                ? await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, store, diagnostics, next, current.Manifest.MinAcceptedSeq,
+                    current.Id, cancellationToken).ConfigureAwait(false)
+                : await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, store, diagnostics, seq ?? 1, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+            unchanged = manifest is not null && published is { } was && ManifestBuilder.ContentId(Renumbered(manifest, was.Manifest)) == was.Id;
+            if (unchanged)
+            {
+                (manifestId, manifest) = published!.Value; // stored when it was built
+            }
+            else if (manifest is not null)
+            {
+                manifestId = await store.PutAsync(ArtifactSerializer.ToNode(manifest), cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Output.StoreUnwritable(ex, diagnostics);
+            manifest = null;
+        }
+
         if (manifest is null)
         {
             Output.Diagnostics(diagnostics.Items, "text", errors, locator: DiagnosticLocator.ForWorkspace(config));
             return 1;
-        }
-
-        string manifestId;
-        var unchanged = published is { } was && ManifestBuilder.ContentId(Renumbered(manifest, was.Manifest)) == was.Id;
-        if (unchanged)
-        {
-            (manifestId, manifest) = published!.Value; // stored when it was built
-        }
-        else
-        {
-            manifestId = await store.PutAsync(ArtifactSerializer.ToNode(manifest), cancellationToken).ConfigureAwait(false);
         }
 
         var text = ArtifactSerializer.ToNode(manifest).ToJsonString(ArtifactSerializer.Options);
@@ -143,9 +154,10 @@ internal static class BuildCommand
         {
             output.WriteLine(text);
         }
-        else
+        else if (!Output.WriteFile("--manifest", manifestPath, path => File.WriteAllText(path, text + "\n"), diagnostics))
         {
-            await File.WriteAllTextAsync(manifestPath, text + "\n", cancellationToken).ConfigureAwait(false);
+            Output.Diagnostics(diagnostics.Items, "text", errors, locator: DiagnosticLocator.ForWorkspace(config));
+            return 1;
         }
 
         if (diagnostics.Items.Count > 0)

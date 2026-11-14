@@ -78,7 +78,8 @@ internal static class RunCommand
         format.DefaultValueFactory = _ => "json";
         var command = new Command("run",
             "Execute a request locally on a workspace or a release manifest and print the result (JSON, or text with --format text). Exits with 0 when the request " +
-            "succeeds, 1 when it fails (the result says why) or the configuration does not load, 2 when the request file or an --explain id is invalid, and on usage errors.")
+            "succeeds, 1 when it fails (the result says why), the configuration does not load or the --record file cannot be written, 2 when the request file or an " +
+            "--explain id is invalid, and on usage errors.")
         {
             config, manifest, store, environment, request, arms, trace, logs, record, deadline, explain, format,
         };
@@ -239,12 +240,22 @@ internal static class RunCommand
                              "includes compiling the code it runs. Rerun with --deadline-ms 5000 to rule out the clock.");
         }
 
+        // A bundle that cannot be written is said, and the result printed all the same: the request ran (review 43).
+        var recorded = true;
         if (recordPath is not null)
         {
             if (result.Recording is { } bundle)
             {
-                ReplayBundleFile.Save(bundle, recordPath);
-                errors.WriteLine($"recorded {request.RequestId} to {recordPath}; replay it with: {ReplayCommandLine(reference, recordPath)}");
+                var saving = new DiagnosticBag();
+                recorded = Output.WriteFile("--record", recordPath, path => ReplayBundleFile.Save(bundle, path), saving);
+                if (recorded)
+                {
+                    errors.WriteLine($"recorded {request.RequestId} to {recordPath}; replay it with: {ReplayCommandLine(reference, recordPath)}");
+                }
+                else
+                {
+                    Output.Diagnostics(saving.Items, "text", errors);
+                }
             }
             else
             {
@@ -262,7 +273,7 @@ internal static class RunCommand
             var options = new RecResultJsonOptions { IncludeColumnProducers = trace };
             output.WriteLine(Output.ToJson(json => RecResultJson.Write(json, result, options)));
         }
-        return result.Succeeded ? 0 : 1;
+        return result.Succeeded && recorded ? 0 : 1;
     }
 
     /// <summary>
@@ -429,14 +440,14 @@ internal static class RunCommand
             return; // saved with the result
         }
 
-        try
+        var saving = new DiagnosticBag();
+        if (Output.WriteFile("--record", path, file => ReplayBundleFile.Save(bundle, file), saving))
         {
-            ReplayBundleFile.Save(bundle, path);
             errors.WriteLine($"recorded aborted request {bundle.Request.RequestId} to {path}");
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        else
         {
-            errors.WriteLine($"{path}: {ex.Message}");
+            Output.Diagnostics(saving.Items, "text", errors);
         }
     }
 }

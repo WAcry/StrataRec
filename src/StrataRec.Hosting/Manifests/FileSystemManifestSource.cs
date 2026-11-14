@@ -65,7 +65,11 @@ public sealed class FileSystemManifestSource : IManifestSource
             }
             catch (DirectoryNotFoundException)
             {
-                // nothing published yet
+                // Nothing published yet, unless a file stands where the directory belongs (review 43).
+                if (NotADirectory(directory) is { } file)
+                {
+                    pointers.Add(new PointerFile(string.Empty, string.Empty, directory, file));
+                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -97,7 +101,10 @@ public sealed class FileSystemManifestSource : IManifestSource
             }
             catch (DirectoryNotFoundException)
             {
-                // nothing published in this environment
+                if (NotADirectory(environmentDirectory) is { } file)
+                {
+                    pointers.Add(new PointerFile(string.Empty, name, environmentDirectory, file));
+                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -111,6 +118,24 @@ public sealed class FileSystemManifestSource : IManifestSource
             return byEnvironment != 0 ? byEnvironment : string.CompareOrdinal(a.PipelineId, b.PipelineId);
         });
         return pointers;
+    }
+
+    /// <summary>
+    /// Why <paramref name="directory"/>, which could not be found, is no directory although something is there: a file at
+    /// it or at one of the directories above it, up to the root. The system says "not found" for both (ENOTDIR), and a store
+    /// whose pointers cannot be listed is not one that publishes nothing (review 43). Null when nothing is there.
+    /// </summary>
+    private string? NotADirectory(string directory)
+    {
+        for (var path = directory; path.Length >= Root.Length; path = Path.GetDirectoryName(path) ?? string.Empty)
+        {
+            if (File.Exists(path))
+            {
+                return $"'{path}' is a file where a directory of pointers belongs";
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Why <paramref name="name"/> cannot name a pointer file; null when it can.</summary>

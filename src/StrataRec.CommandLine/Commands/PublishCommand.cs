@@ -34,7 +34,7 @@ internal static class PublishCommand
         };
         var format = CommonOptions.Format();
         var command = new Command("publish", "Point the manifest's pipeline and environment at it, for nodes serving releases to load. " +
-            "Exits with 1 when the manifest or its artifacts cannot be read or its seq is not newer, and 2 on usage errors.")
+            "Exits with 1 when the manifest or its artifacts cannot be read, its seq is not newer or the store cannot be written, and 2 on usage errors.")
         {
             manifest, store, format,
         };
@@ -57,7 +57,17 @@ internal static class PublishCommand
             return 2;
         }
 
-        var published = await PublishAsync(reference, storeRoot, diagnostics, cancellationToken).ConfigureAwait(false);
+        Published? published;
+        try
+        {
+            published = await PublishAsync(reference, storeRoot, diagnostics, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Output.StoreUnwritable(ex, diagnostics); // what it reads is reported where it is read
+            published = null;
+        }
+
         if (published is not { } done)
         {
             Output.Diagnostics(diagnostics.Items, format, errors);
