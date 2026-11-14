@@ -2,14 +2,10 @@ using System.CommandLine;
 using System.Text.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Experiments.Compilation;
-using StrataRec.Features.Cache;
 using StrataRec.Hosting.Workspace;
-using StrataRec.Llm;
-using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Planning;
-using StrataRec.Redis;
 
-namespace StrataRec.Cli.Commands;
+namespace StrataRec.CommandLine.Commands;
 
 /// <summary>Options shared by commands that read a workspace.</summary>
 internal static class CommonOptions
@@ -64,23 +60,18 @@ internal static class CommonOptions
         Description = "Artifact store directory (blobs/sha256/...) that 'stratarec build --store' uploaded manifests and artifacts to.",
     };
 
-    /// <summary>The engine environment for a workspace: fixture paths resolve against the config root.</summary>
-    public static PlanEnvironment PlanEnvironment(ConfigWorkspace workspace) => PlanEnvironment(workspace.Root);
-
-    /// <summary>The engine environment for a config root: what this binary provides (the built-in registries,
-    /// <c>redis@1</c> for distributed caches and the generative operators of StrataRec.Llm), with relative paths resolving
-    /// against the root. A manifest has no root (null): its bindings are compiled, never loaded, by the commands that read
-    /// manifests. <c>operators</c> and <c>schema</c> use it too, so they list what the other commands accept.</summary>
-    public static PlanEnvironment PlanEnvironment(string? configRoot) => new()
-    {
-        BaseDirectory = configRoot is null ? null : Path.GetFullPath(configRoot),
-        Operators = OperatorRegistry.CreateDefault().AddLlm(),
-        CacheStores = new FeatureCacheStoreRegistry().AddRedis(),
-    };
+    /// <summary>
+    /// What the binary provides (<paramref name="provided"/>, <see cref="StrataRecCommandLine"/>) placed in a config root:
+    /// relative paths in its bindings resolve against the root. A manifest has no root (null): its bindings are compiled,
+    /// never loaded, by the commands that read manifests, and the few that read a file when created resolve against the
+    /// current directory.
+    /// </summary>
+    public static PlanEnvironment ForRoot(PlanEnvironment provided, string? configRoot) =>
+        provided with { BaseDirectory = configRoot is null ? null : Path.GetFullPath(configRoot) };
 
     /// <summary>Loads a workspace and compiles one pipeline (with its experiments).</summary>
     public static (ConfigWorkspace Workspace, PlanCompileRequest? Request, PlanCompilation? Compilation) Compile(
-        string config, string environment, string? pipeline, DiagnosticBag diagnostics)
+        PlanEnvironment provided, string config, string environment, string? pipeline, DiagnosticBag diagnostics)
     {
         var workspace = ConfigWorkspace.Load(config, diagnostics);
         if (diagnostics.HasErrors)
@@ -94,7 +85,7 @@ internal static class CommonOptions
             return (workspace, null, null);
         }
 
-        var compilation = PlanCompiler.Compile(request, PlanEnvironment(workspace));
+        var compilation = PlanCompiler.Compile(request, ForRoot(provided, workspace.Root));
         diagnostics.AddRange(compilation.Diagnostics);
         return (workspace, request, compilation);
     }

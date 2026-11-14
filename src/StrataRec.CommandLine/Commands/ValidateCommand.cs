@@ -2,8 +2,9 @@ using System.CommandLine;
 using StrataRec.Artifacts.Model;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting.Workspace;
+using StrataRec.Pipeline.Planning;
 
-namespace StrataRec.Cli.Commands;
+namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
 /// <c>stratarec validate</c>: every static check CI runs (design 10.1 item 1) — schemas, types, data flow, patch
@@ -11,7 +12,7 @@ namespace StrataRec.Cli.Commands;
 /// </summary>
 internal static class ValidateCommand
 {
-    public static Command Create()
+    public static Command Create(PlanEnvironment provided)
     {
         var config = CommonOptions.Config();
         var environment = CommonOptions.Environment();
@@ -19,12 +20,13 @@ internal static class ValidateCommand
         var format = CommonOptions.Format();
         var strict = new Option<bool>("--warnings-as-errors") { Description = "Fail on warnings (e.g. experiment interactions) too." };
         var command = new Command("validate", "Run all static checks on a configuration workspace.") { config, environment, pipeline, format, strict };
-        command.SetAction(parse => Run(parse.GetValue(config)!, parse.GetValue(environment)!, parse.GetValue(pipeline), parse.GetValue(format)!,
-            parse.GetValue(strict), Console.Out));
+        command.SetAction(parse => Run(provided, parse.GetValue(config)!, parse.GetValue(environment)!, parse.GetValue(pipeline), parse.GetValue(format)!,
+            parse.GetValue(strict), parse.InvocationConfiguration.Output));
         return command;
     }
 
-    internal static int Run(string config, string environment, string? pipeline, string format, bool warningsAsErrors, TextWriter output)
+    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
+    internal static int Run(PlanEnvironment provided, string config, string environment, string? pipeline, string format, bool warningsAsErrors, TextWriter output)
     {
         var diagnostics = new DiagnosticBag();
         var workspace = ConfigWorkspace.Load(config, diagnostics);
@@ -49,7 +51,7 @@ internal static class ValidateCommand
                     continue;
                 }
 
-                var compilation = PlanCompiler.Compile(request, CommonOptions.PlanEnvironment(workspace));
+                var compilation = PlanCompiler.Compile(request, CommonOptions.ForRoot(provided, workspace.Root));
                 diagnostics.AddRange(compilation.Diagnostics);
                 summaries.Add(Summary(id, request, compilation));
             }

@@ -4,7 +4,7 @@ using StrataRec.Artifacts.Model;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 
-namespace StrataRec.Cli.Commands;
+namespace StrataRec.CommandLine.Commands;
 
 /// <summary>Diagnostic and value rendering shared by commands.</summary>
 internal static class Output

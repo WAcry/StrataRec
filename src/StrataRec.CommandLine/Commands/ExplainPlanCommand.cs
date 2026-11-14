@@ -7,7 +7,7 @@ using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting.Plans;
 using StrataRec.Pipeline.Planning;
 
-namespace StrataRec.Cli.Commands;
+namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
 /// <c>stratarec explain-plan</c> (design 13.4): the unified plan's timeline, node variants, experiment sites and
@@ -16,7 +16,7 @@ namespace StrataRec.Cli.Commands;
 /// </summary>
 internal static class ExplainPlanCommand
 {
-    public static Command Create()
+    public static Command Create(PlanEnvironment provided)
     {
         var config = CommonOptions.ConfigOrManifest();
         var manifest = CommonOptions.Manifest();
@@ -35,21 +35,23 @@ internal static class ExplainPlanCommand
         {
             config, manifest, store, environment, pipeline, format, arms,
         };
-        command.SetAction((parse, cancellationToken) => RunAsync(parse.GetValue(config), parse.GetValue(environment)!, parse.GetValue(pipeline), parse.GetValue(format)!,
-            parse.GetValue(arms) ?? Array.Empty<string>(), Console.Out, cancellationToken, parse.GetValue(manifest), parse.GetValue(store)));
+        command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(config), parse.GetValue(environment)!, parse.GetValue(pipeline),
+            parse.GetValue(format)!, parse.GetValue(arms) ?? Array.Empty<string>(), parse.InvocationConfiguration.Output, cancellationToken, parse.GetValue(manifest),
+            parse.GetValue(store), parse.InvocationConfiguration.Error));
         return command;
     }
 
     /// <param name="config">The workspace (<c>-c</c>); with <paramref name="manifest"/> null too, the workspace <c>config</c>.</param>
     /// <param name="manifest">A manifest id or file (<c>--manifest</c>), read with <paramref name="store"/>.</param>
     /// <param name="errors">Where diagnostics go; standard error by default.</param>
+    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
     internal static async Task<int> RunAsync(
-        string? config, string environment, string? pipeline, string format, string[] armArgs, TextWriter output, CancellationToken cancellationToken,
-        string? manifest = null, string? store = null, TextWriter? errors = null)
+        PlanEnvironment provided, string? config, string environment, string? pipeline, string format, string[] armArgs, TextWriter output,
+        CancellationToken cancellationToken, string? manifest = null, string? store = null, TextWriter? errors = null)
     {
         errors ??= Console.Error;
         var diagnostics = new DiagnosticBag();
-        var (reference, ok) = ConfigRef.Select(config, manifest, store, "config", diagnostics);
+        var (reference, ok) = ConfigRef.Select(config, manifest, store, "config", diagnostics, provided);
         if (!ok)
         {
             Output.Diagnostics(diagnostics.Items, format, errors);

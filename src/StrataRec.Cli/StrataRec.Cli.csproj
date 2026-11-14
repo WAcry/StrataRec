@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- The stratarec tool: the commands of StrataRec.CommandLine with what this tool ships (Program.CreateEnvironment). -->
   <PropertyGroup>
     <RootNamespace>StrataRec.Cli</RootNamespace>
     <OutputType>Exe</OutputType>
@@ -9,19 +10,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\StrataRec.Hosting\StrataRec.Hosting.csproj" />
+    <ProjectReference Include="..\StrataRec.CommandLine\StrataRec.CommandLine.csproj" />
     <ProjectReference Include="..\StrataRec.Redis\StrataRec.Redis.csproj" />
     <ProjectReference Include="..\StrataRec.Llm\StrataRec.Llm.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="System.CommandLine" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <InternalsVisibleTo Include="StrataRec.UnitTests" />
-    <InternalsVisibleTo Include="StrataRec.IntegrationTests" />
-    <InternalsVisibleTo Include="StrataRec.Benchmarks" />
   </ItemGroup>
 
 </Project>

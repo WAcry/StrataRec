@@ -59,7 +59,9 @@ public sealed class ReplayComparisonTests
     {
         var result = new RecResult
         {
+            RequestId = "r",
             Succeeded = succeeded,
+            ErrorKind = succeeded ? RecErrorKind.None : RecErrorKind.Failed,
             Error = succeeded ? null : "node failed",
             Items = items,
             Experiments = new ExperimentRecord(Array.Empty<string>(), Array.Empty<string>(), Array.Empty<IgnoredArm>()),

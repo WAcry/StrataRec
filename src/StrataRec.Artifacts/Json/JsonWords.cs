@@ -46,6 +46,23 @@ public static class JsonWords
         }
     }
 
+    /// <summary>
+    /// <see cref="Value(JsonNode?)"/> for a value read without building nodes (a request body read once); the same words
+    /// for the same JSON, a string that is not valid Unicode included. An absent value (<see cref="JsonValueKind.Undefined"/>)
+    /// is <c>nothing</c>.
+    /// </summary>
+    public static string Value(in JsonElement element) => element.ValueKind switch
+    {
+        JsonValueKind.Null => "null",
+        JsonValueKind.Object => "an object",
+        JsonValueKind.Array => "an array",
+        JsonValueKind.String => TryText(element, out var text) ? "the string " + Quote(text) : "a string that is not valid Unicode",
+        JsonValueKind.Number => "the number " + Cut(element.GetRawText()),
+        JsonValueKind.True => "true",
+        JsonValueKind.False => "false",
+        _ => "nothing",
+    };
+
     /// <summary>A kind of token, for a reader that only knows the token: <c>a number</c>, <c>an object</c>, …</summary>
     public static string Token(JsonTokenType token) => token switch
     {
@@ -129,6 +146,21 @@ public static class JsonWords
         try
         {
             text = value.GetValue<string>();
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            text = string.Empty;
+            return false;
+        }
+    }
+
+    /// <summary><see cref="TryText(JsonValue, out string)"/> for a string element.</summary>
+    public static bool TryText(in JsonElement value, out string text)
+    {
+        try
+        {
+            text = value.GetString()!;
             return true;
         }
         catch (InvalidOperationException)

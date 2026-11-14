@@ -1,5 +1,5 @@
 using System.Text.Json;
-using StrataRec.Cli.Commands;
+using StrataRec.CommandLine.Commands;
 using StrataRec.Hosting.Replay;
 
 namespace StrataRec.IntegrationTests;
@@ -75,7 +75,7 @@ public sealed class RunCommandArmsTests
             var bundle = Path.Combine(directory, "bundle.json");
             var output = new StringWriter();
 
-            var code = await RunCommand.RunAsync(HomeFeedTestHost.SampleRoot(), "local", request, cliArms, false, output, CancellationToken.None, recordPath: bundle);
+            var code = await RunCommand.RunAsync(Tool.Environment, HomeFeedTestHost.SampleRoot(), "local", request, cliArms, false, output, CancellationToken.None, recordPath: bundle);
 
             Assert.Equal(0, code);
             using var result = JsonDocument.Parse(output.ToString());

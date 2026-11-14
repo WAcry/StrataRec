@@ -10,6 +10,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\StrataRec.Hosting\StrataRec.Hosting.csproj" />
+    <!-- The stratarec commands, run with this binary's components (Program.cs). -->
+    <ProjectReference Include="..\..\src\StrataRec.CommandLine\StrataRec.CommandLine.csproj" />
   </ItemGroup>
 
   <ItemGroup>

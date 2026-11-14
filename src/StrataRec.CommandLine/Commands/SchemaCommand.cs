@@ -7,7 +7,7 @@ using System.Text.Json.Schema;
 using StrataRec.Artifacts.Model;
 using StrataRec.Pipeline.Planning;
 
-namespace StrataRec.Cli.Commands;
+namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
 /// <c>stratarec schema</c>: JSON Schema (2020-12) of every artifact and operator config, generated from the C# types
@@ -17,22 +17,23 @@ internal static class SchemaCommand
 {
     private static IReadOnlyList<(string Name, Type Type)> Artifacts => ArtifactSerializer.ArtifactTypes;
 
-    public static Command Create()
+    public static Command Create(PlanEnvironment provided)
     {
         var kind = new Argument<string>("kind") { Description = "pipeline, catalog, bindings, experiment, release, policy, table, manifest, replay_bundle, or operator." };
         var op = new Argument<string?>("operator") { Description = "Operator id for 'operator', e.g. TopK@1.", Arity = ArgumentArity.ZeroOrOne };
         var command = new Command("schema", "Print the JSON Schema of an artifact type or an operator's config.") { kind, op };
-        command.SetAction(parse => Run(parse.GetValue(kind)!, parse.GetValue(op), Console.Out, Console.Error));
+        command.SetAction(parse => Run(provided, parse.GetValue(kind)!, parse.GetValue(op), parse.InvocationConfiguration.Output, parse.InvocationConfiguration.Error));
         return command;
     }
 
-    internal static int Run(string kind, string? op, TextWriter output, TextWriter error)
+    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
+    internal static int Run(PlanEnvironment provided, string kind, string? op, TextWriter output, TextWriter error)
     {
         Type? type = null;
         string title;
         if (kind == "operator")
         {
-            var operators = CommonOptions.PlanEnvironment(configRoot: null).Operators;
+            var operators = provided.Operators;
             if (op is null || !operators.TryGet(op, out var factory))
             {
                 error.WriteLine($"Unknown operator '{op}'. Known: {string.Join(", ", operators.Ids)}");

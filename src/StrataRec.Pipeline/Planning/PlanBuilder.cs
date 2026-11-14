@@ -17,7 +17,12 @@ using StrataRec.Pipeline.Operators;
 namespace StrataRec.Pipeline.Planning;
 
 /// <summary>Binary-side capabilities and environment used to compile plans.</summary>
-public sealed class PlanEnvironment
+/// <remarks>
+/// A record so that what a binary provides (its registries) is described once and placed in a workspace with
+/// <c>with { BaseDirectory = … }</c>: the engine's host (<c>AddStrataRec</c>) and the command line set the base directory
+/// from the config root they load, every property is copied, and a property added later is copied too.
+/// </remarks>
+public sealed record PlanEnvironment
 {
     public OperatorRegistry Operators { get; init; } = OperatorRegistry.CreateDefault();
 
@@ -39,7 +44,8 @@ public sealed class PlanEnvironment
 
     public CandidateSourceRegistry CandidateSources { get; init; } = CandidateSourceRegistry.CreateDefault();
 
-    /// <summary>Directory that relative fixture paths in bindings resolve against (the config root).</summary>
+    /// <summary>Directory that relative fixture paths in bindings resolve against (the config root); null resolves them
+    /// against the current directory.</summary>
     public string? BaseDirectory { get; init; }
 
     /// <summary>Capability ids this binary provides (design 10.4).</summary>
@@ -1668,7 +1674,7 @@ public sealed class PlanBuilder
             ContextFeatures = ToSortedArray(contextFeatures),
             Warnings = _diagnostics.Items,
             CompileTime = _clock.Elapsed,
-            RequestInputs = _requestInputs!,
+            RequestSchema = RequestSchema.FromPlan(_sources!.Pipeline.PipelineId, _requestInputs!),
         };
         _ = plan.Telemetry; // metric tags are built with the plan, not on its first request
         return plan;

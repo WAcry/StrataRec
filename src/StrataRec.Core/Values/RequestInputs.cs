@@ -9,7 +9,16 @@ namespace StrataRec.Core.Values;
 /// </summary>
 public sealed class RequestInputs : IReadOnlyDictionary<string, ScalarValue>
 {
-    private readonly Dictionary<string, ScalarValue> _values = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ScalarValue> _values;
+
+    public RequestInputs()
+        : this(0)
+    {
+    }
+
+    /// <param name="capacity">How many inputs will be set, so a reader that knows (one per declared input at most) does
+    /// not grow the table input by input.</param>
+    public RequestInputs(int capacity) => _values = new Dictionary<string, ScalarValue>(capacity, StringComparer.Ordinal);
 
     /// <summary>Creates an empty, mutable instance.</summary>
     public static RequestInputs Empty => new();

@@ -182,8 +182,8 @@ public sealed class ExecutionPlan
 
     public TimeSpan CompileTime { get; init; }
 
-    /// <summary>Request inputs by name (context id and type) for validation.</summary>
-    public required IReadOnlyDictionary<string, ContextField> RequestInputs { get; init; }
+    /// <summary>The inputs the pipeline accepts (<c>request_schema</c>) and the rules a request's inputs follow.</summary>
+    public required RequestSchema RequestSchema { get; init; }
 
     /// <summary>Metric tags of the plan's nodes, built once per plan (design 13.1 rule 5).</summary>
     internal Execution.PlanTelemetry Telemetry =>

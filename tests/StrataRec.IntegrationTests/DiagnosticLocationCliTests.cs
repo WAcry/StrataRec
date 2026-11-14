@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
-using StrataRec.Cli.Commands;
+using StrataRec.CommandLine.Commands;
 
 namespace StrataRec.IntegrationTests;
 
@@ -56,7 +56,7 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         var root = Workspace((Pipeline, "\"expr\": \"col.item.smoothed_ctr\" }", "\"expr\": \"col.item.smoothed_ctr * 'a'\" }"));
         var output = new StringWriter();
 
-        Assert.Equal(1, ValidateCommand.Run(root, "local", null, "json", warningsAsErrors: false, output));
+        Assert.Equal(1, ValidateCommand.Run(Tool.Environment, root, "local", null, "json", warningsAsErrors: false, output));
 
         using var report = JsonDocument.Parse(output.ToString());
         var error = Assert.Single(report.RootElement.GetProperty("diagnostics").EnumerateArray(), d => d.GetProperty("severity").GetString() == "error");
@@ -76,7 +76,7 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         var root = Workspace();
         var output = new StringWriter();
 
-        Assert.Equal(0, ValidateCommand.Run(root, "local", null, "json", warningsAsErrors: false, output));
+        Assert.Equal(0, ValidateCommand.Run(Tool.Environment, root, "local", null, "json", warningsAsErrors: false, output));
 
         using var report = JsonDocument.Parse(output.ToString());
         var warning = Assert.Single(report.RootElement.GetProperty("diagnostics").EnumerateArray());
@@ -149,6 +149,17 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         "error REQUEST_INVALID /inputs/surfce: Input 'surfce' is not declared in the request_schema of pipeline 'home_feed'.")]
     [InlineData("\"deadline_ms\": 200", "\"deadline_ms\": \"200\"", "\"deadline_ms\"",
         "error REQUEST_INVALID /deadline_ms: 'deadline_ms' must be a number or null, got the string \"200\".")]
+    // Review 32: a null pipeline_id was an unhandled exception; duplicate members are rejected as in a service's request body.
+    [InlineData("\"pipeline_id\": \"home_feed\"", "\"pipeline_id\": null", "\"pipeline_id\"",
+        "error REQUEST_INVALID /pipeline_id: 'pipeline_id' must name a pipeline, got null.\n    hint: give the id of the pipeline to run, e.g. \"pipeline_id\": \"home_feed\"")]
+    [InlineData("\"pipeline_id\": \"home_feed\"", "\"pipeline_id\": \"\"", "\"pipeline_id\"",
+        "error REQUEST_INVALID /pipeline_id: 'pipeline_id' must name a pipeline, got an empty string.")]
+    [InlineData("\"request_id\": \"req-1001\"", "\"request_id\": \"req-1001\", \"request_id\": \"req-1002\"", "\"request_id\": \"req-1002\"",
+        "error JSONC_DUPLICATE_KEY: Duplicate key 'request_id'")]
+    [InlineData("\"user_id\": 1001", "\"user_id\": 1001, \"user_id\": 1002", "\"user_id\": 1002",
+        "error JSONC_DUPLICATE_KEY: Duplicate key 'user_id'")]
+    [InlineData("\"surface\": \"home\"", "\"surface\": \"home\", \"tenant\": 1, \"surfce\": null", "\"tenant\"",
+        "error REQUEST_INVALID /inputs/tenant: Input 'tenant' is not declared in the request_schema of pipeline 'home_feed'.")]
     public async Task Run_AMistakeInTheRequestFile_IsAtItsLineAndColumn(string old, string replacement, string at, string error)
     {
         const string requestFile = "requests/user_1001.json";
@@ -186,7 +197,7 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         var to = Workspace((Pipeline, "\"config\": { \"output_col\": \"score.coarse\", \"expr\"", "\"config\": { \"outputcol\": \"score.coarse\", \"expr\""));
         var errors = new StringWriter();
 
-        Assert.Equal(2, await DiffCommand.RunAsync(from, to, null, "local", null, Array.Empty<string>(), "text", TextWriter.Null, CancellationToken.None, errors));
+        Assert.Equal(2, await DiffCommand.RunAsync(Tool.Environment, from, to, null, "local", null, Array.Empty<string>(), "text", TextWriter.Null, CancellationToken.None, errors));
 
         var (line, column) = Position(to, Pipeline, "\"outputcol\"");
         Assert.Contains(
@@ -230,7 +241,7 @@ public sealed class DiagnosticLocationCliTests : IDisposable
     private static List<string> ValidateText(string root, int expectedErrors)
     {
         var output = new StringWriter();
-        ValidateCommand.Run(root, "local", null, "text", warningsAsErrors: false, output);
+        ValidateCommand.Run(Tool.Environment, root, "local", null, "text", warningsAsErrors: false, output);
         var lines = output.ToString().Split('\n').Select(l => l.TrimEnd('\r')).ToList();
         Assert.True(lines.Count(l => l.Contains(": error ", StringComparison.Ordinal)) == expectedErrors, output.ToString());
         Assert.Contains($"{expectedErrors} error(s), ", output.ToString(), StringComparison.Ordinal);

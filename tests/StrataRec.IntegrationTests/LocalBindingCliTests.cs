@@ -1,6 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using StrataRec.Cli.Commands;
+using StrataRec.CommandLine.Commands;
 
 namespace StrataRec.IntegrationTests;
 
@@ -15,7 +15,7 @@ public sealed class LocalBindingCliTests
             """)).Root;
         var output = new StringWriter();
 
-        Assert.Equal(1, ValidateCommand.Run(root, "local", null, "json", warningsAsErrors: false, output));
+        Assert.Equal(1, ValidateCommand.Run(Tool.Environment, root, "local", null, "json", warningsAsErrors: false, output));
 
         using var report = JsonDocument.Parse(output.ToString());
         var errors = report.RootElement.GetProperty("diagnostics").EnumerateArray()
@@ -72,7 +72,7 @@ public sealed class LocalBindingCliTests
     {
         var root = HomeFeedTestHost.LoadModified(root => Directory.Delete(Path.Combine(root, "fixtures", "author_snapshot"), recursive: true)).Root;
 
-        Assert.Equal(0, ValidateCommand.Run(root, "local", null, "text", warningsAsErrors: false, TextWriter.Null));
+        Assert.Equal(0, ValidateCommand.Run(Tool.Environment, root, "local", null, "text", warningsAsErrors: false, TextWriter.Null));
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public sealed class LocalBindingCliTests
     {
         var output = new StringWriter();
 
-        Assert.Equal(0, SchemaCommand.Run("bindings", null, output, TextWriter.Null));
+        Assert.Equal(0, SchemaCommand.Run(Tool.Environment, "bindings", null, output, TextWriter.Null));
 
         var schema = JsonNode.Parse(output.ToString())!;
         var binding = FindObjectWithProperty(schema, "max_bytes")!;

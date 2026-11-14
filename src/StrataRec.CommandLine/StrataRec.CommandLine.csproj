@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The stratarec commands as a library: the stratarec tool (StrataRec.Cli) runs them with the components it ships, and
+       a host binary runs them with its own (StrataRecCommandLine), so a workspace that names custom components is
+       validated, explained and run by the binary that serves it. A tool package (PackAsTool) cannot be referenced. -->
+  <PropertyGroup>
+    <RootNamespace>StrataRec.CommandLine</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\StrataRec.Hosting\StrataRec.Hosting.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The integration tests drive the commands' Run methods directly, with writers of their own. -->
+    <InternalsVisibleTo Include="StrataRec.IntegrationTests" />
+  </ItemGroup>
+
+</Project>
