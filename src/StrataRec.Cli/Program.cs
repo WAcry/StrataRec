@@ -4,9 +4,9 @@ using StrataRec.Cli.Commands;
 namespace StrataRec.Cli;
 
 /// <summary>
-/// <c>stratarec</c>: validate, build, explain and run configurations locally (design 10.1, 13.4). Output is plain text
+/// <c>stratarec</c>: validate, build, explain, diff and run configurations locally (design 10.1, 13.4). Output is plain text
 /// for humans or <c>--format json</c> for CI and agents; the exit code is 0 on success, 1 on configuration errors and
-/// 2 on usage errors.
+/// 2 on usage errors; <c>diff</c> follows diff(1): 0 when nothing differs, 1 when something does, 2 on any error.
 /// </summary>
 public static class Program
 {
@@ -21,6 +21,7 @@ public static class Program
         root.Add(RunCommand.Create());
         root.Add(ReplayCommand.Create());
         root.Add(CompareCommand.Create());
+        root.Add(DiffCommand.Create());
         root.Add(SchemaCommand.Create());
         root.Add(OperatorsCommand.Create());
         return root;
