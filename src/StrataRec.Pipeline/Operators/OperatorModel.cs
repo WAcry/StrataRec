@@ -123,6 +123,7 @@ public sealed class OperatorRegistry
         .Add(new Standard.CompositeMultiplierScorerFactory())
         .Add(new Standard.TopKFactory())
         .Add(new Standard.SlidingWindowQuotaFactory())
+        .Add(new Standard.GroupAggregateFactory())
         .Add(new Standard.ModelScorerFactory())
         .Add(new Standard.PairwiseRankerFactory())
         .Add(new Standard.ListwiseRerankerFactory())

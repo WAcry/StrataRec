@@ -2201,7 +2201,7 @@ $ stratarec run -c samples/home_feed -r samples/home_feed/requests/user_1001.jso
   explain   17: dropped by safety_filter
               recall: entered at rank 17; recall.sources_mask 3, recall.best_rank 5, recall.best_score 1.66, recall.primary_source 'two_tower'
               safety_filter: dropped (was rank 17); item.is_policy_safe true, item.report_rate 0.08; dropped: (col.item.is_policy_safe ?? true) && col.item.report_rate < 0.05 is false
-              not live in 7 other nodes
+              not live in 9 other nodes
   explain   13: returned at rank 2
               recall: entered at rank 13; recall.sources_mask 1, recall.best_rank 13, recall.best_score 0.87, recall.primary_source 'two_tower'
               ...
@@ -2209,6 +2209,8 @@ $ stratarec run -c samples/home_feed -r samples/home_feed/requests/user_1001.jso
               fusion: rank 4; item.report_rate 0.0084, score.ctr 0.5873608, score.final 1.0177788; score.final = 0.5873608 × 1.7328 = 1.0177788
               freshness_calibration: rank 4; item.age_hours 100.3, score.final 1.0807481
               rank_sort: rank 4; score.final 1.0807481; kept: score.final 1.0807481 ranks 4 of the 30 kept (k = 1000)
+              author_rank: rank 4; item.author_id 101, score.final 1.0807481, group.author_rank 2
+              author_cap: rank 4; group.author_rank 2; kept: (col.group.author_rank ?? 1) <= 2 is true
               mmr_diversifier: rank 2 (was 4); item.embedding vec[4], score.final 1.0807481
 ```
 
@@ -2310,7 +2312,7 @@ stratarec/
 
 `StrataRec.Features` 是独立的命名空间和包：特征目录、实体键和连接器契约不依赖流水线，离线训练任务和特征治理工具可以单独引用它，读取同一份特征目录。
 
-核心标准算子库包括 `MultiSourceRecall`、`ExpressionFilter`、`ExpressionScorer`、`CompositeMultiplierScorer`、`ModelScorer`、`PairwiseRanker`、`ListwiseReranker`、`TopK`、`MmrDiversifier`、`SlidingWindowQuota` 和 `ChildAggregate`。`StrataRec.Llm` 提供 `GenerativeRetriever`、`LlmReranker` 和 `LlmAnnotator`（第 5.9 节）。扩展包注册的算子和模型客户端类型与核心算子一样进入二进制的能力清单（第 10.4 节）：产物引用了未安装的扩展时，能力匹配会拒绝它。
+核心标准算子库包括 `MultiSourceRecall`、`ExpressionFilter`、`ExpressionScorer`、`CompositeMultiplierScorer`、`ModelScorer`、`PairwiseRanker`、`ListwiseReranker`、`TopK`、`MmrDiversifier`、`SlidingWindowQuota` 和 `GroupAggregate`（父子表的 `ChildAggregate` 随第 4.7 节推后）。`StrataRec.Llm` 提供 `GenerativeRetriever`、`LlmReranker` 和 `LlmAnnotator`（第 5.9 节）。扩展包注册的算子和模型客户端类型与核心算子一样进入二进制的能力清单（第 10.4 节）：产物引用了未安装的扩展时，能力匹配会拒绝它。
 
 ### 16.2 联合计划的正确性锚点
 

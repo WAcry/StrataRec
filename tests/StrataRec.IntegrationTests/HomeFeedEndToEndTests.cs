@@ -41,7 +41,7 @@ public sealed class HomeFeedEndToEndTests
         Assert.Equal(new[]
         {
             (100, "recall"), (200, "safety_filter"), (300, "coarse_score"), (350, "coarse_top_k"), (400, "ctr_ranker"),
-            (450, "fusion"), (470, "freshness_calibration"), (500, "rank_sort"), (520, "diversity_cap"), (550, "mmr_diversifier"),
+            (450, "fusion"), (470, "freshness_calibration"), (500, "rank_sort"), (512, "author_rank"), (515, "author_cap"), (520, "diversity_cap"), (550, "mmr_diversifier"),
         }, orders);
 
         var mmr = plan.ArmsFromIds(new[] { "exp_mmr_diversity/mmr" });

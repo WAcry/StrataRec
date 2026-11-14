@@ -136,6 +136,7 @@
               "ExpressionFilter@1",
               "ExpressionScorer@1",
               "GenerativeRetriever@1",
+              "GroupAggregate@1",
               "ListwiseReranker@1",
               "LlmAnnotator@1",
               "LlmReranker@1",
@@ -151,6 +152,7 @@
               "Drops rows for which a boolean ColumnExpr predicate is false.",
               "Evaluates a ColumnExpr for every live row and writes it to a column.",
               "Appends the candidates a generative model names that the table does not have, from prompts rendered with Mustache templates.",
+              "Per group of rows (by a column, or all rows): count, sum, mean, min, max, std or rank, written back to every row of the group.",
               "Reranks the leading rows by scores a model gives them as one list.",
               "Writes a generative model's answer for each leading row into a column, from prompts rendered per row with Mustache templates.",
               "Reranks the leading rows in the order a generative model lists them, from prompts rendered with Mustache templates.",
@@ -419,6 +421,70 @@
                     "prompts",
                     "output",
                     "max_items"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "config"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "op": {
+                  "const": "GroupAggregate@1"
+                }
+              },
+              "required": [
+                "op"
+              ]
+            },
+            "then": {
+              "properties": {
+                "config": {
+                  "description": "Per group of rows (by a column, or all rows): count, sum, mean, min, max, std or rank, written back to every row of the group.",
+                  "type": "object",
+                  "properties": {
+                    "group_col": {
+                      "description": "Grouping column (int64, int32 or string), e.g. item.author_id. Omitted, all rows form one group. A row whose key is missing is in no group: its outputs are missing.",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "outputs": {
+                      "description": "Output column → what it gets. An object, so an experiment adds, changes or deletes (null) one output. A column not declared under columns is declared by the node: int64 for count and rank, float64 for the others, nullable when a value can be missing.",
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "fn": {
+                            "description": "count (rows of the group), sum, mean, min, max, std (population standard deviation) of value_col, or rank: the row's 1-based place in its group, ordered by value_col as TopK@1 orders (missing last, ties by entity_id ascending).",
+                            "type": "string"
+                          },
+                          "value_col": {
+                            "description": "Numeric column the function reads; count takes none. Missing values are left out (a column holds no NaN: a commit makes non-finite values the default or missing).",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "ascending": {
+                            "description": "rank only: lower values first.",
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "fn"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "outputs"
                   ],
                   "additionalProperties": false
                 }

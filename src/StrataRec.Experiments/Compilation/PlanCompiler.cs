@@ -659,18 +659,48 @@ internal sealed partial class UnifiedCompilation
             }
         }
 
+        // Compiled in timeline order (each node by the lowest order any combination gives it; fallbacks, which have none,
+        // after the timeline), not by id: a node declares the columns it writes without a declaration as it compiles
+        // (an implicit output: recall.*, GroupAggregate@1's), and the nodes that run after it must know them whatever
+        // their ids. By id, a reader named before its writer ('author_cap' before 'author_rank') did not know the column.
+        var timeline = new List<(string Id, long Order)>(ids.Count);
         foreach (var id in ids)
         {
-            CompileNodeVariants(id);
+            if (DefineNodeVariants(id) is { } variants)
+            {
+                timeline.Add((id, FirstOrder(variants)));
+            }
+        }
+
+        timeline.Sort(static (a, b) => a.Order != b.Order ? a.Order.CompareTo(b.Order) : string.CompareOrdinal(a.Id, b.Id));
+        foreach (var (id, _) in timeline)
+        {
+            CompileNodeVariants(_variants[id]);
         }
     }
 
-    private void CompileNodeVariants(string nodeId)
+    /// <summary>The lowest order of a node's definitions; <see cref="long.MaxValue"/> for a fallback or a node without one.</summary>
+    private static long FirstOrder(NodeVariants variants)
+    {
+        var first = long.MaxValue;
+        foreach (var definition in variants.Definitions)
+        {
+            if (definition?["order"] is JsonValue order && order.TryGetValue<long>(out var value) && value < first)
+            {
+                first = value;
+            }
+        }
+
+        return first;
+    }
+
+    /// <summary>Each combination's definition of a node (<see cref="NodeVariants.Definitions"/>), compiled afterwards.</summary>
+    private NodeVariants? DefineNodeVariants(string nodeId)
     {
         var pointer = "/nodes/" + JsonPointer.Escape(nodeId);
         if (BuildSpace(arm => arm.TouchedNodes.Contains(nodeId), $"Node '{nodeId}'", pointer) is not { } space)
         {
-            return;
+            return null;
         }
 
         var variants = new NodeVariants
@@ -687,7 +717,6 @@ internal sealed partial class UnifiedCompilation
         _variants[nodeId] = variants;
 
         var baseline = _view.Nodes[nodeId]?.DeepClone();
-        var byHash = new Dictionary<string, (CompiledNode? Node, bool Failed)>(StringComparer.Ordinal);
         bool? fallbackRole = null;
         for (var c = 0; c < space.Count; c++)
         {
@@ -719,20 +748,36 @@ internal sealed partial class UnifiedCompilation
             }
 
             fallbackRole = isFallback;
+        }
+
+        variants.IsFallback = fallbackRole == true;
+        return variants;
+    }
+
+    /// <summary>Compiles each distinct definition of a node once (<see cref="DefineNodeVariants"/>).</summary>
+    private void CompileNodeVariants(NodeVariants variants)
+    {
+        var byHash = new Dictionary<string, (CompiledNode? Node, bool Failed)>(StringComparer.Ordinal);
+        for (var c = 0; c < variants.Definitions.Length; c++)
+        {
+            if (variants.Definitions[c] is not { } node || variants.Failed[c])
+            {
+                continue;
+            }
+
+            var start = _diagnostics.Count;
             var hash = ContentHash.Compute(node);
             if (!byHash.TryGetValue(hash, out var compiled))
             {
-                var result = _builder.CompileNode(nodeId, node, _pipelineLabel);
+                var result = _builder.CompileNode(variants.NodeId, node, _pipelineLabel);
                 compiled = (result, result is null);
                 byHash[hash] = compiled;
             }
 
             variants.Variants[c] = compiled.Node;
             variants.Failed[c] = compiled.Failed;
-            Settle(start, armsInCombination);
+            Settle(start, ArmPatches(variants.ArmsOf(c)));
         }
-
-        variants.IsFallback = fallbackRole == true;
     }
 
     /// <summary>Compiles every tap variant (design 8.3, 12.3). Runs after the nodes: <c>columns_from</c> needs them.</summary>

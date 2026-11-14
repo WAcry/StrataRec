@@ -155,6 +155,42 @@ internal static class RowRanking
         }
     }
 
+    /// <summary>
+    /// The 1-based rank of each row within its group, in the order <see cref="SelectTop"/> ranks a column, so the rows a
+    /// group's rank keeps are the ones <c>TopK@1</c> would keep of that group. <paramref name="groups"/>[i] is the group of
+    /// <paramref name="rows"/>[i], negative for none: its rank is left as it is. O(n log n), nothing allocated per row.
+    /// </summary>
+    public static void RankWithinGroups(
+        ReadOnlySpan<int> rows, ReadOnlySpan<int> groups, ColumnBuffer? score, CandidateTable table, bool ascending, Span<long> ranks,
+        Core.Memory.RequestMemory memory)
+    {
+        var entries = memory.Rent<GroupedEntry>(Math.Max(1, rows.Length));
+        var intIds = table.KeyType == EntityKeyType.Int64 ? table.Int64Ids : null;
+        var count = 0;
+        for (var i = 0; i < rows.Length; i++)
+        {
+            if (groups[i] < 0)
+            {
+                continue;
+            }
+
+            var row = rows[i];
+            ulong key = 0;
+            var present = score is not null && TryGetSortKey(score, row, out key);
+            entries[count++] = new GroupedEntry(groups[i], i,
+                new Entry(present ? (ascending ? key : ~key) : 0, intIds is null ? 0 : intIds[row], row, present ? (byte)0 : (byte)1));
+        }
+
+        var span = entries.AsSpan(0, count);
+        span.Sort(new GroupedEntryComparer(new EntryComparer(intIds is null ? table.StringIds : null)));
+        long rank = 0;
+        for (var j = 0; j < count; j++)
+        {
+            rank = j > 0 && span[j].Group == span[j - 1].Group ? rank + 1 : 1;
+            ranks[span[j].Index] = rank;
+        }
+    }
+
     /// <summary>Quickselect: afterwards the k smallest entries (by comparer) occupy [0, k).</summary>
     private static void Select(Span<Entry> span, int k, EntryComparer comparer)
     {
@@ -218,6 +254,14 @@ internal static class RowRanking
     }
 
     internal readonly record struct Entry(ulong Key, long Id, int Row, byte Missing);
+
+    /// <param name="Index">The entry's index in the rows ranked, where its rank goes.</param>
+    private readonly record struct GroupedEntry(int Group, int Index, Entry Entry);
+
+    private readonly struct GroupedEntryComparer(EntryComparer within) : IComparer<GroupedEntry>
+    {
+        public int Compare(GroupedEntry x, GroupedEntry y) => x.Group != y.Group ? x.Group.CompareTo(y.Group) : within.Compare(x.Entry, y.Entry);
+    }
 
     private readonly struct EntryComparer(DictStringColumn? stringIds) : IComparer<Entry>
     {

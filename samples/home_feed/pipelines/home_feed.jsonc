@@ -66,6 +66,16 @@
       "order": 500, "op": "TopK@1",
       "config": { "score_col": "score.final", "k": 1000 }
     },
+    // At most two items of an author on the home surface: each item's rank among its author's items, then a filter (an
+    // item without an author is not capped).
+    "author_rank": {
+      "order": 512, "op": "GroupAggregate@1",
+      "config": { "group_col": "item.author_id", "outputs": { "group.author_rank": { "fn": "rank", "value_col": "score.final" } } }
+    },
+    "author_cap": {
+      "order": 515, "op": "ExpressionFilter@1", "when": "ctx.request.surface == 'home'",
+      "config": { "predicate": "(col.group.author_rank ?? 1) <= 2" }
+    },
     "diversity_cap": {
       "order": 520, "op": "SlidingWindowQuota@1", "when": "ctx.request.surface == 'home'",
       "config": { "group_col": "item.category", "window": 3, "max_per_window": 1 }

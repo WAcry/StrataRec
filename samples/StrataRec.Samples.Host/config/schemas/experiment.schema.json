@@ -143,6 +143,7 @@
                     "CompositeMultiplierScorer@1",
                     "ExpressionFilter@1",
                     "ExpressionScorer@1",
+                    "GroupAggregate@1",
                     "ListwiseReranker@1",
                     "MmrDiversifier@1",
                     "ModelScorer@1",
@@ -157,6 +158,7 @@
                     "score = base × Π multipliers + Σ addends, with named, independently patchable terms.",
                     "Drops rows for which a boolean ColumnExpr predicate is false.",
                     "Evaluates a ColumnExpr for every live row and writes it to a column.",
+                    "Per group of rows (by a column, or all rows): count, sum, mean, min, max, std or rank, written back to every row of the group.",
                     "Reranks the leading rows by scores a model gives them as one list.",
                     "Maximal marginal relevance rerank of the leading rows using an embedding column.",
                     "Scores rows with a model: named inputs from columns, named outputs to columns, batched.",
@@ -431,6 +433,80 @@
                               "string",
                               "null"
                             ]
+                          }
+                        },
+                        "additionalProperties": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "GroupAggregate@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "Per group of rows (by a column, or all rows): count, sum, mean, min, max, std or rank, written back to every row of the group.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "group_col": {
+                            "description": "Grouping column (int64, int32 or string), e.g. item.author_id. Omitted, all rows form one group. A row whose key is missing is in no group: its outputs are missing.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "outputs": {
+                            "description": "Output column → what it gets. An object, so an experiment adds, changes or deletes (null) one output. A column not declared under columns is declared by the node: int64 for count and rank, float64 for the others, nullable when a value can be missing.",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": {
+                              "type": [
+                                "object",
+                                "null"
+                              ],
+                              "properties": {
+                                "fn": {
+                                  "description": "count (rows of the group), sum, mean, min, max, std (population standard deviation) of value_col, or rank: the row's 1-based place in its group, ordered by value_col as TopK@1 orders (missing last, ties by entity_id ascending).",
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "value_col": {
+                                  "description": "Numeric column the function reads; count takes none. Missing values are left out (a column holds no NaN: a commit makes non-finite values the default or missing).",
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "ascending": {
+                                  "description": "rank only: lower values first.",
+                                  "type": [
+                                    "boolean",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "additionalProperties": {
+                                "type": "null"
+                              }
+                            }
                           }
                         },
                         "additionalProperties": {
