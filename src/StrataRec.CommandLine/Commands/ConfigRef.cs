@@ -1,4 +1,3 @@
-using System.Text;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Artifacts.Storage;
@@ -113,6 +112,23 @@ internal sealed class ConfigRef
         return (directory is null ? null : Workspace(directory, provided), true);
     }
 
+    /// <summary>
+    /// A manifest named on its own (<c>publish</c>): its content id or its file, read with <paramref name="store"/>. Returns
+    /// null after reporting a usage error under <paramref name="option"/>.
+    /// </summary>
+    public static ConfigRef? Manifest(string text, string store, string option, DiagnosticBag diagnostics, Pipeline.Planning.PlanEnvironment provided)
+    {
+        if (!text.StartsWith(ContentHash.Prefix, StringComparison.Ordinal) && !File.Exists(text))
+        {
+            diagnostics.Error("CONFIG_REF_UNKNOWN", option, string.Empty,
+                Directory.Exists(text) ? $"'{text}' is a directory, not a manifest." : $"'{text}' is neither a file nor a manifest id.",
+                "pass the manifest's content id (sha256:<64 hex digits>, as 'stratarec build' prints it) or the manifest file 'stratarec build --manifest' wrote");
+            return null;
+        }
+
+        return ParseManifest(text, store, option, diagnostics, workspaceAllowed: false, provided);
+    }
+
     private static ConfigRef? ParseManifest(
         string text, string? store, string option, DiagnosticBag diagnostics, bool workspaceAllowed, Pipeline.Planning.PlanEnvironment provided)
     {
@@ -202,6 +218,13 @@ internal sealed class ConfigRef
             return null;
         }
 
+        // As a node checks it (design 10.4): a manifest that needs what this binary lacks is reported as such, not as the
+        // errors of compiling it without them.
+        if (ManifestBuilder.CheckCapabilities(manifest, id, _provided, diagnostics).Count > 0)
+        {
+            return null;
+        }
+
         return await ManifestBuilder.LoadAsync(manifest, id, store, diagnostics, cancellationToken).ConfigureAwait(false);
     }
 
@@ -228,8 +251,9 @@ internal sealed class ConfigRef
     public RecEngine CreateReplayEngine() => new(PlanEnvironment(), bindingOptions: new BindingHostOptions { Load = false });
 
     /// <summary>
-    /// Loads the ref into <paramref name="engine"/>: every pipeline of a workspace's release, or the manifest's pipeline at
-    /// its sequence number. Returns the manifest's pipeline (empty for a workspace), or null after reporting errors.
+    /// Loads the ref into <paramref name="engine"/>: every pipeline of a workspace's release, or the manifest's pipeline as
+    /// a node loads it (<see cref="RecEngine.LoadManifestAsync"/>: its capabilities checked, at its sequence number). Returns
+    /// the manifest's pipeline (empty for a workspace), or null after reporting errors.
     /// </summary>
     public async Task<string?> LoadIntoAsync(RecEngine engine, string environment, DiagnosticBag diagnostics, CancellationToken cancellationToken)
     {
@@ -239,10 +263,9 @@ internal sealed class ConfigRef
         {
             diagnostics.AddRange(ServiceCollectionExtensions.LoadWorkspace(engine, Text, environment).Items);
         }
-        else if (await ReadManifestAsync(diagnostics, cancellationToken).ConfigureAwait(false) is { } read
-                 && await ManifestBuilder.LoadAsync(read.Manifest, read.Id, read.Store, diagnostics, cancellationToken).ConfigureAwait(false) is { } request)
+        else if (await ReadManifestAsync(diagnostics, cancellationToken).ConfigureAwait(false) is { } read)
         {
-            var result = await engine.LoadAsync(request, read.Manifest.Seq, cancellationToken).ConfigureAwait(false);
+            var result = await engine.LoadManifestAsync(read.Manifest, read.Id, read.Store, cancellationToken).ConfigureAwait(false);
             diagnostics.AddRange(result.Diagnostics);
             pipeline = read.Manifest.PipelineId;
         }
@@ -263,61 +286,37 @@ internal sealed class ConfigRef
         }
 
         var store = new FileSystemArtifactStore(Store);
-        string json;
-        string source;
         if (Kind == ConfigRefKind.ManifestId)
         {
-            byte[]? bytes;
-            try
+            // As a node reads it; an id the store lacks says which store, and that a file would do.
+            var read = new DiagnosticBag();
+            var stored = await ManifestBuilder.ReadAsync(store, Text, read, cancellationToken).ConfigureAwait(false);
+            foreach (var d in read.Items)
             {
-                bytes = await store.TryGetAsync(Text, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is ArtifactIntegrityException or IOException or UnauthorizedAccessException)
-            {
-                diagnostics.Error("MANIFEST_UNREADABLE", Label(Text), string.Empty, $"The manifest could not be read from {store.GetBlobPath(Text)}: {ex.Message}",
-                    "the blob is damaged: upload the manifest again (stratarec build --store), or read it from a copy of the store");
-                return null;
-            }
-
-            if (bytes is null)
-            {
-                diagnostics.Error("MANIFEST_UNKNOWN", Label(Text), string.Empty, $"The store {store.RootDirectory} has no manifest '{Text}'.",
-                    "check the id ('stratarec build' prints it) and that --store is the store the manifest was built into; or pass the manifest file");
-                return null;
+                diagnostics.Add(d.Code == "MANIFEST_UNKNOWN"
+                    ? d with
+                    {
+                        Message = $"The store {store.RootDirectory} has no manifest '{Text}'.",
+                        Hint = "check the id ('stratarec build' prints it) and that --store is the store the manifest was built into; or pass the manifest file",
+                    }
+                    : d);
             }
 
-            json = Encoding.UTF8.GetString(bytes);
-            source = Label(Text);
-        }
-        else
-        {
-            try
-            {
-                json = await File.ReadAllTextAsync(Text, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                diagnostics.Error("MANIFEST_UNREADABLE", Text, string.Empty, ex.Message);
-                return null;
-            }
-
-            source = Text;
+            return stored is null ? null : (stored, Text, store);
         }
 
-        ReleaseManifest manifest;
+        string json;
         try
         {
-            manifest = ArtifactSerializer.Deserialize<ReleaseManifest>(json, source);
+            json = await File.ReadAllTextAsync(Text, cancellationToken).ConfigureAwait(false);
         }
-        catch (ArtifactFormatException ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            diagnostics.Error("MANIFEST_SCHEMA", source, ex.Pointer, ex.Reason,
-                ex.Hint ?? "a release manifest has pipeline_id, environment, artifacts and experiments, as 'stratarec build' writes it (design 10.2)");
+            diagnostics.Error("MANIFEST_UNREADABLE", Text, string.Empty, ex.Message);
             return null;
         }
 
-        var id = Kind == ConfigRefKind.ManifestId ? Text : ContentHash.Compute(ArtifactSerializer.ToNode(manifest));
-        return (manifest, id, store);
+        return ManifestBuilder.Parse(json, Text, diagnostics) is { } manifest ? (manifest, ManifestBuilder.ContentId(manifest), store) : null;
     }
 
     /// <summary>The diagnostic artifact of a manifest, as <see cref="ManifestBuilder.LoadAsync"/> labels its errors.</summary>

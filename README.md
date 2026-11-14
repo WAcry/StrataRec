@@ -22,6 +22,7 @@ dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r s
 dotnet run --project src/StrataRec.Cli -- replay       -c samples/home_feed bundles   # 用录制的 I/O 重现并对比（--explain 同样可用）；compare --baseline 对比两份配置
 dotnet run --project src/StrataRec.Cli -- diff         --from <旧工作区或 manifest> --to samples/home_feed   # 按桶组合对比两份配置
 dotnet run --project src/StrataRec.Cli -- build        -c samples/home_feed -s store   # 产物按哈希写进 store；加载这份 manifest 的节点录制的包，replay -s store 就在录制时的 manifest 上回放（在工作区上录制的包仍用 -c）
+dotnet run --project src/StrataRec.Cli -- publish      -s store <manifest id 或文件>   # 让 store 里的指针指向它（seq 必须更大）；设置了 Releases 的服务节点会加载它
 dotnet run --project src/StrataRec.Cli -- schema pipeline          # 各类产物的 JSON Schema；schema --out <工作区>/schemas 写进工作区，供编辑器使用
 dotnet run --project src/StrataRec.Cli -- operators                # 算子及其声明的效果
 ```
@@ -58,6 +59,8 @@ curl -s -X POST localhost:5000/recommend/trending_feed -H 'content-type: applica
      -d @samples/StrataRec.Samples.Host/config/requests/user_1001.json
 dotnet run --project samples/StrataRec.Samples.Host -- stratarec validate -c config   # 宿主自己的二进制带着自定义组件跑全部 stratarec 命令（-c 相对项目目录）
 ```
+
+生产环境的节点服务 manifest 而不是工作区：CI 用 `stratarec build --store` 写产物、`stratarec publish` 改指针；宿主在 `AddStrataRec` 里设置 `Releases`、列出 `Pipelines`，并注册 `IManifestSource` 和 `IArtifactStore`（本地目录各有现成的实现，其他存储实现这两个接口）。节点启动时加载每条流水线的 manifest，任何一条没有应用成功就不启动；之后按间隔轮询，新的 manifest 在后台编译、原子替换。缺少 manifest 所需能力的节点报 `incompatible`，继续服务当前计划。
 
 ## 示例工作区
 

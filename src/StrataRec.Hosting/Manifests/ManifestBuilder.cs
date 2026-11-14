@@ -5,6 +5,7 @@ using StrataRec.Artifacts.Model;
 using StrataRec.Artifacts.Storage;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting.Workspace;
+using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Hosting.Manifests;
 
@@ -100,7 +101,7 @@ public static class ManifestBuilder
         DiagnosticBag diagnostics,
         CancellationToken cancellationToken = default)
     {
-        var label = "manifest:" + manifestId;
+        var label = Label(manifestId);
         var pipeline = await FetchAsync<PipelineArtifact>(store, manifest.Artifacts.Pipeline, label, "/artifacts/pipeline", diagnostics, cancellationToken).ConfigureAwait(false);
         var catalog = await FetchAsync<FeatureCatalogArtifact>(store, manifest.Artifacts.Catalog, label, "/artifacts/catalog", diagnostics, cancellationToken).ConfigureAwait(false);
         var bindings = await FetchAsync<SourceBindingArtifact>(store, manifest.Artifacts.Bindings, label, "/artifacts/bindings", diagnostics, cancellationToken).ConfigureAwait(false);
@@ -183,6 +184,124 @@ public static class ManifestBuilder
             ArtifactIds = artifactIds,
         };
     }
+
+    /// <summary>
+    /// The content id of a manifest, as <c>stratarec build</c> stores it: the RFC 8785 hash of the manifest as the artifact
+    /// model serializes it, so a manifest file that was reformatted or commented keeps the id of the blob build stored.
+    /// </summary>
+    public static string ContentId(ReleaseManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        return ContentHash.Compute(ArtifactSerializer.ToNode(manifest));
+    }
+
+    /// <summary>
+    /// Reads the manifest stored under <paramref name="manifestId"/> (design 10.3 step 1): what a node does with the id a
+    /// pointer names. Returns null after reporting <c>MANIFEST_ID_INVALID</c>, <c>MANIFEST_UNREADABLE</c> (the store
+    /// failed, or the blob is damaged), <c>MANIFEST_UNKNOWN</c> (the store does not have it) or <c>MANIFEST_SCHEMA</c>, at
+    /// the artifact <c>manifest:&lt;id&gt;</c>. Cancellation and failures of the store other than I/O propagate.
+    /// </summary>
+    public static async ValueTask<ReleaseManifest?> ReadAsync(
+        IArtifactStore store, string manifestId, DiagnosticBag diagnostics, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(manifestId);
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        var label = Label(manifestId);
+        if (!ContentHash.IsValid(manifestId))
+        {
+            diagnostics.Error("MANIFEST_ID_INVALID", label, string.Empty, $"'{manifestId}' is not a manifest content id.",
+                "a manifest id is sha256:<64 lowercase hex digits>, as 'stratarec build' prints it");
+            return null;
+        }
+
+        byte[]? bytes;
+        try
+        {
+            bytes = await store.TryGetAsync(manifestId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is ArtifactIntegrityException or IOException or UnauthorizedAccessException)
+        {
+            diagnostics.Error("MANIFEST_UNREADABLE", label, string.Empty, $"The manifest could not be read: {ex.Message}",
+                ex is ArtifactIntegrityException
+                    ? "the blob is damaged: upload the manifest again (stratarec build --store), or read it from a copy of the store"
+                    : "check that the artifact store can be read");
+            return null;
+        }
+
+        if (bytes is null)
+        {
+            diagnostics.Error("MANIFEST_UNKNOWN", label, string.Empty, $"The artifact store has no manifest '{manifestId}'.",
+                "check the id and that the store is the one 'stratarec build --store' uploaded the manifest to");
+            return null;
+        }
+
+        return Parse(Encoding.UTF8.GetString(bytes), label, diagnostics);
+    }
+
+    /// <summary>
+    /// Deserializes a manifest's JSON; <paramref name="source"/> labels its diagnostics (a file path, or
+    /// <c>manifest:&lt;id&gt;</c>). Returns null after reporting <c>MANIFEST_SCHEMA</c> at the pointer at fault.
+    /// </summary>
+    public static ReleaseManifest? Parse(string json, string source, DiagnosticBag diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        try
+        {
+            return ArtifactSerializer.Deserialize<ReleaseManifest>(json, source);
+        }
+        catch (ArtifactFormatException ex)
+        {
+            diagnostics.Error("MANIFEST_SCHEMA", source, ex.Pointer, ex.Reason,
+                ex.Hint ?? "a release manifest has pipeline_id, environment, artifacts and experiments, as 'stratarec build' writes it (design 10.2)");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The capabilities a manifest requires that <paramref name="environment"/> does not provide (design 10.4 item 2),
+    /// sorted (ordinal) and without duplicates; empty when the binary can serve it.
+    /// </summary>
+    public static List<string> MissingCapabilities(ReleaseManifest manifest, PlanEnvironment environment)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        ArgumentNullException.ThrowIfNull(environment);
+        var provided = new HashSet<string>(environment.Capabilities(), StringComparer.Ordinal);
+        var missing = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var capability in manifest.Requires)
+        {
+            if (!provided.Contains(capability))
+            {
+                missing.Add(capability);
+            }
+        }
+
+        return new List<string>(missing);
+    }
+
+    /// <summary>
+    /// Checks that <paramref name="environment"/> provides every capability the manifest requires, and reports
+    /// <c>MANIFEST_INCOMPATIBLE</c> at <c>manifest:&lt;id&gt;/requires</c> naming each one it lacks otherwise. Returns the
+    /// missing capabilities (<see cref="MissingCapabilities"/>). The engine (<see cref="RecEngine.LoadManifestAsync"/>) and
+    /// the command line check here, so a node and <c>stratarec</c> report an incompatible manifest the same way.
+    /// </summary>
+    public static List<string> CheckCapabilities(ReleaseManifest manifest, string manifestId, PlanEnvironment environment, DiagnosticBag diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        var missing = MissingCapabilities(manifest, environment);
+        if (missing.Count > 0)
+        {
+            diagnostics.Error("MANIFEST_INCOMPATIBLE", Label(manifestId), "/requires",
+                $"The manifest requires {(missing.Count == 1 ? "a capability" : "capabilities")} this binary does not provide: {string.Join(", ", missing)}.",
+                "serve it with a binary that registers them ('stratarec operators' lists what a binary provides), or release a manifest built without them (design 10.4)");
+        }
+
+        return missing;
+    }
+
+    /// <summary>The diagnostic artifact of a manifest: <c>manifest:&lt;id&gt;</c>.</summary>
+    internal static string Label(string manifestId) => "manifest:" + manifestId;
 
     /// <summary>Operators, connectors and clients named by the configuration (design 10.4).</summary>
     private static List<string> RequiredCapabilities(PlanCompileRequest request)

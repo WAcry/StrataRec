@@ -42,10 +42,13 @@ builder.Services.AddStrataRec(options =>
 //   until a listener subscribes, e.g. with OpenTelemetry:
 //     builder.Services.AddOpenTelemetry().WithMetrics(m => m.AddMeter("StrataRec")).WithTracing(t => t.AddSource("StrataRec"));
 // - Event logs need nothing: the engine logs plan loads, load warnings and dependency failures to the host's ILoggerFactory.
-// - Releases. AddStrataRec serves the workspace as it was at startup; a service that takes new releases without a restart
-//   loads them into the same RecEngine in the background (RecEngine.LoadAsync), which swaps plans atomically. A request
-//   may then be read with one plan's request schema and run on the next: the engine checks the inputs again against the
-//   plan it runs, and RecommendEndpoint answers what the engine says.
+// - Releases. AddStrataRec serves the workspace as it was at startup. A production node serves release manifests instead
+//   ('stratarec build --store', then 'stratarec publish'): set options.Releases, list options.Pipelines, and register
+//   where the pointers and artifacts are; the node loads them before the server listens, then polls for new ones:
+//     builder.Services.AddSingleton<IManifestSource>(new FileSystemManifestSource("/srv/stratarec"));
+//     builder.Services.AddSingleton<IArtifactStore>(new FileSystemArtifactStore("/srv/stratarec"));
+//   Plans then change while the service runs, atomically: a request may be read with one plan's request schema and run on
+//   the next; the engine checks the inputs again against the plan it runs, and RecommendEndpoint answers what it says.
 
 var app = builder.Build();
 

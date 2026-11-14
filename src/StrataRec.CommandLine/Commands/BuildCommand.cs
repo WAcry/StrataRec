@@ -64,7 +64,7 @@ internal static class BuildCommand
             await File.WriteAllTextAsync(manifestPath, text + "\n", cancellationToken).ConfigureAwait(false);
         }
 
-        errors.WriteLine($"manifest {manifestId} ({manifest.Requires.Count} capabilities, {manifest.Experiments.Count} experiments)");
+        errors.WriteLine($"manifest {manifestId} ({Output.Count(manifest.Requires.Count, "capability", "capabilities")}, {Output.Count(manifest.Experiments.Count, "experiment")})");
         return 0;
     }
 }
