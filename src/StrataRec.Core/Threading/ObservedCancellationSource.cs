@@ -60,7 +60,8 @@ public enum CancellationSite : byte
 /// extension's callback on the timer's thread all the same. So a caller's <c>Cancel</c> never throws what an extension's
 /// callback threw. The framework never waits on these tokens' callbacks: its waits are bounded by the caller's token and
 /// absolute deadlines (the shared waits' invariant 1), and a source is disposed only once whoever holds its token has
-/// ended (invariant 3), so callbacks queued on the pool are never dropped by a disposal.</para>
+/// ended (invariant 3). That holder may end before the pool runs the callbacks; the disposal then completes after them
+/// (<see cref="Dispose(bool)"/>).</para>
 /// <para>Costs as a linked source with <c>CancelAfter</c>: the source, its registration on the linked token, and a
 /// timer (the same timer object as <c>CancelAfter</c>'s, in a 24 B wrapper). Nothing else unless the token is cancelled
 /// while callbacks are registered on it: then the task that runs them, and one continuation until it has.</para>
@@ -84,11 +85,17 @@ public class ObservedCancellationSource : CancellationTokenSource
 
     private static readonly Action<Task, object?> Observe = static (callbacks, state) => ((ObservedCancellationSource)state!).Failed(callbacks.Exception!);
 
+    private static readonly Action<Task, object?> DisposeBaseAfter = static (_, state) => ((ObservedCancellationSource)state!).DisposeBase();
+
+    /// <summary>In <see cref="_cancellation"/>: the source was disposed before a cancellation published its callbacks.</summary>
+    private static readonly Task Disposing = new(static () => { });
+
     private readonly CancellationTokenRegistration _link;
     private readonly RequestEventLog? _events;
     private readonly string? _requestId;
     private readonly CancellationSite _site;
     private ITimer? _timer;
+    private Task? _cancellation; // the first cancellation's callbacks, or Disposing; set once (see Dispose)
 
     /// <param name="site">The token's site, for the metric and the request event.</param>
     /// <param name="linkedTo">A token this one is cancelled with; none by default.</param>
@@ -151,6 +158,13 @@ public class ObservedCancellationSource : CancellationTokenSource
             return Task.CompletedTask; // see below
         }
 
+        // Published before anything else, for a disposal that comes now (Dispose). If the disposal came first, it saw the
+        // token cancelled and left the base disposal to this cancellation, once its callbacks have run.
+        if (Interlocked.CompareExchange(ref _cancellation, callbacks, null) == Disposing)
+        {
+            DisposeAfter(callbacks);
+        }
+
         if (!callbacks.IsCompleted)
         {
             _ = callbacks.ContinueWith(Observe, this, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
@@ -181,16 +195,44 @@ public class ObservedCancellationSource : CancellationTokenSource
     {
     }
 
+    /// <summary>
+    /// Stops the timer and the link at once; the base disposal waits for the callbacks of a cancellation that are still
+    /// to run. The base disposal clears the registrations, and a cancellation's callbacks are taken from them only when
+    /// its work item runs on the pool, so disposing in between would drop every callback, silently (the callbacks' task
+    /// still succeeds). Whoever held the token may well have ended before that work item ran: it saw the cancellation
+    /// flag. Disposal and cancellation meet in one exchange on <see cref="_cancellation"/>, whichever comes first: a
+    /// cancellation that published its callbacks has them waited for; one that has cancelled but not yet published finds
+    /// the disposal there and disposes after its callbacks itself. Nothing is allocated unless callbacks are still to run.
+    /// </summary>
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
             Interlocked.Exchange(ref _timer, null)?.Dispose();
             _link.Dispose();
+            var published = Interlocked.CompareExchange(ref _cancellation, Disposing, null);
+            if (published is null)
+            {
+                if (IsCancellationRequested)
+                {
+                    return; // cancelled, callbacks not yet published: the cancellation disposes after them
+                }
+            }
+            else if (published != Disposing && !published.IsCompleted)
+            {
+                DisposeAfter(published);
+                return;
+            }
         }
 
         base.Dispose(disposing);
     }
+
+    private void DisposeAfter(Task callbacks) =>
+        _ = callbacks.ContinueWith(DisposeBaseAfter, this, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+    /// <summary>The base disposal once the callbacks have run; disposing twice is harmless.</summary>
+    private void DisposeBase() => base.Dispose(true);
 
     /// <summary>The linked token was cancelled: so is this one, its callbacks on the pool (see the remarks).</summary>
     private void CancelLinked() => _ = CancelObservedAsync();

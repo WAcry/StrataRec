@@ -8,5 +8,10 @@ namespace StrataRec.IntegrationTests;
 internal static class Program
 {
     public static int Main(string[] args) =>
-        args is ["timer-fault", var site] ? TimerFaultChild.Run(site) : 0;
+        args switch
+        {
+            ["timer-fault", var site] => TimerFaultChild.Run(site),
+            ["cancel-then-dispose"] => TimerFaultChild.CancelThenDispose(),
+            _ => 0,
+        };
 }

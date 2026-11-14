@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
+using StrataRec.Core.Threading;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Assignment;
 using StrataRec.Features.Connectors;
@@ -46,6 +47,24 @@ public sealed class TimerFaultTests
         Assert.Equal("0", Value(output, "unobserved"));
     }
 
+    /// <summary>
+    /// Review 22 #1: the holder of a token can end once it sees the cancellation flag, before the pool runs the callbacks
+    /// of that cancellation, and the framework then disposes the source. The base disposal clears the registrations, so
+    /// the callbacks were dropped, silently. The child has one pool worker, held by a gate, so the callbacks are queued
+    /// and not yet taken when the source is disposed.
+    /// </summary>
+    [Fact]
+    public void CallbacksACancellationQueued_RunEvenIfTheSourceIsDisposedBeforeThePoolTakesThem()
+    {
+        var output = TimerFaultChild.Start("cancel-then-dispose", out var exitCode, singleWorker: true);
+
+        Assert.True(exitCode == 0, $"the child exited with {exitCode}:\n{output}");
+        Assert.Equal("True", Value(output, "single_worker"));
+        Assert.Equal("True", Value(output, "queued")); // the order the test is about: queued, disposed, then run
+        Assert.Equal("1", Value(output, "ran"));
+        Assert.Equal("True", Value(output, "disposed")); // and the disposal completes once they have run
+    }
+
     private static string Value(string output, string key)
     {
         foreach (var line in output.Split('\n'))
@@ -71,7 +90,8 @@ internal static class TimerFaultChild
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(30);
 
     /// <summary>Runs this assembly as a child process for <paramref name="site"/> and returns what it printed.</summary>
-    public static string Start(string site, out int exitCode)
+    /// <param name="singleWorker">The child runs with one processor, so it can hold the pool to a single worker.</param>
+    public static string Start(string site, out int exitCode, bool singleWorker = false)
     {
         var start = new ProcessStartInfo("dotnet")
         {
@@ -81,9 +101,21 @@ internal static class TimerFaultChild
             WorkingDirectory = AppContext.BaseDirectory,
         };
         start.ArgumentList.Add(typeof(TimerFaultChild).Assembly.Location);
-        start.ArgumentList.Add("timer-fault");
-        start.ArgumentList.Add(site);
+        if (site == "cancel-then-dispose")
+        {
+            start.ArgumentList.Add(site);
+        }
+        else
+        {
+            start.ArgumentList.Add("timer-fault");
+            start.ArgumentList.Add(site);
+        }
+
         start.Environment["DOTNET_DbgEnableMiniDump"] = "0"; // a crash is the failure the test is about: no dump
+        if (singleWorker)
+        {
+            start.Environment["DOTNET_PROCESSOR_COUNT"] = "1"; // the pool's maximum cannot go below the processor count
+        }
         using var child = Process.Start(start)!;
         var stdout = child.StandardOutput.ReadToEndAsync();
         var stderr = child.StandardError.ReadToEndAsync();
@@ -95,6 +127,51 @@ internal static class TimerFaultChild
 
         exitCode = child.ExitCode;
         return stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// Cancels a source while the pool's only worker is held, so the callbacks are queued and not yet taken; disposes
+    /// it, as the framework does once the token's holder has ended; then lets the pool go, counts the callbacks and
+    /// checks that the disposal completed after them.
+    /// </summary>
+    public static int CancelThenDispose()
+    {
+        ThreadPool.SetMinThreads(1, 1);
+        var single = ThreadPool.SetMaxThreads(1, 1);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        ThreadPool.UnsafeQueueUserWorkItem(_ => { entered.Set(); release.Wait(); }, null);
+        entered.Wait();
+
+        var source = new ObservedCancellationSource(CancellationSite.Call);
+        var ran = 0;
+        source.Token.Register(() => Interlocked.Increment(ref ran));
+        var callbacks = source.CancelObservedAsync();
+        var queued = !callbacks.IsCompleted;
+        source.Dispose();
+        release.Set();
+        var done = callbacks.Wait(Patience);
+        var disposed = SpinWait.SpinUntil(
+            () =>
+            {
+                try
+                {
+                    _ = source.Token.WaitHandle;
+                    return false;
+                }
+                catch (ObjectDisposedException)
+                {
+                    return true;
+                }
+            },
+            Patience);
+
+        Console.WriteLine($"single_worker={single}");
+        Console.WriteLine($"queued={queued}");
+        Console.WriteLine($"done={done}");
+        Console.WriteLine($"ran={Volatile.Read(ref ran)}");
+        Console.WriteLine($"disposed={disposed}");
+        return 0;
     }
 
     public static int Run(string site)
