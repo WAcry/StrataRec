@@ -322,6 +322,7 @@ public sealed class PlanBuilder
             ReadFeatures = ToSortedArray(context.ReadFeatures),
             RequiredOutputs = ToSortedArray(context.RequiredOutputs),
             ReadParams = ToSortedArray(context.ReadParams),
+            VersionReads = ToSortedArray(context.VersionReads),
             Outputs = ToArray(context.Outputs),
         };
         _nodes.Add(node);
@@ -536,6 +537,7 @@ public sealed class PlanBuilder
         var readFeatures = new SortedSet<int>();
         var readContext = new SortedSet<int>();
         var pinnedNodes = new SortedSet<string>(StringComparer.Ordinal);
+        var versionReads = new HashSet<VersionRead>();
         foreach (var symbol in reads)
         {
             if (symbol.Kind == SymbolKind.Column)
@@ -551,9 +553,10 @@ public sealed class PlanBuilder
                     {
                         readOutputs.Add(symbol.Id);
                     }
-                    else if (symbol.Name.LastIndexOf('@') is > 0 and var at)
+                    else if (symbol.Name.IndexOf('@', StringComparison.Ordinal) is > 0 and var at)
                     {
                         pinnedNodes.Add(symbol.Name[(at + 1)..]);
+                        versionReads.Add(new VersionRead(symbol.Name[(at + 1)..], symbol.Id));
                     }
                 }
             }
@@ -588,6 +591,7 @@ public sealed class PlanBuilder
             ColumnSources = columnSources.ToArray(),
             PinnedProducers = pinned.ToArray(),
             PinnedNodes = new List<string>(pinnedNodes).ToArray(),
+            VersionReads = ToSortedArray(versionReads),
         };
     }
 
@@ -756,13 +760,32 @@ public sealed class PlanBuilder
             columns.Add((name, expression));
         }
 
-        return ok ? new OutputPlan { Limit = limit, Columns = columns.ToArray() } : null;
+        if (!ok)
+        {
+            return null;
+        }
+
+        var versionReads = new List<(string, VersionRead)>();
+        foreach (var (name, expression) in columns)
+        {
+            foreach (var symbol in expression.Reads)
+            {
+                if (symbol is { Kind: SymbolKind.Column, FixedSlot: >= 0 } && Schema.Columns[symbol.Id].Kind == ColumnKind.Output
+                    && symbol.Name.IndexOf('@', StringComparison.Ordinal) is > 0 and var at)
+                {
+                    versionReads.Add((name, new VersionRead(symbol.Name[(at + 1)..], symbol.Id)));
+                }
+            }
+        }
+
+        return new OutputPlan { Limit = limit, Columns = columns.ToArray(), VersionReads = versionReads.ToArray() };
     }
 
     /// <summary>
     /// Static data-flow check of one fully merged node set (design 4.6, 5.3, 11.5): every non-nullable column a node
     /// reads has a producer that cannot be skipped before it; fixed columns have one producer per path; row sources keep
-    /// every non-nullable column covered (<see cref="ValidateRowSource"/>); nodes sharing an order are independent.
+    /// every non-nullable column covered (<see cref="ValidateRowSource"/>); nodes sharing an order are independent; every
+    /// pinned version names a node of this set that writes it (<see cref="ValidateVersionRead"/>).
     /// </summary>
     /// <remarks>
     /// Each rule here looks at a few nodes and taps; <see cref="DataFlowScopes"/> says which, for a caller that cannot
@@ -953,6 +976,96 @@ public sealed class PlanBuilder
                 }
             }
         }
+
+        // Pinned versions against the nodes of this combination (design 4.6).
+        foreach (var node in ordered)
+        {
+            foreach (var read in node.VersionReads)
+            {
+                ValidateVersionRead(read, "Node", node.NodeId, node.Pointer, "/config", ordered, fallbacks, artifact);
+            }
+        }
+
+        foreach (var (_, fallback) in fallbacks)
+        {
+            foreach (var read in fallback.VersionReads)
+            {
+                ValidateVersionRead(read, "Fallback", fallback.NodeId, fallback.Pointer, "/config", ordered, fallbacks, artifact);
+            }
+        }
+
+        if (taps is not null)
+        {
+            foreach (var tap in taps)
+            {
+                foreach (var read in tap.VersionReads)
+                {
+                    ValidateVersionRead(read, "Tap", tap.TapId, "/log_taps/", tap.TapId, ordered, fallbacks, artifact);
+                }
+            }
+        }
+
+        if (output is not null)
+        {
+            foreach (var (name, read) in output.VersionReads)
+            {
+                ValidateVersionRead(read, "Output column", name, "/output/columns/", name, ordered, fallbacks, artifact);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A pinned version (<c>col.x@node</c>, design 4.6) read where the nodes of one combination run: the pinned node must be
+    /// among them and write the column there, into a version of its own. That it may not run in a request (skipped,
+    /// failed, after the reader) is the runtime's to handle: the read is missing. That it is not in this combination, or
+    /// does not write the column in it, is a configuration mistake, whatever other combinations hold. Row sources write one
+    /// version shared by every row source, so theirs cannot be pinned.
+    /// </summary>
+    /// <param name="kind">What reads it, for the message: <c>Node</c>, <c>Fallback</c>, <c>Tap</c> or <c>Output column</c>.</param>
+    /// <param name="reader">The reader's id or name.</param>
+    /// <param name="pointer">The reader's location with <paramref name="pointerSuffix"/>, joined only for an error: this runs for every combination.</param>
+    private void ValidateVersionRead(
+        VersionRead read, string kind, string reader, string pointer, string pointerSuffix, List<CompiledNode> timeline,
+        IReadOnlyDictionary<string, CompiledNode> fallbacks, string artifact)
+    {
+        CompiledNode? pinned = null;
+        foreach (var node in timeline)
+        {
+            if (node.NodeId == read.Node)
+            {
+                pinned = node;
+                break;
+            }
+        }
+
+        if (pinned is null && fallbacks.TryGetValue(read.Node, out var fallback))
+        {
+            pinned = fallback;
+        }
+
+        var unknown = pinned is null || !Writes(pinned, read.Logical);
+        if (!unknown && !IsRowSource(pinned!))
+        {
+            return;
+        }
+
+        var column = Schema.Columns[read.Logical].Name;
+        var where = pointer + pointerSuffix;
+        if (unknown)
+        {
+            _diagnostics.Error("VERSION_REF_UNKNOWN", artifact, where,
+                pinned is null
+                    ? $"{kind} '{reader}' reads 'col.{column}@{read.Node}', but there is no node '{read.Node}'."
+                    : $"{kind} '{reader}' reads 'col.{column}@{read.Node}', but '{read.Node}' does not write '{column}'.",
+                $"pin a node that writes '{column}', or read 'col.{column}' (its latest version)");
+        }
+        else
+        {
+            // Row sources append into one shared slot per column (every row source's rows), not a per-node version.
+            _diagnostics.Error("VERSION_REF_ROW_SOURCE", artifact, where,
+                $"{kind} '{reader}' reads 'col.{column}@{read.Node}', which pins a row source's output; row sources have no per-node version.",
+                $"read 'col.{column}' before a later node rewrites it, or copy it to a new column with an ExpressionScorer");
+        }
     }
 
     /// <summary>
@@ -968,12 +1081,15 @@ public sealed class PlanBuilder
     /// <para>The rules and what decides them: a reader's non-nullable column (the reader and the column's producers);
     /// one producer per path and row sources' shadowing (the producers); row sources keeping a non-nullable column
     /// covered (a row source and the producers); independence of nodes that may share an order (the two nodes); a
-    /// fallback's existence and outputs (the node); a tap's columns, features and pinned versions (the tap, the nodes it
-    /// attaches after, and the producers, feature readers or pinned node).</para>
+    /// fallback's existence and outputs (the node); a pinned version read by a node or the output (the reader and the
+    /// pinned node); a tap's columns, features and pinned versions (the tap, the nodes it attaches after, and the
+    /// producers, feature readers or pinned node).</para>
     /// </remarks>
     /// <param name="nodes">Node id → the variants it takes in some combination (timeline nodes and fallbacks).</param>
     /// <param name="taps">Tap id → the variants it takes in some combination.</param>
-    public List<DataFlowScope> DataFlowScopes(IReadOnlyDictionary<string, List<CompiledNode>> nodes, IReadOnlyDictionary<string, List<CompiledTap>> taps)
+    /// <param name="output">The output, the same in every combination.</param>
+    public List<DataFlowScope> DataFlowScopes(
+        IReadOnlyDictionary<string, List<CompiledNode>> nodes, IReadOnlyDictionary<string, List<CompiledTap>> taps, OutputPlan output)
     {
         var schema = Schema;
         var producers = new SortedDictionary<int, SortedSet<string>>();
@@ -987,9 +1103,9 @@ public sealed class PlanBuilder
         {
             foreach (var node in variants)
             {
-                foreach (var output in node.Outputs)
+                foreach (var written in node.Outputs)
                 {
-                    Add(producers, output.LogicalId, id);
+                    Add(producers, written.LogicalId, id);
                 }
 
                 foreach (var logical in node.RequiredOutputs)
@@ -1106,6 +1222,30 @@ public sealed class PlanBuilder
             Scope($"node '{id}' and its fallback", nodes[id][0].Pointer + "/on_failure", new SortedSet<string>(StringComparer.Ordinal) { id });
         }
 
+        // A pinned version read by a node or the output: the reader's variants say whether it is read, the pinned node's
+        // whether it is written there and by a row source. A tap's is decided within the tap's scope for that node, below.
+        var pins = new HashSet<(string Reader, string Node)>();
+        foreach (var (id, variants) in nodes)
+        {
+            foreach (var node in variants)
+            {
+                foreach (var read in node.VersionReads)
+                {
+                    if (pins.Add((id, read.Node)))
+                    {
+                        Scope($"node '{id}' reading the version of '{read.Node}'", node.Pointer + "/config",
+                            new SortedSet<string>(StringComparer.Ordinal) { id, read.Node });
+                    }
+                }
+            }
+        }
+
+        foreach (var (name, read) in output.VersionReads)
+        {
+            Scope($"output column '{name}' reading the version of '{read.Node}'", "/output/columns/" + name,
+                new SortedSet<string>(StringComparer.Ordinal) { read.Node });
+        }
+
         foreach (var (tapId, variants) in taps)
         {
             var attach = new SortedSet<string>(StringComparer.Ordinal);
@@ -1216,7 +1356,7 @@ public sealed class PlanBuilder
     /// <summary>
     /// A tap is a passive observer (design 8.3, 8.5): every output column it reads must have a producer before the
     /// attach point, and every candidate feature must already have been fetched there. A pinned version
-    /// (<c>col.x@node</c>) may be absent (the node is not in this plan variant: missing), but never in the future.
+    /// (<c>col.x@node</c>) must not be written in the future (<see cref="ValidateVersionRead"/> checks that it is written).
     /// </summary>
     private void ValidateTap(CompiledTap tap, Dictionary<int, string> possible, HashSet<int> fetched, HashSet<string> later, string artifact)
     {
@@ -1315,42 +1455,6 @@ public sealed class PlanBuilder
         LogPlan? log = null)
     {
         var schema = Schema;
-
-        // @node version references must name a node that writes the column (design 4.6).
-        foreach (var (nodeId, logical) in schema.VersionReferences)
-        {
-            var found = false;
-            var rowSource = false;
-            foreach (var node in _nodes)
-            {
-                if (node.NodeId != nodeId)
-                {
-                    continue;
-                }
-
-                foreach (var o in node.Outputs)
-                {
-                    if (o.LogicalId == logical)
-                    {
-                        found = true;
-                        rowSource |= IsRowSource(node);
-                    }
-                }
-            }
-
-            if (rowSource)
-            {
-                // Row sources append into one shared slot per column (every row source's rows), not a per-node version.
-                _diagnostics.Error("VERSION_REF_ROW_SOURCE", PipelineLabel, "/",
-                    $"'col.{schema.Columns[logical].Name}@{nodeId}' pins a row source's output; row sources have no per-node version.",
-                    $"read 'col.{schema.Columns[logical].Name}' before a later node rewrites it, or copy it to a new column with an ExpressionScorer");
-            }
-            else if (!found)
-            {
-                _diagnostics.Error("VERSION_REF_UNKNOWN", PipelineLabel, "/",
-                    $"'col.{schema.Columns[logical].Name}@{nodeId}' refers to a node that never writes that column.");
-            }
-        }
 
         log ??= LogPlan.Empty;
 
@@ -1797,6 +1901,24 @@ public sealed class PlanBuilder
         }
 
         Array.Sort(array);
+        return array;
+    }
+
+    private static VersionRead[] ToSortedArray(IReadOnlyCollection<VersionRead> values)
+    {
+        if (values.Count == 0)
+        {
+            return Array.Empty<VersionRead>();
+        }
+
+        var array = new VersionRead[values.Count];
+        var i = 0;
+        foreach (var v in values)
+        {
+            array[i++] = v;
+        }
+
+        Array.Sort(array, static (a, b) => string.CompareOrdinal(a.Node, b.Node) is var c && c != 0 ? c : a.Logical.CompareTo(b.Logical));
         return array;
     }
 

@@ -145,7 +145,7 @@ public sealed class CombinationLimitTests
         new() { BaseDirectory = host.Root, Operators = OperatorRegistry.CreateDefault().Add(new JointFactory()) };
 
     /// <summary>Layers whose one arm adds a filter that keeps every row, each at its own order.</summary>
-    private static IEnumerable<ExperimentPlacement> Filters(int count)
+    internal static IEnumerable<ExperimentPlacement> Filters(int count)
     {
         for (var i = 0; i < count; i++)
         {
@@ -154,7 +154,7 @@ public sealed class CombinationLimitTests
     }
 
     /// <summary>An experiment in its own layer (named after it) with one arm, <c>t</c>.</summary>
-    private static ExperimentPlacement Treatment(string id, string patch) =>
+    internal static ExperimentPlacement Treatment(string id, string patch) =>
         new(Experiment(id, new JsonObject { ["t"] = JsonNode.Parse(patch) }), "layer_" + id);
 
     public sealed class JointConfig
@@ -221,7 +221,7 @@ public sealed class CombinationLimitTests
     }.ToJsonString());
 
     /// <summary>The sample's request with <paramref name="placements"/> instead of its experiments.</summary>
-    private static PlanCompileRequest With(PlanCompileRequest r, IReadOnlyList<ExperimentPlacement> placements, int? maxCombinationsChecked = null) => new()
+    internal static PlanCompileRequest With(PlanCompileRequest r, IReadOnlyList<ExperimentPlacement> placements, int? maxCombinationsChecked = null) => new()
     {
         Pipeline = r.Pipeline,
         Catalog = r.Catalog,
