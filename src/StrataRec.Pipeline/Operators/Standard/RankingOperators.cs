@@ -1,5 +1,6 @@
 using System.Numerics.Tensors;
 using StrataRec.Core.Columns;
+using StrataRec.Core.Memory;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 
@@ -350,6 +351,7 @@ public sealed class MmrDiversifierConfig
     /// <summary>Relevance weight λ in [0, 1]; use <see cref="LambdaParam"/> to make it tunable.</summary>
     public double? Lambda { get; init; }
 
+    /// <summary>A float64 parameter for λ, declared with a min and a max within [0, 1].</summary>
     public string? LambdaParam { get; init; }
 
     /// <summary>Number of leading ranks to rerank; later rows keep their order. Default 50.</summary>
@@ -400,10 +402,17 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
             return null;
         }
 
+        // λ outside [0, 1] turns the similarity penalty into a reward (or the score into a penalty) (external review).
+        if (config.Lambda is { } fixedLambda && !(fixedLambda >= 0 && fixedLambda <= 1))
+        {
+            context.Error("/lambda", "MMR_LAMBDA", $"lambda must be between 0 and 1, got {fixedLambda}.", "1 ranks by score alone, 0 by diversity alone");
+            return null;
+        }
+
         ParamRef? lambdaParam = null;
         if (config.LambdaParam is not null)
         {
-            if (!context.TryParam(config.LambdaParam, "/lambda_param", out var p, StorageKind.Float64))
+            if (!context.TryParam(config.LambdaParam, "/lambda_param", out var p, StorageKind.Float64, within: (0, 1)))
             {
                 return null;
             }
@@ -420,11 +429,65 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
         return new MmrDiversifier(score, embedding, config.Lambda ?? 0, lambdaParam, config.Window);
     }
 
+    /// <summary>
+    /// The MMR order of a window of rows: each step picks the largest λ·relevance − (1−λ)·(the row's largest similarity
+    /// to a row already picked), the first by relevance alone; equal values keep the incoming order. The similarity is the
+    /// cosine of the rows' vectors, and 0 where either has none (or a zero one). It was floored at 0 (the largest
+    /// similarity started at 0), so a row opposite every pick counted as merely unrelated (external review).
+    /// </summary>
+    /// <param name="rows">The window's rows, in their incoming order.</param>
+    /// <param name="relevance">Each row's score; negative infinity for a row without one, which then comes last.</param>
+    /// <param name="order">Receives the rows in MMR order (as many as <paramref name="rows"/>).</param>
+    internal static void Order(ReadOnlySpan<int> rows, ReadOnlySpan<double> relevance, VectorColumn? vectors, double lambda, Span<int> order, RequestMemory memory)
+    {
+        var n = rows.Length;
+        var maxSim = memory.Rent<double>(n); // read only once a row has been picked
+        var used = memory.RentCleared<bool>(n);
+        var norms = memory.Rent<float>(n);
+        for (var i = 0; i < n; i++)
+        {
+            norms[i] = vectors is not null && vectors.IsValid(rows[i]) ? TensorPrimitives.Norm(vectors.Row(rows[i])) : 0f;
+        }
+
+        for (var step = 0; step < n; step++)
+        {
+            var best = -1;
+            var bestValue = double.NegativeInfinity;
+            for (var i = 0; i < n; i++)
+            {
+                if (used[i])
+                {
+                    continue;
+                }
+
+                var gain = lambda == 0 ? 0 : lambda * relevance[i]; // not 0 · −∞
+                var value = step == 0 ? gain : gain - ((1 - lambda) * maxSim[i]);
+                if (best < 0 || value > bestValue)
+                {
+                    best = i;
+                    bestValue = value;
+                }
+            }
+
+            used[best] = true;
+            order[step] = rows[best];
+            var chosen = norms[best] > 0f ? vectors!.Row(rows[best]) : default;
+            for (var i = 0; i < n; i++)
+            {
+                if (!used[i])
+                {
+                    double sim = norms[best] > 0f && norms[i] > 0f ? TensorPrimitives.Dot(chosen, vectors!.Row(rows[i])) / (norms[best] * norms[i]) : 0f;
+                    maxSim[i] = step == 0 ? sim : Math.Max(maxSim[i], sim);
+                }
+            }
+        }
+    }
+
     private sealed class MmrDiversifier(ColumnRef score, ColumnRef embedding, double fixedLambda, ParamRef? lambdaParam, int window) : Operator
     {
         public override ValueTask ExecuteAsync(OperatorContext context)
         {
-            var lambda = lambdaParam is { } p ? context.Param(p).AsFloat64() : fixedLambda;
+            var lambda = lambdaParam is { } p ? context.Param(p).AsFloat64() : fixedLambda; // within [0, 1]: checked at compile time
             var live = context.LiveRows;
             var n = Math.Min(window, live.Length);
             if (n <= 1)
@@ -433,56 +496,15 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
             }
 
             var scores = context.Read(score);
-            var vectors = context.Read(embedding) as VectorColumn;
             var memory = context.Memory;
             var relevance = memory.Rent<double>(n);
-            var maxSim = memory.RentCleared<double>(n);
-            var used = memory.RentCleared<bool>(n);
-            var norms = memory.Rent<float>(n);
             for (var i = 0; i < n; i++)
             {
                 relevance[i] = scores is not null && RowRanking.TryGetScore(scores, live[i], out var s) ? s : double.NegativeInfinity;
-                norms[i] = vectors is not null && vectors.IsValid(live[i]) ? TensorPrimitives.Norm(vectors.Row(live[i])) : 0f;
             }
 
             var order = memory.Rent<int>(live.Length);
-            for (var step = 0; step < n; step++)
-            {
-                var best = -1;
-                var bestValue = double.NegativeInfinity;
-                for (var i = 0; i < n; i++)
-                {
-                    if (used[i])
-                    {
-                        continue;
-                    }
-
-                    var value = (lambda * relevance[i]) - ((1 - lambda) * maxSim[i]);
-                    if (best < 0 || value > bestValue)
-                    {
-                        best = i;
-                        bestValue = value;
-                    }
-                }
-
-                used[best] = true;
-                order[step] = live[best];
-                if (vectors is null || norms[best] == 0f)
-                {
-                    continue;
-                }
-
-                var chosen = vectors.Row(live[best]);
-                for (var i = 0; i < n; i++)
-                {
-                    if (!used[i] && norms[i] > 0f)
-                    {
-                        var sim = TensorPrimitives.Dot(chosen, vectors.Row(live[i])) / (norms[best] * norms[i]);
-                        maxSim[i] = Math.Max(maxSim[i], sim);
-                    }
-                }
-            }
-
+            Order(live[..n], relevance.AsSpan(0, n), context.Read(embedding) as VectorColumn, lambda, order, memory);
             live[n..].CopyTo(order.AsSpan(n));
             context.SetOrder(order.AsSpan(0, live.Length));
             return ValueTask.CompletedTask;

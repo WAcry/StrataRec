@@ -223,7 +223,10 @@ public sealed class OperatorCompileContext
     }
 
     /// <summary>Resolves a parameter leaf the operator reads.</summary>
-    public bool TryParam(string name, string configKey, out ParamRef parameter, StorageKind? expectedKind = null)
+    /// <param name="within">A range the operator needs every value in (MMR's λ in [0, 1]): the parameter must be declared
+    /// with a min and a max inside it. Values are checked against the declaration, and experiments cannot widen it
+    /// (design 11.8), so every value the operator reads is in range, without a check per request.</param>
+    public bool TryParam(string name, string configKey, out ParamRef parameter, StorageKind? expectedKind = null, (double Min, double Max)? within = null)
     {
         parameter = default;
         if (!_schema.TryGetParam(name, out var leaf))
@@ -247,6 +250,14 @@ public sealed class OperatorCompileContext
         if (expectedKind is { } kind && leaf.Type.Kind != kind)
         {
             Error(configKey, "PARAM_TYPE_MISMATCH", $"Parameter '{name}' has type {leaf.Type}, but {Descriptor.Id} needs {new ColumnType(kind)}.");
+            return false;
+        }
+
+        if (within is { } range && !(leaf.Min >= range.Min && leaf.Max <= range.Max))
+        {
+            var declared = leaf.Min is { } min && leaf.Max is { } max ? $"it is declared as [{min}, {max}]" : "it is declared without a min and a max";
+            Error(configKey, "PARAM_RANGE", $"Parameter '{name}' must be declared within [{range.Min}, {range.Max}] for {Descriptor.Id}: {declared}.",
+                $"declare \"min\": {range.Min}, \"max\": {range.Max} (or a narrower range) for it under /param_schema");
             return false;
         }
 

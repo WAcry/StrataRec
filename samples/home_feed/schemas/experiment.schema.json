@@ -875,6 +875,7 @@
                             ]
                           },
                           "lambda_param": {
+                            "description": "A float64 parameter for λ, declared with a min and a max within [0, 1].",
                             "type": [
                               "string",
                               "null"

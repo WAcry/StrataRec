@@ -1,0 +1,123 @@
+using StrataRec.Core.Columns;
+using StrataRec.Core.Memory;
+using StrataRec.Core.Types;
+using StrataRec.Pipeline.Operators.Standard;
+
+namespace StrataRec.UnitTests.Pipeline;
+
+/// <summary>
+/// <c>MmrDiversifier@1</c>'s order is the formula's: each step picks the largest λ·score − (1−λ)·max cosine(picked), the
+/// first by score alone. The similarity to the rows picked was floored at 0, as if a row unlike every pick were merely
+/// unrelated to them (external review). Compared with a direct reference on small random windows.
+/// </summary>
+public sealed class MmrDiversifierTests
+{
+    [Fact]
+    public void AnOppositeVector_IsANegativeSimilarity_NotZero()
+    {
+        // The reviewer's example: after A, B (opposite A) scores 0.35 + 0.5 = 0.85, C (unrelated) 0.40.
+        double[] scores = [1.0, 0.7, 0.8];
+        float[]?[] vectors = [[1, 0], [-1, 0], [0, 1]];
+
+        Assert.Equal(new[] { 0, 1, 2 }, Order(scores, vectors, 0.5));
+        Assert.Equal(new[] { 0, 1, 2 }, Reference(scores, vectors, 0.5));
+    }
+
+    [Theory]
+    [InlineData(0.0)]
+    [InlineData(0.3)]
+    [InlineData(0.5)]
+    [InlineData(1.0)]
+    public void Orders_AsTheFormula_OnRandomWindows(double lambda)
+    {
+        var random = new Random(17);
+        for (var trial = 0; trial < 300; trial++)
+        {
+            var n = random.Next(1, 12);
+            var scores = new double[n];
+            var vectors = new float[]?[n];
+            for (var i = 0; i < n; i++)
+            {
+                // Few distinct scores and vectors, so ties happen; some rows without a vector, some with a zero one.
+                scores[i] = random.Next(10) == 0 ? double.NegativeInfinity : random.Next(-3, 4) / 2.0;
+                vectors[i] = random.Next(6) switch
+                {
+                    0 => null,
+                    1 => [0, 0],
+                    _ => [random.Next(-2, 3), random.Next(-2, 3)],
+                };
+            }
+
+            Assert.Equal(Reference(scores, vectors, lambda), Order(scores, vectors, lambda));
+        }
+    }
+
+    private static int[] Order(double[] scores, float[]?[] vectors, double lambda)
+    {
+        var memory = new RequestMemory();
+        try
+        {
+            var column = new VectorColumn(ColumnType.Vector(2).AsNullable(), scores.Length, memory);
+            for (var i = 0; i < vectors.Length; i++)
+            {
+                if (vectors[i] is { } vector)
+                {
+                    column.Set(i, vector);
+                }
+                else
+                {
+                    column.SetMissing(i);
+                }
+            }
+
+            var order = new int[scores.Length];
+            MmrDiversifierFactory.Order(Enumerable.Range(0, scores.Length).ToArray(), scores, column, lambda, order, memory);
+            return order;
+        }
+        finally
+        {
+            memory.Release();
+        }
+    }
+
+    /// <summary>The formula, directly: similarity is the cosine, 0 where either row has no vector (or a zero one).</summary>
+    private static int[] Reference(double[] scores, float[]?[] vectors, double lambda)
+    {
+        var picked = new List<int>();
+        while (picked.Count < scores.Length)
+        {
+            var best = -1;
+            var bestValue = double.NegativeInfinity;
+            for (var i = 0; i < scores.Length; i++)
+            {
+                if (picked.Contains(i))
+                {
+                    continue;
+                }
+
+                var relevance = lambda == 0 ? 0 : lambda * scores[i];
+                var value = picked.Count == 0 ? relevance : relevance - ((1 - lambda) * picked.Max(p => Cosine(vectors[i], vectors[p])));
+                if (best < 0 || value > bestValue)
+                {
+                    best = i;
+                    bestValue = value;
+                }
+            }
+
+            picked.Add(best);
+        }
+
+        return picked.ToArray();
+    }
+
+    private static double Cosine(float[]? a, float[]? b)
+    {
+        if (a is null || b is null)
+        {
+            return 0;
+        }
+
+        var norms = MathF.Sqrt((a[0] * a[0]) + (a[1] * a[1])) * MathF.Sqrt((b[0] * b[0]) + (b[1] * b[1]));
+        return norms == 0 ? 0 : ((a[0] * b[0]) + (a[1] * b[1])) / norms;
+    }
+}
