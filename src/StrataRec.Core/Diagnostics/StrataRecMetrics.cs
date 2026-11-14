@@ -59,6 +59,7 @@ public static class StrataRecMetrics
         public const string ModelDuration = "stratarec.model.duration";
         public const string ModelErrors = "stratarec.model.errors";
         public const string ModelFallbacks = "stratarec.model.fallbacks";
+        public const string ModelPairs = "stratarec.model.pairs";
         public const string PlanCompileDuration = "stratarec.plan.compile.duration";
         public const string PlanVariants = "stratarec.plan.variants";
         public const string PlanSequence = "stratarec.plan.sequence";
@@ -292,6 +293,13 @@ public static class StrataRecMetrics
 
     /// <summary>Model nodes served by their fallback node. Tags: <c>stratarec.model</c>.</summary>
     public static readonly Counter<long> ModelFallbacks = Meter.CreateCounter<long>(Names.ModelFallbacks, "{node}", "Model nodes served by their fallback.");
+
+    /// <summary>
+    /// Pairs of rows a pairwise operator (<c>PairwiseRanker@1</c>) sent to its model, one add per node run: the cost that
+    /// grows with the square of the window (design 5.9). Counted only while a listener is enabled, and never in a replay,
+    /// which is not traffic (design 13.4). Tags: <c>stratarec.model</c>.
+    /// </summary>
+    public static readonly Counter<long> ModelPairs = Meter.CreateCounter<long>(Names.ModelPairs, "{pair}", "Pairs of rows sent to pairwise models.");
 
     // Plans.
 

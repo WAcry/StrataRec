@@ -125,6 +125,36 @@ internal static class RowRanking
         }
     }
 
+    /// <summary>
+    /// Orders <paramref name="rows"/> in place by scores an operator computed for them (<paramref name="scores"/>[i] is
+    /// the score of <paramref name="rows"/>[i]) as <see cref="SelectTop"/> ranks a column: higher first, NaN last, ties
+    /// by <c>entity_id</c> ascending, never by the incoming order.
+    /// </summary>
+    public static void Sort(Span<int> rows, ReadOnlySpan<double> scores, CandidateTable table, Core.Memory.RequestMemory memory)
+    {
+        var n = rows.Length;
+        if (n <= 1)
+        {
+            return;
+        }
+
+        var entries = memory.Rent<Entry>(n);
+        var intIds = table.KeyType == EntityKeyType.Int64 ? table.Int64Ids : null;
+        for (var i = 0; i < n; i++)
+        {
+            var row = rows[i];
+            var present = TryFloat64Key(scores[i], out var key);
+            entries[i] = new Entry(present ? ~key : 0, intIds is null ? 0 : intIds[row], row, present ? (byte)0 : (byte)1);
+        }
+
+        var span = entries.AsSpan(0, n);
+        span.Sort(new EntryComparer(intIds is null ? table.StringIds : null));
+        for (var i = 0; i < n; i++)
+        {
+            rows[i] = span[i].Row;
+        }
+    }
+
     /// <summary>Quickselect: afterwards the k smallest entries (by comparer) occupy [0, k).</summary>
     private static void Select(Span<Entry> span, int k, EntryComparer comparer)
     {

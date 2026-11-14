@@ -121,6 +121,8 @@ public sealed class OperatorRegistry
         .Add(new Standard.TopKFactory())
         .Add(new Standard.SlidingWindowQuotaFactory())
         .Add(new Standard.ModelScorerFactory())
+        .Add(new Standard.PairwiseRankerFactory())
+        .Add(new Standard.ListwiseRerankerFactory())
         .Add(new Standard.MmrDiversifierFactory());
 
     public OperatorRegistry Add(IOperatorFactory factory)

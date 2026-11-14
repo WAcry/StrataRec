@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using StrataRec.Artifacts.Json;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Types;
@@ -9,23 +10,28 @@ namespace StrataRec.Pipeline.Operators.Standard;
 /// <summary>
 /// The config keys every model operator shares (design 6.9): which model, which of its versions, and the columns and
 /// context values that feed it. One definition, so <c>ModelScorer@1</c>, <c>PairwiseRanker@1</c> and
-/// <c>ListwiseReranker@1</c> accept them with the same meaning, codes and messages.
+/// <c>ListwiseReranker@1</c> accept them with the same meaning, codes and messages. Ordered first in each operator's
+/// JSON Schema, before the operator's own keys.
 /// </summary>
 public abstract class ModelCallConfig
 {
     /// <summary>Logical model name, bound per environment.</summary>
+    [JsonPropertyOrder(-1)]
     public required string Model { get; init; }
 
     /// <summary>Fixed model version; or use <see cref="VersionParam"/>.</summary>
+    [JsonPropertyOrder(-1)]
     public string? Version { get; init; }
 
     /// <summary>String parameter (with an <c>enum</c> of allowed versions) selecting the version per request.</summary>
+    [JsonPropertyOrder(-1)]
     public string? VersionParam { get; init; }
 
     /// <summary>
     /// Model input name → column or context reference (<c>col.*</c> / <c>ctx.*</c>) of a non-nullable float32, float64,
     /// bool, int32, int64 or <c>vec&lt;float32,N&gt;</c> type; the type decides the tensor (<see cref="ModelTensorRule"/>).
     /// </summary>
+    [JsonPropertyOrder(-1)]
     public required Dictionary<string, string> Inputs { get; init; }
 }
 

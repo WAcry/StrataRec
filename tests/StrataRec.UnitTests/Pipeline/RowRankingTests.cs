@@ -127,6 +127,21 @@ public sealed class RowRankingTests
         Assert.False(RowRanking.TryFloat64Key(double.NaN, out _));
     }
 
+    [Fact]
+    public void ScoresAnOperatorComputed_RankHigherFirst_NaNLast_TiesByEntityId_NotByTheIncomingOrder()
+    {
+        var memory = new RequestMemory();
+        var table = new CandidateTable(new TableSchema(EntityKeyType.String, new[] { ColumnType.String }), 8, memory);
+        table.AppendRows(new[] { "e", "d", "c", "b", "a", "f", "g", "h" });
+        var rows = table.Rows.Order.ToArray();
+        double[] scores = { 1, double.NaN, 2, -0.0, 0.0, double.PositiveInfinity, double.NaN, 1 };
+
+        RowRanking.Sort(rows, scores, table, memory);
+
+        // "c" (2) after "f" (∞); the zeros tie, so "a" before "b"; "e" and "h" tie at 1; the NaNs last, by id too.
+        Assert.Equal(new[] { "f", "c", "e", "h", "a", "b", "d", "g" }, rows.Select(row => table.StringIds.Get(row)));
+    }
+
     private static long[] Ids(int count) => Enumerable.Range(1, count).Select(i => (long)i).ToArray();
 
     /// <summary>The expected rank order: present scores by value (best first), ties and missing values by id.</summary>
