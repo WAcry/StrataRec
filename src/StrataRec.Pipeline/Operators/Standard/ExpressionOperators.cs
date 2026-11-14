@@ -170,7 +170,8 @@ public sealed class CompositeMultiplierScorerFactory : IOperatorFactory
 
         if (!output.Type.IsFloat)
         {
-            context.Error("/output_col", "COLUMN_TYPE_MISMATCH", $"Output column '{config.OutputCol}' must be float32 or float64, not {output.Type}.");
+            context.Error("/output_col", "COLUMN_TYPE_MISMATCH", $"Output column '{config.OutputCol}' must be float32 or float64, not {output.Type}.",
+                $"declare '{config.OutputCol}' as float64 or float32 under /columns: {context.Descriptor.Id} writes scores");
             return null;
         }
 

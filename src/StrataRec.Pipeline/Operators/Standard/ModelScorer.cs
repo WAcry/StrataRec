@@ -69,7 +69,8 @@ public sealed class ModelScorerFactory : IOperatorFactory
 
             if (!column.Type.IsFloat)
             {
-                context.Error("/outputs/" + JsonPointer.Escape(outputNames[i]), "COLUMN_TYPE_MISMATCH", $"Model output column '{column.Name}' must be float32 or float64.");
+                context.Error("/outputs/" + JsonPointer.Escape(outputNames[i]), "COLUMN_TYPE_MISMATCH", $"Model output column '{column.Name}' must be float32 or float64, not {column.Type}.",
+                    $"declare '{column.Name}' as float32 or float64 under /columns");
                 ok = false;
             }
 

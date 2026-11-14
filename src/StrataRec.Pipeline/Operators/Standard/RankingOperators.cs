@@ -39,13 +39,15 @@ public sealed class TopKFactory : IOperatorFactory
 
         if (!score.Type.IsNumeric)
         {
-            context.Error("/score_col", "COLUMN_TYPE_MISMATCH", $"Score column '{config.ScoreCol}' must be numeric, not {score.Type}.");
+            context.Error("/score_col", "COLUMN_TYPE_MISMATCH", $"Score column '{config.ScoreCol}' must be numeric, not {score.Type}.",
+                "sort by a numeric column, e.g. \"score_col\": \"score.final\"");
             return null;
         }
 
         if ((config.K is null) == (config.KParam is null))
         {
-            context.Error(string.Empty, "TOPK_K", "Set exactly one of 'k' and 'k_param'.");
+            context.Error(string.Empty, "TOPK_K", "Set exactly one of 'k' and 'k_param'.",
+                "give \"k\": <count>, or \"k_param\": \"<an int64 parameter>\" for a count experiments can change");
             return null;
         }
 
@@ -162,13 +164,16 @@ public sealed class SlidingWindowQuotaFactory : IOperatorFactory
 
         if (group.Type.Kind is not (StorageKind.Int64 or StorageKind.Int32 or StorageKind.String))
         {
-            context.Error("/group_col", "COLUMN_TYPE_MISMATCH", $"Group column must be int64, int32 or string, not {group.Type}.");
+            context.Error("/group_col", "COLUMN_TYPE_MISMATCH", $"Group column '{config.GroupCol}' must be int64, int32 or string, not {group.Type}.",
+                "group by a column that names a group, such as an id or a category");
             return null;
         }
 
         if (config.Window < 1 || config.MaxPerWindow < 1)
         {
-            context.Error(string.Empty, "QUOTA_BAD_CONFIG", "window and max_per_window must be at least 1.");
+            var (at, name, value) = config.Window < 1 ? ("/window", "window", config.Window) : ("/max_per_window", "max_per_window", config.MaxPerWindow);
+            context.Error(at, "QUOTA_BAD_CONFIG", $"{name} is {value}, but it must be at least 1.",
+                "e.g. \"window\": 3, \"max_per_window\": 1 keeps at most one row of a group in any 3 consecutive ranks");
             return null;
         }
 
@@ -374,15 +379,24 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
             return null;
         }
 
-        if (embedding.Type.Kind != StorageKind.Vector || !score.Type.IsNumeric)
+        if (!score.Type.IsNumeric)
         {
-            context.Error("/embedding_col", "COLUMN_TYPE_MISMATCH", "score_col must be numeric and embedding_col a vec<float32,N>.");
+            context.Error("/score_col", "COLUMN_TYPE_MISMATCH", $"Score column '{config.ScoreCol}' must be numeric, not {score.Type}.",
+                "use the score the rows are ranked by, e.g. \"score_col\": \"score.final\"");
+            return null;
+        }
+
+        if (embedding.Type.Kind != StorageKind.Vector)
+        {
+            context.Error("/embedding_col", "COLUMN_TYPE_MISMATCH", $"Embedding column '{config.EmbeddingCol}' must be a vector, not {embedding.Type}.",
+                "use a vec<float32,N> column, such as an item embedding from the catalog");
             return null;
         }
 
         if ((config.Lambda is null) == (config.LambdaParam is null))
         {
-            context.Error(string.Empty, "MMR_LAMBDA", "Set exactly one of 'lambda' and 'lambda_param'.");
+            context.Error(string.Empty, "MMR_LAMBDA", "Set exactly one of 'lambda' and 'lambda_param'.",
+                "give \"lambda\": <0 to 1>, or \"lambda_param\": \"<a float64 parameter>\" for a value experiments can change");
             return null;
         }
 

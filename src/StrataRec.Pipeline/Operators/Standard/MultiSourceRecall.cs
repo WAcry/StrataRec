@@ -32,6 +32,12 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
 
     public Operator? Compile(OperatorCompileContext context)
     {
+        // The recall columns are the same whatever the config says: declared first, the nodes that read them compile on
+        // when something below is wrong (a misspelled source, an unbound one), instead of reporting them unknown.
+        var declared = context.TryWriteColumn("recall.sources_mask", string.Empty, ColumnType.Int64, out var mask)
+            & context.TryWriteColumn("recall.best_rank", string.Empty, ColumnType.Int64, out var bestRank)
+            & context.TryWriteColumn("recall.best_score", string.Empty, ColumnType.Float64, out var bestScore)
+            & context.TryWriteColumn("recall.primary_source", string.Empty, ColumnType.String, out var primary);
         var config = context.BindConfig<MultiSourceRecallConfig>();
         if (config is null)
         {
@@ -54,11 +60,13 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         var names = new List<string>();
         if (config.SourceOrder is not null)
         {
-            foreach (var name in config.SourceOrder)
+            for (var i = 0; i < config.SourceOrder.Count; i++)
             {
+                var name = config.SourceOrder[i];
                 if (!byName.ContainsKey(name))
                 {
-                    context.Error("/source_order", "RECALL_UNKNOWN_SOURCE", $"'{name}' has no entry in parameter '{config.QuotasParam}'.");
+                    context.Error($"/source_order/{i}", "RECALL_UNKNOWN_SOURCE", $"'{name}' has no entry in parameter '{config.QuotasParam}'.",
+                        Spelling.DidYouMean(name, byName.Keys) ?? $"give it a quota in '{config.QuotasParam}', or remove it from source_order");
                     return null;
                 }
 
@@ -69,7 +77,8 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
             {
                 if (!names.Contains(name))
                 {
-                    context.Error("/source_order", "RECALL_SOURCE_ORDER", $"source_order must list every source; '{name}' is missing.");
+                    context.Error("/source_order", "RECALL_SOURCE_ORDER", $"source_order must list every source; '{name}' is missing.",
+                        $"add '{name}' (an earlier source wins an item's primary source), or omit source_order to merge the sources by name");
                     return null;
                 }
             }
@@ -86,8 +95,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
             return null;
         }
 
-        // Every source is bound, and the columns declared, before giving up on one that is not: each unbound source is
-        // reported, and the nodes that read the recall columns compile on, instead of reporting them unknown.
+        // Every source is bound before giving up on one that is not: each unbound source is reported.
         var sources = new SourceEntry[names.Count];
         var unbound = false;
         for (var i = 0; i < names.Count; i++)
@@ -102,11 +110,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
             sources[i] = new SourceEntry(names[i], bound.Value.Source, bound.Value.TimeoutMs, byName[names[i]], new IoTarget(IoKind.CandidateSource, names[i]));
         }
 
-        if (!context.TryWriteColumn("recall.sources_mask", string.Empty, ColumnType.Int64, out var mask)
-            || !context.TryWriteColumn("recall.best_rank", string.Empty, ColumnType.Int64, out var bestRank)
-            || !context.TryWriteColumn("recall.best_score", string.Empty, ColumnType.Float64, out var bestScore)
-            || !context.TryWriteColumn("recall.primary_source", string.Empty, ColumnType.String, out var primary)
-            || unbound)
+        if (!declared || unbound)
         {
             return null;
         }

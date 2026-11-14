@@ -81,7 +81,8 @@ public sealed class GroupAggregateFactory : IOperatorFactory
             }
             else if (g.Type.Kind is not (StorageKind.Int64 or StorageKind.Int32 or StorageKind.String))
             {
-                context.Error("/group_col", "COLUMN_TYPE_MISMATCH", $"Group column '{config.GroupCol}' must be int64, int32 or string, not {g.Type}.");
+                context.Error("/group_col", "COLUMN_TYPE_MISMATCH", $"Group column '{config.GroupCol}' must be int64, int32 or string, not {g.Type}.",
+                    "group by a column that names a group, such as an id or a category (a float is a measurement, and equal values would be a coincidence)");
                 groupFailed = true;
             }
             else
@@ -135,7 +136,8 @@ public sealed class GroupAggregateFactory : IOperatorFactory
         }
         else if (spec.ValueCol is null)
         {
-            context.Error(at, "GROUP_AGGREGATE_VALUE", $"{spec.Fn} needs value_col, the numeric column it reads.");
+            context.Error(at, "GROUP_AGGREGATE_VALUE", $"{spec.Fn} needs value_col, the numeric column it reads.",
+                $"add \"value_col\", e.g. \"value_col\": \"score.final\"" + (function == Function.Rank ? "" : "; count needs none"));
             return Unusable(context, name);
         }
         else if (!context.TryReadColumn(spec.ValueCol, at + "/value_col", out var v))
@@ -144,7 +146,8 @@ public sealed class GroupAggregateFactory : IOperatorFactory
         }
         else if (!v.Type.IsNumeric)
         {
-            context.Error(at + "/value_col", "COLUMN_TYPE_MISMATCH", $"{spec.Fn} reads a numeric column, and '{spec.ValueCol}' is {v.Type}.");
+            context.Error(at + "/value_col", "COLUMN_TYPE_MISMATCH", $"{spec.Fn} reads a numeric column, and '{spec.ValueCol}' is {v.Type}.",
+                "give an int32, int64, float32 or float64 column; to count the rows of a group, use \"fn\": \"count\" without value_col");
             return Unusable(context, name);
         }
         else

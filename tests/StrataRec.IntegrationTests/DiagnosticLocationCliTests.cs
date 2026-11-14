@@ -129,6 +129,13 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         // recall columns are still declared: the output that reads one is not reported unknown
     [InlineData("bindings/local.jsonc", "\"activation\": \"sigmoid\"", "\"activaton\": \"sigmoid\"",
         "MODEL_CONFIG", "/models/ctr_model/outputs/p_click/activaton", "\"activaton\"")] // was ignored: the identity scored
+    // An operator's error is at the setting to change, with a hint (they were at the config or the other column, without).
+    [InlineData(Pipeline, "\"source_order\": [\"two_tower\", \"popular\"]", "\"source_order\": [\"two_tower\", \"populr\"]",
+        "RECALL_UNKNOWN_SOURCE", "/nodes/recall/config/source_order/1", "\"populr\"")]
+    [InlineData(Pipeline, "\"window\": 3, \"max_per_window\": 1", "\"window\": 3, \"max_per_window\": 0",
+        "QUOTA_BAD_CONFIG", "/nodes/diversity_cap/config/max_per_window", "\"max_per_window\": 0")]
+    [InlineData("experiments/exp_mmr_diversity.jsonc", "\"score_col\": \"score.final\"", "\"score_col\": \"item.category\"",
+        "COLUMN_TYPE_MISMATCH", "/arms/mmr/nodes/mmr_diversifier/config/score_col", "\"score_col\": \"item.category\"")]
     public void Text_ADeclarationWithAnError_IsTheOnlyError(string file, string old, string replacement, string code, string pointer, string at)
     {
         var root = Workspace((file, old, replacement));
@@ -136,7 +143,9 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         var lines = ValidateText(root, expectedErrors: 1);
 
         var (line, column) = Position(root, file, at);
-        Assert.Contains(lines, l => l.StartsWith($"{root}/{file}:{line}:{column}: error {code} {pointer}: ", StringComparison.Ordinal));
+        var error = lines.FindIndex(l => l.StartsWith($"{root}/{file}:{line}:{column}: error {code} {pointer}: ", StringComparison.Ordinal));
+        Assert.True(error >= 0, string.Join('\n', lines));
+        Assert.StartsWith("    hint: ", lines[error + 3]); // after the source line and its caret: how to fix it
     }
 
     [Fact]
