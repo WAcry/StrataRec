@@ -281,7 +281,21 @@ public sealed record PlanLoadResult(
     string ManifestId,
     TimeSpan CompileTime,
     IReadOnlyList<ConfigDiagnostic> Diagnostics,
-    PlanReport Report);
+    PlanReport Report)
+{
+    /// <summary>
+    /// The plan compiled and loaded, and was not applied because its pipeline serves an equal or higher sequence by now
+    /// (a newer release won the race): not a failure, and nothing to retry.
+    /// </summary>
+    public bool Stale { get; init; }
+
+    /// <summary>
+    /// The plan compiled and loaded, and was not applied because its sequence is below a <c>min_accepted_seq</c> the engine
+    /// learned meanwhile from another manifest of its pipeline (<see cref="RecEngine.LoadManifestAsync"/>): the release
+    /// controller revoked it (design 10.2).
+    /// </summary>
+    public bool Revoked { get; init; }
+}
 
 /// <summary>
 /// The engine: holds one immutable plan per pipeline and swaps it atomically when a new one compiles (design 10.3).
@@ -309,7 +323,7 @@ public sealed record PlanLoadResult(
 public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposable
 {
     private readonly ConcurrentDictionary<string, LoadedPipeline> _pipelines = new(StringComparer.Ordinal);
-    private readonly object _publishGate = new(); // the lifecycle lock: _loads, _disposed and every change of _pipelines
+    private readonly object _publishGate = new(); // the lifecycle lock: _loads, _disposed, _minAcceptedSeq and every change of _pipelines
     private readonly HashSet<PendingLoad> _loads = new();
     private long _loadTicket;
     private readonly PipelineExecutor _executor;
@@ -388,8 +402,10 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// </summary>
     /// <param name="sequence">
     /// Release order (the manifest's <c>seq</c>, design 10.2). A plan never replaces one with an equal or higher
-    /// sequence, so a slow load of an older release cannot overwrite a newer one that finished first. When omitted,
-    /// a ticket taken at the start of the call orders local loads; do not mix the two schemes for one pipeline.
+    /// sequence, so a slow load of an older release cannot overwrite a newer one that finished first
+    /// (<see cref="PlanLoadResult.Stale"/>), nor is one applied whose sequence is below a <c>min_accepted_seq</c> the engine
+    /// has seen for its pipeline (<see cref="PlanLoadResult.Revoked"/>, <see cref="LoadManifestAsync"/>). When omitted, a
+    /// ticket taken at the start of the call orders local loads; do not mix the two schemes for one pipeline.
     /// </param>
     /// <param name="cancellationToken">Cancels the load until the plan is applied: checked when the call starts, while it
     /// waits for signatures and loads (the bindings of other plans load on), and when it is about to publish.</param>
@@ -406,7 +422,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         var load = BeginLoad(cancellationToken);
         try
         {
-            return await LoadWithBindingsAsync(request, order, load, cancellationToken).ConfigureAwait(false);
+            return await LoadWithBindingsAsync(request, order, released: sequence.HasValue, load, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (load.Cancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
@@ -461,8 +477,9 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// disposal in that window.</summary>
     internal Action? Publishing { get; set; }
 
+    /// <param name="released">The order is a release's sequence, which revocation applies to; not a local load's ticket.</param>
     private async Task<PlanLoadResult> LoadWithBindingsAsync(
-        PlanCompileRequest request, long order, PendingLoad load, CancellationToken cancellationToken)
+        PlanCompileRequest request, long order, bool released, PendingLoad load, CancellationToken cancellationToken)
     {
         var lease = load.Lease;
 
@@ -509,6 +526,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         _ = loaded.Telemetry; // request metric tags are built with the plan, not on its first request
         Publishing?.Invoke();
         long? served = null;
+        long? revokedBelow = null;
         LoadedPipeline? replaced = null;
         bool disposed, cancelled;
         try
@@ -526,6 +544,12 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                         served = current.Sequence;
                         diagnostics.Info("PLAN_STALE", "engine", string.Empty,
                             $"Not applied: pipeline '{pipelineId}' already serves sequence {current.Sequence} (this load is {order}).");
+                    }
+                    else if (released && _minAcceptedSeq.TryGetValue(pipelineId, out var floor) && order < floor)
+                    {
+                        // A manifest of the pipeline revoked this sequence while it compiled and loaded (design 10.3 item 6).
+                        revokedBelow = floor;
+                        Revoked(diagnostics, request.ManifestId, pipelineId, order, floor);
                     }
                     else
                     {
@@ -556,7 +580,13 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         if (served is { } currentSequence)
         {
             PlanLoadTelemetry.Stale(_logger, pipelineId, request.ManifestId, order, currentSequence);
-            return new PlanLoadResult(pipelineId, false, request.ManifestId, plan.CompileTime, diagnostics.Items, compilation.Report);
+            return new PlanLoadResult(pipelineId, false, request.ManifestId, plan.CompileTime, diagnostics.Items, compilation.Report) { Stale = true };
+        }
+
+        if (revokedBelow is { } minAcceptedSeq)
+        {
+            PlanLoadTelemetry.Revoked(_logger, pipelineId, request.ManifestId, order, minAcceptedSeq);
+            return new PlanLoadResult(pipelineId, false, request.ManifestId, plan.CompileTime, diagnostics.Items, compilation.Report) { Revoked = true };
         }
 
         PlanLoadTelemetry.LogApplied(_logger, plan, order);

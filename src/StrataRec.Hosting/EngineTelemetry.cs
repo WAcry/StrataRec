@@ -173,6 +173,25 @@ internal static partial class PlanLoadTelemetry
         LogStale(logger, pipelineId, manifestId, sequence, current);
     }
 
+    public static void Incompatible(ILogger logger, string pipelineId, string manifestId, long sequence, IReadOnlyList<string> missing)
+    {
+        Count(pipelineId, "incompatible");
+        LogIncompatible(logger, pipelineId, manifestId, sequence, string.Join(", ", missing));
+    }
+
+    public static void Revoked(ILogger logger, string pipelineId, string manifestId, long sequence, long minAcceptedSeq)
+    {
+        Count(pipelineId, "revoked");
+        LogRevoked(logger, pipelineId, manifestId, sequence, minAcceptedSeq);
+    }
+
+    /// <summary>The manifest, or an artifact it names, could not be read: missing, damaged, of another identity.</summary>
+    public static void ArtifactsFailed(ILogger logger, string pipelineId, string manifestId, DiagnosticBag diagnostics)
+    {
+        Count(pipelineId, "artifacts_failed");
+        LogArtifactsFailed(logger, pipelineId, manifestId, diagnostics.ErrorCount, FirstError(diagnostics));
+    }
+
     private static void Count(string pipelineId, string outcome) =>
         StrataRecMetrics.PlanLoads.Add(1, new KeyValuePair<string, object?>(StrataRecTags.Pipeline, pipelineId), new KeyValuePair<string, object?>(StrataRecTags.Outcome, outcome));
 
@@ -200,6 +219,18 @@ internal static partial class PlanLoadTelemetry
     [LoggerMessage(EventId = 1005, Level = LogLevel.Error,
         Message = "Plan of pipeline '{PipelineId}' from manifest '{ManifestId}' not applied: {ErrorCount} local table(s) or instance(s) it binds failed to load; the current plan stays. First: {FirstError}")]
     private static partial void LogBindingsFailed(ILogger logger, string pipelineId, string manifestId, int errorCount, string? firstError);
+
+    [LoggerMessage(EventId = 1006, Level = LogLevel.Error,
+        Message = "Manifest '{ManifestId}' (sequence {Sequence}) for pipeline '{PipelineId}' is incompatible: this binary lacks {MissingCapabilities}; the current plan stays")]
+    private static partial void LogIncompatible(ILogger logger, string pipelineId, string manifestId, long sequence, string missingCapabilities);
+
+    [LoggerMessage(EventId = 1007, Level = LogLevel.Warning,
+        Message = "Manifest '{ManifestId}' for pipeline '{PipelineId}' is revoked: its sequence {Sequence} is below min_accepted_seq {MinAcceptedSeq}; the current plan stays")]
+    private static partial void LogRevoked(ILogger logger, string pipelineId, string manifestId, long sequence, long minAcceptedSeq);
+
+    [LoggerMessage(EventId = 1008, Level = LogLevel.Error,
+        Message = "Manifest '{ManifestId}' for pipeline '{PipelineId}' not applied: {ErrorCount} error(s) reading it or its artifacts; the current plan stays. First: {FirstError}")]
+    private static partial void LogArtifactsFailed(ILogger logger, string pipelineId, string manifestId, int errorCount, string? firstError);
 
     [LoggerMessage(EventId = 1004, Level = LogLevel.Information,
         Message = "Manifest '{ManifestId}' for pipeline '{PipelineId}' not applied: its sequence {Sequence} is not newer than the served {CurrentSequence}")]

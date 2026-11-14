@@ -356,6 +356,38 @@ public sealed class ManifestRefCliTests
         await Expect(1, "MANIFEST_UNREADABLE", "manifest:" + id, "the blob is damaged", manifest: id, store: store);
     }
 
+    [Fact]
+    public async Task AManifestThatNeedsWhatTheBinaryLacks_IsIncompatible_AsOnANode()
+    {
+        // Built by a binary with an operator this one does not register (design 10.4): its requires names it.
+        var root = ManifestStores.Workspace();
+        var store = ManifestStores.NewStore();
+        var (_, file) = await ManifestStores.BuildAsync(root, store);
+        var built = ManifestStores.Read(file);
+        var needs = new ReleaseManifest
+        {
+            PipelineId = built.PipelineId,
+            Environment = built.Environment,
+            Seq = built.Seq,
+            Requires = [.. built.Requires, "CategoryBoost@1"],
+            Artifacts = built.Artifacts,
+            Experiments = built.Experiments,
+        };
+        var id = await ManifestStores.PutAsync(store, needs);
+
+        await Expect(1, "MANIFEST_INCOMPATIBLE", "manifest:" + id, "'stratarec operators' lists what a binary provides", manifest: id, store: store, pointer: "/requires");
+        var errors = new StringWriter();
+        Assert.Equal(1, await ExplainPlanCommand.RunAsync(Tool.Environment, null, "local", null, "text", Array.Empty<string>(), TextWriter.Null, CancellationToken.None,
+            id, store, errors));
+        Assert.Contains("The manifest requires a capability this binary does not provide: CategoryBoost@1.", errors.ToString());
+
+        // replay loads it as a node does, with the same report: the configuration does not load (1).
+        errors = new StringWriter();
+        Assert.Equal(1, await ReplayCommand.RunAsync(Tool.Environment, null, "local", [store], Array.Empty<string>(), "json", false, TextWriter.Null, CancellationToken.None,
+            manifest: id, store: store, errors: errors));
+        Assert.Contains(ManifestStores.Errors(errors.ToString()), e => e is ("MANIFEST_INCOMPATIBLE", _, "/requires", _));
+    }
+
     private static async Task Expect(
         int exitCode, string code, string artifact, string hint, string? config = null, string? manifest = null, string? store = null, string? pipeline = null, string pointer = "")
     {

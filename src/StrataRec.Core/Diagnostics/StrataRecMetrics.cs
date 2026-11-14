@@ -354,7 +354,9 @@ public static class StrataRecMetrics
     /// <summary>
     /// Plan loads (design 10.3). Tags: <c>stratarec.pipeline</c>, <c>stratarec.outcome</c> = <c>applied</c> |
     /// <c>compile_failed</c> | <c>bindings_failed</c> (a local table it reads, or a client or connector it uses, failed its first load) |
-    /// <c>stale</c>.
+    /// <c>stale</c> | and for release manifests (design 10.3, 10.4) <c>incompatible</c> (the binary lacks a capability the
+    /// manifest requires) | <c>revoked</c> (its <c>seq</c> is below a <c>min_accepted_seq</c> the engine has seen) |
+    /// <c>artifacts_failed</c> (the manifest or an artifact it names could not be read).
     /// </summary>
     public static readonly Counter<long> PlanLoads = Meter.CreateCounter<long>(Names.PlanLoads, "{load}", "Plan loads by outcome.");
 
