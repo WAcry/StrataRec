@@ -85,46 +85,53 @@ public sealed class LogisticModelClient : IModelClient
             return new ValueTask<ModelStatus>(ModelStatus.Failed($"Model '{_model}' has no version '{version}'."));
         }
 
+        // Each weight's input, checked once: [batch] exactly; its data may be a longer pooled buffer, but its shape says how
+        // many rows it holds. The index map is on the stack, so a call allocates nothing.
         var batch = call.BatchSize;
-        var logits = outputs.GetFloat32(_output, batch).Span[..batch];
-        logits.Fill((float)_bias);
         var inputs = call.Inputs.Span;
+        Span<int> inputOf = _inputs.Length <= 64 ? stackalloc int[_inputs.Length] : new int[_inputs.Length];
         for (var w = 0; w < _inputs.Length; w++)
         {
-            var found = false;
-            foreach (var input in inputs)
+            inputOf[w] = -1;
+            for (var i = 0; i < inputs.Length; i++)
             {
-                if (input.Name != _inputs[w])
+                if (inputs[i].Name == _inputs[w])
                 {
-                    continue;
+                    inputOf[w] = i;
+                    break;
                 }
-
-                // [batch] exactly: its data may be a longer pooled buffer, but its shape says how many rows it holds.
-                if (input.ElementType != TensorElementType.Float32 || input.Shape is not [var rows] || rows != batch || input.Float32.Length < batch)
-                {
-                    return new ValueTask<ModelStatus>(ModelStatus.Failed($"Input '{input.Name}' must be float32 [{batch}]."));
-                }
-
-                var values = input.Float32.Span;
-                var weight = (float)_weights[w];
-                for (var r = 0; r < batch; r++)
-                {
-                    logits[r] += weight * values[r];
-                }
-
-                found = true;
-                break;
             }
 
-            if (!found)
+            if (inputOf[w] < 0)
             {
                 return new ValueTask<ModelStatus>(ModelStatus.Failed($"Missing input '{_inputs[w]}'."));
             }
+
+            var input = inputs[inputOf[w]];
+            if (input.ElementType != TensorElementType.Float32 || input.Shape is not [var rows] || rows != batch || input.Float32.Length < batch)
+            {
+                return new ValueTask<ModelStatus>(ModelStatus.Failed($"Input '{input.Name}' must be float32 [{batch}]."));
+            }
         }
 
+        // In double, as the coefficients were checked: in float a large weight and bias that cancel (1e40 and -1e40) would
+        // overflow to infinities and give NaN. A logit that is not a number even so (weights that overflow double) is a
+        // failed call, never a score: the node's on_failure decides, not a NaN passed on as a probability.
+        var probabilities = outputs.GetFloat32(_output, batch).Span[..batch];
         for (var r = 0; r < batch; r++)
         {
-            logits[r] = 1f / (1f + MathF.Exp(-logits[r]));
+            var logit = _bias;
+            for (var w = 0; w < _weights.Length; w++)
+            {
+                logit += _weights[w] * inputs[inputOf[w]].Float32.Span[r];
+            }
+
+            if (double.IsNaN(logit))
+            {
+                return new ValueTask<ModelStatus>(ModelStatus.Failed($"The logit of row {r} is not a number: the weights overflow."));
+            }
+
+            probabilities[r] = (float)(1.0 / (1.0 + Math.Exp(-logit)));
         }
 
         return new ValueTask<ModelStatus>(ModelStatus.Ok);

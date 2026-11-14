@@ -228,9 +228,11 @@ public sealed class KeyValueFeatureConnector : IFeatureSourceConnector, ILoadabl
             for (var row = 0; row < documents.Count; row++)
             {
                 var (record, line) = documents[row];
-                if (!record.TryGetProperty(keyField, out var key) || !key.TryGetInt64(out var id))
+                // TryGetInt64 throws on anything but a number, so the kind is checked first: a string key ("7") is a load
+                // error at its line, like every other mistake in the file, not an exception without a location.
+                if (!record.TryGetProperty(keyField, out var key) || key.ValueKind != JsonValueKind.Number || !key.TryGetInt64(out var id))
                 {
-                    throw Bad(line, $"the record has no int64 '{keyField}'");
+                    throw Bad(line, $"the record has no int64 '{keyField}' (an integer such as {{\"{keyField}\": 7}})");
                 }
 
                 if (!records.TryAdd(id, row))
