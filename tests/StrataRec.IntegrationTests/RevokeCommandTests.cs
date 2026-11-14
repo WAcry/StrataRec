@@ -260,6 +260,21 @@ public sealed class RevokeCommandTests
         {
             File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
+
+        // Pointers that cannot be traversed are not "nothing published", with -e either (review 42: exit 0, nothing shown).
+        var all = Path.Combine(store, "pointers");
+        File.SetUnixFileMode(all, UnixFileMode.None);
+        try
+        {
+            (code, output, errors) = await Status(store, "-e", "local", "-p", "home_feed");
+            Assert.Equal(1, code);
+            Assert.Contains("error POINTER_UNREADABLE", errors);
+            Assert.DoesNotContain("nothing is published", output);
+        }
+        finally
+        {
+            File.SetUnixFileMode(all, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
     }
 
     private static async Task<(int Code, string Output, string Errors)> Status(string store, params string[] options)
@@ -328,6 +343,13 @@ public sealed class RevokeCommandTests
         await using var engine = new RecEngine(CommonOptions.ForRoot(Tool.Environment, root));
         var loaded = await engine.LoadManifestAsync(withoutImplicit, await ManifestStores.PutAsync(store, withoutImplicit), blobs);
         Assert.True(loaded.Applied, loaded.Reason);
+
+        // A second stop does not require again what the first freed: the bindings artifact still lists it (review 42).
+        var second = await ManifestBuilder.RevokeAsync(withoutQuality, await ManifestStores.PutAsync(store, withoutQuality), ["exp_mmr_diversity"], blobs, diagnostics);
+        Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
+        Assert.DoesNotContain("future_client@1", second!.Requires);
+        Assert.DoesNotContain("MmrDiversifier@1", second.Requires);
+        Assert.Contains("implicit_client@1", second.Requires);
     }
 
     /// <summary>

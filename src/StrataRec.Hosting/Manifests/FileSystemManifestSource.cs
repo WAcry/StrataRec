@@ -55,11 +55,17 @@ public sealed class FileSystemManifestSource : IManifestSource
         {
             environments.Add(Path.Combine(directory, Segment(environment, nameof(environment))));
         }
-        else if (Directory.Exists(directory))
+        else
         {
+            // Enumerated, not asked whether it exists: a directory that cannot be traversed does not exist to Exists, and
+            // would read as nothing published (review 42).
             try
             {
                 environments.AddRange(Directory.EnumerateDirectories(directory));
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // nothing published yet
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -70,7 +76,7 @@ public sealed class FileSystemManifestSource : IManifestSource
         foreach (var environmentDirectory in environments)
         {
             var name = Path.GetFileName(environmentDirectory);
-            if (name.StartsWith('.') || !Directory.Exists(environmentDirectory))
+            if (name.StartsWith('.'))
             {
                 continue;
             }
@@ -88,6 +94,10 @@ public sealed class FileSystemManifestSource : IManifestSource
                     var pipeline = fileName[..^".json".Length];
                     pointers.Add(new PointerFile(pipeline, name, file, PointerName(pipeline) ?? PointerName(name)));
                 }
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // nothing published in this environment
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {

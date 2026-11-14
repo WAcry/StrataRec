@@ -80,7 +80,7 @@ public static class ManifestBuilder
             Seq = seq,
             MinAcceptedSeq = minAcceptedSeq,
             Previous = previous,
-            Requires = RequiredCapabilities(request.Pipeline, request.Experiments, request.Bindings, Array.Empty<ExperimentPlacement>()),
+            Requires = RequiredCapabilities(request.Pipeline, request.Experiments, request.Bindings, Array.Empty<ExperimentPlacement>(), null),
             Artifacts = new ManifestArtifacts
             {
                 Catalog = await store.PutAsync(catalog!.Document, cancellationToken).ConfigureAwait(false),
@@ -141,7 +141,7 @@ public static class ManifestBuilder
             Seq = seq,
             MinAcceptedSeq = seq,
             Previous = manifestId,
-            Requires = RequiredCapabilities(request.Pipeline, kept, request.Bindings, removed),
+            Requires = RequiredCapabilities(request.Pipeline, kept, request.Bindings, removed, manifest.Requires),
             Artifacts = manifest.Artifacts,
             Experiments = entries,
         };
@@ -391,8 +391,10 @@ public static class ManifestBuilder
 
     /// <summary>Operators, connectors and clients named by the configuration (design 10.4).</summary>
     /// <param name="removed">Experiments a revocation removes from <paramref name="experiments"/>: see the binding rule inside.</param>
+    /// <param name="revoked">The requires of the manifest a revocation revokes; null for a build.</param>
     private static List<string> RequiredCapabilities(
-        PipelineArtifact pipeline, IReadOnlyList<ExperimentPlacement> experiments, SourceBindingArtifact bindings, IReadOnlyList<ExperimentPlacement> removed)
+        PipelineArtifact pipeline, IReadOnlyList<ExperimentPlacement> experiments, SourceBindingArtifact bindings, IReadOnlyList<ExperimentPlacement> removed,
+        IReadOnlyList<string>? revoked)
     {
         var required = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var (_, node) in pipeline.Nodes)
@@ -446,9 +448,15 @@ public static class ManifestBuilder
             excluded.ExceptWith(named);
         }
 
+        // A revocation requires no binding type the manifest it revokes did not: what an earlier stop freed stays free, as
+        // the bindings artifact still lists it (review 42: a second stop required again the client the first one freed).
+        HashSet<string>? before = revoked is null ? null : new HashSet<string>(revoked, StringComparer.Ordinal);
         foreach (var type in bindings.RequiredTypes(excluded))
         {
-            required.Add(type);
+            if (before is null || before.Contains(type))
+            {
+                required.Add(type);
+            }
         }
 
         required.Add(Expressions.ExpressionCompiler.FunctionSetCapability);
