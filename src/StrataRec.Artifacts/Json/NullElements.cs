@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 
 namespace StrataRec.Artifacts.Json;
@@ -21,8 +22,9 @@ namespace StrataRec.Artifacts.Json;
 /// a set that dropped or reordered items; review 46), and no code of the bound object runs (a computed property returning
 /// <c>this</c> recursed; review 45). Element nullability comes from the member's annotations, so a model member added
 /// later is checked without being listed; at the root, and where annotations are unknown, a null element is let
-/// through (a patch's null deletes). A polymorphic object is walked as the type its discriminator names; a member with
-/// its own converter, or a type the serializer does not read as an object, list or map, is not walked into.
+/// through (a patch's null deletes). A polymorphic object is walked as the type its discriminator names, a present
+/// <c>Nullable&lt;T&gt;</c> as its <c>T</c>; a member the serializer does not read (ignored, computed), a member with its
+/// own converter, or a type the serializer does not read as an object, list or map, is not walked into (review 47).
 /// </para>
 /// <para>
 /// Runs when a document or a config is bound, and only when the document has a null at all; members are looked up once
@@ -39,13 +41,16 @@ internal static class NullElements
         null => true,
         JsonObject o => AnyNullIn(o),
         JsonArray a => AnyNullIn(a),
+        // A value can hold a CLR list or object (JsonValue.Create(array)), written as JSON that may have a null: the
+        // same JSON is checked however the tree was built (review 47).
+        JsonValue v => v.GetValueKind() is JsonValueKind.Null or JsonValueKind.Array or JsonValueKind.Object,
         _ => false,
     };
 
     /// <param name="document">The document bound.</param>
     /// <param name="type">The type it was bound to.</param>
     public static JsonBindingError? Find(JsonElement document, Type type, JsonSerializerOptions options) =>
-        Walk(document, options.GetTypeInfo(type), declared: null, [], options);
+        Walk(document, options.GetTypeInfo(Nullable.GetUnderlyingType(type) ?? type), declared: null, [], options);
 
     private static bool AnyNullIn(JsonObject o)
     {
@@ -86,8 +91,8 @@ internal static class NullElements
                     if (members.Named.TryGetValue(property.Name, out var member))
                     {
                         // A null member is the serializer's to reject (or allowed); a member with its own converter has
-                        // its own shape.
-                        if (property.Value.ValueKind != JsonValueKind.Null && member.Property.CustomConverter is null
+                        // its own shape; one the serializer does not read (ignored, computed) is skipped, as it skips it.
+                        if (member.Read && property.Value.ValueKind != JsonValueKind.Null && member.Property.CustomConverter is null
                             && Into(property.Value, member.Property.PropertyType, member.Nullability, path, new Step(property.Name, false), options) is { } error)
                         {
                             return error;
@@ -106,9 +111,9 @@ internal static class NullElements
 
                 return null;
             case JsonTypeInfoKind.Enumerable when value.ValueKind == JsonValueKind.Array && info.ElementType is { } itemType:
-                if (itemType is { IsValueType: true } && Nullable.GetUnderlyingType(itemType) is null && options.GetTypeInfo(itemType).Kind == JsonTypeInfoKind.None)
+                if ((Nullable.GetUnderlyingType(itemType) ?? itemType) is { IsValueType: true } plain && options.GetTypeInfo(plain).Kind == JsonTypeInfoKind.None)
                 {
-                    return null; // numbers, booleans, enums: none can be null, and nothing to walk into
+                    return null; // numbers, booleans, enums, with or without ?: a null is the serializer's, and nothing to walk into
                 }
 
                 var item = declared?.ElementType ?? (declared?.GenericTypeArguments is { Length: 1 } single ? single[0] : null);
@@ -142,7 +147,9 @@ internal static class NullElements
 
     private static JsonBindingError? Into(JsonElement value, Type type, NullabilityInfo? declared, List<Step> path, Step step, JsonSerializerOptions options)
     {
-        var info = options.GetTypeInfo(type);
+        // A present Nullable<T> is read as its T (its own type info is opaque). The annotations of a T? already describe
+        // T's type arguments.
+        var info = options.GetTypeInfo(Nullable.GetUnderlyingType(type) ?? type);
         if (info.Kind == JsonTypeInfoKind.None)
         {
             return null;
@@ -230,13 +237,21 @@ internal static class NullElements
             {
                 foreach (var property in info.Properties)
                 {
-                    var nullability = property.AttributeProvider switch
+                    // The document is read into a constructor parameter, when there is one: its annotations are the
+                    // contract (a constructor may take nulls and drop them).
+                    var parameter = property.AssociatedParameter?.AttributeProvider as ParameterInfo;
+                    var nullability = parameter is not null ? context.Create(parameter) : property.AttributeProvider switch
                     {
                         PropertyInfo p => context.Create(p),
                         FieldInfo f => context.Create(f),
                         _ => null,
                     };
-                    var member = new Member(property, nullability);
+
+                    // What the serializer fills: through a setter, a constructor parameter, or the getter's object when
+                    // it populates. An ignored member has no accessors; a computed one only a getter.
+                    var read = parameter is not null || property.Set is not null || (property.Get is not null
+                        && (property.ObjectCreationHandling ?? info.PreferredPropertyObjectCreationHandling ?? options.PreferredObjectCreationHandling) == JsonObjectCreationHandling.Populate);
+                    var member = new Member(property, nullability, read);
                     if (property.IsExtensionData)
                     {
                         extension = member;
@@ -252,5 +267,6 @@ internal static class NullElements
         }
     }
 
-    private sealed record Member(JsonPropertyInfo Property, NullabilityInfo? Nullability);
+    /// <param name="Read">Whether the serializer reads the member's value from the document.</param>
+    private sealed record Member(JsonPropertyInfo Property, NullabilityInfo? Nullability, bool Read);
 }

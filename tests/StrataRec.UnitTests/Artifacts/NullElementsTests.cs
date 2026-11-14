@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -8,7 +9,8 @@ namespace StrataRec.UnitTests.Artifacts;
 
 /// <summary>
 /// A null element where the model says a value is required is a binding error at the element's own pointer, for any
-/// config an extension binds; what the document did not write (a computed property) is not walked (review 45).
+/// config an extension binds; what the document did not write (a computed property) is not walked (review 45), nor what the
+/// serializer does not read (review 47).
 /// </summary>
 public sealed class NullElementsTests
 {
@@ -44,6 +46,47 @@ public sealed class NullElementsTests
     [InlineData("""{ "by_tag": { "only:one": [null] } }""", "/by_tag/only:one/0", "Item 0 of 'only:one' must be a string, got null.")] // a key converter: not written as a value
     public void TheErrorIsAtTheElementAsTheDocumentSpellsIt(string json, string pointer, string message) =>
         AssertBinds<Collections>(json, pointer, message);
+
+    [Theory]
+    // Review 47: only what the serializer reads is checked. An ignored member and a computed one are skipped (the
+    // document's value is not read); one populated, or filled through a constructor parameter, is read.
+    [InlineData("""{ "ignored": [null] }""", null, null)]
+    [InlineData("""{ "computed": [null] }""", null, null)]
+    [InlineData("""{ "populated": [null] }""", "/populated/0", "Item 0 of 'populated' must be a string, got null.")]
+    // A present Nullable<T> is read as its T: its members and elements are checked; a null one is allowed.
+    [InlineData("""{ "held": { "items": [null] } }""", "/held/items/0", "Item 0 of 'items' must be a string, got null.")]
+    [InlineData("""{ "held": null }""", null, null)]
+    [InlineData("""{ "helds": [{ "items": [null] }] }""", "/helds/0/items/0", "Item 0 of 'items' must be a string, got null.")]
+    [InlineData("""{ "helds": [null] }""", null, null)]
+    [InlineData("""{ "names": [null] }""", "/names/0", "Item 0 of 'names' must be a string, got null.")]
+    [InlineData("""{ "counts": [1, null] }""", null, null)]
+    public void WhatTheSerializerReads_IsChecked(string json, string? pointer, string? message) =>
+        AssertBinds<Contracts>(json, pointer, message);
+
+    [Theory]
+    // A member filled through a constructor parameter follows the parameter's annotations: the document is read into it.
+    [InlineData(typeof(FilteringConstructor), null)]
+    [InlineData(typeof(PlainConstructor), "/items/0")]
+    public void AConstructorParameter_IsTheContract(Type type, string? pointer) =>
+        Assert.Equal(pointer, NullElements.Find(JsonDocument.Parse("""{ "items": [null] }""").RootElement, type, ArtifactSerializer.Options)?.Pointer);
+
+    [Fact]
+    public void ANullableStructAtTheRoot_IsReadAsTheStruct()
+    {
+        var error = Assert.Throws<ArtifactFormatException>(() => ArtifactSerializer.Deserialize<Held?>("""{ "items": [null] }"""));
+
+        Assert.Equal("/items/0", error.Pointer);
+    }
+
+    [Fact]
+    public void AValueHoldingAList_IsCheckedAsTheListItWrites()
+    {
+        // The same JSON as { "set": ["a", null] }, built from a CLR array: one JsonValue, not a JsonArray.
+        var node = new JsonObject { ["set"] = JsonValue.Create(new string?[] { "a", null }) };
+
+        Assert.False(ArtifactSerializer.TryBind<Collections>(node, "the config", out _, out var error));
+        Assert.Equal("/set/1", error.Pointer);
+    }
 
     private static void AssertBinds<T>(string json, string? pointer, string? message)
         where T : class
@@ -117,4 +160,38 @@ public sealed class NullElementsTests
     }
 
     public record struct Pair(List<string> Items);
+
+    public readonly record struct Held(List<string> Items);
+
+    public sealed class Contracts
+    {
+        [JsonIgnore]
+        public List<string> Ignored { get; init; } = [];
+
+        public List<string> Computed => ["x"];
+
+        [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
+        public List<string> Populated { get; } = [];
+
+        public Held? Held { get; init; }
+
+        public Held?[] Helds { get; init; } = [];
+
+        public ImmutableArray<string>? Names { get; init; }
+
+        public int?[] Counts { get; init; } = [];
+    }
+
+    /// <summary>Its constructor takes nulls and drops them.</summary>
+    public sealed class FilteringConstructor(List<string?> items)
+    {
+        public List<string> Items { get; } = Without(items);
+
+        private static List<string> Without(List<string?> items) => [.. items.Where(item => item is not null).Select(item => item!)];
+    }
+
+    public sealed class PlainConstructor(List<string> items)
+    {
+        public List<string> Items { get; } = items;
+    }
 }
