@@ -30,7 +30,7 @@ public sealed class ModelTensorReplayTests
         var recording = new TensorModels();
         var engine = Load(host, recording);
 
-        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-tensors", 1001, "home", ReplayTests.ControlArms));
+        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-tensors", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
 
         Assert.True(recorded.Succeeded, recorded.Error);
         var run = Assert.Single(recorded.Recording!.Runs);
@@ -42,7 +42,7 @@ public sealed class ModelTensorReplayTests
         // Through JSON, on a fresh engine whose model would answer differently: every output must come from the recording.
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording));
         var replaying = new TensorModels(bias: 1.0f);
-        var outcome = await Load(host, replaying).ReplayAsync(bundle);
+        var outcome = await Load(host, replaying).ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
 
         var report = outcome.Report;
         Assert.True(report.Diff.Identical, ReplayTests.Describe(report));

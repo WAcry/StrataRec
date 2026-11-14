@@ -329,12 +329,12 @@ public sealed class RunReplayTests
     [Fact]
     public void ResolvingAnExceptionType_NeverLoadsAnAssembly()
     {
-        // An assembly the test host can load by name (it ships next to the tests) but nothing here has loaded.
-        const string unloaded = "Microsoft.VisualStudio.CodeCoverage.Shim";
+        // An assembly the tests can load by name (a dependency, next to them) but nothing here loads: see the project file.
+        const string unloaded = "System.CommandLine";
         Assert.True(File.Exists(Path.Combine(AppContext.BaseDirectory, unloaded + ".dll")));
         Assert.DoesNotContain(AppDomain.CurrentDomain.GetAssemblies(), a => a.GetName().Name == unloaded);
 
-        var thrown = Replayed(new ReplayTypeIdentity { Name = "Microsoft.CodeCoverage.ShimException", Assembly = unloaded });
+        var thrown = Replayed(new ReplayTypeIdentity { Name = "System.CommandLine.CommandLineException", Assembly = unloaded });
 
         Assert.IsType<ReplayedCallException>(thrown);
         Assert.DoesNotContain(AppDomain.CurrentDomain.GetAssemblies(), a => a.GetName().Name == unloaded);

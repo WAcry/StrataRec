@@ -24,7 +24,8 @@ public sealed class TopKInt64Tests
               "output": { "limit_param": "k", "columns": { "source": "col.recall.primary_source" } } }
             """, files: files);
 
-        var result = await new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest { RequestId = "r", Inputs = new RequestInputs(), Deadline = TimeSpan.FromSeconds(5) });
+        var result = await new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest { RequestId = "r", Inputs = new RequestInputs(), Deadline = TimeSpan.FromSeconds(5) },
+            TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal(expected, result.Items.Select(i => i.Id.Int64Value));

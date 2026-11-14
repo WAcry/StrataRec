@@ -61,7 +61,8 @@ public sealed class RunOutputTests : IDisposable
         var output = new StringWriter();
         var error = new StringWriter();
 
-        var validated = await StrataRecCommandLine.InvokeAsync(["validate", "-c", HomeFeedTestHost.SampleRoot(), "--format", "json"], Tool.Environment, output, error);
+        var validated = await StrataRecCommandLine.InvokeAsync(["validate", "-c", HomeFeedTestHost.SampleRoot(), "--format", "json"], Tool.Environment, output, error,
+            TestContext.Current.CancellationToken);
         Assert.Equal(0, validated);
         using (var report = JsonDocument.Parse(output.ToString()))
         {
@@ -69,13 +70,13 @@ public sealed class RunOutputTests : IDisposable
         }
 
         output.GetStringBuilder().Clear();
-        var unknown = await StrataRecCommandLine.InvokeAsync(["schema", "operator", "Nope@1"], Tool.Environment, output, error);
+        var unknown = await StrataRecCommandLine.InvokeAsync(["schema", "operator", "Nope@1"], Tool.Environment, output, error, TestContext.Current.CancellationToken);
         Assert.Equal(2, unknown);
         Assert.Contains("Unknown operator 'Nope@1'", error.ToString(), StringComparison.Ordinal);
         Assert.Equal(string.Empty, output.ToString());
 
         // The operators of the environment it was given: the stock tool's include StrataRec.Llm's.
-        var listed = await StrataRecCommandLine.InvokeAsync(["operators", "--format", "json"], Tool.Environment, output, error);
+        var listed = await StrataRecCommandLine.InvokeAsync(["operators", "--format", "json"], Tool.Environment, output, error, TestContext.Current.CancellationToken);
         Assert.Equal(0, listed);
         using var operators = JsonDocument.Parse(output.ToString());
         Assert.Contains(operators.RootElement.GetProperty("operators").EnumerateArray(), o => o.GetProperty("id").GetString() == "LlmReranker@1");

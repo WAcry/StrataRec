@@ -41,19 +41,19 @@ public sealed class RevokeCommandTests
 
         // A node serves it, ignoring the platform's arm of the revoked experiment, and refuses the manifest before it.
         await using var engine = new RecEngine(CommonOptions.ForRoot(Tool.Environment, root));
-        var loaded = await engine.LoadManifestAsync(revocation, revocationId, blobs);
+        var loaded = await engine.LoadManifestAsync(revocation, revocationId, blobs, TestContext.Current.CancellationToken);
         Assert.True(loaded.Applied, loaded.Reason);
         var request = ReplayTests.Request("req-revoked", 1001, "home", null);
         var result = await engine.ExecuteAsync(new RecRequest
         {
             PipelineId = request.PipelineId, RequestId = request.RequestId, Inputs = request.Inputs, Deadline = request.Deadline, TimeMs = request.TimeMs,
             Assignment = ["exp_mmr_diversity/mmr", "exp_quality_weight/strong"],
-        });
+        }, TestContext.Current.CancellationToken);
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal(revocationId, result.ManifestId);
         Assert.Equal(["exp_quality_weight/strong"], result.Experiments.Assigned);
         Assert.Equal("exp_mmr_diversity/mmr", Assert.Single(result.Experiments.Ignored).Id);
-        Assert.Equal(ManifestLoadStatus.Revoked, (await engine.LoadManifestAsync(firstManifest, first, blobs)).Status);
+        Assert.Equal(ManifestLoadStatus.Revoked, (await engine.LoadManifestAsync(firstManifest, first, blobs, TestContext.Current.CancellationToken)).Status);
 
         // Again: nothing changes, and it succeeds, so a stop can be retried.
         (code, output, errors) = await Revoke(store, "exp_mmr_diversity");
@@ -95,11 +95,12 @@ public sealed class RevokeCommandTests
         Assert.Contains("hint: it releases exp_freshness_calibration, exp_mmr_diversity, exp_quality_weight", errors);
 
         // Usage errors.
-        Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(["revoke", "-s", store, "exp_mmr_diversity"], Tool.Environment, TextWriter.Null, TextWriter.Null));
-        Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(["revoke", "-s", store, "-p", "home_feed"], Tool.Environment, TextWriter.Null, TextWriter.Null));
+        Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(["revoke", "-s", store, "exp_mmr_diversity"], Tool.Environment, TextWriter.Null, TextWriter.Null,
+            TestContext.Current.CancellationToken));
+        Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(["revoke", "-s", store, "-p", "home_feed"], Tool.Environment, TextWriter.Null, TextWriter.Null, TestContext.Current.CancellationToken));
         var usage = new StringWriter();
         Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(["revoke", "-s", store, "-p", "home_feed", "-e", "../x", "exp_mmr_diversity"], Tool.Environment,
-            TextWriter.Null, usage));
+            TextWriter.Null, usage, TestContext.Current.CancellationToken));
         Assert.Contains("error POINTER_NAME_INVALID --env", usage.ToString());
     }
 
@@ -179,8 +180,8 @@ public sealed class RevokeCommandTests
         Assert.Equal(0, (await Revoke(store, "exp_mmr_diversity")).Code);
         var revocation = await Pointer(store);
         var pointers = new FileSystemManifestSource(store);
-        await pointers.WritePointerAsync("home_feed", "prod", first); // another environment, and one pointer that cannot be read
-        await pointers.WritePointerAsync("other_feed", "prod", first);
+        await pointers.WritePointerAsync("home_feed", "prod", first, TestContext.Current.CancellationToken); // another environment, and one pointer that cannot be read
+        await pointers.WritePointerAsync("other_feed", "prod", first, TestContext.Current.CancellationToken);
 
         (code, output, errors) = await Status(store);
         Assert.Equal(1, code);
@@ -299,17 +300,17 @@ public sealed class RevokeCommandTests
         var first = await ReadAsync(blobs, await BuildAndPublishAsync(root, store));
 
         // The bindings gain a model of a new client type, and one arm of exp_quality_weight names it.
-        var bindings = (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(blobs.GetBlobPath(first.Artifacts.Bindings)))!;
+        var bindings = (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(blobs.GetBlobPath(first.Artifacts.Bindings), TestContext.Current.CancellationToken))!;
         ((System.Text.Json.Nodes.JsonObject)bindings["models"]!)["future_model"] = new System.Text.Json.Nodes.JsonObject { ["client"] = "future_client@1" };
         ((System.Text.Json.Nodes.JsonObject)bindings["models"]!)["implicit_model"] = new System.Text.Json.Nodes.JsonObject { ["client"] = "implicit_client@1" };
         var experiment = (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(
-            await File.ReadAllTextAsync(blobs.GetBlobPath(first.Experiments["exp_quality_weight"].Artifact)))!;
+            await File.ReadAllTextAsync(blobs.GetBlobPath(first.Experiments["exp_quality_weight"].Artifact), TestContext.Current.CancellationToken))!;
         var arm = (System.Text.Json.Nodes.JsonObject)((System.Text.Json.Nodes.JsonObject)experiment["arms"]!)["strong"]!;
         arm["params"] ??= new System.Text.Json.Nodes.JsonObject();
         ((System.Text.Json.Nodes.JsonObject)arm["params"]!)["ranker_model"] = "future_model";
         var experiments = new Dictionary<string, ManifestExperiment>(first.Experiments)
         {
-            ["exp_quality_weight"] = new() { Artifact = await blobs.PutAsync(experiment), Layer = first.Experiments["exp_quality_weight"].Layer },
+            ["exp_quality_weight"] = new() { Artifact = await blobs.PutAsync(experiment, TestContext.Current.CancellationToken), Layer = first.Experiments["exp_quality_weight"].Layer },
         };
         var manifest = new ReleaseManifest
         {
@@ -317,7 +318,7 @@ public sealed class RevokeCommandTests
             Requires = [.. first.Requires, "future_client@1", "implicit_client@1"],
             Artifacts = new ManifestArtifacts
             {
-                Pipeline = first.Artifacts.Pipeline, Catalog = first.Artifacts.Catalog, Bindings = await blobs.PutAsync(bindings), Tables = first.Artifacts.Tables,
+                Pipeline = first.Artifacts.Pipeline, Catalog = first.Artifacts.Catalog, Bindings = await blobs.PutAsync(bindings, TestContext.Current.CancellationToken), Tables = first.Artifacts.Tables,
                 Policy = first.Artifacts.Policy,
             },
             Experiments = experiments,
@@ -325,8 +326,8 @@ public sealed class RevokeCommandTests
         var id = await ManifestStores.PutAsync(store, manifest);
 
         var diagnostics = new DiagnosticBag();
-        var withoutQuality = await ManifestBuilder.RevokeAsync(manifest, id, ["exp_quality_weight"], blobs, diagnostics);
-        var withoutMmr = await ManifestBuilder.RevokeAsync(manifest, id, ["exp_mmr_diversity"], blobs, diagnostics);
+        var withoutQuality = await ManifestBuilder.RevokeAsync(manifest, id, ["exp_quality_weight"], blobs, diagnostics, TestContext.Current.CancellationToken);
+        var withoutMmr = await ManifestBuilder.RevokeAsync(manifest, id, ["exp_mmr_diversity"], blobs, diagnostics, TestContext.Current.CancellationToken);
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
         Assert.DoesNotContain("future_client@1", withoutQuality!.Requires);
         Assert.Contains("linear@1", withoutQuality.Requires); // the baseline's model still is
@@ -341,11 +342,11 @@ public sealed class RevokeCommandTests
             Experiments = withoutQuality.Experiments,
         };
         await using var engine = new RecEngine(CommonOptions.ForRoot(Tool.Environment, root));
-        var loaded = await engine.LoadManifestAsync(withoutImplicit, await ManifestStores.PutAsync(store, withoutImplicit), blobs);
+        var loaded = await engine.LoadManifestAsync(withoutImplicit, await ManifestStores.PutAsync(store, withoutImplicit), blobs, TestContext.Current.CancellationToken);
         Assert.True(loaded.Applied, loaded.Reason);
 
         // A second stop does not require again what the first freed: the bindings artifact still lists it (review 42).
-        var second = await ManifestBuilder.RevokeAsync(withoutQuality, await ManifestStores.PutAsync(store, withoutQuality), ["exp_mmr_diversity"], blobs, diagnostics);
+        var second = await ManifestBuilder.RevokeAsync(withoutQuality, await ManifestStores.PutAsync(store, withoutQuality), ["exp_mmr_diversity"], blobs, diagnostics, TestContext.Current.CancellationToken);
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
         Assert.DoesNotContain("future_client@1", second!.Requires);
         Assert.DoesNotContain("MmrDiversifier@1", second.Requires);
@@ -375,7 +376,7 @@ public sealed class RevokeCommandTests
             PipelineId = firstManifest.PipelineId, Environment = firstManifest.Environment, Seq = 3, MinAcceptedSeq = 3, Previous = revocation,
             Requires = firstManifest.Requires, Artifacts = firstManifest.Artifacts, Experiments = firstManifest.Experiments,
         }).ToJsonString());
-        Assert.Equal(0, await StrataRecCommandLine.InvokeAsync(["publish", "-s", store, back], Tool.Environment, TextWriter.Null, TextWriter.Null));
+        Assert.Equal(0, await StrataRecCommandLine.InvokeAsync(["publish", "-s", store, back], Tool.Environment, TextWriter.Null, TextWriter.Null, TestContext.Current.CancellationToken));
         var (code, errors) = await Build(root, store);
         Assert.True(code == 0, errors);
         Assert.Contains(": unchanged, the release the pointer names has this configuration", errors);

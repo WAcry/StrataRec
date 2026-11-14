@@ -137,7 +137,7 @@ public class FeatureRuntimeReviewRegressionTests
         var writerScore = writer.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "shared");
         writer.Build();
         await writer.NewRequest([1, 2, 3]).EnsureAsync(writerScore);
-        await store.WhenWrittenAsync(3).WaitAsync(TimeSpan.FromSeconds(10)); // never written while the chunk count overflowed
+        await store.WhenWrittenAsync(3).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken); // never written while the chunk count overflowed
 
         var connector = ScriptedConnector.Values((key, _) => key * 1.5);
         var reader = new FeatureTestRig().CacheSource("shared", connector, distributed: store, maxBatch: int.MaxValue); // an empty table
@@ -523,7 +523,7 @@ public class FeatureRuntimeReviewRegressionTests
         var request = rig.NewRequest(TwoItems, userId: 7);
 
         request.Fetcher.StartContextFetch(new[] { score }, CancellationToken.None);
-        var result = await request.EnsureAsync(score).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        var result = await request.EnsureAsync(score).AsTask().WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         Assert.True(result.Failed);
         release.SetResult();

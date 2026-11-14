@@ -4,7 +4,6 @@ using StrataRec.Core.Columns;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
-using Xunit.Abstractions;
 
 namespace StrataRec.UnitTests.Expressions;
 

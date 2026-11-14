@@ -43,7 +43,7 @@ public sealed class BoundedWaitTests
         using var events = new RequestEventLog(logs.CreateLogger("events"), autoFlush: false, heldAfter: TimeSpan.Zero);
         var engine = Engine(host, pool, models: models, events: events);
 
-        var result = await engine.ExecuteAsync(Request("req-node-timeout")).AsTask().WaitAsync(Patience);
+        var result = await engine.ExecuteAsync(Request("req-node-timeout"), TestContext.Current.CancellationToken).AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         // Returned with the gate closed: the request did not wait for the model.
         Assert.True(result.Succeeded, result.Error);
@@ -66,7 +66,7 @@ public sealed class BoundedWaitTests
 
         // The model answers late, writing its outputs into buffers still rented, and only then lets go of the memory.
         models.Open();
-        Assert.True((await models.Answered.Task.WaitAsync(Patience)).Succeeded);
+        Assert.True((await models.Answered.Task.WaitAsync(Patience, TestContext.Current.CancellationToken)).Succeeded);
         Assert.True(SpinWait.SpinUntil(() => pool.Returned > 0, Patience));
         Assert.Empty(run.ModelCalls[0].Outputs);
 
@@ -84,7 +84,7 @@ public sealed class BoundedWaitTests
         var pool = new CountingPool();
         var engine = Engine(host, pool, models: models);
 
-        var result = await engine.ExecuteAsync(Request("req-deadline", deadlineMs: 1_000)).AsTask().WaitAsync(Patience);
+        var result = await engine.ExecuteAsync(Request("req-deadline", deadlineMs: 1_000), TestContext.Current.CancellationToken).AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
         Assert.StartsWith("node 'ctr_ranker' failed: timed out after ", result.Error);
@@ -93,7 +93,7 @@ public sealed class BoundedWaitTests
         Assert.Equal(0, pool.Returned);
 
         models.Open();
-        Assert.True((await models.Answered.Task.WaitAsync(Patience)).Succeeded);
+        Assert.True((await models.Answered.Task.WaitAsync(Patience, TestContext.Current.CancellationToken)).Succeeded);
         Assert.True(SpinWait.SpinUntil(() => pool.Returned > 0, Patience));
     }
 
@@ -110,10 +110,10 @@ public sealed class BoundedWaitTests
         using var cancel = new CancellationTokenSource();
 
         var running = engine.ExecuteAsync(Request("req-caller", onRecording: bundle => delivered = bundle), cancel.Token).AsTask();
-        await models.Started.Task.WaitAsync(Patience);
+        await models.Started.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         cancel.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(Patience));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(Patience, TestContext.Current.CancellationToken));
         Assert.False(models.Answered.Task.IsCompleted);
         Assert.Equal("cancelled", Assert.Single(delivered!.Runs[0].ModelCalls).Status);
         Assert.Empty(capture.Of(StrataRecMetrics.Names.ModelErrors)); // the caller giving up is not the model's fault
@@ -122,7 +122,7 @@ public sealed class BoundedWaitTests
         Assert.Equal(0, pool.Returned);
 
         models.Open();
-        Assert.True((await models.Answered.Task.WaitAsync(Patience)).Succeeded);
+        Assert.True((await models.Answered.Task.WaitAsync(Patience, TestContext.Current.CancellationToken)).Succeeded);
         Assert.True(SpinWait.SpinUntil(() => pool.Returned > 0, Patience));
         Assert.Equal("cancelled", delivered.Runs[0].ModelCalls[0].Status);
     }
@@ -131,7 +131,7 @@ public sealed class BoundedWaitTests
     public async Task ASourceIgnoringCancellation_IsCutOffAtItsOwnTimeout_AndNothingItAddedIsRead()
     {
         // What recall appends when popular answers, for comparison: popular adds rows two_tower does not have.
-        var baseline = await Engine(HomeFeedTestHost.Load(), new CountingPool()).ExecuteAsync(Request("req-source-baseline"));
+        var baseline = await Engine(HomeFeedTestHost.Load(), new CountingPool()).ExecuteAsync(Request("req-source-baseline"), TestContext.Current.CancellationToken);
         var twoTower = baseline.Recording!.Runs[0].CandidateCalls.Single(c => c.Source == "two_tower").Ids!.Value.EnumerateArray()
             .Select(id => id.GetInt64()).Distinct().Count();
         Assert.True(baseline.Trace!.Single(n => n.NodeId == "recall").RowsOut > twoTower);
@@ -143,7 +143,7 @@ public sealed class BoundedWaitTests
         var pool = new CountingPool();
         var engine = Engine(host, pool, sources: sources);
 
-        var result = await engine.ExecuteAsync(Request("req-source-timeout")).AsTask().WaitAsync(Patience);
+        var result = await engine.ExecuteAsync(Request("req-source-timeout"), TestContext.Current.CancellationToken).AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         Assert.False(sources.Answered.Task.IsCompleted);
@@ -162,7 +162,7 @@ public sealed class BoundedWaitTests
 
         // It answers late, adding its candidates again into the closed buffer, and then lets go of the memory.
         sources.Open();
-        Assert.True((await sources.Answered.Task.WaitAsync(Patience)).Succeeded);
+        Assert.True((await sources.Answered.Task.WaitAsync(Patience, TestContext.Current.CancellationToken)).Succeeded);
         Assert.True(SpinWait.SpinUntil(() => pool.Returned > 0, Patience));
 
         await AssertReplaysAtOnce(engine, result.Recording, "recall", "degraded", recall.Detail);
@@ -175,7 +175,7 @@ public sealed class BoundedWaitTests
         // the call's bound (the node's deadline): it is not heard, so the call is a timeout as the request saw it.
         var engine = Engine(HomeFeedTestHost.Load(SampleTiming.AsWritten), new CountingPool(), models: new LateModels());
 
-        var result = await engine.ExecuteAsync(Request("req-late")).AsTask().WaitAsync(Patience);
+        var result = await engine.ExecuteAsync(Request("req-late"), TestContext.Current.CancellationToken).AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         var ranker = result.Trace!.Single(n => n.NodeId == "ctr_ranker");
@@ -187,7 +187,7 @@ public sealed class BoundedWaitTests
         Assert.Equal(ReplayTiming.TimedOut, run.Nodes.Single(n => n.Node == "ctr_ranker").Attempts[0].Timing);
 
         // Served exactly as when the model fails outright.
-        var failed = await Engine(HomeFeedTestHost.LoadModified(MetricsTests.FailModel), new CountingPool()).ExecuteAsync(Request("req-late"));
+        var failed = await Engine(HomeFeedTestHost.LoadModified(MetricsTests.FailModel), new CountingPool()).ExecuteAsync(Request("req-late"), TestContext.Current.CancellationToken);
         LiveRunAssert.SameNodeOutcomes(failed, result, "ctr_ranker");
         Assert.Equal(Items(failed), Items(result));
 

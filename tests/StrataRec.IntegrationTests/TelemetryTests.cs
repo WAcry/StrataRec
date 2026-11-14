@@ -35,7 +35,7 @@ public sealed class MetricsTests
         var (engine, plan) = LoadEngine(HomeFeedTestHost.Load());
 
         var watch = Stopwatch.StartNew();
-        var result = await engine.ExecuteAsync(Request("req-metrics"));
+        var result = await engine.ExecuteAsync(Request("req-metrics"), TestContext.Current.CancellationToken);
         watch.Stop();
 
         Assert.True(result.Succeeded, result.Error);
@@ -134,7 +134,7 @@ public sealed class MetricsTests
             Inputs = HomeFeedTestHost.Inputs(1001, "home"),
             Assignment = new[] { "exp_ramped_early/t", "exp_mmr_diversity/mmr", "exp_mmr_diversity/control", "exp_quality_weight/strong" },
             Deadline = HomeFeedTestHost.Deadline,
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         AssertTagRules(capture.Measurements);
@@ -161,7 +161,7 @@ public sealed class MetricsTests
             Assignment = new[] { "exp_ramped_early/t", "exp_mmr_diversity/mmr", "exp_mmr_diversity/control", "exp_quality_weight/strong" },
             Deadline = TimeSpan.Zero,
             Debug = new DebugOptions { Record = true },
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
         Assert.Contains("assignment took the whole budget", result.Error);
@@ -200,7 +200,7 @@ public sealed class MetricsTests
             Assignment = new[] { "exp_quality_weight/strong" },
             Deadline = HomeFeedTestHost.Deadline,
             Debug = new DebugOptions { ForceArms = new[] { "exp_nope/t" } },
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Experiments.Assigned);
@@ -214,7 +214,7 @@ public sealed class MetricsTests
         using var capture = new MetricCapture();
         var (engine, _) = LoadEngine(HomeFeedTestHost.LoadModified(FailAuthorStore));
 
-        var result = await engine.ExecuteAsync(Request("req-degraded"));
+        var result = await engine.ExecuteAsync(Request("req-degraded"), TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         AssertTagRules(capture.Measurements);
@@ -265,7 +265,7 @@ public sealed class MetricsTests
         {
             var (engine, _) = LoadEngine(HomeFeedTestHost.LoadModified(root => SlowDown(root, slow, tightTimeout: true)));
 
-            await engine.ExecuteAsync(Request("req-timeout"));
+            await engine.ExecuteAsync(Request("req-timeout"), TestContext.Current.CancellationToken);
 
             var errors = slow == "model"
                 ? capture.Of(StrataRecMetrics.Names.ModelErrors)
@@ -294,7 +294,7 @@ public sealed class MetricsTests
         var engine = new RecEngine(environment);
         Assert.True(engine.Load(host.Request).Applied);
 
-        await engine.ExecuteAsync(Request("req-client-timeout"));
+        await engine.ExecuteAsync(Request("req-client-timeout"), TestContext.Current.CancellationToken);
 
         var errors = client == "model"
             ? capture.Of(StrataRecMetrics.Names.ModelErrors)
@@ -359,8 +359,8 @@ public sealed class MetricsTests
         var sink = new InMemoryLogSink();
         await using (var logs = new LogPipeline(sink, producerId: "test/1"))
         {
-            await new PipelineExecutor(logs: logs).ExecuteAsync(plan, HomeFeedTestHost.NewRequest());
-            await logs.FlushAsync();
+            await new PipelineExecutor(logs: logs).ExecuteAsync(plan, HomeFeedTestHost.NewRequest(), TestContext.Current.CancellationToken);
+            await logs.FlushAsync(TestContext.Current.CancellationToken);
         }
 
         AssertTagRules(capture.Measurements);
@@ -470,7 +470,7 @@ public sealed class TracingTests
         ActivitySource.AddActivityListener(listener);
         var (engine, plan) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
 
-        var result = await engine.ExecuteAsync(MetricsTests.Request("req-traced"));
+        var result = await engine.ExecuteAsync(MetricsTests.Request("req-traced"), TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         var spans = stopped.ToList();
@@ -512,7 +512,7 @@ public sealed class TracingTests
         // A request the sampler drops gets its (unrecorded) request span and nothing else.
         record = false;
         started.Clear();
-        var dropped = await engine.ExecuteAsync(MetricsTests.Request("req-sampled-out"));
+        var dropped = await engine.ExecuteAsync(MetricsTests.Request("req-sampled-out"), TestContext.Current.CancellationToken);
 
         Assert.True(dropped.Succeeded, dropped.Error);
         var only = Assert.Single(started);
@@ -537,7 +537,7 @@ public sealed class TracingTests
         });
         var (engine, plan) = MetricsTests.LoadEngine(host);
 
-        var result = await engine.ExecuteAsync(MetricsTests.Request("req-fallback-arm"));
+        var result = await engine.ExecuteAsync(MetricsTests.Request("req-fallback-arm"), TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Contains("exp_quality_weight", result.Experiments.Triggered);
@@ -606,7 +606,7 @@ public sealed class EventLogTests
 
         for (var i = 0; i < 50; i++)
         {
-            var result = await executor.ExecuteAsync(plan, Request(i));
+            var result = await executor.ExecuteAsync(plan, Request(i), TestContext.Current.CancellationToken);
             Assert.True(result.Succeeded, result.Error); // served by ctr_backup
         }
 
@@ -630,7 +630,7 @@ public sealed class EventLogTests
         // The next window: one more summary per pair, and no new health line while the source keeps failing.
         for (var i = 50; i < 80; i++)
         {
-            await executor.ExecuteAsync(plan, Request(i));
+            await executor.ExecuteAsync(plan, Request(i), TestContext.Current.CancellationToken);
         }
 
         logging.Entries.Clear();

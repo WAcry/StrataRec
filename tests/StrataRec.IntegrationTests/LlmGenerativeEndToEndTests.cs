@@ -35,7 +35,7 @@ public sealed class LlmGenerativeEndToEndTests
         var host = HomeFeedTestHost.LoadModified(root => AddLlm(root, Ids, Reason));
         using var metrics = new MetricCapture();
 
-        var recorded = await NewEngine(host).ExecuteAsync(ReplayTests.Request("req-llm-gen", 1001, "home", ReplayTests.ControlArms));
+        var recorded = await NewEngine(host).ExecuteAsync(ReplayTests.Request("req-llm-gen", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
 
         Assert.True(recorded.Succeeded, recorded.Error);
         var items = recorded.Items.ToDictionary(i => i.Id.Int64Value);
@@ -61,7 +61,7 @@ public sealed class LlmGenerativeEndToEndTests
         // Through JSON, on a fresh engine whose stand-ins answer otherwise: the texts must come from the recording.
         metrics.Measurements.Clear();
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!));
-        var outcome = await NewEngine(HomeFeedTestHost.LoadModified(root => AddLlm(root, "[]", "Something else."))).ReplayAsync(bundle);
+        var outcome = await NewEngine(HomeFeedTestHost.LoadModified(root => AddLlm(root, "[]", "Something else."))).ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
 
         var report = outcome.Report;
         Assert.True(report.Diff.Identical, ReplayTests.Describe(report));
@@ -80,7 +80,7 @@ public sealed class LlmGenerativeEndToEndTests
     public async Task AfterTheAnnotatorsWindowChanges_EachEntityReplaysItsOwnAnnotation()
     {
         var recorded = await NewEngine(HomeFeedTestHost.LoadModified(root => AddLlm(root, Ids, Reason)))
-            .ExecuteAsync(ReplayTests.Request("req-llm-window", 1001, "home", ReplayTests.ControlArms));
+            .ExecuteAsync(ReplayTests.Request("req-llm-window", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         Assert.True(recorded.Succeeded, recorded.Error);
         var modified = HomeFeedTestHost.LoadModified(root =>
         {
@@ -88,7 +88,7 @@ public sealed class LlmGenerativeEndToEndTests
             ReplayTests.Edit(root, Pipeline, "\"column\": \"llm.reason\", \"window\": 3", "\"column\": \"llm.reason\", \"window\": 5");
         });
 
-        var outcome = await NewEngine(modified).ReplayAsync(recorded.Recording!);
+        var outcome = await NewEngine(modified).ReplayAsync(recorded.Recording!, cancellationToken: TestContext.Current.CancellationToken);
 
         var report = outcome.Report;
         var replayed = outcome.Result.Items;
@@ -108,7 +108,7 @@ public sealed class LlmGenerativeEndToEndTests
     public async Task AfterTheRetrieversPromptChanges_ItsCallIsNotRecorded_AndTheNodeIsSkipped()
     {
         var recorded = await NewEngine(HomeFeedTestHost.LoadModified(root => AddLlm(root, Ids, Reason)))
-            .ExecuteAsync(ReplayTests.Request("req-llm-prompt", 1001, "home", ReplayTests.ControlArms));
+            .ExecuteAsync(ReplayTests.Request("req-llm-prompt", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         Assert.True(recorded.Succeeded, recorded.Error);
         var modified = HomeFeedTestHost.LoadModified(root =>
         {
@@ -116,7 +116,7 @@ public sealed class LlmGenerativeEndToEndTests
             ReplayTests.Edit(root, Pipeline, "as a JSON array of item ids.", "as a JSON array of item ids, best first.");
         });
 
-        var outcome = await NewEngine(modified).ReplayAsync(recorded.Recording!);
+        var outcome = await NewEngine(modified).ReplayAsync(recorded.Recording!, cancellationToken: TestContext.Current.CancellationToken);
 
         var report = outcome.Report;
         Assert.True(outcome.Result.Succeeded, outcome.Result.Error); // on_failure: skip

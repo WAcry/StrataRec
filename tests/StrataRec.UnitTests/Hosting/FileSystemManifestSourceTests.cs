@@ -25,14 +25,14 @@ public sealed class FileSystemManifestSourceTests : IDisposable
     {
         var source = new FileSystemManifestSource(_root);
 
-        await source.WritePointerAsync("home_feed", "prod", IdA);
+        await source.WritePointerAsync("home_feed", "prod", IdA, TestContext.Current.CancellationToken);
         var path = Path.Combine(_root, "pointers", "prod", "home_feed.json");
         Assert.Equal(path, source.GetPointerPath("home_feed", "prod"));
         Assert.Equal($"{{ \"manifest\": \"{IdA}\" }}\n", File.ReadAllText(path));
         Assert.Equal(IdA, await source.GetManifestIdAsync("home_feed", "prod", CancellationToken.None));
         Assert.Null(await source.GetManifestIdAsync("home_feed", "staging", CancellationToken.None));
 
-        await source.WritePointerAsync("home_feed", "prod", IdB);
+        await source.WritePointerAsync("home_feed", "prod", IdB, TestContext.Current.CancellationToken);
         Assert.Equal(IdB, await source.GetManifestIdAsync("home_feed", "prod", CancellationToken.None));
         Assert.Equal(new[] { "home_feed.json" }, Directory.GetFiles(Path.GetDirectoryName(path)!).Select(Path.GetFileName)); // no temporary left
     }
@@ -85,7 +85,7 @@ public sealed class FileSystemManifestSourceTests : IDisposable
     {
         var source = new FileSystemManifestSource(_root);
 
-        await Assert.ThrowsAsync<ArgumentException>(() => source.WritePointerAsync("p", "e", "sha256:nope"));
+        await Assert.ThrowsAsync<ArgumentException>(() => source.WritePointerAsync("p", "e", "sha256:nope", TestContext.Current.CancellationToken));
         Assert.Null(await source.GetManifestIdAsync("p", "e", CancellationToken.None));
     }
 

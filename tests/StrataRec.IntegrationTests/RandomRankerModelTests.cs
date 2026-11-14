@@ -34,7 +34,7 @@ public sealed class RandomRankerModelTests
         var host = HomeFeedTestHost.LoadModified(root => AddRankers(root, PairBinding, ListBinding));
         var (engine, _) = MetricsTests.LoadEngine(host); // the signature checks pass against the stand-in
 
-        var recorded = await engine.ExecuteAsync(Request("req-random-rankers"));
+        var recorded = await engine.ExecuteAsync(Request("req-random-rankers"), TestContext.Current.CancellationToken);
 
         Assert.True(recorded.Succeeded, recorded.Error);
         var run = Assert.Single(recorded.Recording!.Runs);
@@ -57,8 +57,8 @@ public sealed class RandomRankerModelTests
         Assert.True(top.Take(6).Min(i => i.Listwise) >= top[6].Listwise);
 
         // The same request ranks the same; another request seed reranks the same window.
-        Assert.Equal(top, Ranked(await engine.ExecuteAsync(Request("req-random-rankers"))));
-        var reseeded = await engine.ExecuteAsync(Request("req-random-rankers-2"));
+        Assert.Equal(top, Ranked(await engine.ExecuteAsync(Request("req-random-rankers"), TestContext.Current.CancellationToken)));
+        var reseeded = await engine.ExecuteAsync(Request("req-random-rankers-2"), TestContext.Current.CancellationToken);
         Assert.NotEqual(recorded.Recording.Request.Seed, reseeded.Recording!.Request.Seed);
         var other = Ranked(reseeded);
         Assert.Equal(top.Take(8).Select(i => i.Id).Order(), other.Take(8).Select(i => i.Id).Order());
@@ -67,7 +67,7 @@ public sealed class RandomRankerModelTests
         // Through JSON, on a fresh engine.
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording));
         var (fresh, _) = MetricsTests.LoadEngine(host);
-        var outcome = await fresh.ReplayAsync(bundle);
+        var outcome = await fresh.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(outcome.Report.Diff.Identical, ReplayTests.Describe(outcome.Report));
         Assert.Equal(recorded.Items.Select(i => (i.Id.Int64Value, i.Rank)), outcome.Result.Items.Select(i => (i.Id.Int64Value, i.Rank)));

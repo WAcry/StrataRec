@@ -60,8 +60,8 @@ public sealed class HomeFeedEndToEndTests
         var plan = HomeFeedTestHost.Load().Plan();
         var executor = new PipelineExecutor();
 
-        var first = await executor.ExecuteAsync(plan, HomeFeedTestHost.NewRequest());
-        var second = await executor.ExecuteAsync(plan, HomeFeedTestHost.NewRequest());
+        var first = await executor.ExecuteAsync(plan, HomeFeedTestHost.NewRequest(), TestContext.Current.CancellationToken);
+        var second = await executor.ExecuteAsync(plan, HomeFeedTestHost.NewRequest(), TestContext.Current.CancellationToken);
 
         Assert.True(first.Succeeded, first.Error);
         Assert.Equal(10, first.Items.Count);
@@ -77,7 +77,7 @@ public sealed class HomeFeedEndToEndTests
     public async Task DiversityCapLimitsCategoriesPerWindowOnHome()
     {
         var plan = HomeFeedTestHost.Load().Plan();
-        var result = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(surface: "home"));
+        var result = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(surface: "home"), TestContext.Current.CancellationToken);
 
         var categories = result.Items.Select(i => i.Columns["category"].AsString()).ToArray();
         for (var i = 0; i + 2 < categories.Length; i++)
@@ -105,8 +105,8 @@ public sealed class HomeFeedEndToEndTests
 
                     foreach (var (user, surface) in new[] { (1001L, "home"), (1002L, "explore") })
                     {
-                        var actual = await executor.ExecuteAsync(unified, HomeFeedTestHost.NewRequest(user, surface, unified.ArmsFromIds(arms)));
-                        var expected = await executor.ExecuteAsync(reference.Plan!, HomeFeedTestHost.NewRequest(user, surface));
+                        var actual = await executor.ExecuteAsync(unified, HomeFeedTestHost.NewRequest(user, surface, unified.ArmsFromIds(arms)), TestContext.Current.CancellationToken);
+                        var expected = await executor.ExecuteAsync(reference.Plan!, HomeFeedTestHost.NewRequest(user, surface), TestContext.Current.CancellationToken);
                         Assert.True(actual.Succeeded, actual.Error);
                         LiveRunAssert.SameNodeOutcomes(expected, actual);
                         Assert.Equal(Describe(expected), Describe(actual));
@@ -120,8 +120,9 @@ public sealed class HomeFeedEndToEndTests
     public async Task ParameterOnlyArmChangesTheSnapshotAndTriggersAtTheOutput()
     {
         var plan = HomeFeedTestHost.Load().Plan();
-        var strong = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(arms: plan.ArmsFromIds(new[] { "exp_quality_weight/strong" })));
-        var control = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(arms: plan.ArmsFromIds(new[] { "exp_quality_weight/control" })));
+        var strong = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(arms: plan.ArmsFromIds(new[] { "exp_quality_weight/strong" })), TestContext.Current.CancellationToken);
+        var control = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(arms: plan.ArmsFromIds(new[] { "exp_quality_weight/control" })),
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(8, strong.Items.Count);
         Assert.Equal(10, control.Items.Count);
@@ -137,13 +138,14 @@ public sealed class HomeFeedEndToEndTests
         {
             foreach (var arm in new[] { "exp_mmr_diversity/control", "exp_mmr_diversity/mmr" })
             {
-                var result = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(surface: surface, arms: plan.ArmsFromIds(new[] { arm })));
+                var result = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(surface: surface, arms: plan.ArmsFromIds(new[] { arm })),
+                    TestContext.Current.CancellationToken);
                 // The site at 550 is unconditional (mmr has no `when`), so every request that reaches it triggers.
                 Assert.Contains("exp_mmr_diversity", result.TriggeredExperiments);
             }
         }
 
-        var unassigned = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest());
+        var unassigned = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(), TestContext.Current.CancellationToken);
         Assert.Empty(unassigned.TriggeredExperiments);
     }
 
@@ -157,7 +159,7 @@ public sealed class HomeFeedEndToEndTests
         });
         var plan = host.Plan();
 
-        var result = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(captureLogs: true));
+        var result = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(captureLogs: true), TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         var ranker = Assert.Single(result.Outcomes, o => o.NodeId == "ctr_ranker");
@@ -175,7 +177,7 @@ public sealed class HomeFeedEndToEndTests
     {
         var plan = HomeFeedTestHost.Load().Plan();
         var arms = plan.ArmsFromIds(new[] { "exp_freshness_calibration/calibrated" });
-        var result = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(arms: arms, captureLogs: true));
+        var result = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(arms: arms, captureLogs: true), TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         var served = Assert.Single(result.LogBatches, b => b.TapId == "served");
@@ -203,7 +205,7 @@ public sealed class HomeFeedEndToEndTests
         Assert.Single(result.LogBatches, b => b.TapId == "$experiments");
 
         // Without the arm the tap uses the baseline variant.
-        var baseline = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(captureLogs: true));
+        var baseline = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(captureLogs: true), TestContext.Current.CancellationToken);
         Assert.DoesNotContain(Assert.Single(baseline.LogBatches, b => b.TapId == "served").Columns, c => c.Name == "pre_calibration");
     }
 
@@ -217,10 +219,10 @@ public sealed class HomeFeedEndToEndTests
             var executor = new PipelineExecutor(logs: logs);
             for (var user = 1001; user <= 1002; user++)
             {
-                await executor.ExecuteAsync(plan, HomeFeedTestHost.NewRequest(user));
+                await executor.ExecuteAsync(plan, HomeFeedTestHost.NewRequest(user), TestContext.Current.CancellationToken);
             }
 
-            await logs.FlushAsync();
+            await logs.FlushAsync(TestContext.Current.CancellationToken);
         }
 
         var durable = sink.Snapshot().Where(b => b.Delivery == LogDelivery.Durable).Select(b => b.Seq).Order().ToArray();
@@ -252,7 +254,7 @@ public sealed class HomeFeedEndToEndTests
                         Inputs = HomeFeedTestHost.Inputs(1001, "home"),
                         Assignment = arms,
                         Deadline = HomeFeedTestHost.Deadline,
-                    });
+                    }, TestContext.Current.CancellationToken);
 
                     Assert.True(result.Succeeded, result.Error);
                     Assert.Equal(arms.Order(), result.Experiments.Assigned.Order());
@@ -266,7 +268,7 @@ public sealed class HomeFeedEndToEndTests
         var baseline = await engine.ExecuteAsync(new RecRequest
         {
             PipelineId = "home_feed", RequestId = "req-baseline", Inputs = HomeFeedTestHost.Inputs(1001, "home"), Deadline = HomeFeedTestHost.Deadline,
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.True(baseline.Succeeded, baseline.Error);
         Assert.Empty(baseline.Experiments.Assigned);
@@ -280,7 +282,7 @@ public sealed class HomeFeedEndToEndTests
         var plan = HomeFeedTestHost.Load().Plan();
         var request = new PipelineRequest { RequestId = "r", Inputs = new RequestInputs().Set("user_id", 1001L), Deadline = TimeSpan.FromSeconds(1) };
 
-        var result = await new PipelineExecutor().ExecuteAsync(plan, request);
+        var result = await new PipelineExecutor().ExecuteAsync(plan, request, TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
         Assert.Contains("surface", result.Error);

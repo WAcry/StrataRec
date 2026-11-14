@@ -39,12 +39,12 @@ public class RedisCacheStoreTests
         using var cancel = new CancellationTokenSource();
         var loading = store.LoadAsync(cancel.Token).AsTask();
         cancel.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => loading.WaitAsync(Wait));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => loading.WaitAsync(Wait, TestContext.Current.CancellationToken));
 
         var disposing = store.DisposeAsync().AsTask();
         release.SetResult(); // the connect ends only now, after the disposal began
-        var connection = await made.Task.WaitAsync(Wait);
-        await disposing.WaitAsync(Wait);
+        var connection = await made.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
+        await disposing.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         await Assert.ThrowsAsync<ObjectDisposedException>(() => connection.GetDatabase().PingAsync());
     }
@@ -84,7 +84,7 @@ public class RedisCacheStoreTests
         {
             await using var store = new RedisCacheStore(new RedisStoreSettings(listener.LocalEndpoint.ToString()!, "stratarec-test:", null, null, Tls: true, Database: 0));
 
-            var error = await Assert.ThrowsAsync<BindingException>(() => store.LoadAsync(CancellationToken.None).AsTask().WaitAsync(Wait));
+            var error = await Assert.ThrowsAsync<BindingException>(() => store.LoadAsync(CancellationToken.None).AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken));
 
             Assert.Equal("/tls", error.Pointer);
             Assert.Contains("TLS handshake", error.Reason);
@@ -94,7 +94,7 @@ public class RedisCacheStoreTests
         {
             stop.Cancel();
             listener.Stop();
-            await serving.WaitAsync(Wait);
+            await serving.WaitAsync(Wait, TestContext.Current.CancellationToken);
         }
     }
 

@@ -23,8 +23,8 @@ public abstract class ArtifactStoreContractTests
     {
         var artifact = Jsonc.Parse(Pipeline)!;
 
-        var id = await Store.PutAsync(artifact);
-        var bytes = await Store.TryGetAsync(id);
+        var id = await Store.PutAsync(artifact, TestContext.Current.CancellationToken);
+        var bytes = await Store.TryGetAsync(id, TestContext.Current.CancellationToken);
 
         Assert.Equal(ContentHash.Compute(artifact), id);
         Assert.Equal(JsonCanonicalizer.Canonicalize(artifact), bytes);
@@ -33,11 +33,11 @@ public abstract class ArtifactStoreContractTests
     [Fact]
     public async Task Put_IsIdempotentAcrossFormatting()
     {
-        var first = await Store.PutAsync(Jsonc.Parse(Pipeline)!);
+        var first = await Store.PutAsync(Jsonc.Parse(Pipeline)!, TestContext.Current.CancellationToken);
         var second = await Store.PutAsync(Jsonc.Parse("""
             // same content, different order and spelling
             { "params": { "final_top_k": 5e1 }, "nodes": { "fusion": { "op": "CompositeMultiplierScorer@1", "order": 400.0 } }, "pipeline_id": "home_feed", }
-            """)!);
+            """)!, TestContext.Current.CancellationToken);
 
         Assert.Equal(first, second);
         Assert.Equal(1, CountBlobs());
@@ -46,7 +46,7 @@ public abstract class ArtifactStoreContractTests
     [Fact]
     public async Task TryGet_UnknownId_ReturnsNull()
     {
-        Assert.Null(await Store.TryGetAsync(ContentHash.Compute(JsonValue.Create("never stored"))));
+        Assert.Null(await Store.TryGetAsync(ContentHash.Compute(JsonValue.Create("never stored")), TestContext.Current.CancellationToken));
     }
 
     [Theory]
@@ -56,7 +56,7 @@ public abstract class ArtifactStoreContractTests
     [InlineData("SHA256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a")]
     public async Task TryGet_MalformedId_Throws(string id)
     {
-        var ex = await Assert.ThrowsAsync<ArgumentException>(async () => await Store.TryGetAsync(id));
+        var ex = await Assert.ThrowsAsync<ArgumentException>(async () => await Store.TryGetAsync(id, TestContext.Current.CancellationToken));
 
         Assert.Equal("contentId", ex.ParamName);
     }
@@ -64,15 +64,15 @@ public abstract class ArtifactStoreContractTests
     [Fact]
     public async Task Arguments_AreValidated()
     {
-        await Assert.ThrowsAsync<ArgumentNullException>(async () => await Store.TryGetAsync(null!));
-        await Assert.ThrowsAsync<ArgumentNullException>(async () => await Store.PutAsync(null!));
+        await Assert.ThrowsAsync<ArgumentNullException>(async () => await Store.TryGetAsync(null!, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ArgumentNullException>(async () => await Store.PutAsync(null!, TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task Put_NonCanonicalizableArtifact_Throws()
     {
         await Assert.ThrowsAsync<JsonCanonicalizationException>(
-            async () => await Store.PutAsync(new JsonObject { ["x"] = double.NaN }));
+            async () => await Store.PutAsync(new JsonObject { ["x"] = double.NaN }, TestContext.Current.CancellationToken));
         Assert.Equal(0, CountBlobs());
     }
 
@@ -82,7 +82,7 @@ public abstract class ArtifactStoreContractTests
         var artifact = Jsonc.Parse(Pipeline)!;
         var before = artifact.ToJsonString();
 
-        await Store.PutAsync(artifact);
+        await Store.PutAsync(artifact, TestContext.Current.CancellationToken);
 
         Assert.Equal(before, artifact.ToJsonString());
     }
@@ -90,11 +90,11 @@ public abstract class ArtifactStoreContractTests
     [Fact]
     public async Task TryGet_ReturnsCallerOwnedArray()
     {
-        var id = await Store.PutAsync(Jsonc.Parse(Pipeline)!);
-        var first = (await Store.TryGetAsync(id))!;
+        var id = await Store.PutAsync(Jsonc.Parse(Pipeline)!, TestContext.Current.CancellationToken);
+        var first = (await Store.TryGetAsync(id, TestContext.Current.CancellationToken))!;
 
         first[0] = (byte)'X';
-        var second = (await Store.TryGetAsync(id))!;
+        var second = (await Store.TryGetAsync(id, TestContext.Current.CancellationToken))!;
 
         Assert.Equal((byte)'{', second[0]);
     }
@@ -125,7 +125,7 @@ public abstract class ArtifactStoreContractTests
         for (var n = 0; n < ids.Length; n++)
         {
             Assert.Equal(ContentHash.Compute(documents[n % documents.Length]), ids[n]);
-            var bytes = await Store.TryGetAsync(ids[n]);
+            var bytes = await Store.TryGetAsync(ids[n], TestContext.Current.CancellationToken);
             Assert.Equal(JsonCanonicalizer.Canonicalize(documents[n % documents.Length]), bytes);
         }
     }
@@ -165,26 +165,26 @@ public sealed class FileSystemArtifactStoreTests : ArtifactStoreContractTests, I
     [Fact]
     public async Task Put_UsesBlobsSha256Layout_AndLeavesNoTemporaryFiles()
     {
-        var id = await _store.PutAsync(Jsonc.Parse(Pipeline)!);
+        var id = await _store.PutAsync(Jsonc.Parse(Pipeline)!, TestContext.Current.CancellationToken);
 
         var expectedPath = Path.Combine(_root, "blobs", "sha256", id["sha256:".Length..]);
         Assert.Equal(expectedPath, _store.GetBlobPath(id));
         Assert.Equal(Path.Combine(_root, "blobs", "sha256"), _store.BlobDirectory);
         Assert.True(File.Exists(expectedPath));
         Assert.Equal(new[] { expectedPath }, Directory.GetFiles(_store.BlobDirectory));
-        Assert.Equal(JsonCanonicalizer.Canonicalize(Jsonc.Parse(Pipeline)), await File.ReadAllBytesAsync(expectedPath));
+        Assert.Equal(JsonCanonicalizer.Canonicalize(Jsonc.Parse(Pipeline)), await File.ReadAllBytesAsync(expectedPath, TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task TryGet_CorruptedBlob_ThrowsIntegrityException()
     {
-        var id = await _store.PutAsync(Jsonc.Parse(Pipeline)!);
+        var id = await _store.PutAsync(Jsonc.Parse(Pipeline)!, TestContext.Current.CancellationToken);
         var path = _store.GetBlobPath(id);
-        var bytes = await File.ReadAllBytesAsync(path);
+        var bytes = await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken);
         bytes[^2] ^= 0x01; // same length, different content
-        await File.WriteAllBytesAsync(path, bytes);
+        await File.WriteAllBytesAsync(path, bytes, TestContext.Current.CancellationToken);
 
-        var ex = await Assert.ThrowsAsync<ArtifactIntegrityException>(async () => await _store.TryGetAsync(id));
+        var ex = await Assert.ThrowsAsync<ArtifactIntegrityException>(async () => await _store.TryGetAsync(id, TestContext.Current.CancellationToken));
 
         Assert.Equal(id, ex.ExpectedContentId);
         Assert.Equal(ContentHash.FromCanonicalBytes(bytes), ex.ActualContentId);
@@ -196,31 +196,31 @@ public sealed class FileSystemArtifactStoreTests : ArtifactStoreContractTests, I
     public async Task Put_RepairsDamagedBlob()
     {
         var artifact = Jsonc.Parse(Pipeline)!;
-        var id = await _store.PutAsync(artifact);
+        var id = await _store.PutAsync(artifact, TestContext.Current.CancellationToken);
         var path = _store.GetBlobPath(id);
-        await File.WriteAllBytesAsync(path, Encoding.UTF8.GetBytes("{\"truncated"));
+        await File.WriteAllBytesAsync(path, Encoding.UTF8.GetBytes("{\"truncated"), TestContext.Current.CancellationToken);
 
-        Assert.Equal(id, await _store.PutAsync(artifact));
+        Assert.Equal(id, await _store.PutAsync(artifact, TestContext.Current.CancellationToken));
 
-        Assert.Equal(JsonCanonicalizer.Canonicalize(artifact), await _store.TryGetAsync(id));
+        Assert.Equal(JsonCanonicalizer.Canonicalize(artifact), await _store.TryGetAsync(id, TestContext.Current.CancellationToken));
         Assert.Equal(1, CountBlobs());
     }
 
     [Fact]
     public async Task StoresSharingARoot_SeeEachOthersBlobs()
     {
-        var id = await _store.PutAsync(Jsonc.Parse(Pipeline)!);
+        var id = await _store.PutAsync(Jsonc.Parse(Pipeline)!, TestContext.Current.CancellationToken);
 
         var other = new FileSystemArtifactStore(_root);
 
-        Assert.NotNull(await other.TryGetAsync(id));
+        Assert.NotNull(await other.TryGetAsync(id, TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task TryGet_BeforeAnyPut_ReturnsNull()
     {
         Assert.False(Directory.Exists(_store.BlobDirectory));
-        Assert.Null(await _store.TryGetAsync(ContentHash.Compute(new JsonObject())));
+        Assert.Null(await _store.TryGetAsync(ContentHash.Compute(new JsonObject()), TestContext.Current.CancellationToken));
     }
 
     [Fact]

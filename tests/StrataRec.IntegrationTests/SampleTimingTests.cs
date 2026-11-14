@@ -64,8 +64,8 @@ public sealed class SampleTimingTests
     public async Task ComparingRunsThatDecidedDifferently_FailsNamingTheNodeAndWhy()
     {
         var executor = new PipelineExecutor();
-        var served = await executor.ExecuteAsync(HomeFeedTestHost.Load().Plan(), HomeFeedTestHost.NewRequest());
-        var fellBack = await executor.ExecuteAsync(HomeFeedTestHost.LoadModified(MetricsTests.FailModel).Plan(), HomeFeedTestHost.NewRequest());
+        var served = await executor.ExecuteAsync(HomeFeedTestHost.Load().Plan(), HomeFeedTestHost.NewRequest(), TestContext.Current.CancellationToken);
+        var fellBack = await executor.ExecuteAsync(HomeFeedTestHost.LoadModified(MetricsTests.FailModel).Plan(), HomeFeedTestHost.NewRequest(), TestContext.Current.CancellationToken);
 
         var error = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => LiveRunAssert.SameNodeOutcomes(served, fellBack));
 
@@ -81,10 +81,10 @@ public sealed class SampleTimingTests
         // decisions compare equal across the two, both when the ranker serves and when its fallback does (review 14).
         var (serving, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
         var (fallingBack, _) = MetricsTests.LoadEngine(HomeFeedTestHost.LoadModified(MetricsTests.FailModel));
-        var servedTrace = await serving.ExecuteAsync(Traced("req-trace"));
-        var servedRecording = await serving.ExecuteAsync(ReplayTests.Request("req-record", 1001, "home", ReplayTests.ControlArms));
-        var fellBackTrace = await fallingBack.ExecuteAsync(Traced("req-trace-fallback"));
-        var fellBackRecording = await fallingBack.ExecuteAsync(ReplayTests.Request("req-record-fallback", 1001, "home", ReplayTests.ControlArms));
+        var servedTrace = await serving.ExecuteAsync(Traced("req-trace"), TestContext.Current.CancellationToken);
+        var servedRecording = await serving.ExecuteAsync(ReplayTests.Request("req-record", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
+        var fellBackTrace = await fallingBack.ExecuteAsync(Traced("req-trace-fallback"), TestContext.Current.CancellationToken);
+        var fellBackRecording = await fallingBack.ExecuteAsync(ReplayTests.Request("req-record-fallback", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         Assert.Null(servedRecording.Trace);
         Assert.Null(servedTrace.Recording);
         Assert.Contains(fellBackRecording.Recording!.Runs[0].Nodes, n => n.Node == "ctr_ranker" && n.Outcome == "fallback");
@@ -122,9 +122,9 @@ public sealed class SampleTimingTests
         ReplayTests.Edit(healthyRoot, "bindings/local.jsonc", "\"fail\": true", "\"fail\": false");
         var healthy = Engine(healthyRoot);
 
-        var traced = await failing.ExecuteAsync(Request(new DebugOptions { Trace = true }));
-        var recorded = await failing.ExecuteAsync(Request(new DebugOptions { Record = true }));
-        var servedByPrimary = await healthy.ExecuteAsync(Request(new DebugOptions { Record = true }));
+        var traced = await failing.ExecuteAsync(Request(new DebugOptions { Trace = true }), TestContext.Current.CancellationToken);
+        var recorded = await failing.ExecuteAsync(Request(new DebugOptions { Record = true }), TestContext.Current.CancellationToken);
+        var servedByPrimary = await healthy.ExecuteAsync(Request(new DebugOptions { Record = true }), TestContext.Current.CancellationToken);
         Assert.Equal(("backup", "backup", "primary"), (traced.ServedBy, recorded.ServedBy, servedByPrimary.ServedBy));
 
         LiveRunAssert.SameNodeOutcomes(traced, recorded);

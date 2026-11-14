@@ -100,7 +100,7 @@ public sealed class RowSourceFallbackTests
         Assert.Subset(after.ToHashSet(), new HashSet<long> { 43, 45, 48, 49 });
         Assert.DoesNotContain(42L, after);
 
-        var replayed = await failingEngine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(failing.Recording!)));
+        var replayed = await failingEngine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(failing.Recording!)), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(replayed.Report.Diff.Identical, ReplayTests.Describe(replayed.Report));
         Assert.Empty(replayed.Report.Gaps);

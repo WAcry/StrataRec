@@ -112,7 +112,7 @@ public sealed class ExplainEndToEndTests
         var engine = new RecEngine(new PlanEnvironment { BaseDirectory = root });
         ServiceCollectionExtensions.LoadWorkspace(engine, root, "local", new[] { "primary" }).ThrowIfErrors("load");
 
-        var result = await engine.ExecuteAsync(Request("primary", EntityKey.FromInt64(8), EntityKey.FromInt64(1)));
+        var result = await engine.ExecuteAsync(Request("primary", EntityKey.FromInt64(8), EntityKey.FromInt64(1)), TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal("backup", result.ServedBy);
@@ -139,9 +139,10 @@ public sealed class ExplainEndToEndTests
         var engine = new RecEngine(host.Environment);
         Assert.True(engine.Load(host.Request).Applied);
 
-        var tooMany = await engine.ExecuteAsync(Request("home_feed", Enumerable.Range(1, DebugOptions.MaxExplainIds + 1).Select(i => EntityKey.FromInt64(i)).ToArray()));
-        var otherType = await engine.ExecuteAsync(Request("home_feed", EntityKey.FromString("17")));
-        var none = await engine.ExecuteAsync(Request("home_feed"));
+        var tooMany = await engine.ExecuteAsync(Request("home_feed", Enumerable.Range(1, DebugOptions.MaxExplainIds + 1).Select(i => EntityKey.FromInt64(i)).ToArray()),
+            TestContext.Current.CancellationToken);
+        var otherType = await engine.ExecuteAsync(Request("home_feed", EntityKey.FromString("17")), TestContext.Current.CancellationToken);
+        var none = await engine.ExecuteAsync(Request("home_feed"), TestContext.Current.CancellationToken);
 
         Assert.Equal((RecErrorKind.InvalidRequest, (string?)null), (tooMany.ErrorKind, tooMany.ErrorPointer));
         Assert.Equal("explain_ids has 101 ids, but a request explains at most 100 candidates; ask about fewer ids per request.", tooMany.Error);

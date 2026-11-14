@@ -30,7 +30,7 @@ public class SnapshotFilesUpdateSourceTests
         dir.Write("snapshot.json", """{"format": "jsonl", "position": {"0": 120, "3": 7}, "files": ["part-0.jsonl", "more/part-1.jsonl"]}""");
 
         var table = Table();
-        var position = new SnapshotFilesUpdateSource(Path.Combine(dir.Path, "snapshot.json")).Load(table.Writer);
+        var position = new SnapshotFilesUpdateSource(Path.Combine(dir.Path, "snapshot.json")).Load(table.Writer, TestContext.Current.CancellationToken);
 
         Assert.Equal(new UpdatePosition(new[] { new PartitionOffset(3, 7), new PartitionOffset(0, 120) }), position);
         Assert.Equal(position, table.Position);
@@ -71,7 +71,7 @@ public class SnapshotFilesUpdateSourceTests
         dir.Write("a.jsonl", """{"key": "ué-1", "version": 1, "fields": {"i64": 1}}""" + "\n" + """{"key": "u-2", "version": 1, "fields": {"i64": 2}}""");
         dir.Write("snapshot.json", """{"files": ["a.jsonl"]}""");
         var table = Table(EntityKeyType.String);
-        Assert.True(new SnapshotFilesUpdateSource(Path.Combine(dir.Path, "snapshot.json")).Load(table.Writer).IsEmpty);
+        Assert.True(new SnapshotFilesUpdateSource(Path.Combine(dir.Path, "snapshot.json")).Load(table.Writer, TestContext.Current.CancellationToken).IsEmpty);
         Assert.Equal(1, table.Pin().Read(table.Schema.FieldIndex("i64"), table.Pin().Find("ué-1")).AsInt64());
         Assert.Equal(2, table.Pin().Read(table.Schema.FieldIndex("i64"), table.Pin().Find("u-2")).AsInt64());
     }
@@ -116,7 +116,7 @@ public class SnapshotFilesUpdateSourceTests
         dir.Write("snapshot.json", """{"files": ["part.jsonl"]}""");
         var table = Table();
 
-        var error = Assert.Throws<FeatureUpdateException>(() => new SnapshotFilesUpdateSource(Path.Combine(dir.Path, "snapshot.json")).Load(table.Writer));
+        var error = Assert.Throws<FeatureUpdateException>(() => new SnapshotFilesUpdateSource(Path.Combine(dir.Path, "snapshot.json")).Load(table.Writer, TestContext.Current.CancellationToken));
 
         Assert.Equal(file + ":3", error.Location);
         Assert.Equal(pointer, error.Pointer);
@@ -151,7 +151,7 @@ public class SnapshotFilesUpdateSourceTests
         var path = dir.Write("snapshot.json", manifest);
         var table = Table();
 
-        var error = Assert.Throws<FeatureUpdateException>(() => new SnapshotFilesUpdateSource(path).Load(table.Writer));
+        var error = Assert.Throws<FeatureUpdateException>(() => new SnapshotFilesUpdateSource(path).Load(table.Writer, TestContext.Current.CancellationToken));
 
         Assert.EndsWith(pointer.Length == 0 && hint.Contains("before", StringComparison.Ordinal) ? "missing.jsonl" : "snapshot.json", error.Location, StringComparison.Ordinal);
         Assert.Equal(pointer, error.Pointer);
@@ -162,7 +162,7 @@ public class SnapshotFilesUpdateSourceTests
     public void MissingManifest_IsReported()
     {
         using var dir = new TempDirectory();
-        var error = Assert.Throws<FeatureUpdateException>(() => new SnapshotFilesUpdateSource(Path.Combine(dir.Path, "snapshot.json")).Load(Table().Writer));
+        var error = Assert.Throws<FeatureUpdateException>(() => new SnapshotFilesUpdateSource(Path.Combine(dir.Path, "snapshot.json")).Load(Table().Writer, TestContext.Current.CancellationToken));
         Assert.Contains("snapshot.json", error.Hint, StringComparison.Ordinal);
     }
 
@@ -175,13 +175,13 @@ public class SnapshotFilesUpdateSourceTests
         dir.Write("snapshot.json", """{"position": {"0": 100}, "files": ["gen-1.jsonl"]}""");
         var table = Table();
         var source = new SnapshotFilesUpdateSource(manifest);
-        source.Load(table.Writer);
+        source.Load(table.Writer, TestContext.Current.CancellationToken);
         var first = table.Pin();
 
         // The next generation drops keys 1-50 and adds 101-150; versions start afresh.
         dir.Write("gen-2.jsonl", Lines(51, 150, version: 0));
         dir.Write("snapshot.json", """{"position": {"0": 250}, "files": ["gen-2.jsonl"]}""");
-        source.Load(table.Writer);
+        source.Load(table.Writer, TestContext.Current.CancellationToken);
         var second = table.Pin();
 
         Assert.NotSame(first, second);
@@ -194,7 +194,7 @@ public class SnapshotFilesUpdateSourceTests
         // A broken generation: the load fails at its line, and the table keeps the second generation.
         dir.Write("gen-3.jsonl", Lines(1, 10, version: 1) + "\n{\"key\": 11}");
         dir.Write("snapshot.json", """{"position": {"0": 300}, "files": ["gen-3.jsonl"]}""");
-        var error = Assert.Throws<FeatureUpdateException>(() => source.Load(table.Writer));
+        var error = Assert.Throws<FeatureUpdateException>(() => source.Load(table.Writer, TestContext.Current.CancellationToken));
         Assert.EndsWith("gen-3.jsonl:11", error.Location, StringComparison.Ordinal);
         Assert.Same(second, table.Pin());
         Assert.Equal(UpdatePosition.Single(250), table.Position);
@@ -241,7 +241,7 @@ public class SnapshotFilesUpdateSourceTests
 
         // An unchanged manifest is not reloaded: the version stays the same across several periods.
         var current = table.Pin();
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
         Assert.Same(current, table.Pin());
 
         cancel.Cancel();
@@ -306,7 +306,7 @@ public class SnapshotFilesUpdateSourceTests
             "{\"key\": \"after\", \"version\": 1, \"fields\": {\"s\": \"" + json + json + "\", \"t\": \"" + json + json + json + "\", \"ls\": [\"" + json + json + json + "\"]}}");
         dir.Write("snapshot.json", """{"files": ["a.jsonl"]}""");
         var table = Table(EntityKeyType.String);
-        new SnapshotFilesUpdateSource(Path.Combine(dir.Path, "snapshot.json")).Load(table.Writer);
+        new SnapshotFilesUpdateSource(Path.Combine(dir.Path, "snapshot.json")).Load(table.Writer, TestContext.Current.CancellationToken);
 
         var version = table.Pin();
         Assert.Equal(3, version.RecordCount);

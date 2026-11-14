@@ -3,4 +3,10 @@
   <ItemGroup Condition="'$(IsProductionCode)' == 'true'">
     <Using Remove="System.Linq" />
   </ItemGroup>
+
+  <!-- `dotnet test -p:TestReports=true` (CI): each test assembly writes a TRX report named after its project. The default
+       name is a time stamp, which assemblies running at the same moment share. -->
+  <PropertyGroup Condition="'$(IsTestProject)' == 'true' And '$(TestReports)' == 'true'">
+    <TestingPlatformCommandLineArguments>$(TestingPlatformCommandLineArguments) --report-xunit-trx --report-xunit-trx-filename $(MSBuildProjectName).trx</TestingPlatformCommandLineArguments>
+  </PropertyGroup>
 </Project>

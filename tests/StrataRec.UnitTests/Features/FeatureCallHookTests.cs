@@ -86,7 +86,7 @@ public class FeatureCallHookTests
         release.SetResult();
         if (hook is not null)
         {
-            var call = await hook.FirstRecorded.Task.WaitAsync(TimeSpan.FromSeconds(60));
+            var call = await hook.FirstRecorded.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
             Assert.Equal(new long[] { 1, 2 }, call.Keys);
             Assert.Equal(new double?[] { 2.0, 4.0 }, call.Values);
         }

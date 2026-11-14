@@ -23,7 +23,7 @@ public sealed class ManifestLoadTests : IDisposable
         var (manifest, id) = await _fixture.Pipeline("p").BuildAsync("p", seq: 3);
         await using var engine = new RecEngine(_fixture.Environment);
 
-        var result = await engine.LoadManifestAsync(manifest, id, _fixture.Store);
+        var result = await engine.LoadManifestAsync(manifest, id, _fixture.Store, TestContext.Current.CancellationToken);
 
         Assert.Equal((ManifestLoadStatus.Applied, "p", id, 3L), (result.Status, result.PipelineId, result.ManifestId, result.Sequence));
         Assert.True(result.Applied);
@@ -34,7 +34,7 @@ public sealed class ManifestLoadTests : IDisposable
         Assert.True(engine.TryGetPipeline("p", out var served));
         Assert.Equal((3L, id), (served.Sequence, served.Plan.ManifestId));
 
-        var response = await engine.ExecuteAsync(ReleaseFixture.Request("p"));
+        var response = await engine.ExecuteAsync(ReleaseFixture.Request("p"), TestContext.Current.CancellationToken);
         Assert.True(response.Succeeded, response.Error);
         Assert.Equal(id, response.ManifestId);
         Assert.Equal(new long[] { 9, 8 }, response.Items.Select(i => i.Id.Int64Value));
@@ -47,12 +47,12 @@ public sealed class ManifestLoadTests : IDisposable
         var (second, secondId) = await _fixture.Pipeline("p", k: 3).BuildAsync("p", seq: 2);
         var store = new WatchedStore(_fixture.Store);
         await using var engine = new RecEngine(_fixture.Environment);
-        Assert.True((await engine.LoadManifestAsync(second, secondId, store)).Applied);
+        Assert.True((await engine.LoadManifestAsync(second, secondId, store, TestContext.Current.CancellationToken)).Applied);
         var reads = store.Reads;
 
         foreach (var (manifest, id) in new[] { (second, secondId), (first, firstId) })
         {
-            var result = await engine.LoadManifestAsync(manifest, id, store);
+            var result = await engine.LoadManifestAsync(manifest, id, store, TestContext.Current.CancellationToken);
 
             Assert.Equal(ManifestLoadStatus.Stale, result.Status);
             Assert.Equal("pipeline 'p' already serves sequence 2", result.Reason);
@@ -74,10 +74,10 @@ public sealed class ManifestLoadTests : IDisposable
         var incompatibleId = await _fixture.PutAsync(incompatible);
         var store = new WatchedStore(_fixture.Store);
         await using var engine = new RecEngine(_fixture.Environment);
-        Assert.True((await engine.LoadManifestAsync(current, currentId, store)).Applied);
+        Assert.True((await engine.LoadManifestAsync(current, currentId, store, TestContext.Current.CancellationToken)).Applied);
         var reads = store.Reads;
 
-        var result = await engine.LoadManifestAsync(incompatible, incompatibleId, store);
+        var result = await engine.LoadManifestAsync(incompatible, incompatibleId, store, TestContext.Current.CancellationToken);
 
         Assert.Equal(ManifestLoadStatus.Incompatible, result.Status);
         Assert.Equal(new[] { "Alpaca@2", "Zebra@1" }, result.MissingCapabilities);
@@ -89,7 +89,7 @@ public sealed class ManifestLoadTests : IDisposable
         Assert.Equal(reads, store.Reads); // nothing downloaded
 
         Assert.Equal((1L, currentId), (result.ServedSequence, result.ServedManifestId));
-        var response = await engine.ExecuteAsync(ReleaseFixture.Request("p"));
+        var response = await engine.ExecuteAsync(ReleaseFixture.Request("p"), TestContext.Current.CancellationToken);
         Assert.True(response.Succeeded, response.Error);
         Assert.Equal(currentId, response.ManifestId);
 
@@ -104,14 +104,14 @@ public sealed class ManifestLoadTests : IDisposable
         var (current, currentId) = await _fixture.Pipeline("p").BuildAsync("p", seq: 1);
         var (next, _) = await _fixture.Pipeline("p", k: 3).BuildAsync("p", seq: 3);
         await using var engine = new RecEngine(_fixture.Environment);
-        Assert.True((await engine.LoadManifestAsync(current, currentId, _fixture.Store)).Applied);
+        Assert.True((await engine.LoadManifestAsync(current, currentId, _fixture.Store, TestContext.Current.CancellationToken)).Applied);
 
         // The controller revoked everything below 4, in a manifest this binary cannot serve: still learned.
         var revoking = ReleaseFixture.With(next, seq: 5, minAcceptedSeq: 4, requires: ["Missing@1"]);
-        Assert.Equal(ManifestLoadStatus.Incompatible, (await engine.LoadManifestAsync(revoking, await _fixture.PutAsync(revoking), _fixture.Store)).Status);
+        Assert.Equal(ManifestLoadStatus.Incompatible, (await engine.LoadManifestAsync(revoking, await _fixture.PutAsync(revoking), _fixture.Store, TestContext.Current.CancellationToken)).Status);
 
         var revokedId = await _fixture.PutAsync(next);
-        var revoked = await engine.LoadManifestAsync(next, revokedId, _fixture.Store);
+        var revoked = await engine.LoadManifestAsync(next, revokedId, _fixture.Store, TestContext.Current.CancellationToken);
 
         Assert.Equal(ManifestLoadStatus.Revoked, revoked.Status);
         Assert.Equal("sequence 3 is below min_accepted_seq 4", revoked.Reason);
@@ -122,10 +122,10 @@ public sealed class ManifestLoadTests : IDisposable
 
         // A lower min_accepted_seq does not lower what was learned; a manifest at the floor is applied.
         var atFloor = ReleaseFixture.With(next, seq: 4, minAcceptedSeq: 0);
-        var applied = await engine.LoadManifestAsync(atFloor, await _fixture.PutAsync(atFloor), _fixture.Store);
+        var applied = await engine.LoadManifestAsync(atFloor, await _fixture.PutAsync(atFloor), _fixture.Store, TestContext.Current.CancellationToken);
         Assert.Equal(ManifestLoadStatus.Applied, applied.Status);
         var older = ReleaseFixture.With(current, seq: 2, minAcceptedSeq: 0);
-        Assert.Equal(ManifestLoadStatus.Revoked, (await engine.LoadManifestAsync(older, await _fixture.PutAsync(older), _fixture.Store)).Status);
+        Assert.Equal(ManifestLoadStatus.Revoked, (await engine.LoadManifestAsync(older, await _fixture.PutAsync(older), _fixture.Store, TestContext.Current.CancellationToken)).Status);
     }
 
     [Fact]
@@ -136,7 +136,7 @@ public sealed class ManifestLoadTests : IDisposable
         var revoking = ReleaseFixture.With(next, seq: 3, minAcceptedSeq: 3, requires: ["Missing@1"]);
         var revokingId = await _fixture.PutAsync(revoking);
         await using var engine = new RecEngine(_fixture.Environment);
-        Assert.True((await engine.LoadManifestAsync(current, currentId, _fixture.Store)).Applied);
+        Assert.True((await engine.LoadManifestAsync(current, currentId, _fixture.Store, TestContext.Current.CancellationToken)).Applied);
 
         // Right before the loaded plan is published, a manifest revokes its sequence (it is incompatible, so it neither
         // waits nor replaces the plan itself).
@@ -145,7 +145,7 @@ public sealed class ManifestLoadTests : IDisposable
             engine.Publishing = null;
             Assert.Equal(ManifestLoadStatus.Incompatible, engine.LoadManifestAsync(revoking, revokingId, _fixture.Store).GetAwaiter().GetResult().Status);
         };
-        var result = await engine.LoadManifestAsync(next, nextId, _fixture.Store);
+        var result = await engine.LoadManifestAsync(next, nextId, _fixture.Store, TestContext.Current.CancellationToken);
 
         Assert.Equal(ManifestLoadStatus.Revoked, result.Status);
         Assert.Equal("sequence 2 is below min_accepted_seq 3", result.Reason);
@@ -161,16 +161,16 @@ public sealed class ManifestLoadTests : IDisposable
         var (next, nextId) = await _fixture.Pipeline("p", k: 3).BuildAsync("p", seq: 2);
         File.Delete(_fixture.Store.GetBlobPath(next.Artifacts.Pipeline));
         await using var engine = new RecEngine(_fixture.Environment);
-        Assert.True((await engine.LoadManifestAsync(current, currentId, _fixture.Store)).Applied);
+        Assert.True((await engine.LoadManifestAsync(current, currentId, _fixture.Store, TestContext.Current.CancellationToken)).Applied);
 
-        var result = await engine.LoadManifestAsync(next, nextId, _fixture.Store);
+        var result = await engine.LoadManifestAsync(next, nextId, _fixture.Store, TestContext.Current.CancellationToken);
 
         Assert.Equal(ManifestLoadStatus.Rejected, result.Status);
         var error = Assert.Single(result.Diagnostics);
         Assert.Equal(("ARTIFACT_MISSING", "manifest:" + nextId, "/artifacts/pipeline"), (error.Code, error.Artifact, error.Pointer));
         Assert.StartsWith($"ARTIFACT_MISSING manifest:{nextId}/artifacts/pipeline: Artifact '{next.Artifacts.Pipeline}' is not in the store.", result.Reason);
         Assert.Equal((1L, currentId), (result.ServedSequence, result.ServedManifestId));
-        Assert.Equal(currentId, (await engine.ExecuteAsync(ReleaseFixture.Request("p"))).ManifestId);
+        Assert.Equal(currentId, (await engine.ExecuteAsync(ReleaseFixture.Request("p"), TestContext.Current.CancellationToken)).ManifestId);
     }
 
     [Fact]
@@ -213,13 +213,13 @@ public sealed class ManifestLoadTests : IDisposable
         using var loggers = LoggerFactory.Create(builder => builder.AddProvider(log));
         await using var engine = new RecEngine(_fixture.Environment, loggerFactory: loggers);
 
-        Assert.True((await engine.LoadManifestAsync(current, currentId, _fixture.Store)).Applied);
+        Assert.True((await engine.LoadManifestAsync(current, currentId, _fixture.Store, TestContext.Current.CancellationToken)).Applied);
         File.Move(_fixture.Store.GetBlobPath(next.Artifacts.Pipeline), Path.Combine(_fixture.StoreRoot, "aside"));
-        Assert.Equal(ManifestLoadStatus.Rejected, (await engine.LoadManifestAsync(next, nextId, _fixture.Store)).Status);
+        Assert.Equal(ManifestLoadStatus.Rejected, (await engine.LoadManifestAsync(next, nextId, _fixture.Store, TestContext.Current.CancellationToken)).Status);
         File.Move(Path.Combine(_fixture.StoreRoot, "aside"), _fixture.Store.GetBlobPath(next.Artifacts.Pipeline));
-        Assert.Equal(ManifestLoadStatus.Stale, (await engine.LoadManifestAsync(current, currentId, _fixture.Store)).Status);
-        Assert.Equal(ManifestLoadStatus.Incompatible, (await engine.LoadManifestAsync(incompatible, incompatibleId, _fixture.Store)).Status);
-        Assert.Equal(ManifestLoadStatus.Revoked, (await engine.LoadManifestAsync(next, nextId, _fixture.Store)).Status);
+        Assert.Equal(ManifestLoadStatus.Stale, (await engine.LoadManifestAsync(current, currentId, _fixture.Store, TestContext.Current.CancellationToken)).Status);
+        Assert.Equal(ManifestLoadStatus.Incompatible, (await engine.LoadManifestAsync(incompatible, incompatibleId, _fixture.Store, TestContext.Current.CancellationToken)).Status);
+        Assert.Equal(ManifestLoadStatus.Revoked, (await engine.LoadManifestAsync(next, nextId, _fixture.Store, TestContext.Current.CancellationToken)).Status);
 
         Assert.Equal(new[] { "applied", "artifacts_failed", "stale", "incompatible", "revoked" }, outcomes);
         var events = log.Entries.Where(e => e.Category == typeof(RecEngine).FullName).Select(e => (e.EventId.Id, e.Level)).ToList();
@@ -239,14 +239,14 @@ public sealed class ManifestLoadTests : IDisposable
         var (next, nextId) = await _fixture.Pipeline("p", k: 3).BuildAsync("p", seq: 2);
         var store = new WatchedStore(_fixture.Store) { Hold = next.Artifacts.Pipeline };
         var engine = new RecEngine(_fixture.Environment);
-        Assert.True((await engine.LoadManifestAsync(current, currentId, store)).Applied);
+        Assert.True((await engine.LoadManifestAsync(current, currentId, store, TestContext.Current.CancellationToken)).Applied);
 
-        var load = engine.LoadManifestAsync(next, nextId, store);
-        await store.HeldReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
-        await engine.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30));
+        var load = engine.LoadManifestAsync(next, nextId, store, TestContext.Current.CancellationToken);
+        await store.HeldReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await engine.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
-        await store.HeldReadCancelled.Task.WaitAsync(TimeSpan.FromSeconds(30));
-        var thrown = await Assert.ThrowsAsync<ObjectDisposedException>(() => load.WaitAsync(TimeSpan.FromSeconds(30)));
+        await store.HeldReadCancelled.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        var thrown = await Assert.ThrowsAsync<ObjectDisposedException>(() => load.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
         Assert.IsAssignableFrom<OperationCanceledException>(thrown.InnerException);
     }
 
@@ -262,15 +262,15 @@ public sealed class ManifestLoadTests : IDisposable
         var (next, nextId) = await _fixture.Pipeline("p", k: 3).BuildAsync("p", seq: 2);
         var store = new WatchedStore(_fixture.Store) { Hold = next.Artifacts.Pipeline, ThrowOnCancel = true };
         await using var engine = new RecEngine(_fixture.Environment);
-        Assert.True((await engine.LoadManifestAsync(current, currentId, store)).Applied);
+        Assert.True((await engine.LoadManifestAsync(current, currentId, store, TestContext.Current.CancellationToken)).Applied);
         using var caller = new CancellationTokenSource();
 
         var load = engine.LoadManifestAsync(next, nextId, store, caller.Token);
-        await store.HeldReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await store.HeldReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         caller.Cancel(); // threw the store's AggregateException here
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => load.WaitAsync(TimeSpan.FromSeconds(30)));
-        await store.HeldReadCancelled.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => load.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
+        await store.HeldReadCancelled.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         Assert.True(engine.TryGetPipeline("p", out var served));
         Assert.Equal(currentId, served.Plan.ManifestId);
     }
@@ -287,8 +287,8 @@ public sealed class ManifestLoadTests : IDisposable
         using var loggers = LoggerFactory.Create(builder => builder.AddProvider(log));
         await using var engine = new RecEngine(_fixture.Environment, loggerFactory: loggers);
 
-        Assert.Equal(ManifestLoadStatus.Applied, (await engine.LoadManifestAsync(current, currentId, _fixture.Store)).Status);
-        Assert.Equal(ManifestLoadStatus.Stale, (await engine.LoadManifestAsync(current, currentId, _fixture.Store)).Status);
+        Assert.Equal(ManifestLoadStatus.Applied, (await engine.LoadManifestAsync(current, currentId, _fixture.Store, TestContext.Current.CancellationToken)).Status);
+        Assert.Equal(ManifestLoadStatus.Stale, (await engine.LoadManifestAsync(current, currentId, _fixture.Store, TestContext.Current.CancellationToken)).Status);
 
         Assert.Equal(new[] { 1001, 1004 }, log.Entries.Where(e => e.Category == typeof(RecEngine).FullName).Select(e => e.EventId.Id));
     }
@@ -300,6 +300,6 @@ public sealed class ManifestLoadTests : IDisposable
         var engine = new RecEngine(_fixture.Environment);
         await engine.DisposeAsync();
 
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.LoadManifestAsync(manifest, id, _fixture.Store));
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.LoadManifestAsync(manifest, id, _fixture.Store, TestContext.Current.CancellationToken));
     }
 }

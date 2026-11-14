@@ -94,10 +94,10 @@ public sealed class ReplayExceptionTests
         });
         Assert.True(engine.Load(host.Request).Applied);
 
-        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-throw-" + mode, 1001, "home", ReplayTests.ControlArms));
+        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-throw-" + mode, 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         Assert.Equal((false, $"node 'ctr_ranker' failed: {detail}"), (recorded.Succeeded, recorded.Error));
 
-        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!)));
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!)), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(recorded.Error, outcome.Result.Error);
         var node = outcome.Report.Nodes.Single(n => n.Node == "ctr_ranker");

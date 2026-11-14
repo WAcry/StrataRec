@@ -116,7 +116,7 @@ public sealed class LogPipelineTests
             }
 
             pipeline.Submit(Batch("debug", LogDelivery.BestEffort));
-            await pipeline.FlushAsync();
+            await pipeline.FlushAsync(TestContext.Current.CancellationToken);
             Assert.Contains(pipeline.Stats(), s => s is { TapId: "served", Delivered: 5, Dropped: 0 });
         }
 
@@ -134,7 +134,7 @@ public sealed class LogPipelineTests
         await using (var pipeline = new LogPipeline(sink))
         {
             pipeline.Submit(Batch("served", LogDelivery.Durable));
-            await pipeline.FlushAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            await pipeline.FlushAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         }
 
         Assert.Equal(1, sink.Written);
@@ -147,7 +147,7 @@ public sealed class LogPipelineTests
         var sink = new FlakySink(failures: int.MaxValue);
         await using var pipeline = new LogPipeline(sink);
         pipeline.Submit(Batch("debug", LogDelivery.BestEffort));
-        await pipeline.FlushAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await pipeline.FlushAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         Assert.Contains(pipeline.Stats(), s => s is { TapId: "debug", Delivered: 0, Dropped: 1 });
     }
@@ -223,7 +223,7 @@ public sealed class LogPipelineTests
             pipeline.Submit(Batch("poison", LogDelivery.Durable));
             pipeline.Submit(Batch("served", LogDelivery.Durable));
             pipeline.Submit(Batch("served", LogDelivery.Durable));
-            await pipeline.FlushAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            await pipeline.FlushAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
             Assert.Equal(1, pipeline.Rejected);
             Assert.Contains(pipeline.Stats(), s => s is { TapId: "poison", Delivered: 0, Dropped: 1 });
@@ -300,11 +300,11 @@ public sealed class LogPipelineTests
         var sink = new StuckSink(stuck.Task);
         var pipeline = new LogPipeline(sink, new LogPipelineOptions { DrainTimeout = TimeSpan.FromMilliseconds(20) });
         pipeline.Submit(Batch("served", LogDelivery.Durable));
-        await sink.Started.WaitAsync(TimeSpan.FromSeconds(30));
+        await sink.Started.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         // The write never completes until the end of the test, so returning at all is the bound at work; the 30 s only
         // keeps a regression from hanging the run (a busy runner has stalled for seconds).
-        await pipeline.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30));
+        await pipeline.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         stuck.SetResult();
     }
 
@@ -320,9 +320,9 @@ public sealed class LogPipelineTests
             Assert.Equal(LogAdmission.Queued, pipeline.Submit(Batch("served", LogDelivery.Durable)));
         }
 
-        await pipeline.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30));
+        await pipeline.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
-        await pipeline.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        await pipeline.FlushAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         Assert.Contains(pipeline.Stats(), s => s is { TapId: "served", Delivered: 0, Dropped: 3 });
     }
 

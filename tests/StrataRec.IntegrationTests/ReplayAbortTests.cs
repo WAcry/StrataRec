@@ -36,7 +36,7 @@ public sealed class ReplayAbortTests
 
         var running = engine.ExecuteAsync(WithCallback(ReplayTests.Request("req-cancelled", 1001, "home", ReplayTests.ControlArms),
             bundle => delivered = bundle), cancel.Token).AsTask();
-        await models.Started.Task.WaitAsync(TimeSpan.FromSeconds(60));
+        await models.Started.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
         cancel.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running); // recording does not swallow the cancellation
@@ -48,7 +48,7 @@ public sealed class ReplayAbortTests
         Assert.NotEmpty(run.ModelCalls);
         Assert.All(run.ModelCalls, call => Assert.Equal("cancelled", call.Status)); // the client honoured the cancellation
 
-        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(delivered)));
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(delivered)), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal((true, "cancelled by the caller"), (outcome.Aborted, outcome.AbortReason));
         Assert.Empty(outcome.Result.Items);
@@ -74,7 +74,7 @@ public sealed class ReplayAbortTests
         Assert.Equal(new[] { "exp_quality_weight" }, ranker.Triggered);
         Assert.Equal(new[] { "exp_quality_weight" }, bundle.Result.TriggeredExperiments);
 
-        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(bundle)));
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(bundle)), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(outcome.Aborted);
         Assert.Equal(bundle.Result.TriggeredExperiments, outcome.Result.Experiments.Triggered);
@@ -94,7 +94,7 @@ public sealed class ReplayAbortTests
         bundle["runs"]![0]!["result"]!["triggered_experiments"] = new JsonArray();
         bundle["result"]!["triggered_experiments"] = new JsonArray();
 
-        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(bundle.ToJsonString()));
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(bundle.ToJsonString()), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(outcome.Aborted);
         Assert.Empty(outcome.Result.Experiments.Triggered);
@@ -153,10 +153,10 @@ public sealed class ReplayAbortTests
 
         var running = engine.ExecuteAsync(WithCallback(ReplayTests.Request("req-stuck", 1001, "home", arms: null),
             bundle => delivered = bundle), cancel.Token).AsTask();
-        await stuck.Started.Task.WaitAsync(TimeSpan.FromSeconds(60));
+        await stuck.Started.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
         cancel.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(TimeSpan.FromSeconds(60)));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken));
         Assert.False(stuck.Answered.Task.IsCompleted);
         var call = Assert.Single(delivered!.Runs[0].ModelCalls);
         Assert.Equal(("cancelled", true), (call.Status, call.Threw));
@@ -165,11 +165,11 @@ public sealed class ReplayAbortTests
 
         // The client answers after the abort; its answer is recorded nowhere.
         stuck.Release.SetResult();
-        await stuck.Answered.Task.WaitAsync(TimeSpan.FromSeconds(60));
+        await stuck.Answered.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
         Assert.Equal("cancelled", delivered.Runs[0].ModelCalls[0].Status);
         Assert.Empty(delivered.Runs[0].ModelCalls[0].Outputs);
 
-        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(delivered)));
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(delivered)), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(outcome.Aborted);
         Assert.True(outcome.Report.Diff.Identical);
@@ -185,8 +185,8 @@ public sealed class ReplayAbortTests
         var stuck = new StuckClient();
         var engine = WithStuckScorer(stuck, awaitCall: false);
 
-        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-in-flight", 1001, "home", arms: null))
-            .AsTask().WaitAsync(TimeSpan.FromSeconds(60));
+        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-in-flight", 1001, "home", arms: null), TestContext.Current.CancellationToken)
+            .AsTask().WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
 
         Assert.Equal("node 'ctr_ranker' failed: left non-nullable column 'score.ctr' without a value on 30 of 30 live rows", recorded.Error);
         var call = Assert.Single(recorded.Recording!.Runs[0].ModelCalls);
@@ -195,7 +195,7 @@ public sealed class ReplayAbortTests
 
         // The call completes after the snapshot; its answer is recorded nowhere.
         stuck.Release.SetResult();
-        Assert.True((await stuck.Invocation!.WaitAsync(TimeSpan.FromSeconds(60))).Succeeded);
+        Assert.True((await stuck.Invocation!.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken)).Succeeded);
         Assert.Equal("outstanding", recorded.Recording.Runs[0].ModelCalls[0].Status);
         Assert.Empty(recorded.Recording.Runs[0].ModelCalls[0].Outputs);
     }
@@ -204,7 +204,7 @@ public sealed class ReplayAbortTests
     public async Task ARunAbortedBetweenPositions_ReplaysThePositionsItFinished_AndStopsAtTheNextOne()
     {
         var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
-        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-between", 1001, "home", ReplayTests.ControlArms));
+        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-between", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         Assert.True(recorded.Succeeded, recorded.Error);
 
         // The same request as if it had been aborted right after its third position (e.g. while publishing that node).
@@ -224,7 +224,7 @@ public sealed class ReplayAbortTests
             result["items"] = new JsonArray();
         }
 
-        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(bundle.ToJsonString()));
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(bundle.ToJsonString()), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(outcome.Aborted);
         Assert.True(outcome.Report.Diff.Identical);
@@ -242,7 +242,7 @@ public sealed class ReplayAbortTests
         {
             delivered = bundle;
             throw new InvalidOperationException("the host's sink is down");
-        }));
+        }), TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Same(result.Recording, delivered);

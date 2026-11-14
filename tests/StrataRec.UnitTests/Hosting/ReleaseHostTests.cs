@@ -31,15 +31,15 @@ public sealed class ReleaseHostTests : IDisposable
         using var host = Build(["p"]);
         var engine = host.Services.GetRequiredService<IRecEngine>();
 
-        await host.StartAsync();
+        await host.StartAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(new[] { "p" }, engine.PipelineIds());
-        var response = await engine.ExecuteAsync(ReleaseFixture.Request("p"));
+        var response = await engine.ExecuteAsync(ReleaseFixture.Request("p"), TestContext.Current.CancellationToken);
         Assert.True(response.Succeeded, response.Error);
         Assert.Equal(id, response.ManifestId);
         var report = Assert.Single(_reports.All);
         Assert.Equal((ManifestLoadStatus.Applied, id, 1L), (report.Result.Status, report.Result.ManifestId, report.Result.ServedSequence));
-        await host.StopAsync();
+        await host.StopAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public sealed class ReleaseHostTests : IDisposable
         await _fixture.PublishAsync("p", id);
         using var host = Build(["p"]);
 
-        var thrown = await Assert.ThrowsAsync<ConfigException>(() => host.StartAsync());
+        var thrown = await Assert.ThrowsAsync<ConfigException>(() => host.StartAsync(TestContext.Current.CancellationToken));
 
         Assert.StartsWith($"Loading StrataRec releases of environment 'local' (p: incompatible manifest {id}: this binary lacks Teleport@1) failed with 1 error(s)",
             thrown.Message, StringComparison.Ordinal);
@@ -70,7 +70,7 @@ public sealed class ReleaseHostTests : IDisposable
         await _fixture.PublishAsync("a", a);
         using var host = Build(["a", "c"]);
 
-        var thrown = await Assert.ThrowsAsync<ConfigException>(() => host.StartAsync());
+        var thrown = await Assert.ThrowsAsync<ConfigException>(() => host.StartAsync(TestContext.Current.CancellationToken));
 
         Assert.StartsWith($"Loading StrataRec releases of environment 'local' (a: applied manifest {a} (sequence 1); c: nothing published) failed with 2 error(s)",
             thrown.Message, StringComparison.Ordinal);
@@ -89,10 +89,10 @@ public sealed class ReleaseHostTests : IDisposable
         await _fixture.PublishAsync("b", b);
         using var host = Build(["a", "b"]);
 
-        await host.StartAsync();
+        await host.StartAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(new[] { "a", "b" }, host.Services.GetRequiredService<IRecEngine>().PipelineIds());
-        await host.StopAsync();
+        await host.StopAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -110,7 +110,7 @@ public sealed class ReleaseHostTests : IDisposable
         });
         using var host = builder.Build();
 
-        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => host.StartAsync());
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => host.StartAsync(TestContext.Current.CancellationToken));
         Assert.Contains("no IManifestSource", thrown.Message);
         Assert.Contains("new FileSystemManifestSource(", thrown.Message);
     }
@@ -122,17 +122,17 @@ public sealed class ReleaseHostTests : IDisposable
         await _fixture.PublishAsync("p", first);
         using var host = Build(["p"], _clock);
         var engine = host.Services.GetRequiredService<IRecEngine>();
-        await host.StartAsync();
-        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30)); // the polling waits
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken); // the polling waits
 
         await _clock.AdvanceAsync(Poll); // nothing new
         var (_, second) = await _fixture.Pipeline("p", k: 3).BuildAsync("p", seq: 2);
         await _fixture.PublishAsync("p", second);
         await _clock.AdvanceAsync(Poll);
 
-        Assert.Equal(second, (await engine.ExecuteAsync(ReleaseFixture.Request("p"))).ManifestId);
+        Assert.Equal(second, (await engine.ExecuteAsync(ReleaseFixture.Request("p"), TestContext.Current.CancellationToken)).ManifestId);
         Assert.Equal(new[] { (0.0, first, ManifestLoadStatus.Applied), (2.0, second, ManifestLoadStatus.Applied) }, _reports.Attempts());
-        await host.StopAsync();
+        await host.StopAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -142,8 +142,8 @@ public sealed class ReleaseHostTests : IDisposable
         await _fixture.PublishAsync("p", first);
         using var host = Build(["p"], _clock, maxRetry: TimeSpan.FromSeconds(4));
         var engine = host.Services.GetRequiredService<IRecEngine>();
-        await host.StartAsync();
-        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         // A manifest whose pipeline artifact is not in the store yet.
         var (second, secondId) = await _fixture.Pipeline("p", k: 3).BuildAsync("p", seq: 2);
@@ -167,7 +167,7 @@ public sealed class ReleaseHostTests : IDisposable
         Assert.All(attempts.Take(4), a => Assert.Equal(ManifestLoadStatus.Rejected, a.Status));
         Assert.Equal(ManifestLoadStatus.Applied, attempts[4].Status);
         Assert.Contains("ARTIFACT_MISSING", _reports.All[1].Result.Reason);
-        Assert.Equal(secondId, (await engine.ExecuteAsync(ReleaseFixture.Request("p"))).ManifestId);
+        Assert.Equal(secondId, (await engine.ExecuteAsync(ReleaseFixture.Request("p"), TestContext.Current.CancellationToken)).ManifestId);
     }
 
     [Fact]
@@ -177,8 +177,8 @@ public sealed class ReleaseHostTests : IDisposable
         await _fixture.PublishAsync("p", firstId);
         using var host = Build(["p"], _clock);
         var engine = host.Services.GetRequiredService<IRecEngine>();
-        await host.StartAsync();
-        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         // Incompatible: once.
         var incompatible = ReleaseFixture.With(first, seq: 2, requires: ["Teleport@1"]);
@@ -205,8 +205,8 @@ public sealed class ReleaseHostTests : IDisposable
             new[] { (0.0, firstId, ManifestLoadStatus.Applied), (1, incompatibleId, ManifestLoadStatus.Incompatible), (6, firstId, ManifestLoadStatus.Stale),
                 (9, thirdId, ManifestLoadStatus.Applied) },
             _reports.Attempts());
-        Assert.Equal(thirdId, (await engine.ExecuteAsync(ReleaseFixture.Request("p"))).ManifestId);
-        await host.StopAsync();
+        Assert.Equal(thirdId, (await engine.ExecuteAsync(ReleaseFixture.Request("p"), TestContext.Current.CancellationToken)).ManifestId);
+        await host.StopAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -216,8 +216,8 @@ public sealed class ReleaseHostTests : IDisposable
         await _fixture.PublishAsync("p", id);
         var log = new ReleaseLog();
         using var host = Build(["p"], _clock, maxRetry: TimeSpan.FromSeconds(4), log: log);
-        await host.StartAsync();
-        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         File.WriteAllText(_fixture.Pointers.GetPointerPath("p", "local"), "{ not json");
         for (var i = 0; i < 8; i++)
@@ -230,7 +230,7 @@ public sealed class ReleaseHostTests : IDisposable
         Assert.Equal(4, failures.Count);
         Assert.All(failures, f => Assert.IsType<InvalidDataException>(f.Exception));
         Assert.Equal(new[] { 1000, 2000, 4000, 4000 }.Select(ms => $"reading it again in {ms} ms"), failures.Select(f => f.Message[f.Message.IndexOf("reading", StringComparison.Ordinal)..]));
-        await host.StopAsync();
+        await host.StopAsync(TestContext.Current.CancellationToken);
     }
 
     [Theory]
@@ -243,23 +243,23 @@ public sealed class ReleaseHostTests : IDisposable
         var store = new WatchedStore(_fixture.Store);
         var host = Build(["p"], _clock, store: store);
         var engine = host.Services.GetRequiredService<IRecEngine>();
-        await host.StartAsync();
-        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         var (second, secondId) = await _fixture.Pipeline("p", k: 3).BuildAsync("p", seq: 2);
         store.Hold = second.Artifacts.Pipeline;
         await _fixture.PublishAsync("p", secondId);
         _clock.Advance(Poll);
-        await store.HeldReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await store.HeldReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         if (stop)
         {
-            await host.StopAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            await host.StopAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
             Assert.True(store.HeldReadCancelled.Task.IsCompleted);
-            Assert.Equal(first, (await engine.ExecuteAsync(ReleaseFixture.Request("p"))).ManifestId);
+            Assert.Equal(first, (await engine.ExecuteAsync(ReleaseFixture.Request("p"), TestContext.Current.CancellationToken)).ManifestId);
         }
 
-        await Task.Run(host.Dispose).WaitAsync(TimeSpan.FromSeconds(30));
+        await Task.Run(host.Dispose, TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         Assert.True(store.HeldReadCancelled.Task.IsCompleted);
         Assert.Single(_reports.All); // the cancelled attempt is no outcome
@@ -278,8 +278,8 @@ public sealed class ReleaseHostTests : IDisposable
         var log = new ReleaseLog();
         using var host = Build(["p"], _clock, log: log);
         var engine = host.Services.GetRequiredService<IRecEngine>();
-        await host.StartAsync();
-        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         log.Fails = true;
 
         // 1 s: the pointer is unreadable (event 1009).
@@ -300,12 +300,12 @@ public sealed class ReleaseHostTests : IDisposable
         Assert.Equal(
             new[] { (0.0, first, ManifestLoadStatus.Applied), (2, secondId, ManifestLoadStatus.Rejected), (3, secondId, ManifestLoadStatus.Applied) },
             _reports.Attempts());
-        Assert.Equal(secondId, (await engine.ExecuteAsync(ReleaseFixture.Request("p"))).ManifestId);
+        Assert.Equal(secondId, (await engine.ExecuteAsync(ReleaseFixture.Request("p"), TestContext.Current.CancellationToken)).ManifestId);
         var events = log.Entries.Select(e => e.EventId.Id).ToList();
         Assert.Contains(1009, events);
         Assert.Contains(1012, events);
         Assert.DoesNotContain(1013, events); // nothing escaped to the polling's last guard
-        await host.StopAsync();
+        await host.StopAsync(TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -323,10 +323,10 @@ public sealed class ReleaseHostTests : IDisposable
         using var starting = new CancellationTokenSource();
 
         var start = host.StartAsync(starting.Token);
-        await source.HeldStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await source.HeldStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         starting.Cancel(); // threw the source's AggregateException here
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => start.WaitAsync(TimeSpan.FromSeconds(30)));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => start.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
         Assert.Empty(host.Services.GetRequiredService<IRecEngine>().PipelineIds());
     }
 
@@ -342,23 +342,23 @@ public sealed class ReleaseHostTests : IDisposable
         using var blocked = new ManualResetEventSlim();
         var source = new HeldSource(_fixture.Pointers) { BlockOnCancel = blocked };
         var host = Build(["p"], _clock, source: source);
-        await host.StartAsync();
-        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         source.Hold = true;
         _clock.Advance(Poll);
-        await source.HeldStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await source.HeldStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         try
         {
             using var stopBy = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
-            await host.StopAsync(stopBy.Token).WaitAsync(TimeSpan.FromSeconds(30));
+            await host.StopAsync(stopBy.Token).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         }
         finally
         {
             blocked.Set();
         }
 
-        await Task.Run(host.Dispose).WaitAsync(TimeSpan.FromSeconds(30));
+        await Task.Run(host.Dispose, TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -374,16 +374,16 @@ public sealed class ReleaseHostTests : IDisposable
         using var blocked = new ManualResetEventSlim();
         var source = new HeldSource(_fixture.Pointers) { BlockOnCancel = blocked };
         var host = Build(["p"], _clock, source: source);
-        await host.StartAsync();
-        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         source.Hold = true;
         _clock.Advance(Poll);
-        await source.HeldStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await source.HeldStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
-        var stopping = host.StopAsync(); // the default stop timeout: 30 s
-        _ = Task.Delay(200).ContinueWith(_ => blocked.Set(), TaskScheduler.Default);
-        await stopping.WaitAsync(TimeSpan.FromSeconds(30));
-        await Task.Run(host.Dispose).WaitAsync(TimeSpan.FromSeconds(30));
+        var stopping = host.StopAsync(TestContext.Current.CancellationToken); // the default stop timeout: 30 s
+        _ = Task.Delay(200, TestContext.Current.CancellationToken).ContinueWith(_ => blocked.Set(), TaskScheduler.Default);
+        await stopping.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await Task.Run(host.Dispose, TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         Assert.True(source.CallbackEndedAtDisposal);
     }
@@ -402,8 +402,8 @@ public sealed class ReleaseHostTests : IDisposable
         var log = new ReleaseLog();
         using var host = Build(["p"], _clock, store: store, log: log);
         var engine = host.Services.GetRequiredService<IRecEngine>();
-        await host.StartAsync();
-        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         var (_, second) = await _fixture.Pipeline("p", k: 3).BuildAsync("p", seq: 2);
         store.FailOn = second;
@@ -414,8 +414,8 @@ public sealed class ReleaseHostTests : IDisposable
         Assert.Equal(new[] { (0.0, first, ManifestLoadStatus.Applied), (1, second, ManifestLoadStatus.Rejected), (2, second, ManifestLoadStatus.Applied) },
             _reports.Attempts());
         Assert.Contains("(reading its message threw)", _reports.All[1].Result.Reason);
-        Assert.Equal(second, (await engine.ExecuteAsync(ReleaseFixture.Request("p"))).ManifestId);
-        await host.StopAsync();
+        Assert.Equal(second, (await engine.ExecuteAsync(ReleaseFixture.Request("p"), TestContext.Current.CancellationToken)).ManifestId);
+        await host.StopAsync(TestContext.Current.CancellationToken);
     }
 
     /// <summary>A store whose read of <see cref="FailOn"/> throws once, an exception whose message cannot be read.</summary>

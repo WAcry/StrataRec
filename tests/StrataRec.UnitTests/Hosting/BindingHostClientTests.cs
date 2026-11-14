@@ -53,13 +53,13 @@ public sealed class BindingHostClientTests
         var instance = a.Acquire(Spec(factory), factory.Create);
         b.Acquire(Spec(factory), factory.Create);
 
-        var waiting = a.WaitLoadedAsync();
-        await instance.LoadStarted.Task.WaitAsync(Wait);
+        var waiting = a.WaitLoadedAsync(TestContext.Current.CancellationToken);
+        await instance.LoadStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.False(waiting.IsCompleted);
 
         instance.FinishLoad();
-        Assert.Empty(await waiting.WaitAsync(Wait));
-        Assert.Empty(await b.WaitLoadedAsync().WaitAsync(Wait)); // taken over loaded
+        Assert.Empty(await waiting.WaitAsync(Wait, TestContext.Current.CancellationToken));
+        Assert.Empty(await b.WaitLoadedAsync(TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken)); // taken over loaded
         Assert.Equal(1, instance.Loads);
     }
 
@@ -73,7 +73,7 @@ public sealed class BindingHostClientTests
         var broken = failed.Acquire(Spec(factory), factory.Create);
         broken.FailLoad(new BindingException("/uri", "The model file 'm.bin' does not exist.", "check the path"));
 
-        var failure = Assert.Single(await failed.WaitLoadedAsync().WaitAsync(Wait));
+        var failure = Assert.Single(await failed.WaitLoadedAsync(TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken));
 
         Assert.Equal(("BINDING_LOAD_FAILED", "bindings:test", "/models/ctr_model/uri", "check the path"),
             (failure.Code, failure.Artifact, failure.Pointer, failure.Hint));
@@ -84,10 +84,10 @@ public sealed class BindingHostClientTests
         var fresh = retry.Acquire(Spec(factory), factory.Create);
         Assert.NotSame(broken, fresh); // the next load really retries
         fresh.FinishLoad();
-        Assert.Empty(await retry.WaitLoadedAsync().WaitAsync(Wait));
+        Assert.Empty(await retry.WaitLoadedAsync(TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken));
 
         failed.Dispose(); // the failed plan returns its lease: its instance goes
-        await broken.Disposed.Task.WaitAsync(Wait);
+        await broken.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.False(fresh.Disposed.Task.IsCompleted);
         Assert.Equal(1, host.InstanceCount);
     }
@@ -101,17 +101,17 @@ public sealed class BindingHostClientTests
         var slow = lease.Acquire(Spec(factory), factory.Create);
         slow.IgnoreCancellation = true;
 
-        var failure = Assert.Single(await lease.WaitLoadedAsync().WaitAsync(Wait));
+        var failure = Assert.Single(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken));
         Assert.Contains("did not finish loading within 50 ms", failure.Message, StringComparison.Ordinal);
         Assert.Contains("LoadTimeout", failure.Hint, StringComparison.Ordinal);
 
         lease.Dispose();
         Assert.True(SpinWait.SpinUntil(() => slow.LoadToken.IsCancellationRequested, Wait)); // the release cancels the load...
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
         Assert.False(slow.Disposed.Task.IsCompleted); // ...and does not dispose under it
 
         slow.FinishLoad();
-        await slow.Disposed.Task.WaitAsync(Wait);
+        await slow.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal(1, slow.DisposeCount);
     }
 
@@ -128,11 +128,11 @@ public sealed class BindingHostClientTests
         lease.Dispose(); // the plan is replaced
         Assert.False(lease.TryEnter()); // no new request enters a retired lease
         lease.RequestEnded(); // the request returned...
-        await Task.Delay(20);
+        await Task.Delay(20, TestContext.Current.CancellationToken);
         Assert.False(instance.Disposed.Task.IsCompleted); // ...but a call its run abandoned still runs
 
         run.RequestEnded(); // that call returned
-        await instance.Disposed.Task.WaitAsync(Wait);
+        await instance.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal(0, host.InstanceCount);
     }
 
@@ -147,11 +147,11 @@ public sealed class BindingHostClientTests
         Assert.Same(instance, current.Acquire(Spec(factory), factory.Create));
 
         old.Dispose();
-        await Task.Delay(20);
+        await Task.Delay(20, TestContext.Current.CancellationToken);
         Assert.False(instance.Disposed.Task.IsCompleted);
 
         current.Dispose();
-        await instance.Disposed.Task.WaitAsync(Wait);
+        await instance.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -184,14 +184,14 @@ public sealed class BindingHostClientTests
             proceed.Wait(Wait);
             return created;
         }));
-        await creating.Task.WaitAsync(Wait);
+        await creating.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         var winner = b.Acquire(Spec(factory), factory.Create);
         proceed.Set();
 
-        Assert.Same(winner, await loser.WaitAsync(Wait));
+        Assert.Same(winner, await loser.WaitAsync(Wait, TestContext.Current.CancellationToken));
         var dropped = Assert.Single(factory.Created, i => !ReferenceEquals(i, winner));
-        await dropped.Disposed.Task.WaitAsync(Wait);
+        await dropped.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal(0, dropped.Loads);
         Assert.Equal(1, host.InstanceCount);
     }
@@ -205,25 +205,25 @@ public sealed class BindingHostClientTests
         var loading = host.OpenLease();
         var held = host.OpenLease();
         var instance = loading.Acquire(Spec(factory), factory.Create);
-        var waiting = loading.WaitLoadedAsync();
-        await instance.LoadStarted.Task.WaitAsync(Wait);
+        var waiting = loading.WaitLoadedAsync(TestContext.Current.CancellationToken);
+        await instance.LoadStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         var used = Loaded(held, factory, """{ "uri": "used.bin" }""");
         Assert.True(held.TryEnter()); // a request still runs on the plan
 
         loading.Dispose();
         held.Dispose();
-        await host.DisposeAsync().AsTask().WaitAsync(Wait); // bounded: the request is still running
+        await host.DisposeAsync().AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken); // bounded: the request is still running
 
         Assert.True(instance.LoadToken.IsCancellationRequested);
-        await instance.Disposed.Task.WaitAsync(Wait);
+        await instance.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.False(used.Disposed.Task.IsCompleted);
         Assert.Contains(logs.Entries, e => e.EventId == 1210); // the instance the request holds was not disposed in time
-        var failure = Assert.Single(await waiting.WaitAsync(Wait));
+        var failure = Assert.Single(await waiting.WaitAsync(Wait, TestContext.Current.CancellationToken));
         Assert.Contains("stopped before the load completed", failure.Message, StringComparison.Ordinal);
         Assert.Throws<ObjectDisposedException>(() => host.OpenLease());
 
         held.RequestEnded(); // the request returns after shutdown: its instance is still disposed
-        await used.Disposed.Task.WaitAsync(Wait);
+        await used.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
     }
 
     [Theory]
@@ -238,8 +238,8 @@ public sealed class BindingHostClientTests
         var instance = lease.Acquire(Spec(factory), factory.Create);
         using var cleanup = new ManualResetEventSlim();
         instance.CleanupGate = cleanup;
-        _ = lease.WaitLoadedAsync();
-        await instance.LoadStarted.Task.WaitAsync(Wait);
+        _ = lease.WaitLoadedAsync(TestContext.Current.CancellationToken);
+        await instance.LoadStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         if (releasedFirst)
         {
@@ -247,18 +247,18 @@ public sealed class BindingHostClientTests
         }
 
         var shutdown = host.DisposeAsync().AsTask();
-        await instance.CleanupStarted.Task.WaitAsync(Wait);
+        await instance.CleanupStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         if (!releasedFirst)
         {
             lease.Dispose(); // a second cancellation must still wait for the first one's callbacks
         }
 
-        await shutdown.WaitAsync(Wait); // bounded by its timeout
+        await shutdown.WaitAsync(Wait, TestContext.Current.CancellationToken); // bounded by its timeout
         Assert.Contains(logs.Entries, e => e.EventId == 1210);
         Assert.False(instance.Disposed.Task.IsCompleted); // the load returned, its cancellation callback has not
 
         cleanup.Set();
-        await instance.Disposed.Task.WaitAsync(Wait);
+        await instance.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal((1, 0), (instance.DisposeCount, instance.DisposalsDuringCleanup));
         Assert.True(SpinWait.SpinUntil(() => host.InstanceCount == 0, Wait));
     }
@@ -274,12 +274,12 @@ public sealed class BindingHostClientTests
         using var cleanup = new ManualResetEventSlim(initialState: true);
         instance.CleanupGate = cleanup;
         instance.ThrowingCleanup = true;
-        _ = lease.WaitLoadedAsync();
-        await instance.LoadStarted.Task.WaitAsync(Wait);
+        _ = lease.WaitLoadedAsync(TestContext.Current.CancellationToken);
+        await instance.LoadStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         lease.Dispose();
 
-        await instance.Disposed.Task.WaitAsync(Wait);
+        await instance.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal((1, 0), (instance.DisposeCount, instance.DisposalsDuringCleanup));
         Assert.Contains(logs.Entries, e => e.EventId == 1212); // logged before the disposal, which waited for the callback
     }
@@ -293,12 +293,12 @@ public sealed class BindingHostClientTests
         var lease = host.OpenLease();
         var instance = Loaded(lease, factory);
         instance.ThrowOnDispose = true;
-        await logs.Thrown.Task.WaitAsync(Wait);
+        await logs.Thrown.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         lease.Dispose();
-        await instance.Disposed.Task.WaitAsync(Wait);
+        await instance.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.True(SpinWait.SpinUntil(() => logs.Entries.Any(e => e.EventId == 1211), Wait));
-        await host.DisposeAsync().AsTask().WaitAsync(Wait);
+        await host.DisposeAsync().AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.DoesNotContain(logs.Entries, e => e.EventId == 1210);
     }
 
@@ -317,7 +317,7 @@ public sealed class BindingHostClientTests
             statuses.Add(lookup.Status);
             client.FinishLoad();
             return lookup;
-        }).WaitAsync(Wait);
+        }, TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         Assert.Equal([SignatureStatus.Pending, SignatureStatus.Known], statuses);
         Assert.Equal("p_click", Assert.Single(compiled.Signature!.Outputs).Name);
@@ -334,7 +334,7 @@ public sealed class BindingHostClientTests
         using var lease = host.OpenLease();
 
         var lookup = await lease.CompileAsync(bindings =>
-            bindings.Signature(bindings.Acquire(Spec(server), server.Create), "ctr_model", "2")).WaitAsync(Wait);
+            bindings.Signature(bindings.Acquire(Spec(server), server.Create), "ctr_model", "2"), TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         Assert.Equal(SignatureStatus.Failed, lookup.Status);
         Assert.Contains("within 50 ms", lookup.Error, StringComparison.Ordinal);
@@ -360,7 +360,7 @@ public sealed class BindingHostClientTests
             answer.TrySetResult();
             Assert.True(SpinWait.SpinUntil(() => bindings.Signature(client, "ctr_model", null).Status == SignatureStatus.Known, Wait)); // an arm
             return baseline;
-        }).WaitAsync(Wait);
+        }, TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         Assert.Equal([SignatureStatus.Pending, SignatureStatus.Known], compiles);
         Assert.Equal(SignatureStatus.Known, lookup.Status);
@@ -377,17 +377,17 @@ public sealed class BindingHostClientTests
         {
             // On a thread of its own, so a compile that blocks fails the test instead of hanging it.
             var lookup = await Task.Run(() => lease.CompileAsync(bindings =>
-                bindings.Signature(bindings.Acquire(Spec(server), server.Create), "ctr_model", null))).WaitAsync(Wait);
+                bindings.Signature(bindings.Acquire(Spec(server), server.Create), "ctr_model", null))).WaitAsync(Wait, TestContext.Current.CancellationToken);
 
             Assert.Equal(SignatureStatus.Failed, lookup.Status); // the client has not returned: its answer is not waited for
             Assert.Contains("within 50 ms", lookup.Error, StringComparison.Ordinal);
 
             // The bound may end the wait before the pool even started the client's method (review 17): what follows needs
             // the client inside it, so wait for that instead of assuming the pool started it within the 50 ms.
-            await server.Entered.Task.WaitAsync(Wait);
+            await server.Entered.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
             Assert.True(server.Inside);
             lease.Dispose(); // the plan is rejected
-            await Task.Delay(50);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
             Assert.False(server.Disposed.Task.IsCompleted); // the client is still inside its method
         }
         finally
@@ -395,7 +395,7 @@ public sealed class BindingHostClientTests
             server.Gate.Set();
         }
 
-        await server.Disposed.Task.WaitAsync(Wait);
+        await server.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal(0, server.DisposalsInside);
     }
 
@@ -410,14 +410,14 @@ public sealed class BindingHostClientTests
         {
             var compiling = Task.Run(() => lease.CompileAsync(bindings =>
                 bindings.Signature(bindings.Acquire(Spec(server), server.Create), "ctr_model", null), cancel.Token));
-            await server.Entered.Task.WaitAsync(Wait);
+            await server.Entered.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
             cancel.Cancel();
 
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => compiling.WaitAsync(Wait));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => compiling.WaitAsync(Wait, TestContext.Current.CancellationToken));
             Assert.True(server.Inside);
             lease.Dispose();
-            await Task.Delay(50);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
             Assert.False(server.Disposed.Task.IsCompleted);
         }
         finally
@@ -425,7 +425,7 @@ public sealed class BindingHostClientTests
             server.Gate.Set();
         }
 
-        await server.Disposed.Task.WaitAsync(Wait);
+        await server.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal(0, server.DisposalsInside);
     }
 
@@ -436,16 +436,16 @@ public sealed class BindingHostClientTests
         var server = new CleaningServer();
         var lease = host.OpenLease();
 
-        var compiling = lease.CompileAsync(bindings => bindings.Signature(bindings.Acquire(Spec(server), server.Create), "ctr_model", null));
-        await server.Entered.Task.WaitAsync(Wait);
+        var compiling = lease.CompileAsync(bindings => bindings.Signature(bindings.Acquire(Spec(server), server.Create), "ctr_model", null), TestContext.Current.CancellationToken);
+        await server.Entered.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         lease.Dispose(); // cancels the lookup: its callback ends the lookup, then goes on cleaning up with the instance
-        await server.CleanupStarted.Task.WaitAsync(Wait);
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => compiling.WaitAsync(Wait)); // the second compile meets the retired lease
-        await Task.Delay(50);
+        await server.CleanupStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => compiling.WaitAsync(Wait, TestContext.Current.CancellationToken)); // the second compile meets the retired lease
+        await Task.Delay(50, TestContext.Current.CancellationToken);
         Assert.False(server.Disposed.Task.IsCompleted);
 
         server.Gate.Set();
-        await server.Disposed.Task.WaitAsync(Wait);
+        await server.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal(0, server.DisposalsDuringCleanup);
     }
 
@@ -469,14 +469,14 @@ public sealed class BindingHostClientTests
         Assert.True(SpinWait.SpinUntil(() => client?.SignatureCalls == 1, Wait));
 
         cancel.Cancel(); // the engine's load is cancelled...
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => compiling.WaitAsync(Wait));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => compiling.WaitAsync(Wait, TestContext.Current.CancellationToken));
         lease.Dispose(); // ...and returns its lease
         Assert.True(SpinWait.SpinUntil(() => client!.SignatureToken.IsCancellationRequested, Wait)); // the lookup is cancelled...
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
         Assert.False(client!.Disposed.Task.IsCompleted); // ...and the client is not disposed under it
 
         answer.SetResult();
-        await client.Disposed.Task.WaitAsync(Wait);
+        await client.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal((1, 0), (client.DisposeCount, client.CallsAtOrAfterDispose));
         Assert.Equal(0, host.InstanceCount);
     }
@@ -495,13 +495,13 @@ public sealed class BindingHostClientTests
         var compiling = lease.CompileAsync(bindings =>
             bindings.Signature(bindings.Acquire(Spec(factory), factory.Create), "ctr_model", null), cancel.Token);
         var client = Assert.Single(factory.Created);
-        await client.LoadStarted.Task.WaitAsync(Wait); // the load waits for its token, or for the test
+        await client.LoadStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken); // the load waits for its token, or for the test
 
         cancel.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => compiling.WaitAsync(Wait));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => compiling.WaitAsync(Wait, TestContext.Current.CancellationToken));
         lease.Dispose();
 
-        await client.Disposed.Task.WaitAsync(Prompt); // the lease ended and released the client: its load was cancelled
+        await client.Disposed.Task.WaitAsync(Prompt, TestContext.Current.CancellationToken); // the lease ended and released the client: its load was cancelled
         Assert.True(client.LoadToken.IsCancellationRequested);
         Assert.Empty(lease.Instances);
         Assert.Equal(0, client.SignatureCalls); // nobody waits for the answer any more, so the client is never asked
@@ -521,12 +521,12 @@ public sealed class BindingHostClientTests
         var first = cancelled.CompileAsync(bindings =>
             bindings.Signature(bindings.Acquire(Spec(factory), factory.Create), "ctr_model", null), cancel.Token);
         var second = surviving.CompileAsync(bindings =>
-            bindings.Signature(bindings.Acquire(Spec(factory), factory.Create), "ctr_model", null));
+            bindings.Signature(bindings.Acquire(Spec(factory), factory.Create), "ctr_model", null), TestContext.Current.CancellationToken);
         var client = Assert.Single(factory.Created); // one client, one load, both lookups waiting for it
-        await client.LoadStarted.Task.WaitAsync(Wait);
+        await client.LoadStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         cancel.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first.WaitAsync(Wait));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first.WaitAsync(Wait, TestContext.Current.CancellationToken));
         cancelled.Dispose();
 
         Assert.True(SpinWait.SpinUntil(() => cancelled.Instances.Count == 0, Prompt)); // its lookup ended, and its lease with it
@@ -534,7 +534,7 @@ public sealed class BindingHostClientTests
         Assert.False(second.IsCompleted);
 
         client.FinishLoad();
-        Assert.Equal(SignatureStatus.Known, (await second.WaitAsync(Wait)).Status);
+        Assert.Equal(SignatureStatus.Known, (await second.WaitAsync(Wait, TestContext.Current.CancellationToken)).Status);
         Assert.Equal(1, client.Loads);
         Assert.False(client.Disposed.Task.IsCompleted);
     }
@@ -552,10 +552,10 @@ public sealed class BindingHostClientTests
             var lookup = bindings.Signature(client, "ctr_model", null);
             client.FailLoad(new InvalidOperationException("corrupt model"));
             return lookup;
-        }).WaitAsync(Wait);
+        }, TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         Assert.Equal(SignatureStatus.Unchecked, lookup.Status);
-        var failure = Assert.Single(await lease.WaitLoadedAsync().WaitAsync(Wait));
+        var failure = Assert.Single(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken));
         Assert.Contains("corrupt model", failure.Message, StringComparison.Ordinal);
     }
 
@@ -567,10 +567,10 @@ public sealed class BindingHostClientTests
         using var lease = host.OpenLease();
 
         var lookup = await lease.CompileAsync(bindings =>
-            bindings.Signature(bindings.Acquire(Spec(factory), factory.Create), "ctr_model", null)).WaitAsync(Wait);
+            bindings.Signature(bindings.Acquire(Spec(factory), factory.Create), "ctr_model", null), TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         Assert.Equal(SignatureStatus.Unchecked, lookup.Status);
-        Assert.Empty(await lease.WaitLoadedAsync().WaitAsync(Wait));
+        Assert.Empty(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken));
         Assert.Equal((0, 0), (factory.Created[0].Loads, factory.Created[0].SignatureCalls));
     }
 
@@ -585,7 +585,7 @@ public sealed class BindingHostClientTests
         instance.OnLoad = async token => instance.Credential = await instance.Context.SecretReference("credentials")!.ResolveAsync(token);
         instance.FinishLoad();
 
-        Assert.Empty(await lease.WaitLoadedAsync().WaitAsync(Wait));
+        Assert.Empty(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken));
         Assert.Equal("value-of-ctr-token", instance.Credential!.Reveal());
     }
 
@@ -599,7 +599,8 @@ public sealed class BindingHostClientTests
         lease.Acquire(Spec(factory, """{ "uri": "slow.bin" }"""), factory.Create); // still loading when the other fails
         broken.FailLoad(new UnreadableException());
 
-        var failure = Assert.Single(await lease.WaitLoadedAsync().WaitAsync(Wait)); // stops early only with a failure to show
+        // Stops early only with a failure to show.
+        var failure = Assert.Single(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken));
 
         Assert.Equal(("BINDING_LOAD_FAILED", "bindings:test", "/models/ctr_model"), (failure.Code, failure.Artifact, failure.Pointer));
         Assert.Contains(typeof(UnreadableException).FullName!, failure.Message, StringComparison.Ordinal);
@@ -614,7 +615,7 @@ public sealed class BindingHostClientTests
         using var lease = host.OpenLease();
 
         var lookup = await lease.CompileAsync(bindings =>
-            bindings.Signature(bindings.Acquire(Spec(server), server.Create), "ctr_model", null)).WaitAsync(Wait);
+            bindings.Signature(bindings.Acquire(Spec(server), server.Create), "ctr_model", null), TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         Assert.Equal(SignatureStatus.Failed, lookup.Status);
         Assert.Contains(typeof(UnreadableException).FullName!, lookup.Error, StringComparison.Ordinal);
@@ -649,7 +650,7 @@ public sealed class BindingHostClientTests
 
         lease.Dispose();
 
-        await Task.WhenAll(first.Disposed.Task, second.Disposed.Task).WaitAsync(Wait);
+        await Task.WhenAll(first.Disposed.Task, second.Disposed.Task).WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal(0, host.InstanceCount); // both entries were found again, although the factory's hash changed
     }
 

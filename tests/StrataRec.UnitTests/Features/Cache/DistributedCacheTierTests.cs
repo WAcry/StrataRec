@@ -29,14 +29,14 @@ public class DistributedCacheTierTests
         };
         var tier = new DistributedCacheTier(store);
         Assert.True(tier.TryWrite(Cache(), Entries(1), 1));
-        await store.Held.Task.WaitAsync(Wait);
+        await store.Held.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         var disposing = tier.DisposeAsync().AsTask();
-        await store.Cancelled.Task.WaitAsync(Wait);
+        await store.Cancelled.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal(0, store.Disposals); // the write still runs on it
         store.Release();
 
-        var error = await Assert.ThrowsAsync<AggregateException>(() => disposing.WaitAsync(Wait));
+        var error = await Assert.ThrowsAsync<AggregateException>(() => disposing.WaitAsync(Wait, TestContext.Current.CancellationToken));
         Assert.Contains(error.Flatten().InnerExceptions, e => e.Message == "cleanup failed"); // reported, for the host to log
         Assert.Equal((1, true), (store.Disposals, store.DisposedAfterTheWriteReturned));
         await tier.DisposeAsync();
@@ -56,14 +56,14 @@ public class DistributedCacheTierTests
         var cache = Cache();
         Assert.True(tier.TryWrite(cache, Entries(1), 1)); // written, then its count throws
         Assert.True(tier.TryWrite(cache, Entries(2), 1));
-        await store.Held.Task.WaitAsync(Wait); // the loop went on to the second
+        await store.Held.Task.WaitAsync(Wait, TestContext.Current.CancellationToken); // the loop went on to the second
 
         var disposing = tier.DisposeAsync().AsTask();
-        await store.Cancelled.Task.WaitAsync(Wait);
+        await store.Cancelled.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal(0, store.Disposals);
         store.Release();
 
-        var error = await Assert.ThrowsAsync<AggregateException>(() => disposing.WaitAsync(Wait));
+        var error = await Assert.ThrowsAsync<AggregateException>(() => disposing.WaitAsync(Wait, TestContext.Current.CancellationToken));
         Assert.Contains(error.InnerExceptions, e => e.Message == "listener failed");
         Assert.Equal((2, 1, true), (store.Calls, store.Disposals, store.DisposedAfterTheWriteReturned));
         Assert.Equal(0, tier.QueuedBytes);
@@ -82,14 +82,14 @@ public class DistributedCacheTierTests
         var tier = new DistributedCacheTier(store);
         var cache = Cache();
         Assert.True(tier.TryWrite(cache, Entries(1), 1));
-        await store.Held.Task.WaitAsync(Wait);
+        await store.Held.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.True(tier.TryWrite(cache, Entries(2), 1));
         Assert.True(tier.TryWrite(cache, Entries(3), 1));
 
         var disposing = tier.DisposeAsync().AsTask();
-        await store.Cancelled.Task.WaitAsync(Wait);
+        await store.Cancelled.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         store.Release();
-        await disposing.WaitAsync(Wait);
+        await disposing.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         Assert.Equal(1, store.Calls);
         Assert.Equal((1L, 2L), (written.Total, dropped.Total));

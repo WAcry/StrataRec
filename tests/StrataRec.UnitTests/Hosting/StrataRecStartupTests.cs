@@ -31,7 +31,7 @@ public sealed class StrataRecStartupTests : IDisposable
 
         var engine = host.Services.GetRequiredService<IRecEngine>();
         Assert.Empty(engine.PipelineIds()); // nothing loads before the host starts
-        await host.StartAsync();
+        await host.StartAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(new[] { "p" }, engine.PipelineIds());
         Assert.True(engine.TryGetRequestSchema("p", out var schema));
@@ -41,11 +41,11 @@ public sealed class StrataRecStartupTests : IDisposable
         var result = await engine.ExecuteAsync(new RecRequest
         {
             PipelineId = "p", RequestId = "r", Inputs = new StrataRec.Core.Values.RequestInputs().Set("user_id", 1L), Deadline = TimeSpan.FromSeconds(30),
-        });
+        }, TestContext.Current.CancellationToken);
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal(new long[] { 9, 8 }, result.Items.Select(i => i.Id.Int64Value));
         Assert.Empty(log.Entries);
-        await host.StopAsync();
+        await host.StopAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -55,7 +55,7 @@ public sealed class StrataRecStartupTests : IDisposable
         Workspace(root, data: """{ "items": [9, 8] }""", topK: "\"k\": \"two\"");
         using var host = Build(new CapturedLog(), options => options.ConfigRoot = root);
 
-        var thrown = await Assert.ThrowsAsync<ConfigException>(() => host.StartAsync());
+        var thrown = await Assert.ThrowsAsync<ConfigException>(() => host.StartAsync(TestContext.Current.CancellationToken));
 
         Assert.StartsWith($"Loading StrataRec configuration from {root} (local)", thrown.Message, StringComparison.Ordinal);
         var error = Assert.Single(thrown.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
@@ -75,13 +75,13 @@ public sealed class StrataRecStartupTests : IDisposable
             options.PlanEnvironment = environment; // its BaseDirectory is null: the config root is used
         });
 
-        await host.StartAsync();
+        await host.StartAsync(TestContext.Current.CancellationToken);
 
         var (level, eventId, message) = Assert.Single(log.Entries);
         Assert.Equal((LogLevel.Warning, 1003), (level, eventId.Id));
         Assert.Equal("Configuration warning TEST_WARNING at pipeline:p/nodes/top/config: Mind the gap. (hint: none)", message);
         Assert.Equal(new[] { "p" }, host.Services.GetRequiredService<IRecEngine>().PipelineIds());
-        await host.StopAsync();
+        await host.StopAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -98,10 +98,10 @@ public sealed class StrataRecStartupTests : IDisposable
             options.PlanEnvironment = new PlanEnvironment { CandidateSources = CandidateSourceRegistry.CreateDefault().Add(new SlowListFactory()) };
         }, concurrently: true, later);
 
-        await host.StartAsync();
+        await host.StartAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(new[] { "p" }, later.SawPipelines);
-        await host.StopAsync();
+        await host.StopAsync(TestContext.Current.CancellationToken);
     }
 
     private IHost Build(CapturedLog log, Action<StrataRecOptions> configure, bool concurrently = false, LaterService? later = null)

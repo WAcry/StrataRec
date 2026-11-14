@@ -39,7 +39,7 @@ public sealed class LocalTableEngineTests
         Assert.Same(first, second);
         Assert.Equal(1, engine.Bindings.TableCount);
         Assert.Single(logs.Entries, e => e.EventId.Id == 1201); // loaded once
-        Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-reuse"))).Succeeded);
+        Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-reuse"), TestContext.Current.CancellationToken)).Succeeded);
     }
 
     [Fact]
@@ -56,7 +56,7 @@ public sealed class LocalTableEngineTests
         Assert.True(second.IsLoaded);
         Assert.Equal(32L << 20, second.Options.MaxBytes);
         Assert.Equal(1, engine.Bindings.TableCount); // the replaced plan's table is no longer held
-        Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-rebuilt"))).Succeeded);
+        Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-rebuilt"), TestContext.Current.CancellationToken)).Succeeded);
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public sealed class LocalTableEngineTests
         var host = HomeFeedTestHost.LoadModified(root => BreakLine(root, Snapshot, 3));
         await using var engine = new RecEngine(host.Environment);
 
-        var load = await engine.LoadAsync(host.Request);
+        var load = await engine.LoadAsync(host.Request, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(load.Applied);
         Assert.False(engine.TryGetPipeline("home_feed", out _));
@@ -83,18 +83,18 @@ public sealed class LocalTableEngineTests
         var host = HomeFeedTestHost.LoadModified(_ => { });
         await using var engine = new RecEngine(host.Environment);
         var current = AuthorTable(Load(engine, host.Root));
-        var before = await engine.ExecuteAsync(MetricsTests.Request("req-before"));
+        var before = await engine.ExecuteAsync(MetricsTests.Request("req-before"), TestContext.Current.CancellationToken);
 
         // A new release reads a new snapshot directory, whose third line is broken.
         CopySnapshot(host.Root, Snapshot, "fixtures/author_snapshot_v2");
         BreakLine(host.Root, "fixtures/author_snapshot_v2", 3);
         ReplayTests.Edit(host.Root, "bindings/local.jsonc", Snapshot + "\"", "fixtures/author_snapshot_v2\"");
-        var failed = await engine.LoadAsync(Compile(host.Root));
+        var failed = await engine.LoadAsync(Compile(host.Root), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(failed.Applied);
         Assert.Contains(failed.Diagnostics, d => d.Code == "LOCAL_TABLE_LOAD_FAILED" && d.Message.Contains("author_snapshot_v2", StringComparison.Ordinal));
         Assert.Same(current, AuthorTable(engine));
-        var during = await engine.ExecuteAsync(MetricsTests.Request("req-during"));
+        var during = await engine.ExecuteAsync(MetricsTests.Request("req-during"), TestContext.Current.CancellationToken);
         Assert.True(during.Succeeded, during.Error);
         LiveRunAssert.SameNodeOutcomes(before, during);
         Assert.Equal(Items(before), Items(during));
@@ -123,7 +123,7 @@ public sealed class LocalTableEngineTests
         File.WriteAllText(Path.Combine(host.Root, Snapshot, "snapshot.json"), "{ \"format\": \"jsonl\", ");
         await Eventually(() => logs.Entries.Count(e => e.EventId.Id == 1203) >= 2, "two restarts of the failed source");
         Assert.Equal(186443.0, Followers(table, 100)); // still serving its last complete load
-        Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-failing-source"))).Succeeded);
+        Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-failing-source"), TestContext.Current.CancellationToken)).Succeeded);
 
         // The next good snapshot is picked up by the restarted source.
         File.WriteAllText(Path.Combine(host.Root, Snapshot, "part-0001.jsonl"), "{\"key\": 100, \"version\": 2, \"fields\": {\"a_followers\": 5.0}}\n");
@@ -138,7 +138,7 @@ public sealed class LocalTableEngineTests
     public async Task AReplay_ReproducesTheRecording_AfterTheTableChanged_AndOnAnEngineThatLoadsNoTables()
     {
         var (recording, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
-        var recorded = await recording.ExecuteAsync(ReplayTests.Request("req-local-replay", 1001, "home", ReplayTests.ControlArms));
+        var recorded = await recording.ExecuteAsync(ReplayTests.Request("req-local-replay", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         Assert.True(recorded.Succeeded, recorded.Error);
         var authorCall = Assert.Single(recorded.Recording!.Runs[0].FeatureCalls, c => c.Source == "author_store");
         Assert.Equal("ok", authorCall.Status);
@@ -147,10 +147,10 @@ public sealed class LocalTableEngineTests
         // Same configuration, different data: every author has ten times the followers.
         var changed = HomeFeedTestHost.LoadModified(root => ScaleFollowers(root, 10));
         var (changedEngine, _) = MetricsTests.LoadEngine(changed);
-        var live = await changedEngine.ExecuteAsync(ReplayTests.Request("req-local-live", 1001, "home", ReplayTests.ControlArms));
+        var live = await changedEngine.ExecuteAsync(ReplayTests.Request("req-local-live", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         LiveRunAssert.SameNodeOutcomes(recorded, live);
         Assert.NotEqual(Items(recorded), Items(live)); // the same decisions: the table matters to the result
-        var replayed = await changedEngine.ReplayAsync(bundle);
+        var replayed = await changedEngine.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(replayed.Report.Diff.Identical, ReplayTests.Describe(replayed.Report));
         Assert.Empty(replayed.Report.Gaps);
@@ -159,7 +159,7 @@ public sealed class LocalTableEngineTests
         var sample = HomeFeedTestHost.Load();
         await using var replayOnly = new RecEngine(sample.Environment, bindings: new BindingHost(new BindingHostOptions { Load = false }));
         Assert.True(replayOnly.Load(sample.Request).Applied);
-        var unloaded = await replayOnly.ReplayAsync(bundle);
+        var unloaded = await replayOnly.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(unloaded.Report.Diff.Identical, ReplayTests.Describe(unloaded.Report));
         Assert.Empty(unloaded.Report.Gaps);
@@ -181,8 +181,8 @@ public sealed class LocalTableEngineTests
         var (remote, _) = MetricsTests.LoadEngine(fetched);
         var arms = treatment ? new[] { "exp_freshness_calibration/calibrated", "exp_mmr_diversity/mmr", "exp_quality_weight/strong" } : ReplayTests.ControlArms;
 
-        var fromTable = await local.ExecuteAsync(ReplayTests.Request("req-same", userId, surface, arms));
-        var fromFetch = await remote.ExecuteAsync(ReplayTests.Request("req-same", userId, surface, arms));
+        var fromTable = await local.ExecuteAsync(ReplayTests.Request("req-same", userId, surface, arms), TestContext.Current.CancellationToken);
+        var fromFetch = await remote.ExecuteAsync(ReplayTests.Request("req-same", userId, surface, arms), TestContext.Current.CancellationToken);
 
         Assert.True(fromTable.Succeeded, fromTable.Error);
         Assert.True(fromFetch.Succeeded, fromFetch.Error);
@@ -335,7 +335,7 @@ public sealed class LocalReadRecordingTests
             });
             listener.Start();
 
-            var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-update-window", 1001, "home", ReplayTests.ControlArms));
+            var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-update-window", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
 
             Assert.True(recorded.Succeeded, recorded.Error);
             Assert.True(updates >= 1, "the read counted no keys");
@@ -345,7 +345,7 @@ public sealed class LocalReadRecordingTests
             Assert.DoesNotContain("9876543", recordedFollowers, StringComparison.Ordinal);
             listener.Dispose();
 
-            var replayed = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording)));
+            var replayed = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording)), cancellationToken: TestContext.Current.CancellationToken);
 
             Assert.True(replayed.Report.Diff.Identical, ReplayTests.Describe(replayed.Report));
             Assert.Empty(replayed.Report.Gaps);

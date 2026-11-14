@@ -18,7 +18,8 @@ public sealed class RunCommandDeadlineTests
             // A deadline no request can meet: it is spent before execution starts.
             var request = Path.Combine(directory, "request.json");
             await File.WriteAllTextAsync(request,
-                "{ \"pipeline_id\": \"home_feed\", \"request_id\": \"r\", \"inputs\": { \"user_id\": 1001, \"session_id\": \"s-1\", \"surface\": \"home\" }, \"deadline_ms\": 0.001 }");
+                "{ \"pipeline_id\": \"home_feed\", \"request_id\": \"r\", \"inputs\": { \"user_id\": 1001, \"session_id\": \"s-1\", \"surface\": \"home\" }, \"deadline_ms\": 0.001 }",
+                TestContext.Current.CancellationToken);
 
             Assert.False(await Succeeded(request, deadlineMs: null));
             Assert.True(await Succeeded(request, deadlineMs: HomeFeedTestHost.UntimedMs));
@@ -33,7 +34,8 @@ public sealed class RunCommandDeadlineTests
         {
             var usage = new StringWriter();
             Assert.Equal(2, await StrataRec.CommandLine.StrataRecCommandLine.InvokeAsync(
-                ["run", "-c", HomeFeedTestHost.SampleRoot(), "-r", "request.json", "--deadline-ms", value], Tool.Environment, TextWriter.Null, usage));
+                ["run", "-c", HomeFeedTestHost.SampleRoot(), "-r", "request.json", "--deadline-ms", value], Tool.Environment, TextWriter.Null, usage,
+                TestContext.Current.CancellationToken));
             Assert.Contains(value == "0" ? "--deadline-ms must be positive." : "Cannot parse argument 'abc'", usage.ToString());
         }
 

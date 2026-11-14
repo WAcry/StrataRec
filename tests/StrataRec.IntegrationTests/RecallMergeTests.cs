@@ -32,7 +32,7 @@ public sealed class RecallMergeTests
         var result = await new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
         {
             RequestId = "r", Inputs = new RequestInputs(), Deadline = TimeSpan.FromSeconds(5),
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         var expected = new (int Id, long Mask, long Rank, double Score, string Primary)[]

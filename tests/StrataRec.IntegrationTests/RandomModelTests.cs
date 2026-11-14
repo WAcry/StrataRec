@@ -18,7 +18,7 @@ public sealed class RandomModelTests
     {
         var (engine, _) = MetricsTests.LoadEngine(Host(Binding));
 
-        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-random", 1001, "home", ReplayTests.ControlArms));
+        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-random", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
 
         Assert.True(recorded.Succeeded, recorded.Error);
         Assert.Equal(10, recorded.Items.Count);
@@ -29,9 +29,9 @@ public sealed class RandomModelTests
         Assert.All(scores.Values, s => Assert.InRange(s, 0.0, 1.0 - Math.Pow(2, -24)));
 
         // The same request scores the same; a request with another seed scores the same candidates differently.
-        var again = await engine.ExecuteAsync(ReplayTests.Request("req-random", 1001, "home", ReplayTests.ControlArms));
+        var again = await engine.ExecuteAsync(ReplayTests.Request("req-random", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         Assert.Equal(scores, Scores(Assert.Single(again.Recording!.Runs)));
-        var reseeded = await engine.ExecuteAsync(ReplayTests.Request("req-random-2", 1001, "home", ReplayTests.ControlArms));
+        var reseeded = await engine.ExecuteAsync(ReplayTests.Request("req-random-2", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         Assert.NotEqual(recorded.Recording.Request.Seed, reseeded.Recording!.Request.Seed);
         var other = Scores(Assert.Single(reseeded.Recording.Runs));
         Assert.Equal(scores.Keys.Order(), other.Keys.Order());
@@ -40,7 +40,7 @@ public sealed class RandomModelTests
         // Through JSON, on a fresh engine.
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording));
         var (fresh, _) = MetricsTests.LoadEngine(Host(Binding));
-        var outcome = await fresh.ReplayAsync(bundle);
+        var outcome = await fresh.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(outcome.Report.Diff.Identical, ReplayTests.Describe(outcome.Report));
         Assert.Equal(recorded.Items.Select(i => (i.Id.Int64Value, i.Rank)), outcome.Result.Items.Select(i => (i.Id.Int64Value, i.Rank)));

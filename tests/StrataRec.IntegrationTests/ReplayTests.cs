@@ -28,13 +28,13 @@ public sealed class ReplayTests
     public async Task HomeFeed_RecordThenReplay_ReproducesTheResultExactly(long? userId, string surface, bool treatment)
     {
         var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
-        var recorded = await engine.ExecuteAsync(Request("req-rt", userId, surface, treatment ? TreatmentArms : null));
+        var recorded = await engine.ExecuteAsync(Request("req-rt", userId, surface, treatment ? TreatmentArms : null), TestContext.Current.CancellationToken);
         Assert.True(recorded.Succeeded, recorded.Error);
 
         // Through JSON, and on a fresh engine: the bundle alone carries everything the replay needs.
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!));
         var (fresh, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
-        var outcome = await fresh.ReplayAsync(bundle);
+        var outcome = await fresh.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
 
         var report = outcome.Report;
         Assert.True(report.Diff.Identical, Describe(report));
@@ -57,7 +57,7 @@ public sealed class ReplayTests
     {
         var (engine, plan) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
 
-        var recorded = await engine.ExecuteAsync(Request("req-shape", 1001, "home", ControlArms, captureLogs: true));
+        var recorded = await engine.ExecuteAsync(Request("req-shape", 1001, "home", ControlArms, captureLogs: true), TestContext.Current.CancellationToken);
 
         var bundle = recorded.Recording!;
         Assert.Equal(ReplayBundle.CurrentFormat, bundle.Format);
@@ -112,14 +112,14 @@ public sealed class ReplayTests
             Deadline = HomeFeedTestHost.Deadline,
             TimeMs = 1_767_225_600_000,
             Debug = new DebugOptions { Record = true },
-        });
+        }, TestContext.Current.CancellationToken);
         (string, string)[] ignored = { ("exp_mmr_diversity/control", "layer_conflict"), ("exp_mmr_diversity/mmr", "layer_conflict"), ("not_real/unknown", "unknown") };
         Assert.Equal(new[] { "exp_quality_weight/strong" }, recorded.Experiments.Assigned); // the conflicting layer ran its baseline
         Assert.Equal(ignored, recorded.Experiments.Ignored.Select(i => (i.Id, IgnoredArm.Name(i.Reason))));
         Assert.Equal(ignored, recorded.Recording!.Request.Assignment.Ignored.Select(i => (i.Id, i.Reason)));
 
-        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording)));
-        var withArms = await engine.ReplayAsync(recorded.Recording, new ReplayOptions { Arms = new[] { "exp_quality_weight/strong" } });
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording)), cancellationToken: TestContext.Current.CancellationToken);
+        var withArms = await engine.ReplayAsync(recorded.Recording, new ReplayOptions { Arms = new[] { "exp_quality_weight/strong" } }, TestContext.Current.CancellationToken);
 
         Assert.True(outcome.Report.Diff.Identical, Describe(outcome.Report));
         Assert.Equal(recorded.Experiments.Assigned, outcome.Result.Experiments.Assigned);
@@ -139,11 +139,12 @@ public sealed class ReplayTests
             Assignment = new[] { "not_real/unknown" },
             Deadline = HomeFeedTestHost.Deadline,
             Debug = new DebugOptions { Record = true },
-        });
+        }, TestContext.Current.CancellationToken);
         var json = JsonNode.Parse(ReplayBundleFile.Serialize(recorded.Recording!))!;
         json["request"]!["assignment"]!["ignored"]![0]!["reason"] = "first_wins";
 
-        var error = await Assert.ThrowsAsync<ReplayBundleException>(async () => await engine.ReplayAsync(ReplayBundleFile.Parse(json.ToJsonString())));
+        var error = await Assert.ThrowsAsync<ReplayBundleException>(async () =>
+            await engine.ReplayAsync(ReplayBundleFile.Parse(json.ToJsonString()), cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal("/request/assignment/ignored/0/reason", error.Pointer);
         Assert.Contains("layer_conflict", error.Hint);
@@ -165,7 +166,7 @@ public sealed class ReplayTests
                 "\"score\": \"col.score.final\", \"embedding_present\": \"has(col.item.embedding)\", \"undefined\": \"0.0 / 0.0\",");
         });
         var (engine, _) = MetricsTests.LoadEngine(host);
-        var recorded = await engine.ExecuteAsync(Request("req-non-finite", 1001, "home", ControlArms));
+        var recorded = await engine.ExecuteAsync(Request("req-non-finite", 1001, "home", ControlArms), TestContext.Current.CancellationToken);
         Assert.True(recorded.Succeeded, recorded.Error);
         Assert.True(recorded.Items.Single(i => i.Id.Int64Value == 1).Columns["embedding_present"].AsBool());
         Assert.All(recorded.Items, i => Assert.True(double.IsNaN(i.Columns["undefined"].AsFloat64())));
@@ -176,7 +177,7 @@ public sealed class ReplayTests
         Assert.Equal("\"Infinity\"", embedding.Values!["i_emb"][row][0].GetRawText());
         Assert.All(bundle.Result.Items, i => Assert.Equal("\"NaN\"", i.Columns["undefined"]!.Value.GetRawText()));
 
-        var outcome = await engine.ReplayAsync(bundle);
+        var outcome = await engine.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(outcome.Report.Diff.Identical, Describe(outcome.Report));
         Assert.Empty(outcome.Report.Gaps);
@@ -193,7 +194,7 @@ public sealed class ReplayTests
     {
         var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
 
-        var result = await engine.ExecuteAsync(MetricsTests.Request("req-no-record"));
+        var result = await engine.ExecuteAsync(MetricsTests.Request("req-no-record"), TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Null(result.Recording);
@@ -213,7 +214,7 @@ public sealed class ReplayTests
             Edit(root, "pipelines/home_feed.jsonc", "\"order\": 520,", "\"order\": 520, \"min_remaining_ms\": 10000,");
         }, SampleTiming.AsWritten);
         var (engine, _) = MetricsTests.LoadEngine(host);
-        var recorded = await engine.ExecuteAsync(Request("req-slow", 1001, "home", ControlArms, deadlineMs: 5_000));
+        var recorded = await engine.ExecuteAsync(Request("req-slow", 1001, "home", ControlArms, deadlineMs: 5_000), TestContext.Current.CancellationToken);
         Assert.True(recorded.Succeeded, recorded.Error);
 
         var run = recorded.Recording!.Runs[0];
@@ -229,7 +230,7 @@ public sealed class ReplayTests
         // The replay answers every call from the bundle and takes timing from it: nothing is called, nothing is
         // awaited, so it completes synchronously (on a slow machine as on a fast one).
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording));
-        var pending = engine.ReplayAsync(bundle);
+        var pending = engine.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(pending.IsCompletedSuccessfully, "the replay waited for a call or a timer");
         var outcome = await pending;
@@ -246,12 +247,12 @@ public sealed class ReplayTests
     {
         var host = HomeFeedTestHost.LoadModified(MetricsTests.FailAuthorStore);
         var (engine, _) = MetricsTests.LoadEngine(host);
-        var recorded = await engine.ExecuteAsync(Request("req-fail", 1001, "home", ControlArms));
+        var recorded = await engine.ExecuteAsync(Request("req-fail", 1001, "home", ControlArms), TestContext.Current.CancellationToken);
         Assert.Contains(recorded.Recording!.Runs[0].FeatureCalls, c => c.Source == "author_store" && c.Status == "error" && c.Values is null);
 
         // Replayed on the healthy sample: the recorded failure is replayed, not the healthy source.
         var (healthy, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
-        var outcome = await healthy.ReplayAsync(recorded.Recording);
+        var outcome = await healthy.ReplayAsync(recorded.Recording, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(outcome.Report.Diff.Identical, Describe(outcome.Report));
         Assert.Equal("fallback", outcome.Report.Nodes.Single(n => n.Node == "ctr_ranker").Replayed);
@@ -268,7 +269,7 @@ public sealed class ReplayTests
         {
             PipelineId = "primary", RequestId = "r", Inputs = new RequestInputs(), Deadline = TimeSpan.FromSeconds(2),
             Debug = new DebugOptions { Record = true },
-        });
+        }, TestContext.Current.CancellationToken);
         Assert.Equal("backup", recorded.ServedBy);
 
         var bundle = recorded.Recording!;
@@ -276,7 +277,7 @@ public sealed class ReplayTests
         Assert.Equal("error", bundle.Runs[0].CandidateCalls.Single().Status);
         Assert.Equal(("backup", true), (bundle.Result.ServedBy, bundle.Result.Degraded));
 
-        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(bundle)));
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(bundle)), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(outcome.Report.Diff.Identical, Describe(outcome.Report));
         Assert.Equal("backup", outcome.Result.ServedBy);
@@ -288,7 +289,7 @@ public sealed class ReplayTests
     public async Task ReplayOnAModifiedConfiguration_TreatsDataTheBundleLacksAsMissing_AndReportsIt()
     {
         var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
-        var recorded = await engine.ExecuteAsync(Request("req-mod", 1001, "home", ControlArms));
+        var recorded = await engine.ExecuteAsync(Request("req-mod", 1001, "home", ControlArms), TestContext.Current.CancellationToken);
 
         // More candidates from two_tower than the recording holds, 10 more rows for the model, and an output column
         // reading a feature the recorded request never fetched.
@@ -299,7 +300,7 @@ public sealed class ReplayTests
             Edit(root, "pipelines/home_feed.jsonc", "\"category\": \"col.item.category\",", "\"category\": \"col.item.category\", \"age\": \"col.item.age_hours\",");
         });
         var (candidate, _) = MetricsTests.LoadEngine(modified);
-        var outcome = await candidate.ReplayAsync(recorded.Recording!);
+        var outcome = await candidate.ReplayAsync(recorded.Recording!, cancellationToken: TestContext.Current.CancellationToken);
 
         var report = outcome.Report;
         Assert.True(outcome.Result.Succeeded, outcome.Result.Error);
@@ -325,9 +326,9 @@ public sealed class ReplayTests
     public async Task ReplayWithOtherArms_RunsTheirNodes_FromTheRecordedData()
     {
         var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
-        var recorded = await engine.ExecuteAsync(Request("req-arms", 1001, "home", ControlArms));
+        var recorded = await engine.ExecuteAsync(Request("req-arms", 1001, "home", ControlArms), TestContext.Current.CancellationToken);
 
-        var outcome = await engine.ReplayAsync(recorded.Recording!, new ReplayOptions { Arms = new[] { "exp_mmr_diversity/mmr", "no_such/arm" } });
+        var outcome = await engine.ReplayAsync(recorded.Recording!, new ReplayOptions { Arms = new[] { "exp_mmr_diversity/mmr", "no_such/arm" } }, TestContext.Current.CancellationToken);
 
         var report = outcome.Report;
         Assert.Equal(new[] { "exp_mmr_diversity/mmr" }, report.ReplayedArms);
@@ -347,7 +348,7 @@ public sealed class ReplayTests
         var bundles = new List<ReplayBundle>();
         foreach (var (id, userId, surface) in new[] { ("a", (long?)1001, "home"), ("b", (long?)1002, "home"), ("c", null, "explore") })
         {
-            bundles.Add((await engine.ExecuteAsync(Request("req-" + id, userId, surface, ControlArms))).Recording!);
+            bundles.Add((await engine.ExecuteAsync(Request("req-" + id, userId, surface, ControlArms), TestContext.Current.CancellationToken)).Recording!);
         }
 
         var candidateHost = HomeFeedTestHost.LoadModified(root =>
@@ -359,7 +360,7 @@ public sealed class ReplayTests
         var pairs = new List<ReplayPair>();
         foreach (var bundle in bundles)
         {
-            pairs.Add(new ReplayPair(bundle.Request.RequestId, bundle.Request.RequestId, await engine.ReplayAsync(bundle), await candidate.ReplayAsync(bundle)));
+            pairs.Add(new ReplayPair(bundle.Request.RequestId, bundle.Request.RequestId, await engine.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken), await candidate.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken)));
         }
 
         var report = ReplayComparison.Compare(pairs, 10, "score", "base", "cand");
@@ -453,7 +454,7 @@ public sealed class ReplayTelemetryTests
         ReplayBundle bundle;
         using (var recording = new MetricCapture())
         {
-            var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-telemetry", 1001, "home", ReplayTests.ControlArms));
+            var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-telemetry", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
             bundle = recorded.Recording!;
             Assert.NotEmpty(recording.Of(StrataRecMetrics.Names.SourceErrors)); // recording a request does not hide it
         }
@@ -472,7 +473,7 @@ public sealed class ReplayTelemetryTests
         };
         ActivitySource.AddActivityListener(listener);
 
-        var outcome = await engine.ReplayAsync(bundle);
+        var outcome = await engine.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(outcome.Report.Diff.Identical, ReplayTests.Describe(outcome.Report));
         Assert.Equal("fallback", outcome.Report.Nodes.Single(n => n.Node == "ctr_ranker").Replayed); // the failure was replayed...

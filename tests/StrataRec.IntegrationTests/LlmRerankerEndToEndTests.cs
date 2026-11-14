@@ -26,12 +26,12 @@ public sealed class LlmRerankerEndToEndTests
     [Fact]
     public async Task TheAnswer_ReordersTheWindow_AndTheRecording_ReplaysIdentically_FromTheRecordedText()
     {
-        var baseline = await NewEngine(HomeFeedTestHost.Load()).ExecuteAsync(ReplayTests.Request("req-llm", 1001, "home", ReplayTests.ControlArms));
+        var baseline = await NewEngine(HomeFeedTestHost.Load()).ExecuteAsync(ReplayTests.Request("req-llm", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         Assert.True(baseline.Succeeded, baseline.Error);
         var host = HomeFeedTestHost.LoadModified(root => AddLlm(root, Answer));
         using var metrics = new MetricCapture();
 
-        var recorded = await NewEngine(host).ExecuteAsync(ReplayTests.Request("req-llm", 1001, "home", ReplayTests.ControlArms));
+        var recorded = await NewEngine(host).ExecuteAsync(ReplayTests.Request("req-llm", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
 
         Assert.True(recorded.Succeeded, recorded.Error);
         var before = baseline.Items.Select(i => i.Id.Int64Value).ToList();
@@ -48,7 +48,7 @@ public sealed class LlmRerankerEndToEndTests
         metrics.Measurements.Clear();
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!));
         var identity = HomeFeedTestHost.LoadModified(root => AddLlm(root, "[1, 2, 3, 4]"));
-        var outcome = await NewEngine(identity).ReplayAsync(bundle);
+        var outcome = await NewEngine(identity).ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
 
         var report = outcome.Report;
         Assert.True(report.Diff.Identical, ReplayTests.Describe(report));
@@ -63,9 +63,9 @@ public sealed class LlmRerankerEndToEndTests
     [InlineData("feature")]
     public async Task AfterThePromptChanges_TheReplayReportsTheCallAsNotRecorded_AndTheNodeIsSkipped(string change)
     {
-        var baseline = await NewEngine(HomeFeedTestHost.Load()).ExecuteAsync(ReplayTests.Request("req-llm-changed", 1001, "home", ReplayTests.ControlArms));
+        var baseline = await NewEngine(HomeFeedTestHost.Load()).ExecuteAsync(ReplayTests.Request("req-llm-changed", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         var recorded = await NewEngine(HomeFeedTestHost.LoadModified(root => AddLlm(root, Answer)))
-            .ExecuteAsync(ReplayTests.Request("req-llm-changed", 1001, "home", ReplayTests.ControlArms));
+            .ExecuteAsync(ReplayTests.Request("req-llm-changed", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         Assert.True(recorded.Succeeded, recorded.Error);
 
         // The instruction is worded differently, or the derived feature the rows show is scaled differently.
@@ -81,7 +81,7 @@ public sealed class LlmRerankerEndToEndTests
                 ReplayTests.Edit(root, "catalog/home_feed.jsonc", "col.item.smoothed_ctr * 100.0", "col.item.smoothed_ctr * 1000.0");
             }
         });
-        var outcome = await NewEngine(modified).ReplayAsync(recorded.Recording!);
+        var outcome = await NewEngine(modified).ReplayAsync(recorded.Recording!, cancellationToken: TestContext.Current.CancellationToken);
 
         var report = outcome.Report;
         Assert.True(outcome.Result.Succeeded, outcome.Result.Error); // on_failure: skip

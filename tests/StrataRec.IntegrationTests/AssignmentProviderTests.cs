@@ -35,7 +35,7 @@ public sealed class AssignmentProviderTests
         Assert.True(engine.Load(host.Request).Applied);
         engine.TryGetPipeline("home_feed", out var served);
 
-        var result = await engine.ExecuteAsync(Request("req-ctx"));
+        var result = await engine.ExecuteAsync(Request("req-ctx"), TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal(ProviderArms.Order(), result.Experiments.Assigned.Order());
@@ -53,7 +53,7 @@ public sealed class AssignmentProviderTests
         Assert.Throws<NotSupportedException>(() => ((IList<ArmInfo>)context.Arms)[0] = context.Arms[1]);
 
         // Built once per plan: every request of the plan passes the same views.
-        await engine.ExecuteAsync(Request("req-ctx-2"));
+        await engine.ExecuteAsync(Request("req-ctx-2"), TestContext.Current.CancellationToken);
         Assert.Same(provider.Calls[0].Arms, provider.Calls[1].Arms);
     }
 
@@ -67,10 +67,10 @@ public sealed class AssignmentProviderTests
         string[] platform = { "exp_freshness_calibration/calibrated" };
         string[] forced = { "exp_quality_weight/control" };
 
-        var fromProvider = await engine.ExecuteAsync(Request("req-provider"));
-        var fromCaller = await engine.ExecuteAsync(Request("req-caller", assignment: platform));
-        var fromNothing = await engine.ExecuteAsync(Request("req-empty", assignment: Array.Empty<string>()));
-        var fromForce = await engine.ExecuteAsync(Request("req-forced", assignment: platform, force: forced));
+        var fromProvider = await engine.ExecuteAsync(Request("req-provider"), TestContext.Current.CancellationToken);
+        var fromCaller = await engine.ExecuteAsync(Request("req-caller", assignment: platform), TestContext.Current.CancellationToken);
+        var fromNothing = await engine.ExecuteAsync(Request("req-empty", assignment: Array.Empty<string>()), TestContext.Current.CancellationToken);
+        var fromForce = await engine.ExecuteAsync(Request("req-forced", assignment: platform, force: forced), TestContext.Current.CancellationToken);
 
         Assert.Equal(ProviderArms.Order(), fromProvider.Experiments.Assigned.Order());
         Assert.Equal("provider", fromProvider.Recording!.Request.Assignment.Source);
@@ -90,7 +90,7 @@ public sealed class AssignmentProviderTests
         var engine = new RecEngine(host.Environment);
         Assert.True(engine.Load(host.Request).Applied);
 
-        var result = await engine.ExecuteAsync(Request("req-none"));
+        var result = await engine.ExecuteAsync(Request("req-none"), TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Empty(result.Experiments.Assigned);
@@ -147,7 +147,7 @@ public sealed class AssignmentProviderTests
             RequestId = "req-late",
             Inputs = HomeFeedTestHost.Inputs(1001, "home"),
             Deadline = TimeSpan.FromMilliseconds(500), // room to reach the provider on a loaded machine: 50 ms ran out before it
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
         Assert.Equal("deadline exceeded during assignment", result.Error);
@@ -222,7 +222,7 @@ public sealed class AssignmentProviderTests
         var engine = new RecEngine(host.Environment, provider) { AssignmentWaitTimers = new ImmediateTimers() };
         Assert.True(engine.Load(host.Request).Applied);
 
-        var result = await engine.ExecuteAsync(Request("req-wait-abandons"));
+        var result = await engine.ExecuteAsync(Request("req-wait-abandons"), TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
         Assert.Equal("deadline exceeded during assignment", result.Error);
@@ -246,7 +246,7 @@ public sealed class AssignmentProviderTests
 
         // From a thread without a synchronization context, as in a server: xUnit's would keep the request's continuation
         // out of Cancel, hiding the order above.
-        await Task.Run(caller.Cancel);
+        await Task.Run(caller.Cancel, TestContext.Current.CancellationToken);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
         await AssertEnds(provider);
@@ -314,10 +314,10 @@ public sealed class AssignmentProviderTests
         var engine = new RecEngine(host.Environment, provider, loggerFactory: logger) { AssignmentWaitTimers = new ImmediateTimers() };
         Assert.True(engine.Load(host.Request).Applied);
 
-        var result = await engine.ExecuteAsync(Request("req-cleanup-fails"));
+        var result = await engine.ExecuteAsync(Request("req-cleanup-fails"), TestContext.Current.CancellationToken);
 
         Assert.Equal("deadline exceeded during assignment", result.Error);
-        var logged = await logger.Logged.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        var logged = await logger.Logged.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         Assert.Contains("the provider's cleanup failed", logged!.ToString());
         Assert.True(provider.Token.IsCancellationRequested);
         Assert.False(DisposedTokens.Disposed(provider.Token)); // the provider is still running: its token stays valid
@@ -326,7 +326,7 @@ public sealed class AssignmentProviderTests
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
         while (!DisposedTokens.Disposed(provider.Token) && DateTime.UtcNow < deadline)
         {
-            await Task.Delay(5);
+            await Task.Delay(5, TestContext.Current.CancellationToken);
         }
 
         Assert.True(DisposedTokens.Disposed(provider.Token), "the abandoned provider's token source was not disposed after it ended");
@@ -386,7 +386,7 @@ public sealed class AssignmentProviderTests
         var engine = new RecEngine(host.Environment, provider) { AssignmentWaitTimers = timers };
         Assert.True(engine.Load(host.Request).Applied);
 
-        var result = await engine.ExecuteAsync(Request("req-wait-first"));
+        var result = await engine.ExecuteAsync(Request("req-wait-first"), TestContext.Current.CancellationToken);
 
         Assert.Equal(1, timers.Created);
         Assert.False(result.Succeeded);
@@ -405,7 +405,7 @@ public sealed class AssignmentProviderTests
         var engine = new RecEngine(host.Environment, provider) { AssignmentWaitTimers = timers };
         Assert.True(engine.Load(host.Request).Applied);
 
-        var result = await engine.ExecuteAsync(Request("req-provider-first"));
+        var result = await engine.ExecuteAsync(Request("req-provider-first"), TestContext.Current.CancellationToken);
 
         Assert.Equal(1, timers.Created);
         Assert.True(result.Succeeded, result.Error);
@@ -441,7 +441,7 @@ public sealed class AssignmentProviderTests
         var engine = new RecEngine(host.Environment, new CompletesOnSecondLook()) { AssignmentWaitTimers = timers };
         Assert.True(engine.Load(host.Request).Applied);
 
-        var result = await engine.ExecuteAsync(Request("req-fast-path"));
+        var result = await engine.ExecuteAsync(Request("req-fast-path"), TestContext.Current.CancellationToken);
 
         Assert.Equal(0, timers.Created);
         Assert.True(result.Succeeded, result.Error);

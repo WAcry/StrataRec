@@ -27,12 +27,12 @@ public sealed class ReplayCliTests
         foreach (var args in new[] { new[] { "replay", "-c", sample, paths[0], paths[1] }, new[] { "replay", "-c", sample, paths[0], "-b", paths[1] } })
         {
             var output = new StringWriter();
-            Assert.Equal(0, await StrataRecCommandLine.InvokeAsync(args, Tool.Environment, output, TextWriter.Null));
+            Assert.Equal(0, await StrataRecCommandLine.InvokeAsync(args, Tool.Environment, output, TextWriter.Null, TestContext.Current.CancellationToken));
             Assert.Contains("2 bundles, 2 replayed, 0 unreadable, 2 reproduced the recorded result exactly; status ok", output.ToString());
         }
 
         var error = new StringWriter();
-        Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(new[] { "replay", "-c", sample }, Tool.Environment, TextWriter.Null, error));
+        Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(new[] { "replay", "-c", sample }, Tool.Environment, TextWriter.Null, error, TestContext.Current.CancellationToken));
         Assert.Contains("Give the bundles to replay: 'stratarec replay -c <workspace> <bundle.json or directory>...'.", error.ToString());
         Directory.Delete(bundles, recursive: true);
     }
@@ -48,7 +48,8 @@ public sealed class ReplayCliTests
         // As printed, the path is an argument: a missing file is reported as such, not as an option missing its value.
         var output = new StringWriter();
         var error = new StringWriter();
-        Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(new[] { "replay", "-c", HomeFeedTestHost.SampleRoot(), "./-b" }, Tool.Environment, output, error));
+        Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(new[] { "replay", "-c", HomeFeedTestHost.SampleRoot(), "./-b" }, Tool.Environment, output, error,
+            TestContext.Current.CancellationToken));
         Assert.DoesNotContain("Required argument", error.ToString());
         Assert.Contains("./-b: not replayed", output.ToString());
     }
@@ -66,7 +67,7 @@ public sealed class ReplayCliTests
     {
         var error = new StringWriter();
 
-        var code = await StrataRecCommandLine.InvokeAsync(args, Tool.Environment, TextWriter.Null, error);
+        var code = await StrataRecCommandLine.InvokeAsync(args, Tool.Environment, TextWriter.Null, error, TestContext.Current.CancellationToken);
 
         Assert.Equal(2, code);
         Assert.Contains(message, error.ToString());
@@ -81,7 +82,7 @@ public sealed class ReplayCliTests
         var output = new StringWriter();
         var error = new StringWriter();
 
-        Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(Array.Empty<string>(), Tool.Environment, output, error));
+        Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(Array.Empty<string>(), Tool.Environment, output, error, TestContext.Current.CancellationToken));
 
         Assert.Contains("Commands:", output.ToString() + error.ToString());
         Assert.DoesNotContain("for the usage", error.ToString());

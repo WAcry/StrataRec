@@ -89,7 +89,7 @@ public sealed class ReviewRegressionTests
 
         foreach (var arm in new[] { "exp_quota/control", "exp_quota/more" })
         {
-            var result = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(arms: plan.ArmsFromIds(new[] { arm })));
+            var result = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(arms: plan.ArmsFromIds(new[] { arm })), TestContext.Current.CancellationToken);
             Assert.False(result.Succeeded);
             Assert.Contains("exp_quota", result.TriggeredExperiments);
         }
@@ -144,7 +144,7 @@ public sealed class ReviewRegressionTests
         var result = await engine.ExecuteAsync(new RecRequest
         {
             PipelineId = "primary", RequestId = "r", Inputs = new RequestInputs(), Deadline = TimeSpan.FromSeconds(2),
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal("backup", result.ServedBy);
@@ -164,7 +164,7 @@ public sealed class ReviewRegressionTests
         var result = await engine.ExecuteAsync(new RecRequest
         {
             PipelineId = "primary", RequestId = "r", Inputs = new RequestInputs(), Deadline = TimeSpan.FromMilliseconds(400),
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
         Assert.InRange(result.ElapsedMs, 0, 30_000); // the deadline cancelled the one-minute primary (a generous watchdog)

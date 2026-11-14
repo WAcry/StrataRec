@@ -39,7 +39,7 @@ public sealed class BoundedCallTests
         {
             client = token;
             return OnThread(gate, () => 1);
-        }), budget, memory, timeoutMs: null).AsTask().WaitAsync(Patience);
+        }), budget, memory, timeoutMs: null).AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.Equal((CallEnd.BudgetRanOut, IoOutcome.Timeout, true, null), (result.End, result.Outcome, result.Abandoned, result.Error));
         Assert.IsAssignableFrom<OperationCanceledException>(result.Exception);
@@ -72,7 +72,7 @@ public sealed class BoundedCallTests
         {
             client = token;
             return OnThread(gate, () => 1);
-        }), budget, memory, timeoutMs: 50).AsTask().WaitAsync(Patience);
+        }), budget, memory, timeoutMs: 50).AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.Equal((CallEnd.TimedOut, IoOutcome.Timeout, true, "timed out after 50 ms"), (result.End, result.Outcome, result.Abandoned, result.Error));
         Assert.Null(result.Exception);
@@ -119,9 +119,9 @@ public sealed class BoundedCallTests
             started.SetResult();
             return OnThread(gate, () => 1);
         }), budget, memory, timeoutMs: 300_000).AsTask();
-        await started.Task.WaitAsync(Patience);
+        await started.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         caller.Cancel();
-        var result = await running.WaitAsync(Patience);
+        var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.Equal((CallEnd.Cancelled, IoOutcome.Cancelled, true), (result.End, result.Outcome, result.Abandoned));
         Assert.Equal(caller.Token, Assert.IsAssignableFrom<OperationCanceledException>(result.Exception).CancellationToken);
@@ -187,7 +187,7 @@ public sealed class BoundedCallTests
         }
 
         gate.Release();
-        var result = await running.WaitAsync(Patience);
+        var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.Equal((CallEnd.TimedOut, IoOutcome.Timeout, 0, "timed out after 200 ms", true), (result.End, result.Outcome, result.Value, result.Error, result.Abandoned));
         Assert.Null(result.Exception);
@@ -215,14 +215,14 @@ public sealed class BoundedCallTests
             waiting.Set(); // the pending call has started its wait
             return await pending;
         });
-        Assert.True(waiting.Wait(Patience));
+        Assert.True(waiting.Wait(Patience, TestContext.Current.CancellationToken));
         // Cancelled from a thread of its own: the wait's continuation may run inside Cancel, and the gate holds it there.
-        var cancelling = Task.Run(caller.Cancel);
+        var cancelling = Task.Run(caller.Cancel, TestContext.Current.CancellationToken);
         Assert.True(gate.WaitHeld(), "the wait never resumed on a thread of its own");
         client.SetResult(31);
         gate.Release();
-        var result = await running.WaitAsync(Patience);
-        await cancelling.WaitAsync(Patience);
+        var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await cancelling.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.Equal((CallEnd.Cancelled, IoOutcome.Cancelled, 0, true), (result.End, result.Outcome, result.Value, result.Abandoned));
         Assert.Equal(caller.Token, Assert.IsAssignableFrom<OperationCanceledException>(result.Exception).CancellationToken);
@@ -257,7 +257,7 @@ public sealed class BoundedCallTests
             }
         });
 
-        var result = await Run(site.With(client.Send), budget, memory, timeoutMs: when == "after its own timeout" ? 10 : 300_000).AsTask().WaitAsync(Patience);
+        var result = await Run(site.With(client.Send), budget, memory, timeoutMs: when == "after its own timeout" ? 10 : 300_000).AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.Equal((1, 1), (client.OnCompletedCalls, client.GetResultCalls)); // pending when sent; its result taken once
         var expected = when switch
@@ -285,7 +285,7 @@ public sealed class BoundedCallTests
 
         var running = Run(site.With(_ => new ValueTask<int>(client.Task)), budget, memory, timeoutMs: 300_000).AsTask();
         client.SetException(thrown);
-        var result = await running.WaitAsync(Patience);
+        var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.Equal((CallEnd.Threw, IoOutcome.Timeout, "transport", false), (result.End, result.Outcome, result.Error, result.Abandoned));
         Assert.Same(thrown, result.Exception);
@@ -392,7 +392,7 @@ public sealed class BoundedCallTests
         var running = Run(site.With(_ => OnThread(gate, () => 3)), budget, memory, timeoutMs: null).AsTask();
         Assert.Equal(1, memory.Release()); // the request has gone; the call is still waiting
         gate.Set();
-        var result = await running.WaitAsync(Patience);
+        var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.Equal((CallEnd.Answered, 3), (result.End, result.Value));
         Assert.True(Assert.Single(site.Recorded).MemoryLive);

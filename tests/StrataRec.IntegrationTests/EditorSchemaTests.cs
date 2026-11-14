@@ -319,11 +319,11 @@ public sealed class EditorSchemaTests
         {
             var schemas = Path.Combine(directory, "schemas");
             var output = new StringWriter();
-            Assert.Equal(0, await StrataRecCommandLine.InvokeAsync(new[] { "schema", "--out", schemas }, Tool.Environment, output, TextWriter.Null));
+            Assert.Equal(0, await StrataRecCommandLine.InvokeAsync(new[] { "schema", "--out", schemas }, Tool.Environment, output, TextWriter.Null, TestContext.Current.CancellationToken));
             Assert.Contains($"wrote 8 of 8 schemas to {schemas}", output.ToString(), StringComparison.Ordinal);
             var written = Directory.GetFiles(schemas).ToDictionary(f => Path.GetFileName(f), File.ReadAllBytes);
             output = new StringWriter();
-            Assert.Equal(0, await StrataRecCommandLine.InvokeAsync(new[] { "schema", "-o", schemas }, Tool.Environment, output, TextWriter.Null));
+            Assert.Equal(0, await StrataRecCommandLine.InvokeAsync(new[] { "schema", "-o", schemas }, Tool.Environment, output, TextWriter.Null, TestContext.Current.CancellationToken));
             Assert.Contains("the 8 schemas are current", output.ToString(), StringComparison.Ordinal);
             Assert.Equal(written, Directory.GetFiles(schemas).ToDictionary(f => Path.GetFileName(f), File.ReadAllBytes));
 
@@ -347,7 +347,7 @@ public sealed class EditorSchemaTests
     public async Task Schema_WithoutAKindOrWithBoth_IsAUsageError(string[] arguments, string message)
     {
         var error = new StringWriter();
-        Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(new[] { "schema" }.Concat(arguments).ToArray(), Tool.Environment, TextWriter.Null, error));
+        Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(new[] { "schema" }.Concat(arguments).ToArray(), Tool.Environment, TextWriter.Null, error, TestContext.Current.CancellationToken));
         Assert.Contains(message, error.ToString(), StringComparison.Ordinal);
     }
 

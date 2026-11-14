@@ -37,8 +37,8 @@ public class BindingHostTableTests
         Assert.Same(tableA, tableB);
         Assert.NotSame(tableA, other);
         Assert.Equal(2, host.TableCount);
-        Assert.Empty(await a.WaitLoadedAsync());
-        Assert.Empty(await b.WaitLoadedAsync());
+        Assert.Empty(await a.WaitLoadedAsync(TestContext.Current.CancellationToken));
+        Assert.Empty(await b.WaitLoadedAsync(TestContext.Current.CancellationToken));
         Assert.Equal(1, first.Runs);
         Assert.Equal(0, second.Runs); // the shared table keeps the source that loaded it
         Assert.Equal(1.0, Read(tableB, 1));
@@ -63,8 +63,8 @@ public class BindingHostTableTests
         Assert.Equal(specA.Identity, specB.Identity);
         Assert.NotSame(tableA, tableB);
         Assert.Equal(2, host.TableCount);
-        Assert.Empty(await a.WaitLoadedAsync());
-        Assert.Empty(await b.WaitLoadedAsync());
+        Assert.Empty(await a.WaitLoadedAsync(TestContext.Current.CancellationToken));
+        Assert.Empty(await b.WaitLoadedAsync(TestContext.Current.CancellationToken));
         Assert.Equal((1, 1), (mine.Runs, theirs.Runs));
         Assert.Equal((1.0, 2.0), (Read(tableA, 1), Read(tableB, 1)));
     }
@@ -106,14 +106,14 @@ public class BindingHostTableTests
         var b = host.OpenLease();
         a.Acquire(Spec(source));
         b.Acquire(Spec(source));
-        Assert.Empty(await a.WaitLoadedAsync());
+        Assert.Empty(await a.WaitLoadedAsync(TestContext.Current.CancellationToken));
 
         a.Dispose();
         Assert.False(stopped.Task.IsCompleted);
         Assert.Equal(1, host.TableCount);
         b.Dispose();
 
-        await stopped.Task.WaitAsync(Wait);
+        await stopped.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal(0, host.TableCount);
     }
 
@@ -132,7 +132,7 @@ public class BindingHostTableTests
         using var failed = host.OpenLease();
         var failedTable = failed.Acquire(Spec(source));
 
-        var failure = Assert.Single(await failed.WaitLoadedAsync());
+        var failure = Assert.Single(await failed.WaitLoadedAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal(("LOCAL_TABLE_LOAD_FAILED", "item_store/item", "bindings:test", "/sources/item_store"),
             (failure.Code, Assert.IsType<LocalTableLoadException>(failure.Exception).Table, failure.Artifact, failure.Pointer));
@@ -146,7 +146,7 @@ public class BindingHostTableTests
         using var retry = host.OpenLease();
         var retried = retry.Acquire(Spec(source));
         Assert.NotSame(failedTable, retried);
-        Assert.Empty(await retry.WaitLoadedAsync());
+        Assert.Empty(await retry.WaitLoadedAsync(TestContext.Current.CancellationToken));
         Assert.Equal(7.0, Read(retried, 1));
         Assert.Equal(2, source.Runs);
     }
@@ -158,7 +158,7 @@ public class BindingHostTableTests
         using var lease = host.OpenLease();
         lease.Acquire(Spec(new ScriptedSource((_, _, _) => throw new UnreadableException())));
 
-        var failure = Assert.Single(await lease.WaitLoadedAsync().WaitAsync(TimeSpan.FromSeconds(30)));
+        var failure = Assert.Single(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
 
         Assert.Equal("LOCAL_TABLE_LOAD_FAILED", failure.Code);
         Assert.Contains(typeof(UnreadableException).FullName!, failure.Message, StringComparison.Ordinal);
@@ -171,7 +171,7 @@ public class BindingHostTableTests
         using var lease = host.OpenLease();
         lease.Acquire(Spec(new ScriptedSource((_, _, _) => Task.CompletedTask)));
 
-        var failure = Assert.Single(await lease.WaitLoadedAsync());
+        var failure = Assert.Single(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken));
 
         Assert.Contains("returned without loading the table", failure.Message);
     }
@@ -211,8 +211,8 @@ public class BindingHostTableTests
         using var lease = host.OpenLease();
         var table = lease.Acquire(Spec(source));
 
-        Assert.Empty(await lease.WaitLoadedAsync());
-        Assert.Equal(UpdatePosition.Single(6), await lastRun.Task.WaitAsync(Wait));
+        Assert.Empty(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(UpdatePosition.Single(6), await lastRun.Task.WaitAsync(Wait, TestContext.Current.CancellationToken));
 
         Assert.Equal(new[] { UpdatePosition.Empty, UpdatePosition.Single(5), UpdatePosition.Single(5), UpdatePosition.Single(5), UpdatePosition.Single(5) }, starts);
         var restarts = logs.Entries.Where(e => e.EventId == 1203).ToList();
@@ -221,7 +221,7 @@ public class BindingHostTableTests
         Assert.Equal(2.0, Read(table, 1)); // served throughout, with what each run wrote
 
         await host.DisposeAsync();
-        await stopped.Task.WaitAsync(Wait);
+        await stopped.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
     }
 
     [Theory]
@@ -249,13 +249,13 @@ public class BindingHostTableTests
         using var lease = host.OpenLease();
         var table = lease.Acquire(Spec(source));
 
-        Assert.Empty(await lease.WaitLoadedAsync().WaitAsync(Wait));
-        await restarted.Task.WaitAsync(Wait);
-        await logs.Thrown.Task.WaitAsync(Wait); // the logger did throw on that event
+        Assert.Empty(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken));
+        await restarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
+        await logs.Thrown.Task.WaitAsync(Wait, TestContext.Current.CancellationToken); // the logger did throw on that event
         Assert.Equal(1.0, Read(table, 1));
 
         await host.DisposeAsync();
-        await stopped.Task.WaitAsync(Wait);
+        await stopped.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -271,13 +271,13 @@ public class BindingHostTableTests
         });
         using var lease = host.OpenLease();
         lease.Acquire(Spec(source));
-        var waiting = lease.WaitLoadedAsync();
-        await loading.Task.WaitAsync(Wait);
+        var waiting = lease.WaitLoadedAsync(TestContext.Current.CancellationToken);
+        await loading.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         await host.DisposeAsync();
 
         Assert.True(returned.Task.IsCompleted); // the host waited for the source to return
-        var failure = Assert.Single(await waiting.WaitAsync(Wait));
+        var failure = Assert.Single(await waiting.WaitAsync(Wait, TestContext.Current.CancellationToken));
         Assert.Contains("stopped before the load completed", failure.Message);
         Assert.Throws<ObjectDisposedException>(() => host.OpenLease());
     }
@@ -304,21 +304,21 @@ public class BindingHostTableTests
         });
         var lease = host.OpenLease();
         lease.Acquire(Spec(source));
-        Assert.Empty(await lease.WaitLoadedAsync());
+        Assert.Empty(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken));
         try
         {
             // Called off the test thread, so a call that blocks fails the test instead of hanging it.
             if (releasedFirst)
             {
                 // What a plan swap does with the tables only the replaced plan read: it returns, the callback runs elsewhere.
-                await Task.Run(lease.Dispose).WaitAsync(Wait);
-                await entered.Task.WaitAsync(Wait);
+                await Task.Run(lease.Dispose, TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken);
+                await entered.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
             }
 
             // Shutdown waits for the released table too, and gives up after its timeout.
-            await Task.Run(() => host.DisposeAsync().AsTask()).WaitAsync(Wait);
+            await Task.Run(() => host.DisposeAsync().AsTask(), TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken);
 
-            await entered.Task.WaitAsync(Wait);
+            await entered.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
             Assert.False(gate.IsSet);
             Assert.Equal(1, Assert.Single(logs.Entries, e => e.EventId == 1205).Values["Running"]);
         }
@@ -327,7 +327,7 @@ public class BindingHostTableTests
             gate.Set();
         }
 
-        await returned.Task.WaitAsync(Wait); // the source still ends once its callback does
+        await returned.Task.WaitAsync(Wait, TestContext.Current.CancellationToken); // the source still ends once its callback does
         lease.Dispose();
     }
 
@@ -347,17 +347,17 @@ public class BindingHostTableTests
         });
         var lease = host.OpenLease();
         lease.Acquire(Spec(source));
-        Assert.Empty(await lease.WaitLoadedAsync());
+        Assert.Empty(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken));
 
         if (releasedFirst)
         {
             lease.Dispose();
-            await returned.Task.WaitAsync(Wait);
+            await returned.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         }
 
-        await host.DisposeAsync().AsTask().WaitAsync(Wait);
+        await host.DisposeAsync().AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken);
 
-        await returned.Task.WaitAsync(Wait);
+        await returned.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         var failed = Assert.Single(logs.Entries, e => e.EventId == 1206);
         Assert.Contains("cleanup failed", failed.Exception!.ToString());
         Assert.DoesNotContain(logs.Entries, e => e.EventId == 1205);
@@ -394,18 +394,18 @@ public class BindingHostTableTests
         });
         var lease = host.OpenLease();
         lease.Acquire(Spec(source));
-        Assert.Empty(await lease.WaitLoadedAsync());
+        Assert.Empty(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken));
 
-        var disposal = Task.Run(() => host.DisposeAsync().AsTask());
-        await cancelled.Task.WaitAsync(Wait);
-        await logs.Thrown.Task.WaitAsync(Wait);
+        var disposal = Task.Run(() => host.DisposeAsync().AsTask(), TestContext.Current.CancellationToken);
+        await cancelled.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
+        await logs.Thrown.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         // A shutdown that stopped waiting completes right after the failed log; this one has 30 s and the source runs on.
-        Assert.NotSame(disposal, await Task.WhenAny(disposal, Task.Delay(200)));
+        Assert.NotSame(disposal, await Task.WhenAny(disposal, Task.Delay(200, TestContext.Current.CancellationToken)));
         Assert.False(returned.Task.IsCompleted);
 
         cleanup.TrySetResult();
-        await disposal.WaitAsync(Wait);
+        await disposal.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.True(returned.Task.IsCompleted);
         lease.Dispose();
     }
@@ -421,7 +421,7 @@ public class BindingHostTableTests
 
         using var lease = host.OpenLease();
         var table = lease.Acquire(Spec(new ScriptedSource(Load(1))));
-        Assert.Empty(await lease.WaitLoadedAsync());
+        Assert.Empty(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken));
         Assert.True(table.IsLoaded);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => lease.WaitLoadedAsync(cancelled.Token)); // ready already
 
@@ -439,7 +439,7 @@ public class BindingHostTableTests
         using var lease = host.OpenLease();
         var table = lease.Acquire(Spec(source));
 
-        Assert.Empty(await lease.WaitLoadedAsync());
+        Assert.Empty(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken));
         Assert.Equal(0, source.Runs);
         Assert.False(table.IsLoaded);
     }

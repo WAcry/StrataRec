@@ -36,25 +36,25 @@ public sealed class BindingLifetimeTests
         var models = new ScriptedModels();
         var root = Workspace(generation: 1);
         await using var engine = new RecEngine(Environment(root, models));
-        Assert.True((await engine.LoadAsync(Compile(root))).Applied);
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         var old = Assert.Single(models.Created);
         var instances = engine.Bindings.InstanceCount; // the model, and the sample's connectors and candidate sources
 
         models.HoldCalls();
-        var running = engine.ExecuteAsync(Request("req-in-flight")).AsTask();
-        await models.CallStarted.Task.WaitAsync(Wait);
+        var running = engine.ExecuteAsync(Request("req-in-flight"), TestContext.Current.CancellationToken).AsTask();
+        await models.CallStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         Rebind(root, generation: 2); // another identity: a new client
-        Assert.True((await engine.LoadAsync(Compile(root))).Applied);
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         var current = Assert.Single(models.Created, c => c != old);
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
         Assert.False(old.Disposed.Task.IsCompleted); // its request is still running on it
 
         models.ReleaseCalls();
-        Assert.True((await running.WaitAsync(Wait)).Succeeded);
-        await old.Disposed.Task.WaitAsync(Wait);
+        Assert.True((await running.WaitAsync(Wait, TestContext.Current.CancellationToken)).Succeeded);
+        await old.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.False(current.Disposed.Task.IsCompleted);
-        Assert.True((await engine.ExecuteAsync(Request("req-after"))).Succeeded);
+        Assert.True((await engine.ExecuteAsync(Request("req-after"), TestContext.Current.CancellationToken)).Succeeded);
         Assert.Equal(instances, engine.Bindings.InstanceCount); // the other instances were taken over, the old model went
     }
 
@@ -64,21 +64,21 @@ public sealed class BindingLifetimeTests
         var models = new ScriptedModels();
         var root = Workspace(generation: 1, modelTimeoutMs: 100);
         await using var engine = new RecEngine(Environment(root, models));
-        Assert.True((await engine.LoadAsync(Compile(root))).Applied);
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         var old = Assert.Single(models.Created);
         models.HoldCalls();
 
-        var result = await engine.ExecuteAsync(Request("req-abandoning")).AsTask().WaitAsync(Wait);
+        var result = await engine.ExecuteAsync(Request("req-abandoning"), TestContext.Current.CancellationToken).AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.True(result.Succeeded); // served by ctr_backup; the model call runs on, abandoned
         Assert.Contains(result.Trace!, o => o is { NodeId: "ctr_ranker", Kind: NodeOutcomeKind.Degraded, ProducedBy: "ctr_backup" });
 
         Rebind(root, generation: 2);
-        Assert.True((await engine.LoadAsync(Compile(root))).Applied);
-        await Task.Delay(50);
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
         Assert.False(old.Disposed.Task.IsCompleted); // the request returned, its call did not
 
         models.ReleaseCalls();
-        await old.Disposed.Task.WaitAsync(Wait);
+        await old.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal(1, old.Calls);
     }
 
@@ -88,23 +88,23 @@ public sealed class BindingLifetimeTests
         var models = new ScriptedModels();
         var root = Workspace(generation: 1);
         await using var engine = new RecEngine(Environment(root, models));
-        Assert.True((await engine.LoadAsync(Compile(root))).Applied);
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         var served = Assert.Single(models.Created);
         var instances = engine.Bindings.InstanceCount;
 
         models.Load = (_, _) => throw new BindingException("/model_file", "The model file 'ctr.bin' does not exist.", "check the path");
         Rebind(root, generation: 2);
-        var load = await engine.LoadAsync(Compile(root));
+        var load = await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(load.Applied);
         var error = Assert.Single(load.Diagnostics, d => d.IsError);
         Assert.Equal(("BINDING_LOAD_FAILED", "bindings:local", "/models/ctr_model/model_file", "check the path"),
             (error.Code, error.Artifact, error.Pointer, error.Hint));
         var failed = Assert.Single(models.Created, c => c != served);
-        await failed.Disposed.Task.WaitAsync(Wait); // the rejected plan's lease is returned
+        await failed.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken); // the rejected plan's lease is returned
         Assert.False(served.Disposed.Task.IsCompleted); // the served plan keeps serving
         Assert.Equal(instances, engine.Bindings.InstanceCount); // the rejected plan held nothing more
-        Assert.True((await engine.ExecuteAsync(Request("req-still-served"))).Succeeded);
+        Assert.True((await engine.ExecuteAsync(Request("req-still-served"), TestContext.Current.CancellationToken)).Succeeded);
     }
 
     [Fact]
@@ -114,16 +114,16 @@ public sealed class BindingLifetimeTests
         var root = Workspace(generation: 1);
         await using var engine = new RecEngine(Environment(root, models));
 
-        var load = await engine.LoadAsync(Compile(root));
+        var load = await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(load.Applied);
         var error = Assert.Single(load.Diagnostics, d => d.IsError);
         Assert.Equal(("BINDING_LOAD_FAILED", "bindings:local", "/models/ctr_model"), (error.Code, error.Artifact, error.Pointer));
         Assert.Contains(typeof(UnreadableException).FullName!, error.Message, StringComparison.Ordinal);
-        Assert.False((await engine.ExecuteAsync(Request("req-never-served"))).Succeeded);
+        Assert.False((await engine.ExecuteAsync(Request("req-never-served"), TestContext.Current.CancellationToken)).Succeeded);
         var client = Assert.Single(models.Created);
         Assert.Equal(0, client.Calls);
-        await client.Disposed.Task.WaitAsync(Wait); // the rejected plan returned its lease
+        await client.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken); // the rejected plan returned its lease
     }
 
     [Fact]
@@ -139,19 +139,19 @@ public sealed class BindingLifetimeTests
         };
         var root = Workspace(generation: 1);
         var engine = new RecEngine(Environment(root, models), bindingOptions: new BindingHostOptions { ShutdownTimeout = TimeSpan.FromMilliseconds(100) });
-        var load = engine.LoadAsync(Compile(root));
-        var token = await loading.Task.WaitAsync(Wait);
+        var load = engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken);
+        var token = await loading.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
-        await engine.DisposeAsync().AsTask().WaitAsync(Wait); // bounded, although the load has not returned
+        await engine.DisposeAsync().AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken); // bounded, although the load has not returned
 
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => load.WaitAsync(Wait));
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => load.WaitAsync(Wait, TestContext.Current.CancellationToken));
         Assert.True(token.IsCancellationRequested);
         var client = Assert.Single(models.Created);
         Assert.False(client.Disposed.Task.IsCompleted); // never disposed under its load
 
         finish.SetResult();
-        await client.Disposed.Task.WaitAsync(Wait);
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.ExecuteAsync(Request("req-late")).AsTask());
+        await client.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.ExecuteAsync(Request("req-late"), TestContext.Current.CancellationToken).AsTask());
     }
 
     [Fact]
@@ -160,19 +160,19 @@ public sealed class BindingLifetimeTests
         var models = new ScriptedModels();
         var root = Workspace(generation: 1);
         var engine = new RecEngine(Environment(root, models), bindingOptions: new BindingHostOptions { ShutdownTimeout = TimeSpan.FromMilliseconds(100) });
-        Assert.True((await engine.LoadAsync(Compile(root))).Applied);
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         var client = Assert.Single(models.Created);
         models.HoldCalls();
-        var running = engine.ExecuteAsync(Request("req-at-shutdown")).AsTask();
-        await models.CallStarted.Task.WaitAsync(Wait);
+        var running = engine.ExecuteAsync(Request("req-at-shutdown"), TestContext.Current.CancellationToken).AsTask();
+        await models.CallStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
-        await engine.DisposeAsync().AsTask().WaitAsync(Wait);
+        await engine.DisposeAsync().AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         Assert.False(client.Disposed.Task.IsCompleted);
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.ExecuteAsync(Request("req-after-shutdown")).AsTask());
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.ExecuteAsync(Request("req-after-shutdown"), TestContext.Current.CancellationToken).AsTask());
         models.ReleaseCalls();
-        Assert.True((await running.WaitAsync(Wait)).Succeeded); // the request in flight completes on its plan
-        await client.Disposed.Task.WaitAsync(Wait);
+        Assert.True((await running.WaitAsync(Wait, TestContext.Current.CancellationToken)).Succeeded); // the request in flight completes on its plan
+        await client.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -189,7 +189,7 @@ public sealed class BindingLifetimeTests
         var root = Workspace(generation: 1);
         await using var engine = new RecEngine(Environment(root, models));
 
-        var load = await engine.LoadAsync(Compile(root));
+        var load = await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(load.Applied);
         var error = Assert.Single(load.Diagnostics, d => d.Code == "MODEL_SIGNATURE"); // and the tap that reads the node's inputs
@@ -209,7 +209,7 @@ public sealed class BindingLifetimeTests
         var root = Workspace(generation: 1, credentials: "secret://ctr-token");
         await using var engine = new RecEngine(Environment(root, models), bindingOptions: new BindingHostOptions { Secrets = new Store() });
 
-        var load = await engine.LoadAsync(Compile(root));
+        var load = await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(load.Applied);
         var error = Assert.Single(load.Diagnostics, d => d.IsError);
@@ -228,10 +228,10 @@ public sealed class BindingLifetimeTests
         await using var engine = new RecEngine(Environment(root, models), loggerFactory: logs,
             bindingOptions: new BindingHostOptions { Secrets = new Store(("ctr-token", Value)) });
 
-        var load = await engine.LoadAsync(Compile(root));
+        var load = await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
         ReplayBundle? bundle = null;
-        var result = await engine.ExecuteAsync(Request("req-secret", onRecording: b => bundle = b));
+        var result = await engine.ExecuteAsync(Request("req-secret", onRecording: b => bundle = b), TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
         Assert.Equal(Value, Assert.Single(models.Created).Credential!.Reveal());
@@ -251,7 +251,7 @@ public sealed class BindingLifetimeTests
         var root = Workspace(generation: 1, credentials: Pasted);
         await using var engine = new RecEngine(Environment(root, models), loggerFactory: logs);
 
-        var load = await engine.LoadAsync(Compile(root));
+        var load = await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(load.Applied);
         var error = Assert.Single(load.Diagnostics, d => d.Code == "MODEL_CONFIG"); // and the tap that reads the node's inputs
@@ -268,7 +268,7 @@ public sealed class BindingLifetimeTests
         var root = Workspace(generation: 1);
         BindCounting(root, latencyMs: null);
         var engine = new RecEngine(Environment(root, models, connectors, sources));
-        Assert.True((await engine.LoadAsync(Compile(root))).Applied);
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         Assert.Equal((1, 2, 2), (models.Created.Count, connectors.Created.Count, sources.Created.Count));
         var model = Assert.Single(models.Created);
         var items = connectors.Last("item_store");
@@ -277,33 +277,33 @@ public sealed class BindingLifetimeTests
         // A swap during a request: the connector and the source whose settings changed are replaced, the others are
         // taken over loaded, and the replaced ones live until the request that runs on them ends.
         models.HoldCalls();
-        var running = engine.ExecuteAsync(Request("req-across-the-swap")).AsTask();
-        await models.CallStarted.Task.WaitAsync(Wait);
+        var running = engine.ExecuteAsync(Request("req-across-the-swap"), TestContext.Current.CancellationToken).AsTask();
+        await models.CallStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         BindCounting(root, latencyMs: 0);
-        Assert.True((await engine.LoadAsync(Compile(root))).Applied);
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         Assert.Equal((1, 3, 3), (models.Created.Count, connectors.Created.Count, sources.Created.Count));
         Assert.Single(connectors.Created, c => c.Name == "user_store");
         Assert.Single(sources.Created, s => s.Name == "two_tower");
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
         Assert.False(items.Disposed.Task.IsCompleted || popular.Disposed.Task.IsCompleted);
 
         models.ReleaseCalls();
-        Assert.True((await running.WaitAsync(Wait)).Succeeded);
-        await Task.WhenAll(items.Disposed.Task, popular.Disposed.Task).WaitAsync(Wait);
+        Assert.True((await running.WaitAsync(Wait, TestContext.Current.CancellationToken)).Succeeded);
+        await Task.WhenAll(items.Disposed.Task, popular.Disposed.Task).WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.False(model.Disposed.Task.IsCompleted); // shared with the current plan
-        Assert.True((await engine.ExecuteAsync(Request("req-on-the-new-plan"))).Succeeded);
+        Assert.True((await engine.ExecuteAsync(Request("req-on-the-new-plan"), TestContext.Current.CancellationToken)).Succeeded);
 
         // A new model: the old one goes as soon as no request runs on it.
         Rebind(root, generation: 2);
-        Assert.True((await engine.LoadAsync(Compile(root))).Applied);
-        await model.Disposed.Task.WaitAsync(Wait);
-        Assert.True((await engine.ExecuteAsync(Request("req-on-the-new-model"))).Succeeded);
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
+        await model.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
+        Assert.True((await engine.ExecuteAsync(Request("req-on-the-new-model"), TestContext.Current.CancellationToken)).Succeeded);
 
         // The engine's disposal takes the rest: every instance was disposed exactly once, and none was called after.
-        await engine.DisposeAsync().AsTask().WaitAsync(Wait);
+        await engine.DisposeAsync().AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken);
         var all = models.Created.Cast<Counted>().Concat(connectors.Created).Concat(sources.Created).ToList();
         Assert.Equal(8, all.Count); // two models, three connectors (one replaced), three sources (one replaced)
-        await Task.WhenAll(all.Select(i => i.Disposed.Task)).WaitAsync(Wait);
+        await Task.WhenAll(all.Select(i => i.Disposed.Task)).WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.All(all, i => Assert.Equal((1, 0), (i.Disposals, i.LateCalls)));
         Assert.All(all.Where(i => i is not CountingConnectors.Connector { Name: "user_store" }), // the baseline reads no user feature
             i => Assert.True(i.Calls > 0, "every instance served a request"));
@@ -343,21 +343,21 @@ public sealed class BindingLifetimeTests
         var root = Workspace(generation: 1);
         BindCounting(root, latencyMs: null);
         var engine = new RecEngine(Environment(root, models, connectors, sources));
-        Assert.True((await engine.LoadAsync(Compile(root), sequence: Throwing - 1)).Applied);
+        Assert.True((await engine.LoadAsync(Compile(root), sequence: Throwing - 1, cancellationToken: TestContext.Current.CancellationToken)).Applied);
         var old = Assert.Single(models.Created);
 
         Rebind(root, generation: 2);
         BindCounting(root, latencyMs: 0);
-        Assert.True((await engine.LoadAsync(Compile(root), sequence: Throwing)).Applied);
+        Assert.True((await engine.LoadAsync(Compile(root), sequence: Throwing, cancellationToken: TestContext.Current.CancellationToken)).Applied);
         Assert.Equal(1, Volatile.Read(ref thrown));
 
         // The new plan serves, and the replaced plan's lease is retired.
-        await old.Disposed.Task.WaitAsync(Wait);
-        Assert.True((await engine.ExecuteAsync(Request("req-after-the-metric-failure"))).Succeeded);
-        await engine.DisposeAsync().AsTask().WaitAsync(Wait);
+        await old.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
+        Assert.True((await engine.ExecuteAsync(Request("req-after-the-metric-failure"), TestContext.Current.CancellationToken)).Succeeded);
+        await engine.DisposeAsync().AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken);
         var all = models.Created.Cast<Counted>().Concat(connectors.Created).Concat(sources.Created).ToList();
         Assert.Equal(8, all.Count);
-        await Task.WhenAll(all.Select(i => i.Disposed.Task)).WaitAsync(Wait);
+        await Task.WhenAll(all.Select(i => i.Disposed.Task)).WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.All(all, i => Assert.Equal((1, 0), (i.Disposals, i.LateCalls)));
         Assert.Equal(0, engine.Bindings.InstanceCount);
     }
@@ -376,10 +376,10 @@ public sealed class BindingLifetimeTests
         var served = new RemoteSignatureModels();
         await using (var engine = new RecEngine(Environment(root, served)))
         {
-            var load = await engine.LoadAsync(Compile(root));
+            var load = await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken);
             Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
             Assert.True(served.Lookups > 0);
-            Assert.True((await engine.ExecuteAsync(Request("req-remote-signature"))).Succeeded);
+            Assert.True((await engine.ExecuteAsync(Request("req-remote-signature"), TestContext.Current.CancellationToken)).Succeeded);
         }
 
         // The server's model has no input the node maps: the plan is rejected at the node, before it is served...
@@ -390,7 +390,7 @@ public sealed class BindingLifetimeTests
                 [new TensorSpec("p_click", TensorElementType.Float32, [-1])]),
         };
         await using var rejecting = new RecEngine(Environment(root, renamed));
-        var rejected = await rejecting.LoadAsync(Compile(root));
+        var rejected = await rejecting.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken);
         Assert.False(rejected.Applied);
         var error = Assert.Single(rejected.Diagnostics, d => d.Code == "MODEL_SIGNATURE");
         Assert.Equal(("pipeline:home_feed", "/nodes/ctr_ranker/config/inputs/log_followers"), (error.Artifact, error.Pointer));

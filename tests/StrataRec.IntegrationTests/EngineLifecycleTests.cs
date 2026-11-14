@@ -26,24 +26,24 @@ public sealed class EngineLifecycleTests
         var root = Workspace();
         using var host = new BindingHost();
         var engine = new RecEngine(Environment(root, sources), bindings: host);
-        var loading = engine.LoadAsync(Compile(root));
-        var source = await sources.Next().WaitAsync(Wait); // the load waits for the first load of the table
+        var loading = engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken);
+        var source = await sources.Next().WaitAsync(Wait, TestContext.Current.CancellationToken); // the load waits for the first load of the table
 
-        await engine.DisposeAsync().AsTask().WaitAsync(Wait);
+        await engine.DisposeAsync().AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken);
 
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => loading.WaitAsync(Wait));
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => loading.WaitAsync(Wait, TestContext.Current.CancellationToken));
         Assert.True(source.Token.IsCancellationRequested);
         Assert.False(engine.TryGetPipeline("home_feed", out _));
         Assert.Equal(0, host.TableCount);
         await engine.DisposeAsync(); // once is enough
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.LoadAsync(Compile(root)));
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(0, host.TableCount);
 
         // The host was passed in: the disposal left it running for its other engines.
         sources.Open();
         await using var other = new RecEngine(Environment(root, sources), bindings: host);
-        Assert.True((await other.LoadAsync(Compile(root))).Applied);
-        Assert.True((await other.ExecuteAsync(MetricsTests.Request("req-other"))).Succeeded);
+        Assert.True((await other.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
+        Assert.True((await other.ExecuteAsync(MetricsTests.Request("req-other"), TestContext.Current.CancellationToken)).Succeeded);
     }
 
     [Fact]
@@ -56,7 +56,7 @@ public sealed class EngineLifecycleTests
         var engine = new RecEngine(Environment(root, sources), bindings: host);
         engine.Publishing = () => engine.Dispose(); // the tables are loaded; the publish lock is next
 
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.LoadAsync(Compile(root)));
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.False(engine.TryGetPipeline("home_feed", out _));
         Assert.Equal(0, host.TableCount);
@@ -72,8 +72,8 @@ public sealed class EngineLifecycleTests
         using var host = new BindingHost();
         var first = new RecEngine(Environment(root, sources), bindings: host);
         var second = new RecEngine(Environment(root, sources), bindings: host);
-        Assert.True((await first.LoadAsync(Compile(root))).Applied);
-        Assert.True((await second.LoadAsync(Compile(root))).Applied);
+        Assert.True((await first.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
+        Assert.True((await second.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         var source = await sources.Next();
         Assert.Equal(1, host.TableCount); // one table, held by both
 
@@ -81,7 +81,7 @@ public sealed class EngineLifecycleTests
 
         Assert.False(source.Token.IsCancellationRequested); // a cancellation would be requested synchronously
         Assert.Equal(1, host.TableCount);
-        Assert.True((await second.ExecuteAsync(MetricsTests.Request("req-second"))).Succeeded);
+        Assert.True((await second.ExecuteAsync(MetricsTests.Request("req-second"), TestContext.Current.CancellationToken)).Succeeded);
 
         await second.DisposeAsync();
 
@@ -104,13 +104,13 @@ public sealed class EngineLifecycleTests
         using var host = new BindingHost();
         await using var first = new RecEngine(Environment(root, mine), bindings: host);
         await using var second = new RecEngine(Environment(root, theirs), bindings: host);
-        Assert.True((await first.LoadAsync(Compile(root))).Applied);
-        Assert.True((await second.LoadAsync(Compile(root))).Applied);
+        Assert.True((await first.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
+        Assert.True((await second.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
 
         Assert.Equal((1, 1), (mine.Runs, theirs.Runs));
         Assert.Equal(2, host.TableCount);
         Assert.Equal((5.0, 7.0), (Followers(first), Followers(second)));
-        Assert.True((await second.ExecuteAsync(MetricsTests.Request("req-second"))).Succeeded);
+        Assert.True((await second.ExecuteAsync(MetricsTests.Request("req-second"), TestContext.Current.CancellationToken)).Succeeded);
     }
 
     [Fact]
@@ -121,7 +121,7 @@ public sealed class EngineLifecycleTests
         var root = Workspace();
         using var host = new BindingHost();
         await using var engine = new RecEngine(Environment(root, sources), bindings: host);
-        Assert.True((await engine.LoadAsync(Compile(root), sequence: 1)).Applied);
+        Assert.True((await engine.LoadAsync(Compile(root), sequence: 1, cancellationToken: TestContext.Current.CancellationToken)).Applied);
         var source = await sources.Next();
 
         // Another configuration that shares the (ready) table, so nothing has to be waited for.
@@ -139,8 +139,8 @@ public sealed class EngineLifecycleTests
         Assert.Equal(1, served.Sequence);
         Assert.False(source.Token.IsCancellationRequested); // the served plan still holds the table: its source runs on
         Assert.Equal(1, host.TableCount);
-        Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-after-cancel"))).Succeeded);
-        Assert.True((await engine.LoadAsync(Compile(root), sequence: 4)).Applied);
+        Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-after-cancel"), TestContext.Current.CancellationToken)).Succeeded);
+        Assert.True((await engine.LoadAsync(Compile(root), sequence: 4, cancellationToken: TestContext.Current.CancellationToken)).Applied);
     }
 
     [Fact]
@@ -185,24 +185,24 @@ public sealed class EngineLifecycleTests
         var root = Workspace();
         var host = new BindingHost(new BindingHostOptions { ShutdownTimeout = TimeSpan.FromMilliseconds(50) });
         var engine = new RecEngine(Environment(root, sources), bindings: host);
-        Assert.True((await engine.LoadAsync(Compile(root))).Applied);
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
 
         try
         {
             // A changed binding: a new table, and the replaced plan's table is released by the swap. Loaded off the test
             // thread, so a swap that blocks fails the test instead of hanging it.
             ReplayTests.Edit(root, "bindings/local.jsonc", "\"max_bytes\":\"16MiB\"", "\"max_bytes\":\"32MiB\"");
-            var swap = await Task.Run(() => engine.LoadAsync(Compile(root))).WaitAsync(Wait);
+            var swap = await Task.Run(() => engine.LoadAsync(Compile(root))).WaitAsync(Wait, TestContext.Current.CancellationToken);
 
             Assert.True(swap.Applied);
-            await entered.Task.WaitAsync(Wait);
+            await entered.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
             Assert.False(cleanup.IsSet);
             Assert.Equal(1, host.TableCount);
-            Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-swapped"))).Succeeded);
+            Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-swapped"), TestContext.Current.CancellationToken)).Succeeded);
 
             // Shutdown is bounded by its timeout, also for the table still stopping.
             await engine.DisposeAsync();
-            await Task.Run(() => host.DisposeAsync().AsTask()).WaitAsync(Wait);
+            await Task.Run(() => host.DisposeAsync().AsTask(), TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken);
             Assert.False(cleanup.IsSet);
         }
         finally

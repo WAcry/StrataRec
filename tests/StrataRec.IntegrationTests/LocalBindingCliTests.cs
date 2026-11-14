@@ -54,9 +54,9 @@ public sealed class LocalBindingCliTests
         }
 
         using var process = System.Diagnostics.Process.Start(start)!;
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
+        var stdout = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        var stderr = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
 
         Assert.True(process.ExitCode == 1, $"exit {process.ExitCode}; stderr: {await stderr}");
         using var report = JsonDocument.Parse(await stdout);

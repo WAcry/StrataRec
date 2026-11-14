@@ -38,9 +38,9 @@ public sealed class CacheEngineTests
         await using var engine = MetricsTests.LoadEngine(HomeFeedTestHost.LoadModified(root => CacheItems(root))).Engine;
         using var metrics = new MetricCapture();
 
-        var expected = await reference.ExecuteAsync(MetricsTests.Request("req-fetched"));
+        var expected = await reference.ExecuteAsync(MetricsTests.Request("req-fetched"), TestContext.Current.CancellationToken);
         var before = Snapshot.Of(metrics);
-        var first = await engine.ExecuteAsync(MetricsTests.Request("req-first"));
+        var first = await engine.ExecuteAsync(MetricsTests.Request("req-first"), TestContext.Current.CancellationToken);
         var firstRead = Snapshot.Of(metrics).Minus(before);
         var (fromTable, tableRead) = await UntilServedFromTable(engine, metrics, MetricsTests.Request);
 
@@ -58,7 +58,7 @@ public sealed class CacheEngineTests
         static RecRequest Recorded(string id) => ReplayTests.Request(id, 1001, "home", ReplayTests.ControlArms);
         await using var engine = MetricsTests.LoadEngine(HomeFeedTestHost.LoadModified(root => CacheItems(root))).Engine;
         using var metrics = new MetricCapture();
-        var missed = await engine.ExecuteAsync(Recorded("req-miss"));
+        var missed = await engine.ExecuteAsync(Recorded("req-miss"), TestContext.Current.CancellationToken);
         var (hit, _) = await UntilServedFromTable(engine, metrics, Recorded);
 
         // A fresh engine on the same configuration: its table is empty, so a replay that read it would differ.
@@ -68,7 +68,7 @@ public sealed class CacheEngineTests
         {
             Assert.True(recorded.Succeeded, recorded.Error);
             var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!));
-            var outcome = await fresh.ReplayAsync(bundle);
+            var outcome = await fresh.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
             Assert.True(outcome.Report.Diff.Identical, ReplayTests.Describe(outcome.Report));
             Assert.Empty(outcome.Report.Gaps);
             Assert.Equal(Items(recorded), Items(outcome.Result));
@@ -90,9 +90,9 @@ public sealed class CacheEngineTests
 
         // The configuration loaded again: a new plan with a lease of its own gets the connector the host holds, so the
         // same table, with every row already written back.
-        Assert.True((await engine.LoadAsync(Compile(root))).Applied);
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         var before = Snapshot.Of(metrics);
-        var result = await engine.ExecuteAsync(MetricsTests.Request("req-swapped"));
+        var result = await engine.ExecuteAsync(MetricsTests.Request("req-swapped"), TestContext.Current.CancellationToken);
         var read = Snapshot.Of(metrics).Minus(before);
 
         Assert.True(result.Succeeded, result.Error);
@@ -116,7 +116,7 @@ public sealed class CacheEngineTests
         await UntilServedFromTable(first, metrics, MetricsTests.Request); // the first engine's table holds every key it reads
 
         var before = Snapshot.Of(metrics);
-        var result = await second.ExecuteAsync(MetricsTests.Request("req-second"));
+        var result = await second.ExecuteAsync(MetricsTests.Request("req-second"), TestContext.Current.CancellationToken);
         var read = Snapshot.Of(metrics).Minus(before);
 
         Assert.True(result.Succeeded, result.Error);
@@ -135,11 +135,11 @@ public sealed class CacheEngineTests
         using var metrics = new MetricCapture();
 
         var before = Snapshot.Of(metrics);
-        var origin = await first.ExecuteAsync(MetricsTests.Request("req-origin"));
+        var origin = await first.ExecuteAsync(MetricsTests.Request("req-origin"), TestContext.Current.CancellationToken);
         var firstRead = Snapshot.Of(metrics).Minus(before);
         await Eventually(shared.HoldsEveryKeyRead, () => "the first engine's distributed write-back: " + Snapshot.Of(metrics));
         before = Snapshot.Of(metrics);
-        var fromStore = await second.ExecuteAsync(MetricsTests.Request("req-store"));
+        var fromStore = await second.ExecuteAsync(MetricsTests.Request("req-store"), TestContext.Current.CancellationToken);
         var secondRead = Snapshot.Of(metrics).Minus(before);
 
         Assert.True(origin.Succeeded && fromStore.Succeeded, origin.Error ?? fromStore.Error);
@@ -160,23 +160,23 @@ public sealed class CacheEngineTests
         var store = Assert.Single(shared.Created);
         Assert.Equal(1, store.Loads);
 
-        Assert.True((await engine.LoadAsync(Compile(root))).Applied); // the same binding: the same store
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied); // the same binding: the same store
         Assert.Single(shared.Created);
 
         CacheItems(root, $$"""{ "store": "{{SharedStores.Type}}", "generation": 1, "timeout_ms": 20 }""");
-        Assert.True((await engine.LoadAsync(Compile(root))).Applied); // how long the engine waits is not the store's identity
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied); // how long the engine waits is not the store's identity
         Assert.Single(shared.Created);
-        Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-unchanged"))).Succeeded);
+        Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-unchanged"), TestContext.Current.CancellationToken)).Succeeded);
 
         CacheItems(root, $$"""{ "store": "{{SharedStores.Type}}", "generation": 2 }""");
-        Assert.True((await engine.LoadAsync(Compile(root))).Applied);
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         var replacement = Assert.Single(shared.Created, s => s != store);
-        await store.Disposed.Task.WaitAsync(Wait); // no served plan uses it any more
+        await store.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken); // no served plan uses it any more
         Assert.Equal(1, replacement.Loads);
-        Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-changed"))).Succeeded);
+        Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-changed"), TestContext.Current.CancellationToken)).Succeeded);
 
         await engine.DisposeAsync();
-        await replacement.Disposed.Task.WaitAsync(Wait);
+        await replacement.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal((1, 1), (store.Disposals, replacement.Disposals));
     }
 

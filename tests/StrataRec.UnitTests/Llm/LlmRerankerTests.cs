@@ -326,7 +326,7 @@ public sealed class LlmMetricsTests
         var replay = RunReplay.Create(recorded.Recording!, "/runs/0");
 
         var replayed = await new PipelineExecutor().ExecuteAsync(Compile(models, Rerank(Template, extra: """, "max_output_tokens": 65"""), onFailure: "skip"),
-            new PipelineRequest { RequestId = "r", Inputs = Inputs(), Deadline = RunReplay.Deadline, Seed = 1234, Replay = replay });
+            new PipelineRequest { RequestId = "r", Inputs = Inputs(), Deadline = RunReplay.Deadline, Seed = 1234, Replay = replay }, TestContext.Current.CancellationToken);
 
         Assert.Equal(new long[] { 50, 30, 10, 20, 40, 70, 60 }, IdsOf(recorded));
         Assert.Equal(Incoming, IdsOf(replayed));

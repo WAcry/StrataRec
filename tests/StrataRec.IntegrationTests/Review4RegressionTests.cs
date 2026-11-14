@@ -54,7 +54,7 @@ public sealed class Review4RegressionTests
         var result = await engine.ExecuteAsync(new RecRequest
         {
             PipelineId = "home_feed", RequestId = "r", Inputs = HomeFeedTestHost.Inputs(1001, "home"), Deadline = TimeSpan.FromMilliseconds(100),
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
         Assert.Contains("assignment", result.Error);
@@ -80,7 +80,7 @@ public sealed class Review4RegressionTests
 
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await executor.ExecuteAsync(plan, request, cancel.Token));
-            await logs.FlushAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            await logs.FlushAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         }
 
         var record = Assert.Single(sink.Snapshot(), b => b.TapId == "$experiments");
@@ -177,7 +177,7 @@ public sealed class Review4RegressionTests
                 .Replace("\"expr\": \"col.item.smoothed_ctr\" }", "\"expr\": \"col.item.smoothed_ctr * (ctx.user.tenure_days > 1000.0 ? 1.0 : 1.0)\" }", StringComparison.Ordinal));
         });
         var plan = alsoServed.Plan();
-        var result = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(captureLogs: true));
+        var result = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(captureLogs: true), TestContext.Current.CancellationToken);
         Assert.True(result.Succeeded, result.Error);
         var served = Assert.Single(result.LogBatches, b => b.TapId == "served");
         Assert.Equal(420.0, served.Context.Single(c => c.Item1 == "tenure").Item2.AsFloat64());
@@ -213,7 +213,7 @@ public sealed class Review4RegressionTests
             var request = HomeFeedTestHost.NewRequest(arms: plan.ArmsFromIds(new[] { "exp_quality_weight/strong" }), captureLogs: true);
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await executor.ExecuteAsync(plan, request, cancel.Token));
-            await logs.FlushAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            await logs.FlushAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         }
 
         Assert.Empty(sink.Snapshot());

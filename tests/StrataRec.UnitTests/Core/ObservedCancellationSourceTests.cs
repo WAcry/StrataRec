@@ -34,8 +34,8 @@ public sealed class ObservedCancellationSourceTests
 
         source.CancelAfterObserved(TimeSpan.FromMilliseconds(10));
 
-        await ran.Task.WaitAsync(Patience);
-        var failure = await source.Failed.Task.WaitAsync(Patience);
+        await ran.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        var failure = await source.Failed.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.Equal("cleanup failed", Assert.IsType<InvalidOperationException>(Assert.Single(failure.Flatten().InnerExceptions)).Message);
         Assert.True(SpinWait.SpinUntil(() => counted.Of("fetch") == 1, Patience));
         events.Flush();
@@ -90,7 +90,7 @@ public sealed class ObservedCancellationSourceTests
 
         node.CancelAfterObserved(TimeSpan.FromMilliseconds(10));
 
-        Assert.True(both.Wait(Patience));
+        Assert.True(both.Wait(Patience, TestContext.Current.CancellationToken));
         Assert.True(SpinWait.SpinUntil(() => counted.Of("node") == 1 && counted.Of("call") == 1, Patience));
         Assert.True(call.IsCancellationRequested);
     }
@@ -139,7 +139,7 @@ public sealed class ObservedCancellationSourceTests
 
         await Assert.ThrowsAsync<AggregateException>(() => source.CancelObservedAsync());
 
-        await source.Failed.Task.WaitAsync(Patience);
+        await source.Failed.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.True(SpinWait.SpinUntil(() => counted.Of("call") == 1, Patience));
     }
 
@@ -196,13 +196,13 @@ public sealed class ObservedCancellationSourceTests
         });
 
         var callbacks = source.CancelObservedAsync();
-        Assert.True(entered.Wait(Patience));
+        Assert.True(entered.Wait(Patience, TestContext.Current.CancellationToken));
         source.Dispose();
         source.Dispose();
         Assert.False(Disposed(source)); // the callbacks are still running
 
         release.Set();
-        await callbacks.WaitAsync(Patience);
+        await callbacks.WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.Equal(1, ran);
         Assert.True(SpinWait.SpinUntil(() => Disposed(source), Patience));
     }
@@ -225,7 +225,7 @@ public sealed class ObservedCancellationSourceTests
 
         Assert.Same(first, second);
         release.Set();
-        await first.WaitAsync(Patience);
+        await first.WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.Equal(1, ran);
         source.Dispose();
         Assert.True(Disposed(source));

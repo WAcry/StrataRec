@@ -26,7 +26,7 @@ public class ListInt32EndToEndTests
         var result = await new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
         {
             RequestId = "r", Inputs = new RequestInputs(), Deadline = TimeSpan.FromSeconds(5), TimeMs = 1_767_225_600_000,
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         var byId = result.Items.ToDictionary(i => i.Id.Int64Value, i => i.Columns);
@@ -75,7 +75,7 @@ public class ListInt32EndToEndTests
         var result = await new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
         {
             RequestId = "r", Inputs = new RequestInputs(), Deadline = TimeSpan.FromSeconds(5), TimeMs = 1_767_225_600_000,
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
         Assert.Contains("output reads a feature that failed", result.Error);
@@ -111,7 +111,7 @@ public class ListInt32EndToEndTests
         var result = await new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
         {
             RequestId = "r", Inputs = new RequestInputs(), Deadline = TimeSpan.FromSeconds(5), TimeMs = 1_767_225_600_000, CaptureLogs = true,
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Contains(result.Outcomes, t => t.NodeId == "narrow" && t.Kind == NodeOutcomeKind.Failed);
@@ -134,12 +134,12 @@ public class ListInt32EndToEndTests
         var rejected = await new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
         {
             RequestId = "r", Inputs = new RequestInputs().Set(input, value), Deadline = TimeSpan.FromSeconds(5),
-        });
+        }, TestContext.Current.CancellationToken);
         var accepted = await new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
         {
             RequestId = "r", Inputs = new RequestInputs().Set(input, scalar is null ? ScalarValue.FromInt64List(new long[] { 7, 8 }) : ScalarValue.FromInt64(7)),
             Deadline = TimeSpan.FromSeconds(5),
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.False(rejected.Succeeded);
         Assert.Contains(scalar is null

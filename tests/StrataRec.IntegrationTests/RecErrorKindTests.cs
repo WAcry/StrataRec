@@ -25,8 +25,8 @@ public sealed class RecErrorKindTests : IDisposable
     {
         await using var engine = Load(_root);
 
-        var served = await engine.ExecuteAsync(Request("feed", Inputs(1001)));
-        var degraded = await engine.ExecuteAsync(Request("broken", Inputs(1001, region: "us")));
+        var served = await engine.ExecuteAsync(Request("feed", Inputs(1001)), TestContext.Current.CancellationToken);
+        var degraded = await engine.ExecuteAsync(Request("broken", Inputs(1001, region: "us")), TestContext.Current.CancellationToken);
 
         Assert.True(served.Succeeded, served.Error);
         Assert.Equal((RecErrorKind.None, null, null), (served.ErrorKind, served.Error, served.ErrorPointer));
@@ -42,7 +42,7 @@ public sealed class RecErrorKindTests : IDisposable
     {
         await using var engine = Load(_root);
 
-        var result = await engine.ExecuteAsync(Request("home_feed", Inputs(1001)));
+        var result = await engine.ExecuteAsync(Request("home_feed", Inputs(1001)), TestContext.Current.CancellationToken);
 
         Assert.Equal((false, RecErrorKind.UnknownPipeline, "Unknown pipeline 'home_feed'."), (result.Succeeded, result.ErrorKind, result.Error));
         Assert.Null(result.ErrorPointer);
@@ -68,7 +68,7 @@ public sealed class RecErrorKindTests : IDisposable
         }
 
         // "broken" fails when it runs and has a fallback: a request that cannot run is not one for the fallback to serve.
-        var result = await engine.ExecuteAsync(Request("broken", inputs));
+        var result = await engine.ExecuteAsync(Request("broken", inputs), TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
         Assert.Equal((RecErrorKind.InvalidRequest, pointer, error), (result.ErrorKind, result.ErrorPointer, result.Error));
@@ -88,7 +88,7 @@ public sealed class RecErrorKindTests : IDisposable
         {
             PipelineId = "home_feed", RequestId = "r", Inputs = HomeFeedTestHost.Inputs(1001, "home"), Deadline = HomeFeedTestHost.Deadline,
             Debug = new DebugOptions { ForceArms = new[] { "exp_gone/treatment" } },
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.Equal((false, RecErrorKind.InvalidRequest), (result.Succeeded, result.ErrorKind));
         Assert.Contains("exp_gone/treatment", result.Error, StringComparison.Ordinal);
@@ -101,7 +101,7 @@ public sealed class RecErrorKindTests : IDisposable
         var provider = new CountingProvider(answers: false);
         await using var engine = Load(_root, provider);
 
-        var result = await engine.ExecuteAsync(Request("feed", Inputs(1001), TimeSpan.FromMilliseconds(100)));
+        var result = await engine.ExecuteAsync(Request("feed", Inputs(1001), TimeSpan.FromMilliseconds(100)), TestContext.Current.CancellationToken);
 
         Assert.Equal((false, RecErrorKind.DeadlineExceeded), (result.Succeeded, result.ErrorKind));
         Assert.Contains("deadline exceeded", result.Error, StringComparison.Ordinal);
@@ -113,8 +113,8 @@ public sealed class RecErrorKindTests : IDisposable
     {
         await using var engine = Load(_root);
 
-        var alone = await engine.ExecuteAsync(Request("lonely", Inputs(1001)));
-        var both = await engine.ExecuteAsync(Request("strict_broken", Inputs(1001)));
+        var alone = await engine.ExecuteAsync(Request("lonely", Inputs(1001)), TestContext.Current.CancellationToken);
+        var both = await engine.ExecuteAsync(Request("strict_broken", Inputs(1001)), TestContext.Current.CancellationToken);
 
         Assert.Equal((false, RecErrorKind.Failed), (alone.Succeeded, alone.ErrorKind));
         Assert.Null(alone.ErrorPointer);
@@ -133,7 +133,7 @@ public sealed class RecErrorKindTests : IDisposable
         await using var engine = Load(_root);
 
         // "region" is declared by "broken" and not by "backup": the backup runs with user_id only.
-        var result = await engine.ExecuteAsync(Request("broken", Inputs(1001, region: "us")));
+        var result = await engine.ExecuteAsync(Request("broken", Inputs(1001, region: "us")), TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal("backup", result.ServedBy);
@@ -151,12 +151,12 @@ public sealed class RecErrorKindTests : IDisposable
         Assert.True(before.TryRead(body.RootElement, out var inputs, out var errors), string.Join("\n", errors));
 
         Edit(Path.Combine(_root, "pipelines", "feed.jsonc"), "\"tenant_id\": { \"type\": \"int64?\" }, ", string.Empty);
-        var reload = await ServiceCollectionExtensions.LoadWorkspaceAsync(engine, _root, "local", new[] { "feed" });
+        var reload = await ServiceCollectionExtensions.LoadWorkspaceAsync(engine, _root, "local", new[] { "feed" }, TestContext.Current.CancellationToken);
         Assert.False(reload.HasErrors, string.Join("\n", reload.Items));
         Assert.True(engine.TryGetRequestSchema("feed", out var after));
         Assert.False(after.Contains("tenant_id"));
 
-        var result = await engine.ExecuteAsync(Request("feed", inputs));
+        var result = await engine.ExecuteAsync(Request("feed", inputs), TestContext.Current.CancellationToken);
 
         Assert.Equal((false, RecErrorKind.InvalidRequest, "/inputs/tenant_id"), (result.Succeeded, result.ErrorKind, result.ErrorPointer));
         Assert.Equal("Input 'tenant_id' is not declared in the request_schema of pipeline 'feed'. Declared inputs: 'user_id'.", result.Error);
@@ -170,7 +170,7 @@ public sealed class RecErrorKindTests : IDisposable
         // Review 33: the replay ran the inputs it decoded without the check, so a release that requires a new input turned
         // the recorded request into a failure, or a success of the fallback, where the engine answers it as invalid.
         await using var engine = Load(_root);
-        var recorded = await engine.ExecuteAsync(Request("feed", Inputs(1001), debug: new DebugOptions { Record = true }));
+        var recorded = await engine.ExecuteAsync(Request("feed", Inputs(1001), debug: new DebugOptions { Record = true }), TestContext.Current.CancellationToken);
         Assert.True(recorded.Succeeded, recorded.Error);
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!));
 
@@ -181,12 +181,12 @@ public sealed class RecErrorKindTests : IDisposable
             Edit(feed, "\"pipeline_id\": \"feed\",", "\"pipeline_id\": \"feed\", \"fallback_pipeline\": \"backup\",");
         }
 
-        var reload = await ServiceCollectionExtensions.LoadWorkspaceAsync(engine, _root, "local", new[] { "feed", "backup" });
+        var reload = await ServiceCollectionExtensions.LoadWorkspaceAsync(engine, _root, "local", new[] { "feed", "backup" }, TestContext.Current.CancellationToken);
         Assert.False(reload.HasErrors, string.Join("\n", reload.Items));
         Assert.Empty(reload.Items);
-        var live = await engine.ExecuteAsync(Request("feed", Inputs(1001)));
+        var live = await engine.ExecuteAsync(Request("feed", Inputs(1001)), TestContext.Current.CancellationToken);
 
-        var outcome = await engine.ReplayAsync(bundle);
+        var outcome = await engine.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
 
         var replayed = outcome.Result;
         Assert.Equal((false, RecErrorKind.InvalidRequest, "/inputs/tenant_id"), (replayed.Succeeded, replayed.ErrorKind, replayed.ErrorPointer));
@@ -201,10 +201,10 @@ public sealed class RecErrorKindTests : IDisposable
     {
         // The caller's inputs suit the pipeline asked for; its fallback's do not: the configuration's fault, not the caller's.
         await using var engine = Load(_root);
-        var recorded = await engine.ExecuteAsync(Request("strict_broken", Inputs(1001), debug: new DebugOptions { Record = true }));
+        var recorded = await engine.ExecuteAsync(Request("strict_broken", Inputs(1001), debug: new DebugOptions { Record = true }), TestContext.Current.CancellationToken);
         Assert.Equal((false, RecErrorKind.Failed), (recorded.Succeeded, recorded.ErrorKind));
 
-        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!)));
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!)), cancellationToken: TestContext.Current.CancellationToken);
 
         var replayed = outcome.Result;
         Assert.Equal((false, RecErrorKind.Failed, null), (replayed.Succeeded, replayed.ErrorKind, replayed.ErrorPointer));

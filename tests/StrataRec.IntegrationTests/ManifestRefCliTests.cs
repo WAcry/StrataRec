@@ -122,15 +122,15 @@ public sealed class ManifestRefCliTests
         {
             foreach (var (file, id) in manifests)
             {
-                var request = await ManifestBuilder.LoadAsync(ManifestStores.Read(file), id, new FileSystemArtifactStore(store), new DiagnosticBag());
-                Assert.True((await engine.LoadAsync(request!, 1)).Applied);
+                var request = await ManifestBuilder.LoadAsync(ManifestStores.Read(file), id, new FileSystemArtifactStore(store), new DiagnosticBag(), TestContext.Current.CancellationToken);
+                Assert.True((await engine.LoadAsync(request!, 1, TestContext.Current.CancellationToken)).Applied);
             }
 
             var result = await engine.ExecuteAsync(new RecRequest
             {
                 PipelineId = "primary", RequestId = "req-failover", Inputs = new Core.Values.RequestInputs(), Deadline = TimeSpan.FromSeconds(30),
                 Debug = new DebugOptions { Record = true },
-            });
+            }, TestContext.Current.CancellationToken);
             Assert.Equal("backup", result.ServedBy);
             recording = result.Recording!;
             Assert.Equal(new[] { manifests[0].Id, manifests[1].Id }, recording.Runs.Select(r => r.ManifestId));
@@ -179,9 +179,10 @@ public sealed class ManifestRefCliTests
 
         // An engine without the fallback pipeline says so instead of passing the primary's failure off as the replay.
         await using var primaryOnly = new RecEngine(CommonOptions.ForRoot(Tool.Environment, root), bindingOptions: new Hosting.Bindings.BindingHostOptions { Load = false });
-        var primary = await ManifestBuilder.LoadAsync(ManifestStores.Read(manifests[0].File), manifests[0].Id, new FileSystemArtifactStore(store), new DiagnosticBag());
-        Assert.True((await primaryOnly.LoadAsync(primary!, 1)).Applied);
-        var outcome = await primaryOnly.ReplayAsync(recording);
+        var primary = await ManifestBuilder.LoadAsync(ManifestStores.Read(manifests[0].File), manifests[0].Id, new FileSystemArtifactStore(store), new DiagnosticBag(),
+            TestContext.Current.CancellationToken);
+        Assert.True((await primaryOnly.LoadAsync(primary!, 1, TestContext.Current.CancellationToken)).Applied);
+        var outcome = await primaryOnly.ReplayAsync(recording, cancellationToken: TestContext.Current.CancellationToken);
         Assert.False(outcome.Result.Succeeded);
         Assert.Contains(outcome.Report.Notes, n => n.Contains("this engine has not loaded 'backup'", StringComparison.Ordinal));
     }
@@ -196,13 +197,13 @@ public sealed class ManifestRefCliTests
 
         // Requests served by an engine that loaded the manifest, as a node does (its bindings loaded from the workspace's files).
         var request = await ManifestBuilder.LoadAsync(ManifestStores.Read(file), id,
-            new FileSystemArtifactStore(store), new DiagnosticBag());
+            new FileSystemArtifactStore(store), new DiagnosticBag(), TestContext.Current.CancellationToken);
         await using (var engine = new RecEngine(CommonOptions.ForRoot(Tool.Environment, root)))
         {
-            Assert.True((await engine.LoadAsync(request!, 1)).Applied);
+            Assert.True((await engine.LoadAsync(request!, 1, TestContext.Current.CancellationToken)).Applied);
             foreach (var (name, userId, arms) in new[] { ("a-user", 1001L, new[] { "exp_mmr_diversity/mmr", "exp_quality_weight/strong" }), ("b-other", 1002L, Array.Empty<string>()) })
             {
-                var result = await engine.ExecuteAsync(ReplayTests.Request("req-" + name, userId, "home", arms));
+                var result = await engine.ExecuteAsync(ReplayTests.Request("req-" + name, userId, "home", arms), TestContext.Current.CancellationToken);
                 Assert.True(result.Succeeded, result.Error);
                 Assert.Equal(id, result.Recording!.Manifest.Id);
                 ReplayBundleFile.Save(result.Recording, Path.Combine(manifestBundles, name + ".json"));
@@ -456,7 +457,7 @@ public sealed class ManifestRefCliTests
         File.WriteAllText(beyond, System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(file), "\"seq\": \\d+", "\"seq\": 9007199254740993"));
         await Expect(1, "MANIFEST_NOT_CANONICAL", beyond, "write integers of at most 9007199254740991", manifest: beyond, store: store, pointer: "/seq");
         var publishErrors = new StringWriter();
-        Assert.Equal(1, await StrataRecCommandLine.InvokeAsync(["publish", "-s", store, beyond], Tool.Environment, TextWriter.Null, publishErrors));
+        Assert.Equal(1, await StrataRecCommandLine.InvokeAsync(["publish", "-s", store, beyond], Tool.Environment, TextWriter.Null, publishErrors, TestContext.Current.CancellationToken));
         Assert.Contains($"error MANIFEST_NOT_CANONICAL {beyond}/seq", publishErrors.ToString());
         Assert.DoesNotContain("Unhandled", publishErrors.ToString());
 

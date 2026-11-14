@@ -41,11 +41,11 @@ public sealed class WorkspaceTests
         var diagnostics = new DiagnosticBag();
         var workspace = ConfigWorkspace.Load(HomeFeedTestHost.SampleRoot(SampleTiming.AsWritten), diagnostics);
         var store = new StrataRec.Artifacts.Storage.InMemoryArtifactStore();
-        var manifest = await StrataRec.Hosting.Manifests.ManifestBuilder.BuildAsync(workspace, "home_feed", "local", store, diagnostics);
+        var manifest = await StrataRec.Hosting.Manifests.ManifestBuilder.BuildAsync(workspace, "home_feed", "local", store, diagnostics, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(manifest);
         Assert.Empty(diagnostics.Items);
 
-        var loaded = await StrataRec.Hosting.Manifests.ManifestBuilder.LoadAsync(manifest!, "sha256:test", store, diagnostics);
+        var loaded = await StrataRec.Hosting.Manifests.ManifestBuilder.LoadAsync(manifest!, "sha256:test", store, diagnostics, TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
         Assert.Equal(3, loaded!.Experiments.Count);
 
@@ -66,7 +66,7 @@ public sealed class WorkspaceTests
             Experiments = swapped,
         };
         var errors = new DiagnosticBag();
-        Assert.Null(await StrataRec.Hosting.Manifests.ManifestBuilder.LoadAsync(tampered, "sha256:tampered", store, errors));
+        Assert.Null(await StrataRec.Hosting.Manifests.ManifestBuilder.LoadAsync(tampered, "sha256:tampered", store, errors, TestContext.Current.CancellationToken));
         var error = Assert.Single(errors.Items);
         Assert.Equal("MANIFEST_IDENTITY", error.Code);
         Assert.Equal("/experiments/exp_mmr_diversity/artifact", error.Pointer);

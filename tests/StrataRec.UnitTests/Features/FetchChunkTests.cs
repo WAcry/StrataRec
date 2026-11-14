@@ -52,8 +52,8 @@ public class FetchChunkTests
         var hook = new FeatureCallHookTests.ListHook();
         var request = rig.NewRequest(new long[] { 1, 2, 3 }, hook: hook);
 
-        var result = await request.EnsureAsync(score).AsTask().WaitAsync(Patience);
-        await Task.WhenAll(observed.Select(o => o.Task)).WaitAsync(Patience); // both cooperative connectors saw the budget
+        var result = await request.EnsureAsync(score).AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await Task.WhenAll(observed.Select(o => o.Task)).WaitAsync(Patience, TestContext.Current.CancellationToken); // both cooperative connectors saw the budget
 
         Assert.True(result.Failed);
         Assert.Contains("timed out after 100 ms", result.Error);
@@ -64,7 +64,7 @@ public class FetchChunkTests
         _ = token.WaitHandle; // still alive: the first connector holds it
 
         late.SetResult();
-        await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience);
+        await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         DisposedTokens.AssertEventuallyDisposed(token);
     }
@@ -103,16 +103,16 @@ public class FetchChunkTests
         var request = rig.NewRequest(new long[] { 1, 2 }, deadlineMs: 600_000, hook: hook);
 
         var ensure = request.Fetcher.EnsureAsync(new[] { score }, caller.Token);
-        await started.Task.WaitAsync(Patience);
+        await started.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         caller.Cancel();
-        var result = await ensure.AsTask().WaitAsync(Patience);
+        var result = await ensure.AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.True(result.Failed);
         Assert.Contains("was cancelled", result.Error);
         Assert.Equal(2, hook.Recorded.Count);
         Assert.All(hook.Recorded, call => Assert.Equal(IoOutcome.Cancelled, call.Outcome));
         release.SetResult();
-        await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience);
+        await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience, TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -154,8 +154,8 @@ public class FetchChunkTests
         try
         {
             var ensure = request.EnsureAsync(score).AsTask();
-            Assert.True(callbackEntered.Wait(Patience)); // the budget ran out and the callback blocks
-            var result = await ensure.WaitAsync(Patience);
+            Assert.True(callbackEntered.Wait(Patience, TestContext.Current.CancellationToken)); // the budget ran out and the callback blocks
+            var result = await ensure.WaitAsync(Patience, TestContext.Current.CancellationToken);
             Assert.False(callbackReturned.IsSet); // the callback still blocks
 
             Assert.True(result.Failed);
@@ -171,10 +171,10 @@ public class FetchChunkTests
             releaseCallback.Set();
         }
 
-        Assert.True(callbackReturned.Wait(Patience));
+        Assert.True(callbackReturned.Wait(Patience, TestContext.Current.CancellationToken));
         answers[0].SetResult(FetchStatus.Ok);
         answers[1].SetResult(FetchStatus.Ok);
-        await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience);
+        await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.True(SpinWait.SpinUntil(() => request.Memory.IsReturned, Patience));
     }
 
@@ -216,7 +216,7 @@ public class FetchChunkTests
         Assert.Equal(new[] { IoOutcome.Timeout, IoOutcome.Timeout }, calls.Select(c => c.Outcome));
         Assert.All(calls, c => Assert.Contains("timed out after 100 ms", c.Status.Error));
         never.SetResult(FetchStatus.Ok);
-        await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience);
+        await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience, TestContext.Current.CancellationToken);
     }
 
     [Theory]
@@ -254,7 +254,7 @@ public class FetchChunkTests
         Assert.Equal(2, abandoned);
         Assert.Equal(0, pool.Returned);
         hang.Set();
-        await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience);
+        await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.True(SpinWait.SpinUntil(() => request.Memory.IsReturned, Patience)); // the last call site lets go right after
         if (hook is not null)
         {
@@ -295,7 +295,7 @@ public class FetchChunkTests
         var ensure = request.EnsureAsync(score, tag).AsTask();
         Assert.False(ensure.IsCompleted);
         gate.Set();
-        var result = await ensure.WaitAsync(Patience);
+        var result = await ensure.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.Equal(FeatureState.Ok, result.State);
         for (var row = 0; row < 5; row++)
@@ -389,9 +389,9 @@ public class FetchChunkTests
         var ensure = request.Fetcher.EnsureAsync(new[] { score, tag, history }, caller.Token).AsTask();
         start.Set();
         await hook.WhenDecided(Chunks - 1, Patience); // every chunk but the hung one
-        Assert.True(abandonedWrote.Wait(Patience));
+        Assert.True(abandonedWrote.Wait(Patience, TestContext.Current.CancellationToken));
         caller.Cancel();
-        var result = await ensure.WaitAsync(Patience); // returns at once, the first chunk still running
+        var result = await ensure.WaitAsync(Patience, TestContext.Current.CancellationToken); // returns at once, the first chunk still running
 
         // The controls are the chunks the fetch accepted, not the ones that merely finished their work; every message
         // carries each chunk's outcome and timing, so a failure explains itself.
@@ -420,7 +420,7 @@ public class FetchChunkTests
         Assert.False(request.Memory.IsReturned);
         Assert.Equal(0, pool.Returned);
         late.Set();
-        await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience);
+        await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.True(request.Memory.IsReturned);
     }
 

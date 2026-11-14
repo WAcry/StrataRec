@@ -34,12 +34,12 @@ public sealed class PublishCommandTests
         var named = await new FileSystemManifestSource(store).GetManifestIdAsync("home_feed", "local", CancellationToken.None);
         Assert.Equal(id, named);
         var diagnostics = new DiagnosticBag();
-        var manifest = await ManifestBuilder.ReadAsync(blobs, named!, diagnostics);
+        var manifest = await ManifestBuilder.ReadAsync(blobs, named!, diagnostics, TestContext.Current.CancellationToken);
         Assert.NotNull(manifest);
         await using var engine = new RecEngine(CommonOptions.ForRoot(Tool.Environment, root));
-        var loaded = await engine.LoadManifestAsync(manifest!, id, blobs);
+        var loaded = await engine.LoadManifestAsync(manifest!, id, blobs, TestContext.Current.CancellationToken);
         Assert.True(loaded.Applied, loaded.Reason);
-        var result = await engine.ExecuteAsync(ReplayTests.Request("req-published", 1001, "home", Array.Empty<string>()));
+        var result = await engine.ExecuteAsync(ReplayTests.Request("req-published", 1001, "home", Array.Empty<string>()), TestContext.Current.CancellationToken);
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal(id, result.ManifestId);
         Assert.NotEmpty(result.Items);
@@ -155,7 +155,7 @@ public sealed class PublishCommandTests
         Assert.Equal((4L, 3L, flooredId), (nextManifest.Seq, nextManifest.MinAcceptedSeq, nextManifest.Previous));
         Assert.Equal(0, (await Publish(store, next)).Code);
         var diff = new StringWriter();
-        Assert.Equal(1, await StrataRecCommandLine.InvokeAsync(["diff", "--to", next, "-s", store], Tool.Environment, diff, TextWriter.Null));
+        Assert.Equal(1, await StrataRecCommandLine.InvokeAsync(["diff", "--to", next, "-s", store], Tool.Environment, diff, TextWriter.Null, TestContext.Current.CancellationToken));
         Assert.Contains("final_top_k", diff.ToString());
 
         // A pointer that cannot be read: the next number is unknown; --seq says it.
@@ -182,7 +182,7 @@ public sealed class PublishCommandTests
 
         // home_feed's local pointer names a prod manifest of seq 50.
         var foreign = await ManifestStores.PutAsync(store, Renumbered(firstManifest, "prod", 50));
-        await pointers.WritePointerAsync("home_feed", "local", foreign);
+        await pointers.WritePointerAsync("home_feed", "local", foreign, TestContext.Current.CancellationToken);
         var errors = new StringWriter();
         Assert.Equal(1, await BuildCommand.RunAsync(Tool.Environment, root, "local", null, store, null, null, TextWriter.Null, CancellationToken.None, errors));
         Assert.Contains("error MANIFEST_OTHER_ENVIRONMENT", errors.ToString());
@@ -209,14 +209,14 @@ public sealed class PublishCommandTests
         foreach (var seq in new[] { "0", "9007199254740992" })
         {
             var usage = new StringWriter();
-            Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(["build", "-c", root, "-s", store, "--seq", seq], Tool.Environment, TextWriter.Null, usage));
+            Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(["build", "-c", root, "-s", store, "--seq", seq], Tool.Environment, TextWriter.Null, usage, TestContext.Current.CancellationToken));
             Assert.Contains("--seq must be from 1 to 9007199254740991", usage.ToString());
         }
 
         foreach (var arguments in new[] { new[] { "--seq", "abc" }, ["--seq", "9223372036854775808"], ["--seq=abc"] })
         {
             var usage = new StringWriter();
-            Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(["build", "-c", root, "-s", store, .. arguments], Tool.Environment, TextWriter.Null, usage));
+            Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(["build", "-c", root, "-s", store, .. arguments], Tool.Environment, TextWriter.Null, usage, TestContext.Current.CancellationToken));
             Assert.Contains("Cannot parse argument", usage.ToString());
         }
     }

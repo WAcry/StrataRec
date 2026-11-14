@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using StackExchange.Redis;
 using StrataRec.Core.Bindings;
@@ -492,9 +493,9 @@ public sealed class RedisDownTests
         await using var engine = await CacheEngineTests.Load(root, new RedisCacheStoreFactory());
         using var metrics = new MetricCapture();
 
-        var expected = await reference.ExecuteAsync(MetricsTests.Request("req-fetched"));
+        var expected = await reference.ExecuteAsync(MetricsTests.Request("req-fetched"), TestContext.Current.CancellationToken);
         var before = CacheEngineTests.Snapshot.Of(metrics);
-        var result = await engine.ExecuteAsync(MetricsTests.Request("req-redis-down"));
+        var result = await engine.ExecuteAsync(MetricsTests.Request("req-redis-down"), TestContext.Current.CancellationToken);
         var read = CacheEngineTests.Snapshot.Of(metrics).Minus(before);
 
         Assert.True(result.Succeeded, result.Error);
@@ -507,7 +508,8 @@ public sealed class RedisDownTests
 /// <summary>A <see cref="FactAttribute"/> skipped, with the reason, when there is no Redis to test against (see <see cref="RedisServer"/>).</summary>
 public sealed class RedisFactAttribute : FactAttribute
 {
-    public RedisFactAttribute()
+    public RedisFactAttribute([CallerFilePath] string? sourceFilePath = null, [CallerLineNumber] int sourceLineNumber = -1)
+        : base(sourceFilePath, sourceLineNumber)
     {
         if (RedisServer.Unavailable is { } why)
         {
@@ -519,7 +521,8 @@ public sealed class RedisFactAttribute : FactAttribute
 /// <summary>A <see cref="FactAttribute"/> that needs docker, to start a Redis of its own (<see cref="RedisServer.StartRequirePassAsync"/>).</summary>
 public sealed class DockerRedisFactAttribute : FactAttribute
 {
-    public DockerRedisFactAttribute()
+    public DockerRedisFactAttribute([CallerFilePath] string? sourceFilePath = null, [CallerLineNumber] int sourceLineNumber = -1)
+        : base(sourceFilePath, sourceLineNumber)
     {
         if (RedisServer.DockerUnavailable is { } why)
         {
@@ -564,7 +567,7 @@ public sealed class RedisServer : IAsyncLifetime
 
     public static string UniquePrefix() => "stratarec-test:" + Guid.NewGuid().ToString("N") + ":";
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         if (Unavailable is not null)
         {
@@ -588,7 +591,7 @@ public sealed class RedisServer : IAsyncLifetime
         return _requirePass;
     }
 
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         if (_connection is not null)
         {

@@ -53,7 +53,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
 
         // What the service does at startup: compile, load every binding (kv_store@1 reads its files), check the model's signature.
         await using var engine = new RecEngine(SampleEnvironment.Create() with { BaseDirectory = ConfigRoot });
-        var loaded = await ServiceCollectionExtensions.LoadWorkspaceAsync(engine, ConfigRoot, "local");
+        var loaded = await ServiceCollectionExtensions.LoadWorkspaceAsync(engine, ConfigRoot, "local", cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(Clean(loaded.Items), string.Join("\n", loaded.Items));
         Assert.Equal(new[] { Pipeline }, engine.PipelineIds());
     }
@@ -141,11 +141,11 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
     public async Task Run_ServesTheRequestFile_WithTheCustomComponents_AsTheServiceAnswersIt()
     {
         // The HTTP body names the pipeline in the route; a request file for `stratarec run` names it in pipeline_id.
-        var body = await File.ReadAllTextAsync(Path.Combine(ConfigRoot, "requests", "user_1001.json"));
+        var body = await File.ReadAllTextAsync(Path.Combine(ConfigRoot, "requests", "user_1001.json"), TestContext.Current.CancellationToken);
         var file = JsonNode.Parse(body)!.AsObject();
         file["pipeline_id"] = Pipeline;
         var request = Path.Combine(CopyOfTheWorkspace(), "requests", "user_1001.cli.json");
-        await File.WriteAllTextAsync(request, file.ToJsonString());
+        await File.WriteAllTextAsync(request, file.ToJsonString(), TestContext.Current.CancellationToken);
         var (code, local, error) = await Stratarec("run", "-c", ConfigRoot, "-r", request, "--deadline-ms", SampleBudgets.UntimedMs.ToString(CultureInfo.InvariantCulture));
         Assert.True(code == 0, error);
 
@@ -160,7 +160,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
     [Fact]
     public async Task Recommend_RanksWithTheCustomComponents_AndTheAssignedArm()
     {
-        var body = await File.ReadAllTextAsync(Path.Combine(ConfigRoot, "requests", "user_1001.json")); // region us, arm strong
+        var body = await File.ReadAllTextAsync(Path.Combine(ConfigRoot, "requests", "user_1001.json"), TestContext.Current.CancellationToken); // region us, arm strong
         var response = await Post(_host.CreateClient(), Pipeline, body);
 
         Assert.Equal(HttpStatusCode.OK, response.Status);
@@ -358,10 +358,10 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
     [Fact]
     public async Task Healthz_ListsTheServedPipelines()
     {
-        var response = await _host.CreateClient().GetAsync("/healthz");
+        var response = await _host.CreateClient().GetAsync("/healthz", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var json = JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
+        var json = JsonNode.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))!;
         Assert.Equal("ok", json["status"]!.GetValue<string>());
         Assert.Equal(new[] { Pipeline }, Strings(json["pipelines"]));
     }
@@ -432,7 +432,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
             (status, result) = await Post(client, Pipeline, Request);
             Assert.Equal(HttpStatusCode.OK, status);
         }
-        while (result["manifest"]!.GetValue<string>() != revocation && DateTime.UtcNow < deadline && await Task.Delay(20).ContinueWith(_ => true));
+        while (result["manifest"]!.GetValue<string>() != revocation && DateTime.UtcNow < deadline && await Task.Delay(20, TestContext.Current.CancellationToken).ContinueWith(_ => true));
 
         Assert.Equal(revocation, result["manifest"]!.GetValue<string>());
         Assert.Empty(Strings(result["experiments"]!["assigned"]));

@@ -25,7 +25,7 @@ public sealed class ModelRankerReplayTests
         var engine = Load(host, pairs, lists);
         using var metrics = new MetricCapture();
 
-        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-rankers", 1001, "home", ReplayTests.ControlArms));
+        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-rankers", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
 
         Assert.True(recorded.Succeeded, recorded.Error);
         var run = Assert.Single(recorded.Recording!.Runs);
@@ -46,7 +46,7 @@ public sealed class ModelRankerReplayTests
         metrics.Measurements.Clear();
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording));
         var (replayPairs, replayLists) = (new PairModels(bias: 1f), new ListModels(bias: 1f));
-        var outcome = await Load(host, replayPairs, replayLists).ReplayAsync(bundle);
+        var outcome = await Load(host, replayPairs, replayLists).ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
 
         var report = outcome.Report;
         Assert.True(report.Diff.Identical, ReplayTests.Describe(report));
@@ -62,7 +62,8 @@ public sealed class ModelRankerReplayTests
     public async Task AfterAnInputChanges_TheReplayReportsTheCallsAsNotRecorded_AndTheNodesFollowTheirOnFailure()
     {
         var host = HomeFeedTestHost.LoadModified(AddRankers);
-        var recorded = await Load(host, new PairModels(), new ListModels()).ExecuteAsync(ReplayTests.Request("req-rankers-changed", 1001, "home", ReplayTests.ControlArms));
+        var recorded = await Load(host, new PairModels(), new ListModels())
+            .ExecuteAsync(ReplayTests.Request("req-rankers-changed", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         Assert.True(recorded.Succeeded, recorded.Error);
 
         // Each ranker reads the model's score instead of the one it was recorded with.
@@ -73,7 +74,7 @@ public sealed class ModelRankerReplayTests
             ReplayTests.Edit(root, Pipeline, "\"smoothed_ctr\": \"col.item.smoothed_ctr\", \"seed\"", "\"smoothed_ctr\": \"col.score.ctr\", \"seed\"");
         });
         var (pairs, lists) = (new PairModels(), new ListModels());
-        var outcome = await Load(modified, pairs, lists).ReplayAsync(recorded.Recording!);
+        var outcome = await Load(modified, pairs, lists).ReplayAsync(recorded.Recording!, cancellationToken: TestContext.Current.CancellationToken);
 
         var report = outcome.Report;
         Assert.True(outcome.Result.Succeeded, outcome.Result.Error); // on_failure: skip
