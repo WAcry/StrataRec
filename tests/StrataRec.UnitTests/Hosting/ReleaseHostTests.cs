@@ -361,6 +361,82 @@ public sealed class ReleaseHostTests : IDisposable
         await Task.Run(host.Dispose).WaitAsync(TimeSpan.FromSeconds(30));
     }
 
+    /// <summary>
+    /// Review 36 #1: a stop used to return once the polling ended, with the source's cleanup on the stopping token still
+    /// running, and the container then disposed the source under it, the stop timeout far off. The stop waits for the
+    /// callbacks of its cancellation too, within its timeout.
+    /// </summary>
+    [Fact]
+    public async Task AStop_WaitsForTheSourcesCleanup_BeforeTheContainerDisposesIt()
+    {
+        var (_, id) = await _fixture.Pipeline("p").BuildAsync("p", seq: 1);
+        await _fixture.PublishAsync("p", id);
+        using var blocked = new ManualResetEventSlim();
+        var source = new HeldSource(_fixture.Pointers) { BlockOnCancel = blocked };
+        var host = Build(["p"], _clock, source: source);
+        await host.StartAsync();
+        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        source.Hold = true;
+        _clock.Advance(Poll);
+        await source.HeldStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        var stopping = host.StopAsync(); // the default stop timeout: 30 s
+        _ = Task.Delay(200).ContinueWith(_ => blocked.Set(), TaskScheduler.Default);
+        await stopping.WaitAsync(TimeSpan.FromSeconds(30));
+        await Task.Run(host.Dispose).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.True(source.CallbackEndedAtDisposal);
+    }
+
+    /// <summary>
+    /// Review 36 #2: an attempt that threw before it set its outcome (here describing the store's exception threw) left the
+    /// new manifest with the last one's final outcome, so the polling, alive, never loaded it. The store fails once: the
+    /// manifest is applied when it is tried again.
+    /// </summary>
+    [Fact]
+    public async Task AnAttemptThatThrew_IsTriedAgain_AndItsManifestApplied()
+    {
+        var (_, first) = await _fixture.Pipeline("p").BuildAsync("p", seq: 1);
+        await _fixture.PublishAsync("p", first);
+        var store = new FailingOnceStore(_fixture.Store);
+        var log = new ReleaseLog();
+        using var host = Build(["p"], _clock, store: store, log: log);
+        var engine = host.Services.GetRequiredService<IRecEngine>();
+        await host.StartAsync();
+        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+
+        var (_, second) = await _fixture.Pipeline("p", k: 3).BuildAsync("p", seq: 2);
+        store.FailOn = second;
+        await _fixture.PublishAsync("p", second);
+        await _clock.AdvanceAsync(Poll); // 1 s: the store throws, its message too
+        await _clock.AdvanceAsync(Poll); // 2 s: tried again
+
+        Assert.Equal(new[] { (0.0, first, ManifestLoadStatus.Applied), (1, second, ManifestLoadStatus.Rejected), (2, second, ManifestLoadStatus.Applied) },
+            _reports.Attempts());
+        Assert.Contains("(reading its message threw)", _reports.All[1].Result.Reason);
+        Assert.Equal(second, (await engine.ExecuteAsync(ReleaseFixture.Request("p"))).ManifestId);
+        await host.StopAsync();
+    }
+
+    /// <summary>A store whose read of <see cref="FailOn"/> throws once, an exception whose message cannot be read.</summary>
+    private sealed class FailingOnceStore(IArtifactStore inner) : IArtifactStore
+    {
+        private int _failed;
+
+        public string? FailOn { get; set; }
+
+        public ValueTask<byte[]?> TryGetAsync(string contentId, CancellationToken cancellationToken = default) =>
+            contentId == FailOn && Interlocked.Exchange(ref _failed, 1) == 0 ? throw new UnreadableException() : inner.TryGetAsync(contentId, cancellationToken);
+
+        public ValueTask<string> PutAsync(System.Text.Json.Nodes.JsonNode artifact, CancellationToken cancellationToken = default) =>
+            inner.PutAsync(artifact, cancellationToken);
+
+        private sealed class UnreadableException : Exception
+        {
+            public override string Message => throw new InvalidOperationException("no message");
+        }
+    }
+
     private IHost Build(
         string[] pipelines, TimeProvider? clock = null, TimeSpan? maxRetry = null, IArtifactStore? store = null, ReleaseLog? log = null,
         IManifestSource? source = null)
@@ -372,7 +448,7 @@ public sealed class ReleaseHostTests : IDisposable
             EnvironmentName = "Production",
         });
         builder.Logging.ClearProviders().AddProvider(log ?? new ReleaseLog());
-        builder.Services.AddSingleton<IManifestSource>(source ?? _fixture.Pointers);
+        builder.Services.AddSingleton<IManifestSource>(_ => source ?? _fixture.Pointers); // created by the container, so disposed by it
         builder.Services.AddSingleton<IArtifactStore>(store ?? _fixture.Store);
         builder.Services.AddSingleton<IReleaseStatusReporter>(new Reporter(_reports, clock ?? _clock));
         builder.Services.AddStrataRec(options =>
@@ -423,7 +499,7 @@ public sealed class ReleaseHostTests : IDisposable
     /// A manifest source that, while <see cref="Hold"/> is set, waits on its token until it is cancelled, with a callback of
     /// its own on the token registered first: one that throws, or one that blocks until released.
     /// </summary>
-    private sealed class HeldSource(IManifestSource inner) : IManifestSource
+    private sealed class HeldSource(IManifestSource inner) : IManifestSource, IDisposable
     {
         private volatile bool _hold;
 
@@ -439,6 +515,13 @@ public sealed class ReleaseHostTests : IDisposable
 
         public TaskCompletionSource HeldStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        /// <summary>Whether the blocking callback had ended when the container disposed the source; null until disposed.</summary>
+        public bool? CallbackEndedAtDisposal { get; private set; }
+
+        private volatile bool _callbackEnded;
+
+        public void Dispose() => CallbackEndedAtDisposal ??= _callbackEnded;
+
         public async ValueTask<string?> GetManifestIdAsync(string pipelineId, string environment, CancellationToken cancellationToken)
         {
             if (Hold)
@@ -447,7 +530,11 @@ public sealed class ReleaseHostTests : IDisposable
                 // callback, and would unregister it.
                 _ = ThrowOnCancel
                     ? cancellationToken.Register(static () => throw new InvalidOperationException("pointer cleanup failed"))
-                    : BlockOnCancel is { } blocked ? cancellationToken.Register(() => blocked.Wait()) : default;
+                    : BlockOnCancel is { } blocked ? cancellationToken.Register(() =>
+                    {
+                        blocked.Wait();
+                        _callbackEnded = true;
+                    }) : default;
                 HeldStarted.TrySetResult();
                 await Task.Delay(Timeout.Infinite, cancellationToken);
             }
