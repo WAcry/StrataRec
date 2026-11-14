@@ -100,12 +100,15 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
     /// </summary>
     /// <remarks>
     /// <para>Connected, one command tells (<see cref="CommandRefusedAsync"/>), since it reaches the server.</para>
-    /// <para>Not connected, the client's failure does not tell. StackExchange.Redis (2.13) tells the connect that its
-    /// connection ended before it publishes the refusal that ended it. It also keeps a connection's first failure, so a
-    /// dropped first connection hides a later refusal. A command failing fast then carries a plain connection failure,
-    /// and a load against a server that refuses the credentials succeeded (CI once; reproduced deterministically by an
-    /// investigation). A connect that must succeed reports the refusal it saw, read when it gives up. So one is tried,
-    /// once, with the store's settings. It costs a second connect timeout only when the server is down.</para>
+    /// <para>Not connected, the client's failure may not tell yet. StackExchange.Redis tells the connect that its connection
+    /// ended before it publishes the refusal that ended it, and a dropped connection's failure can replace a refusal it
+    /// published. A connect that must succeed reports the refusal its own connection saw, read when it gives up, so one is
+    /// tried, once, with the store's settings; it costs a second connect timeout only when the server is down.</para>
+    /// <para>A refusal is evidence whichever connection saw it, and a connection that saw nothing is no evidence of the
+    /// contrary (investigation 3, review 35): the probe can fail before it reads the refusal the store's connection already
+    /// has, from a timeout or a reset, and the load then took the server for down. So the connection's own evidence is
+    /// kept too: a command on it, which fails at once with the failure it published, before and after the probe, and the
+    /// refusals it publishes meanwhile. Only a probe that connects and is answered says the credentials are accepted.</para>
     /// </remarks>
     private async Task<BindingException?> RefusalAsync(ConnectionMultiplexer connection, ConfigurationOptions options, CancellationToken cancellationToken)
     {
@@ -114,28 +117,61 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
             return await CommandRefusedAsync(connection, _settings.User).ConfigureAwait(false) ? CredentialsRefused() : null;
         }
 
-        var probe = options.Clone();
-        probe.AbortOnConnectFail = true;
-        probe.ConnectRetry = 1;
-        var probing = _connect(probe);
-        ConnectionMultiplexer probed;
-        try
+        var published = 0;
+        void Failed(object? sender, ConnectionFailedEventArgs failure)
         {
-            probed = await probing.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            _ = DisposeOnceConnectedAsync(probing);
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return RefusalIn(ex);
+            if (failure.FailureType == ConnectionFailureType.AuthenticationFailure || (failure.Exception is { } ex && IsRefusal(ex)))
+            {
+                Volatile.Write(ref published, 1);
+            }
         }
 
-        await using (probed.ConfigureAwait(false))
+        connection.ConnectionFailed += Failed;
+        try
         {
-            return await CommandRefusedAsync(probed, _settings.User).ConfigureAwait(false) ? CredentialsRefused() : null;
+            if (await CommandRefusedAsync(connection, _settings.User).ConfigureAwait(false))
+            {
+                return CredentialsRefused();
+            }
+
+            var probe = options.Clone();
+            probe.AbortOnConnectFail = true;
+            probe.ConnectRetry = 1;
+            var probing = _connect(probe);
+            ConnectionMultiplexer? probed = null;
+            try
+            {
+                probed = await probing.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                _ = DisposeOnceConnectedAsync(probing);
+                throw;
+            }
+            catch (Exception ex) when (RefusalIn(ex) is { } refused)
+            {
+                return refused;
+            }
+            catch (Exception)
+            {
+                // The probe did not connect and saw no refusal: that proves nothing, so the connection's evidence decides.
+            }
+
+            if (probed is not null)
+            {
+                await using (probed.ConfigureAwait(false))
+                {
+                    return await CommandRefusedAsync(probed, _settings.User).ConfigureAwait(false) ? CredentialsRefused() : null;
+                }
+            }
+
+            return Volatile.Read(ref published) == 1 || await CommandRefusedAsync(connection, _settings.User).ConfigureAwait(false)
+                ? CredentialsRefused()
+                : null;
+        }
+        finally
+        {
+            connection.ConnectionFailed -= Failed;
         }
     }
 

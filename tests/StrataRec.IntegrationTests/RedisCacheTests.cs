@@ -182,13 +182,19 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
 
         await using var store = new RedisCacheStore(new RedisStoreSettings(endpoint, RedisServer.UniquePrefix(), null, null, false, 0), Connect);
         BindingException error;
+
+        // Each hold blocks a pool thread, and the probe reads its replies on the pool: without spare threads the test's own
+        // holds starved the probe, which then timed out before it read the refusal (investigation 3; CI, review 35).
+        ThreadPool.GetMinThreads(out var workers, out var completionPorts);
+        ThreadPool.SetMinThreads(Math.Max(workers, 64), completionPorts);
         try
         {
-            error = await RefusedAsync(store);
+            error = await RefusedAsync(store, () => $"held {log.Held}, timed out {log.TimedOut}");
         }
         finally
         {
             publish.Set();
+            ThreadPool.SetMinThreads(workers, completionPorts);
         }
 
         Assert.Equal(string.Empty, error.Pointer);
@@ -219,10 +225,30 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
     }
 
     /// <summary>
-    /// The load's refusal. A load that succeeded instead failed once in CI and never locally: the failure then says what
-    /// the server answers a read, which tells a refusal the load missed from a server it took for down.
+    /// Investigation 3 (review 35): the store's connection was refused, and the probe failed before it read the refusal (here
+    /// the proxy resets it; in CI a timeout): a probe that saw nothing is no evidence, so the refusal the connection saw
+    /// still fails the load. The connection's own two connections pass; every later one (the probe's, the connection's
+    /// reconnects) is reset.
     /// </summary>
-    private static async Task<BindingException> RefusedAsync(RedisCacheStore store)
+    [DockerRedisFact]
+    public async Task ARefusalTheConnectionSaw_StillFailsTheLoad_WhenTheProbeFailsBeforeItSeesOne()
+    {
+        var endpoint = await server.StartRequirePassAsync();
+        await using var proxy = new DroppingProxy(endpoint, drops: accepted => accepted > 2);
+
+        await using var store = new RedisCacheStore(new RedisStoreSettings(proxy.Endpoint, RedisServer.UniquePrefix(), null, null, false, 0));
+        var error = await RefusedAsync(store, () => $"the proxy dropped {proxy.Dropped} connections");
+
+        Assert.Equal(string.Empty, error.Pointer);
+        Assert.Contains("\"password\"", error.Hint);
+    }
+
+    /// <summary>
+    /// The load's refusal. A load that succeeded instead failed once in CI and never locally: the failure then says what
+    /// the server answers a read, which tells a refusal the load missed from a server it took for down, and the test's
+    /// own <paramref name="state"/>, which its assertions after this one would have said.
+    /// </summary>
+    private static async Task<BindingException> RefusedAsync(RedisCacheStore store, Func<string>? state = null)
     {
         try
         {
@@ -245,7 +271,8 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
             answer = ex.ToString();
         }
 
-        throw new Xunit.Sdk.XunitException("The load accepted credentials the server refuses. A read then gave: " + answer);
+        throw new Xunit.Sdk.XunitException("The load accepted credentials the server refuses. A read then gave: " + answer
+            + (state is null ? string.Empty : "; " + state()));
     }
 
     /// <summary>Review 19: through the engine, refused credentials reject the plan at the binding's password setting.</summary>
@@ -350,27 +377,37 @@ internal sealed class HoldRefusalLog(ManualResetEventSlim release) : Microsoft.E
     }
 }
 
-/// <summary>A TCP proxy on the loopback that resets its first connections and forwards the others to a server.</summary>
+/// <summary>
+/// A TCP proxy on the loopback that resets the connections <c>drops</c> picks by their order of arrival (1-based) and
+/// forwards the others to a server.
+/// </summary>
 internal sealed class DroppingProxy : IAsyncDisposable
 {
     private readonly System.Net.Sockets.TcpListener _listener = new(System.Net.IPAddress.Loopback, 0);
     private readonly CancellationTokenSource _stop = new();
     private readonly string _target;
-    private readonly int _drop;
+    private readonly Func<int, bool> _drops;
     private readonly Task _accepting;
     private int _accepted;
+    private int _dropped;
 
+    /// <summary>Resets the first <paramref name="drop"/> connections.</summary>
     public DroppingProxy(string target, int drop)
+        : this(target, accepted => accepted <= drop)
+    {
+    }
+
+    public DroppingProxy(string target, Func<int, bool> drops)
     {
         _target = target;
-        _drop = drop;
+        _drops = drops;
         _listener.Start();
         _accepting = AcceptAsync();
     }
 
     public string Endpoint => _listener.LocalEndpoint.ToString()!;
 
-    public int Dropped => Math.Min(Volatile.Read(ref _accepted), _drop);
+    public int Dropped => Volatile.Read(ref _dropped);
 
     public async ValueTask DisposeAsync()
     {
@@ -394,8 +431,9 @@ internal sealed class DroppingProxy : IAsyncDisposable
                 return;
             }
 
-            if (Interlocked.Increment(ref _accepted) <= _drop)
+            if (_drops(Interlocked.Increment(ref _accepted)))
             {
+                Interlocked.Increment(ref _dropped);
                 client.Client.LingerState = new System.Net.Sockets.LingerOption(true, 0); // closing resets the connection
                 client.Dispose();
                 continue;
