@@ -96,7 +96,8 @@ jobs:
         run: dotnet run --project src/StrataRec.Cli -c Release --no-build -- explain-plan -c samples/home_feed
 
       - name: Run a request
-        run: dotnet run --project src/StrataRec.Cli -c Release --no-build -- run -c samples/home_feed -r samples/home_feed/requests/user_1001.json --trace
+        # A one-shot process compiles what it runs on its first request; the sample's 200 ms deadline is for a warm service.
+        run: dotnet run --project src/StrataRec.Cli -c Release --no-build -- run -c samples/home_feed -r samples/home_feed/requests/user_1001.json --trace --deadline-ms 10000
 
   benchmarks:
     # Smoke only: proves the benchmarks still build and run. Shared runners are too noisy for regression thresholds.
