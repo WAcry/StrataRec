@@ -13,6 +13,7 @@ using StrataRec.Logging;
 using StrataRec.Models;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Testing;
 using StrataRec.Pipeline.Sources;
 
 namespace StrataRec.IntegrationTests;
@@ -173,20 +174,7 @@ internal static class TimerFaultChild
         source.Dispose();
         release.Set();
         var done = callbacks.Wait(Patience);
-        var disposed = SpinWait.SpinUntil(
-            () =>
-            {
-                try
-                {
-                    _ = source.Token.WaitHandle;
-                    return false;
-                }
-                catch (ObjectDisposedException)
-                {
-                    return true;
-                }
-            },
-            Patience);
+        var disposed = DisposedTokens.WaitUntilDisposed(source.Token, Patience);
 
         Console.WriteLine($"single_worker={single}");
         Console.WriteLine($"queued={queued}");

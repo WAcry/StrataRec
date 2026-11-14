@@ -5,7 +5,7 @@ using StrataRec.Core.Memory;
 using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Sources;
 using StrataRec.UnitTests.Features;
-using StrataRec.UnitTests.Core;
+using StrataRec.Testing;
 
 namespace StrataRec.UnitTests.Pipeline;
 

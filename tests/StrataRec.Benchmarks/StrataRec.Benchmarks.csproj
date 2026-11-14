@@ -12,7 +12,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="..\Shared\*.cs" LinkBase="Shared" />
+    <Compile Include="..\Shared\*.cs" Exclude="..\Shared\DisposedTokens.cs" LinkBase="Shared" /> <!-- DisposedTokens is a test assertion -->
   </ItemGroup>
 
   <ItemGroup>

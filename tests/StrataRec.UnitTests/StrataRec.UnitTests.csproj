@@ -34,4 +34,9 @@
     <None Include="Llm\MustacheSpec\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The one shared helper the unit tests need; the other files of tests/Shared are for the sample-based tests. -->
+    <Compile Include="..\Shared\DisposedTokens.cs" LinkBase="Shared" />
+  </ItemGroup>
+
 </Project>

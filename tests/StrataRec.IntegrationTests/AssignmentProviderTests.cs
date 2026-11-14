@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using StrataRec.Experiments.Assignment;
 using StrataRec.Hosting;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Testing;
 
 namespace StrataRec.IntegrationTests;
 
@@ -319,30 +320,18 @@ public sealed class AssignmentProviderTests
         var logged = await logger.Logged.Task.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Contains("the provider's cleanup failed", logged!.ToString());
         Assert.True(provider.Token.IsCancellationRequested);
-        Assert.False(Disposed(provider.Token)); // the provider is still running: its token stays valid
+        Assert.False(DisposedTokens.Disposed(provider.Token)); // the provider is still running: its token stays valid
 
         provider.End();
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
-        while (!Disposed(provider.Token) && DateTime.UtcNow < deadline)
+        while (!DisposedTokens.Disposed(provider.Token) && DateTime.UtcNow < deadline)
         {
             await Task.Delay(5);
         }
 
-        Assert.True(Disposed(provider.Token), "the abandoned provider's token source was not disposed after it ended");
+        Assert.True(DisposedTokens.Disposed(provider.Token), "the abandoned provider's token source was not disposed after it ended");
     }
 
-    private static bool Disposed(CancellationToken token)
-    {
-        try
-        {
-            _ = token.WaitHandle;
-            return false;
-        }
-        catch (ObjectDisposedException)
-        {
-            return true;
-        }
-    }
 
     /// <summary>Answers when told to: a provider whose answer comes at a moment the test picks.</summary>
     private sealed class GatedProvider : IAssignmentProvider
