@@ -1,3 +1,4 @@
+using System.Text;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Hosting.Workspace;
@@ -9,7 +10,9 @@ namespace StrataRec.CommandLine.Commands;
 /// <param name="Line">1-based line.</param>
 /// <param name="Column">1-based column (UTF-16 code units).</param>
 /// <param name="Exact">False when the diagnostic's artifact label says more than the file (an arm combination, a side of a diff), so it is printed too.</param>
-internal readonly record struct SourceLocation(string File, int Line, int Column, bool Exact);
+/// <param name="Source">The text of the line, printed under the diagnostic with a caret at the column; null when the place
+/// was not found in the file (the location is then its first line) or the file could not be read.</param>
+internal readonly record struct SourceLocation(string File, int Line, int Column, bool Exact, string? Source = null);
 
 /// <summary>
 /// Turns a diagnostic's artifact and pointer into <c>file:line:column</c> when its artifact is a workspace file
@@ -80,13 +83,39 @@ internal sealed class DiagnosticLocator
 
     private SourceLocation At(string file, string path, ConfigDiagnostic diagnostic, bool exact)
     {
+        var text = Text(path);
         if (diagnostic.Line is { } line)
         {
-            return new SourceLocation(file, line, diagnostic.Column ?? 1, exact);
+            // A syntax error knows its line; without a column there is nothing to point at.
+            var source = text is not null && diagnostic.Column is not null ? LineOf(text, line) : null;
+            return new SourceLocation(file, line, diagnostic.Column ?? 1, exact, source);
         }
 
-        var at = Text(path) is { } text ? JsoncLocator.Locate(text, diagnostic.Pointer, diagnostic.Offset) : null;
-        return at is { } found ? new SourceLocation(file, found.Line, found.Column, exact) : new SourceLocation(file, 1, 1, exact);
+        var at = text is not null ? JsoncLocator.Locate(text, diagnostic.Pointer, diagnostic.Offset) : null;
+        return at is { } found
+            ? new SourceLocation(file, found.Line, found.Column, exact, LineOf(text!, found.Line))
+            : new SourceLocation(file, 1, 1, exact);
+    }
+
+    /// <summary>Line <paramref name="line"/> (1-based, lines end at '\n' as <see cref="JsoncLocator"/> counts them) without its line break; null past the end.</summary>
+    internal static string? LineOf(ReadOnlySpan<byte> text, int line)
+    {
+        var start = 0;
+        for (var i = 1; i < line; i++)
+        {
+            var next = text[start..].IndexOf((byte)'\n');
+            if (next < 0)
+            {
+                return null;
+            }
+
+            start += next + 1;
+        }
+
+        var rest = text[start..];
+        var end = rest.IndexOf((byte)'\n');
+        var bytes = end < 0 ? rest : rest[..end];
+        return Encoding.UTF8.GetString(bytes.Length > 0 && bytes[^1] == (byte)'\r' ? bytes[..^1] : bytes);
     }
 
     /// <summary>The path as a terminal opens it from the current directory, with '/' separators.</summary>

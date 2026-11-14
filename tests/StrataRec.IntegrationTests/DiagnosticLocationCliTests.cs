@@ -35,6 +35,7 @@ public sealed class DiagnosticLocationCliTests : IDisposable
             $"{root}/{Pipeline}:{line}:{column}: error NODE_BAD_CONFIG /nodes/coarse_score/config/outputcol: Unknown key 'outputcol' in the config of ExpressionScorer@1.",
             lines);
         Assert.Contains("    hint: did you mean 'output_col'?", lines);
+        AssertSourceUnder(lines, $"{root}/{Pipeline}:{line}:{column}: ", root, Pipeline, line, column);
     }
 
     [Fact]
@@ -126,6 +127,7 @@ public sealed class DiagnosticLocationCliTests : IDisposable
 
         var (line, column) = Position(root, Pipeline, "\"op\": \"TopK@1\",\n      \"config\": { \"score_col\": \"score.coarse\"");
         Assert.Contains(lines, l => l.StartsWith($"{root}/{Pipeline}:{line}:{column}: error JSONC_SYNTAX: ", StringComparison.Ordinal));
+        AssertSourceUnder(lines, $"{root}/{Pipeline}:{line}:{column}: ", root, Pipeline, line, column);
     }
 
     [Fact]
@@ -170,7 +172,12 @@ public sealed class DiagnosticLocationCliTests : IDisposable
 
         Assert.True(code == 2, $"exit {code}; stderr: {stderr}");
         var (line, column) = Position(root, requestFile, at);
-        Assert.Contains($"{request}:{line}:{column}: {error}", stderr, StringComparison.Ordinal);
+        var parts = error.Split('\n'); // the message at its location; the hint after the source line
+        Assert.Contains($"{request}:{line}:{column}: {parts[0]}", stderr, StringComparison.Ordinal);
+        foreach (var part in parts[1..])
+        {
+            Assert.Contains(part, stderr, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
@@ -246,6 +253,20 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         Assert.True(lines.Count(l => l.Contains(": error ", StringComparison.Ordinal)) == expectedErrors, output.ToString());
         Assert.Contains(expectedErrors == 1 ? "1 error, " : $"{expectedErrors} errors, ", output.ToString(), StringComparison.Ordinal);
         return lines;
+    }
+
+    /// <summary>
+    /// Under the diagnostic that starts with <paramref name="prefix"/>: its source line without the indentation, and a caret
+    /// under the column (the lines here are short and ASCII).
+    /// </summary>
+    private static void AssertSourceUnder(List<string> lines, string prefix, string root, string file, int line, int column)
+    {
+        var at = lines.FindIndex(l => l.StartsWith(prefix, StringComparison.Ordinal));
+        Assert.True(at >= 0, prefix);
+        var source = File.ReadAllLines(Path.Combine(root, file))[line - 1];
+        var indentation = source.Length - source.TrimStart().Length;
+        Assert.Equal("    " + source.Trim(), lines[at + 1]);
+        Assert.Equal("    " + new string(' ', column - 1 - indentation) + "^", lines[at + 2]);
     }
 
     /// <summary>The 1-based line and UTF-16 column of the first occurrence of <paramref name="marker"/> in the file.</summary>
