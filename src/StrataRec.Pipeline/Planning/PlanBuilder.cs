@@ -172,6 +172,16 @@ public sealed class PlanBuilder
                 continue;
             }
 
+            if (schema.TryGetContext("request." + name, out var builtin) && builtin.Kind == ContextFieldKind.Builtin)
+            {
+                // ctx.request.id, seed and time_ms are the engine's: an input of that name could not be read.
+                _diagnostics.Error("REQUEST_RESERVED_NAME", PipelineLabel, "/request_schema/" + JsonPointer.Escape(name),
+                    $"'ctx.request.{name}' is built in: the engine sets it for every request ({BuiltinMeaning(name)}).",
+                    $"read the built-in ctx.request.{name}, or rename this input");
+                unusableInputs.Add(name);
+                continue;
+            }
+
             var field = schema.AddRequestInput(name, type);
             _requestInputs[name] = field;
             inputTypes[name] = type;
@@ -1699,6 +1709,14 @@ public sealed class PlanBuilder
 
         return true;
     }
+
+    private static string BuiltinMeaning(string name) => name switch
+    {
+        "id" => "the request's \"request_id\"",
+        "seed" => "the seed of hash01, a hash of the request's id unless the request gives \"seed\" beside \"inputs\"",
+        "time_ms" => "the request's time in Unix milliseconds, now unless the request gives \"time_ms\" beside \"inputs\"",
+        _ => "a field of the engine",
+    };
 
     private void DefineFeatures(SchemaSources sources, Dictionary<string, ColumnType> inputTypes, HashSet<string> unusableInputs)
     {

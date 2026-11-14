@@ -93,14 +93,15 @@ samples/home_feed/
   "config": { "group_col": "item.author_id", "outputs": { "group.author_rank": { "fn": "rank", "value_col": "score.final" } } } },
 "author_cap": { "order": 515, "op": "ExpressionFilter@1", "config": { "predicate": "(col.group.author_rank ?? 1) <= 2" } },
 
-// 分数在请求内标准化：不分组的均值和标准差，再用表达式
+// 分数在请求内标准化：不分组的均值和标准差，再用表达式（表达式写的 score.ctr_z 在 columns 里声明，例如 { "type": "float64", "default": 0.0 }）
 "request_stats": { "order": 460, "op": "GroupAggregate@1",
   "config": { "outputs": { "stats.ctr_mean": { "fn": "mean", "value_col": "score.ctr" },
                            "stats.ctr_std":  { "fn": "std",  "value_col": "score.ctr" } } } },
 "ctr_z": { "order": 465, "op": "ExpressionScorer@1",
   "config": { "output_col": "score.ctr_z", "expr": "(col.score.ctr - col.stats.ctr_mean) / max(col.stats.ctr_std, 1e-6)" } },
 
-// 确定性的探索扰动：同一请求种子给同样的结果，可以回放（score.final 声明为 "flow": true，才能被几个节点依次改写）
+// 确定性的探索扰动：ctx.request.seed 是内置字段（默认由请求 ID 哈希得到），同一请求给同样的结果，可以回放
+// （score.final 声明为 "flow": true，才能被几个节点依次改写）
 "explore": { "order": 468, "op": "ExpressionScorer@1",
   "config": { "output_col": "score.final", "expr": "col.score.final + 0.05 * hash01(ctx.request.seed, col.entity_id)" } },
 ```
