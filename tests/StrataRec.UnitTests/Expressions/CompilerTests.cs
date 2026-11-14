@@ -47,6 +47,24 @@ public class CompilerTests
         return f.Build(8);
     }
 
+    [Theory]
+    [InlineData("col.item.age_hours", "col.item.age_hours")] // a reference, with the column's own type (float32?)
+    [InlineData("(col.item.report_rate)", "col.item.report_rate")]
+    [InlineData("col.score.final@fusion", "col.score.final@fusion")]
+    [InlineData("col.item.report_rate * 2.0", null)]
+    [InlineData("col.item.age_hours ?? 0.0", null)]
+    [InlineData("ctx.user.tenure_days", null)] // a context value is not a candidate column
+    public void AnExpressionThatIsAColumn_NamesIt(string source, string? column)
+    {
+        var compiled = HomeFeed().Compile(source);
+
+        Assert.Equal(column, compiled.ColumnReference?.Name);
+        if (compiled.ColumnReference is { } reference)
+        {
+            Assert.Equal(source.Contains("age_hours") ? "float32?" : source.Contains("report_rate") ? "float32" : "float64", reference.Type.ToString());
+        }
+    }
+
     internal const string FusionFormula = """
         let utility    = param.w_click * col.score.p_click + param.w_like * col.score.p_like;
         let age_hours  = col.item.age_hours ?? 720.0;

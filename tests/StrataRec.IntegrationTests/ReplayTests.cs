@@ -94,7 +94,8 @@ public sealed class ReplayTests
         Assert.Contains(run.Sampling.Taps, t => t is { Tap: "served", Active: true });
 
         Assert.Equal(10, bundle.Result.Items.Count);
-        Assert.Equal(("float64", "string"), (bundle.Result.ColumnTypes["score"], bundle.Result.ColumnTypes["category"]));
+        // score is col.score.final, a float32 column: an output that is a column keeps the column's float32 type.
+        Assert.Equal(("float32", "string"), (bundle.Result.ColumnTypes["score"], bundle.Result.ColumnTypes["category"]));
         Assert.Equal(recorded.Items[0].Id.Int64Value, bundle.Result.Items[0].Id.GetInt64());
     }
 

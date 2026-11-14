@@ -21,6 +21,13 @@ public abstract class CompiledExpression
     /// <summary>Every symbol the expression reads (deduplicated), for dependency analysis and fetch planning.</summary>
     public abstract IReadOnlyList<Symbol> Reads { get; }
 
+    /// <summary>
+    /// The candidate column the expression is, when it is nothing but a reference to one (<c>col.score.final</c>); null
+    /// otherwise. <see cref="ResultType"/> is the expression type system's (every float is float64); a reader that wants
+    /// the column's own storage type, such as an output whose float32 values should print as floats, takes it from here.
+    /// </summary>
+    public virtual Symbol? ColumnReference => null;
+
     /// <summary>Normalized, optimized form of the expression for explain-plan output.</summary>
     public abstract string Describe();
 

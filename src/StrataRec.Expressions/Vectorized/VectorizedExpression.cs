@@ -51,6 +51,8 @@ internal sealed class VectorizedExpression : CompiledExpression
 
     public override IReadOnlyList<Symbol> Reads => _reads;
 
+    public override Symbol? ColumnReference => Optimized.Op == IrOp.Column ? Optimized.Symbol : null;
+
     /// <summary>The type-checked IR before optimization (input of the reference interpreter).</summary>
     internal IrNode Bound { get; }
 

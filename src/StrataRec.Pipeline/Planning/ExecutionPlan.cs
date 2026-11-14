@@ -1,5 +1,6 @@
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Tables;
+using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
 using StrataRec.Features.Runtime;
@@ -122,6 +123,14 @@ public sealed class OutputPlan
     public required ParamRef Limit { get; init; }
 
     public required (string Name, CompiledExpression Expression)[] Columns { get; init; }
+
+    /// <summary>
+    /// The type of an output column's values: its expression's result type, except that an output that is nothing but a
+    /// float32 column (<c>col.score.final</c>) stays float32, so its values print as the floats they are (<c>0.08</c>, not
+    /// the double <c>0.07999999821186066</c>) in results and replay bundles. The values themselves are the same.
+    /// </summary>
+    public static ColumnType ValueType(CompiledExpression expression) =>
+        expression.ColumnReference is { Type.Kind: StorageKind.Float32 } column ? column.Type : expression.ResultType;
 
     /// <summary>The pinned versions the output's columns read (<c>col.x@node</c>), with the column that reads each.</summary>
     public (string Column, VersionRead Read)[] VersionReads { get; init; } = Array.Empty<(string, VersionRead)>();

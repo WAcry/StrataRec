@@ -1181,7 +1181,7 @@ public sealed class PipelineExecutor
                 continue;
             }
 
-            var buffer = ColumnBuffer.Create(expression.ResultType, Math.Max(1, state.Table.StorageCapacity), state.Memory);
+            var buffer = ColumnBuffer.Create(OutputPlan.ValueType(expression), Math.Max(1, state.Table.StorageCapacity), state.Memory);
             expression.Evaluate(state.Eval, rows, buffer);
             for (var i = 0; i < count; i++)
             {
