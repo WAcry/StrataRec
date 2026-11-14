@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>StrataRec.Samples.Host</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <!-- "dotnet run" from any directory runs in this one, so the content root (and with it appsettings.json and the
+         workspace under config/) is the project directory. -->
+    <RunWorkingDirectory>$(MSBuildProjectDirectory)</RunWorkingDirectory>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\StrataRec.Hosting\StrataRec.Hosting.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The workspace is read from the content root, not the build output; it ships with a published app. -->
+    <Content Remove="config\**" />
+    <None Update="config\**" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

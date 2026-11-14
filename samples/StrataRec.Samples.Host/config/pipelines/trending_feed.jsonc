@@ -1,0 +1,64 @@
+// The trending feed: recall from a custom source (trending@1) and a built-in one → score with a custom model client
+// (logistic@1) → a business boost, a custom operator (CategoryBoost@1) → sort. Its features come from a custom connector
+// (kv_store@1, catalog/trending.jsonc).
+{
+  "pipeline_id": "trending_feed",
+  "entity_key_type": "int64",
+  "request_schema": {
+    "user_id": { "type": "int64?" },
+    "region":  { "type": "string?" }
+  },
+  "columns": {
+    "score.engage": { "type": "float32", "default": 0.0 },
+    "score.final":  { "type": "float32", "default": 0.0 }
+  },
+  "param_schema": {
+    "recall_quotas": { "type": "map<string,int64>", "min": 0, "max": 500 },
+    "final_top_k":   { "type": "int64", "min": 1, "max": 50 }
+  },
+  "params": {
+    "recall_quotas": { "trending": 12, "editorial": 4 },
+    "final_top_k": 8
+  },
+  "nodes": {
+    "recall": {
+      "order": 100, "op": "MultiSourceRecall@1",
+      "config": { "quotas_param": "recall_quotas", "source_order": ["trending", "editorial"] }
+    },
+    "engagement": {
+      "order": 200, "op": "ModelScorer@1", "on_failure": "fallback:engagement_backup",
+      "config": {
+        "model": "engagement",
+        "version": "v3",
+        "inputs": { "ctr": "col.item.ctr_7d", "freshness": "col.item.freshness", "affinity": "ctx.user.affinity" },
+        "outputs": { "p_engage": "score.engage" }
+      }
+    },
+    "engagement_backup": {
+      "role": "fallback", "op": "ExpressionScorer@1",
+      "config": { "output_col": "score.engage", "expr": "col.item.ctr_7d" }
+    },
+    "editorial_boost": {
+      "order": 300, "op": "CategoryBoost@1",
+      "config": {
+        "score_col": "score.engage",
+        "category_col": "item.category",
+        "output_col": "score.final",
+        "boosts": { "local_news": 1.5 }
+      }
+    },
+    "rank": {
+      "order": 400, "op": "TopK@1",
+      "config": { "score_col": "score.final", "k_param": "final_top_k" }
+    }
+  },
+  "output": {
+    "limit_param": "final_top_k",
+    "columns": {
+      "score": "col.score.final",
+      "engage": "col.score.engage",
+      "category": "col.item.category",
+      "source": "col.recall.primary_source"
+    }
+  }
+}

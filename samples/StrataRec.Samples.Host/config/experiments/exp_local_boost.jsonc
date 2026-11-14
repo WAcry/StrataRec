@@ -1,0 +1,13 @@
+// An experiment on the custom operator: its config is JSON like any built-in operator's, so an arm patches one entry of it
+// (RFC 7396) and the engine compiles a node variant for the arm.
+{
+  "experiment_id": "exp_local_boost",
+  "pipeline_id": "trending_feed",
+  "owner": "feed-team",
+  "description": "A stronger boost for local news.",
+  "expires_at": "2099-12-31",
+  "arms": {
+    "control": {},
+    "strong": { "nodes": { "editorial_boost": { "config": { "boosts": { "local_news": 2.0 } } } } }
+  }
+}
