@@ -792,6 +792,8 @@ internal sealed partial class UnifiedCompilation
                 if (!byHash.TryGetValue(key, out var compiled))
                 {
                     var result = _builder.CompileTap(tapId, tap, _pipelineLabel, nodeId => ResolveVariant(nodeId, armsInCombination));
+                    // A node no combination has, with a suggestion for the typo. One that only some combinations have is
+                    // judged in each (PlanBuilder.ValidateDataFlow), as a compile of that combination alone judges it.
                     if (result?.AttachAfter is { } after && !_variants.ContainsKey(after))
                     {
                         _diagnostics.Error("TAP_UNKNOWN_NODE", _pipelineLabel, pointer + "/attach/after", $"Tap '{tapId}' attaches after unknown node '{after}'.",
