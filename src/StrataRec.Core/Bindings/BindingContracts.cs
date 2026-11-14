@@ -41,6 +41,20 @@ public sealed class BindingException : Exception
     public string Reason { get; }
 
     public string? Hint { get; }
+
+    /// <summary>
+    /// The error for a member a client does not take, at <paramref name="parent"/> followed by its name: the closest member
+    /// it takes, when the name looks like a typo of one, then what it takes (<paramref name="takes"/>). Check settings
+    /// strictly with it: a misspelled setting is otherwise ignored, and its default used without a word.
+    /// </summary>
+    /// <param name="parent">The pointer of the object the member is in; empty for the binding itself.</param>
+    public static BindingException Unknown(string parent, string name, IEnumerable<string> known, string takes)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        var guess = Diagnostics.Spelling.DidYouMean(name, known);
+        return new BindingException(parent + "/" + BindingContext.EscapePointerToken(name), $"Unknown setting '{name}'.",
+            guess is null ? takes : guess + " " + takes);
+    }
 }
 
 /// <summary>

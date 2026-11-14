@@ -86,13 +86,17 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
             return null;
         }
 
+        // Every source is bound, and the columns declared, before giving up on one that is not: each unbound source is
+        // reported, and the nodes that read the recall columns compile on, instead of reporting them unknown.
         var sources = new SourceEntry[names.Count];
+        var unbound = false;
         for (var i = 0; i < names.Count; i++)
         {
             var bound = context.CandidateSource(names[i], "/quotas_param");
             if (bound is null)
             {
-                return null;
+                unbound = true;
+                continue;
             }
 
             sources[i] = new SourceEntry(names[i], bound.Value.Source, bound.Value.TimeoutMs, byName[names[i]], new IoTarget(IoKind.CandidateSource, names[i]));
@@ -101,7 +105,8 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         if (!context.TryWriteColumn("recall.sources_mask", string.Empty, ColumnType.Int64, out var mask)
             || !context.TryWriteColumn("recall.best_rank", string.Empty, ColumnType.Int64, out var bestRank)
             || !context.TryWriteColumn("recall.best_score", string.Empty, ColumnType.Float64, out var bestScore)
-            || !context.TryWriteColumn("recall.primary_source", string.Empty, ColumnType.String, out var primary))
+            || !context.TryWriteColumn("recall.primary_source", string.Empty, ColumnType.String, out var primary)
+            || unbound)
         {
             return null;
         }

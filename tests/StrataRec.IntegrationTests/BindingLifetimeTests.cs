@@ -467,6 +467,26 @@ public sealed class BindingLifetimeTests
         Debug = new DebugOptions { Trace = true, OnRecording = onRecording },
     };
 
+    private static readonly string[] LinearSettings = ["outputs", "versions", "latency_ms", "fail"];
+
+    /// <summary>
+    /// The context with only the settings the wrapped built-in client takes: the test clients' own (generation, credentials,
+    /// ...) are not the built-in's, which checks its settings strictly.
+    /// </summary>
+    private static BindingContext Only(BindingContext context, params string[] settings)
+    {
+        var kept = new Dictionary<string, System.Text.Json.JsonElement>(StringComparer.Ordinal);
+        foreach (var (name, value) in context.Settings)
+        {
+            if (Array.IndexOf(settings, name) >= 0)
+            {
+                kept[name] = value;
+            }
+        }
+
+        return new BindingContext(context.Name, kept, context.BaseDirectory, null);
+    }
+
     /// <summary>
     /// <c>scripted@1</c>: linear@1 models the test drives. Each client loads with <see cref="Load"/> (and resolves its
     /// <c>credentials</c> reference), answers <see cref="Signature"/> when set, and holds its calls while
@@ -496,7 +516,7 @@ public sealed class BindingLifetimeTests
 
         public IModelClient Create(BindingContext context)
         {
-            var client = new Client(this, _linear.Create(context), context.SecretReference("credentials"));
+            var client = new Client(this, _linear.Create(Only(context, LinearSettings)), context.SecretReference("credentials"));
             _created.Enqueue(client);
             return client;
         }
@@ -615,7 +635,7 @@ public sealed class BindingLifetimeTests
 
         public IFeatureSourceConnector Create(BindingContext context)
         {
-            var connector = new Connector(context.Name, _memory.Create(context));
+            var connector = new Connector(context.Name, _memory.Create(Only(context, "data", "data_file", "latency_ms", "fail")));
             _created.Enqueue(connector);
             return connector;
         }
@@ -660,7 +680,7 @@ public sealed class BindingLifetimeTests
 
         public ICandidateSource Create(BindingContext context)
         {
-            var source = new Source(context.Name, _list.Create(context));
+            var source = new Source(context.Name, _list.Create(Only(context, "data_file", "items", "by_input", "lists", "latency_ms", "fail")));
             _created.Enqueue(source);
             return source;
         }
@@ -703,7 +723,7 @@ public sealed class BindingLifetimeTests
 
         public int Lookups => Volatile.Read(ref _lookups);
 
-        public IModelClient Create(BindingContext context) => new Client(this, _linear.Create(context));
+        public IModelClient Create(BindingContext context) => new Client(this, _linear.Create(Only(context, LinearSettings)));
 
         private sealed class Client(RemoteSignatureModels owner, IModelClient inner) : IModelClient
         {

@@ -304,30 +304,90 @@ public sealed class MemoryFeatureConnectorFactory : IFeatureConnectorFactory
 
     public string ConnectorType => Type;
 
-    /// <remarks>A test fixture: it reads its data file here, at create time, so it needs no load.</remarks>
+    private const string Takes = "memory@1 takes 'data' (the records, by entity key) or 'data_file' (a JSON file of them), and optionally 'latency_ms' and 'fail'";
+    private static readonly string[] Settings = ["data", "data_file", "latency_ms", "fail"];
+
+    /// <remarks>
+    /// A test fixture: it reads its data file here, at create time, so it needs no load. Settings are checked strictly: a
+    /// misspelled one would otherwise be ignored, and every feature read missing.
+    /// </remarks>
+    /// <exception cref="BindingException">A setting is unknown or invalid, or the data file cannot be read: at the setting,
+    /// with a hint.</exception>
     public IFeatureSourceConnector Create(BindingContext context)
     {
+        ArgumentNullException.ThrowIfNull(context);
         var settings = context.Settings;
+        foreach (var (name, _) in settings)
+        {
+            if (Array.IndexOf(Settings, name) < 0)
+            {
+                throw BindingException.Unknown(string.Empty, name, Settings, Takes);
+            }
+        }
+
         JsonElement data;
         if (settings.TryGetValue("data", out var inline))
         {
+            if (settings.ContainsKey("data_file"))
+            {
+                throw new BindingException("/data_file", "memory@1 takes 'data' or 'data_file', not both.", "keep the one that holds the records");
+            }
+
             data = inline;
         }
         else if (settings.TryGetValue("data_file", out var file))
         {
-            var path = file.GetString() ?? throw new FormatException($"Source '{context.Name}': data_file must be a string.");
-            path = Path.Combine(context.BaseDirectory, path); // a rooted path stays as it is
-
-            using var doc = JsonDocument.Parse(File.ReadAllText(path), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
-            data = doc.RootElement.Clone();
+            data = Read(file, context.BaseDirectory);
         }
         else
         {
             data = JsonDocument.Parse("{}").RootElement;
         }
 
-        var latency = settings.TryGetValue("latency_ms", out var l) ? l.GetInt32() : 0;
-        var fail = settings.TryGetValue("fail", out var f) && f.GetBoolean();
+        if (data.ValueKind != JsonValueKind.Object)
+        {
+            throw new BindingException(settings.ContainsKey("data") ? "/data" : "/data_file", "The records must be a JSON object, by entity key.", Takes);
+        }
+
+        var latency = 0;
+        if (settings.TryGetValue("latency_ms", out var l))
+        {
+            latency = l.ValueKind == JsonValueKind.Number && l.TryGetInt32(out var ms) && ms >= 0
+                ? ms
+                : throw new BindingException("/latency_ms", $"'latency_ms' must be a whole number of milliseconds, 0 or more; got {l.GetRawText()}.");
+        }
+
+        var fail = false;
+        if (settings.TryGetValue("fail", out var f))
+        {
+            fail = f.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? f.GetBoolean()
+                : throw new BindingException("/fail", $"'fail' must be true or false; got {f.GetRawText()}.");
+        }
+
         return new MemoryFeatureConnector(data, latency, fail);
+    }
+
+    private static JsonElement Read(JsonElement setting, string baseDirectory)
+    {
+        if (setting.ValueKind != JsonValueKind.String || setting.GetString() is not { Length: > 0 } relative)
+        {
+            throw new BindingException("/data_file", $"'data_file' must be the path of a JSON file; got {setting.GetRawText()}.");
+        }
+
+        var path = Path.Combine(baseDirectory, relative); // a rooted path stays as it is
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+            return document.RootElement.Clone();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new BindingException("/data_file", $"'{path}' cannot be read: {ex.Message}", $"a relative path resolves against {baseDirectory}");
+        }
+        catch (JsonException ex)
+        {
+            throw new BindingException("/data_file", $"'{path}' is not JSON: {ex.Message}");
+        }
     }
 }

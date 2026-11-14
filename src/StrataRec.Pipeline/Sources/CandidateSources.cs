@@ -210,50 +210,10 @@ public sealed class MemoryListCandidateSource : ICandidateSource
         return CandidateSourceStatus.Ok;
     }
 
-    internal static MemoryListCandidateSource Create(JsonElement settings)
-    {
-        var items = settings.TryGetProperty("items", out var i) ? ParseList(i) : Array.Empty<Entry>();
-        string? byInput = settings.TryGetProperty("by_input", out var b) ? b.GetString() : null;
-        var lists = new Dictionary<string, Entry[]>(StringComparer.Ordinal);
-        if (settings.TryGetProperty("lists", out var l))
-        {
-            foreach (var p in l.EnumerateObject())
-            {
-                lists[p.Name] = ParseList(p.Value);
-            }
-        }
+    internal static MemoryListCandidateSource Create(Entry[] items, string? byInput, Dictionary<string, Entry[]> lists, int latencyMs, bool fail) =>
+        new(items, byInput, lists, latencyMs, fail);
 
-        var latency = settings.TryGetProperty("latency_ms", out var lat) ? lat.GetInt32() : 0;
-        var fail = settings.TryGetProperty("fail", out var f) && f.GetBoolean();
-        return new MemoryListCandidateSource(items, byInput, lists, latency, fail);
-    }
-
-    private static Entry[] ParseList(JsonElement array)
-    {
-        var result = new Entry[array.GetArrayLength()];
-        var index = 0;
-        foreach (var e in array.EnumerateArray())
-        {
-            var score = 1.0 - (index / (double)Math.Max(1, result.Length));
-            var id = e;
-            if (e.ValueKind == JsonValueKind.Object)
-            {
-                id = e.GetProperty("id");
-                if (e.TryGetProperty("score", out var s))
-                {
-                    score = s.GetDouble();
-                }
-            }
-
-            result[index++] = id.ValueKind == JsonValueKind.String
-                ? new Entry(0, id.GetString(), score)
-                : new Entry(id.GetInt64(), null, score);
-        }
-
-        return result;
-    }
-
-    private readonly record struct Entry(long Int64Id, string? StringId, double Score);
+    internal readonly record struct Entry(long Int64Id, string? StringId, double Score);
 }
 
 /// <summary>Factory for <c>memory_list@1</c>.</summary>
@@ -263,62 +223,195 @@ public sealed class MemoryListCandidateSourceFactory : ICandidateSourceFactory
 
     public string ClientType => Type;
 
-    /// <remarks>A test fixture: it reads its data file here, at create time, so it needs no load.</remarks>
+    private const string Takes = "memory_list@1 takes 'items' (ids, or { \"id\", \"score\" } objects, best first), or 'by_input' with 'lists' " +
+                                 "(a list per value of that input, '*' for the others), 'latency_ms' and 'fail', and 'data_file': a JSON file of the same members";
+
+    private static readonly string[] Members = ["items", "by_input", "lists", "latency_ms", "fail"];
+    private static readonly string[] Settings = ["data_file", "items", "by_input", "lists", "latency_ms", "fail"];
+
+    /// <remarks>
+    /// A test fixture: it reads its data file here, at create time, so it needs no load. Members are checked strictly, in
+    /// the binding and in the file: a misspelled one would otherwise be ignored and the list served empty or unchanged.
+    /// </remarks>
+    /// <exception cref="BindingException">A setting or a member of the data file is unknown or invalid: at the setting, or
+    /// at <c>/data_file</c> naming the member in the file, with a hint.</exception>
     public ICandidateSource Create(BindingContext context)
     {
-        var sourceName = context.Name;
-        var settings = context.Settings;
-
-        // The data file supplies the list object; settings in the binding itself (latency_ms, fail, ...) override it,
-        // so fault injection works the same with or without a data file.
-        JsonDocument? fileDoc = null;
+        ArgumentNullException.ThrowIfNull(context);
+        var members = new Dictionary<string, (JsonElement Value, Where Where)>(StringComparer.Ordinal);
+        JsonDocument? file = null;
         try
         {
-            if (settings.TryGetValue("data_file", out var file))
+            foreach (var (name, _) in context.Settings)
             {
-                var path = file.GetString() ?? throw new FormatException($"Candidate source '{sourceName}': data_file must be a string.");
-                path = Path.Combine(context.BaseDirectory, path); // a rooted path stays as it is
-
-                fileDoc = JsonDocument.Parse(File.ReadAllText(path), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
-                if (fileDoc.RootElement.ValueKind != JsonValueKind.Object)
+                if (Array.IndexOf(Settings, name) < 0)
                 {
-                    throw new FormatException($"Candidate source '{sourceName}': data_file '{path}' must contain a JSON object.");
+                    throw BindingException.Unknown(string.Empty, name, Settings, Takes);
                 }
             }
 
-            using var buffer = new MemoryStream();
-            using (var writer = new Utf8JsonWriter(buffer))
+            if (context.Settings.TryGetValue("data_file", out var dataFile))
             {
-                writer.WriteStartObject();
-                if (fileDoc is not null)
+                (file, var path) = Read(dataFile, context.BaseDirectory);
+                foreach (var member in file.RootElement.EnumerateObject())
                 {
-                    foreach (var property in fileDoc.RootElement.EnumerateObject())
+                    if (Array.IndexOf(Members, member.Name) < 0)
                     {
-                        if (!settings.ContainsKey(property.Name))
-                        {
-                            property.WriteTo(writer);
-                        }
+                        var guess = Core.Diagnostics.Spelling.DidYouMean(member.Name, Members);
+                        throw new BindingException("/data_file", $"'{path}' has a member '{member.Name}', which memory_list@1 does not take.",
+                            guess is null ? Takes : guess + " " + Takes);
                     }
-                }
 
-                foreach (var (key, value) in settings)
-                {
-                    if (key != "data_file")
-                    {
-                        writer.WritePropertyName(key);
-                        value.WriteTo(writer);
-                    }
+                    members[member.Name] = (member.Value, new Where(path, "/" + member.Name));
                 }
-
-                writer.WriteEndObject();
             }
 
-            using var settingsDoc = JsonDocument.Parse(buffer.ToArray());
-            return MemoryListCandidateSource.Create(settingsDoc.RootElement.Clone());
+            foreach (var (name, value) in context.Settings)
+            {
+                if (name != "data_file")
+                {
+                    members[name] = (value, new Where(null, "/" + name)); // the binding's own settings override the file's
+                }
+            }
+
+            var items = members.TryGetValue("items", out var i) ? List(i.Value, i.Where) : Array.Empty<MemoryListCandidateSource.Entry>();
+            string? byInput = null;
+            if (members.TryGetValue("by_input", out var b))
+            {
+                byInput = b.Value.ValueKind == JsonValueKind.String && b.Value.GetString() is { Length: > 0 } input
+                    ? input
+                    : throw b.Where.Error(string.Empty, $"'by_input' must name a request input; got {b.Value.GetRawText()}.");
+            }
+
+            var lists = new Dictionary<string, MemoryListCandidateSource.Entry[]>(StringComparer.Ordinal);
+            if (members.TryGetValue("lists", out var l))
+            {
+                if (l.Value.ValueKind != JsonValueKind.Object)
+                {
+                    throw l.Where.Error(string.Empty, $"'lists' must be an object of input value to list; got {l.Value.GetRawText()}.");
+                }
+
+                foreach (var list in l.Value.EnumerateObject())
+                {
+                    lists[list.Name] = List(list.Value, l.Where.In("/" + list.Name.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal)));
+                }
+            }
+
+            var latency = 0;
+            if (members.TryGetValue("latency_ms", out var t))
+            {
+                latency = t.Value.ValueKind == JsonValueKind.Number && t.Value.TryGetInt32(out var ms) && ms >= 0
+                    ? ms
+                    : throw t.Where.Error(string.Empty, $"'latency_ms' must be a whole number of milliseconds, 0 or more; got {t.Value.GetRawText()}.");
+            }
+
+            var fail = false;
+            if (members.TryGetValue("fail", out var f))
+            {
+                fail = f.Value.ValueKind is JsonValueKind.True or JsonValueKind.False
+                    ? f.Value.GetBoolean()
+                    : throw f.Where.Error(string.Empty, $"'fail' must be true or false; got {f.Value.GetRawText()}.");
+            }
+
+            return MemoryListCandidateSource.Create(items, byInput, lists, latency, fail);
         }
         finally
         {
-            fileDoc?.Dispose();
+            file?.Dispose();
         }
+    }
+
+    private static (JsonDocument Document, string Path) Read(JsonElement setting, string baseDirectory)
+    {
+        if (setting.ValueKind != JsonValueKind.String || setting.GetString() is not { Length: > 0 } relative)
+        {
+            throw new BindingException("/data_file", $"'data_file' must be the path of a JSON file; got {setting.GetRawText()}.");
+        }
+
+        var path = Path.Combine(baseDirectory, relative); // a rooted path stays as it is
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(File.ReadAllText(path), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new BindingException("/data_file", $"'{path}' cannot be read: {ex.Message}", $"a relative path resolves against {baseDirectory}");
+        }
+        catch (JsonException ex)
+        {
+            throw new BindingException("/data_file", $"'{path}' is not JSON: {ex.Message}");
+        }
+
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            document.Dispose();
+            throw new BindingException("/data_file", $"'{path}' must hold a JSON object of memory_list@1's members.", Takes);
+        }
+
+        return (document, path);
+    }
+
+    /// <summary>A list: ids or <c>{"id", "score"}</c> objects, best first; scores default to a descending ramp.</summary>
+    private static MemoryListCandidateSource.Entry[] List(JsonElement array, Where where)
+    {
+        if (array.ValueKind != JsonValueKind.Array)
+        {
+            throw where.Error(string.Empty, $"A list must be an array of ids or {{ \"id\", \"score\" }} objects; got {array.GetRawText()}.");
+        }
+
+        var result = new MemoryListCandidateSource.Entry[array.GetArrayLength()];
+        var index = 0;
+        foreach (var item in array.EnumerateArray())
+        {
+            var at = "/" + index;
+            var score = 1.0 - (index / (double)Math.Max(1, result.Length));
+            var id = item;
+            if (item.ValueKind == JsonValueKind.Object)
+            {
+                id = default;
+                foreach (var member in item.EnumerateObject())
+                {
+                    switch (member.Name)
+                    {
+                        case "id":
+                            id = member.Value;
+                            break;
+                        case "score":
+                            score = member.Value.ValueKind == JsonValueKind.Number && member.Value.TryGetDouble(out var s) && double.IsFinite(s)
+                                ? s
+                                : throw where.Error(at + "/score", $"A score must be a finite number; got {member.Value.GetRawText()}.");
+                            break;
+                        default:
+                            throw where.Error(at + "/" + member.Name, $"An item has 'id' and 'score', not '{member.Name}'.",
+                                Core.Diagnostics.Spelling.DidYouMean(member.Name, ["id", "score"]));
+                    }
+                }
+
+                if (id.ValueKind == JsonValueKind.Undefined)
+                {
+                    throw where.Error(at, "An item object needs its 'id'.");
+                }
+            }
+
+            result[index++] = id.ValueKind switch
+            {
+                JsonValueKind.String => new MemoryListCandidateSource.Entry(0, id.GetString(), score),
+                JsonValueKind.Number when id.TryGetInt64(out var int64) => new MemoryListCandidateSource.Entry(int64, null, score),
+                _ => throw where.Error(at, $"An id must be a string or an int64; got {id.GetRawText()}."),
+            };
+        }
+
+        return result;
+    }
+
+    /// <summary>Where a member came from: the binding's setting at <c>Pointer</c>, or the data file (<c>File</c>) at it.</summary>
+    private readonly record struct Where(string? File, string Pointer)
+    {
+        public Where In(string pointer) => this with { Pointer = Pointer + pointer };
+
+        public BindingException Error(string pointer, string message, string? hint = null) => File is null
+            ? new BindingException(Pointer + pointer, message, hint)
+            : new BindingException("/data_file", $"'{File}' at {Pointer + pointer}: {message}", hint);
     }
 }

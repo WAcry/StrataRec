@@ -1,3 +1,4 @@
+using StrataRec.Core.Diagnostics;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
@@ -125,9 +126,12 @@ public sealed class ClientResolver
             error = null;
             return false;
         }
-        catch (Exception ex) when (ex is FormatException or InvalidOperationException or System.Text.Json.JsonException or KeyNotFoundException)
+        catch (Exception ex) when (ex is FormatException or InvalidOperationException or IOException or System.Text.Json.JsonException or KeyNotFoundException)
         {
-            error = $"Model '{name}': {ex.Message}";
+            // The binding's to fix, as a BindingException is, and as feature sources report it (CONNECTOR_CONFIG).
+            _diagnostics.Error("MODEL_CONFIG", _artifact, "/" + BindingSpec.SectionName(BindingSection.Models) + "/" + JsonPointer.Escape(name),
+                $"Model '{name}': {ExceptionText.Of(ex)}");
+            error = null;
             return false;
         }
 
@@ -180,7 +184,10 @@ public sealed class ClientResolver
         }
         catch (Exception ex) when (ex is FormatException or InvalidOperationException or IOException or System.Text.Json.JsonException or KeyNotFoundException)
         {
-            error = $"Candidate source '{name}': {ex.Message}";
+            // At the binding, not at the node that names it (it was reported at a recall node's quotas_param).
+            _diagnostics.Error("CANDIDATE_SOURCE_CONFIG", _artifact,
+                "/" + BindingSpec.SectionName(BindingSection.CandidateSources) + "/" + JsonPointer.Escape(name), $"Candidate source '{name}': {ExceptionText.Of(ex)}");
+            error = null;
             return false;
         }
 

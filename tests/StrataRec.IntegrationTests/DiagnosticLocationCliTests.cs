@@ -122,6 +122,11 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         "FUNNEL_NO_KEY", "/funnel_groups/deep_trace/key", "\"key\": []")]
     [InlineData("experiments/exp_mmr_diversity.jsonc", "\"diversity_cap\": null,", "\"diversty_cap\": null,",
         "PATCH_DELETE_MISSING", "/arms/mmr/nodes/diversty_cap", "\"diversty_cap\"")] // the arm's parameters are not reported again
+    [InlineData("bindings/local.jsonc", "\"fixtures/recall_two_tower.json\"", "\"fixtures/no_such_file.json\"",
+        "CANDIDATE_SOURCE_CONFIG", "/candidate_sources/two_tower/data_file", "\"data_file\": \"fixtures/no_such_file.json\"")] // at the binding, and the
+        // recall columns are still declared: the output that reads one is not reported unknown
+    [InlineData("bindings/local.jsonc", "\"activation\": \"sigmoid\"", "\"activaton\": \"sigmoid\"",
+        "MODEL_CONFIG", "/models/ctr_model/outputs/p_click/activaton", "\"activaton\"")] // was ignored: the identity scored
     public void Text_ADeclarationWithAnError_IsTheOnlyError(string file, string old, string replacement, string code, string pointer, string at)
     {
         var root = Workspace((file, old, replacement));
