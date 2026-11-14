@@ -1161,8 +1161,12 @@ internal sealed partial class UnifiedCompilation
             if (matches == 1)
             {
                 owner = match!.Id;
-                var message = ids.Count == 0 ? d.Message : $"{d.Message} (together with {string.Join(", ", ids)})";
-                final = d with { Artifact = match.Artifact, Pointer = match.PointerPrefix + d.Pointer, Message = message };
+                var together = ids.Count == 0 ? string.Empty : $" (together with {string.Join(", ", ids)})";
+                final = d with
+                {
+                    Artifact = match.Artifact, Pointer = match.PointerPrefix + d.Pointer, Message = d.Message + together,
+                    Brief = d.Brief is null ? null : d.Brief + together,
+                };
             }
             else
             {

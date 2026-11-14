@@ -73,7 +73,8 @@ internal static class Output
     /// <summary>
     /// One diagnostic as text. Located, it starts with <c>file:line:column:</c>, which terminals and editors open at the
     /// place, followed by the pointer (and the artifact label when it says more than the file, such as the arms of a
-    /// combination); otherwise it is <see cref="ConfigDiagnostic.ToString"/>.
+    /// combination); otherwise it is <see cref="ConfigDiagnostic.ToString"/>. Under the source line and its caret, the
+    /// message is the <see cref="ConfigDiagnostic.Brief"/> one, which does not quote the expression the line shows.
     /// </summary>
     public static string Text(ConfigDiagnostic d, SourceLocation? location)
     {
@@ -84,8 +85,9 @@ internal static class Output
 
         var where = at.Exact ? d.Pointer : d.Artifact + d.Pointer;
         var source = at.Source is { } line ? "\n" + Snippet(line, at.Column) : string.Empty;
+        var message = at.Source is not null && d.Brief is { } brief ? brief : d.Message;
         var hint = d.Hint is null ? string.Empty : $"\n    hint: {d.Hint}";
-        return $"{at.File}:{at.Line}:{at.Column}: {d.SeverityName} {d.Code}{(where.Length > 0 ? " " + where : string.Empty)}: {d.Message}{source}{hint}";
+        return $"{at.File}:{at.Line}:{at.Column}: {d.SeverityName} {d.Code}{(where.Length > 0 ? " " + where : string.Empty)}: {message}{source}{hint}";
     }
 
     /// <summary>Lines longer than this are cut to this many characters around the column.</summary>

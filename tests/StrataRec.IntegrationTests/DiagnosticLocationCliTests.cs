@@ -72,6 +72,20 @@ public sealed class DiagnosticLocationCliTests : IDisposable
     }
 
     [Fact]
+    public void Text_AnExpressionError_UnderItsSourceLine_DoesNotQuoteTheExpressionAgain()
+    {
+        var root = Workspace((Pipeline, "\"expr\": \"col.item.smoothed_ctr\" }", "\"expr\": \"col.item.smoothed_ctr * 'a'\" }"));
+
+        var lines = ValidateText(root, expectedErrors: 1);
+
+        var (line, column) = Position(root, Pipeline, "'a'\" }");
+        var at = lines.IndexOf($"{root}/{Pipeline}:{line}:{column}: error EXPR_TYPE_MISMATCH /nodes/coarse_score/config/expr: '*' needs numbers, got float64 and string.");
+        Assert.True(at >= 0, string.Join("\n", lines)); // the offset and the expression are on the next two lines
+        Assert.Contains("\"expr\": \"col.item.smoothed_ctr * 'a'\"", lines[at + 1]);
+        Assert.EndsWith("^", lines[at + 2]);
+    }
+
+    [Fact]
     public void Json_EveryLocatedDiagnostic_HasFileLineAndColumn()
     {
         var root = Workspace();

@@ -48,6 +48,13 @@ public sealed record ConfigDiagnostic(
     /// <summary>1-based column (UTF-16 code units) that goes with <see cref="Line"/>.</summary>
     public int? Column { get; init; }
 
+    /// <summary>
+    /// <see cref="Message"/> without the place inside the string that it names for readers who see only the message (an
+    /// expression's offset and text), for a tool that shows the place itself, such as a source line with a caret under
+    /// the column; null when the message names no such place.
+    /// </summary>
+    public string? Brief { get; init; }
+
     /// <summary><c>error</c>, <c>warning</c> or <c>info</c>, as tools print it.</summary>
     public string SeverityName => Severity switch
     {
