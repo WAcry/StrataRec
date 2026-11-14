@@ -1,6 +1,7 @@
 using System.Text.Json;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Hashing;
+using StrataRec.Core.Types;
 using StrataRec.Models;
 using StrataRec.Pipeline.Operators.Standard;
 
@@ -30,7 +31,10 @@ public sealed class RandomModelClientTests
         Assert.Equal(signature, await client.GetSignatureAsync("ctr_model", null, CancellationToken.None));
 
         // What ModelScorer@1 checks at load for the sample's ctr_ranker node: the stand-in passes as the real model would.
-        var inputs = new Dictionary<string, string> { ["smoothed_ctr"] = "col.item.smoothed_ctr", ["log_followers"] = "col.author.log_followers" };
+        var inputs = new ScorerSignature.MappedInput[]
+        {
+            new("smoothed_ctr", "col.item.smoothed_ctr", ColumnType.Float32), new("log_followers", "col.author.log_followers", ColumnType.Float32),
+        };
         Assert.Empty(ScorerSignature.Check("Model 'ctr_model' version 'v13'", inputs, new Dictionary<string, string> { ["p_click"] = "score.ctr" }, signature));
         await Assert.ThrowsAsync<ArgumentException>(async () => await client.GetSignatureAsync("other_model", null, CancellationToken.None));
     }
@@ -140,10 +144,18 @@ public sealed class RandomModelClientTests
             Inputs = new[] { NamedInput.FromFloat32("smoothed_ctr", new[] { 1 }, new float[1]), NamedInput.FromInt64("log_followers", new[] { 1 }, new long[1]) },
             Options = new ModelCallOptions(Seed: 1),
         };
+        var vectorInput = new ModelCall // what ModelScorer@1 sends for a vec<float32,2> column: enough floats, but two per row
+        {
+            Model = "ctr_model",
+            BatchSize = 1,
+            Inputs = new[] { NamedInput.FromFloat32("smoothed_ctr", new[] { 1 }, new float[1]), NamedInput.FromFloat32("log_followers", new[] { 1, 2 }, new float[2]) },
+            Options = new ModelCallOptions(Seed: 1),
+        };
 
         Assert.Equal(ModelStatus.Failed("Missing input 'log_followers'."), await client.InvokeAsync(missing, new Outputs(), CancellationToken.None));
         Assert.Equal(ModelStatus.Failed("Input 'log_followers' must be float32 with one value per row (3)."), await client.InvokeAsync(shortInput, new Outputs(), CancellationToken.None));
-        Assert.False((await client.InvokeAsync(int64Input, new Outputs(), CancellationToken.None)).Succeeded);
+        Assert.Equal(ModelStatus.Failed("Input 'log_followers' must be float32 with one value per row (1)."), await client.InvokeAsync(int64Input, new Outputs(), CancellationToken.None));
+        Assert.Equal(ModelStatus.Failed("Input 'log_followers' must be float32 with one value per row (1)."), await client.InvokeAsync(vectorInput, new Outputs(), CancellationToken.None));
     }
 
     /// <summary>

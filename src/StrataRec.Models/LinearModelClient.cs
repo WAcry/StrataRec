@@ -9,7 +9,10 @@ namespace StrataRec.Models;
 /// <c>activation(bias + Σ weight_i · input_i)</c> over float32 <c>[batch]</c> inputs.
 /// </summary>
 /// <remarks>
-/// <para>Intended for local development, tests, replay fixtures and as a cheap fallback model. Settings:</para>
+/// <para>Intended for local development, tests, replay fixtures and as a cheap fallback model. Its signature declares every
+/// input and output float32 <c>[-1]</c>, one value per row: <c>ModelScorer@1</c> can feed it float32, float64 and bool
+/// columns, and reports an int or vector column mapped to it at load time (the scorer sends those as int64 <c>[rows]</c>
+/// and float32 <c>[rows, N]</c>). A call with another tensor fails. Settings:</para>
 /// <code>
 /// { "client": "linear@1",
 ///   "outputs": { "p_click": { "bias": -2.0, "weights": { "smoothed_ctr": 8.0 }, "activation": "sigmoid" } },
@@ -112,6 +115,11 @@ public sealed class LinearModelClient : IModelClient
                 if (input is null)
                 {
                     return ModelStatus.Failed($"Missing input '{name}'.");
+                }
+
+                if (input.Value.ElementType != TensorElementType.Float32 || input.Value.Shape is not { Length: 1 } || input.Value.Float32.Length < batch)
+                {
+                    return ModelStatus.Failed($"Input '{name}' must be float32 with one value per row ({batch}).");
                 }
 
                 var data = input.Value.Float32.Span;
