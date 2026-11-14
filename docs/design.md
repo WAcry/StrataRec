@@ -2193,6 +2193,28 @@ span 回答“这个请求的时间花在哪里”。候选级的问题，例如
 
 最后给出结论：返回（名次）、排在输出数量限制之外、被哪个节点淘汰、从未被召回，或者请求没有结果。后备流水线服务了请求时，解释的是它那次运行。本请求选中的节点变体和触发的实验在实验记录里，外部调用的完成状态和耗时在 trace 和回放包里。
 
+`stratarec run --explain` 把解释放进结果的 JSON；加 `--format text` 是可读的形式（`replay --explain` 同样），没有对候选做任何事的节点只计数：
+
+```text
+$ stratarec run -c samples/home_feed -r samples/home_feed/requests/user_1001.json --format text --explain 17,13
+...
+  explain   pipeline home_feed
+  explain   17: dropped by safety_filter
+              recall: entered at rank 17; recall.sources_mask 3, recall.best_rank 5, recall.best_score 1.66, recall.primary_source 'two_tower'
+              safety_filter: dropped (was rank 17); item.is_policy_safe true, item.report_rate 0.07999999821186066; dropped: (col.item.is_policy_safe ?? true) && col.item.report_rate < 0.05 is false
+              not live in 7 other nodes
+  explain   13: returned at rank 2
+              recall: entered at rank 13; recall.sources_mask 1, recall.best_rank 13, recall.best_score 0.87, recall.primary_source 'two_tower'
+              ...
+              coarse_top_k: rank 4 (was 13); score.coarse 0.10402508825063705; kept: score.coarse 0.10402508825063705 ranks 4 of the 30 kept (k = 30)
+              fusion: rank 4; item.report_rate 0.00839999970048666, score.ctr 0.5873607993125916, score.final 1.017778754234314; score.final = 0.5873607993125916 × 1.7328000023961068 = 1.0177787944562378
+              freshness_calibration: rank 4; item.age_hours 100.30000305175781, score.final 1.0807480812072754
+              rank_sort: rank 4; score.final 1.0807480812072754; kept: score.final 1.0807480812072754 ranks 4 of the 30 kept (k = 1000)
+              mmr_diversifier: rank 2 (was 4); item.embedding vec[4], score.final 1.0807480812072754
+```
+
+组合打分的说明按 float64 重算算式，所以和 float32 列里存的分数（这里 `score.final 1.017778754234314`）在第八位前后可能不同。
+
 trace 和解释只在调试请求中生成，内容不做屏蔽（第 8.9 节）。
 
 **为指定用户开启调试。** 排查线上问题时，常常需要看某几个用户的完整执行过程。宿主可以维护一份用户名单（放在宿主自己的配置里），为名单内用户的请求设置 `DebugOptions` 生成 trace，并按频率限制写入调试存储。引擎不需要知道名单的存在。trace 按节点和候选结构化地记录执行过程，覆盖每一个节点，不依赖事先写好的日志语句。
