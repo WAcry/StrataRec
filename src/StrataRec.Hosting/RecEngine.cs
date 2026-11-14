@@ -689,14 +689,17 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                     pending = answer.AsTask();
                     var left = request.Deadline - Stopwatch.GetElapsedTime(started);
                     var wait = pending.WaitAsync(left <= TimeSpan.Zero ? TimeSpan.Zero : left, AssignmentWaitTimers, cancellationToken);
-                    if (!(wait.IsCompleted && pending.IsCompleted))
+                    if (!ReferenceEquals(wait, pending))
                     {
                         // A wait that was set up ends with whoever came first: the provider, the deadline or the caller.
+                        // Its outcome decides, even when the provider has completed by now too: a wait that timed out an
+                        // instant before the provider answered has lost the answer (review 20 #2).
                         ids = await wait.ConfigureAwait(false);
                         return Resolve(pipeline.Plan, ids);
                     }
 
-                    // WaitAsync hands back a completed provider as it is, whatever the time or the caller: judged below.
+                    // WaitAsync handed back the provider itself: it had completed before a wait could be set up (while its
+                    // ValueTask became a task, say), whatever the time or the caller, so no wait decided. Judged below.
                     answer = new ValueTask<IReadOnlyList<string>>(pending);
                 }
 
