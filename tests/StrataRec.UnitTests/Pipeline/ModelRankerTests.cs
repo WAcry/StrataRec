@@ -148,6 +148,7 @@ public sealed class ModelRankerTests
     [InlineData(3)]
     [InlineData(10)]
     [InlineData(256)]
+    [InlineData(int.MaxValue)] // one call: the batch count overflowed and no call was sent (review 27)
     public async Task Pairwise_RanksTheWindowByExpectedWins_TiesByEntityId_RowsAfterTheWindowKeepTheirOrder(int batchSize)
     {
         var models = new TestModels(_ => PairIds, Prefer(Strengths));

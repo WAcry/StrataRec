@@ -1,6 +1,7 @@
 using System.Globalization;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
+using StrataRec.Core.Memory;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting.Workspace;
@@ -57,6 +58,7 @@ public sealed class ModelScorerTests
     [InlineData(2)]
     [InlineData(3)]
     [InlineData(256)]
+    [InlineData(int.MaxValue)] // one batch: the batch count must not overflow (review 27)
     public async Task EachInput_IsSentAsItsTypeGivesIt_WithEveryRowsValue_InBatchesOfBatchSize(int batchSize)
     {
         var models = new CapturingModels(AllKindsSignature);
@@ -68,7 +70,7 @@ public sealed class ModelScorerTests
         Assert.Equal(5, result.Items.Count);
         Assert.All(result.Items, item => Assert.Equal(0.5, item.Columns["p"].AsFloat64())); // every batch's output was written back
         var calls = models.Calls;
-        var expectedSizes = Enumerable.Range(0, (5 + batchSize - 1) / batchSize).Select(b => Math.Min(batchSize, 5 - (b * batchSize)));
+        var expectedSizes = Enumerable.Range(0, Batching.Count(5, batchSize)).Select(b => Math.Min(batchSize, 5 - (b * batchSize)));
         Assert.Equal(expectedSizes.Order(), calls.Select(c => c.BatchSize).Order());
         var seen = new List<long>();
         foreach (var call in calls)

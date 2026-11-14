@@ -104,6 +104,57 @@ public class FeatureRuntimeReviewRegressionTests
     }
 
     [Fact]
+    public async Task Batches_AMaxBatchOfInt32Max_IsOneChunkOfEveryKey()
+    {
+        // "Everything in one chunk": the chunk count overflowed to 0, so no call was sent and no key was fetched (review 27).
+        var chunks = new List<int>();
+        var connector = new ScriptedConnector((keys, fields, writer, _) =>
+        {
+            chunks.Add(writer.KeyCount);
+            ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 1.5);
+            return ValueTask.FromResult(FetchStatus.Ok);
+        });
+        var rig = new FeatureTestRig().Source("item_store", connector, maxBatch: int.MaxValue);
+        var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+        var request = rig.NewRequest(new long[] { 1, 2, 3, 4, 5 });
+
+        await request.EnsureAsync(score);
+
+        Assert.Equal(new[] { 5 }, chunks);
+        for (var row = 0; row < 5; row++)
+        {
+            Assert.Equal((row + 1) * 1.5, request.Value(score, row).AsFloat64());
+        }
+    }
+
+    [Fact]
+    public async Task Batches_AMaxBatchOfInt32Max_ReadsTheDistributedTierAndFetchesItsMissesInOneChunkEach()
+    {
+        // The cache path chunks its distributed read and its fetch of the misses by max_batch too (review 27).
+        var store = new FakeCacheStore();
+        var writer = new FeatureTestRig().CacheSource("shared", ScriptedConnector.Values((key, _) => key * 1.5), distributed: store, maxBatch: int.MaxValue);
+        var writerScore = writer.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "shared");
+        writer.Build();
+        await writer.NewRequest([1, 2, 3]).EnsureAsync(writerScore);
+        await store.WhenWrittenAsync(3).WaitAsync(TimeSpan.FromSeconds(10)); // never written while the chunk count overflowed
+
+        var connector = ScriptedConnector.Values((key, _) => key * 1.5);
+        var reader = new FeatureTestRig().CacheSource("shared", connector, distributed: store, maxBatch: int.MaxValue); // an empty table
+        var score = reader.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "shared");
+        reader.Build();
+        var request = reader.NewRequest([1, 2, 3, 4, 5]);
+
+        await request.EnsureAsync(score);
+
+        Assert.Equal(new long[] { 4, 5 }, Assert.Single(connector.Calls).Keys.Select(k => k.Int64Value));
+        for (var row = 0; row < 5; row++)
+        {
+            Assert.Equal((row + 1) * 1.5, request.Value(score, row).AsFloat64());
+        }
+    }
+
+    [Fact]
     public async Task Batches_ConcurrentChunks_KeepEveryNumericStringAndListValue()
     {
         const int Count = 512;

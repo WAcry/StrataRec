@@ -45,7 +45,7 @@ internal sealed class StagingArea
         _memory = memory;
         KeyCount = keyCount;
         ChunkSize = chunkSize;
-        ChunkCount = Math.Max(1, (keyCount + chunkSize - 1) / chunkSize);
+        ChunkCount = Math.Max(1, Batching.Count(keyCount, chunkSize));
         _bitsPerChunk = Bits.WordCount(Math.Max(1, Math.Min(chunkSize, keyCount))) * 64;
         _bitsPerField = checked(ChunkCount * _bitsPerChunk);
         _written = memory.RentCleared<ulong>(Math.Max(1, checked(fields.Length * (_bitsPerField / 64))));

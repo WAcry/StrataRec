@@ -1,6 +1,7 @@
 using System.Globalization;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
+using StrataRec.Core.Memory;
 using StrataRec.Core.Types;
 using StrataRec.Models;
 
@@ -155,7 +156,7 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
             }
 
             var version = call.Version(context);
-            var batches = (pairs + batchSize - 1) / batchSize;
+            var batches = Batching.Count(pairs, batchSize);
             var writers = new ModelOutputWriter[batches];
             var calls = new Task<ModelStatus>[batches];
             for (var b = 0; b < batches; b++)

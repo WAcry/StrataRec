@@ -1,6 +1,7 @@
 using StrataRec.Artifacts.Json;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
+using StrataRec.Core.Memory;
 using StrataRec.Models;
 
 namespace StrataRec.Pipeline.Operators.Standard;
@@ -117,7 +118,7 @@ public sealed class ModelScorerFactory : IOperatorFactory
             }
 
             var version = call.Version(context);
-            var batches = (n + batchSize - 1) / batchSize;
+            var batches = Batching.Count(n, batchSize);
             var writers = new ModelOutputWriter[batches];
             var calls = new Task<ModelStatus>[batches];
             for (var b = 0; b < batches; b++)

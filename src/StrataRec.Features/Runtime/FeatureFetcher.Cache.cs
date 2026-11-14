@@ -286,7 +286,7 @@ public sealed partial class FeatureFetcher
     private async ValueTask ReadDistributedAsync(CacheRead read, DistributedCacheTier tier, CancellationToken cancellationToken)
     {
         var chunkSize = read.IsContext ? 1 : read.Supply.MaxBatch;
-        var chunks = (read.MissCount + chunkSize - 1) / chunkSize;
+        var chunks = Batching.Count(read.MissCount, chunkSize);
         var calls = _memory.Rent<ValueTask<bool>>(chunks);
         for (var c = 0; c < chunks; c++)
         {
@@ -527,7 +527,7 @@ public sealed partial class FeatureFetcher
         }
 
         var chunkSize = read.IsContext ? 1 : read.Supply.MaxBatch;
-        var chunks = (count + chunkSize - 1) / chunkSize;
+        var chunks = Batching.Count(count, chunkSize);
         var staging = new StagingArea(group.Fields, count, chunkSize, _memory);
         var calls = _memory.Rent<ValueTask<FetchStatus>>(chunks);
         var writtenMs = read.Cache.NowMs(); // the version of what this fetch writes back: when it started
