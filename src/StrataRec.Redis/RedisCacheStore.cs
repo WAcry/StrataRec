@@ -37,13 +37,17 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
     private const int CommandTimeoutMs = 1000;
 
     private readonly RedisStoreSettings _settings;
-    private ConnectionMultiplexer? _connection;
+    private readonly Func<ConfigurationOptions, Task<ConnectionMultiplexer>> _connect;
+    private Task<ConnectionMultiplexer>? _connecting;
     private IDatabase? _database;
     private volatile bool _cluster;
 
-    internal RedisCacheStore(RedisStoreSettings settings)
+    /// <param name="settings">The checked settings.</param>
+    /// <param name="connect">Connects; tests pass one they can hold.</param>
+    internal RedisCacheStore(RedisStoreSettings settings, Func<ConfigurationOptions, Task<ConnectionMultiplexer>>? connect = null)
     {
         _settings = settings;
+        _connect = connect ?? (static options => ConnectionMultiplexer.ConnectAsync(options));
     }
 
     public string StoreType => Type;
@@ -69,9 +73,12 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
             options.Password = (await password.ResolveAsync(cancellationToken).ConfigureAwait(false)).Reveal();
         }
 
-        var connection = await ConnectionMultiplexer.ConnectAsync(options).WaitAsync(cancellationToken).ConfigureAwait(false);
+        // The connect itself cannot be cancelled: a cancelled load stops waiting for it, and the store keeps it, so that
+        // its disposal waits for a connection that completes later and disposes it (review 19).
+        var connecting = _connect(options);
+        Volatile.Write(ref _connecting, connecting);
+        var connection = await connecting.WaitAsync(cancellationToken).ConfigureAwait(false);
         connection.ConnectionRestored += (_, _) => _cluster = IsCluster(connection);
-        _connection = connection;
         _database = connection.GetDatabase(_settings.Database);
         _cluster = IsCluster(connection);
     }
@@ -134,13 +141,29 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
         return sets;
     }
 
+    /// <summary>
+    /// Closes the connection, also one a cancelled load left connecting: the disposal then waits for the connect to end
+    /// (within the connect timeout) and disposes what it made.
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
-        if (_connection is { } connection)
+        if (Volatile.Read(ref _connecting) is not { } connecting)
         {
-            await connection.CloseAsync(allowCommandsToComplete: false).ConfigureAwait(false);
-            await connection.DisposeAsync().ConfigureAwait(false);
+            return;
         }
+
+        ConnectionMultiplexer connection;
+        try
+        {
+            connection = await connecting.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            return; // it made no connection
+        }
+
+        await connection.CloseAsync(allowCommandsToComplete: false).ConfigureAwait(false);
+        await connection.DisposeAsync().ConfigureAwait(false);
     }
 
     private RedisKey[] Keys(CacheKeyspace keyspace, ReadOnlySpan<EntityKey> keys)
