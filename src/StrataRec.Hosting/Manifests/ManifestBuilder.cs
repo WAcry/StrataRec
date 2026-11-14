@@ -229,7 +229,10 @@ public static class ManifestBuilder
         }
         catch (Exception ex) when (ex is ArgumentException or ArtifactIntegrityException or IOException)
         {
-            diagnostics.Error("ARTIFACT_UNAVAILABLE", label, pointer, $"Artifact '{id}' could not be read: {ex.Message}");
+            diagnostics.Error("ARTIFACT_UNAVAILABLE", label, pointer, $"Artifact '{id}' could not be read: {ex.Message}",
+                ex is ArtifactIntegrityException
+                    ? "the stored blob is damaged: upload the artifact again ('stratarec build --store' rewrites it), or read it from a copy of the store"
+                    : null);
             return null;
         }
 

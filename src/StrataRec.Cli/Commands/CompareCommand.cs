@@ -1,24 +1,33 @@
 using System.CommandLine;
 using System.Globalization;
 using System.Text.Json;
+using StrataRec.Artifacts.Model;
 using StrataRec.Hosting.Replay;
 
 namespace StrataRec.Cli.Commands;
 
 /// <summary>
 /// <c>stratarec compare</c>: the recorded-mode comparison of design 10.8. Replays every bundle on a baseline and a
-/// candidate workspace and reports latency, error and empty rates, Top-K overlap, Kendall τ, the score distribution
-/// change and the feature-missing rate, plus every gap the candidate hit.
+/// candidate configuration (workspaces or release manifests, <see cref="ConfigRef"/>) and reports latency, error and
+/// empty rates, Top-K overlap, Kendall τ, the score distribution change and the feature-missing rate, plus every gap the
+/// candidate hit.
 /// </summary>
 internal static class CompareCommand
 {
     public static Command Create()
     {
-        var candidate = CommonOptions.Config();
-        candidate.Description = "Candidate configuration directory.";
+        var candidate = CommonOptions.ConfigOrManifest();
+        candidate.Description = "Candidate configuration directory; default 'config'. Not with --manifest.";
+        var manifest = CommonOptions.Manifest();
+        manifest.Description = "Candidate release manifest instead of a directory: its content id (sha256:<hex>) in --store, or a manifest file. Not with -c.";
+        var store = CommonOptions.Store();
         var environment = CommonOptions.Environment();
         var format = CommonOptions.Format();
-        var baseline = new Option<string>("--baseline") { Description = "Baseline configuration directory (e.g. the main branch).", Required = true };
+        var baseline = new Option<string>("--baseline")
+        {
+            Description = "Baseline configuration: a workspace directory (e.g. the main branch), a manifest content id (sha256:<hex>) in --store, or a manifest file.",
+            Required = true,
+        };
         var bundles = new Option<string>("--bundle", "-b") { Description = "A directory of replay bundles (or one bundle).", Required = true };
         var arms = new Option<string[]>("--arms", "-a")
         {
@@ -27,29 +36,42 @@ internal static class CompareCommand
         };
         var topK = new Option<int>("--top-k", "-k") { Description = "K of the Top-K overlap.", DefaultValueFactory = _ => 10 };
         var score = new Option<string>("--score") { Description = "Output column whose distribution is compared.", DefaultValueFactory = _ => "score" };
-        var command = new Command("compare", "Replay recorded requests on a baseline and a candidate workspace and compare the results (design 10.8). " +
+        var command = new Command("compare", "Replay recorded requests on a baseline and a candidate configuration and compare the results (design 10.8). " +
             "Exits with 2 unless every bundle was compared; the report is printed either way.")
         {
-            candidate, environment, format, baseline, bundles, arms, topK, score,
+            candidate, manifest, store, environment, format, baseline, bundles, arms, topK, score,
         };
-        command.SetAction((parse, cancellationToken) => RunAsync(parse.GetValue(baseline)!, parse.GetValue(candidate)!, parse.GetValue(environment)!,
+        command.SetAction((parse, cancellationToken) => RunAsync(parse.GetValue(baseline)!, parse.GetValue(candidate), parse.GetValue(environment)!,
             parse.GetValue(bundles)!, parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(topK), parse.GetValue(score)!, parse.GetValue(format)!,
-            Console.Out, cancellationToken));
+            Console.Out, cancellationToken, parse.GetValue(manifest), parse.GetValue(store)));
         return command;
     }
 
+    /// <param name="baselineRef">A workspace directory, manifest id or manifest file (<see cref="ConfigRef.Parse"/>).</param>
+    /// <param name="candidateConfig">The candidate workspace (<c>-c</c>); with <paramref name="candidateManifest"/> null too, the workspace <c>config</c>.</param>
+    /// <param name="errors">Where diagnostics go; standard error by default.</param>
     internal static async Task<int> RunAsync(
-        string baselineConfig, string candidateConfig, string environment, string bundlePath, string[] armArgs, int topK, string scoreColumn, string format,
-        TextWriter output, CancellationToken cancellationToken)
+        string baselineRef, string? candidateConfig, string environment, string bundlePath, string[] armArgs, int topK, string scoreColumn, string format,
+        TextWriter output, CancellationToken cancellationToken, string? candidateManifest = null, string? store = null, TextWriter? errors = null)
     {
+        errors ??= Console.Error;
         if (topK < 1)
         {
-            Console.Error.WriteLine("--top-k must be at least 1.");
+            errors.WriteLine("--top-k must be at least 1.");
             return 2;
         }
 
-        var baseline = ReplayCommand.LoadEngine(baselineConfig, environment, format);
-        var candidate = ReplayCommand.LoadEngine(candidateConfig, environment, format);
+        var diagnostics = new DiagnosticBag();
+        var baselineConfig = ConfigRef.Parse(baselineRef, store, "--baseline", diagnostics);
+        var (candidateRef, ok) = ConfigRef.Select(candidateConfig, candidateManifest, store, "config", diagnostics);
+        if (baselineConfig is null || !ok)
+        {
+            Output.Diagnostics(diagnostics.Items, format, errors);
+            return 2;
+        }
+
+        await using var baseline = await ReplayCommand.LoadEngineAsync(baselineConfig, environment, format, errors, cancellationToken).ConfigureAwait(false);
+        await using var candidate = await ReplayCommand.LoadEngineAsync(candidateRef!, environment, format, errors, cancellationToken).ConfigureAwait(false);
         if (baseline is null || candidate is null)
         {
             return 1;
@@ -88,11 +110,11 @@ internal static class CompareCommand
         var report = ReplayComparison.Compare(pairs, topK, scoreColumn, Manifest(pairs, static p => p.Baseline), Manifest(pairs, static p => p.Candidate));
         if (format == "json")
         {
-            output.WriteLine(Output.ToJson(json => WriteJson(json, report, baselineConfig, candidateConfig)));
+            output.WriteLine(Output.ToJson(json => WriteJson(json, report, baselineConfig.Text, candidateRef!.Text)));
         }
         else
         {
-            WriteText(output, report, baselineConfig, candidateConfig);
+            WriteText(output, report, baselineConfig.Text, candidateRef!.Text);
         }
 
         // Metrics over part of the batch (or none of it) must not pass for a clean comparison in CI.
@@ -176,10 +198,10 @@ internal static class CompareCommand
         json.WriteEndObject();
     }
 
-    private static void WriteSide(Utf8JsonWriter json, string name, string workspace, ReplaySideSummary side)
+    private static void WriteSide(Utf8JsonWriter json, string name, string config, ReplaySideSummary side)
     {
         json.WriteStartObject(name);
-        json.WriteString("workspace", workspace);
+        json.WriteString("config", config);
         json.WriteString("manifest", side.Manifest);
         json.WriteNumber("requests", side.Requests);
         WriteDistribution(json, "latency_ms", side.LatencyMs);
@@ -245,7 +267,7 @@ internal static class CompareCommand
         // The baseline column is as wide as its longest value (paths and manifest ids can be long).
         var width = Math.Max(22, Math.Max(baseline.Length, report.Baseline.Manifest.Length) + 2);
         output.WriteLine($"{"",-26}{"baseline".PadRight(width)}candidate");
-        Row("workspace", baseline, candidate);
+        Row("config", baseline, candidate);
         Row("manifest", report.Baseline.Manifest, report.Candidate.Manifest);
         Row("requests", Number(report.Baseline.Requests), Number(report.Candidate.Requests));
         Row("latency p50 / p95 (ms)", Pair(report.Baseline.LatencyMs.P50, report.Baseline.LatencyMs.P95), Pair(report.Candidate.LatencyMs.P50, report.Candidate.LatencyMs.P95));

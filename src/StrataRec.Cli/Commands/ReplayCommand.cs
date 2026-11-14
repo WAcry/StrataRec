@@ -12,15 +12,19 @@ using StrataRec.Pipeline.Replay;
 namespace StrataRec.Cli.Commands;
 
 /// <summary>
-/// <c>stratarec replay</c> (design 13.4): re-executes recorded requests on a workspace with their recorded external
-/// responses and timing decisions, and prints each result with its diff against the recorded one, the node decisions
-/// and parameters that changed, and every piece of data the bundle lacked.
+/// <c>stratarec replay</c> (design 13.4): re-executes recorded requests with their recorded external responses and timing
+/// decisions, and prints each result with its diff against the recorded one, the node decisions and parameters that
+/// changed, and every piece of data the bundle lacked. It replays on a workspace (<c>-c</c>), on a release manifest
+/// (<c>--manifest</c>), or, given only <c>--store</c>, each bundle on the manifest it recorded (<see cref="ReplayEngines"/>).
 /// </summary>
 internal static class ReplayCommand
 {
     public static Command Create()
     {
-        var config = CommonOptions.Config();
+        var config = CommonOptions.ConfigOrManifest();
+        var manifest = CommonOptions.Manifest();
+        var store = CommonOptions.Store();
+        store.Description += " With neither -c nor --manifest, each bundle replays on the manifest it recorded, read from this store.";
         var environment = CommonOptions.Environment();
         var format = CommonOptions.Format();
         var bundle = new Option<string>("--bundle", "-b") { Description = "A replay bundle (from 'stratarec run --record'), or a directory of them.", Required = true };
@@ -30,21 +34,36 @@ internal static class ReplayCommand
             AllowMultipleArgumentsPerToken = true,
         };
         var expectIdentical = new Option<bool>("--expect-identical") { Description = "Exit with 1 unless every replay reproduces its recorded result exactly." };
-        var command = new Command("replay", "Replay recorded requests on a workspace and diff against the recorded results. " +
-            "Exits with 2 unless every bundle was replayed; the report is printed either way.")
+        var command = new Command("replay", "Replay recorded requests on a workspace, a release manifest, or (with only --store) the manifest each bundle " +
+            "recorded, and diff against the recorded results. Exits with 2 unless every bundle was replayed; the report is printed either way.")
         {
-            config, environment, format, bundle, arms, expectIdentical,
+            config, manifest, store, environment, format, bundle, arms, expectIdentical,
         };
-        command.SetAction((parse, cancellationToken) => RunAsync(parse.GetValue(config)!, parse.GetValue(environment)!, parse.GetValue(bundle)!,
-            parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(format)!, parse.GetValue(expectIdentical), Console.Out, cancellationToken));
+        command.SetAction((parse, cancellationToken) => RunAsync(parse.GetValue(config), parse.GetValue(environment)!, parse.GetValue(bundle)!,
+            parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(format)!, parse.GetValue(expectIdentical), Console.Out, cancellationToken,
+            parse.GetValue(manifest), parse.GetValue(store)));
         return command;
     }
 
+    /// <param name="config">The workspace (<c>-c</c>). With <paramref name="manifest"/> null too: each bundle's recorded manifest when
+    /// <paramref name="store"/> is given, else the workspace <c>config</c>.</param>
+    /// <param name="manifest">A manifest id or file (<c>--manifest</c>), read with <paramref name="store"/>.</param>
+    /// <param name="errors">Where diagnostics and per-bundle errors go; standard error by default.</param>
     internal static async Task<int> RunAsync(
-        string config, string environment, string bundlePath, string[] armArgs, string format, bool expectIdentical, TextWriter output, CancellationToken cancellationToken)
+        string? config, string environment, string bundlePath, string[] armArgs, string format, bool expectIdentical, TextWriter output, CancellationToken cancellationToken,
+        string? manifest = null, string? store = null, TextWriter? errors = null)
     {
-        var engine = LoadEngine(config, environment, format);
-        if (engine is null)
+        errors ??= Console.Error;
+        var diagnostics = new DiagnosticBag();
+        var (reference, ok) = ConfigRef.Select(config, manifest, store, store is null ? "config" : null, diagnostics);
+        if (!ok)
+        {
+            Output.Diagnostics(diagnostics.Items, format, errors);
+            return 2;
+        }
+
+        await using var engines = await ReplayEngines.CreateAsync(reference, store, environment, format, errors, cancellationToken).ConfigureAwait(false);
+        if (engines is null)
         {
             return 1;
         }
@@ -52,16 +71,15 @@ internal static class ReplayCommand
         var arms = ExplainPlanCommand.SplitArms(armArgs);
         var options = new ReplayOptions { Arms = arms.Count > 0 ? arms : null };
         var files = ReplayBundleFile.Find(bundlePath);
-        var results = new List<(string File, ReplayOutcome? Outcome, string? Error)>();
+        var results = new List<BundleReplay>();
         foreach (var file in files)
         {
-            var (outcome, error) = await ReplayFileAsync(engine, file, options, cancellationToken).ConfigureAwait(false);
-            results.Add((file, outcome, error));
+            results.Add(await ReplayFileAsync(engines, file, options, errors, cancellationToken).ConfigureAwait(false));
         }
 
         if (files.Count == 0)
         {
-            Console.Error.WriteLine($"{bundlePath}: no replay bundles found.");
+            errors.WriteLine($"{bundlePath}: no replay bundles found.");
         }
 
         var singleFile = files.Count == 1 && !Directory.Exists(bundlePath);
@@ -78,9 +96,9 @@ internal static class ReplayCommand
                 json.WriteStartObject();
                 WriteReplaySummary(json, results);
                 json.WriteStartArray("bundles");
-                foreach (var (file, outcome, error) in results)
+                foreach (var result in results)
                 {
-                    WriteReplay(json, file, outcome, error);
+                    WriteReplay(json, result.File, result.Outcome, result.Error);
                 }
 
                 json.WriteEndArray();
@@ -89,62 +107,64 @@ internal static class ReplayCommand
         }
         else
         {
-            foreach (var (file, outcome, error) in results)
+            foreach (var result in results)
             {
-                WriteReplayText(output, file, outcome, error);
+                WriteReplayText(output, result.File, result.Outcome, result.Error);
             }
 
             if (!singleFile)
             {
-                var (replayed, unreadable, identical) = Counts(results);
-                output.WriteLine($"{results.Count} bundle(s), {replayed} replayed, {unreadable} unreadable, {identical} reproduced the recorded result exactly; " +
-                    $"status {Status(results)}");
+                var (replayed, unreadable, unresolved, identical) = Counts(results);
+                output.WriteLine($"{results.Count} bundle(s), {replayed} replayed, {unreadable} unreadable, " +
+                    (unresolved > 0 ? $"{unresolved} without a configuration to replay on, " : string.Empty) +
+                    $"{identical} reproduced the recorded result exactly; status {Status(results)}");
             }
         }
 
         var different = false;
-        foreach (var (_, outcome, _) in results)
+        foreach (var result in results)
         {
-            different |= outcome is null || !outcome.Report.Diff.Identical;
+            different |= result.Outcome is null || !result.Outcome.Report.Diff.Identical;
         }
 
-        // An unreadable bundle, or nothing to replay at all, is an input error even when the rest replayed identically.
+        // A bundle not replayed (unreadable, or its configuration unavailable), or nothing to replay at all, is an input error
+        // even when the rest replayed identically.
         return Status(results) != "ok" ? 2 : expectIdentical && different ? 1 : 0;
     }
 
-    private static (int Replayed, int Unreadable, int Identical) Counts(List<(string File, ReplayOutcome? Outcome, string? Error)> results)
+    /// <summary>One bundle's replay, or why it was not replayed.</summary>
+    /// <param name="Unresolved">Not replayed because the configuration it recorded is not available (not because the bundle is unreadable).</param>
+    private sealed record BundleReplay(string File, ReplayOutcome? Outcome, string? Error, bool Unresolved);
+
+    private static (int Replayed, int Unreadable, int Unresolved, int Identical) Counts(List<BundleReplay> results)
     {
-        int replayed = 0, unreadable = 0, identical = 0;
-        foreach (var (_, outcome, error) in results)
+        int replayed = 0, unreadable = 0, unresolved = 0, identical = 0;
+        foreach (var result in results)
         {
-            replayed += outcome is not null ? 1 : 0;
-            unreadable += error is not null ? 1 : 0;
-            identical += outcome?.Report.Diff.Identical == true ? 1 : 0;
+            replayed += result.Outcome is not null ? 1 : 0;
+            unreadable += result.Error is not null && !result.Unresolved ? 1 : 0;
+            unresolved += result.Unresolved ? 1 : 0;
+            identical += result.Outcome?.Report.Diff.Identical == true ? 1 : 0;
         }
 
-        return (replayed, unreadable, identical);
+        return (replayed, unreadable, unresolved, identical);
     }
 
-    /// <summary><c>ok</c> (every bundle replayed), <c>partial</c> (some unreadable) or <c>failed</c> (none replayed, or no bundles).</summary>
-    private static string Status(List<(string File, ReplayOutcome? Outcome, string? Error)> results)
+    /// <summary><c>ok</c> (every bundle replayed), <c>partial</c> (some not replayed) or <c>failed</c> (none replayed, or no bundles).</summary>
+    private static string Status(List<BundleReplay> results)
     {
-        var (replayed, unreadable, _) = Counts(results);
-        return replayed == 0 ? "failed" : unreadable > 0 ? "partial" : "ok";
+        var (replayed, _, _, _) = Counts(results);
+        return replayed == 0 ? "failed" : replayed < results.Count ? "partial" : "ok";
     }
 
-    /// <summary>Loads every pipeline of a workspace into a fresh engine; prints diagnostics and returns null on errors.</summary>
-    internal static RecEngine? LoadEngine(string config, string environment, string format)
+    /// <summary>Loads a configuration into a fresh replay engine (<see cref="ConfigRef.LoadReplayEngineAsync"/>); prints diagnostics and returns null on errors.</summary>
+    internal static async Task<RecEngine?> LoadEngineAsync(ConfigRef reference, string environment, string format, TextWriter errors, CancellationToken cancellationToken)
     {
-        // A replay answers every external call and local read from the recording (design 13.4), so the engine loads no table
-        // and no client: replaying needs neither their data, their model files, their snapshot files nor their secrets.
-        var engine = new RecEngine(
-            CommonOptions.PlanEnvironment(config),
-            bindings: new BindingHost(new BindingHostOptions { Load = false }));
-        var diagnostics = ServiceCollectionExtensions.LoadWorkspace(engine, config, environment);
-        if (diagnostics.HasErrors)
+        var diagnostics = new DiagnosticBag();
+        var engine = await reference.LoadReplayEngineAsync(environment, diagnostics, cancellationToken).ConfigureAwait(false);
+        if (engine is null)
         {
-            Output.Diagnostics(diagnostics.Items, format, Console.Error);
-            return null;
+            Output.Diagnostics(diagnostics.Items, format, errors);
         }
 
         return engine;
@@ -172,13 +192,43 @@ internal static class ReplayCommand
         }
     }
 
-    private static void WriteReplaySummary(Utf8JsonWriter json, List<(string File, ReplayOutcome? Outcome, string? Error)> results)
+    /// <summary>Replays one bundle file on the engine <paramref name="engines"/> chooses for it.</summary>
+    private static async Task<BundleReplay> ReplayFileAsync(ReplayEngines engines, string file, ReplayOptions options, TextWriter errors, CancellationToken cancellationToken)
     {
-        var (replayed, unreadable, identical) = Counts(results);
-        var gaps = 0;
-        foreach (var (_, outcome, _) in results)
+        string? error;
+        var unresolved = false;
+        try
         {
-            gaps += outcome?.Report.Gaps.Count ?? 0;
+            var bundle = ReplayBundleFile.Load(file);
+            var (engine, problem, hint) = await engines.ForAsync(bundle, cancellationToken).ConfigureAwait(false);
+            if (engine is not null)
+            {
+                return new BundleReplay(file, await engine.ReplayAsync(bundle, options, cancellationToken).ConfigureAwait(false), null, false);
+            }
+
+            error = $"{file}: {problem} (hint: {hint})";
+            unresolved = true;
+        }
+        catch (ReplayBundleException ex)
+        {
+            error = $"{file}: {ex.Message}" + (ex.Hint is null ? string.Empty : $" (hint: {ex.Hint})");
+        }
+        catch (IOException ex)
+        {
+            error = $"{file}: {ex.Message}";
+        }
+
+        errors.WriteLine(error);
+        return new BundleReplay(file, null, error, unresolved);
+    }
+
+    private static void WriteReplaySummary(Utf8JsonWriter json, List<BundleReplay> results)
+    {
+        var (replayed, unreadable, unresolved, identical) = Counts(results);
+        var gaps = 0;
+        foreach (var result in results)
+        {
+            gaps += result.Outcome?.Report.Gaps.Count ?? 0;
         }
 
         json.WriteStartObject("summary");
@@ -187,6 +237,7 @@ internal static class ReplayCommand
         json.WriteNumber("replayed", replayed);
         json.WriteNumber("identical", identical);
         json.WriteNumber("unreadable", unreadable);
+        json.WriteNumber("unresolved", unresolved);
         json.WriteNumber("gaps", gaps);
         json.WriteEndObject();
     }

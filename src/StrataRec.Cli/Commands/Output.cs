@@ -145,6 +145,13 @@ internal static class Output
         }
     }
 
+    /// <summary>
+    /// A JSON value on one line in its RFC 8785 form: members in ordinal order, so a workspace and the manifest built from
+    /// it (whose store keeps canonical bytes) print alike, and nothing escaped that a terminal shows as is (quotes in
+    /// expressions, non-ASCII).
+    /// </summary>
+    public static string Compact(System.Text.Json.Nodes.JsonNode? value) => Artifacts.Json.JsonCanonicalizer.CanonicalizeToString(value);
+
     public static string ToJson(Action<Utf8JsonWriter> write)
     {
         using var stream = new MemoryStream();
