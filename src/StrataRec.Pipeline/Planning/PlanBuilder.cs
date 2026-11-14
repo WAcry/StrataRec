@@ -785,7 +785,8 @@ public sealed class PlanBuilder
     /// Static data-flow check of one fully merged node set (design 4.6, 5.3, 11.5): every non-nullable column a node
     /// reads has a producer that cannot be skipped before it; fixed columns have one producer per path; row sources keep
     /// every non-nullable column covered (<see cref="ValidateRowSource"/>); nodes sharing an order are independent; every
-    /// pinned version names a node of this set that writes it (<see cref="ValidateVersionRead"/>).
+    /// pinned version names a node of this set that writes it (<see cref="ValidateVersionRead"/>); taps attach after a node
+    /// of this set and log only context features it reads (<see cref="ValidateTapDependencies"/>).
     /// </summary>
     /// <remarks>
     /// Each rule here looks at a few nodes and taps; <see cref="DataFlowScopes"/> says which, for a caller that cannot
@@ -1012,6 +1013,88 @@ public sealed class PlanBuilder
                 ValidateVersionRead(read, "Output column", name, "/output/columns/", name, ordered, fallbacks, artifact);
             }
         }
+
+        if (taps is not null)
+        {
+            ValidateTapDependencies(taps, ordered, fallbacks, output, artifact);
+        }
+    }
+
+    /// <summary>
+    /// What a tap needs from the nodes of one combination wherever it attaches (design 8.3, 8.5): its attach point is a
+    /// node there, and every context feature it logs is one they or the output read. The engine prefetches the context
+    /// features of every variant for every request, but that is how it runs the plan, not what the configuration says: a
+    /// tap that logs a feature only an arm's node reads breaks when that experiment ends. So the rule is the one a compile
+    /// of the combination alone applies.
+    /// </summary>
+    private void ValidateTapDependencies(
+        IReadOnlyList<CompiledTap> taps, List<CompiledNode> timeline, IReadOnlyDictionary<string, CompiledNode> fallbacks, OutputPlan? output, string artifact)
+    {
+        HashSet<int>? read = null; // context features this combination fetches, built for the first tap that logs one
+        foreach (var tap in taps)
+        {
+            if (tap.AttachAfter is { } after)
+            {
+                var found = false;
+                foreach (var node in timeline)
+                {
+                    if (node.NodeId == after)
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found)
+                {
+                    // A fallback runs in its node's place: the taps after that node capture what it produced.
+                    _diagnostics.Error("TAP_UNKNOWN_NODE", artifact, "/log_taps/" + tap.TapId + "/attach/after",
+                        fallbacks.ContainsKey(after)
+                            ? $"Tap '{tap.TapId}' attaches after fallback '{after}', which only runs in place of another node; taps never fire after it."
+                            : $"Tap '{tap.TapId}' attaches after '{after}', which is not a node of the pipeline.",
+                        fallbacks.ContainsKey(after)
+                            ? $"attach after the node that falls back to '{after}': its taps capture the fallback's output too"
+                            : $"attach after a node that runs wherever the tap does (an arm that adds '{after}' can add the tap too), or use {{\"output\": true}}");
+                }
+            }
+
+            if (tap.ReadContextFeatures.Length == 0)
+            {
+                continue;
+            }
+
+            if (read is null)
+            {
+                read = new HashSet<int>();
+                foreach (var node in timeline)
+                {
+                    MarkFetched(read, node.ReadFeatures);
+                }
+
+                foreach (var (_, fallback) in fallbacks)
+                {
+                    MarkFetched(read, fallback.ReadFeatures);
+                }
+
+                if (output is not null)
+                {
+                    foreach (var (_, expression) in output.Columns)
+                    {
+                        MarkSymbols(read, expression);
+                    }
+                }
+            }
+
+            foreach (var f in tap.ReadContextFeatures)
+            {
+                if (!read.Contains(f))
+                {
+                    _diagnostics.Error("TAP_FEATURE_NOT_FETCHED", artifact, "/log_taps/" + tap.TapId,
+                        $"Tap '{tap.TapId}' reads context feature '{_features[f].Definition.Name}', which no node or output column reads; taps never trigger fetches.",
+                        "log a context feature that a node or the output reads wherever the tap runs (an arm that adds the reader can add the tap's field too)");
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -1083,7 +1166,8 @@ public sealed class PlanBuilder
     /// covered (a row source and the producers); independence of nodes that may share an order (the two nodes); a
     /// fallback's existence and outputs (the node); a pinned version read by a node or the output (the reader and the
     /// pinned node); a tap's columns, features and pinned versions (the tap, the nodes it attaches after, and the
-    /// producers, feature readers or pinned node).</para>
+    /// producers, feature readers or pinned node); a tap's attach point (the tap and the nodes it attaches after); a
+    /// context feature a tap logs (the tap and the nodes that read the feature: the output reads the same everywhere).</para>
     /// </remarks>
     /// <param name="nodes">Node id → the variants it takes in some combination (timeline nodes and fallbacks).</param>
     /// <param name="taps">Tap id → the variants it takes in some combination.</param>
@@ -1252,6 +1336,7 @@ public sealed class PlanBuilder
             var pinned = new SortedSet<string>(StringComparer.Ordinal);
             var reads = new SortedSet<int>();
             var features = new SortedSet<int>();
+            var contextFeatures = new SortedSet<int>();
             foreach (var tap in variants)
             {
                 if (tap.AttachAfter is { } after)
@@ -1262,9 +1347,22 @@ public sealed class PlanBuilder
                 pinned.UnionWith(tap.PinnedNodes);
                 reads.UnionWith(tap.ReadOutputs);
                 features.UnionWith(tap.ReadFeatures);
+                contextFeatures.UnionWith(tap.ReadContextFeatures);
             }
 
             var pointer = "/log_taps/" + tapId;
+            if (attach.Count > 0)
+            {
+                Scope($"tap '{tapId}' and where it attaches", pointer + "/attach/after", new SortedSet<string>(attach, StringComparer.Ordinal), tapId);
+            }
+
+            foreach (var feature in contextFeatures)
+            {
+                // Fetched at request start for the whole request: who reads it matters, not where the tap attaches.
+                Scope($"tap '{tapId}' reading context feature '{_features[feature].Definition.Name}'", pointer,
+                    With(featureReaders.GetValueOrDefault(feature), Array.Empty<string>()), tapId);
+            }
+
             foreach (var node in pinned)
             {
                 Scope($"tap '{tapId}' reading the version of '{node}'", pointer, With(attach, new[] { node }), tapId);
@@ -1478,28 +1576,6 @@ public sealed class PlanBuilder
         foreach (var (_, expression) in output.Columns)
         {
             MarkSymbols(serving, expression);
-        }
-
-        foreach (var slot in log.Taps)
-        {
-            var reported = new HashSet<int>();
-            foreach (var tap in slot.Variants)
-            {
-                if (tap is null)
-                {
-                    continue;
-                }
-
-                foreach (var f in tap.ReadContextFeatures)
-                {
-                    if (!serving.Contains(f) && reported.Add(f))
-                    {
-                        _diagnostics.Error("TAP_FEATURE_NOT_FETCHED", PipelineLabel, "/log_taps/" + tap.TapId,
-                            $"Tap '{tap.TapId}' reads context feature '{_features[f].Definition.Name}', which the pipeline never fetches; taps never trigger fetches.",
-                            "log a context feature a node, trigger condition or the output already reads");
-                    }
-                }
-            }
         }
 
         var contextFeatures = new HashSet<int>();

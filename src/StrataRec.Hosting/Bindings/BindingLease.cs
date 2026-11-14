@@ -43,7 +43,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
     private readonly BindingHost _host;
     private readonly object _gate = new();
     private readonly List<BindingHost.TableEntry> _tables = new();
-    private readonly Dictionary<string, BindingHost.TableEntry> _tablesByIdentity = new(StringComparer.Ordinal);
+    private readonly Dictionary<TableKey, BindingHost.TableEntry> _tablesByKey = new();
     private readonly List<BindingHost.ClientEntry> _clients = new();
     private readonly Dictionary<BindingKey, BindingHost.ClientEntry> _clientsByKey = new();
     private readonly Dictionary<object, BindingHost.ClientEntry> _clientsByInstance = new(ReferenceEqualityComparer.Instance);
@@ -101,14 +101,14 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_tablesByIdentity.TryGetValue(spec.Identity, out var held))
+            if (_tablesByKey.TryGetValue(spec.Key, out var held))
             {
                 return held.Table;
             }
 
             var entry = _host.Acquire(spec);
             _tables.Add(entry);
-            _tablesByIdentity[spec.Identity] = entry;
+            _tablesByKey[spec.Key] = entry;
             return entry.Table;
         }
     }
@@ -425,7 +425,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
             _disposed = true;
             tables = new List<BindingHost.TableEntry>(_tables);
             _tables.Clear();
-            _tablesByIdentity.Clear();
+            _tablesByKey.Clear();
         }
 
         CancelLookups(); // before the lease is marked retired, so the callbacks of the cancellation can count as a user
@@ -525,7 +525,9 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
     }
 
     /// <summary>
-    /// The client's answer once it can give one: after its load; never faults. The client's method runs on the pool, its
+    /// The client's answer once it can give one: after its load, unless the lookups are cancelled first; never faults. A
+    /// cancellation ends only the wait for the load: a call already inside the client keeps the lease until the client's
+    /// method returns. The client's method runs on the pool, its
     /// synchronous part included, so a method that blocks before it returns its task holds up neither the compile nor the
     /// bounded wait for the answers (<see cref="CompileAsync{T}"/>); its answer is then pending, and late. The caller
     /// entered the lease for the lookup, and this ends that entry once the client returned.
@@ -534,16 +536,23 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
     {
         try
         {
+            // The wait for the load ends with the lookups. The lookup holds the lease, the lease holds the client, and the
+            // client's load is cancelled only once nobody holds it: a lookup that waited out the load after its plan was
+            // cancelled would keep all three until LoadTimeout. Another plan holding the client keeps the load going.
+            var token = _lookups.Token;
             try
             {
-                await entry.Ready().ConfigureAwait(false);
+                await entry.Ready().WaitAsync(token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                return SignatureLookup.Failure(new OperationCanceledException(token)); // nobody waits for the answer any more
             }
             catch (Exception)
             {
                 return SignatureLookup.Unchecked; // the load failed: the plan is rejected with that failure, at the binding
             }
 
-            var token = _lookups.Token;
             if (token.IsCancellationRequested)
             {
                 return SignatureLookup.Failure(new OperationCanceledException(token)); // nobody waits for the answer any more

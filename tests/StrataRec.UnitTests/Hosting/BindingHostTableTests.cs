@@ -4,14 +4,16 @@ using StrataRec.Artifacts.Model;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
+using StrataRec.Features.Cache;
 using StrataRec.Features.Local;
 using StrataRec.Hosting.Bindings;
+using StrataRec.UnitTests.Features;
 
 namespace StrataRec.UnitTests.Hosting;
 
 /// <summary>
-/// The engine's table lifecycle (design 6.6): sharing by identity, readiness, first-load failures, restarts with backoff,
-/// release and shutdown. Sources are scripted run by run and signal through task completion sources, so nothing here
+/// The engine's table lifecycle (design 6.6): sharing by identity and owner, readiness, first-load failures, restarts with
+/// backoff, release and shutdown. Sources are scripted run by run and signal through task completion sources, so nothing here
 /// depends on timing.
 /// </summary>
 public class BindingHostTableTests
@@ -19,17 +21,18 @@ public class BindingHostTableTests
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(30);
 
     [Fact]
-    public async Task SpecsWithTheSameIdentity_ShareOneTable_LoadedOnce()
+    public async Task SpecsWithTheSameIdentityAndFactory_ShareOneTable_LoadedOnce()
     {
         using var host = new BindingHost();
         var first = new ScriptedSource(Load(1));
         var second = new ScriptedSource(Load(2));
+        var factory = new Sources(first, second, new ScriptedSource(Load(3))); // one per spec, as a real factory creates them
         using var a = host.OpenLease();
         using var b = host.OpenLease();
 
-        var tableA = a.Acquire(Spec(first));
-        var tableB = b.Acquire(Spec(second));
-        var other = b.Acquire(Spec(new ScriptedSource(Load(3)), maxBytes: "2MiB"));
+        var tableA = a.Acquire(Spec(factory));
+        var tableB = b.Acquire(Spec(factory));
+        var other = b.Acquire(Spec(factory, maxBytes: "2MiB"));
 
         Assert.Same(tableA, tableB);
         Assert.NotSame(tableA, other);
@@ -39,6 +42,54 @@ public class BindingHostTableTests
         Assert.Equal(1, first.Runs);
         Assert.Equal(0, second.Runs); // the shared table keeps the source that loaded it
         Assert.Equal(1.0, Read(tableB, 1));
+    }
+
+    [Fact]
+    public async Task SpecsWithTheSameIdentityFromAnotherFactory_GetATableOfTheirOwn_LoadedByTheirOwnSource()
+    {
+        // Two engines on one host compile the same configuration with registries of their own: the identities are equal,
+        // but the second engine's table must hold what its own source loads, not what the first engine's source loaded.
+        using var host = new BindingHost();
+        var mine = new ScriptedSource(Load(1));
+        var theirs = new ScriptedSource(Load(2));
+        using var a = host.OpenLease();
+        using var b = host.OpenLease();
+        var specA = Spec(new Sources(mine));
+        var specB = Spec(new Sources(theirs));
+
+        var tableA = a.Acquire(specA);
+        var tableB = b.Acquire(specB);
+
+        Assert.Equal(specA.Identity, specB.Identity);
+        Assert.NotSame(tableA, tableB);
+        Assert.Equal(2, host.TableCount);
+        Assert.Empty(await a.WaitLoadedAsync());
+        Assert.Empty(await b.WaitLoadedAsync());
+        Assert.Equal((1, 1), (mine.Runs, theirs.Runs));
+        Assert.Equal((1.0, 2.0), (Read(tableA, 1), Read(tableB, 1)));
+    }
+
+    [Fact]
+    public void CacheSpecsWithTheSameIdentity_ShareATableOnlyWithTheSameConnector()
+    {
+        // A plan swap gets the connector the host already holds (one per binding key), so it takes over the table with the
+        // rows that connector fetched. Another engine's connector with the same configuration gets an empty table of its
+        // own: the rows the first connector fetched are not its connector's answers.
+        using var host = new BindingHost(new BindingHostOptions { Load = false });
+        var connector = ScriptedConnector.Values((_, _) => 1.0);
+        var otherConnector = ScriptedConnector.Values((_, _) => 2.0);
+        using var current = host.OpenLease();
+        using var next = host.OpenLease();
+        using var otherEngine = host.OpenLease();
+
+        var table = current.Acquire(CacheSpec(connector));
+        var takenOver = next.Acquire(CacheSpec(connector));
+        var own = otherEngine.Acquire(CacheSpec(otherConnector));
+
+        Assert.Equal(CacheSpec(connector).Identity, CacheSpec(otherConnector).Identity);
+        Assert.Same(table, takenOver);
+        Assert.NotSame(table, own);
+        Assert.Equal(2, host.TableCount);
     }
 
     [Fact]
@@ -393,7 +444,9 @@ public class BindingHostTableTests
         Assert.False(table.IsLoaded);
     }
 
-    private static LocalTableSpec Spec(IFeatureUpdateSource source, string maxBytes = "1MiB")
+    /// <summary>The spec of a local table loaded by a source of <paramref name="factory"/>; a <see cref="ScriptedSource"/>
+    /// is its own factory, so the specs of one source share a table.</summary>
+    private static LocalTableSpec Spec(IFeatureUpdateSourceFactory factory, string maxBytes = "1MiB")
     {
         var entity = new StrataRec.Features.Catalog.EntityDefinition
         {
@@ -404,7 +457,17 @@ public class BindingHostTableTests
             $$"""{ "mode": "local", "max_bytes": "{{maxBytes}}", "bootstrap": { "source": "scripted@1" } }""");
         ByteSize.TryParse(maxBytes, out var bytes);
         return LocalTableSpec.Create(
-            schema, new LocalFeatureTableOptions { MaxBytes = bytes }, binding, new FixedSource(source), "item_store", "bindings:test", "/sources/item_store", null);
+            schema, new LocalFeatureTableOptions { MaxBytes = bytes }, binding, factory, "item_store", "bindings:test", "/sources/item_store", null);
+    }
+
+    /// <summary>The spec of a <c>cache</c> table in front of <paramref name="connector"/>, with one configuration.</summary>
+    private static LocalTableSpec CacheSpec(ScriptedConnector connector)
+    {
+        var schema = new LocalTableSchema("item_store", "item", EntityKeyType.Int64, LocalTableMode.Cache, new[] { new LocalTableField("score", ColumnType.Float64) });
+        var binding = ArtifactSerializer.Deserialize<FeatureSourceBinding>(
+            """{ "mode": "cache", "connector": "scripted@1", "max_bytes": "1MiB", "cache": { "ttl_ms": 60000 } }""");
+        var options = new LocalFeatureTableOptions { MaxBytes = 1 << 20, Cache = new CacheTableOptions { TtlMs = 60_000 } };
+        return LocalTableSpec.CreateCache(schema, options, binding, connector, "bindings:test", "/sources/item_store", null);
     }
 
     /// <summary>A run that loads item 1 with <paramref name="score"/> in one reload and returns.</summary>
@@ -454,20 +517,29 @@ public class BindingHostTableTests
         public override string Message => throw new InvalidOperationException("the message failed");
     }
 
-    /// <summary>A factory that hands out one given source.</summary>
-    private sealed class FixedSource(IFeatureUpdateSource source) : IFeatureUpdateSourceFactory
+    /// <summary>A factory that hands out the given sources in order, one per spec (the last one again if asked for more).</summary>
+    private sealed class Sources(params IFeatureUpdateSource[] sources) : IFeatureUpdateSourceFactory
     {
-        public string SourceType => source.SourceType;
+        private int _created;
 
-        public IFeatureUpdateSource Create(string sourceName, IReadOnlyDictionary<string, System.Text.Json.JsonElement> settings, string? baseDirectory) => source;
+        public string SourceType => "scripted@1";
+
+        public IFeatureUpdateSource Create(string sourceName, IReadOnlyDictionary<string, System.Text.Json.JsonElement> settings, string? baseDirectory) =>
+            sources[Math.Min(_created++, sources.Length - 1)];
     }
 
-    /// <summary>Runs its scripted runs in order (the last one again if it is run more often); counts runs.</summary>
-    private sealed class ScriptedSource(params Func<UpdatePosition, IFeatureTableWriter, CancellationToken, Task>[] runs) : IFeatureUpdateSource
+    /// <summary>
+    /// Runs its scripted runs in order (the last one again if it is run more often); counts runs. Also its own factory, so
+    /// every spec of one source has one owner, and shares the table, as the specs of one engine's plans do.
+    /// </summary>
+    private sealed class ScriptedSource(params Func<UpdatePosition, IFeatureTableWriter, CancellationToken, Task>[] runs)
+        : IFeatureUpdateSource, IFeatureUpdateSourceFactory
     {
         private int _runs;
 
         public string SourceType => "scripted@1";
+
+        public IFeatureUpdateSource Create(string sourceName, IReadOnlyDictionary<string, System.Text.Json.JsonElement> settings, string? baseDirectory) => this;
 
         public int Runs => Volatile.Read(ref _runs);
 

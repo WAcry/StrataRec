@@ -5,26 +5,30 @@ using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
+using StrataRec.Features.Connectors;
 
 namespace StrataRec.Features.Local;
 
 /// <summary>
 /// What a plan needs from one local feature table (design 6.6): the layout, the limits, the source that loads it, and
-/// the <see cref="Identity"/> that decides whether a table loaded for an earlier plan can serve this one.
+/// the <see cref="Key"/> (its <see cref="Identity"/> and its <see cref="Owner"/>) that decides whether a table loaded for
+/// an earlier plan can serve this one.
 /// </summary>
 public sealed class LocalTableSpec
 {
     private LocalTableSpec(
-        LocalTableSchema schema, LocalFeatureTableOptions options, FeatureSourceBinding binding, IFeatureUpdateSource bootstrap, string artifact,
-        string pointer, string baseDirectory)
+        LocalTableSchema schema, LocalFeatureTableOptions options, FeatureSourceBinding binding, IFeatureUpdateSource bootstrap, object owner,
+        string artifact, string pointer, string baseDirectory)
     {
         Schema = schema;
         Options = options;
         Bootstrap = bootstrap;
+        Owner = owner;
         Artifact = artifact;
         Pointer = pointer;
         BaseDirectory = baseDirectory;
         Identity = ComputeIdentity(schema, binding, baseDirectory);
+        Key = new TableKey(owner, Identity);
     }
 
     /// <summary>
@@ -33,7 +37,8 @@ public sealed class LocalTableSpec
     /// later change of the process's current directory changes neither what the source reads nor which table is shared.
     /// </summary>
     /// <param name="binding">The source's binding as written (mode <c>local</c>, with a <c>bootstrap</c>); part of the identity.</param>
-    /// <param name="bootstrapFactory">The factory of the binding's <c>bootstrap</c> source, which loads the table.</param>
+    /// <param name="bootstrapFactory">The factory of the binding's <c>bootstrap</c> source, which loads the table; the
+    /// spec's <see cref="Owner"/>, so a table is shared only between plans whose sources the same factory object creates.</param>
     /// <param name="sourceName">The feature source's name, for the bootstrap source.</param>
     /// <param name="artifact">The bindings artifact, e.g. <c>bindings:local</c>, for load errors.</param>
     /// <param name="pointer">The binding's pointer, e.g. <c>/sources/item_store</c>, for load errors.</param>
@@ -61,7 +66,7 @@ public sealed class LocalTableSpec
 
         var directory = BindingContext.PinBaseDirectory(baseDirectory);
         var source = bootstrapFactory.Create(sourceName, bootstrap.Settings, directory);
-        return new LocalTableSpec(schema, options, binding, source, artifact, pointer, directory);
+        return new LocalTableSpec(schema, options, binding, source, bootstrapFactory, artifact, pointer, directory);
     }
 
     /// <summary>
@@ -70,19 +75,29 @@ public sealed class LocalTableSpec
     /// as a local table's, so a change of the connector, of the cache settings or of the field set starts a new, empty table.
     /// </summary>
     /// <param name="options">With <see cref="LocalFeatureTableOptions.Cache"/> set.</param>
+    /// <param name="connector">The connector the table caches, as the plan's bindings handed it out; the spec's
+    /// <see cref="Owner"/>, so a table holds only rows this connector object fetched. The engine hands out one connector
+    /// per <see cref="Bindings.BindingKey"/>, so the same connector object already means the same factory and identity.</param>
     public static LocalTableSpec CreateCache(
-        LocalTableSchema schema, LocalFeatureTableOptions options, FeatureSourceBinding binding, string artifact, string pointer, string? baseDirectory)
+        LocalTableSchema schema,
+        LocalFeatureTableOptions options,
+        FeatureSourceBinding binding,
+        IFeatureSourceConnector connector,
+        string artifact,
+        string pointer,
+        string? baseDirectory)
     {
         ArgumentNullException.ThrowIfNull(schema);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(binding);
+        ArgumentNullException.ThrowIfNull(connector);
         if (schema.Mode != LocalTableMode.Cache || options.Cache is null)
         {
             throw new ArgumentException("A cache spec has a cache schema and cache options.", nameof(options));
         }
 
         return new LocalTableSpec(
-            schema, options, binding, Cache.CacheWriterSource.Instance, artifact, pointer, BindingContext.PinBaseDirectory(baseDirectory));
+            schema, options, binding, Cache.CacheWriterSource.Instance, connector, artifact, pointer, BindingContext.PinBaseDirectory(baseDirectory));
     }
 
     public LocalTableSchema Schema { get; }
@@ -90,8 +105,17 @@ public sealed class LocalTableSpec
     public LocalFeatureTableOptions Options { get; }
 
     /// <summary>Loads the table (for a <c>cache</c> table, its writer). A table reused from an earlier plan keeps the source
-    /// it was loaded by, which has the same identity and therefore the same settings.</summary>
+    /// it was loaded by, which has the same <see cref="Key"/>: the same settings, created by the same factory.</summary>
     public IFeatureUpdateSource Bootstrap { get; }
+
+    /// <summary>
+    /// The runtime object whose data the table holds, compared by reference: the bootstrap source's factory for a
+    /// <c>local</c> table, the connector for a <c>cache</c> table. The <see cref="Identity"/> describes the configuration
+    /// only, and two engines on one host can compile the same configuration with different registries; a table shared
+    /// on the identity alone would serve one engine the data another engine's source loaded or another engine's connector
+    /// fetched. Not part of the identity, which stays a canonical, stable description of the configuration.
+    /// </summary>
+    public object Owner { get; }
 
     /// <summary>The bindings artifact, e.g. <c>bindings:local</c>.</summary>
     public string Artifact { get; }
@@ -106,12 +130,12 @@ public sealed class LocalTableSpec
     public string BaseDirectory { get; }
 
     /// <summary>
-    /// The one rule for reusing a table across plans: two specs with the same identity are served by one table, so a new
-    /// plan takes over a loaded table instead of loading it again. The identity is the RFC 8785 canonical JSON of what
-    /// decides the table's contents: the source and entity, the key type, the physical fields with their storage types
-    /// (in field-name order, so renaming the features that read them, or changing their defaults, changes nothing), the
-    /// source's binding as written, and the absolute <see cref="BaseDirectory"/>. Nothing else in the configuration
-    /// is part of it: other sources, pipelines and experiments never cause a reload.
+    /// The one rule for reusing a table across plans: two specs with the same identity (and the same <see cref="Owner"/>)
+    /// are served by one table, so a new plan takes over a loaded table instead of loading it again. The identity is the
+    /// RFC 8785 canonical JSON of what decides the table's contents: the source and entity, the key type, the physical
+    /// fields with their storage types (in field-name order, so renaming the features that read them, or changing their
+    /// defaults, changes nothing), the source's binding as written, and the absolute <see cref="BaseDirectory"/>. Nothing
+    /// else in the configuration is part of it: other sources, pipelines and experiments never cause a reload.
     /// </summary>
     /// <remarks>
     /// The binding is taken whole rather than setting by setting, so a binding setting added later is part of the
@@ -119,6 +143,9 @@ public sealed class LocalTableSpec
     /// The table options all come from the binding (<c>max_bytes</c>) or are the engine's constants.
     /// </remarks>
     public string Identity { get; }
+
+    /// <summary>What a table is shared by: <see cref="Identity"/> and the <see cref="Owner"/> object.</summary>
+    public TableKey Key { get; }
 
     private static string ComputeIdentity(LocalTableSchema schema, FeatureSourceBinding binding, string baseDirectory)
     {
@@ -144,12 +171,43 @@ public sealed class LocalTableSpec
     }
 }
 
+/// <summary>
+/// The key of every collection of shared tables (<see cref="LocalTableSpec.Key"/>): the spec's identity, and its owner
+/// compared by reference, as <see cref="Bindings.BindingKey"/> does for instances. A table is shared only between plans
+/// whose data comes from the same source factory or connector object, so the owner's own <c>Equals</c> and
+/// <c>GetHashCode</c> are never used: an owner with value equality (a record) would get another owner's table. One type,
+/// so no collection can compare owners another way.
+/// </summary>
+public readonly struct TableKey : IEquatable<TableKey>
+{
+    internal TableKey(object owner, string identity)
+    {
+        Owner = owner;
+        Identity = identity;
+    }
+
+    public object Owner { get; }
+
+    public string Identity { get; }
+
+    public static bool operator ==(TableKey left, TableKey right) => left.Equals(right);
+
+    public static bool operator !=(TableKey left, TableKey right) => !left.Equals(right);
+
+    public bool Equals(TableKey other) => ReferenceEquals(Owner, other.Owner) && string.Equals(Identity, other.Identity, StringComparison.Ordinal);
+
+    public override bool Equals(object? obj) => obj is TableKey other && Equals(other);
+
+    public override int GetHashCode() =>
+        HashCode.Combine(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(Owner), Identity is null ? 0 : StringComparer.Ordinal.GetHashCode(Identity));
+}
+
 /// <summary>Gives a plan being compiled the table of each local (source, entity) it reads (design 6.6).</summary>
-/// <remarks>The engine's provider (<c>BindingLease</c> in Hosting) shares tables by <see cref="LocalTableSpec.Identity"/>
+/// <remarks>The engine's provider (<c>BindingLease</c> in Hosting) shares tables by <see cref="LocalTableSpec.Key"/>
 /// and loads them in the background; a plan is served only once its tables are loaded.</remarks>
 public interface ILocalTableProvider
 {
-    /// <summary>The table for <paramref name="spec"/>: one already held with the same identity, or a new one.</summary>
+    /// <summary>The table for <paramref name="spec"/>: one already held with the same key, or a new one.</summary>
     /// <exception cref="ArgumentOutOfRangeException">The spec's <c>max_bytes</c> cannot hold even an empty table.</exception>
     LocalFeatureTable Acquire(LocalTableSpec spec);
 }

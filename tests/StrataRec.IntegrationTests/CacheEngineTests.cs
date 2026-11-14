@@ -5,7 +5,9 @@ using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Features.Cache;
+using StrataRec.Features.Local;
 using StrataRec.Hosting;
+using StrataRec.Hosting.Bindings;
 using StrataRec.Hosting.Replay;
 using StrataRec.Hosting.Workspace;
 using StrataRec.Pipeline.Planning;
@@ -75,6 +77,52 @@ public sealed class CacheEngineTests
         // Neither tier nor the connector: a replay reads no table and writes nothing back.
         Assert.DoesNotContain(metrics.Measurements.Skip(before), m => m.Instrument.StartsWith("stratarec.cache.", StringComparison.Ordinal)
             || (m.Instrument == StrataRecMetrics.Names.SourceKeys && Equals(m.Tags[StrataRecTags.Source], Source)));
+    }
+
+    [Fact]
+    public async Task APlanSwap_KeepsTheConnector_AndTakesOverTheTableWithWhatItFetched()
+    {
+        var root = HomeFeedTestHost.LoadModified(r => CacheItems(r)).Root;
+        await using var engine = await Load(root, bindings: null);
+        using var metrics = new MetricCapture();
+        await UntilServedFromTable(engine, metrics, MetricsTests.Request);
+        var table = ItemTable(engine);
+
+        // The configuration loaded again: a new plan with a lease of its own gets the connector the host holds, so the
+        // same table, with every row already written back.
+        Assert.True((await engine.LoadAsync(Compile(root))).Applied);
+        var before = Snapshot.Of(metrics);
+        var result = await engine.ExecuteAsync(MetricsTests.Request("req-swapped"));
+        var read = Snapshot.Of(metrics).Minus(before);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Same(table, ItemTable(engine));
+        Assert.Equal(2, engine.Bindings.TableCount); // item_store's and the sample's local author_store, none left over
+        Assert.True(read.Keys("local", "miss") == 0 && read.Keys("local", "hit") > 0, read.ToString());
+        Assert.Equal(0, read.ConnectorKeys);
+    }
+
+    [Fact]
+    public async Task TwoEnginesSharingAHost_WithConnectorsOfTheirOwn_NeverReadEachOthersTable()
+    {
+        // The same configuration, so the same table identity, but each engine's registry creates its own connector: the
+        // second engine finds an empty table and asks its own connector, instead of serving the rows the first engine's
+        // connector fetched.
+        var root = HomeFeedTestHost.LoadModified(r => CacheItems(r)).Root;
+        using var host = new BindingHost();
+        await using var first = await Load(root, host);
+        await using var second = await Load(root, host);
+        using var metrics = new MetricCapture();
+        await UntilServedFromTable(first, metrics, MetricsTests.Request); // the first engine's table holds every key it reads
+
+        var before = Snapshot.Of(metrics);
+        var result = await second.ExecuteAsync(MetricsTests.Request("req-second"));
+        var read = Snapshot.Of(metrics).Minus(before);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.True(read.Keys("local", "miss") >= 1 && read.ConnectorKeys >= 1, read.ToString());
+        Assert.NotSame(ItemTable(first), ItemTable(second));
+        Assert.Equal(4, host.TableCount); // item_store's and the sample's local author_store, for each engine
     }
 
     [Fact]
@@ -150,6 +198,21 @@ public sealed class CacheEngineTests
         var load = await engine.LoadAsync(Compile(root));
         Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
         return engine;
+    }
+
+    /// <summary>An engine on its own registries (so its own connector) over <paramref name="bindings"/>, or a host of its own.</summary>
+    private static async Task<RecEngine> Load(string root, BindingHost? bindings)
+    {
+        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = root }, bindings: bindings);
+        var load = await engine.LoadAsync(Compile(root));
+        Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
+        return engine;
+    }
+
+    private static LocalFeatureTable ItemTable(RecEngine engine)
+    {
+        Assert.True(engine.TryGetPipeline("home_feed", out var pipeline));
+        return Assert.Single(pipeline.Bindings.Tables, t => t.Schema.Source == Source);
     }
 
     internal static PlanCompileRequest Compile(string root)

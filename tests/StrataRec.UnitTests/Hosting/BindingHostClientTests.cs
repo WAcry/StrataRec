@@ -18,6 +18,9 @@ namespace StrataRec.UnitTests.Hosting;
 public sealed class BindingHostClientTests
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(30);
+
+    /// <summary>For what must happen promptly: far below the default <see cref="BindingHostOptions.LoadTimeout"/>.</summary>
+    private static readonly TimeSpan Prompt = TimeSpan.FromSeconds(10);
     private static readonly string Root = Path.Combine(Path.GetTempPath(), "stratarec-config");
 
     [Fact]
@@ -476,6 +479,64 @@ public sealed class BindingHostClientTests
         await client.Disposed.Task.WaitAsync(Wait);
         Assert.Equal((1, 0), (client.DisposeCount, client.CallsAtOrAfterDispose));
         Assert.Equal(0, host.InstanceCount);
+    }
+
+    [Fact]
+    public async Task ACancelledPlansLookupWaitingForTheLoad_EndsAtOnce_SoItsLeaseEndsAndTheLoadIsCancelled()
+    {
+        // The lookup holds the lease, the lease holds the client, and the client's load is cancelled only once nobody holds
+        // it. A lookup that went on waiting for the load after its plan was cancelled held all three until LoadTimeout
+        // (two minutes here); the bound below is far shorter.
+        await using var host = new BindingHost();
+        var factory = new Factory();
+        var lease = host.OpenLease();
+        using var cancel = new CancellationTokenSource();
+
+        var compiling = lease.CompileAsync(bindings =>
+            bindings.Signature(bindings.Acquire(Spec(factory), factory.Create), "ctr_model", null), cancel.Token);
+        var client = Assert.Single(factory.Created);
+        await client.LoadStarted.Task.WaitAsync(Wait); // the load waits for its token, or for the test
+
+        cancel.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => compiling.WaitAsync(Wait));
+        lease.Dispose();
+
+        await client.Disposed.Task.WaitAsync(Prompt); // the lease ended and released the client: its load was cancelled
+        Assert.True(client.LoadToken.IsCancellationRequested);
+        Assert.Empty(lease.Instances);
+        Assert.Equal(0, client.SignatureCalls); // nobody waits for the answer any more, so the client is never asked
+    }
+
+    [Fact]
+    public async Task APlanSharingTheClient_KeepsItsLoadWhenAnotherPlanIsCancelled_AndGetsItsAnswer()
+    {
+        // The control: only the cancelled plan's wait ends. The other plan holds the same client, so its load goes on, and
+        // that plan's lookup is answered once the load completes.
+        await using var host = new BindingHost();
+        var factory = new Factory();
+        var cancelled = host.OpenLease();
+        using var surviving = host.OpenLease();
+        using var cancel = new CancellationTokenSource();
+
+        var first = cancelled.CompileAsync(bindings =>
+            bindings.Signature(bindings.Acquire(Spec(factory), factory.Create), "ctr_model", null), cancel.Token);
+        var second = surviving.CompileAsync(bindings =>
+            bindings.Signature(bindings.Acquire(Spec(factory), factory.Create), "ctr_model", null));
+        var client = Assert.Single(factory.Created); // one client, one load, both lookups waiting for it
+        await client.LoadStarted.Task.WaitAsync(Wait);
+
+        cancel.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first.WaitAsync(Wait));
+        cancelled.Dispose();
+
+        Assert.True(SpinWait.SpinUntil(() => cancelled.Instances.Count == 0, Prompt)); // its lookup ended, and its lease with it
+        Assert.False(client.LoadToken.IsCancellationRequested); // the other plan still holds the client
+        Assert.False(second.IsCompleted);
+
+        client.FinishLoad();
+        Assert.Equal(SignatureStatus.Known, (await second.WaitAsync(Wait)).Status);
+        Assert.Equal(1, client.Loads);
+        Assert.False(client.Disposed.Task.IsCompleted);
     }
 
     [Fact]
