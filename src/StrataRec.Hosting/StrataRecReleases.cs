@@ -263,9 +263,10 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
                 }
             }
         }
-        catch (OperationCanceledException) when (stopping.IsCancellationRequested)
+        catch (Exception) when (stopping.IsCancellationRequested)
         {
-            // The host stops.
+            // The host stops: whatever the cancelled work threw on its way out (a cancellation, or a transport's own
+            // exception) ends the polling, and is no fault for anyone to observe after the stop gave up waiting (review 37).
         }
     }
 
@@ -328,7 +329,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
             var manifest = await ManifestBuilder.ReadAsync(_store!, manifestId, diagnostics, cancellationToken).ConfigureAwait(false);
             if (manifest is not null)
             {
-                CheckIdentity(manifest, state.PipelineId, manifestId, diagnostics);
+                ManifestBuilder.CheckIdentity(manifest, manifestId, state.PipelineId, _environment, diagnostics);
             }
 
             if (manifest is null || diagnostics.HasErrors)
@@ -374,24 +375,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
 
         await ReportAsync(result, cancellationToken).ConfigureAwait(false);
         return result;
-    }
-
-    /// <summary>The pointer of (pipeline, environment) must name a manifest of that pipeline and environment.</summary>
-    private void CheckIdentity(ReleaseManifest manifest, string pipelineId, string manifestId, DiagnosticBag diagnostics)
-    {
-        if (manifest.PipelineId != pipelineId)
-        {
-            diagnostics.Error("MANIFEST_OTHER_PIPELINE", ManifestBuilder.Label(manifestId), "/pipeline_id",
-                $"The pointer of pipeline '{pipelineId}' names a manifest of pipeline '{manifest.PipelineId}'.",
-                "point it at a manifest of its own pipeline: 'stratarec publish' writes the pointer the manifest names");
-        }
-
-        if (manifest.Environment != _environment)
-        {
-            diagnostics.Error("MANIFEST_OTHER_ENVIRONMENT", ManifestBuilder.Label(manifestId), "/environment",
-                $"The pointer of environment '{_environment}' names a manifest built for environment '{manifest.Environment}'.",
-                $"build the manifest for this environment (stratarec build -e {_environment}) and publish it");
-        }
     }
 
     /// <summary>

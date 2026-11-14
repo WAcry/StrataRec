@@ -307,7 +307,7 @@ public sealed class ManifestRefCliTests
     {
         var root = ManifestStores.Workspace(AbsoluteSnapshot);
         var store = ManifestStores.NewStore();
-        var (id, _) = await ManifestStores.BuildAsync(root, store);
+        var (id, manifestFile) = await ManifestStores.BuildAsync(root, store);
         var request = Path.Combine(root, "requests", "user_1001.json");
         var bundle = Path.Combine(store, "recorded.json");
 
@@ -324,6 +324,17 @@ public sealed class ManifestRefCliTests
         var replayErrors = new StringWriter();
         Assert.True(0 == await ReplayCommand.RunAsync(Tool.Environment, null, "local", [bundle], Array.Empty<string>(), "json", true, TextWriter.Null,
             CancellationToken.None, store: store, errors: replayErrors), replayErrors.ToString());
+
+        // A manifest named by its file need not be in the store: the command names the file (review 37).
+        var copy = Path.Combine(ManifestStores.NewStore(), "release.json");
+        File.Copy(manifestFile, copy);
+        var fileBundle = Path.Combine(store, "recorded-file.json");
+        (code, _, errors) = await Run(request, manifest: copy, store: store, record: fileBundle);
+        Assert.True(code == 0, errors);
+        Assert.Contains($"replay it with: stratarec replay --manifest {copy} -s {store} {fileBundle}", errors);
+        replayErrors = new StringWriter();
+        Assert.True(0 == await ReplayCommand.RunAsync(Tool.Environment, null, "local", [fileBundle], Array.Empty<string>(), "json", true, TextWriter.Null,
+            CancellationToken.None, manifest: copy, store: store, errors: replayErrors), replayErrors.ToString());
     }
 
     /// <summary>
@@ -340,9 +351,16 @@ public sealed class ManifestRefCliTests
         File.WriteAllText(other, File.ReadAllText(Path.Combine(root, "requests", "user_1001.json")).Replace("\"home_feed\"", "\"other_feed\"", StringComparison.Ordinal));
 
         var (code, _, errors) = await Run(other, manifest: id, store: store);
-        Assert.Equal(1, code);
+        Assert.Equal(2, code); // the request's mistake, as help says (review 37)
         Assert.Contains("REQUEST_INVALID", errors);
         Assert.Contains("The request runs pipeline 'other_feed', and the manifest releases pipeline 'home_feed'.", errors);
+
+        // Without a workspace, a '$schema' that is no string is still pointed at the request schema.
+        var schema = Path.Combine(store, "schema.json");
+        File.WriteAllText(schema, File.ReadAllText(Path.Combine(root, "requests", "user_1001.json")).Replace("\"../schemas/request.schema.json\"", "1", StringComparison.Ordinal));
+        (code, _, errors) = await Run(schema, manifest: id, store: store);
+        Assert.Equal(2, code);
+        Assert.Contains("write \"$schema\": \"../schemas/request.schema.json\"", errors);
 
         // The sample's own bindings name the snapshot relative to the workspace.
         var relative = ManifestStores.Workspace();

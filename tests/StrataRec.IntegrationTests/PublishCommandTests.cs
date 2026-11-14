@@ -167,6 +167,59 @@ public sealed class PublishCommandTests
         Assert.Equal(0, await BuildCommand.RunAsync(Tool.Environment, root, "local", null, store, null, 9, TextWriter.Null, CancellationToken.None, TextWriter.Null));
     }
 
+    /// <summary>
+    /// A pointer names a manifest of its own pipeline and environment; one that names another's (copied or edited by hand)
+    /// says nothing of this pipeline's sequence, so build without --seq and publish refuse it rather than number or compare
+    /// by it. Sequence numbers end at 2^53 - 1, the largest integer a manifest's JSON writes exactly (review 37).
+    /// </summary>
+    [Fact]
+    public async Task Build_AndPublish_RefuseAPointerToAnotherPipelinesManifest_AndSeqsEndAt2To53()
+    {
+        var root = ManifestStores.Workspace();
+        var store = ManifestStores.NewStore();
+        var (_, firstManifest) = await BuildNext(root, store);
+        var pointers = new FileSystemManifestSource(store);
+
+        // home_feed's local pointer names a prod manifest of seq 50.
+        var foreign = await ManifestStores.PutAsync(store, Renumbered(firstManifest, "prod", 50));
+        await pointers.WritePointerAsync("home_feed", "local", foreign);
+        var errors = new StringWriter();
+        Assert.Equal(1, await BuildCommand.RunAsync(Tool.Environment, root, "local", null, store, null, null, TextWriter.Null, CancellationToken.None, errors));
+        Assert.Contains("error MANIFEST_OTHER_ENVIRONMENT", errors.ToString());
+        Assert.Contains("error POINTER_MANIFEST_FOREIGN", errors.ToString());
+        Assert.Contains("hint: fix the pointer, or pass --seq", errors.ToString());
+
+        // A release of seq 2 is not compared with seq 50 of another environment, nor published over it.
+        var second = await BuildAsync(root, store, 2, 7);
+        var (code, _, publishErrors) = await Publish(store, second);
+        Assert.Equal(1, code);
+        Assert.Contains("error POINTER_MANIFEST_FOREIGN", publishErrors);
+        Assert.Contains("hint: delete the pointer to publish without comparing with it", publishErrors);
+        Assert.Equal(foreign, await pointers.GetManifestIdAsync("home_feed", "local", CancellationToken.None));
+        File.Delete(pointers.GetPointerPath("home_feed", "local"));
+        Assert.Equal(0, (await Publish(store, second)).Code);
+
+        // Published at 2^53 - 1: there is no next.
+        Assert.Equal(0, (await Publish(store, await ManifestStores.PutAsync(store, Renumbered(firstManifest, "local", BuildCommand.MaxSeq)))).Code);
+        errors = new StringWriter();
+        Assert.Equal(1, await BuildCommand.RunAsync(Tool.Environment, root, "local", null, store, null, null, TextWriter.Null, CancellationToken.None, errors));
+        Assert.Contains("error SEQ_EXHAUSTED", errors.ToString());
+
+        // --seq takes 1 to 2^53 - 1.
+        foreach (var seq in new[] { "0", "9007199254740992" })
+        {
+            var usage = new StringWriter();
+            Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(["build", "-c", root, "-s", store, "--seq", seq], Tool.Environment, TextWriter.Null, usage));
+            Assert.Contains("--seq must be from 1 to 9007199254740991", usage.ToString());
+        }
+    }
+
+    private static ReleaseManifest Renumbered(ReleaseManifest manifest, string environment, long seq) => new()
+    {
+        PipelineId = manifest.PipelineId, Environment = environment, Seq = seq, MinAcceptedSeq = manifest.MinAcceptedSeq, Previous = manifest.Previous,
+        Requires = manifest.Requires, Artifacts = manifest.Artifacts, Experiments = manifest.Experiments,
+    };
+
     private static async Task<(string Id, ReleaseManifest Manifest)> BuildNext(string root, string store)
     {
         var file = Path.Combine(store, $"manifest-{Guid.NewGuid():N}.json");

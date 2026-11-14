@@ -23,6 +23,12 @@ namespace StrataRec.CommandLine.Commands;
 /// </remarks>
 internal static class BuildCommand
 {
+    /// <summary>
+    /// The largest sequence number, 2^53 − 1: a manifest is canonical JSON (RFC 8785), which writes integers as doubles, so
+    /// a larger one is not written exactly (review 37).
+    /// </summary>
+    internal const long MaxSeq = 9_007_199_254_740_991;
+
     public static Command Create(PlanEnvironment provided)
     {
         var config = CommonOptions.Config();
@@ -32,9 +38,16 @@ internal static class BuildCommand
         var manifest = new Option<string?>("--manifest", "-m") { Description = "Write the manifest here instead of stdout." };
         var seq = new Option<long?>("--seq")
         {
-            Description = "The manifest's sequence number (design 10.2). By default the next release: one more than the manifest the store's pointer for the " +
-                          "pipeline and environment names ('stratarec publish' writes it), keeping its min_accepted_seq; 1 when none is published.",
+            Description = "The manifest's sequence number (design 10.2), from 1 to 2^53 - 1. By default the next release: one more than the manifest the store's " +
+                          "pointer for the pipeline and environment names ('stratarec publish' writes it), keeping its min_accepted_seq; 1 when none is published.",
         };
+        seq.Validators.Add(static result =>
+        {
+            if (result.GetValueOrDefault<long?>() is < 1 or > MaxSeq)
+            {
+                result.AddError($"--seq must be from 1 to {MaxSeq} (2^53 - 1, the largest integer a manifest's JSON writes exactly).");
+            }
+        });
         var command = new Command("build", "Validate, upload artifacts by content hash and emit a release manifest. Exits with 1 when the configuration has errors.") { config, environment, pipeline, store, manifest, seq };
         command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(config)!, parse.GetValue(environment)!, parse.GetValue(pipeline),
             parse.GetValue(store)!, parse.GetValue(manifest), parse.GetValue(seq), parse.InvocationConfiguration.Output, cancellationToken,
@@ -162,6 +175,23 @@ internal static class BuildCommand
             diagnostics.Error("POINTER_MANIFEST_UNREADABLE", pointers.GetPointerPath(pipelineId, environment), string.Empty,
                 $"The pointer names manifest '{current}', which the store cannot read, so the next sequence is unknown.",
                 "restore that manifest to the store, or pass --seq");
+            return (false, null);
+        }
+
+        // Its sequence, floor and id say nothing of this pipeline's releases when it is another's (review 37).
+        if (!ManifestBuilder.CheckIdentity(published, current, pipelineId, environment, diagnostics))
+        {
+            diagnostics.Error("POINTER_MANIFEST_FOREIGN", pointers.GetPointerPath(pipelineId, environment), string.Empty,
+                $"The pointer names manifest '{current}' of another pipeline or environment, so the next sequence is unknown.",
+                "fix the pointer, or pass --seq");
+            return (false, null);
+        }
+
+        if (published.Seq >= MaxSeq)
+        {
+            diagnostics.Error("SEQ_EXHAUSTED", "manifest:" + current, "/seq",
+                $"The published manifest has sequence {published.Seq}: the next is beyond {MaxSeq} (2^53 - 1), the largest a manifest's JSON writes exactly.",
+                "sequence numbers end there: a controller that numbers releases by time uses milliseconds or seconds, not finer units");
             return (false, null);
         }
 

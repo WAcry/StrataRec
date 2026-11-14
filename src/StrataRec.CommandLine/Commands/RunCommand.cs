@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
+using StrataRec.Artifacts.Storage;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Values;
 using StrataRec.Hosting;
@@ -141,10 +142,31 @@ internal static class RunCommand
         }
 
         var pipelineId = file.PipelineId;
+        (ReleaseManifest Manifest, string Id, IArtifactStore Store)? release = null;
+        if (reference.IsManifest)
+        {
+            release = await reference.ReadManifestAsync(problems, cancellationToken).ConfigureAwait(false);
+            if (release is null)
+            {
+                Output.Diagnostics(problems.Items, "text", errors, locator: locator);
+                return 1;
+            }
+
+            // The request names the pipeline it runs: one the manifest does not release is the request's mistake.
+            if (release.Value.Manifest.PipelineId != pipelineId)
+            {
+                problems.Error("REQUEST_INVALID", requestPath, "/pipeline_id",
+                    $"The request runs pipeline '{pipelineId}', and the manifest releases pipeline '{release.Value.Manifest.PipelineId}'.",
+                    $"pass a manifest of pipeline '{pipelineId}', or set \"pipeline_id\": \"{release.Value.Manifest.PipelineId}\"");
+                Output.Diagnostics(problems.Items, "text", errors, locator: locator);
+                return 2;
+            }
+        }
+
         // The engine loads the local feature tables (design 6.6) and instances the plan binds before it serves; disposing
         // it stops their sources.
         await using var engine = new RecEngine(reference.PlanEnvironment());
-        var (diagnostics, notice) = await LoadAsync(engine, reference, environment, pipelineId, requestPath, cancellationToken).ConfigureAwait(false);
+        var (diagnostics, notice) = await LoadAsync(engine, reference, release, environment, pipelineId, cancellationToken).ConfigureAwait(false);
         if (diagnostics.HasErrors || !engine.TryGetRequestSchema(pipelineId, out var schema))
         {
             Output.Diagnostics(diagnostics.Items, "text", errors, locator: locator);
@@ -250,39 +272,34 @@ internal static class RunCommand
     internal static string ReplayCommandLine(string config, string bundle) =>
         $"stratarec replay -c {InitCommand.Quote(AsPath(config))} {InitCommand.Quote(AsPath(bundle))}";
 
-    /// <summary>The same for a run on <paramref name="reference"/>: a bundle of a manifest replays on it, from its store.</summary>
-    private static string ReplayCommandLine(ConfigRef reference, string bundle) => reference.IsManifest
-        ? $"stratarec replay -s {InitCommand.Quote(AsPath(reference.Store!))} {InitCommand.Quote(AsPath(bundle))}"
-        : ReplayCommandLine(reference.Text, bundle);
+    /// <summary>
+    /// The same for a run on <paramref name="reference"/>: a bundle of a manifest replays on it, from its store, where the
+    /// manifest's id is found; a manifest file is named, since it need not be in the store (review 37).
+    /// </summary>
+    private static string ReplayCommandLine(ConfigRef reference, string bundle) => reference.Kind switch
+    {
+        ConfigRefKind.ManifestId => $"stratarec replay -s {InitCommand.Quote(AsPath(reference.Store!))} {InitCommand.Quote(AsPath(bundle))}",
+        ConfigRefKind.ManifestFile =>
+            $"stratarec replay --manifest {InitCommand.Quote(AsPath(reference.Text))} -s {InitCommand.Quote(AsPath(reference.Store!))} {InitCommand.Quote(AsPath(bundle))}",
+        _ => ReplayCommandLine(reference.Text, bundle),
+    };
 
     /// <summary>
     /// Loads what the request runs into <paramref name="engine"/>: its pipeline (and the one it falls back to) from a
-    /// workspace, or the manifest, which must release the request's pipeline, as a node loads it. Every diagnostic of the
+    /// workspace, or the manifest read already (<paramref name="release"/>), as a node loads it. Every diagnostic of the
     /// load, and the warning that a manifest's fallback is not loaded, if it has one.
     /// </summary>
     private static async Task<(DiagnosticBag Diagnostics, ConfigDiagnostic? Notice)> LoadAsync(
-        RecEngine engine, ConfigRef reference, string environment, string pipelineId, string requestPath, CancellationToken cancellationToken)
+        RecEngine engine, ConfigRef reference, (ReleaseManifest Manifest, string Id, IArtifactStore Store)? release, string environment, string pipelineId,
+        CancellationToken cancellationToken)
     {
-        if (!reference.IsManifest)
+        if (release is not { } read)
         {
             return (await ServiceCollectionExtensions.LoadWorkspaceAsync(engine, reference.Text, environment, new[] { pipelineId }, cancellationToken)
                 .ConfigureAwait(false), null);
         }
 
         var diagnostics = new DiagnosticBag();
-        if (await reference.ReadManifestAsync(diagnostics, cancellationToken).ConfigureAwait(false) is not { } read)
-        {
-            return (diagnostics, null);
-        }
-
-        if (read.Manifest.PipelineId != pipelineId)
-        {
-            diagnostics.Error("REQUEST_INVALID", requestPath, "/pipeline_id",
-                $"The request runs pipeline '{pipelineId}', and the manifest releases pipeline '{read.Manifest.PipelineId}'.",
-                $"pass a manifest of pipeline '{pipelineId}', or set \"pipeline_id\": \"{read.Manifest.PipelineId}\"");
-            return (diagnostics, null);
-        }
-
         var loaded = await engine.LoadManifestAsync(read.Manifest, read.Id, read.Store, cancellationToken).ConfigureAwait(false);
         diagnostics.AddRange(loaded.Diagnostics);
         if (!loaded.Applied && !diagnostics.HasErrors)
@@ -329,7 +346,7 @@ internal static class RunCommand
         }
 
         var reference = config is null
-            ? null
+            ? "../" + ArtifactSchemas.DirectoryName + "/" + ArtifactSchemas.FileName(SchemaFiles.RequestKind) // a manifest has no workspace: still the request schema, not the helper's default (the pipeline's)
             : Path.GetRelativePath(Path.GetDirectoryName(Path.GetFullPath(requestPath))!,
                 Path.Combine(Path.GetFullPath(config), ArtifactSchemas.DirectoryName, ArtifactSchemas.FileName(SchemaFiles.RequestKind))).Replace('\\', '/');
         if (!ArtifactSchemas.TryRemoveSchemaMember(document, reference, out var schemaError))

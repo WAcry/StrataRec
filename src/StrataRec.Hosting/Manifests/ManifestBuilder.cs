@@ -303,6 +303,35 @@ public static class ManifestBuilder
         return missing;
     }
 
+    /// <summary>
+    /// Checks that the manifest a pointer names is one of the pointer's pipeline and environment, and reports
+    /// <c>MANIFEST_OTHER_PIPELINE</c> at <c>/pipeline_id</c> or <c>MANIFEST_OTHER_ENVIRONMENT</c> at <c>/environment</c>
+    /// otherwise. A content hash proves integrity, not identity: a node must not serve another pipeline's plan under this
+    /// one's name, and <c>stratarec build</c> and <c>publish</c> must not number a release after another pipeline's (review
+    /// 37). Returns whether it is.
+    /// </summary>
+    public static bool CheckIdentity(ReleaseManifest manifest, string manifestId, string pipelineId, string environment, DiagnosticBag diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        var errors = diagnostics.ErrorCount;
+        if (manifest.PipelineId != pipelineId)
+        {
+            diagnostics.Error("MANIFEST_OTHER_PIPELINE", Label(manifestId), "/pipeline_id",
+                $"The pointer of pipeline '{pipelineId}' names a manifest of pipeline '{manifest.PipelineId}'.",
+                "point it at a manifest of its own pipeline: 'stratarec publish' writes the pointer the manifest names");
+        }
+
+        if (manifest.Environment != environment)
+        {
+            diagnostics.Error("MANIFEST_OTHER_ENVIRONMENT", Label(manifestId), "/environment",
+                $"The pointer of environment '{environment}' names a manifest built for environment '{manifest.Environment}'.",
+                $"point it at a manifest built for this environment (stratarec build -e {environment}), as 'stratarec publish' does");
+        }
+
+        return diagnostics.ErrorCount == errors;
+    }
+
     /// <summary>The diagnostic artifact of a manifest: <c>manifest:&lt;id&gt;</c>.</summary>
     internal static string Label(string manifestId) => "manifest:" + manifestId;
 

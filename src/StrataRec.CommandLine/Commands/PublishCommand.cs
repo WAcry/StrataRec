@@ -163,6 +163,15 @@ internal static class PublishCommand
                 return null;
             }
 
+            // Its sequence and floor say nothing of this pipeline's releases when it is another's (review 37).
+            if (!ManifestBuilder.CheckIdentity(published, current, manifest.PipelineId, manifest.Environment, diagnostics))
+            {
+                diagnostics.Error("POINTER_MANIFEST_FOREIGN", path, string.Empty,
+                    $"The pointer names manifest '{current}' of another pipeline or environment, so the sequence of what is published is unknown.",
+                    "delete the pointer to publish without comparing with it");
+                return null;
+            }
+
             previous = (current, published.Seq);
             if (current == id)
             {
