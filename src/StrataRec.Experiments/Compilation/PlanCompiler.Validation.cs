@@ -136,14 +136,16 @@ internal sealed partial class UnifiedCompilation
                 // rather than published on a warning.
                 if (reported.Add(scope.Pointer))
                 {
+                    // Each layer with what it changes in the scope: which experiments to move into one layer is what the
+                    // author has to decide, and the subject alone does not say which node a layer reaches it through.
                     var names = new List<string>(list.Count);
                     foreach (var layer in list)
                     {
-                        names.Add(_layers[layer]);
+                        names.Add($"{_layers[layer]} (changes {ChangedBy(layer, scope)})");
                     }
 
                     _diagnostics.Error("COMBINATION_CHECK_LIMIT", _pipelineLabel, scope.Pointer,
-                        $"The data flow of {scope.Subject} depends on arms in {list.Count} layers ({string.Join(", ", names)}): " +
+                        $"The data flow of {scope.Subject} depends on arms in {list.Count} layers ({string.Join("; ", names)}): " +
                         $"{(product == long.MaxValue ? "too many" : product.ToString(System.Globalization.CultureInfo.InvariantCulture))} combinations, " +
                         $"more than the {_request.MaxCombinationsChecked} that can be checked.",
                         "put experiments that change these nodes into fewer layers (arms of one layer never run together), or graduate some of them");
@@ -157,6 +159,29 @@ internal sealed partial class UnifiedCompilation
                 Enumerate(choices, list, combination => Check(combination, timeline, fallbacks, output, seen, report));
             }
         }
+    }
+
+    /// <summary>The nodes and taps of <paramref name="scope"/> whose variants <paramref name="layer"/> decides, by id.</summary>
+    private string ChangedBy(int layer, DataFlowScope scope)
+    {
+        var changed = new List<string>();
+        foreach (var id in scope.Nodes)
+        {
+            if (_variants.TryGetValue(id, out var v) && Array.IndexOf(v.Layers, layer) >= 0)
+            {
+                changed.Add($"node '{id}'");
+            }
+        }
+
+        foreach (var id in scope.Taps)
+        {
+            if (Array.IndexOf(_taps[id].Layers, layer) >= 0)
+            {
+                changed.Add($"tap '{id}'");
+            }
+        }
+
+        return string.Join(", ", changed);
     }
 
     /// <summary>The distinct variants of a space (combinations share deduplicated variants), without "absent".</summary>

@@ -81,6 +81,8 @@ public sealed class CombinationLimitTests
         var error = Assert.Single(unified.Diagnostics, d => d.Code == "COMBINATION_CHECK_LIMIT" && d.Pointer == "/columns/x");
         Assert.True(error.IsError);
         Assert.Contains("8 combinations", error.Message);
+        // Each layer names the node it decides, which is what the author moves between layers.
+        Assert.Contains("layer_a (changes node 'joint'); layer_b (changes node 'joint'); layer_c (changes node 'other')", error.Message);
         Assert.Contains("layer", error.Hint);
     }
 
