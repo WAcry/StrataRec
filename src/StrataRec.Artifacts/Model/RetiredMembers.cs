@@ -35,9 +35,9 @@ internal static class RetiredMembers
     {
         foreach (var member in Members)
         {
-            if (member.Type == type && Locate(document, member.Path, 0, "$") is { } path)
+            if (member.Type == type && Locate(document, member.Path, 0, string.Empty) is { } pointer)
             {
-                return new ArtifactFormatException(source, path, member.Reason, hint: member.Hint);
+                return new ArtifactFormatException(source, pointer, member.Reason, hint: member.Hint);
             }
         }
 
@@ -68,7 +68,7 @@ internal static class RetiredMembers
         }
     }
 
-    /// <summary>The JSONPath of the member at <paramref name="path"/> (<c>*</c> matches any name), or null.</summary>
+    /// <summary>The RFC 6901 pointer of the member at <paramref name="path"/> (<c>*</c> matches any name), or null.</summary>
     private static string? Locate(JsonNode? node, string[] path, int depth, string at)
     {
         if (depth == path.Length)
@@ -83,12 +83,12 @@ internal static class RetiredMembers
 
         if (path[depth] != "*")
         {
-            return obj.TryGetPropertyValue(path[depth], out var child) ? Locate(child, path, depth + 1, at + "." + path[depth]) : null;
+            return obj.TryGetPropertyValue(path[depth], out var child) ? Locate(child, path, depth + 1, at + "/" + Json.JsonPointer.Escape(path[depth])) : null;
         }
 
         foreach (var (name, child) in obj)
         {
-            if (Locate(child, path, depth + 1, at + "['" + name + "']") is { } found)
+            if (Locate(child, path, depth + 1, at + "/" + Json.JsonPointer.Escape(name)) is { } found)
             {
                 return found;
             }

@@ -85,7 +85,7 @@ public interface IOperatorFactory
     /// <summary>
     /// Validates <see cref="OperatorCompileContext.Config"/>, resolves every column, parameter, expression and client
     /// through <paramref name="context"/> (which records reads and writes) and returns the compiled operator. Report
-    /// problems with <see cref="OperatorCompileContext.Error"/> and return null when the node cannot be compiled.
+    /// problems with <see cref="OperatorCompileContext.Error(string, string, string, string?)"/> and return null when the node cannot be compiled.
     /// </summary>
     Operator? Compile(OperatorCompileContext context);
 }

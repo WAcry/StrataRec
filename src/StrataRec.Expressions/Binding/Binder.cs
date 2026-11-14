@@ -22,6 +22,12 @@ internal sealed class Binder
     private readonly List<ExpressionDiagnostic> _diagnostics;
     private readonly List<(string Name, IrNode Node)> _lets = new();
 
+    /// <summary>
+    /// True when the expression reads a name its scope declares with an error (<see cref="IExpressionScope.IsUnusable"/>):
+    /// it does not compile, but the error is the declaration's, reported there.
+    /// </summary>
+    public bool ReadsUnusable { get; private set; }
+
     public Binder(IExpressionScope scope, CompileOptions options, List<ExpressionDiagnostic> diagnostics)
     {
         _scope = scope;
@@ -116,7 +122,25 @@ internal sealed class Binder
             return IrNode.Const(ScalarValue.FromStringList(strings), new ExprType(TypeKind.ListString, false), list.Start, list.Length);
         }
 
-        return Fail(ExpressionErrorCodes.TypeMismatch, "List literal elements must all be numbers or all be strings", list);
+        // Point at a bool, or at the first element of another kind than the first element.
+        AstNode odd = list.Items[0];
+        for (var i = 1; i < values.Length && Category(values[0]) != 2; i++)
+        {
+            if (Category(values[i]) != Category(values[0]))
+            {
+                odd = list.Items[i];
+                break;
+            }
+        }
+
+        return FailAt(odd, ExpressionErrorCodes.TypeMismatch, "List literal elements must all be numbers or all be strings", list);
+
+        static int Category(in ScalarValue v) => v.Kind switch
+        {
+            StorageKind.String => 0,
+            StorageKind.Int64 or StorageKind.Float64 => 1,
+            _ => 2,
+        };
     }
 
     private IrNode BindName(NameAst n)
@@ -166,6 +190,13 @@ internal sealed class Binder
 
         if (!_scope.TryResolve(name, out var symbol))
         {
+            if (_scope.IsUnusable(name))
+            {
+                // Declared with an error that was reported at the declaration: one mistake, one diagnostic.
+                ReadsUnusable = true;
+                return Poison(n);
+            }
+
             return Fail(ExpressionErrorCodes.UnknownName, $"Unknown name '{name}'", n, NameHint(name, false));
         }
 
@@ -276,12 +307,12 @@ internal sealed class Binder
         {
             return operand.Type.IsNumeric
                 ? IrNode.Make(IrOp.Neg, operand.Type, new[] { operand }, u.Start, u.Length)
-                : Fail(ExpressionErrorCodes.TypeMismatch, $"Unary '-' needs a number, got {operand.Type}", u);
+                : FailAt(u.Operand, ExpressionErrorCodes.TypeMismatch, $"Unary '-' needs a number, got {operand.Type}", u);
         }
 
         return operand.Type.Kind == TypeKind.Bool
             ? IrNode.Make(IrOp.Not, operand.Type, new[] { operand }, u.Start, u.Length)
-            : Fail(ExpressionErrorCodes.TypeMismatch, $"'!' needs a bool, got {operand.Type}", u,
+            : FailAt(u.Operand, ExpressionErrorCodes.TypeMismatch, $"'!' needs a bool, got {operand.Type}", u,
                 operand.Type.IsNumeric ? "compare explicitly, e.g. '!(x > 0.0)' or 'x == 0'" : null);
     }
 
@@ -301,21 +332,22 @@ internal sealed class Binder
             {
                 if (!TryUnify(l.Type, r.Type, out var kind, out var dim))
                 {
-                    return Fail(ExpressionErrorCodes.TypeMismatch, $"'??' needs both sides of the same type, got {l.Type} and {r.Type}", b);
+                    // The left side is the value read; the right one, its default, is what disagrees.
+                    return FailAt(b.Right, ExpressionErrorCodes.TypeMismatch, $"'??' needs both sides of the same type, got {l.Type} and {r.Type}", b);
                 }
 
                 return IrNode.Make(IrOp.Coalesce, new ExprType(kind, r.Type.Nullable, dim), new[] { Coerce(l, kind), Coerce(r, kind) }, b.Start, b.Length);
             }
 
             case BinaryOp.In:
-                return BindContains(r, l, b, isIn: true);
+                return BindContains(r, b.Right, l, b.Left, b, isIn: true);
 
             case BinaryOp.And:
             case BinaryOp.Or:
                 if (l.Type.Kind != TypeKind.Bool || r.Type.Kind != TypeKind.Bool)
                 {
-                    return Fail(ExpressionErrorCodes.TypeMismatch, $"'{op}' needs bool operands, got {l.Type} and {r.Type}", b,
-                        "compare numbers explicitly, e.g. 'x > 0.0'");
+                    return FailAt(Culprit(b, l.Type.Kind != TypeKind.Bool, r.Type.Kind != TypeKind.Bool), ExpressionErrorCodes.TypeMismatch,
+                        $"'{op}' needs bool operands, got {l.Type} and {r.Type}", b, "compare numbers explicitly, e.g. 'x > 0.0'");
                 }
 
                 return Lift(b.Op == BinaryOp.And ? IrOp.And : IrOp.Or, TypeKind.Bool, b, l, r);
@@ -350,8 +382,8 @@ internal sealed class Binder
             case BinaryOp.Mod:
                 if (l.Type.Kind != TypeKind.Int || r.Type.Kind != TypeKind.Int)
                 {
-                    return Fail(ExpressionErrorCodes.TypeMismatch, $"'%' needs int64 operands, got {l.Type} and {r.Type}", b,
-                        "'%' is integer remainder only (design 7.5)");
+                    return FailAt(Culprit(b, l.Type.Kind != TypeKind.Int, r.Type.Kind != TypeKind.Int), ExpressionErrorCodes.TypeMismatch,
+                        $"'%' needs int64 operands, got {l.Type} and {r.Type}", b, "'%' is integer remainder only (design 7.5)");
                 }
 
                 return Lift(IrOp.Mod, TypeKind.Int, b, l, r);
@@ -361,7 +393,7 @@ internal sealed class Binder
         }
     }
 
-    private IrNode ArithmeticMismatch(string op, IrNode l, IrNode r, AstNode at)
+    private IrNode ArithmeticMismatch(string op, IrNode l, IrNode r, BinaryAst at)
     {
         string? hint = null;
         if (l.Type.Kind == TypeKind.Bool || r.Type.Kind == TypeKind.Bool)
@@ -373,7 +405,7 @@ internal sealed class Binder
             hint = "expressions do not build strings; use a Mustache template in the operator";
         }
 
-        return Fail(ExpressionErrorCodes.TypeMismatch, $"'{op}' needs numbers, got {l.Type} and {r.Type}", at, hint);
+        return FailAt(Culprit(at, !l.Type.IsNumeric, !r.Type.IsNumeric), ExpressionErrorCodes.TypeMismatch, $"'{op}' needs numbers, got {l.Type} and {r.Type}", at, hint);
     }
 
     private IrNode BindComparison(BinaryAst b, IrNode l, IrNode r, string op)
@@ -409,7 +441,12 @@ internal sealed class Binder
             hint = "text supports size() and contains() only";
         }
 
-        return Fail(ExpressionErrorCodes.TypeMismatch, $"'{op}' is not defined for {l.Type} and {r.Type}", b, hint);
+        // Equality compares numbers, bools and strings; ordering only numbers. An operand of a kind the operator never
+        // takes is at fault; two acceptable kinds that differ (a string and a number) leave the operator itself.
+        var culprit = equality
+            ? Culprit(b, !IsEquatable(l.Type), !IsEquatable(r.Type))
+            : Culprit(b, !l.Type.IsNumeric, !r.Type.IsNumeric);
+        return FailAt(culprit, ExpressionErrorCodes.TypeMismatch, $"'{op}' is not defined for {l.Type} and {r.Type}", b, hint);
     }
 
     private IrNode BindConditional(ConditionalAst c)
@@ -430,7 +467,7 @@ internal sealed class Binder
 
         if (!TryUnify(a.Type, b.Type, out var kind, out var dim))
         {
-            return Fail(ExpressionErrorCodes.TypeMismatch, $"The branches of '?:' have different types: {a.Type} and {b.Type}", c);
+            return FailAt(c.Else, ExpressionErrorCodes.TypeMismatch, $"The branches of '?:' have different types: {a.Type} and {b.Type}", c);
         }
 
         var type = new ExprType(kind, cond.Type.Nullable || a.Type.Nullable || b.Type.Nullable, dim);
@@ -613,7 +650,7 @@ internal sealed class Binder
 
                 if (args[0].Type.Dim > 0 && args[1].Type.Dim > 0 && args[0].Type.Dim != args[1].Type.Dim)
                 {
-                    return Fail(ExpressionErrorCodes.TypeMismatch, $"'{name}' needs vectors of the same dimension, got {args[0].Type} and {args[1].Type}", call);
+                    return FailAt(call.Args[1], ExpressionErrorCodes.TypeMismatch, $"'{name}' needs vectors of the same dimension, got {args[0].Type} and {args[1].Type}", call);
                 }
 
                 return Lift(name == "dot" ? IrOp.Dot : IrOp.Cosine, TypeKind.Float, call, args[0], args[1]);
@@ -631,7 +668,7 @@ internal sealed class Binder
                     args[0].Type.Kind == TypeKind.String ? "strings support ==, !=, 'in' and startsWith() only" : null);
 
             case "contains":
-                return BindContains(args[0], args[1], call, isIn: false);
+                return BindContains(args[0], call.Args[0], args[1], call.Args[1], call, isIn: false);
 
             case "overlap_count":
                 if (args[0].Type.Kind == args[1].Type.Kind && args[0].Type.IsList)
@@ -639,7 +676,8 @@ internal sealed class Binder
                     return Lift(IrOp.Overlap, TypeKind.Int, call, args[0], args[1]);
                 }
 
-                return Fail(ExpressionErrorCodes.TypeMismatch, $"'overlap_count' needs two lists of the same element type, got {args[0].Type} and {args[1].Type}", call);
+                return FailAt(!args[0].Type.IsList ? call.Args[0] : call.Args[1], ExpressionErrorCodes.TypeMismatch,
+                    $"'overlap_count' needs two lists of the same element type, got {args[0].Type} and {args[1].Type}", call);
 
             case "startsWith":
                 if (args[0].Type.Kind == TypeKind.String && args[1].Type.Kind == TypeKind.String)
@@ -647,7 +685,8 @@ internal sealed class Binder
                     return Lift(IrOp.StartsWith, TypeKind.Bool, call, args[0], args[1]);
                 }
 
-                return Fail(ExpressionErrorCodes.TypeMismatch, $"'startsWith' needs two strings, got {args[0].Type} and {args[1].Type}", call);
+                return FailAt(args[0].Type.Kind != TypeKind.String ? call.Args[0] : call.Args[1], ExpressionErrorCodes.TypeMismatch,
+                    $"'startsWith' needs two strings, got {args[0].Type} and {args[1].Type}", call);
 
             case "hash01":
                 for (var i = 0; i < args.Length; i++)
@@ -665,7 +704,7 @@ internal sealed class Binder
         }
     }
 
-    private IrNode BindContains(IrNode list, IrNode x, AstNode at, bool isIn)
+    private IrNode BindContains(IrNode list, AstNode listAt, IrNode x, AstNode xAt, AstNode at, bool isIn)
     {
         var what = isIn ? "'in'" : "'contains'";
         if (list.Type.IsError || x.Type.IsError)
@@ -709,7 +748,9 @@ internal sealed class Binder
             hint = "the list holds int64 values; compare with an int64";
         }
 
-        return Fail(ExpressionErrorCodes.TypeMismatch,
+        // Not a list (or text, for contains) is the list's fault; a list of other elements is the value's.
+        var container = list.Type.IsList || (!isIn && list.Type.Kind == TypeKind.Text);
+        return FailAt(container ? xAt : listAt, ExpressionErrorCodes.TypeMismatch,
             isIn ? $"{what} needs a value and a list of the same element type, got {x.Type} in {list.Type}"
                  : $"{what} needs (list, element) or (text, string), got {list.Type} and {x.Type}",
             at, hint);
@@ -1076,6 +1117,28 @@ internal sealed class Binder
     {
         Report(code, message, at.Start, at.Length, hint);
         return Poison(at);
+    }
+
+    /// <summary>Reports at <paramref name="culprit"/>, the part at fault (an operand, an argument, an operator), and poisons <paramref name="at"/>, the whole operation.</summary>
+    private IrNode FailAt(Span culprit, string code, string message, AstNode at, string? hint = null)
+    {
+        Report(code, message, culprit.Start, culprit.Length, hint);
+        return Poison(at);
+    }
+
+    /// <summary>
+    /// The operand of <paramref name="b"/> at fault: the one that is wrong when only one is, otherwise the operator, since
+    /// neither operand alone is the mistake.
+    /// </summary>
+    private static Span Culprit(BinaryAst b, bool leftWrong, bool rightWrong) =>
+        leftWrong == rightWrong ? new Span(b.OpStart, b.OpLength) : leftWrong ? b.Left : b.Right;
+
+    private static bool IsEquatable(ExprType type) => type.IsNumeric || type.Kind is TypeKind.Bool or TypeKind.String;
+
+    /// <summary>A span of the source: an AST node's, or an operator's.</summary>
+    private readonly record struct Span(int Start, int Length)
+    {
+        public static implicit operator Span(AstNode node) => new(node.Start, node.Length);
     }
 
     private static IrNode Poison(AstNode at) => IrNode.Const(default, ExprType.Error, at.Start, at.Length);

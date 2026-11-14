@@ -87,7 +87,7 @@ internal static class RunCommand
                 diagnostics.Error("REQUEST_INVALID", requestPath, "/pipeline_id", "The request needs a pipeline_id.");
             }
 
-            Output.Diagnostics(diagnostics.Items, "text", Console.Error);
+            Output.Diagnostics(diagnostics.Items, "text", Console.Error, locator: DiagnosticLocator.ForWorkspace(config));
             return 1;
         }
 

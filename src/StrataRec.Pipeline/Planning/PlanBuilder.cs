@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
@@ -122,6 +123,8 @@ public sealed class PlanBuilder
 
     private string PipelineLabel => "pipeline:" + _sources!.Pipeline.PipelineId;
 
+    private string CatalogLabel => "catalog:" + _sources!.Catalog.CatalogId;
+
     /// <summary>Builds the plan schema: request inputs, features, columns, parameters and lookup tables.</summary>
     public PlanSchema DefineSchema(SchemaSources sources)
     {
@@ -147,11 +150,14 @@ public sealed class PlanBuilder
         // Request inputs.
         _requestInputs = new Dictionary<string, ContextField>(StringComparer.Ordinal);
         var inputTypes = new Dictionary<string, ColumnType>(StringComparer.Ordinal);
+        var unusableInputs = new HashSet<string>(StringComparer.Ordinal);
         foreach (var name in Sorted(pipeline.RequestSchema.Keys))
         {
-            if (!ColumnType.TryParse(pipeline.RequestSchema[name].Type, out var type, out var error))
+            if (!ConfigTypes.TryParse(pipeline.RequestSchema[name].Type, TypeSite.Column, out var type, out _, out var error, out var hint))
             {
-                _diagnostics.Error("REQUEST_BAD_TYPE", PipelineLabel, "/request_schema/" + name + "/type", error);
+                _diagnostics.Error("REQUEST_BAD_TYPE", PipelineLabel, "/request_schema/" + JsonPointer.Escape(name) + "/type", error, hint);
+                schema.MarkUnusable("ctx.request." + name);
+                unusableInputs.Add(name);
                 continue;
             }
 
@@ -160,7 +166,7 @@ public sealed class PlanBuilder
             inputTypes[name] = type;
         }
 
-        DefineFeatures(sources, inputTypes);
+        DefineFeatures(sources, inputTypes, unusableInputs);
         DefineColumns(pipeline.Columns, "/columns/", PipelineLabel);
         DefineColumns(sources.ExtraColumns, "/columns/", "arms");
         DefineParams(pipeline, sources);
@@ -190,15 +196,11 @@ public sealed class PlanBuilder
     public CompiledNode? CompileNode(string nodeId, JsonObject definition, string artifact)
     {
         var schema = Schema;
-        var pointer = "/nodes/" + nodeId;
-        NodeSpec spec;
-        try
+        var pointer = "/nodes/" + JsonPointer.Escape(nodeId);
+        if (!ArtifactSerializer.TryBind<NodeSpec>(definition, $"node '{nodeId}'", out var spec, out var invalid))
         {
-            spec = definition.Deserialize<NodeSpec>(ArtifactSerializer.Options) ?? throw new JsonException("node must be an object");
-        }
-        catch (JsonException ex)
-        {
-            _diagnostics.Error("NODE_INVALID", artifact, pointer, ex.Message, "a node needs \"op\" and \"order\" (or \"role\": \"fallback\")");
+            _diagnostics.Error("NODE_INVALID", artifact, pointer + invalid.Pointer, invalid.Message,
+                invalid.Hint ?? "a node needs \"op\" and \"order\" (or \"role\": \"fallback\"); run 'stratarec schema pipeline' for the full schema");
             return null;
         }
 
@@ -274,11 +276,7 @@ public sealed class PlanBuilder
         {
             if (!ExpressionCompiler.TryCompile(spec.When, _scope!, CompileOptions.RequestCondition, out when, out var whenErrors))
             {
-                foreach (var d in whenErrors)
-                {
-                    _diagnostics.Error(d.Code, artifact, pointer + "/when", $"{d.Message} (at offset {d.Offset} in '{spec.When}')", d.Hint);
-                }
-
+                ExpressionErrors.Report(_diagnostics, whenErrors, artifact, pointer + "/when", spec.When);
                 ok = false;
             }
         }
@@ -341,16 +339,11 @@ public sealed class PlanBuilder
     /// </param>
     public CompiledTap? CompileTap(string tapId, JsonObject definition, string artifact, Func<string, CompiledNode?>? resolveNode = null)
     {
-        var pointer = "/log_taps/" + tapId;
-        LogTapSpec spec;
-        try
+        var pointer = "/log_taps/" + JsonPointer.Escape(tapId);
+        if (!ArtifactSerializer.TryBind<LogTapSpec>(definition, $"log tap '{tapId}'", out var spec, out var invalid))
         {
-            spec = definition.Deserialize<LogTapSpec>(ArtifactSerializer.Options) ?? throw new JsonException("tap must be an object");
-        }
-        catch (JsonException ex)
-        {
-            _diagnostics.Error("TAP_INVALID", artifact, pointer + ArtifactSerializer.JsonPathToPointer(ex.Path), ex.Message,
-                "a tap needs \"group\" and \"attach\"; run 'stratarec schema pipeline' for the full schema");
+            _diagnostics.Error("TAP_INVALID", artifact, pointer + invalid.Pointer, invalid.Message,
+                invalid.Hint ?? "a tap needs \"group\" and \"attach\"; run 'stratarec schema pipeline' for the full schema");
             return null;
         }
 
@@ -607,11 +600,7 @@ public sealed class PlanBuilder
             return expression;
         }
 
-        foreach (var d in errors)
-        {
-            _diagnostics.Error(d.Code, artifact, pointer, $"{d.Message} (at offset {d.Offset} in '{source}')", d.Hint);
-        }
-
+        ExpressionErrors.Report(_diagnostics, errors, artifact, pointer, source);
         ok = false;
         return null;
     }
@@ -674,10 +663,7 @@ public sealed class PlanBuilder
                     continue;
                 }
 
-                foreach (var d in errors)
-                {
-                    _diagnostics.Error(d.Code, artifact, pointer + "/key/" + i, $"{d.Message} (at offset {d.Offset} in '{spec.Key[i]}')", d.Hint);
-                }
+                ExpressionErrors.Report(_diagnostics, errors, artifact, pointer + "/key/" + i, spec.Key[i]);
             }
 
             if (keys.Count == spec.Key.Count)
@@ -718,11 +704,7 @@ public sealed class PlanBuilder
             return expression;
         }
 
-        foreach (var d in errors)
-        {
-            _diagnostics.Error(d.Code, artifact, pointer, $"{d.Message} (at offset {d.Offset} in '{source}')", d.Hint);
-        }
-
+        ExpressionErrors.Report(_diagnostics, errors, artifact, pointer, source);
         return null;
     }
 
@@ -734,7 +716,12 @@ public sealed class PlanBuilder
         ParamRef limit = default;
         if (!Schema.TryGetParam(output.LimitParam, out var leaf) || leaf.Type.Kind != StorageKind.Int64)
         {
-            _diagnostics.Error("OUTPUT_BAD_LIMIT", PipelineLabel, "/output/limit_param", $"'{output.LimitParam}' must be a declared int64 parameter.");
+            if (!Schema.IsUnusable("param." + output.LimitParam))
+            {
+                // A parameter declared with an error is reported at its declaration.
+                ReportOutputLimit(output.LimitParam, leaf);
+            }
+
             ok = false;
         }
         else
@@ -748,10 +735,7 @@ public sealed class PlanBuilder
             var source = output.Columns[name];
             if (!ExpressionCompiler.TryCompile(source, _scope!, CompileOptions.Any, out var expression, out var errors))
             {
-                foreach (var d in errors)
-                {
-                    _diagnostics.Error(d.Code, PipelineLabel, "/output/columns/" + name, $"{d.Message} (at offset {d.Offset} in '{source}')", d.Hint);
-                }
+                ExpressionErrors.Report(_diagnostics, errors, PipelineLabel, "/output/columns/" + JsonPointer.Escape(name), source);
 
                 ok = false;
                 continue;
@@ -779,6 +763,31 @@ public sealed class PlanBuilder
         }
 
         return new OutputPlan { Limit = limit, Columns = columns.ToArray(), VersionReads = versionReads.ToArray() };
+    }
+
+    private void ReportOutputLimit(string name, ParamLeaf? leaf)
+    {
+        if (leaf is not null)
+        {
+            _diagnostics.Error("OUTPUT_BAD_LIMIT", PipelineLabel, "/output/limit_param",
+                $"Parameter '{name}' has type {leaf.Type}, but the output limit must be an int64 parameter.",
+                $"declare '{name}' with \"type\": \"int64\", or name an int64 parameter");
+            return;
+        }
+
+        var int64Params = new List<string>();
+        foreach (var p in Schema.Params)
+        {
+            if (p.Type.Kind == StorageKind.Int64 && p.MapName is null)
+            {
+                int64Params.Add(p.Name);
+            }
+        }
+
+        _diagnostics.Error("OUTPUT_BAD_LIMIT", PipelineLabel, "/output/limit_param",
+            $"'{name}' is not a declared parameter; the output limit must be an int64 parameter.",
+            NameSuggestions.DidYouMean(name, int64Params)
+            ?? $"declare it under /param_schema, e.g. \"{name}\": {{ \"type\": \"int64\", \"min\": 1 }}, with a value under /params");
     }
 
     /// <summary>
@@ -836,13 +845,9 @@ public sealed class PlanBuilder
             {
                 if (!guaranteed.Contains(logical))
                 {
-                    var column = schema.Columns[logical];
-                    var why = possible.TryGetValue(logical, out var producer)
-                        ? $"its producer '{producer}' may be skipped (when, min_remaining_ms or on_failure: skip)"
-                        : "no earlier node produces it";
+                    var (why, hint) = MissingProducer(schema.Columns[logical], node, possible, ordered, i);
                     _diagnostics.Error("COLUMN_NO_PRODUCER", artifact, node.Pointer,
-                        $"Node '{node.NodeId}' reads non-nullable column '{column.Name}', but {why}.",
-                        "make the producer unskippable or give it a fallback, or declare the column nullable and handle missing values with '??'");
+                        $"Node '{node.NodeId}' reads non-nullable column '{schema.Columns[logical].Name}', but {why}.", hint);
                 }
             }
 
@@ -1018,6 +1023,34 @@ public sealed class PlanBuilder
         {
             ValidateTapDependencies(taps, ordered, fallbacks, output, artifact);
         }
+    }
+
+    /// <summary>
+    /// Why a column a node reads may not exist when it runs, and the fix that fits: its producer may be skipped, runs
+    /// later, or does not exist at all.
+    /// </summary>
+    private static (string Why, string Hint) MissingProducer(
+        LogicalColumn column, CompiledNode reader, Dictionary<int, string> possible, List<CompiledNode> ordered, int readerIndex)
+    {
+        const string Nullable = "declare the column nullable and handle missing values with '??'";
+        if (possible.TryGetValue(column.Id, out var producer))
+        {
+            return ($"its producer '{producer}' may be skipped (when, min_remaining_ms or on_failure: skip)",
+                $"make '{producer}' unskippable or give it a fallback, or {Nullable}");
+        }
+
+        for (var j = readerIndex + 1; j < ordered.Count; j++)
+        {
+            if (Writes(ordered[j], column.Id))
+            {
+                var later = ordered[j];
+                return ($"its producer '{later.NodeId}' runs later (order {later.Order}, after {reader.Order})",
+                    $"give '{reader.NodeId}' an order above {later.Order}, or '{later.NodeId}' one below {reader.Order}");
+            }
+        }
+
+        return ("no node writes it",
+            $"add a node before '{reader.NodeId}' that writes '{column.Name}' (e.g. ExpressionScorer@1 with \"output_col\": \"{column.Name}\"), or {Nullable}");
     }
 
     /// <summary>
@@ -1536,7 +1569,8 @@ public sealed class PlanBuilder
             _bindings,
             _bindings,
             _environment.CacheStores,
-            _environment.Clock);
+            _environment.Clock,
+            CatalogLabel);
     }
 
     /// <summary>Assembles the final plan. Call after every node, the output and the feature plan are compiled.</summary>
@@ -1632,10 +1666,17 @@ public sealed class PlanBuilder
         return true;
     }
 
-    private void DefineFeatures(SchemaSources sources, Dictionary<string, ColumnType> inputTypes)
+    private void DefineFeatures(SchemaSources sources, Dictionary<string, ColumnType> inputTypes, HashSet<string> unusableInputs)
     {
         var schema = Schema;
-        var catalog = FeatureCatalog.Build(sources.Catalog, inputTypes, _diagnostics, "catalog:" + sources.Catalog.CatalogId);
+        var catalog = FeatureCatalog.Build(sources.Catalog, inputTypes, _diagnostics, CatalogLabel, unusableInputs);
+        foreach (var name in catalog.Unusable)
+        {
+            // Its entity decides the namespace; one that failed has none, so both are marked.
+            schema.MarkUnusable("col." + name);
+            schema.MarkUnusable("ctx." + name);
+        }
+
         var pendingDerived = new List<FeatureDefinition>();
         foreach (var feature in catalog.Features)
         {
@@ -1647,7 +1688,7 @@ public sealed class PlanBuilder
 
             if (schema.TryGetColumn(feature.Name, out _))
             {
-                _diagnostics.Error("FEATURE_DUPLICATE", "catalog", feature.Pointer, $"'{feature.Name}' collides with another column.");
+                _diagnostics.Error("FEATURE_DUPLICATE", CatalogLabel, feature.Pointer, $"'{feature.Name}' collides with another column.");
                 continue;
             }
 
@@ -1663,13 +1704,7 @@ public sealed class PlanBuilder
             for (var i = 0; i < pendingDerived.Count; i++)
             {
                 var feature = pendingDerived[i];
-                var options = new CompileOptions
-                {
-                    ExpectedType = feature.Type.AsNonNullable(),
-                    AllowNullableResult = true,
-                    RequestLevelOnly = feature.IsContext,
-                };
-                if (!ExpressionCompiler.TryCompile(feature.Expr!, _scope!, options, out var expression, out var errors))
+                if (!ExpressionCompiler.TryCompile(feature.Expr!, _scope!, DerivedOptions(feature), out var expression, out var errors))
                 {
                     lastErrors[feature.Name] = errors;
                     continue;
@@ -1686,7 +1721,7 @@ public sealed class PlanBuilder
                     }
                     else if (symbol.Kind == SymbolKind.Param || (symbol.Kind == SymbolKind.Column && schema.Columns[symbol.Id].Kind == ColumnKind.Output))
                     {
-                        _diagnostics.Error("FEATURE_BAD_REFERENCE", "catalog", feature.Pointer + "/expr",
+                        _diagnostics.Error("FEATURE_BAD_REFERENCE", CatalogLabel, feature.Pointer + "/expr",
                             $"Derived feature '{feature.Name}' reads '{symbol.Name}'; derived features may only read features, request inputs and col.entity_id.");
                     }
                 }
@@ -1698,13 +1733,41 @@ public sealed class PlanBuilder
             }
         }
 
-        foreach (var feature in pendingDerived)
+        // One that failed without an error reads a name declared with an error: it is unusable too, and so is one that
+        // failed only because it reads such a derived feature. Recompiling those says which: they now fail silently.
+        for (var marked = true; marked;)
         {
-            foreach (var d in lastErrors[feature.Name])
+            marked = false;
+            foreach (var feature in pendingDerived)
             {
-                _diagnostics.Error(d.Code, "catalog", feature.Pointer + "/expr", $"{d.Message} (at offset {d.Offset} in '{feature.Expr}')", d.Hint);
+                if (lastErrors[feature.Name].Count == 0 && !schema.IsUnusable(feature.ExpressionName))
+                {
+                    schema.MarkUnusable(feature.ExpressionName);
+                    marked = true;
+                }
+            }
+
+            foreach (var feature in pendingDerived)
+            {
+                if (marked && !schema.IsUnusable(feature.ExpressionName))
+                {
+                    ExpressionCompiler.TryCompile(feature.Expr!, _scope!, DerivedOptions(feature), out _, out var errors);
+                    lastErrors[feature.Name] = errors;
+                }
             }
         }
+
+        foreach (var feature in pendingDerived)
+        {
+            ExpressionErrors.Report(_diagnostics, lastErrors[feature.Name], CatalogLabel, feature.Pointer + "/expr", feature.Expr!);
+        }
+
+        static CompileOptions DerivedOptions(FeatureDefinition feature) => new()
+        {
+            ExpectedType = feature.Type.AsNonNullable(),
+            AllowNullableResult = true,
+            RequestLevelOnly = feature.IsContext,
+        };
     }
 
     private void RegisterFeature(FeatureDefinition feature, ColumnType type, CompiledExpression? expression, int[] dependencies)
@@ -1755,9 +1818,10 @@ public sealed class PlanBuilder
                 continue;
             }
 
-            if (!ColumnType.TryParse(spec.Type, out var type, out var error))
+            if (!ConfigTypes.TryParse(spec.Type, TypeSite.Column, out var type, out _, out var error, out var hint))
             {
-                _diagnostics.Error("COLUMN_BAD_TYPE", artifact, pointer + "/type", error);
+                _diagnostics.Error("COLUMN_BAD_TYPE", artifact, pointer + "/type", error, hint);
+                schema.MarkUnusable("col." + name);
                 continue;
             }
 
@@ -1766,6 +1830,7 @@ public sealed class PlanBuilder
             if (hasDefault && !ConfigValues.TryToScalar(spec.Default, type.AsNonNullable(), out value, out var defaultError))
             {
                 _diagnostics.Error("COLUMN_BAD_DEFAULT", artifact, pointer + "/default", defaultError);
+                schema.MarkUnusable("col." + name);
                 continue;
             }
 
@@ -1774,6 +1839,7 @@ public sealed class PlanBuilder
                 _diagnostics.Error("COLUMN_NEEDS_DEFAULT", artifact, pointer,
                     $"Non-nullable numeric column '{name}' needs a 'default' (it replaces NaN/±∞ writes, design 4.3).",
                     "add \"default\": 0.0, or declare the type nullable");
+                schema.MarkUnusable("col." + name);
                 continue;
             }
 
@@ -1802,14 +1868,10 @@ public sealed class PlanBuilder
         {
             var (spec, artifact) = specs[name];
             var pointer = "/param_schema/" + name;
-            var isMap = spec.Type.StartsWith("map<string,", StringComparison.Ordinal) && spec.Type.EndsWith('>');
-            var leafTypeText = isMap ? spec.Type["map<string,".Length..^1] : spec.Type;
-            if (!ColumnType.TryParse(leafTypeText, out var leafType, out var error)
-                || leafType.Nullable
-                || leafType.Kind is not (StorageKind.Int64 or StorageKind.Float64 or StorageKind.Bool or StorageKind.String))
+            if (!ConfigTypes.TryParse(spec.Type, TypeSite.Parameter, out var leafType, out var isMap, out var error, out var hint))
             {
-                _diagnostics.Error("PARAM_BAD_TYPE", artifact, pointer + "/type", error ?? $"Unsupported parameter type '{spec.Type}'.",
-                    "use int64, float64, bool, string or map<string,T>");
+                _diagnostics.Error("PARAM_BAD_TYPE", artifact, pointer + "/type", error, hint);
+                schema.MarkUnusable("param." + name);
                 continue;
             }
 

@@ -248,7 +248,8 @@ public static class ManifestBuilder
         }
         catch (ArtifactFormatException ex)
         {
-            diagnostics.Error("ARTIFACT_SCHEMA", label, pointer, ex.Message);
+            diagnostics.Error("ARTIFACT_SCHEMA", label, pointer,
+                $"Artifact '{id}' does not match its schema{(ex.Pointer.Length > 0 ? " at " + ex.Pointer : string.Empty)}: {ex.Reason}", ex.Hint);
             return null;
         }
     }

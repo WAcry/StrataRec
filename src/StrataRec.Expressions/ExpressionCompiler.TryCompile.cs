@@ -14,7 +14,11 @@ public static partial class ExpressionCompiler
     /// <summary>Default options when none are given: any non-nullable result (design 7.4 rule 4).</summary>
     private static readonly CompileOptions DefaultOptions = new();
 
-    /// <summary>Compiles an expression, returning diagnostics instead of throwing.</summary>
+    /// <summary>
+    /// Compiles an expression, returning diagnostics instead of throwing. Fails without diagnostics only when the
+    /// expression reads a name the scope declares with an error (<see cref="IExpressionScope.IsUnusable"/>), whose
+    /// diagnostic belongs to the declaration.
+    /// </summary>
     /// <remarks>
     /// Pipeline (design 7.7): tokenize → parse (depth-checked while parsing, design 7.9) → bind (names, types,
     /// nullability; diagnostics are collected, not thrown) → result checks against <paramref name="options"/> →
@@ -67,9 +71,9 @@ public static partial class ExpressionCompiler
         }
 
         binder.CheckResult(bound, ast);
-        if (found.Count > 0)
+        if (found.Count > 0 || binder.ReadsUnusable)
         {
-            return false;
+            return false; // without a diagnostic only for a name declared with an error (IExpressionScope.IsUnusable)
         }
 
         var optimized = Optimizer.Optimize(bound);

@@ -74,7 +74,18 @@ internal static class DiffCommand
         var toPlan = await CompileAsync(toRef, "--to", environment, pipeline, diagnostics, cancellationToken).ConfigureAwait(false);
         if (fromPlan is null || toPlan is null)
         {
-            Output.Diagnostics(diagnostics.Items, format, errors);
+            var locator = new DiagnosticLocator();
+            if (!fromRef.IsManifest)
+            {
+                locator.Add("--from", fromRef.Text);
+            }
+
+            if (!toRef.IsManifest)
+            {
+                locator.Add("--to", toRef.Text);
+            }
+
+            Output.Diagnostics(diagnostics.Items, format, errors, locator: locator);
             return 2;
         }
 

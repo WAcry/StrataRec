@@ -173,8 +173,9 @@ public sealed class ReplayBundleFileTests
     {
         var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(Edit(b => b["request"]!["sede"] = 1)));
 
-        Assert.StartsWith("/request", error.Pointer);
-        Assert.Contains("stratarec schema replay_bundle", error.Hint);
+        Assert.Equal("/request/sede", error.Pointer);
+        Assert.Contains("Unknown key 'sede'", error.Message);
+        Assert.Contains("did you mean 'seed'?", error.Hint);
     }
 
     [Fact]

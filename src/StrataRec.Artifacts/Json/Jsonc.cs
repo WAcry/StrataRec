@@ -292,7 +292,7 @@ public static class Jsonc
     }
 
     /// <summary>Converts a byte offset into a 1-based line and UTF-16 column, plus the 0-based byte offset in the line.</summary>
-    private static (int Line, int Column, long BytePositionInLine) PositionOf(ReadOnlySpan<byte> json, long offset)
+    internal static (int Line, int Column, long BytePositionInLine) PositionOf(ReadOnlySpan<byte> json, long offset)
     {
         var end = (int)Math.Clamp(offset, 0, json.Length);
         var prefix = json[..end];

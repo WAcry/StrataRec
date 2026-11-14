@@ -79,21 +79,21 @@ public sealed class OperatorCompileContext
 
     internal IReadOnlyList<OutputColumn> Outputs => _outputs;
 
-    /// <summary>Deserializes <see cref="Config"/> strictly (unknown keys rejected). Returns null after reporting errors.</summary>
+    /// <summary>
+    /// Deserializes <see cref="Config"/> strictly (unknown keys rejected). Returns null after reporting the error at the
+    /// key at fault, in JSON words (<see cref="Artifacts.Json.JsonBindingErrors"/>).
+    /// </summary>
     public T? BindConfig<T>()
         where T : class
     {
-        try
+        if (ArtifactSerializer.TryBind<T>(Config, $"the config of {Descriptor.Id}", out var config, out var error))
         {
-            return Config.Deserialize<T>(ArtifactSerializer.Options)
-                   ?? throw new JsonException("config must be an object");
+            return config;
         }
-        catch (JsonException ex)
-        {
-            var path = ex.Path is { Length: > 1 } p ? "/" + p.TrimStart('$', '.').Replace('.', '/') : string.Empty;
-            Error(path, "NODE_BAD_CONFIG", ex.Message, $"see the JSON Schema of {Descriptor.Id} (stratarec schema)");
-            return null;
-        }
+
+        Error(error.Pointer, "NODE_BAD_CONFIG", error.Message,
+            error.Hint ?? $"run 'stratarec schema operator {Descriptor.Id}' for the JSON Schema of its config");
+        return null;
     }
 
     /// <summary>Resolves a column name (without <c>col.</c>) the operator reads.</summary>
@@ -103,6 +103,12 @@ public sealed class OperatorCompileContext
         column = default;
         if (!_scope.TryResolve("col." + name, out var symbol))
         {
+            if (_schema.IsUnusable("col." + name))
+            {
+                HasErrors = true; // declared with an error, reported at the declaration
+                return false;
+            }
+
             var known = new List<string>();
             foreach (var c in _schema.Columns)
             {
@@ -131,6 +137,12 @@ public sealed class OperatorCompileContext
         column = default;
         if (!_schema.TryGetColumn(name, out var logical))
         {
+            if (_schema.IsUnusable("col." + name))
+            {
+                HasErrors = true; // declared with an error, reported at the declaration
+                return false;
+            }
+
             if (implicitType is null)
             {
                 Error(configKey, "COLUMN_UNDECLARED", $"Output column '{name}' is not declared.",
@@ -180,11 +192,9 @@ public sealed class OperatorCompileContext
 
         if (!ExpressionCompiler.TryCompile(source, _scope, options, out var expression, out var diagnostics))
         {
-            foreach (var d in diagnostics)
-            {
-                Error(configKey, d.Code, $"{d.Message} (at offset {d.Offset} in '{source}')", d.Hint);
-            }
-
+            // No diagnostics: the expression reads a name declared with an error, reported at the declaration.
+            HasErrors = true;
+            ExpressionErrors.Report(_diagnostics, diagnostics, Artifact, Pointer + "/config" + configKey, source);
             return null;
         }
 
@@ -202,6 +212,12 @@ public sealed class OperatorCompileContext
         parameter = default;
         if (!_schema.TryGetParam(name, out var leaf))
         {
+            if (_schema.IsUnusable("param." + name))
+            {
+                HasErrors = true; // declared with an error, reported at the declaration
+                return false;
+            }
+
             var known = new List<string>();
             foreach (var p in _schema.Params)
             {
@@ -239,7 +255,11 @@ public sealed class OperatorCompileContext
             result.Add(new ParamRef(leaf.Id, leaf.Name, leaf.Type));
         }
 
-        if (result.Count == 0)
+        if (result.Count == 0 && _schema.IsUnusable("param." + mapName))
+        {
+            HasErrors = true; // declared with an error, reported at the declaration
+        }
+        else if (result.Count == 0)
         {
             Error(configKey, "PARAM_UNKNOWN", $"'{mapName}' is not a map parameter with entries.", $"declare it in param_schema as map<string,T> and give it values in params");
         }
@@ -320,6 +340,16 @@ public sealed class OperatorCompileContext
     {
         HasErrors = true;
         _diagnostics.Error(code, Artifact, Pointer + "/config" + configKey, message, hint);
+    }
+
+    /// <summary>
+    /// Reports an error in a part of the string at <paramref name="configKey"/> (a template, a pattern): at
+    /// <paramref name="offset"/>, the 0-based character offset of that part, which tools show as a column inside the string.
+    /// </summary>
+    public void Error(string configKey, int offset, string code, string message, string? hint = null)
+    {
+        HasErrors = true;
+        _diagnostics.Add(new ConfigDiagnostic(DiagnosticSeverity.Error, code, Artifact, Pointer + "/config" + configKey, message, hint) { Offset = offset });
     }
 
     public void Warning(string configKey, string code, string message, string? hint = null) =>

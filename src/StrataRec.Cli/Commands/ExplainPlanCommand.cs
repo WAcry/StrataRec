@@ -59,7 +59,7 @@ internal static class ExplainPlanCommand
         var compilation = await reference!.CompileAsync(environment, pipeline, diagnostics, cancellationToken).ConfigureAwait(false);
         if (compilation?.Plan is not { } plan)
         {
-            Output.Diagnostics(diagnostics.Items, format, errors);
+            Output.Diagnostics(diagnostics.Items, format, errors, locator: reference.Locator());
             return 1;
         }
 

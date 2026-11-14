@@ -82,7 +82,7 @@ public sealed class PromptTemplate
 
         if (!MustacheTemplate.TryParse(source, out var template, out var error))
         {
-            context.Error(configKey, error.Code, At(error.Message, error.Offset), error.Hint);
+            context.Error(configKey, error.Offset, error.Code, At(error.Message, error.Offset), error.Hint);
             return null;
         }
 
@@ -397,7 +397,7 @@ public sealed class PromptTemplate
         private void Error(MustacheTag tag, string code, string message, string hint)
         {
             Failed = true;
-            context.Error(configKey, code, At(message, tag.Offset), hint);
+            context.Error(configKey, tag.Offset, code, At(message, tag.Offset), hint);
         }
     }
 

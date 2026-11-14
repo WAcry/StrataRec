@@ -183,6 +183,7 @@ internal sealed class FeatureSourceResolver
     private readonly TimeProvider _clock;
     private readonly DiagnosticBag _diagnostics;
     private readonly string _artifact;
+    private readonly string _catalogArtifact;
     private readonly Dictionary<string, SourceSupply?> _resolved = new(StringComparer.Ordinal);
 
     /// <param name="instances">Where connectors and distributed cache stores come from: the engine shares them across plans by
@@ -197,9 +198,11 @@ internal sealed class FeatureSourceResolver
         IBindingInstances instances,
         string? baseDirectory,
         TimeProvider clock,
-        DiagnosticBag diagnostics)
+        DiagnosticBag diagnostics,
+        string catalogArtifact = "catalog")
     {
         _bindings = bindings;
+        _catalogArtifact = catalogArtifact;
         _connectors = connectors;
         _updateSources = updateSources;
         _cacheStores = cacheStores;
@@ -298,7 +301,7 @@ internal sealed class FeatureSourceResolver
         };
         if (!LocalTableSchema.TryFromFeatures(supply.Name, entity, tableMode, definitions, out var schema, out var conflict))
         {
-            _diagnostics.Error("LOCAL_FIELD_TYPE_CONFLICT", "catalog", ConflictPointer(members, conflict!), conflict!,
+            _diagnostics.Error("LOCAL_FIELD_TYPE_CONFLICT", _catalogArtifact, ConflictPointer(members, conflict!), conflict!,
                 "give every feature that reads the field the same type, or read it through a derived feature");
             return null;
         }
@@ -343,7 +346,7 @@ internal sealed class FeatureSourceResolver
     {
         if (!_bindings.Sources.TryGetValue(sourceName, out var binding))
         {
-            _diagnostics.Error("SOURCE_UNBOUND", "catalog", featurePointer,
+            _diagnostics.Error("SOURCE_UNBOUND", _catalogArtifact, featurePointer,
                 $"Feature source '{sourceName}' has no binding in environment '{_bindings.Environment}'.",
                 NameSuggestions.DidYouMean(sourceName, _bindings.Sources.Keys) ?? "add it under 'sources' in the bindings artifact");
             return null;

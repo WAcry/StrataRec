@@ -59,6 +59,12 @@ internal sealed class ConfigRef
 
     public bool IsManifest => Kind != ConfigRefKind.Workspace;
 
+    /// <summary>
+    /// Locates the diagnostics of a workspace in its files (labelled with <paramref name="prefix"/> and a space when the
+    /// command prefixes them); null for a manifest, whose artifacts are not files.
+    /// </summary>
+    public DiagnosticLocator? Locator(string prefix = "") => IsManifest ? null : new DiagnosticLocator().Add(prefix, Text);
+
     public override string ToString() => Text;
 
     /// <summary>A workspace directory (<c>-c</c>); whether it exists is reported when it loads, as a workspace error.</summary>
@@ -299,7 +305,7 @@ internal sealed class ConfigRef
         }
         catch (ArtifactFormatException ex)
         {
-            diagnostics.Error("MANIFEST_SCHEMA", source, ArtifactSerializer.JsonPathToPointer(ex.JsonPath), ex.Reason,
+            diagnostics.Error("MANIFEST_SCHEMA", source, ex.Pointer, ex.Reason,
                 ex.Hint ?? "a release manifest has pipeline_id, environment, artifacts and experiments, as 'stratarec build' writes it (design 10.2)");
             return null;
         }

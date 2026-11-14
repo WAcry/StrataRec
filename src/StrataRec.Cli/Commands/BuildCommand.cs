@@ -33,7 +33,7 @@ internal static class BuildCommand
         var (workspace, request, compilation) = CommonOptions.Compile(config, environment, pipeline, diagnostics);
         if (request is null || compilation is not { Succeeded: true } || diagnostics.HasErrors)
         {
-            Output.Diagnostics(diagnostics.Items, "text", Console.Error);
+            Output.Diagnostics(diagnostics.Items, "text", Console.Error, locator: DiagnosticLocator.ForWorkspace(config));
             return 1;
         }
 
@@ -41,7 +41,7 @@ internal static class BuildCommand
         var manifest = await ManifestBuilder.BuildAsync(workspace, request.Pipeline.PipelineId, environment, store, diagnostics, seq, cancellationToken).ConfigureAwait(false);
         if (manifest is null)
         {
-            Output.Diagnostics(diagnostics.Items, "text", Console.Error);
+            Output.Diagnostics(diagnostics.Items, "text", Console.Error, locator: DiagnosticLocator.ForWorkspace(config));
             return 1;
         }
 

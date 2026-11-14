@@ -10,7 +10,11 @@ namespace StrataRec.Cli.Commands;
 internal static class Output
 {
     /// <summary>Prints diagnostics (errors first) and returns the exit code: 1 when there are errors.</summary>
-    public static int Diagnostics(IReadOnlyList<ConfigDiagnostic> diagnostics, string format, TextWriter writer, bool warningsAsErrors = false)
+    /// <param name="locator">Where the configuration's files are, so each diagnostic in one is printed with its file, line and
+    /// column (<c>file:line:column:</c> in text, <c>file</c>, <c>line</c>, <c>column</c> in JSON); null prints artifacts and
+    /// pointers only, as for a manifest read from a store.</param>
+    public static int Diagnostics(
+        IReadOnlyList<ConfigDiagnostic> diagnostics, string format, TextWriter writer, bool warningsAsErrors = false, DiagnosticLocator? locator = null)
     {
         var sorted = new List<ConfigDiagnostic>(diagnostics);
         sorted.Sort(static (a, b) => a.Severity != b.Severity ? a.Severity.CompareTo(b.Severity) : 0);
@@ -33,7 +37,7 @@ internal static class Output
                 json.WriteStartArray("diagnostics");
                 foreach (var d in sorted)
                 {
-                    WriteDiagnostic(json, d);
+                    WriteDiagnostic(json, d, locator?.Locate(d));
                 }
 
                 json.WriteEndArray();
@@ -46,7 +50,7 @@ internal static class Output
         {
             foreach (var d in sorted)
             {
-                writer.WriteLine(d.ToString());
+                writer.WriteLine(Text(d, locator?.Locate(d)));
             }
 
             if (sorted.Count > 0)
@@ -60,13 +64,37 @@ internal static class Output
         return errors > 0 || (warningsAsErrors && warnings > 0) ? 1 : 0;
     }
 
-    public static void WriteDiagnostic(Utf8JsonWriter json, ConfigDiagnostic d)
+    /// <summary>
+    /// One diagnostic as text. Located, it starts with <c>file:line:column:</c>, which terminals and editors open at the
+    /// place, followed by the pointer (and the artifact label when it says more than the file, such as the arms of a
+    /// combination); otherwise it is <see cref="ConfigDiagnostic.ToString"/>.
+    /// </summary>
+    public static string Text(ConfigDiagnostic d, SourceLocation? location)
+    {
+        if (location is not { } at)
+        {
+            return d.ToString();
+        }
+
+        var where = at.Exact ? d.Pointer : d.Artifact + d.Pointer;
+        var hint = d.Hint is null ? string.Empty : $"\n    hint: {d.Hint}";
+        return $"{at.File}:{at.Line}:{at.Column}: {d.SeverityName} {d.Code}{(where.Length > 0 ? " " + where : string.Empty)}: {d.Message}{hint}";
+    }
+
+    public static void WriteDiagnostic(Utf8JsonWriter json, ConfigDiagnostic d, SourceLocation? location = null)
     {
         json.WriteStartObject();
-        json.WriteString("severity", d.Severity.ToString().ToLowerInvariant());
+        json.WriteString("severity", d.SeverityName);
         json.WriteString("code", d.Code);
         json.WriteString("artifact", d.Artifact);
         json.WriteString("pointer", d.Pointer);
+        if (location is { } at)
+        {
+            json.WriteString("file", at.File);
+            json.WriteNumber("line", at.Line);
+            json.WriteNumber("column", at.Column);
+        }
+
         json.WriteString("message", d.Message);
         if (d.Hint is not null)
         {

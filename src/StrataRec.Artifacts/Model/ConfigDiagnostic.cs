@@ -12,6 +12,11 @@ public enum DiagnosticSeverity : byte
 /// Every validation layer (schema, catalog, pipeline, experiments, policy) reports through this type so that
 /// humans, CI and AI agents get uniform, actionable output.
 /// </summary>
+/// <remarks>
+/// The artifact and pointer are the location every producer knows. A tool that has the artifact's file turns them into a
+/// line and column (<see cref="Json.JsoncLocator"/>) when it prints the diagnostic; <see cref="Offset"/> and
+/// <see cref="Line"/> refine that where the producer knows more than the pointer.
+/// </remarks>
 /// <param name="Severity">Errors block a plan; warnings require review; info is advisory.</param>
 /// <param name="Code">Stable machine-readable code, e.g. <c>COLUMN_NO_PRODUCER</c>.</param>
 /// <param name="Artifact">Artifact or arm the problem is in, e.g. <c>pipeline:home_feed</c> or <c>exp_mmr/mmr</c>.</param>
@@ -28,16 +33,34 @@ public sealed record ConfigDiagnostic(
 {
     public bool IsError => Severity == DiagnosticSeverity.Error;
 
+    /// <summary>
+    /// 0-based UTF-16 offset of the part at fault inside the string at <see cref="Pointer"/> (an expression or a template),
+    /// or null when the problem is the value as a whole.
+    /// </summary>
+    public int? Offset { get; init; }
+
+    /// <summary>
+    /// 1-based line in the artifact's text when the producer read the text itself and the problem has no pointer (a JSONC
+    /// syntax error); null otherwise.
+    /// </summary>
+    public int? Line { get; init; }
+
+    /// <summary>1-based column (UTF-16 code units) that goes with <see cref="Line"/>.</summary>
+    public int? Column { get; init; }
+
+    /// <summary><c>error</c>, <c>warning</c> or <c>info</c>, as tools print it.</summary>
+    public string SeverityName => Severity switch
+    {
+        DiagnosticSeverity.Error => "error",
+        DiagnosticSeverity.Warning => "warning",
+        _ => "info",
+    };
+
     public override string ToString()
     {
-        var sev = Severity switch
-        {
-            DiagnosticSeverity.Error => "error",
-            DiagnosticSeverity.Warning => "warning",
-            _ => "info",
-        };
+        var where = Line is { } line ? $" (line {line}, column {Column ?? 1})" : string.Empty;
         var hint = Hint is null ? string.Empty : $"\n    hint: {Hint}";
-        return $"{sev} {Code} {Artifact}{Pointer}: {Message}{hint}";
+        return $"{SeverityName} {Code} {Artifact}{Pointer}: {Message}{where}{hint}";
     }
 }
 
