@@ -56,7 +56,7 @@ public static class ArtifactSerializer
         {
             if (node.Deserialize<T>(Options) is { } value)
             {
-                return NullElements.Find(value, Options) is { } nullElement ? throw Failed(nullElement, sourceName, null) : value;
+                return NullElementOf<T>(node) is { } nullElement ? throw Failed(nullElement, sourceName, null) : value;
             }
         }
         catch (JsonException ex)
@@ -82,9 +82,10 @@ public static class ArtifactSerializer
     public static T Deserialize<T>(string json, string? sourceName = null)
     {
         ReadOnlyMemory<byte> utf8;
+        bool hasNull;
         try
         {
-            utf8 = Jsonc.Checked(json, sourceName);
+            utf8 = Jsonc.Checked(json, sourceName, out hasNull);
         }
         catch (JsoncException ex)
         {
@@ -95,7 +96,9 @@ public static class ArtifactSerializer
         {
             if (JsonSerializer.Deserialize<T>(utf8.Span, Options) is { } value)
             {
-                return NullElements.Find(value, Options) is { } nullElement ? throw Failed(nullElement, sourceName, null) : value;
+                return hasNull && NullElements.Find(Jsonc.ParseElement(utf8.Span, sourceName), typeof(T), Options) is { } nullElement
+                    ? throw Failed(nullElement, sourceName, null)
+                    : value;
             }
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException)
@@ -153,7 +156,7 @@ public static class ArtifactSerializer
             return false;
         }
 
-        error = NullElements.Find(value, Options);
+        error = NullElementOf<T>(node);
         if (error is not null)
         {
             value = null;
@@ -162,6 +165,10 @@ public static class ArtifactSerializer
 
         return true;
     }
+
+    /// <summary>A null element of <paramref name="node"/> where <typeparamref name="T"/> requires a value; walked only when it has a null.</summary>
+    private static JsonBindingError? NullElementOf<T>(JsonNode? node) =>
+        NullElements.AnyNull(node) ? NullElements.Find(JsonSerializer.SerializeToElement(node, Options), typeof(T), Options) : null;
 
     /// <summary>
     /// The error for a document the serializer rejects with an exception other than a <see cref="JsonException"/>: one

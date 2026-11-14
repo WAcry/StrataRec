@@ -39,6 +39,9 @@ public sealed class BuiltInClientSettingsTests
         // A fixture is read as strictly as a workspace file: a key written twice was its last value.
         { "memory@1", """{ "data_file": "twice.json" }""", "/data_file", "Duplicate key '1'", "remove or merge one of the definitions" },
         { "memory_list@1", """{ "data_file": "twice.json" }""", "/data_file", "Duplicate key '1'", "remove or merge one of the definitions" },
+        // Review 46: read as text first, an invalid byte became U+FFFD, and the id it was in another id.
+        { "memory_list@1", """{ "data_file": "invalid.json" }""", "/data_file", "is not valid UTF-8", "save the file as UTF-8" },
+        { "memory@1", """{ "data_file": "invalid.json" }""", "/data_file", "is not valid UTF-8", "save the file as UTF-8" },
         { "random@1", """{ "inputs": ["x"], "outputs": ["p"], "sed": 1 }""", "/sed", "Unknown setting 'sed'.", "did you mean 'seed'?" },
         { "random@1", """{ "inputs": ["x", "x"], "outputs": ["p"] }""", "/inputs/1", "'x' is listed twice in 'inputs'.", "list each name once" },
         { "fixed_text@1", """{ "input": ["user"], "outputs": { "answer": "x" } }""", "/input", "Unknown setting 'input'.", "did you mean 'inputs'?" },
@@ -54,6 +57,7 @@ public sealed class BuiltInClientSettingsTests
         File.WriteAllText(Path.Combine(directory, "list.json"), """{ "itemz": [1] }""");
         File.WriteAllText(Path.Combine(directory, "bad-item.json"), """{ "items": [1, true] }""");
         File.WriteAllText(Path.Combine(directory, "twice.json"), """{ "1": {}, "1": {} }""");
+        File.WriteAllBytes(Path.Combine(directory, "invalid.json"), [.. "{ \"items\": [\"bad"u8, 0xFF, .. "\"] }"u8]);
         var context = new BindingContext("b", JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(settings)!, directory, null);
 
         var error = Assert.Throws<BindingException>(() => Create(client, context));

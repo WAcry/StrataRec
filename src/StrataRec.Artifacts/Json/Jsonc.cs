@@ -79,26 +79,30 @@ public static class Jsonc
     }
 
     /// <summary>
-    /// Parses a JSONC document as strictly as <see cref="Parse(string, string?)"/> into a <see cref="JsonElement"/> that
-    /// owns its data: for data read by key rather than edited, such as a connector's fixture file.
+    /// Parses a UTF-8 encoded JSONC document as strictly as <see cref="Parse(ReadOnlySpan{byte}, string?)"/> into a
+    /// <see cref="JsonElement"/> that owns its data: for data read by key rather than edited, such as a connector's
+    /// fixture file. Bytes, not text: a file decoded first would have its invalid bytes replaced, not reported.
     /// </summary>
     /// <exception cref="JsoncException">The document is not valid JSONC or breaks one of the strictness rules.</exception>
-    public static JsonElement ParseElement(string json, string? fileName = null)
+    public static JsonElement ParseElement(ReadOnlySpan<byte> utf8Json, string? fileName = null)
     {
-        using var document = JsonDocument.Parse(Checked(json, fileName), _documentOptions);
-        return document.RootElement.Clone();
+        var json = SkipByteOrderMark(utf8Json);
+        Validate(json, fileName);
+        var reader = new Utf8JsonReader(json, _readerOptions);
+        return JsonElement.ParseValue(ref reader);
     }
 
     /// <summary>
     /// The document as UTF-8, after the checks <see cref="Parse(string, string?)"/> makes (grammar, duplicate keys,
     /// Unicode, depth), without building a tree: for a caller that binds the bytes itself, as strictly as a parsed file.
     /// </summary>
+    /// <param name="hasNull">Whether the document has a <c>null</c> anywhere: one without cannot hold a null element.</param>
     /// <exception cref="JsoncException">The document is not valid JSONC or breaks one of the strictness rules.</exception>
-    internal static ReadOnlyMemory<byte> Checked(string json, string? fileName)
+    internal static ReadOnlyMemory<byte> Checked(string json, string? fileName, out bool hasNull)
     {
         var bytes = Encode(json, fileName);
         var start = SkipByteOrderMark(bytes).Length == bytes.Length ? 0 : 3;
-        Validate(bytes.AsSpan(start), fileName);
+        hasNull = Validate(bytes.AsSpan(start), fileName);
         return bytes.AsMemory(start);
     }
 
@@ -129,7 +133,8 @@ public static class Jsonc
     /// Runs the full grammar over the document and enforces the strictness rules that <see cref="JsonNode.Parse(ReadOnlySpan{byte}, JsonNodeOptions?, JsonDocumentOptions)"/>
     /// does not (duplicate keys, lone surrogates), with exact positions.
     /// </summary>
-    private static void Validate(ReadOnlySpan<byte> json, string? fileName)
+    /// <returns>Whether the document has a <c>null</c> token.</returns>
+    private static bool Validate(ReadOnlySpan<byte> json, string? fileName)
     {
         // Utf8JsonReader finds the end of an unescaped string without validating its UTF-8, and JsonNode keeps such
         // values lazily, so invalid bytes would surface only when a value is read, far from this diagnostic boundary.
@@ -149,6 +154,7 @@ public static class Jsonc
 
         // Key sets indexed by the depth of the object that owns them; reused across sibling objects.
         var keySets = new List<Dictionary<string, long>>();
+        var hasNull = false;
         try
         {
             while (reader.Read())
@@ -184,8 +190,14 @@ public static class Jsonc
                         // Unescaping validates \u escapes: an unpaired surrogate throws InvalidOperationException.
                         _ = reader.GetString();
                         break;
+
+                    case JsonTokenType.Null:
+                        hasNull = true;
+                        break;
                 }
             }
+
+            return hasNull;
         }
         catch (JsonException ex) when (ex is not JsoncException)
         {

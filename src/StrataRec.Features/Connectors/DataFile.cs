@@ -22,10 +22,10 @@ public static class DataFile
         }
 
         var path = Path.Combine(baseDirectory, relative); // a rooted path stays as it is
-        string text;
+        byte[] bytes;
         try
         {
-            text = File.ReadAllText(path);
+            bytes = File.ReadAllBytes(path); // not ReadAllText: it replaces invalid bytes, and a damaged id reads as another
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -34,7 +34,7 @@ public static class DataFile
 
         try
         {
-            return (Jsonc.ParseElement(text, path), path);
+            return (Jsonc.ParseElement(bytes, path), path);
         }
         catch (JsoncException ex)
         {
