@@ -259,8 +259,11 @@ internal sealed partial class UnifiedCompilation
             }
         }
 
+        // The nodes compiled once on the unified schema, which declares for every combination what a writer of any arm
+        // declares: whether each combination's readers have their writers is checked here. Without an arm it is the bare
+        // baseline, compiled alone (ValidateBaselineAlone).
         var start = _diagnostics.Count;
-        _builder.ValidateDataFlow(nodes, selectedFallbacks, output, _pipelineLabel, taps);
+        _builder.ValidateDataFlow(nodes, selectedFallbacks, output, _pipelineLabel, taps, declarations: assigned.Count > 0);
         Settle(start, assigned);
         report.Checked++;
     }

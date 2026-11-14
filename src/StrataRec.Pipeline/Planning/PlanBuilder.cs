@@ -836,7 +836,9 @@ public sealed class PlanBuilder
 
     /// <summary>
     /// Static data-flow check of one fully merged node set (design 4.6, 5.3, 11.5): every non-nullable column a node
-    /// reads has a producer that cannot be skipped before it; fixed columns have one producer per path; row sources keep
+    /// reads has a producer that cannot be skipped before it; with <paramref name="declarations"/>, every column without a
+    /// declaration that a node, fallback or the output reads is declared by a writer compiled before it
+    /// (<see cref="ValidateDeclared"/>); fixed columns have one producer per path; row sources keep
     /// every non-nullable column covered (<see cref="ValidateRowSource"/>); nodes sharing an order are independent; every
     /// pinned version names a node of this set that writes it (<see cref="ValidateVersionRead"/>); taps attach after a node
     /// of this set and log only context features it reads (<see cref="ValidateTapDependencies"/>).
@@ -846,12 +848,15 @@ public sealed class PlanBuilder
     /// check every arm combination. A new rule needs its scope there, or past that limit it is not checked for the
     /// combinations of three layers and more.
     /// </remarks>
+    /// <param name="declarations">For a combination of arms checked on the unified plan's schema. A compile of the nodes
+    /// alone resolves each name on the columns declared before it, so there it always holds.</param>
     public void ValidateDataFlow(
         IReadOnlyList<CompiledNode> timeline,
         IReadOnlyDictionary<string, CompiledNode> fallbacks,
         OutputPlan? output,
         string artifact,
-        IReadOnlyList<CompiledTap>? taps = null)
+        IReadOnlyList<CompiledTap>? taps = null,
+        bool declarations = false)
     {
         var schema = Schema;
         var guaranteed = new HashSet<int>();
@@ -883,6 +888,11 @@ public sealed class PlanBuilder
                         $"Nodes '{node.NodeId}' and '{ordered[j].NodeId}' share order {node.Order} but depend on each other.",
                         "give them different orders");
                 }
+            }
+
+            if (declarations)
+            {
+                ValidateDeclared(node.ReadColumns, node, "Node", node.NodeId, node.Pointer, ordered, i, fallbacks, artifact);
             }
 
             foreach (var logical in node.RequiredOutputs)
@@ -990,6 +1000,31 @@ public sealed class PlanBuilder
             }
         }
 
+        if (declarations)
+        {
+            foreach (var (_, fallback) in fallbacks)
+            {
+                ValidateDeclared(fallback.ReadColumns, fallback, "Fallback", fallback.NodeId, fallback.Pointer, ordered, ordered.Count, fallbacks, artifact);
+            }
+        }
+
+        if (declarations && output is not null)
+        {
+            foreach (var (name, expression) in output.Columns)
+            {
+                var reads = new List<int>();
+                foreach (var symbol in expression.Reads)
+                {
+                    if (symbol.Kind == SymbolKind.Column)
+                    {
+                        reads.Add(symbol.Id);
+                    }
+                }
+
+                ValidateDeclared(reads, null, "Output column", name, "/output/columns/" + JsonPointer.Escape(name), ordered, ordered.Count, fallbacks, artifact);
+            }
+        }
+
         if (taps is not null && output is not null)
         {
             foreach (var (_, expression) in output.Columns)
@@ -1066,6 +1101,71 @@ public sealed class PlanBuilder
         if (taps is not null)
         {
             ValidateTapDependencies(taps, ordered, fallbacks, output, artifact);
+        }
+    }
+
+    /// <summary>
+    /// A column written without a declaration (an implicit output, e.g. GroupAggregate@1's) exists in a compile once a node
+    /// writing it has compiled: the nodes compile by order, then id, the fallbacks after them by id, the output last. So a
+    /// reader needs a writer compiled before it among the nodes of one combination, as a compile of that combination alone
+    /// requires (there the name is unknown). The unified plan compiles every node once on one schema, which an arm's or
+    /// the baseline's writer declares for every combination: one arm deleting or moving the writer and another adding a
+    /// reader of a nullable column ran unchecked, since a nullable read needs no producer (generated differential test).
+    /// A tap's reads need a producer before it (<see cref="ValidateTap"/>), which this implies. The caller checks the
+    /// combinations with an arm: the bare baseline is compiled alone, which says where in an expression the name is.
+    /// </summary>
+    /// <param name="reader">The node or fallback that reads; null for an output column.</param>
+    /// <param name="before">How many nodes of <paramref name="ordered"/> compile before the reader: its index, or all of them.</param>
+    private void ValidateDeclared(
+        IReadOnlyList<int> reads, CompiledNode? reader, string kind, string name, string pointer, List<CompiledNode> ordered, int before,
+        IReadOnlyDictionary<string, CompiledNode> fallbacks, string artifact)
+    {
+        foreach (var logical in reads)
+        {
+            var column = Schema.Columns[logical];
+            if (!column.Implicit || (reader is not null && Writes(reader, logical)))
+            {
+                continue;
+            }
+
+            var declared = false;
+            for (var j = 0; j < before && !declared; j++)
+            {
+                declared = Writes(ordered[j], logical);
+            }
+
+            if (!declared && before == ordered.Count)
+            {
+                foreach (var (id, fallback) in fallbacks)
+                {
+                    // A fallback reader knows what the fallbacks named before it declared; the output knows them all.
+                    if ((reader is null || string.CompareOrdinal(id, reader.NodeId) < 0) && Writes(fallback, logical))
+                    {
+                        declared = true;
+                        break;
+                    }
+                }
+            }
+
+            if (declared)
+            {
+                continue;
+            }
+
+            string? later = null;
+            for (var j = before; j < ordered.Count && later is null; j++)
+            {
+                if (Writes(ordered[j], logical))
+                {
+                    later = $"'{ordered[j].NodeId}' (order {ordered[j].Order}) writes it after";
+                }
+            }
+
+            _diagnostics.Error("COLUMN_NOT_DECLARED", artifact, pointer,
+                $"{kind} '{name}' reads '{column.Name}', which has no declaration: the node writing it declares it, and here " +
+                $"{later ?? "no node writes it"}.",
+                $"declare it under /columns (e.g. \"{column.Name}\": {{ \"type\": \"{column.Type.AsNullable()}\" }}), so it exists wherever '{name}' does, " +
+                $"or keep a node that writes it before '{name}' in every arm combination");
         }
     }
 
@@ -1238,7 +1338,8 @@ public sealed class PlanBuilder
     /// <para>Nullability exempts a column only from the producer a reader needs; every other rule applies to it. A
     /// position runs its node or that node's fallback, so a scope holds both: the fallbacks of its nodes, and the nodes
     /// that fall back to a fallback in it.</para>
-    /// <para>The rules and what decides them: a reader's non-nullable column (the reader and the column's producers);
+    /// <para>The rules and what decides them: a reader's non-nullable column, or column without a declaration (the reader
+    /// and the column's producers; for the output, the producers);
     /// one producer per path and row sources' shadowing (the producers); row sources keeping a non-nullable column
     /// covered (a row source and the producers); independence of nodes that may share an order (the two nodes); a
     /// fallback's existence and outputs (the node); a pinned version read by a node or the output (the reader and the
@@ -1272,6 +1373,14 @@ public sealed class PlanBuilder
                 foreach (var logical in node.RequiredOutputs)
                 {
                     Add(readers, logical, id);
+                }
+
+                foreach (var logical in node.ReadColumns)
+                {
+                    if (schema.Columns[logical].Implicit)
+                    {
+                        Add(readers, logical, id);
+                    }
                 }
 
                 var fetched = new HashSet<int>();
