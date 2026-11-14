@@ -114,7 +114,7 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
     {
         public override IReadOnlyDictionary<string, string> NamedInputs => call.NamedInputs;
 
-        internal override IoTarget ModelTarget => call.Target;
+        public override IoTarget ModelTarget => call.Target;
 
         public override async ValueTask ExecuteAsync(OperatorContext context)
         {
@@ -323,7 +323,7 @@ public sealed class ListwiseRerankerFactory : IOperatorFactory
     {
         public override IReadOnlyDictionary<string, string> NamedInputs => call.NamedInputs;
 
-        internal override IoTarget ModelTarget => call.Target;
+        public override IoTarget ModelTarget => call.Target;
 
         public override async ValueTask ExecuteAsync(OperatorContext context)
         {

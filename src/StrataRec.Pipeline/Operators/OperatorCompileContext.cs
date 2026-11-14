@@ -319,7 +319,14 @@ public sealed class OperatorCompileContext
 
     private readonly HashSet<int> _selfReads = new();
 
-    internal void RecordSymbol(in Symbol symbol)
+    /// <summary>
+    /// Records a name the operator resolved through <see cref="Scope"/> itself as a read of the node, as
+    /// <see cref="CompileExpression"/>, <see cref="TryReadColumn"/> and <see cref="TryParam"/> do for theirs: the fetch
+    /// planner then fetches a feature before the node runs, and data-flow validation and experiment footprints see the
+    /// read (design 5.2, 6.8). Public for operators that resolve names outside expressions, such as a prompt template's
+    /// references (StrataRec.Llm).
+    /// </summary>
+    public void RecordSymbol(in Symbol symbol)
     {
         switch (symbol.Kind)
         {

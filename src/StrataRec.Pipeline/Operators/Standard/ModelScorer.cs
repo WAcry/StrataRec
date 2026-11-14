@@ -96,7 +96,7 @@ public sealed class ModelScorerFactory : IOperatorFactory
     {
         public override IReadOnlyDictionary<string, string> NamedInputs => call.NamedInputs;
 
-        internal override IoTarget ModelTarget => call.Target;
+        public override IoTarget ModelTarget => call.Target;
 
         public override async ValueTask ExecuteAsync(OperatorContext context)
         {

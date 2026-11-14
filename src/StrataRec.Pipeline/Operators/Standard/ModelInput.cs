@@ -200,36 +200,3 @@ internal sealed class ModelInput(string name, CompiledExpression expression, Sym
         return new GatheredInput(entries, null);
     }
 }
-
-/// <summary>
-/// Receives one call's float32 outputs into buffers rented from the request. A call's writer is read only after the call
-/// succeeded: an abandoned client may still be writing it.
-/// </summary>
-internal sealed class ModelOutputWriter(RequestMemory memory) : IModelOutputWriter
-{
-    private readonly Dictionary<string, Memory<float>> _outputs = new(StringComparer.Ordinal);
-    private readonly object _gate = new();
-
-    public Memory<float> GetFloat32(string name, int elementCount)
-    {
-        var buffer = memory.Rent<float>(Math.Max(1, elementCount)).AsMemory(0, elementCount);
-        lock (_gate)
-        {
-            _outputs[name] = buffer;
-        }
-
-        return buffer;
-    }
-
-    public void SetText(string name, string text)
-    {
-    }
-
-    public bool TryGet(string name, out Memory<float> values)
-    {
-        lock (_gate)
-        {
-            return _outputs.TryGetValue(name, out values);
-        }
-    }
-}
