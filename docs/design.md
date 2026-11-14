@@ -599,10 +599,10 @@ internal sealed class RequestMemory
 | 列表级重排 | `ListwiseReranker@1` | `{RowOrder, ColumnWriter}`（`score_col` 可选） | 每个命名输入 `[1, N]` 或 `[1, N, D]` → 分数 `[1, N]` |
 | 生成式召回 | `GenerativeRetriever@1` | `RowSource` | 用户行为序列 `list<int64>` 和上下文 → 生成的物品 ID 或语义 ID 序列 |
 | 大模型重排 | `LlmReranker@1` | `RowOrder`（只保留选中的行时加 `RowFilter`） | 模板渲染的提示词 `text` → 生成文本，解析为有序 ID 列表 |
-| 大模型标注 | `LlmAnnotator@1` | `ColumnWriter` | 每行或每批提示词 `text` → 文本列（例如推荐理由）或类别列 |
-| 整页生成 | `SlateGenerator@1` | `{RowSource, RowOrder}` | 上下文和候选池 → 一组有序的页面位置 |
+| 大模型标注 | `LlmAnnotator@1` | `ColumnWriter` | 每行一个提示词 `text` → 按列类型解析的回答：文本（例如推荐理由）、类别、布尔或数值 |
+| 整页生成 | `GenerativeRetriever@1` 后接 `LlmReranker@1` | `RowSource`，然后 `{RowOrder, RowFilter}` | 上下文 → 生成的候选；候选池 → 一组有序的页面位置 |
 
-其中生成式召回和大模型类算子（`GenerativeRetriever@1`、`LlmReranker@1`、`LlmAnnotator@1`、`SlateGenerator@1`）由扩展包 `StrataRec.Llm` 提供，其余属于核心标准算子库（第 16.1 节）。几个与生成式模型相关的规则在框架层面统一处理：
+其中生成式召回和大模型类算子（`GenerativeRetriever@1`、`LlmReranker@1`、`LlmAnnotator@1`）由扩展包 `StrataRec.Llm` 提供，其余属于核心标准算子库（第 16.1 节）。几个与生成式模型相关的规则在框架层面统一处理：
 
 1. **提示词用 Mustache 模板。** 模板写在产物里，引用列和 `ctx` 字段。Mustache 没有逻辑，提示词里不会出现第二种表达式语言；模板引用的名字在加载期按列和请求 Schema 检查。
 2. **成本上限带默认值。** 成对算子用 `max_pairs` 限制比较的对数，生成类算子用 `max_output_tokens` 限制输出长度，两者都有算子定义的默认值，可以在节点配置中调整。成对比较的数量随候选数平方增长，所以只在前 `window` 名里两两比较；窗口的对数 `window · (window − 1) / 2` 在加载时与 `max_pairs` 比较，超过是配置错误，请求期不截断（理由见 `decisions.md`）。`max_output_tokens` 随调用交给模型客户端，由客户端在生成时执行，因为只有它有分词器；它回报生成的 token 数和是否在上限处截断，引擎对所有模型调用统一计数（`stratarec.model.output_tokens`、`stratarec.model.truncated`）。
@@ -2269,7 +2269,7 @@ stratarec/
 
 `StrataRec.Features` 是独立的命名空间和包：特征目录、实体键和连接器契约不依赖流水线，离线训练任务和特征治理工具可以单独引用它，读取同一份特征目录。
 
-核心标准算子库包括 `MultiSourceRecall`、`ExpressionFilter`、`ExpressionScorer`、`CompositeMultiplierScorer`、`ModelScorer`、`PairwiseRanker`、`ListwiseReranker`、`TopK`、`MmrDiversifier`、`SlidingWindowQuota` 和 `ChildAggregate`。`StrataRec.Llm` 提供 `GenerativeRetriever`、`LlmReranker`、`LlmAnnotator` 和 `SlateGenerator`（第 5.9 节）。扩展包注册的算子和模型客户端类型与核心算子一样进入二进制的能力清单（第 10.4 节）：产物引用了未安装的扩展时，能力匹配会拒绝它。
+核心标准算子库包括 `MultiSourceRecall`、`ExpressionFilter`、`ExpressionScorer`、`CompositeMultiplierScorer`、`ModelScorer`、`PairwiseRanker`、`ListwiseReranker`、`TopK`、`MmrDiversifier`、`SlidingWindowQuota` 和 `ChildAggregate`。`StrataRec.Llm` 提供 `GenerativeRetriever`、`LlmReranker` 和 `LlmAnnotator`（第 5.9 节）。扩展包注册的算子和模型客户端类型与核心算子一样进入二进制的能力清单（第 10.4 节）：产物引用了未安装的扩展时，能力匹配会拒绝它。
 
 ### 16.2 联合计划的正确性锚点
 
