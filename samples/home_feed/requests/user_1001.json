@@ -1,4 +1,5 @@
 {
+  "$schema": "../schemas/request.schema.json",
   "pipeline_id": "home_feed",
   "request_id": "req-1001",
   "inputs": { "user_id": 1001, "session_id": "s-1", "surface": "home" },

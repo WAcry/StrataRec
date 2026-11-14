@@ -24,7 +24,8 @@ internal static class RunCommand
         var request = new Option<string>("--request", "-r")
         {
             Description = "Request JSON: pipeline_id, request_id, inputs, assignment (the arms the experiment platform answered, experiment/arm), " +
-                          "deadline_ms, time_ms, seed, force_arms (forced arms over the assignment; [] forces the baseline).",
+                          "deadline_ms, time_ms, seed, force_arms (forced arms over the assignment; [] forces the baseline); " +
+                          "'stratarec schema request' prints its JSON Schema, which \"$schema\" may name for an editor.",
             Required = true,
         };
         var arms = new Option<string[]>("--arms", "-a")
@@ -69,7 +70,7 @@ internal static class RunCommand
         // Mistakes in the request file are reported like configuration errors, at file:line:column.
         var problems = new DiagnosticBag();
         var locator = DiagnosticLocator.ForWorkspace(config).AddFile(requestPath);
-        var file = await ReadRequestAsync(requestPath, problems, cancellationToken).ConfigureAwait(false);
+        var file = await ReadRequestAsync(requestPath, config, problems, cancellationToken).ConfigureAwait(false);
         if (file is null)
         {
             Output.Diagnostics(problems.Items, "text", errors, locator: locator);
@@ -154,9 +155,11 @@ internal static class RunCommand
     /// <summary>
     /// Reads and binds the request file strictly, like an artifact (<see cref="ArtifactSerializer.TryBind{T}"/>): a
     /// misspelled member is an error with a did-you-mean rather than a key silently ignored, and a member given twice is
-    /// an error at its line (<see cref="Jsonc"/>) rather than one of the two values. Null after reporting.
+    /// an error at its line (<see cref="Jsonc"/>) rather than one of the two values. A top-level <c>$schema</c> is the
+    /// editor's, as in a workspace file (<see cref="ArtifactSchemas.TryRemoveSchemaMember"/>). Null after reporting.
     /// </summary>
-    private static async Task<RequestFile?> ReadRequestAsync(string requestPath, DiagnosticBag problems, CancellationToken cancellationToken)
+    /// <param name="config">The workspace, whose <c>schemas/</c> the hint about <c>$schema</c> names.</param>
+    private static async Task<RequestFile?> ReadRequestAsync(string requestPath, string config, DiagnosticBag problems, CancellationToken cancellationToken)
     {
         JsonNode? document;
         try
@@ -171,6 +174,14 @@ internal static class RunCommand
         catch (IOException ex)
         {
             problems.Error("FILE_UNREADABLE", requestPath, string.Empty, ex.Message);
+            return null;
+        }
+
+        var schema = Path.Combine(Path.GetFullPath(config), ArtifactSchemas.DirectoryName, ArtifactSchemas.FileName(SchemaFiles.RequestKind));
+        var reference = Path.GetRelativePath(Path.GetDirectoryName(Path.GetFullPath(requestPath))!, schema).Replace('\\', '/');
+        if (!ArtifactSchemas.TryRemoveSchemaMember(document, reference, out var schemaError))
+        {
+            problems.Error("REQUEST_INVALID", requestPath, schemaError.Pointer, schemaError.Message, schemaError.Hint);
             return null;
         }
 
@@ -213,8 +224,8 @@ internal static class RunCommand
         }
     }
 
-    /// <summary>The request file of <c>stratarec run</c>.</summary>
-    private sealed class RequestFile
+    /// <summary>The request file of <c>stratarec run</c>; its JSON Schema is <c>schemas/request.schema.json</c> (<see cref="SchemaFiles"/>).</summary>
+    internal sealed class RequestFile
     {
         /// <summary>The pipeline to run, by its pipeline_id.</summary>
         public required string PipelineId { get; init; }

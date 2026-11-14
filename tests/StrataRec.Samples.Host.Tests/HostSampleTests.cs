@@ -96,6 +96,32 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Contains("CategoryBoost@1", unknown.Error, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The workspace's schemas/ are what this binary writes (<c>dotnet run -- stratarec schema --out config/schemas</c>), so
+    /// an editor completes and checks the custom operator's config in the pipeline as it does the built-ins'.
+    /// </summary>
+    [Fact]
+    public async Task TheWorkspaceSchemas_AreTheOnesThisBinaryWrites_WithTheCustomOperator()
+    {
+        var written = CopyOfTheWorkspace();
+        var (code, _, error) = await StratarecText("schema", "--out", Path.Combine(written, "fresh"));
+        Assert.True(code == 0, error);
+
+        var names = Directory.GetFiles(Path.Combine(written, "fresh")).Select(Path.GetFileName).Order(StringComparer.Ordinal).ToList();
+        Assert.Equal(Directory.GetFiles(Path.Combine(ConfigRoot, "schemas")).Select(Path.GetFileName).Order(StringComparer.Ordinal), names);
+        foreach (var name in names)
+        {
+            Assert.True(File.ReadAllText(Path.Combine(written, "fresh", name!)) == File.ReadAllText(Path.Combine(ConfigRoot, "schemas", name!)),
+                $"config/schemas/{name} is stale: run 'dotnet run -- stratarec schema --out config/schemas' in samples/StrataRec.Samples.Host");
+        }
+
+        var pipeline = JsonNode.Parse(File.ReadAllText(Path.Combine(ConfigRoot, "schemas", "pipeline.schema.json")))!;
+        var node = pipeline["properties"]!["nodes"]!["additionalProperties"]!;
+        Assert.Contains("CategoryBoost@1", Strings(node["properties"]!["op"]!["enum"]));
+        var boost = node["allOf"]!.AsArray().Single(b => b!["if"]!["properties"]!["op"]!["const"]!.GetValue<string>() == "CategoryBoost@1")!;
+        Assert.Equal(new[] { "score_col", "category_col", "output_col", "boosts" }, Strings(boost["then"]!["properties"]!["config"]!["required"]));
+    }
+
     [Fact]
     public async Task Operators_ListTheCustomComponents_NextToTheBuiltIns()
     {

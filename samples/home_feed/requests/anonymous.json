@@ -1,4 +1,5 @@
 {
+  "$schema": "../schemas/request.schema.json",
   "pipeline_id": "home_feed",
   "request_id": "req-anon",
   "inputs": { "session_id": "s-anon", "surface": "explore" },

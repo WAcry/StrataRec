@@ -17,11 +17,11 @@ namespace StrataRec.Experiments.Compilation;
 /// </remarks>
 public sealed class PatchableView
 {
-    /// <summary>Top-level sections of the view, in canonical order.</summary>
-    public static readonly string[] Sections =
-    {
-        "params", "param_schema", "columns", "nodes", "funnel_groups", "log_taps", "features", "derived_features",
-    };
+    /// <summary>
+    /// Top-level sections of the view, in canonical order: <see cref="ExperimentArtifact.PipelineSections"/>, then
+    /// <see cref="ExperimentArtifact.CatalogSections"/>.
+    /// </summary>
+    public static readonly string[] Sections = [.. ExperimentArtifact.PipelineSections, .. ExperimentArtifact.CatalogSections];
 
     private PatchableView(PipelineArtifact pipeline, FeatureCatalogArtifact catalog, JsonObject document)
     {

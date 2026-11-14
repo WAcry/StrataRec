@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DataTableArtifact",
+  "allowComments": true,
+  "allowTrailingCommas": true,
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "The JSON Schema of this file, for editors: a path relative to the file (e.g. ../schemas/table.schema.json, as 'stratarec schema --out schemas' writes them) or a URL. The engine ignores it: it is not part of the file's content id.",
+      "type": "string"
+    },
+    "table_id": {
+      "type": "string"
+    },
+    "key_type": {
+      "description": "int64 or string.",
+      "type": "string"
+    },
+    "value_type": {
+      "description": "int64, float64, bool or string.",
+      "type": "string"
+    },
+    "entries": {
+      "description": "Key (as a JSON property name) → value.",
+      "type": "object"
+    },
+    "description": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "table_id",
+    "key_type",
+    "value_type",
+    "entries"
+  ],
+  "additionalProperties": false
+}

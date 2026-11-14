@@ -15,7 +15,10 @@ internal sealed record InitFile(string Path, string Description, string Content)
 /// </summary>
 /// <remarks>
 /// Every file, fixtures and request too, is JSONC that starts with a comment saying what it is and what to change first
-/// (every reader of these files skips comments). The pipeline id is checked before it is substituted
+/// (every reader of these files skips comments). Every file but the fixtures then names its JSON Schema in
+/// <c>"$schema"</c>, in the <c>schemas/</c> init writes next to them (<see cref="InitCommand.Files"/>), so an editor
+/// completes and checks it; a fixture is a connector's data, in which <c>"$schema"</c> would be an item's id. The
+/// pipeline id is checked before it is substituted
 /// (<see cref="InitCommand"/>), so it needs no JSON escaping. Adjacent braces would start a hole in a <c>$$</c> raw
 /// string, so the JSON keeps a space between nested braces.
 /// </remarks>
@@ -52,6 +55,7 @@ internal static class InitTemplates
         // What experiments may change: RFC 6901 path prefixes into the pipeline. These are the defaults: narrow them to protect
         // what experiments must not change, and add "owners" (path prefix → teams) to route reviews.
         {
+          "$schema": "schemas/policy.schema.json",
           "experiment_patchable": ["/params", "/nodes", "/log_taps"],
           "experiment_add_only": ["/columns", "/param_schema", "/features", "/derived_features", "/funnel_groups"]
         }
@@ -64,6 +68,7 @@ internal static class InitTemplates
         // "default" is never missing; one without (age_hours) is nullable, and expressions say what missing means
         // (col.item.age_hours ?? 168.0).
         {
+          "$schema": "../schemas/catalog.schema.json",
           "catalog_id": "{{pipeline}}",
           "entities": {
             "item": { "scope": "candidate", "key": "col.entity_id", "key_type": "int64" }
@@ -86,6 +91,7 @@ internal static class InitTemplates
         // them at your data: here they read fixtures/ or run in process, so the workspace runs offline. Another environment
         // binds the same names in bindings/<env>.jsonc, used by releases/<pipeline>.<env>.jsonc.
         {
+          "$schema": "../schemas/bindings.schema.json",
           "environment": "local",
           "sources": {
             // A fixture answers at once; the timeout only allows for the first request of a process, which compiles code (JIT).
@@ -108,8 +114,9 @@ internal static class InitTemplates
     private static string Pipeline(string pipeline) => $$"""
         // The pipeline: what a request carries, the columns its nodes write, the parameters experiments tune, the nodes (run
         // by "order") and the output. Start with the nodes: 'stratarec operators' lists the operators and
-        // 'stratarec schema operator TopK@1' shows the settings of one.
+        // 'stratarec schema operator TopK@1' shows the settings of one; an editor completes and checks them from "$schema".
         {
+          "$schema": "../schemas/pipeline.schema.json",
           "pipeline_id": "{{pipeline}}",
           // ctx.request.user_id in expressions. To read user features, add a "user" entity keyed by it to the catalog.
           "request_schema": {
@@ -168,6 +175,7 @@ internal static class InitTemplates
         // experiment platform decides which arm a request is in (a request's "assignment"); the release lists the experiment
         // and its layer. To start another one, copy this file: the file name is the experiment_id.
         {
+          "$schema": "../schemas/experiment.schema.json",
           "experiment_id": "{{ExperimentId}}",
           "pipeline_id": "{{pipeline}}",
           "owner": "your-team",
@@ -185,6 +193,7 @@ internal static class InitTemplates
         // The release of pipeline "{{pipeline}}" in environment "local": the catalog and bindings it uses, and each experiment
         // in flight with its layer (a request is in at most one arm per layer). An experiment runs only once it is listed here.
         {
+          "$schema": "../schemas/release.schema.json",
           "pipeline_id": "{{pipeline}}",
           "environment": "local",
           "catalog": "{{pipeline}}",
@@ -228,6 +237,7 @@ internal static class InitTemplates
         // A request for 'stratarec run'. Change it to try others: "inputs" are the pipeline's request_schema fields, and
         // "assignment" the arms the experiment platform put the request in (experiment/arm).
         {
+          "$schema": "../schemas/request.schema.json",
           "pipeline_id": "{{pipeline}}",
           "request_id": "example",
           "inputs": { "user_id": 42 },

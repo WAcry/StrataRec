@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RequestFile",
+  "allowComments": true,
+  "allowTrailingCommas": true,
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "The JSON Schema of this file, for editors: a path relative to the file (e.g. ../schemas/request.schema.json, as 'stratarec schema --out schemas' writes them) or a URL. The engine ignores it: it is not part of the file's content id.",
+      "type": "string"
+    },
+    "pipeline_id": {
+      "description": "The pipeline to run, by its pipeline_id.",
+      "type": "string"
+    },
+    "request_id": {
+      "description": "Request id; it seeds the request's randomness when seed is absent. Defaults to \"cli\".",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "inputs": {
+      "description": "Values for the pipeline's request_schema, by name."
+    },
+    "assignment": {
+      "description": "The arms the experiment platform answered, as \"experiment/arm\"; [] is the answer \"no arms\".",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "force_arms": {
+      "description": "Arms to force over the assignment, as \"experiment/arm\"; [] forces the baseline.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "deadline_ms": {
+      "description": "End-to-end deadline in milliseconds; defaults to 1000.",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "time_ms": {
+      "description": "Request time in Unix milliseconds; defaults to now.",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "seed": {
+      "description": "Seed of the request's randomness; defaults to a hash of the request id.",
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "pipeline_id"
+  ],
+  "additionalProperties": false
+}

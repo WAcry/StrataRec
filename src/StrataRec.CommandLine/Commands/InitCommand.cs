@@ -1,5 +1,6 @@
 using System.CommandLine;
 using StrataRec.Artifacts.Model;
+using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.CommandLine.Commands;
 
@@ -17,7 +18,9 @@ namespace StrataRec.CommandLine.Commands;
 /// </remarks>
 internal static class InitCommand
 {
-    public static Command Create()
+    private const string SchemasDescription = "the JSON Schema of each kind of file above, which it names in \"$schema\": an editor completes and checks it as you type";
+
+    public static Command Create(PlanEnvironment provided)
     {
         var directory = new Argument<string?>("directory")
         {
@@ -34,18 +37,38 @@ internal static class InitCommand
             Description = "Write into a directory that is not empty: files of the same names are overwritten, nothing is deleted.",
         };
         var command = new Command("init", "Create a minimal workspace that validates and runs: a pipeline (recall, model, final score, top k), " +
-                                          "an experiment, local bindings to fixtures and a request. Exits with 2 on usage errors, such as a directory " +
-                                          "that is not empty without --force.")
+                                          "an experiment, local bindings to fixtures, a request, and the JSON Schemas its files name for editors. " +
+                                          "Exits with 2 on usage errors, such as a directory that is not empty without --force.")
         {
             directory, pipeline, force,
         };
-        command.SetAction(parse => Run(parse.GetValue(directory), parse.GetValue(pipeline)!, parse.GetValue(force), parse.InvocationConfiguration.Output,
+        command.SetAction(parse => Run(provided, parse.GetValue(directory), parse.GetValue(pipeline)!, parse.GetValue(force), parse.InvocationConfiguration.Output,
             parse.InvocationConfiguration.Error));
         return command;
     }
 
+    /// <summary>
+    /// What init writes: the workspace (<see cref="InitTemplates"/>), then <c>schemas/</c>, the schemas of the binary that
+    /// runs it (<see cref="SchemaFiles"/>), which the files name in <c>$schema</c>: a workspace opened in an editor completes
+    /// and checks its files, a host binary's operators included, with no setup.
+    /// </summary>
+    internal static InitFile[] Files(PlanEnvironment provided, string pipeline)
+    {
+        var templates = InitTemplates.Files(pipeline);
+        var schemas = SchemaFiles.Generate(provided);
+        var files = new InitFile[templates.Length + schemas.Count];
+        templates.CopyTo(files, 0);
+        for (var i = 0; i < schemas.Count; i++)
+        {
+            files[templates.Length + i] = new InitFile(ArtifactSchemas.DirectoryName + "/" + schemas[i].Name, SchemasDescription, schemas[i].Text);
+        }
+
+        return files;
+    }
+
+    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>): the operators the schemas describe.</param>
     /// <param name="directory">The directory as the user typed it; null for the current directory.</param>
-    internal static int Run(string? directory, string pipeline, bool force, TextWriter output, TextWriter errors)
+    internal static int Run(PlanEnvironment provided, string? directory, string pipeline, bool force, TextWriter output, TextWriter errors)
     {
         var shown = Shown(directory);
         var root = Path.GetFullPath(string.IsNullOrEmpty(directory) ? "." : directory);
@@ -58,7 +81,7 @@ internal static class InitCommand
             return Fail(diagnostics, errors);
         }
 
-        var files = InitTemplates.Files(pipeline);
+        var files = Files(provided, pipeline);
         var existing = new List<string>(); // the files init would overwrite
         try
         {
@@ -93,19 +116,36 @@ internal static class InitCommand
         var select = OtherPipelines(root, InitTemplates.PipelinePath(pipeline)) ? $" -p {pipeline}" : string.Empty;
         var where = shown == "." ? "the current directory" : shown;
         output.WriteLine($"Created a StrataRec workspace in {where}:");
+
+        // The workspace's files one by one, then schemas/ on one line.
+        var listed = new List<(string Path, string Description, bool Overwritten)>();
+        var schemasOverwritten = false;
+        foreach (var file in files)
+        {
+            if (file.Path.StartsWith(ArtifactSchemas.DirectoryName + "/", StringComparison.Ordinal))
+            {
+                schemasOverwritten |= existing.Contains(file.Path);
+            }
+            else
+            {
+                listed.Add((Join(shown, file.Path), file.Description, existing.Contains(file.Path)));
+            }
+        }
+
+        listed.Add((Join(shown, ArtifactSchemas.DirectoryName + "/"), SchemasDescription, schemasOverwritten));
         var width = 0;
-        foreach (var file in files)
+        foreach (var (path, _, _) in listed)
         {
-            width = Math.Max(width, Join(shown, file.Path).Length);
+            width = Math.Max(width, path.Length);
         }
 
-        foreach (var file in files)
+        foreach (var (path, description, overwritten) in listed)
         {
-            var note = existing.Contains(file.Path) ? " (overwritten)" : string.Empty;
-            output.WriteLine($"  {Join(shown, file.Path).PadRight(width)}  {file.Description}{note}");
+            output.WriteLine($"  {path.PadRight(width)}  {description}{(overwritten ? " (overwritten)" : string.Empty)}");
         }
 
-        output.WriteLine("Each file starts with a comment on what it is and what to change first.");
+        output.WriteLine("Each file starts with a comment on what it is and what to change first. The schemas are generated: after an upgrade, " +
+                         $"'stratarec schema --out {Quote(Join(shown, ArtifactSchemas.DirectoryName))}' writes them again (validate warns until then).");
 
         var config = Quote(shown);
         var request = Quote(Join(shown, InitTemplates.RequestPath));

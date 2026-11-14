@@ -54,6 +54,14 @@ dotnet run -- stratarec schema operator CategoryBoost@1  # 自定义算子配置
 dotnet run -- stratarec operators                        # 内置和本二进制的组件
 ```
 
+`config/schemas/` 是这个二进制写出的 JSON Schema，`config/` 下每个文件用第一个成员 `"$schema"` 指向自己那一类（引擎忽略它，也不计入内容 id）。在 VS Code 里打开就有补全、悬停说明和即时报错，包括自定义算子 `CategoryBoost@1` 的配置项。官方 CLI 写出的 schema 不含自定义组件，所以要用宿主自己的二进制生成；加了组件或升级 StrataRec 之后重新生成并提交，否则 `validate` 会给出 `SCHEMAS_STALE` 警告（CI 用 `--warnings-as-errors` 时即失败）：
+
+```sh
+dotnet run -- stratarec schema --out config/schemas       # 每类文件一个 <kind>.schema.json，同一个二进制总是写出相同的字节
+```
+
+`config/requests/user_1001.json` 是给 curl 用的 HTTP 请求体，不是 `stratarec run` 的请求文件，所以不带 `"$schema"`：端点是严格的，会把它当未知成员拒绝。
+
 命令、选项、输出和退出码与官方 CLI 完全相同。CI 里原本跑 `stratarec validate` 的地方改跑 `dotnet run --project <宿主项目> -- stratarec validate -c <工作区>`；`dotnet run` 在项目目录运行（`RunWorkingDirectory`），相对路径从那里算，本示例就是 `-c config`。`stratarec run` 的请求文件比 HTTP 请求体多一个 `pipeline_id`，因为 HTTP 由路由给出流水线。
 
 静态校验不做 I/O：绑定的文件在服务加载计划时才打开，需要加载才能回答的模型签名也在那时检查。服务启动时（`AddStrataRec` 注册的托管服务，在开始监听之前）加载失败会抛出列出全部错误的 `ConfigException`，服务不会启动；警告写入日志（事件 1003）。
@@ -64,4 +72,4 @@ dotnet run -- stratarec operators                        # 内置和本二进制
 
 ## 测试
 
-`tests/StrataRec.Samples.Host.Tests/HostSampleTests.cs` 用 `WebApplicationFactory` 在进程内启动这个服务：工作区校验和加载都没有错误和警告；`stratarec` 命令带着自定义组件运行；推荐结果来自四个自定义组件（分数按数据和权重逐项核对），与 `stratarec run` 的输出一致；400（含重复成员和无效转义）、404、500 的响应，以及每种 `ErrorKind` 对应的状态码；配置有错时服务启动失败。
+`tests/StrataRec.Samples.Host.Tests/HostSampleTests.cs` 用 `WebApplicationFactory` 在进程内启动这个服务：工作区校验和加载都没有错误和警告；`stratarec` 命令带着自定义组件运行；`config/schemas/` 与这个二进制写出的完全相同；推荐结果来自四个自定义组件（分数按数据和权重逐项核对），与 `stratarec run` 的输出一致；400（含重复成员和无效转义）、404、500 的响应，以及每种 `ErrorKind` 对应的状态码；配置有错时服务启动失败。

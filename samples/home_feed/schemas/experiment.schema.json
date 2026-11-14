@@ -1,0 +1,1367 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExperimentArtifact",
+  "allowComments": true,
+  "allowTrailingCommas": true,
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "The JSON Schema of this file, for editors: a path relative to the file (e.g. ../schemas/experiment.schema.json, as 'stratarec schema --out schemas' writes them) or a URL. The engine ignores it: it is not part of the file's content id.",
+      "type": "string"
+    },
+    "experiment_id": {
+      "type": "string"
+    },
+    "pipeline_id": {
+      "type": "string"
+    },
+    "owner": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "ISO date (yyyy-MM-dd) after which the experiment may not enter new manifests.",
+      "type": "string"
+    },
+    "arms": {
+      "description": "Arm id → RFC 7396 merge patch; control arms are usually {}.",
+      "type": "object",
+      "additionalProperties": {
+        "description": "An RFC 7396 merge patch of the pipeline and catalog: an object changes only the members it names, null deletes, an array is replaced whole. A new node or entry must be complete; 'stratarec validate' checks what the patch does to the baseline.",
+        "type": "object",
+        "properties": {
+          "params": {
+            "description": "Parameter values; map-typed parameters are nested objects flattened to leaves (design 11.8).",
+            "type": "object"
+          },
+          "param_schema": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "type": {
+                  "description": "int64, float64, bool, string or map<string,T>.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "min": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "max": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "enum": {
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "description": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "columns": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "type": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "flow": {
+                  "description": "Flow columns may be rewritten by later nodes on the same path.",
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "default": {
+                  "description": "Replacement for non-finite numeric writes; required for non-nullable numeric columns."
+                },
+                "description": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "nodes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "order": {
+                  "description": "Semantic position; required unless role is fallback.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "op": {
+                  "description": "Operator type and version, e.g. TopK@1.",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "CompositeMultiplierScorer@1",
+                    "ExpressionFilter@1",
+                    "ExpressionScorer@1",
+                    "GenerativeRetriever@1",
+                    "ListwiseReranker@1",
+                    "LlmAnnotator@1",
+                    "LlmReranker@1",
+                    "MmrDiversifier@1",
+                    "ModelScorer@1",
+                    "MultiSourceRecall@1",
+                    "PairwiseRanker@1",
+                    "SlidingWindowQuota@1",
+                    "TopK@1",
+                    null
+                  ],
+                  "enumDescriptions": [
+                    "score = base × Π multipliers + Σ addends, with named, independently patchable terms.",
+                    "Drops rows for which a boolean ColumnExpr predicate is false.",
+                    "Evaluates a ColumnExpr for every live row and writes it to a column.",
+                    "Appends the candidates a generative model names that the table does not have, from prompts rendered with Mustache templates.",
+                    "Reranks the leading rows by scores a model gives them as one list.",
+                    "Writes a generative model's answer for each leading row into a column, from prompts rendered per row with Mustache templates.",
+                    "Reranks the leading rows in the order a generative model lists them, from prompts rendered with Mustache templates.",
+                    "Maximal marginal relevance rerank of the leading rows using an embedding column.",
+                    "Scores rows with a model: named inputs from columns, named outputs to columns, batched.",
+                    "Concurrent multi-source retrieval with deterministic merge and entity_id dedup.",
+                    "Reranks the leading rows by a model's pairwise preferences, aggregated into expected wins.",
+                    "Limits rows per group within any sliding window of ranks; over-quota rows move down or drop.",
+                    "Sorts rows by a score column (missing last, ties by entity_id) and keeps the first k."
+                  ]
+                },
+                "config": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "when": {
+                  "description": "Request-level condition over ctx.* (design 5.5).",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "timeout_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "min_remaining_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "on_failure": {
+                  "description": "fail_request (default), skip or fallback:<node_id>.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "fallback_reserve_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "role": {
+                  "description": "fallback for nodes that only run as another node's fallback.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "fetch_barrier": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "compact": {
+                  "description": "auto (default), always or never.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "description": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "CompositeMultiplierScorer@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "score = base × Π multipliers + Σ addends, with named, independently patchable terms.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "output_col": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "base_expr": {
+                            "description": "Base utility (non-nullable float64).",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "multipliers": {
+                            "description": "Named multipliers; experiments add, change or delete (null) single entries without conflicts.",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "addends": {
+                            "description": "Named addends.",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "ExpressionFilter@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "Drops rows for which a boolean ColumnExpr predicate is false.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "predicate": {
+                            "description": "Non-nullable bool ColumnExpr; rows where it is false are dropped.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "ExpressionScorer@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "Evaluates a ColumnExpr for every live row and writes it to a column.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "output_col": {
+                            "description": "Column to write (declared under columns); may be a flow column read by expr.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "expr": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "GenerativeRetriever@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "Appends the candidates a generative model names that the table does not have, from prompts rendered with Mustache templates.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "model": {
+                            "description": "Logical model name, bound per environment.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "version": {
+                            "description": "Fixed model version; or use version_param.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "version_param": {
+                            "description": "String parameter (with an enum of allowed versions) selecting the version per request.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "prompts": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "output": {
+                            "description": "The model's text output holding the answer: a JSON array of entity ids (integers for int64 keys, strings for string keys).",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "max_items": {
+                            "description": "The most rows the node appends: the first new ids of the answer. Also the node's row limit, which sizes the request's candidate table (design 4.8).",
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "rank_col": {
+                            "description": "A column for each appended row's 1-based position in the answer: int64? or int32? (undeclared: int64?). Rows the node did not append have no value in it.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "max_output_tokens": {
+                            "description": "The most tokens the model may generate (design 5.9 rule 2), passed with the call.",
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "ListwiseReranker@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "Reranks the leading rows by scores a model gives them as one list.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "model": {
+                            "description": "Logical model name, bound per environment.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "version": {
+                            "description": "Fixed model version; or use version_param.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "version_param": {
+                            "description": "String parameter (with an enum of allowed versions) selecting the version per request.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "inputs": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "output": {
+                            "description": "The model output read: float32 [1, -1], one score per row of the list, higher first.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "window": {
+                            "description": "The leading ranks sent as one list and reordered by their scores; later rows keep their order after them.",
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "score_col": {
+                            "description": "Optional column for each window row's score: float32? or float64?, missing outside the window. An undeclared column is float32?.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "LlmAnnotator@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "Writes a generative model's answer for each leading row into a column, from prompts rendered per row with Mustache templates.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "model": {
+                            "description": "Logical model name, bound per environment.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "version": {
+                            "description": "Fixed model version; or use version_param.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "version_param": {
+                            "description": "String parameter (with an enum of allowed versions) selecting the version per request.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "prompts": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "output": {
+                            "description": "The model's text output holding the answer: the row's value.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "column": {
+                            "description": "The column written: nullable, since the rows after the window and the rows whose answer is not usable have no value. text?, string?, bool?, int32?, int64?, float32? or float64?; an undeclared column is text?, or string? with categories.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "categories": {
+                            "description": "For a string? column: the answers it allows, compared exactly; any other answer is not usable.",
+                            "type": [
+                              "array",
+                              "null"
+                            ],
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "window": {
+                            "description": "The leading rows annotated, one model call each; the rows after them stay missing.",
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "max_output_tokens": {
+                            "description": "The most tokens the model may generate per answer (design 5.9 rule 2), passed with each call.",
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "LlmReranker@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "Reranks the leading rows in the order a generative model lists them, from prompts rendered with Mustache templates.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "model": {
+                            "description": "Logical model name, bound per environment.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "version": {
+                            "description": "Fixed model version; or use version_param.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "version_param": {
+                            "description": "String parameter (with an enum of allowed versions) selecting the version per request.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "prompts": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "output": {
+                            "description": "The model's text output holding the answer: a JSON array of window ranks or entity ids (see answer).",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "window": {
+                            "description": "The leading rows the prompts show and the answer may reorder; later rows keep their order after them.",
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "answer": {
+                            "description": "What the answer lists: rank, the 1-based window positions {{rank}} shows, or entity_id, the rows' entity ids (JSON integers for int64 keys, strings for string keys). No default: the prompt decides.",
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "enum": [
+                              "rank",
+                              "entity_id",
+                              null
+                            ]
+                          },
+                          "unlisted": {
+                            "description": "Window rows the answer does not list: keep them after the listed ones, in their previous order, or drop them.",
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "enum": [
+                              "keep",
+                              "drop",
+                              null
+                            ]
+                          },
+                          "max_output_tokens": {
+                            "description": "The most tokens the model may generate (design 5.9 rule 2), passed with the call.",
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "MmrDiversifier@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "Maximal marginal relevance rerank of the leading rows using an embedding column.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "score_col": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "embedding_col": {
+                            "description": "Vector column; rows without a vector have zero similarity to everything.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "lambda": {
+                            "description": "Relevance weight λ in [0, 1]; use lambda_param to make it tunable.",
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "lambda_param": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "window": {
+                            "description": "Number of leading ranks to rerank; later rows keep their order. Default 50.",
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "ModelScorer@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "Scores rows with a model: named inputs from columns, named outputs to columns, batched.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "model": {
+                            "description": "Logical model name, bound per environment.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "version": {
+                            "description": "Fixed model version; or use version_param.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "version_param": {
+                            "description": "String parameter (with an enum of allowed versions) selecting the version per request.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "inputs": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "outputs": {
+                            "description": "Model output name → column to write (float32 or float64).",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "batch_size": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "MultiSourceRecall@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "Concurrent multi-source retrieval with deterministic merge and entity_id dedup.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "quotas_param": {
+                            "description": "Map parameter source name → quota (e.g. recall_quotas); a quota of 0 disables a source.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "source_order": {
+                            "description": "Merge order of sources; defaults to ordinal order of their names. Earlier sources win the primary source.",
+                            "type": [
+                              "array",
+                              "null"
+                            ],
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "PairwiseRanker@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "Reranks the leading rows by a model's pairwise preferences, aggregated into expected wins.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "model": {
+                            "description": "Logical model name, bound per environment.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "version": {
+                            "description": "Fixed model version; or use version_param.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "version_param": {
+                            "description": "String parameter (with an enum of allowed versions) selecting the version per request.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "inputs": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "output": {
+                            "description": "The model output read: float32 [-1], one value per pair, the probability that the pair's first (higher-ranked) row is preferred.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "window": {
+                            "description": "The leading ranks to rerank (at least 2); later rows keep their order after them.",
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "max_pairs": {
+                            "description": "Load-time ceiling on the pairs a request sends: window · (window − 1) / 2 above it is a config error. Every pair in the window is compared; none is dropped at run time. The default allows a window of 50.",
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "batch_size": {
+                            "description": "Pairs per model call; the calls run concurrently.",
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "score_col": {
+                            "description": "Optional column for each window row's aggregated score (its expected wins against the other rows of the window): float32? or float64?, missing outside the window. An undeclared column is float32?.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "SlidingWindowQuota@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "Limits rows per group within any sliding window of ranks; over-quota rows move down or drop.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "group_col": {
+                            "description": "Grouping column (int64 or string), e.g. item.creator_id. Missing values are never limited.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "window": {
+                            "description": "Window length in ranks.",
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "max_per_window": {
+                            "description": "Maximum rows of one group in any window.",
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "TopK@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "Sorts rows by a score column (missing last, ties by entity_id) and keeps the first k.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "score_col": {
+                            "description": "Numeric column to rank by.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "k": {
+                            "description": "Fixed number of rows to keep; use k_param to make it tunable.",
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "k_param": {
+                            "description": "int64 parameter holding k.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "ascending": {
+                            "description": "Rank lower scores first.",
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "funnel_groups": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "key": {
+                  "description": "Key expressions; the first non-missing value is the sampling key.",
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "rate": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "log_taps": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "group": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "delivery": {
+                  "description": "best_effort (default) or durable.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "attach": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "after": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "output": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "rows": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "scope": {
+                      "description": "entered, survived (default) or dropped.",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "filter": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "rate": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "max_rows": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "context": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "columns": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "columns_from": {
+                  "description": "Expands to a model node's inputs, e.g. ctr_ranker.inputs.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "fetch_missing": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "features": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "type": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "source": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "field": {
+                  "description": "Physical field name in the store.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "default": {
+                  "description": "Value used when the key legitimately has no value; makes the feature non-nullable."
+                },
+                "owner": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "description": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "deprecated": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "derived_features": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "type": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "expr": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "default": true,
+                "owner": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "description": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "experiment_id",
+    "pipeline_id",
+    "owner",
+    "description",
+    "expires_at",
+    "arms"
+  ],
+  "additionalProperties": false
+}

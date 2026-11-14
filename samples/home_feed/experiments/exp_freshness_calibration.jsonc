@@ -1,5 +1,6 @@
 // Boost fresh items after fusion. Writes the flow column score.final (design 4.6).
 {
+  "$schema": "../schemas/experiment.schema.json",
   "experiment_id": "exp_freshness_calibration",
   "pipeline_id": "home_feed",
   "owner": "fusion-team",

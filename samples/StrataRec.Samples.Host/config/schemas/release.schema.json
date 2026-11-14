@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReleaseArtifact",
+  "allowComments": true,
+  "allowTrailingCommas": true,
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "The JSON Schema of this file, for editors: a path relative to the file (e.g. ../schemas/release.schema.json, as 'stratarec schema --out schemas' writes them) or a URL. The engine ignores it: it is not part of the file's content id.",
+      "type": "string"
+    },
+    "pipeline_id": {
+      "type": "string"
+    },
+    "environment": {
+      "type": "string"
+    },
+    "catalog": {
+      "description": "Catalog id; defaults to the pipeline id.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "bindings": {
+      "description": "Bindings environment; defaults to environment.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "experiments": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "layer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "layer"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "pipeline_id",
+    "environment"
+  ],
+  "additionalProperties": false
+}

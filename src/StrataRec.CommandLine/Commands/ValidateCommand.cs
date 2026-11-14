@@ -8,7 +8,8 @@ namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
 /// <c>stratarec validate</c>: every static check CI runs (design 10.1 item 1) — schemas, types, data flow, patch
-/// footprints and conflicts, per-arm and combination checks — for every pipeline in an environment.
+/// footprints and conflicts, per-arm and combination checks — for every pipeline in an environment, and that the
+/// workspace's <c>schemas/</c> are the ones this binary writes (<see cref="SchemaFiles.Check"/>).
 /// </summary>
 internal static class ValidateCommand
 {
@@ -65,6 +66,9 @@ internal static class ValidateCommand
 
             workspace.CheckFallbackInputs(ids, id => schemas.GetValueOrDefault(id), diagnostics);
         }
+
+        // The JSON Schemas the files name for editors: those of this binary's config types and operators.
+        SchemaFiles.Check(config, provided, diagnostics);
 
         var code = Output.Diagnostics(diagnostics.Items, format, output, warningsAsErrors, DiagnosticLocator.ForWorkspace(config));
         if (format == "text")

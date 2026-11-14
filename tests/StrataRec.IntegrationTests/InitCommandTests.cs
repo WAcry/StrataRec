@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using StrataRec.Artifacts.Json;
+using StrataRec.Artifacts.Model;
 using StrataRec.CommandLine.Commands;
 
 namespace StrataRec.IntegrationTests;
@@ -33,6 +36,27 @@ public sealed class InitCommandTests
         {
             Assert.Contains(file.Path.Replace('/', Path.DirectorySeparatorChar), printed);
             Assert.StartsWith("// ", File.ReadAllText(Path.Combine(root, file.Path)));
+        }
+
+        // schemas/, listed on one line, holds this binary's schemas, and every file but the fixtures names its own first.
+        Assert.Contains(printed.Split('\n'), line => line.TrimStart().StartsWith(Path.Combine(root, "schemas") + Path.DirectorySeparatorChar + " ", StringComparison.Ordinal)
+                                                     && line.Contains("the JSON Schema of each kind of file above", StringComparison.Ordinal));
+        foreach (var schema in SchemaFiles.Generate(Tool.Environment))
+        {
+            Assert.Equal(schema.Text, File.ReadAllText(Path.Combine(root, "schemas", schema.Name)));
+        }
+
+        foreach (var file in InitTemplates.Files(pipeline))
+        {
+            var document = Assert.IsType<JsonObject>(Jsonc.Parse(File.ReadAllText(Path.Combine(root, file.Path))));
+            if (file.Path.StartsWith("fixtures/", StringComparison.Ordinal))
+            {
+                Assert.False(document.ContainsKey("$schema"), file.Path); // a connector's data: "$schema" would be an item id
+                continue;
+            }
+
+            Assert.Equal("$schema", document.First().Key);
+            Assert.Equal(ArtifactSchemas.Reference(file.Path, EditorSchemaTests.KindOf(file.Path)), document["$schema"]!.GetValue<string>());
         }
 
         Assert.True(File.Exists(Path.Combine(root, "pipelines", pipeline + ".jsonc")));
@@ -84,7 +108,7 @@ public sealed class InitCommandTests
         Assert.Equal(0, Init(workspace, InitTemplates.DefaultPipeline, force: false, out _, out _));
         Assert.Equal(2, Init(workspace, InitTemplates.DefaultPipeline, force: false, out _, out errors));
         Assert.Contains("'policy.jsonc' is in the way", errors);
-        Assert.Contains($"overwrite the {InitTemplates.Files(InitTemplates.DefaultPipeline).Length} files", errors);
+        Assert.Contains($"overwrite the {InitCommand.Files(Tool.Environment, InitTemplates.DefaultPipeline).Length} files", errors); // schemas/ too
     }
 
     [Fact]
@@ -339,7 +363,7 @@ public sealed class InitCommandTests
     {
         var output = new StringWriter();
         var error = new StringWriter();
-        var code = InitCommand.Run(directory, pipeline, force, output, error);
+        var code = InitCommand.Run(Tool.Environment, directory, pipeline, force, output, error);
         printed = output.ToString();
         errors = error.ToString();
         return code;

@@ -2,6 +2,7 @@
 // (bindings/local.jsonc). A feature with "default" is non-nullable; without one it is T? and reads as missing when the
 // store has no value.
 {
+  "$schema": "../schemas/catalog.schema.json",
   "catalog_id": "trending",
   "entities": {
     "user": { "scope": "context",   "key": "ctx.request.user_id", "key_type": "int64" },

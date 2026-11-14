@@ -8,8 +8,8 @@ namespace StrataRec.CommandLine;
 /// The <c>stratarec</c> commands (init, validate, build, explain-plan, run, replay, compare, diff, schema, operators;
 /// design 10.1, 13.4), run with the components of the binary that calls them. The <c>stratarec</c> tool is one caller,
 /// with the components it ships; a host binary is another, with its own, so a workspace that names the host's operators,
-/// connectors or clients is validated, explained, run and replayed by the binary that serves it, and <c>schema</c> and
-/// <c>operators</c> describe that binary's components.
+/// connectors or clients is validated, explained, run and replayed by the binary that serves it, and <c>schema</c>,
+/// <c>operators</c> and the schemas <c>init</c> writes describe that binary's components.
 /// </summary>
 /// <remarks>
 /// <para>Output is plain text for people or <c>--format json</c> for CI and agents; the exit code is 0 on success, 1 on
@@ -65,7 +65,7 @@ public static class StrataRecCommandLine
     {
         ArgumentNullException.ThrowIfNull(environment);
         var root = new RootCommand("StrataRec: columnar recommendation pipelines with multi-layer experiments.");
-        root.Add(InitCommand.Create());
+        root.Add(InitCommand.Create(environment));
         root.Add(ValidateCommand.Create(environment));
         root.Add(BuildCommand.Create(environment));
         root.Add(ExplainPlanCommand.Create(environment));

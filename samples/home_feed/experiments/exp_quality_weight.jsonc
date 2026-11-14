@@ -1,5 +1,6 @@
 // A parameter-only experiment: no node variants, only a per-request parameter override (design 12.2).
 {
+  "$schema": "../schemas/experiment.schema.json",
   "experiment_id": "exp_quality_weight",
   "pipeline_id": "home_feed",
   "owner": "fusion-team",

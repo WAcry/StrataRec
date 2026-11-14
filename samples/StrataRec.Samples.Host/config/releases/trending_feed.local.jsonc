@@ -1,6 +1,7 @@
 // The release for local runs (design 10.1): the catalog and bindings it uses, and the layer of each experiment in flight.
 // Which arms a request is in is the experiment platform's answer (the request's "assignment"), not part of the release.
 {
+  "$schema": "../schemas/release.schema.json",
   "pipeline_id": "trending_feed",
   "environment": "local",
   "catalog": "trending",
