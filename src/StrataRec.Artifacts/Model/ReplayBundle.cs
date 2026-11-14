@@ -24,14 +24,12 @@ public sealed class ReplayBundle
 {
     /// <summary>The format this build reads and writes.</summary>
     /// <remarks>
-    /// Version 2 keeps non-finite values (version 1 wrote them as null) and digests model inputs with their element type
-    /// and shape. Version 3 records a thrown exception type as an identity (name, defining assembly, type arguments);
-    /// version 2 had its full name only. Version 4 records which of the platform's arm ids the request ignored and why;
-    /// version 3 had their count only, and a <c>builtin</c> assignment source that no longer exists.
+    /// A format version is the date its layout changed and that day's sequence (<c>2026-11-14.1</c>, then
+    /// <c>2026-11-14.2</c>): it says when a bundle was laid out, and sorts as text.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/4";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-14.1";
 
-    [Description("Format and version: \"stratarec.replay_bundle/4\".")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-14.1\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }

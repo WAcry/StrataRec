@@ -29,12 +29,13 @@ internal enum CacheRecordHeader : byte
 /// <remarks>
 /// <para>Layout, little-endian (as are the platforms .NET runs on):</para>
 /// <code>
-/// 0   uint8   format          1
-/// 1   uint8   flags           bit 0: absent (the connector had no value for the key: every field missing)
-/// 2   uint16  field count     of the table
-/// 4   int64   write time      Unix milliseconds: when the fetch that produced the values started
-/// 12  uint64  fingerprint     XXH3-64 of the field set (<see cref="Fingerprint"/>)
-/// 20  uint8[V] validity       bit f set = field f has a value (V = ceil(fields / 8))
+/// 0   uint32  format          2026111401: the format version 2026-11-14.1 (the date it changed, that day's sequence)
+/// 4   uint8   flags           bit 0: absent (the connector had no value for the key: every field missing)
+/// 5   uint8   (zero)
+/// 6   uint16  field count     of the table
+/// 8   int64   write time      Unix milliseconds: when the fetch that produced the values started
+/// 16  uint64  fingerprint     XXH3-64 of the field set (<see cref="Fingerprint"/>)
+/// 24  uint8[V] validity       bit f set = field f has a value (V = ceil(fields / 8))
 /// …   values of the fields that have one, in field order: bool 1 byte; int32, float32 4; int64, float64 8; vector
 ///     dimension × float32; string and text int32 byte length + UTF-8; list&lt;int32|int64&gt; int32 count + elements;
 ///     list&lt;string&gt; int32 count + (int32 byte length + UTF-8) per item
@@ -46,9 +47,25 @@ internal enum CacheRecordHeader : byte
 /// </remarks>
 internal static class CacheRecord
 {
-    public const byte Format = 1;
+    /// <summary>The format version 2026-11-14.1 as a number: date, then that day's sequence in two digits.</summary>
+    public const uint Format = 2026111401;
     public const byte AbsentFlag = 1;
-    internal const int ValidityOffset = 20;
+    private const int FlagsOffset = 4;
+    private const int FieldCountOffset = 6;
+    private const int WrittenOffset = 8;
+    private const int FingerprintOffset = 16;
+    internal const int ValidityOffset = 24;
+
+    /// <summary>Writes the header (the validity bits are the caller's), as <see cref="ReadHeader"/> reads it.</summary>
+    public static void WriteHeader(Span<byte> header, ushort fieldCount, long writtenMs, ulong fingerprint, bool absent)
+    {
+        BinaryPrimitives.WriteUInt32LittleEndian(header, Format);
+        header[FlagsOffset] = absent ? AbsentFlag : (byte)0;
+        header[FlagsOffset + 1] = 0;
+        BinaryPrimitives.WriteUInt16LittleEndian(header[FieldCountOffset..], fieldCount);
+        BinaryPrimitives.WriteInt64LittleEndian(header[WrittenOffset..], writtenMs);
+        BinaryPrimitives.WriteUInt64LittleEndian(header[FingerprintOffset..], fingerprint);
+    }
 
     /// <summary>Bytes of a record before its values: the header and the validity bits.</summary>
     public static int PrefixSize(int fieldCount) => ValidityOffset + ((fieldCount + 7) / 8);
@@ -83,17 +100,20 @@ internal static class CacheRecord
         absent = false;
         if (record.Length < PrefixSize(fieldCount))
         {
-            return record.Length >= ValidityOffset && record[0] != Format ? CacheRecordHeader.Mismatch : CacheRecordHeader.Corrupt;
+            return record.Length >= ValidityOffset && BinaryPrimitives.ReadUInt32LittleEndian(record) != Format
+                ? CacheRecordHeader.Mismatch
+                : CacheRecordHeader.Corrupt;
         }
 
-        if (record[0] != Format || BinaryPrimitives.ReadUInt16LittleEndian(record[2..]) != fieldCount
-            || BinaryPrimitives.ReadUInt64LittleEndian(record[12..]) != fingerprint)
+        if (BinaryPrimitives.ReadUInt32LittleEndian(record) != Format
+            || BinaryPrimitives.ReadUInt16LittleEndian(record[FieldCountOffset..]) != fieldCount
+            || BinaryPrimitives.ReadUInt64LittleEndian(record[FingerprintOffset..]) != fingerprint)
         {
             return CacheRecordHeader.Mismatch;
         }
 
-        writtenMs = BinaryPrimitives.ReadInt64LittleEndian(record[4..]);
-        absent = (record[1] & AbsentFlag) != 0;
+        writtenMs = BinaryPrimitives.ReadInt64LittleEndian(record[WrittenOffset..]);
+        absent = (record[FlagsOffset] & AbsentFlag) != 0;
         return CacheRecordHeader.Ok;
     }
 
@@ -104,7 +124,7 @@ internal static class CacheRecord
     public static bool HasValue(ReadOnlySpan<byte> record, int field) => (record[ValidityOffset + (field >> 3)] & (1 << (field & 7))) != 0;
 
     /// <summary>The write time of a record whose header was found <see cref="CacheRecordHeader.Ok"/>.</summary>
-    public static long WrittenMs(ReadOnlySpan<byte> record) => BinaryPrimitives.ReadInt64LittleEndian(record[4..]);
+    public static long WrittenMs(ReadOnlySpan<byte> record) => BinaryPrimitives.ReadInt64LittleEndian(record[WrittenOffset..]);
 
     /// <summary>
     /// Walks the values of a record whose header is <see cref="CacheRecordHeader.Ok"/>, calling <paramref name="visitor"/>
@@ -436,11 +456,7 @@ internal sealed class CacheRecordWriter
         var prefix = CacheRecord.PrefixSize(_layout.FieldCount);
         var header = Reserve(prefix);
         header.Clear();
-        header[0] = CacheRecord.Format;
-        header[1] = absent ? CacheRecord.AbsentFlag : (byte)0;
-        BinaryPrimitives.WriteUInt16LittleEndian(header[2..], checked((ushort)_layout.FieldCount));
-        BinaryPrimitives.WriteInt64LittleEndian(header[4..], writtenMs);
-        BinaryPrimitives.WriteUInt64LittleEndian(header[12..], fingerprint);
+        CacheRecord.WriteHeader(header, checked((ushort)_layout.FieldCount), writtenMs, fingerprint, absent);
     }
 
     public void Bool(int field, bool value)

@@ -133,7 +133,7 @@ public class CacheTableTests
         Assert.Equal(CacheRecordHeader.Mismatch, CacheRecord.ReadHeader(record, layout.FieldCount, layout.Fingerprint + 1, out _, out _));
         Assert.Equal(CacheRecordHeader.Mismatch, CacheRecord.ReadHeader(record, layout.FieldCount - 1, layout.Fingerprint, out _, out _));
         var otherFormat = record.ToArray();
-        otherFormat[0] = 2;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(otherFormat, 2026010101); // 2026-01-01.1
         Assert.Equal(CacheRecordHeader.Mismatch, CacheRecord.ReadHeader(otherFormat, layout.FieldCount, layout.Fingerprint, out _, out _));
         Assert.Equal(CacheRecordHeader.Corrupt, CacheRecord.ReadHeader(record[..10], layout.FieldCount, layout.Fingerprint, out _, out _));
         Assert.False(CacheRecord.IsWellFormed(record[..^1], layout));
@@ -171,9 +171,7 @@ public class CacheTableTests
             random.NextBytes(bytes);
             if (bytes.Length >= CacheRecord.PrefixSize(layout.FieldCount))
             {
-                bytes[0] = CacheRecord.Format;
-                BitConverter.TryWriteBytes(bytes.AsSpan(2), (ushort)layout.FieldCount);
-                BitConverter.TryWriteBytes(bytes.AsSpan(12), layout.Fingerprint);
+                CacheRecord.WriteHeader(bytes, (ushort)layout.FieldCount, random.NextInt64(), layout.Fingerprint, absent: false); // random values after it
             }
 
             if (CacheRecord.ReadHeader(bytes, layout.FieldCount, layout.Fingerprint, out _, out _) == CacheRecordHeader.Ok)
