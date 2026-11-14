@@ -26,6 +26,12 @@ public interface IFeatureUpdateSource
     /// <para>A failure is thrown, preferably as <see cref="FeatureUpdateException"/> with where the bad data is and how
     /// to fix it. The table keeps every update written before the failure and its last complete reload; the engine may
     /// run the source again from the table's <see cref="LocalFeatureTable.Position"/>.</para>
+    /// <para><b>A snapshot and a stream.</b> One source may do both. A plan is served once its tables have completed
+    /// their first load (<see cref="IFeatureTableWriter.CompleteReload"/>). So a source that should not serve before it
+    /// has caught up with its stream loads the snapshot after <see cref="IFeatureTableWriter.BeginReload"/>, consumes the
+    /// stream into that version, and completes the reload once it decides it has caught up; then it keeps writing the
+    /// live table. Run again after a failure, from a non-empty position, it skips the snapshot. The source measures and
+    /// reports its own lag: the engine does not (see decisions, <c>max_lag_ms</c>).</para>
     /// </remarks>
     Task RunAsync(UpdatePosition from, IFeatureTableWriter writer, CancellationToken cancellationToken);
 }
