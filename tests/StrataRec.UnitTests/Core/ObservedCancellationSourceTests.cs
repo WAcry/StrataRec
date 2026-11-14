@@ -176,7 +176,11 @@ public sealed class ObservedCancellationSourceTests
         Assert.Equal(0, ran);
     }
 
-    /// <summary>Review 23 #2: a second disposal must not dispose ahead of the callbacks the first one waits for.</summary>
+    /// <summary>
+    /// Review 23 #2: a second disposal must not dispose ahead of the callbacks the first one waits for. The callbacks are
+    /// running (their task is published) when the disposals come; the window before publication is the stress test's
+    /// (<c>TimerFaultTests</c>, cancel-races).
+    /// </summary>
     [Fact]
     public async Task DisposedTwiceWhileItsCallbacksRun_IsDisposedOnceTheyHaveRun()
     {
@@ -203,7 +207,7 @@ public sealed class ObservedCancellationSourceTests
         Assert.True(SpinWait.SpinUntil(() => Disposed(source), Patience));
     }
 
-    /// <summary>Of two concurrent cancellations, one cancels; the other returns its callbacks or a completed task.</summary>
+    /// <summary>Of two cancellations, one after the other, one cancels and the other returns its callbacks' task.</summary>
     [Fact]
     public async Task OfTwoCancellations_OneRunsTheCallbacks_Once()
     {

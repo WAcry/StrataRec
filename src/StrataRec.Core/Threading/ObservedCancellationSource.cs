@@ -68,6 +68,10 @@ public enum CancellationSite : byte
 /// <para>Reporting: the <see cref="RequestEventLog"/> given, if any, summarizes failures per window
 /// (<see cref="RequestEvent.CancellationCallbacksFailed"/>, subject the site); a subclass with a logger of its own
 /// overrides <see cref="CallbacksFailed"/>. Neither can throw out of here.</para>
+/// <para>Only the cancellations above are covered: <see cref="CancelObservedAsync"/>, <see cref="CancelAfterObserved"/>
+/// and the link. The inherited <c>Cancel</c>, <c>CancelAsync</c> and <c>CancelAfter</c> bypass the protocol: their
+/// callbacks run on the calling thread or the timer, as for any token source, and a disposal concurrent with them can
+/// clear callbacks they have not taken yet (review 24). The framework never calls them on these sources.</para>
 /// </remarks>
 public class ObservedCancellationSource : CancellationTokenSource
 {
@@ -145,15 +149,17 @@ public class ObservedCancellationSource : CancellationTokenSource
     }
 
     /// <summary>
-    /// Cancels the token now. The token observes the cancellation before this returns, and its callbacks run on the
-    /// thread pool. Returns the task that runs them. It faults with what they threw, which is counted and reported
-    /// whether or not anyone awaits it, so a caller that does not need to know when they are done can drop it.
+    /// Cancels the token now, and its callbacks run on the thread pool. The cancellation that wins (see remarks) returns
+    /// the task that runs them, after the token has observed the cancellation; the task faults with what they threw,
+    /// which is counted and reported whether or not anyone awaits it, so a caller that does not need to know when they
+    /// are done can drop it.
     /// </summary>
     /// <remarks>
     /// Of concurrent cancellations (the timer, the linked token, the framework), one wins and cancels. The others add no
-    /// callbacks and return its task, or a completed one while it is still starting: the token observes the cancellation
-    /// a moment later. A source whose disposal was requested is not cancelled (a completed task): whoever held the token
-    /// has ended.
+    /// callbacks and return its task once it has published it; before that, while the winner is still starting, they
+    /// return a completed task, and the token observes the cancellation a moment later. So only the winner's return says
+    /// that the callbacks have run when it completes. A source whose disposal was requested is not cancelled (a completed
+    /// task): whoever held the token has ended.
     /// </remarks>
     public Task CancelObservedAsync()
     {

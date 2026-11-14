@@ -62,6 +62,11 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
             BacklogPolicy = BacklogPolicy.FailFast,
             ClientName = "stratarec",
             ConnectTimeout = 2000,
+
+            // One attempt: a connection that did not come up keeps reconnecting in the background (AbortOnConnectFail is
+            // false), so the client's default of three only triples how long a load waits on a server that does not answer
+            // (review 24), and how long a disposal waits for a cancelled load's connection.
+            ConnectRetry = 1,
             AsyncTimeout = CommandTimeoutMs,
             SyncTimeout = CommandTimeoutMs,
             DefaultDatabase = _settings.Database,

@@ -160,19 +160,21 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
     /// The CI flake's first cause (an investigation reproduced it): StackExchange.Redis tells the connect that its
     /// connection ended before it publishes the refusal that ended it. Holding that publication (the client logs it as
     /// event 89 just before) until the load has decided made a refused load succeed, every time. The probe the load then
-    /// makes connects without the hold.
+    /// makes copies the options, logger included, so it may be held too; it fails the load all the same, because a connect
+    /// that gives up reads the refusal the client recorded, not the published one (review 24).
     /// </summary>
     [DockerRedisFact]
     public async Task ARefusalTheClientHasNotPublishedYet_StillFailsTheLoad()
     {
         var endpoint = await server.StartRequirePassAsync();
         using var publish = new ManualResetEventSlim();
+        var log = new HoldRefusalLog(publish);
         var connects = 0;
         Task<ConnectionMultiplexer> Connect(ConfigurationOptions options)
         {
             if (Interlocked.Increment(ref connects) == 1)
             {
-                options.LoggerFactory = new HoldRefusalLog(publish);
+                options.LoggerFactory = log;
             }
 
             return ConnectionMultiplexer.ConnectAsync(options);
@@ -191,6 +193,11 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
 
         Assert.Equal(string.Empty, error.Pointer);
         Assert.Contains("\"password\"", error.Hint);
+
+        // The race was set up: the publication was held while the load decided, and never released by the hold's bound
+        // (a client that renumbers the event, or stops logging it, would otherwise turn this into a plain refusal test).
+        Assert.True(log.Held > 0, "the client never logged a refused handshake as event 89");
+        Assert.Equal(0, log.TimedOut);
     }
 
     /// <summary>
@@ -302,7 +309,16 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
 /// </summary>
 internal sealed class HoldRefusalLog(ManualResetEventSlim release) : Microsoft.Extensions.Logging.ILoggerFactory
 {
-    public Microsoft.Extensions.Logging.ILogger CreateLogger(string categoryName) => new Hold(release);
+    private int _held;
+    private int _timedOut;
+
+    /// <summary>Publications held so far.</summary>
+    public int Held => Volatile.Read(ref _held);
+
+    /// <summary>Holds that ended at their 30 s bound rather than by the release.</summary>
+    public int TimedOut => Volatile.Read(ref _timedOut);
+
+    public Microsoft.Extensions.Logging.ILogger CreateLogger(string categoryName) => new Hold(this, release);
 
     public void AddProvider(Microsoft.Extensions.Logging.ILoggerProvider provider)
     {
@@ -312,7 +328,7 @@ internal sealed class HoldRefusalLog(ManualResetEventSlim release) : Microsoft.E
     {
     }
 
-    private sealed class Hold(ManualResetEventSlim release) : Microsoft.Extensions.Logging.ILogger
+    private sealed class Hold(HoldRefusalLog log, ManualResetEventSlim release) : Microsoft.Extensions.Logging.ILogger
     {
         public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
 
@@ -324,7 +340,11 @@ internal sealed class HoldRefusalLog(ManualResetEventSlim release) : Microsoft.E
         {
             if (eventId.Id == 89 && exception is RedisConnectionException { FailureType: ConnectionFailureType.AuthenticationFailure })
             {
-                release.Wait(TimeSpan.FromSeconds(30));
+                Interlocked.Increment(ref log._held);
+                if (!release.Wait(TimeSpan.FromSeconds(30)))
+                {
+                    Interlocked.Increment(ref log._timedOut);
+                }
             }
         }
     }

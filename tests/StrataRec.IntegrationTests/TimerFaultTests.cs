@@ -70,7 +70,9 @@ public sealed class TimerFaultTests
     /// (the timer and the linked token), and a disposal repeated while a cancellation is still starting, must neither
     /// drop the queued callbacks nor dispose ahead of them. The pool's only worker is held while every round queues its
     /// callbacks, so none has run when its source is disposed; then every callback must run, once, and every source end
-    /// disposed. The rounds hit the windows the review found within a few dozen.
+    /// disposed. The two threads of a round only start together: nothing stops one inside a window, so this is a stress
+    /// test, not a schedule. With the old protocol the rounds hit the windows the review found within a few dozen (in a
+    /// review's run, 60 of 2,000 two-cancellation rounds dropped callbacks), so it fails reliably, not by construction.
     /// </summary>
     [Fact]
     public void CancellationsAndDisposals_InAnyOrder_RunEveryQueuedCallbackOnce_AndDisposeAfterThem()
