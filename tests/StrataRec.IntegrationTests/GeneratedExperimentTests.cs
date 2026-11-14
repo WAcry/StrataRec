@@ -131,7 +131,7 @@ public sealed class GeneratedExperimentTests
             var id = "g" + e;
             // Mostly with a control arm, which is the baseline: without one, only the baseline's own check (a request no
             // experiment assigns, or the experiment's end) refuses a baseline that needs an arm (external review P1).
-            var arms = new JsonObject();
+            var arms = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
             var armIds = new List<string>();
             if (random.Next(4) != 0)
             {
@@ -164,7 +164,7 @@ public sealed class GeneratedExperimentTests
 
             // Mostly a layer of its own; sometimes the previous experiment's (mutually exclusive with it).
             var layer = e > 0 && random.Next(4) == 0 ? placements[^1].Layer : "layer_" + id;
-            placements.Add(new ExperimentPlacement(CombinationLimitTests.Experiment(id, arms), layer));
+            placements.Add(new ExperimentPlacement(Experiment(id, arms), layer));
             if (!layers.TryGetValue(layer, out var layerArms))
             {
                 layers[layer] = layerArms = [];
@@ -186,11 +186,20 @@ public sealed class GeneratedExperimentTests
         var probe = new PlanCompileRequest
         {
             Pipeline = pipeline, Catalog = sample.Catalog, Bindings = sample.Bindings, Tables = sample.Tables, Policy = sample.Policy,
-            Experiments = [new ExperimentPlacement(CombinationLimitTests.Experiment("probe", new JsonObject { ["t"] = patch.DeepClone() }), "probe")],
+            Experiments = [new ExperimentPlacement(Experiment("probe", new() { ["t"] = patch }), "probe")],
             ManifestId = sample.ManifestId,
         };
         return PlanCompiler.CompileMerged(probe, ["probe/t"], environment).Succeeded;
     }
+
+    /// <summary>
+    /// The experiment as a host builds it in code: its patches hold CLR numbers (an order is an <c>int</c>), which a trip
+    /// through JSON text would turn into parsed elements (review 49: only a parsed order was read).
+    /// </summary>
+    private static ExperimentArtifact Experiment(string id, Dictionary<string, JsonObject> arms) => new()
+    {
+        ExperimentId = id, PipelineId = "home_feed", Owner = "t", Description = "d", ExpiresAt = "2099-01-01", Arms = arms,
+    };
 
     /// <summary>One change an arm makes.</summary>
     private static JsonObject Atom(Random random, string suffix)

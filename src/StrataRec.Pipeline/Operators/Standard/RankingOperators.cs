@@ -430,23 +430,30 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
     }
 
     /// <summary>
-    /// The MMR order of a window of rows: each step picks the largest λ·relevance − (1−λ)·(the row's largest similarity
-    /// to a row already picked), the first by relevance alone; equal values keep the incoming order. The similarity is the
-    /// cosine of the rows' vectors, and 0 where either has none (or a zero one). It was floored at 0 (the largest
-    /// similarity started at 0), so a row opposite every pick counted as merely unrelated (external review).
+    /// The MMR order of a window of rows: the first pick is the row with the largest relevance, then each step picks the
+    /// largest λ·relevance − (1−λ)·(the row's largest similarity to a row already picked); equal values keep the incoming
+    /// order. Rows without relevance come after every row with one, in their incoming order. The similarity is the cosine
+    /// of the rows' vectors, and 0 where either has none (or a zero one); with λ = 1 it has no weight and is not computed.
     /// </summary>
+    /// <remarks>
+    /// The similarity was floored at 0 (the largest started at 0), so a row opposite every pick counted as merely
+    /// unrelated (external review). A row without a score had relevance −∞, which λ = 0 turned into 0 (to avoid 0·−∞),
+    /// so it went before rows with a score (review 49). With λ = 1, vectors whose norm overflows float made every
+    /// similarity NaN, and 0·NaN left the order to the incoming one instead of the score (review 49).
+    /// </remarks>
     /// <param name="rows">The window's rows, in their incoming order.</param>
-    /// <param name="relevance">Each row's score; negative infinity for a row without one, which then comes last.</param>
+    /// <param name="relevance">Each row's score; negative infinity for a row without one.</param>
     /// <param name="order">Receives the rows in MMR order (as many as <paramref name="rows"/>).</param>
     internal static void Order(ReadOnlySpan<int> rows, ReadOnlySpan<double> relevance, VectorColumn? vectors, double lambda, Span<int> order, RequestMemory memory)
     {
         var n = rows.Length;
-        var maxSim = memory.Rent<double>(n); // read only once a row has been picked
+        var similar = lambda < 1 && vectors is not null;
+        var maxSim = memory.Rent<double>(n); // read only once a row has been picked, and only with a similarity weight
         var used = memory.RentCleared<bool>(n);
         var norms = memory.Rent<float>(n);
         for (var i = 0; i < n; i++)
         {
-            norms[i] = vectors is not null && vectors.IsValid(rows[i]) ? TensorPrimitives.Norm(vectors.Row(rows[i])) : 0f;
+            norms[i] = similar && vectors!.IsValid(rows[i]) ? TensorPrimitives.Norm(vectors.Row(rows[i])) : 0f;
         }
 
         for (var step = 0; step < n; step++)
@@ -460,8 +467,10 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
                     continue;
                 }
 
-                var gain = lambda == 0 ? 0 : lambda * relevance[i]; // not 0 · −∞
-                var value = step == 0 ? gain : gain - ((1 - lambda) * maxSim[i]);
+                var value = double.IsNegativeInfinity(relevance[i]) ? double.NegativeInfinity // no score: after every row with one
+                    : step == 0 ? relevance[i]
+                    : similar ? (lambda * relevance[i]) - ((1 - lambda) * maxSim[i])
+                    : lambda * relevance[i];
                 if (best < 0 || value > bestValue)
                 {
                     best = i;
@@ -471,6 +480,11 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
 
             used[best] = true;
             order[step] = rows[best];
+            if (!similar)
+            {
+                continue;
+            }
+
             var chosen = norms[best] > 0f ? vectors!.Row(rows[best]) : default;
             for (var i = 0; i < n; i++)
             {

@@ -694,6 +694,18 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
+    /// <summary>
+    /// A node definition's order as it binds (<see cref="NodeSpec.Order"/>): an integer JSON number, however the tree holds
+    /// it. A tree built in code holds an <c>int</c> where a parsed one holds a JSON element, and reading only one CLR type
+    /// put a moved writer last on the timeline, after the reader it declares a column for (review 49).
+    /// </summary>
+    internal static int? OrderOf(JsonNode? node) =>
+        node is JsonObject definition && definition["order"] is JsonValue value
+            ? value.TryGetValue<int>(out var order) ? order
+            : value.GetValueKind() == JsonValueKind.Number && int.TryParse(value.ToJsonString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out order) ? order
+            : null
+            : null;
+
     /// <summary>A distinct definition of a node: the combinations that define it so, compiled once, at its order.</summary>
     private sealed record NodeDefinition(NodeVariants Variants, long Order, List<int> Combinations);
 
@@ -711,7 +723,7 @@ internal sealed partial class UnifiedCompilation
             var hash = ContentHash.Compute(node);
             if (!byHash.TryGetValue(hash, out var definition))
             {
-                var order = node["order"] is JsonValue value && value.TryGetValue<long>(out var o) ? o : long.MaxValue;
+                var order = OrderOf(node) ?? long.MaxValue;
                 definition = new NodeDefinition(variants, order, new List<int>());
                 byHash[hash] = definition;
                 timeline.Add(definition);

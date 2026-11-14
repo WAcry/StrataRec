@@ -371,7 +371,7 @@ internal sealed partial class UnifiedCompilation
                 continue;
             }
 
-            var baseOrder = _view.Nodes[nodeId] is JsonObject b && b["order"] is JsonValue o && o.TryGetValue<int>(out var bo) ? bo : (int?)null;
+            var baseOrder = OrderOf(_view.Nodes[nodeId]);
             if (node.Order is { } order && (arm.AddedNodes.Contains(nodeId) || order != baseOrder))
             {
                 placed[order] = nodeId;

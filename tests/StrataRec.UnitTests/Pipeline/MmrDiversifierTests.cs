@@ -7,8 +7,8 @@ namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary>
 /// <c>MmrDiversifier@1</c>'s order is the formula's: each step picks the largest λ·score − (1−λ)·max cosine(picked), the
-/// first by score alone. The similarity to the rows picked was floored at 0, as if a row unlike every pick were merely
-/// unrelated to them (external review). Compared with a direct reference on small random windows.
+/// first by score alone; rows without a score last. The similarity to the rows picked was floored at 0, as if a row unlike
+/// every pick were merely unrelated to them (external review). Compared with a direct reference on small random windows.
 /// </summary>
 public sealed class MmrDiversifierTests
 {
@@ -21,6 +21,38 @@ public sealed class MmrDiversifierTests
 
         Assert.Equal(new[] { 0, 1, 2 }, Order(scores, vectors, 0.5));
         Assert.Equal(new[] { 0, 1, 2 }, Reference(scores, vectors, 0.5));
+    }
+
+    [Fact]
+    public void RowsWithoutAScore_ComeAfterEveryRowWithOne_EvenWithoutWeightOnTheScore()
+    {
+        // Review 49: at λ = 0 the missing score's −∞ was weighted to 0 like every score, and the third row, opposite the
+        // first pick, went before the second.
+        double[] scores = [1.0, 0.9, double.NegativeInfinity];
+        float[]?[] vectors = [[1, 0], [1, 0], [-1, 0]];
+
+        Assert.Equal(new[] { 0, 1, 2 }, Order(scores, vectors, 0));
+        Assert.Equal(new[] { 0, 1, 2 }, Order(scores, vectors, 0.5));
+    }
+
+    [Fact]
+    public void TheFirstPick_IsTheBestScore_EvenWithoutWeightOnTheScore()
+    {
+        // At λ = 0 every λ·score is 0: the first pick, which has no similarity yet, is by the score itself.
+        double[] scores = [0.2, 1.0, 0.5];
+        float[]?[] vectors = [[1, 0], [0, 1], [1, 1]];
+
+        Assert.Equal(1, Order(scores, vectors, 0)[0]);
+    }
+
+    [Fact]
+    public void WithNoWeightOnSimilarity_TheOrderIsTheScores_WhateverTheVectors()
+    {
+        // Review 49: finite vectors whose norm overflows float made every cosine NaN, and 0·NaN hid the scores.
+        double[] scores = [1.0, 0.7, 0.9];
+        float[]?[] vectors = [[2e38f, 2e38f], [2e38f, 2e38f], [2e38f, 2e38f]];
+
+        Assert.Equal(new[] { 0, 2, 1 }, Order(scores, vectors, 1));
     }
 
     [Theory]
@@ -80,23 +112,21 @@ public sealed class MmrDiversifierTests
         }
     }
 
-    /// <summary>The formula, directly: similarity is the cosine, 0 where either row has no vector (or a zero one).</summary>
+    /// <summary>
+    /// The formula, directly, on the rows with a score: the first pick by score, then λ·score − (1−λ)·max cosine, the
+    /// cosine 0 where either row has no vector (or a zero one). Then the rows without a score, in their incoming order.
+    /// </summary>
     private static int[] Reference(double[] scores, float[]?[] vectors, double lambda)
     {
+        var scored = Enumerable.Range(0, scores.Length).Where(i => !double.IsNegativeInfinity(scores[i])).ToList();
         var picked = new List<int>();
-        while (picked.Count < scores.Length)
+        while (picked.Count < scored.Count)
         {
             var best = -1;
             var bestValue = double.NegativeInfinity;
-            for (var i = 0; i < scores.Length; i++)
+            foreach (var i in scored.Where(i => !picked.Contains(i)))
             {
-                if (picked.Contains(i))
-                {
-                    continue;
-                }
-
-                var relevance = lambda == 0 ? 0 : lambda * scores[i];
-                var value = picked.Count == 0 ? relevance : relevance - ((1 - lambda) * picked.Max(p => Cosine(vectors[i], vectors[p])));
+                var value = picked.Count == 0 ? scores[i] : (lambda * scores[i]) - ((1 - lambda) * picked.Max(p => Cosine(vectors[i], vectors[p])));
                 if (best < 0 || value > bestValue)
                 {
                     best = i;
@@ -107,7 +137,7 @@ public sealed class MmrDiversifierTests
             picked.Add(best);
         }
 
-        return picked.ToArray();
+        return picked.Concat(Enumerable.Range(0, scores.Length).Where(i => double.IsNegativeInfinity(scores[i]))).ToArray();
     }
 
     private static double Cosine(float[]? a, float[]? b)

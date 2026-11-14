@@ -81,6 +81,15 @@ public sealed class NullElementsTests
         AssertCheckedAsRead<PopulatedImmutableArray>(read: false);
         AssertCheckedAsRead<PopulatedReadOnlyList>(read: false);
         AssertCheckedAsRead<PopulatedEnumerable>(read: false);
+        AssertCheckedAsRead<PopulatedImmutableList>(read: false);
+        AssertCheckedAsRead<PopulatedQueue>(read: true);
+        AssertCheckedAsRead<PopulatedBag>(read: false);
+
+        // Review 49: filled, though the serializer cannot create one (no constructor without arguments).
+        AssertCheckedAsRead<PopulatedListWithoutDefaultConstructor>(read: true);
+        AssertCheckedAsRead<PopulatedCollectionWithoutDefaultConstructor>(read: true);
+        AssertCheckedAsRead<PopulatedMapWithoutDefaultConstructor>(read: true, map: true);
+        AssertCheckedAsRead<PopulatedReadOnlyMap>(read: false, map: true);
         Assert.Null(NullElements.Find(JsonDocument.Parse("""{ "held": { "items": [null] } }""").RootElement, typeof(PopulatedStruct), ArtifactSerializer.Options));
     }
 
@@ -103,12 +112,13 @@ public sealed class NullElementsTests
     }
 
     /// <summary>The check reads a member as the serializer does: a null in what it reads is an error, in what it skips nothing.</summary>
-    private static void AssertCheckedAsRead<T>(bool read)
+    private static void AssertCheckedAsRead<T>(bool read, bool map = false)
         where T : class, IReadsItems
     {
-        Assert.Equal(read, JsonSerializer.Deserialize<T>("""{ "items": ["a"] }""", ArtifactSerializer.Options)!.Seen.Contains("a"));
-        var error = NullElements.Find(JsonDocument.Parse("""{ "items": [null] }""").RootElement, typeof(T), ArtifactSerializer.Options);
-        Assert.Equal(read ? "/items/0" : null, error?.Pointer);
+        var (item, missing, pointer) = map ? ("""{ "k": "a" }""", """{ "k": null }""", "/items/k") : ("""["a"]""", "[null]", "/items/0");
+        Assert.Equal(read, JsonSerializer.Deserialize<T>($$"""{ "items": {{item}} }""", ArtifactSerializer.Options)!.Seen.Contains("a"));
+        var error = NullElements.Find(JsonDocument.Parse($$"""{ "items": {{missing}} }""").RootElement, typeof(T), ArtifactSerializer.Options);
+        Assert.Equal(read ? pointer : null, error?.Pointer);
     }
 
     [Fact]
@@ -274,6 +284,91 @@ public sealed class NullElementsTests
         public IEnumerable<string> Items { get; } = new List<string>();
 
         IEnumerable<string> IReadsItems.Seen => Items;
+    }
+
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
+    public sealed class PopulatedImmutableList : IReadsItems
+    {
+        public ImmutableList<string> Items { get; } = [];
+
+        IEnumerable<string> IReadsItems.Seen => Items;
+    }
+
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
+    public sealed class PopulatedQueue : IReadsItems
+    {
+        public Queue<string> Items { get; } = new();
+
+        IEnumerable<string> IReadsItems.Seen => Items;
+    }
+
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
+    public sealed class PopulatedBag : IReadsItems
+    {
+        public System.Collections.Concurrent.ConcurrentBag<string> Items { get; } = [];
+
+        IEnumerable<string> IReadsItems.Seen => Items;
+    }
+
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
+    public sealed class PopulatedListWithoutDefaultConstructor : IReadsItems
+    {
+        public Values<string> Items { get; } = new(4);
+
+        IEnumerable<string> IReadsItems.Seen => Items;
+    }
+
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
+    public sealed class PopulatedCollectionWithoutDefaultConstructor : IReadsItems
+    {
+        public Bag<string> Items { get; } = new(4);
+
+        IEnumerable<string> IReadsItems.Seen => Items;
+    }
+
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
+    public sealed class PopulatedMapWithoutDefaultConstructor : IReadsItems
+    {
+        public ValuesMap<string, string> Items { get; } = new(4);
+
+        IEnumerable<string> IReadsItems.Seen => Items.Values;
+    }
+
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
+    public sealed class PopulatedReadOnlyMap : IReadsItems
+    {
+        public IReadOnlyDictionary<string, string> Items { get; } = new Dictionary<string, string>();
+
+        IEnumerable<string> IReadsItems.Seen => Items.Values;
+    }
+
+    public sealed class Values<T>(int capacity) : List<T>(capacity);
+
+    public sealed class ValuesMap<TKey, TValue>(int capacity) : Dictionary<TKey, TValue>(capacity)
+        where TKey : notnull;
+
+    /// <summary>A collection only through <see cref="ICollection{T}"/>, without a constructor the serializer can call.</summary>
+    public sealed class Bag<T>(int capacity) : ICollection<T>
+    {
+        private readonly List<T> _items = new(capacity);
+
+        public int Count => _items.Count;
+
+        public bool IsReadOnly => false;
+
+        public void Add(T item) => _items.Add(item);
+
+        public void Clear() => _items.Clear();
+
+        public bool Contains(T item) => _items.Contains(item);
+
+        public void CopyTo(T[] array, int arrayIndex) => _items.CopyTo(array, arrayIndex);
+
+        public bool Remove(T item) => _items.Remove(item);
+
+        public IEnumerator<T> GetEnumerator() => _items.GetEnumerator();
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => _items.GetEnumerator();
     }
 
     [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]

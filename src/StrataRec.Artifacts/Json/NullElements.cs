@@ -273,7 +273,8 @@ internal static class NullElements
     /// Whether the serializer fills a member without a setter through its getter's object. Set on the member, the
     /// serializer has checked that it can (or refused the contract); a type's or the options' preference falls back to
     /// replacing where the value cannot be populated (a struct, an array, an immutable or read-only collection), and a
-    /// member replaced without a setter is skipped (review 48).
+    /// member replaced without a setter is skipped (review 48). Whether it can is the serializer's converter's, which it
+    /// does not expose: this follows the shapes its converters populate.
     /// </summary>
     private static bool PopulatedWithoutSetter(JsonPropertyInfo property, JsonTypeInfo declaring, JsonSerializerOptions options)
     {
@@ -297,11 +298,51 @@ internal static class NullElements
         return value.Kind switch
         {
             JsonTypeInfoKind.Object => true,
-            // A collection the serializer can create, and so add to: a mutable one, not an array, an immutable
-            // collection or a read-only interface (NullElementsTests compares each with the serializer).
-            JsonTypeInfoKind.Enumerable or JsonTypeInfoKind.Dictionary => value.CreateObject is not null,
+            // A collection the serializer adds to: one it can create (a read-only interface, an array or an immutable
+            // collection it cannot), or one it adds to though it cannot create one (NullElementsTests compares each
+            // with the serializer).
+            JsonTypeInfoKind.Enumerable or JsonTypeInfoKind.Dictionary => value.CreateObject is not null || AddedTo(property.PropertyType),
             _ => false,
         };
+    }
+
+    /// <summary>
+    /// A collection the serializer fills through what it can add to (a list, a collection, a dictionary, a queue or a
+    /// stack), whether or not it could create one: a type derived from <c>List&lt;T&gt;</c> with only a constructor that
+    /// takes arguments has no <see cref="JsonTypeInfo.CreateObject"/>, yet the instance its getter returns is filled
+    /// (review 49). Never an array or an immutable collection, which also implement the list interfaces.
+    /// </summary>
+    private static bool AddedTo(Type type)
+    {
+        if (type.IsArray || type.Namespace == "System.Collections.Immutable")
+        {
+            return false;
+        }
+
+        if (typeof(System.Collections.IList).IsAssignableFrom(type) || typeof(System.Collections.IDictionary).IsAssignableFrom(type))
+        {
+            return true;
+        }
+
+        foreach (var contract in type.GetInterfaces())
+        {
+            if (contract.IsGenericType && contract.GetGenericTypeDefinition() is var definition
+                && (definition == typeof(ICollection<>) || definition == typeof(IDictionary<,>)))
+            {
+                return true;
+            }
+        }
+
+        for (var t = type; t is not null; t = t.BaseType)
+        {
+            if (t.IsGenericType && t.GetGenericTypeDefinition() is var definition
+                && (definition == typeof(Queue<>) || definition == typeof(Stack<>) || definition == typeof(ConcurrentQueue<>) || definition == typeof(ConcurrentStack<>)))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <param name="Read">Whether the serializer reads the member's value from the document.</param>
