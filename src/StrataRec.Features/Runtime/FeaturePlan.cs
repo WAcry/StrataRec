@@ -1,3 +1,4 @@
+using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
@@ -184,7 +185,8 @@ public sealed class FeaturePlan
         ILocalTableProvider? localTables = null,
         IBindingInstances? instances = null,
         FeatureCacheStoreRegistry? cacheStores = null,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        string catalogArtifact = "catalog")
     {
         var byName = new Dictionary<string, FeatureRuntimeInfo>(StringComparer.Ordinal);
         var grouped = new SortedDictionary<(string Source, string Entity), List<FeatureRuntimeInfo>>(GroupKeyComparer.Instance);
@@ -209,7 +211,8 @@ public sealed class FeaturePlan
         var groups = new List<FetchGroup>();
         var resolver = new FeatureSourceResolver(
             bindings, connectors, updateSources ?? FeatureUpdateSourceRegistry.CreateDefault(), cacheStores ?? new FeatureCacheStoreRegistry(),
-            localTables ?? UnloadedLocalTables.Instance, instances ?? UnsharedInstances.Instance, baseDirectory, clock ?? TimeProvider.System, diagnostics);
+            localTables ?? UnloadedLocalTables.Instance, instances ?? UnsharedInstances.Instance, baseDirectory, clock ?? TimeProvider.System, diagnostics,
+            catalogArtifact);
 
         foreach (var (groupKey, memberList) in grouped)
         {
@@ -238,7 +241,7 @@ public sealed class FeaturePlan
             {
                 if (!byName.TryGetValue(entity.CandidateKeyColumn!, out var kf))
                 {
-                    diagnostics.Error("ENTITY_BAD_KEY", "catalog", "/entities/" + entity.Name, $"Key feature '{entity.CandidateKeyColumn}' is not available.");
+                    diagnostics.Error("ENTITY_BAD_KEY", catalogArtifact, "/entities/" + JsonPointer.Escape(entity.Name), $"Key feature '{entity.CandidateKeyColumn}' is not available.");
                     continue;
                 }
 
@@ -285,7 +288,7 @@ public sealed class FeaturePlan
         }
 
         // Cycles are reported here; the wave computation below only has to terminate on them.
-        var derivedOrder = TopologicalDerivedOrder(all, diagnostics);
+        var derivedOrder = TopologicalDerivedOrder(all, diagnostics, catalogArtifact);
         AssignWaves(all, groups);
         return new FeaturePlan(all, groups.ToArray(), derivedOrder);
     }
@@ -418,7 +421,7 @@ public sealed class FeaturePlan
         }
     }
 
-    private static int[] TopologicalDerivedOrder(FeatureRuntimeInfo[] features, DiagnosticBag diagnostics)
+    private static int[] TopologicalDerivedOrder(FeatureRuntimeInfo[] features, DiagnosticBag diagnostics, string catalogArtifact)
     {
         var order = new List<int>();
         var state = new byte[features.Length]; // 0 = new, 1 = visiting, 2 = done
@@ -441,7 +444,7 @@ public sealed class FeaturePlan
 
             if (state[i] == 1)
             {
-                diagnostics.Error("FEATURE_CYCLE", "catalog", features[i].Definition.Pointer,
+                diagnostics.Error("FEATURE_CYCLE", catalogArtifact, features[i].Definition.Pointer,
                     $"Derived feature '{features[i].Definition.Name}' depends on itself.");
                 return;
             }

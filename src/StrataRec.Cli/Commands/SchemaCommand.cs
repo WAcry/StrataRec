@@ -15,18 +15,7 @@ namespace StrataRec.Cli.Commands;
 /// </summary>
 internal static class SchemaCommand
 {
-    private static readonly (string Name, Type Type)[] Artifacts =
-    {
-        ("pipeline", typeof(PipelineArtifact)),
-        ("catalog", typeof(FeatureCatalogArtifact)),
-        ("bindings", typeof(SourceBindingArtifact)),
-        ("experiment", typeof(ExperimentArtifact)),
-        ("release", typeof(ReleaseArtifact)),
-        ("policy", typeof(PolicyArtifact)),
-        ("table", typeof(DataTableArtifact)),
-        ("manifest", typeof(ReleaseManifest)),
-        ("replay_bundle", typeof(ReplayBundle)),
-    };
+    private static IReadOnlyList<(string Name, Type Type)> Artifacts => ArtifactSerializer.ArtifactTypes;
 
     public static Command Create()
     {

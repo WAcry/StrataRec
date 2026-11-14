@@ -232,10 +232,10 @@ public class CompilerTests
     [InlineData("1.0 + col.item.unknown.size()", ExpressionErrorCodes.UnknownName, 6)]
     [InlineData("col.item.clicks_7d.frobnicate()", ExpressionErrorCodes.UnknownFunction, 19)]
     [InlineData("col.item.clicks_7d && true", ExpressionErrorCodes.TypeMismatch, 0)]
-    [InlineData("5.0 % 2.0", ExpressionErrorCodes.TypeMismatch, 0)]
-    [InlineData("'a' < 'b'", ExpressionErrorCodes.TypeMismatch, 0)]
-    [InlineData("col.recall.primary_source + 'x'", ExpressionErrorCodes.TypeMismatch, 0)]
-    [InlineData("dot(col.item.embedding, ctx.small)", ExpressionErrorCodes.TypeMismatch, 0)]
+    [InlineData("5.0 % 2.0", ExpressionErrorCodes.TypeMismatch, 4)] // both operands wrong: the operator
+    [InlineData("'a' < 'b'", ExpressionErrorCodes.TypeMismatch, 4)]
+    [InlineData("col.recall.primary_source + 'x'", ExpressionErrorCodes.TypeMismatch, 26)]
+    [InlineData("dot(col.item.embedding, ctx.small)", ExpressionErrorCodes.TypeMismatch, 24)] // the second vector disagrees
     [InlineData("1.5 in col.tags_int", ExpressionErrorCodes.TypeMismatch, 0)]
     [InlineData("size(col.recall.primary_source)", ExpressionErrorCodes.TypeMismatch, 5)]
     [InlineData("ctx.request.seed@fusion", ExpressionErrorCodes.UnknownName, 0)]

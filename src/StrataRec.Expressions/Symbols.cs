@@ -53,6 +53,13 @@ public interface IExpressionScope
     /// <summary>All names resolvable in this scope, used for "did you mean" suggestions.</summary>
     IEnumerable<string> KnownNames { get; }
 
+    /// <summary>
+    /// True for a name that is declared but cannot be resolved because its declaration has an error, reported where it is
+    /// declared (a column or parameter of an unknown type). An expression that reads it does not compile, without an
+    /// error of its own: one mistake is reported once, not again at every use.
+    /// </summary>
+    bool IsUnusable(string name) => false;
+
     bool TryGetLookupTable(string name, out ILookupTable table);
 }
 

@@ -55,7 +55,7 @@ internal static class ValidateCommand
             }
         }
 
-        var code = Output.Diagnostics(diagnostics.Items, format, output, warningsAsErrors);
+        var code = Output.Diagnostics(diagnostics.Items, format, output, warningsAsErrors, DiagnosticLocator.ForWorkspace(config));
         if (format == "text")
         {
             foreach (var summary in summaries)

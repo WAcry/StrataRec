@@ -1641,20 +1641,12 @@ flowchart LR
 两个实验分别放在 `rerank` 层和 `fusion` 层，同一个用户可能同时命中 `mmr` 和 `calibrated`。`freshness_calibration` 写流动列 `score.final`，而 `mmr` 新增的 `mmr_diversifier` 读取它，符合交互警告的规则（第 11.5 节）。加入第二个实验的 PR 上，CI 输出的校验报告是这样的：
 
 ```text
-$ stratarec validate --pipeline home_feed
-baseline home_feed ............................. ok
-arm exp_mmr_diversity/mmr ................... ok
-arm exp_freshness_calibration/calibrated ....... ok
-pairs across layers: 1 checked, 0 errors, 1 warning
+$ stratarec validate -c config -p home_feed
+config/experiments/exp_mmr_diversity.jsonc:15:9: warning INTERACTION_READ /arms/mmr/nodes/mmr_diversifier: Node 'mmr_diversifier' added by 'exp_mmr_diversity/mmr' reads 'score.final', which 'exp_freshness_calibration/calibrated' changes through 'freshness_calibration'; the two arms can be assigned together.
+    hint: confirm in review that the added node should see the other experiment's values; otherwise put the experiments in the same layer
 
-WARNING interaction
-  arms:    exp_freshness_calibration/calibrated (layer fusion)
-           exp_mmr_diversity/mmr (layer rerank)
-  column:  score.final
-  writer:  /nodes/freshness_calibration (order 470)
-  reader:  /nodes/mmr_diversifier (order 550, added by exp_mmr_diversity/mmr)
-  effect:  in overlapping traffic, MMR reranks calibrated scores
-  owners:  fresh-content-team, ranking-team
+0 error(s), 1 warning(s)
+home_feed: ok — 11 nodes, 11 compiled variants, 3 experiments, 6 arms, 4 arm combinations checked
 ```
 
 警告不阻止合并，它要求评审人做一个决定：如果两个效果可以叠加（这里 MMR 本来就应该基于最终分），两个 owner 在 PR 中确认后合并；如果需要互斥，就把两个实验放进同一层。这个决定留在 PR 的评审记录中，实验产物里没有任何跨实验的字段，所以每个实验仍然只依赖基线。

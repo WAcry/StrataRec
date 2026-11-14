@@ -67,7 +67,7 @@ internal sealed class ReplayEngines : IAsyncDisposable
         if (pipeline is null)
         {
             await engine.DisposeAsync().ConfigureAwait(false);
-            Output.Diagnostics(diagnostics.Items, format, errors);
+            Output.Diagnostics(diagnostics.Items, format, errors, locator: reference.Locator());
             return null;
         }
 

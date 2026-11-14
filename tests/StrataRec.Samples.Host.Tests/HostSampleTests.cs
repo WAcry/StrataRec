@@ -152,7 +152,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
     }
 
     [Theory]
-    [InlineData("""{ "inputs": { "user_id": "u-1001" } }""", "/inputs/user_id", "not a valid int64")]
+    [InlineData("""{ "inputs": { "user_id": "u-1001" } }""", "/inputs/user_id", "Input 'user_id' must be an integer (int64), got the string \"u-1001\".")]
     [InlineData("""{ "inputs": { "country": "us" } }""", "/inputs/country", "not declared in the request_schema")]
     [InlineData("""{ "input": {} }""", "/input", "Unknown member 'input'")]
     [InlineData("""{ "assignment": "exp_local_boost/strong" }""", "/assignment", "must be an array")]

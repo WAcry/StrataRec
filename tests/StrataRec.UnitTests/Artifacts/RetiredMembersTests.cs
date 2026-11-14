@@ -22,7 +22,7 @@ public sealed class RetiredMembersTests
 
         var ex = Assert.Throws<ArtifactFormatException>(() => ArtifactSerializer.Deserialize<ReleaseManifest>(json, "manifest.json"));
 
-        Assert.Equal("/assignment", ArtifactSerializer.JsonPathToPointer(ex.JsonPath));
+        Assert.Equal("/assignment", ex.Pointer);
         Assert.Contains("experiment platform", ex.Reason);
         Assert.Contains("stratarec build", ex.Hint);
         Assert.StartsWith("manifest.json: ", ex.Message, StringComparison.Ordinal);
@@ -36,7 +36,7 @@ public sealed class RetiredMembersTests
         var ex = Assert.Throws<ArtifactFormatException>(() => ArtifactSerializer.Deserialize<ReleaseManifest>(json));
 
         // Experiment ids may contain '.' and '-': the pointer still names the member exactly.
-        Assert.Equal("/experiments/exp.a-1/arms", ArtifactSerializer.JsonPathToPointer(ex.JsonPath));
+        Assert.Equal("/experiments/exp.a-1/arms", ex.Pointer);
         Assert.Contains("arm bucket ranges", ex.Reason);
         Assert.NotNull(ex.Hint);
     }
@@ -48,19 +48,21 @@ public sealed class RetiredMembersTests
 
         var ex = Assert.Throws<ArtifactFormatException>(() => ArtifactSerializer.Deserialize<ReleaseArtifact>(node, "releases/p.local.jsonc"));
 
-        Assert.Equal("/assignment", ArtifactSerializer.JsonPathToPointer(ex.JsonPath));
+        Assert.Equal("/assignment", ex.Pointer);
         Assert.Contains("\"layer\"", ex.Hint);
     }
 
     [Fact]
-    public void OtherUnknownMembersKeepTheSerializersError()
+    public void OtherUnknownMembersAreUnknownKeys()
     {
         var json = Manifest.Replace("%MEMBER%", "\"assignmnt\": {},").Replace("%ARMS%", string.Empty);
 
         var ex = Assert.Throws<ArtifactFormatException>(() => ArtifactSerializer.Deserialize<ReleaseManifest>(json));
 
-        Assert.Contains("assignmnt", ex.Reason);
-        Assert.Null(ex.Hint);
+        Assert.Equal("/assignmnt", ex.Pointer);
+        Assert.Equal("Unknown key 'assignmnt' in the manifest.", ex.Reason);
+        Assert.DoesNotContain("stratarec build", ex.Hint); // not the retired member's fix
+        Assert.StartsWith("allowed keys: ", ex.Hint, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -69,6 +71,7 @@ public sealed class RetiredMembersTests
         // Experiments have arms of their own; only a release's or manifest's experiment entries had ranges.
         var ex = Assert.Throws<ArtifactFormatException>(() => ArtifactSerializer.Deserialize<PolicyArtifact>("""{ "assignment": {} }"""));
 
-        Assert.Null(ex.Hint);
+        Assert.Equal("Unknown key 'assignment' in the policy.", ex.Reason);
+        Assert.DoesNotContain("experiment platform", ex.Hint);
     }
 }

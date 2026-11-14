@@ -76,8 +76,12 @@ public sealed class ExpressionScorerFactory : IOperatorFactory
         // Compile before declaring the write so that reading the previous version of a flow column resolves correctly.
         if (!context.Schema.TryGetColumn(config.OutputCol, out var declared))
         {
-            context.Error("/output_col", "COLUMN_UNDECLARED", $"Output column '{config.OutputCol}' is not declared.",
-                $"declare it under /columns, e.g. \"{config.OutputCol}\": {{ \"type\": \"float64\", \"default\": 0.0 }}");
+            if (!context.Schema.IsUnusable("col." + config.OutputCol)) // a declaration with an error is reported there
+            {
+                context.Error("/output_col", "COLUMN_UNDECLARED", $"Output column '{config.OutputCol}' is not declared.",
+                    $"declare it under /columns, e.g. \"{config.OutputCol}\": {{ \"type\": \"float64\", \"default\": 0.0 }}");
+            }
+
             return null;
         }
 

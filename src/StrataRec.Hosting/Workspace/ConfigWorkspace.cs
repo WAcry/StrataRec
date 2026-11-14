@@ -311,8 +311,8 @@ public sealed class ConfigWorkspace
         }
         catch (JsoncException ex)
         {
-            var where = ex.Line is { } line ? $" (line {line}, column {ex.Column})" : string.Empty;
-            diagnostics.Error(ex.Code, relative, string.Empty, ex.Reason + where, ex.Hint);
+            // No pointer to a value that does not parse: the position is the reader's.
+            diagnostics.Add(new ConfigDiagnostic(DiagnosticSeverity.Error, ex.Code, relative, string.Empty, ex.Reason, ex.Hint) { Line = ex.Line, Column = ex.Column });
             return null;
         }
         catch (IOException ex)
@@ -334,8 +334,8 @@ public sealed class ConfigWorkspace
         }
         catch (ArtifactFormatException ex)
         {
-            diagnostics.Error("ARTIFACT_SCHEMA", relative, ArtifactSerializer.JsonPathToPointer(ex.JsonPath), ex.Reason,
-                ex.Hint ?? $"run 'stratarec schema {SchemaName<T>()}' for the JSON Schema of this file");
+            diagnostics.Error("ARTIFACT_SCHEMA", relative, ex.Pointer, ex.Reason,
+                ex.Hint ?? $"run 'stratarec schema {ArtifactSerializer.ArtifactName(typeof(T))}' for the JSON Schema of this file");
             return null;
         }
     }
@@ -354,15 +354,63 @@ public sealed class ConfigWorkspace
         return false;
     }
 
-    internal static string SchemaName<T>() => typeof(T).Name switch
+    /// <summary>
+    /// The workspace-relative path of the file a diagnostic's artifact label names, for tools that print diagnostics with
+    /// a file, line and column: <c>pipeline:home_feed</c> is <c>pipelines/home_feed.jsonc</c> (a file is named by the id
+    /// inside it, which loading checks), <c>policy</c> is <c>policy.jsonc</c>, and a label that is a path (as loading and
+    /// release errors use) is that file. Text after the label, such as the arms of a combination
+    /// (<c>pipeline:home_feed with exp_a/x</c>), is ignored. Null for a label that names no file of the workspace (a
+    /// manifest, the workspace as a whole) or a file that does not exist.
+    /// </summary>
+    /// <param name="root">The workspace directory.</param>
+    /// <param name="artifact">The diagnostic's <see cref="ConfigDiagnostic.Artifact"/>.</param>
+    /// <param name="exact">True when <paramref name="artifact"/> is only the file's label, so the file says all it says.</param>
+    public static string? FileOf(string root, string artifact, out bool exact)
     {
-        nameof(PipelineArtifact) => "pipeline",
-        nameof(FeatureCatalogArtifact) => "catalog",
-        nameof(SourceBindingArtifact) => "bindings",
-        nameof(ExperimentArtifact) => "experiment",
-        nameof(ReleaseArtifact) => "release",
-        nameof(PolicyArtifact) => "policy",
-        nameof(DataTableArtifact) => "table",
-        _ => "manifest",
-    };
+        var space = artifact.IndexOf(' ', StringComparison.Ordinal);
+        var label = space < 0 ? artifact : artifact[..space];
+        exact = space < 0;
+        var colon = label.IndexOf(':', StringComparison.Ordinal);
+        string stem;
+        if (colon > 0)
+        {
+            var directory = label[..colon] switch
+            {
+                "pipeline" => "pipelines",
+                "experiment" => "experiments",
+                "catalog" => "catalog",
+                "bindings" => "bindings",
+                "table" => "tables",
+                _ => null,
+            };
+            var id = label[(colon + 1)..];
+            if (directory is null || id.Length == 0 || id.IndexOfAny(['/', '\\']) >= 0 || id is "." or "..")
+            {
+                return null;
+            }
+
+            stem = directory + "/" + id;
+        }
+        else if (label == "policy")
+        {
+            stem = "policy";
+        }
+        else
+        {
+            return label.EndsWith(".jsonc", StringComparison.Ordinal) || label.EndsWith(".json", StringComparison.Ordinal)
+                ? Existing(root, label)
+                : null;
+        }
+
+        return Existing(root, stem + ".jsonc") ?? Existing(root, stem + ".json");
+
+        static string? Existing(string root, string relative)
+        {
+            var full = Path.GetFullPath(Path.Combine(root, relative));
+            var top = Path.GetFullPath(root);
+            return full.StartsWith(Path.TrimEndingDirectorySeparator(top) + Path.DirectorySeparatorChar, StringComparison.Ordinal) && File.Exists(full)
+                ? relative
+                : null;
+        }
+    }
 }

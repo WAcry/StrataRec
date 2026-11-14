@@ -119,16 +119,14 @@ public sealed class PatchableView
     private static T? Read<T>(JsonObject merged, string section, DiagnosticBag diagnostics, string artifact, string pointerPrefix, ref bool ok)
         where T : class
     {
-        try
+        if (ArtifactSerializer.TryBind<T>(merged[section], $"'{section}'", out var value, out var error))
         {
-            return merged[section]!.Deserialize<T>(ArtifactSerializer.Options);
+            return value;
         }
-        catch (JsonException ex)
-        {
-            diagnostics.Error("PATCH_SCHEMA", artifact, pointerPrefix + "/" + section + ArtifactSerializer.JsonPathToPointer(ex.Path), ex.Message,
-                "a new entry must be a complete definition that validates against the collection's schema (design 11.3)");
-            ok = false;
-            return null;
-        }
+
+        diagnostics.Error("PATCH_SCHEMA", artifact, pointerPrefix + "/" + section + error.Pointer, error.Message,
+            error.Hint ?? "a new entry must be a complete definition that validates against the collection's schema (design 11.3)");
+        ok = false;
+        return null;
     }
 }

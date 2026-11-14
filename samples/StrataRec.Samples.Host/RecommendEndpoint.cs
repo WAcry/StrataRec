@@ -149,7 +149,7 @@ public static class RecommendEndpoint
 
                         if (!ConfigValues.TryToScalar(inputValue, field.InputType, out var scalar, out var error))
                         {
-                            problem = $"Input '{input}': {error}.";
+                            problem = $"Input '{input}' {error}.";
                             return false;
                         }
 

@@ -173,6 +173,7 @@ public sealed class PlanSchema
     private readonly Dictionary<string, ParamLeaf> _params = new(StringComparer.Ordinal);
     private readonly List<ParamLeaf> _paramList = new();
     private readonly Dictionary<string, ILookupTable> _tables = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _unusable = new(StringComparer.Ordinal);
 
     public PlanSchema(EntityKeyType keyType)
     {
@@ -214,6 +215,35 @@ public sealed class PlanSchema
     public bool TryGetContext(string name, [NotNullWhen(true)] out ContextField? field) => _context.TryGetValue(name, out field);
 
     public bool TryGetParam(string name, [NotNullWhen(true)] out ParamLeaf? leaf) => _params.TryGetValue(name, out leaf);
+
+    /// <summary>
+    /// Records a name whose declaration has an error, reported at the declaration (a column, parameter, request input or
+    /// feature of an unknown type): it is left out of the schema, and every use of it fails without a second error, so one
+    /// mistake is reported once (<see cref="IExpressionScope.IsUnusable"/>).
+    /// </summary>
+    /// <param name="qualifiedName">The name as expressions write it: <c>col.score.x</c>, <c>ctx.request.user_id</c>,
+    /// <c>param.coarse_k</c> (for a map parameter, every leaf <c>param.quotas.*</c> too).</param>
+    public void MarkUnusable(string qualifiedName) => _unusable.Add(qualifiedName);
+
+    /// <summary>True for a name recorded with <see cref="MarkUnusable"/>, a version of such a column (<c>col.x@node</c>),
+    /// or a leaf of such a map parameter.</summary>
+    public bool IsUnusable(string qualifiedName)
+    {
+        if (_unusable.Count == 0)
+        {
+            return false;
+        }
+
+        var name = qualifiedName.IndexOf('@', StringComparison.Ordinal) is var at and >= 0 ? qualifiedName[..at] : qualifiedName;
+        if (_unusable.Contains(name))
+        {
+            return true;
+        }
+
+        // param.<map>.<key>: the map's declaration decides.
+        var dot = name.StartsWith("param.", StringComparison.Ordinal) ? name.LastIndexOf('.') : -1;
+        return dot > "param.".Length && _unusable.Contains(name[..dot]);
+    }
 
     public List<ParamLeaf> MapLeaves(string mapName)
     {
@@ -409,5 +439,7 @@ public sealed class PlanSchema
         }
 
         public bool TryGetLookupTable(string name, out ILookupTable table) => schema._tables.TryGetValue(name, out table!);
+
+        public bool IsUnusable(string name) => schema.IsUnusable(name);
     }
 }

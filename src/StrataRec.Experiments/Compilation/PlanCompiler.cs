@@ -398,14 +398,14 @@ internal sealed partial class UnifiedCompilation
         var result = new Dictionary<string, T>(StringComparer.Ordinal);
         foreach (var (name, (value, arm)) in _additions[section])
         {
-            try
+            if (ArtifactSerializer.TryBind<T>(value, $"entry '{name}' of '{section}'", out var entry, out var error))
             {
-                result[name] = value.Deserialize<T>(ArtifactSerializer.Options) ?? throw new JsonException("expected an object");
+                result[name] = entry;
             }
-            catch (JsonException ex)
+            else
             {
-                _diagnostics.Error("PATCH_SCHEMA", arm.Artifact, arm.PointerPrefix + "/" + section + "/" + JsonPointer.Escape(name) + ArtifactSerializer.JsonPathToPointer(ex.Path),
-                    ex.Message, "a new entry must be a complete definition (design 11.3)");
+                _diagnostics.Error("PATCH_SCHEMA", arm.Artifact, arm.PointerPrefix + "/" + section + "/" + JsonPointer.Escape(name) + error.Pointer,
+                    error.Message, error.Hint ?? "a new entry must be a complete definition (design 11.3)");
             }
         }
 
@@ -432,7 +432,20 @@ internal sealed partial class UnifiedCompilation
             {
                 if (!schema.TryGetParam(ov.Leaf, out var leaf))
                 {
-                    _diagnostics.Error("PARAM_UNKNOWN", arm.Artifact, ov.Pointer, $"Parameter leaf '{ov.Leaf}' is not declared.");
+                    // A parameter declared with an error (an unknown type) is reported at its declaration; an invalid
+                    // arm's own declarations were dropped with it, and its leaves were checked against them already.
+                    if (arm.Valid && !schema.IsUnusable("param." + ov.Leaf))
+                    {
+                        var declared = new List<string>(schema.Params.Count);
+                        foreach (var p in schema.Params)
+                        {
+                            declared.Add(p.Name);
+                        }
+
+                        _diagnostics.Error("PARAM_UNKNOWN", arm.Artifact, ov.Pointer, $"Parameter leaf '{ov.Leaf}' is not declared.",
+                            NameSuggestions.DidYouMean(ov.Leaf, declared) ?? "declare it under /param_schema of the pipeline or of this arm");
+                    }
+
                     continue;
                 }
 

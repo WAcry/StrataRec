@@ -103,10 +103,12 @@ public sealed class FeatureCatalog
 {
     private readonly Dictionary<string, FeatureDefinition> _features;
 
-    private FeatureCatalog(string catalogId, IReadOnlyDictionary<string, EntityDefinition> entities, Dictionary<string, FeatureDefinition> features)
+    private FeatureCatalog(
+        string catalogId, IReadOnlyDictionary<string, EntityDefinition> entities, Dictionary<string, FeatureDefinition> features, IReadOnlyCollection<string> unusable)
     {
         CatalogId = catalogId;
         Entities = entities;
+        Unusable = unusable;
         _features = features;
         var ordered = new List<FeatureDefinition>(features.Values);
         ordered.Sort(static (a, b) => string.CompareOrdinal(a.Name, b.Name));
@@ -117,6 +119,12 @@ public sealed class FeatureCatalog
 
     public IReadOnlyDictionary<string, EntityDefinition> Entities { get; }
 
+    /// <summary>
+    /// Features the catalog declares but could not build because of an error reported at their declaration (an unknown
+    /// type, a bad default, an entity that failed): a plan marks them unusable, so reading one is not a second error.
+    /// </summary>
+    public IReadOnlyCollection<string> Unusable { get; }
+
     /// <summary>All features ordered by name (ordinal), so ids derived from positions are deterministic.</summary>
     public IReadOnlyList<FeatureDefinition> Features { get; }
 
@@ -124,22 +132,31 @@ public sealed class FeatureCatalog
 
     /// <summary>Validates and compiles a catalog artifact. Problems go to <paramref name="diagnostics"/>.</summary>
     /// <param name="requestSchema">Request input name → type, for context-key validation.</param>
+    /// <param name="unusableInputs">Request inputs declared with an error reported already (an unknown type): an entity
+    /// keyed by one fails without a second error, and so do its features.</param>
     public static FeatureCatalog Build(
         FeatureCatalogArtifact artifact,
         IReadOnlyDictionary<string, ColumnType> requestSchema,
         DiagnosticBag diagnostics,
-        string artifactName = "catalog")
+        string artifactName = "catalog",
+        IReadOnlySet<string>? unusableInputs = null)
     {
         var entities = new Dictionary<string, EntityDefinition>(StringComparer.Ordinal);
+        var broken = new HashSet<string>(StringComparer.Ordinal); // entities declared with an error, reported or inherited
+        var unusable = new SortedSet<string>(StringComparer.Ordinal);
         var entityNames = new List<string>(artifact.Entities.Keys);
         entityNames.Sort(StringComparer.Ordinal);
         foreach (var name in entityNames)
         {
             var spec = artifact.Entities[name];
-            var entity = BuildEntity(name, spec, requestSchema, diagnostics, artifactName);
+            var entity = BuildEntity(name, spec, requestSchema, unusableInputs, diagnostics, artifactName);
             if (entity is not null)
             {
                 entities[name] = entity;
+            }
+            else
+            {
+                broken.Add(name);
             }
         }
 
@@ -147,22 +164,16 @@ public sealed class FeatureCatalog
         foreach (var (name, spec) in artifact.Features)
         {
             var pointer = "/features/" + EscapePointer(name);
-            if (!TryEntity(name, entities, diagnostics, artifactName, pointer, out var entity))
+            if (!TryEntity(name, entities, broken, diagnostics, artifactName, pointer, out var entity))
             {
+                unusable.Add(name);
                 continue;
             }
 
-            if (!ColumnType.TryParse(spec.Type, out var type, out var typeError))
+            if (!ConfigTypes.TryParse(spec.Type, TypeSite.Feature, out var type, out _, out var typeError, out var typeHint))
             {
-                diagnostics.Error("FEATURE_BAD_TYPE", artifactName, pointer + "/type", typeError);
-                continue;
-            }
-
-            if (type.Nullable)
-            {
-                diagnostics.Error("FEATURE_BAD_TYPE", artifactName, pointer + "/type",
-                    $"Feature types are written without '?'; nullability comes from 'default' (got '{spec.Type}').",
-                    "remove the '?' and omit 'default' to make the feature nullable");
+                diagnostics.Error("FEATURE_BAD_TYPE", artifactName, pointer + "/type", typeError, typeHint);
+                unusable.Add(name);
                 continue;
             }
 
@@ -170,7 +181,8 @@ public sealed class FeatureCatalog
             var def = ScalarValue.Missing;
             if (hasDefault && !ConfigValues.TryToScalar(spec.Default, type, out def, out var defError))
             {
-                diagnostics.Error("FEATURE_BAD_DEFAULT", artifactName, pointer + "/default", defError);
+                diagnostics.Error("FEATURE_BAD_DEFAULT", artifactName, pointer + "/default", $"The default of '{name}' {defError}.");
+                unusable.Add(name);
                 continue;
             }
 
@@ -199,14 +211,16 @@ public sealed class FeatureCatalog
                 continue;
             }
 
-            if (!TryEntity(name, entities, diagnostics, artifactName, pointer, out var entity))
+            if (!TryEntity(name, entities, broken, diagnostics, artifactName, pointer, out var entity))
             {
+                unusable.Add(name);
                 continue;
             }
 
-            if (!ColumnType.TryParse(spec.Type, out var type, out var typeError) || type.Nullable)
+            if (!ConfigTypes.TryParse(spec.Type, TypeSite.Feature, out var type, out _, out var typeError, out var typeHint))
             {
-                diagnostics.Error("FEATURE_BAD_TYPE", artifactName, pointer + "/type", typeError ?? $"Derived feature types are written without '?' (got '{spec.Type}').");
+                diagnostics.Error("FEATURE_BAD_TYPE", artifactName, pointer + "/type", typeError, typeHint);
+                unusable.Add(name);
                 continue;
             }
 
@@ -214,7 +228,8 @@ public sealed class FeatureCatalog
             var def = ScalarValue.Missing;
             if (hasDefault && !ConfigValues.TryToScalar(spec.Default, type, out def, out var defError))
             {
-                diagnostics.Error("FEATURE_BAD_DEFAULT", artifactName, pointer + "/default", defError);
+                diagnostics.Error("FEATURE_BAD_DEFAULT", artifactName, pointer + "/default", $"The default of '{name}' {defError}.");
+                unusable.Add(name);
                 continue;
             }
 
@@ -232,12 +247,37 @@ public sealed class FeatureCatalog
             };
         }
 
-        ValidateForeignKeys(entities, features, diagnostics, artifactName);
-        return new FeatureCatalog(artifact.CatalogId, entities, features);
+        // An entity keyed by a feature declared with an error has no key: it and its features fail with that error, and
+        // so does an entity keyed by one of their features.
+        for (var changed = true; changed;)
+        {
+            changed = false;
+            foreach (var entity in new List<EntityDefinition>(entities.Values))
+            {
+                if (entity.KeyIsFeature && unusable.Contains(entity.CandidateKeyColumn!))
+                {
+                    entities.Remove(entity.Name);
+                    foreach (var feature in new List<FeatureDefinition>(features.Values))
+                    {
+                        if (feature.Entity == entity)
+                        {
+                            features.Remove(feature.Name);
+                            unusable.Add(feature.Name);
+                        }
+                    }
+
+                    changed = true;
+                }
+            }
+        }
+
+        ValidateForeignKeys(entities, features, unusable, diagnostics, artifactName);
+        return new FeatureCatalog(artifact.CatalogId, entities, features, unusable);
     }
 
     private static EntityDefinition? BuildEntity(
-        string name, EntitySpec spec, IReadOnlyDictionary<string, ColumnType> requestSchema, DiagnosticBag diagnostics, string artifactName)
+        string name, EntitySpec spec, IReadOnlyDictionary<string, ColumnType> requestSchema, IReadOnlySet<string>? unusableInputs,
+        DiagnosticBag diagnostics, string artifactName)
     {
         var pointer = "/entities/" + EscapePointer(name);
         var keys = StringsOf(spec.Key);
@@ -273,6 +313,11 @@ public sealed class FeatureCatalog
                 var input = key["ctx.request.".Length..];
                 if (!requestSchema.TryGetValue(input, out var inputType))
                 {
+                    if (unusableInputs is not null && unusableInputs.Contains(input))
+                    {
+                        return null; // its declaration's error is reported; the entity fails with it
+                    }
+
                     diagnostics.Error("ENTITY_BAD_KEY", artifactName, pointer + "/key",
                         $"Request input '{input}' is not declared in the pipeline's request_schema.",
                         NameSuggestions.DidYouMean(input, requestSchema.Keys));
@@ -342,7 +387,8 @@ public sealed class FeatureCatalog
     }
 
     private static void ValidateForeignKeys(
-        Dictionary<string, EntityDefinition> entities, Dictionary<string, FeatureDefinition> features, DiagnosticBag diagnostics, string artifactName)
+        Dictionary<string, EntityDefinition> entities, Dictionary<string, FeatureDefinition> features, SortedSet<string> unusable,
+        DiagnosticBag diagnostics, string artifactName)
     {
         foreach (var entity in entities.Values)
         {
@@ -354,6 +400,11 @@ public sealed class FeatureCatalog
             var pointer = "/entities/" + EscapePointer(entity.Name) + "/key";
             if (!features.TryGetValue(entity.CandidateKeyColumn!, out var keyFeature))
             {
+                if (unusable.Contains(entity.CandidateKeyColumn!))
+                {
+                    continue; // declared with an error reported at its declaration
+                }
+
                 diagnostics.Error("ENTITY_BAD_KEY", artifactName, pointer,
                     $"Key column 'col.{entity.CandidateKeyColumn}' is not a declared feature.",
                     NameSuggestions.DidYouMean(entity.CandidateKeyColumn!, features.Keys));
@@ -390,8 +441,8 @@ public sealed class FeatureCatalog
     }
 
     private static bool TryEntity(
-        string featureName, Dictionary<string, EntityDefinition> entities, DiagnosticBag diagnostics, string artifactName, string pointer,
-        out EntityDefinition entity)
+        string featureName, Dictionary<string, EntityDefinition> entities, HashSet<string> broken, DiagnosticBag diagnostics, string artifactName,
+        string pointer, out EntityDefinition entity)
     {
         entity = null!;
         var dot = featureName.IndexOf('.', StringComparison.Ordinal);
@@ -402,6 +453,11 @@ public sealed class FeatureCatalog
         }
 
         var entityName = featureName[..dot];
+        if (broken.Contains(entityName))
+        {
+            return false; // the entity's declaration has an error, reported there
+        }
+
         if (!entities.TryGetValue(entityName, out entity!))
         {
             diagnostics.Error("FEATURE_UNKNOWN_ENTITY", artifactName, pointer, $"Entity '{entityName}' is not declared.",

@@ -37,7 +37,11 @@ internal static class CommonOptions
         DefaultValueFactory = _ => "text",
     }.AcceptOnlyFromAmong("text", "json");
 
-    public static JsonWriterOptions JsonOptions => new() { Indented = true };
+    /// <summary>
+    /// The CLI's JSON output: indented, and with quotes, '&lt;' and non-ASCII text as written, since it goes to a terminal or a
+    /// program, never into HTML (the default encoder writes <c>'</c> as <c>\u0027</c>).
+    /// </summary>
+    public static JsonWriterOptions JsonOptions => new() { Indented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     /// <summary>
     /// <c>-c</c> where <c>--manifest</c> is the alternative: no default value, so that giving both is an error; neither is

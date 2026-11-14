@@ -15,7 +15,7 @@ public sealed class JsonPointerJsonConverter : JsonConverter<JsonPointer>
         if (reader.TokenType != JsonTokenType.String)
         {
             throw new JsonException(
-                $"Expected an RFC 6901 JSON pointer string such as \"/nodes/fusion\" but found {reader.TokenType}.");
+                $"Expected an RFC 6901 JSON pointer string such as \"/nodes/fusion\", got {JsonWords.Token(reader.TokenType)}.");
         }
 
         return ParseOrThrow(reader.GetString()!);
