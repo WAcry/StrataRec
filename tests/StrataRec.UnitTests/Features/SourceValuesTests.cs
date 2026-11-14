@@ -54,6 +54,41 @@ public class SourceValuesTests
     }
 
     [Fact]
+    public async Task APrefetchNoReaderTook_IsCountedWhenTheRequestEnds_ItsAnsweredChunksOnly()
+    {
+        // A prefetch for a node that does not run (a fallback, review 25): chunks [1, 2] and [3, 4] answer (nothing for 3),
+        // [5] is still running when the request ends. The source answered keys 1-4 whether or not anything read them.
+        var held = new TaskCompletionSource<FetchStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var connector = new ScriptedConnector((keys, fields, writer, _) =>
+        {
+            if (keys.CandidateKeys.Span[0].Int64Value == 5)
+            {
+                return new ValueTask<FetchStatus>(held.Task);
+            }
+
+            ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key == 3 ? null : key * 1.0);
+            return ValueTask.FromResult(FetchStatus.Ok);
+        });
+        var rig = new FeatureTestRig().Source("values_unread", connector, maxBatch: 2);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "values_unread");
+        rig.Build();
+        using var values = new SourceValues("values_unread");
+        var request = rig.NewRequest([1, 2, 3, 4, 5]);
+
+        request.Fetcher.Prefetch([clicks], CancellationToken.None);
+        Assert.Equal((0, 0), values.Of("item.clicks")); // nothing read it yet
+
+        request.Fetcher.CountUnreadFetches();
+        Assert.Equal((3, 1), values.Of("item.clicks"));
+        request.Fetcher.CountUnreadFetches();
+        Assert.Equal((3, 1), values.Of("item.clicks")); // once
+
+        held.SetResult(FetchStatus.Ok); // answering after the request ended counts nothing
+        await request.Fetcher.WhenIoCompleteAsync();
+        Assert.Equal((3, 1), values.Of("item.clicks"));
+    }
+
+    [Fact]
     public async Task AFetch_DoesNotCountTheKeysOfAChunkThatFailed_AndCountsAPartialChunksKeys()
     {
         // Chunks [1, 2], [3, 4], [5]: the first answers, the second fails, the third answers in part, with nothing for 5.

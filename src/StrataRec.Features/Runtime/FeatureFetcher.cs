@@ -840,6 +840,46 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>
+    /// Counts the fetches no reader took (<see cref="StrataRecMetrics.SourceValues"/>): a prefetch whose features only a
+    /// node that did not run needed (a fallback, review 25), or one the request ended before reading. A source that
+    /// answered was asked whether or not the request used the answer. Only chunks whose calls completed within their
+    /// budget count, as for a fetch that was read; a chunk still running when the request ends is abandoned. Call once, at
+    /// the end of the request, before its memory is released (the staging lives in it).
+    /// </summary>
+    public void CountUnreadFetches()
+    {
+        if (!CountsValues)
+        {
+            return;
+        }
+
+        foreach (var pending in _pending)
+        {
+            if (pending.Staging is not { } staging)
+            {
+                continue;
+            }
+
+            // Never awaited: each unread call's result is read here once.
+            var answered = 0;
+            for (var c = 0; c < pending.ChunkCount; c++)
+            {
+                var call = pending.Calls[c];
+                var failed = !call.IsCompleted || call.Result.Outcome == FetchOutcome.Failed;
+                pending.ChunkFailed[c] = failed;
+                answered += failed ? 0 : 1;
+            }
+
+            if (answered > 0)
+            {
+                CountFetchedValues(pending, staging);
+            }
+        }
+
+        _pending.Clear();
+    }
+
+    /// <summary>
     /// Whether this request counts <see cref="StrataRecMetrics.SourceValues"/>: only while a listener is enabled, so a
     /// request without one pays this check alone, and never in a replay, which is not traffic (design 13.4).
     /// </summary>
