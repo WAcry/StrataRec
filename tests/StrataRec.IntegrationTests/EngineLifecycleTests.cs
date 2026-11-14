@@ -1,5 +1,6 @@
 using System.Text.Json;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Keys;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Features.Local;
@@ -88,6 +89,28 @@ public sealed class EngineLifecycleTests
         Assert.Equal(0, host.TableCount);
         host.OpenLease().Dispose(); // not disposed: it is the caller's
         Assert.Equal(1, sources.Runs);
+    }
+
+    [Fact]
+    public async Task TwoEnginesSharingAHost_WithSourceFactoriesOfTheirOwn_EachLoadAndServeTheirOwnTable()
+    {
+        // The same configuration, so the same table identity, but each engine's registry has its own factory for the
+        // source type: the second engine's source must run, and its plan read what that source loaded.
+        var mine = new GatedSources(followers: 5);
+        var theirs = new GatedSources(followers: 7);
+        mine.Open();
+        theirs.Open();
+        var root = Workspace();
+        using var host = new BindingHost();
+        await using var first = new RecEngine(Environment(root, mine), bindings: host);
+        await using var second = new RecEngine(Environment(root, theirs), bindings: host);
+        Assert.True((await first.LoadAsync(Compile(root))).Applied);
+        Assert.True((await second.LoadAsync(Compile(root))).Applied);
+
+        Assert.Equal((1, 1), (mine.Runs, theirs.Runs));
+        Assert.Equal(2, host.TableCount);
+        Assert.Equal((5.0, 7.0), (Followers(first), Followers(second)));
+        Assert.True((await second.ExecuteAsync(MetricsTests.Request("req-second"))).Succeeded);
     }
 
     [Fact]
@@ -192,6 +215,15 @@ public sealed class EngineLifecycleTests
     private static string Workspace() => HomeFeedTestHost.LoadModified(root => SampleBindings.Rebind(root, "author_store",
         $$"""{ "mode": "local", "max_bytes": "16MiB", "bootstrap": { "source": "{{GatedSources.Type}}" } }""")).Root;
 
+    /// <summary>Author 100's followers in the table the engine's served plan reads.</summary>
+    private static double Followers(RecEngine engine)
+    {
+        Assert.True(engine.TryGetPipeline("home_feed", out var pipeline));
+        var table = Assert.Single(pipeline.Bindings.Tables, t => t.Schema.Source == "author_store");
+        var version = table.Pin();
+        return version.Read(table.Schema.FieldIndex("a_followers"), version.Find(EntityKey.FromInt64(100))).AsFloat64();
+    }
+
     private static PlanEnvironment Environment(string root, GatedSources sources) => new()
     {
         BaseDirectory = root,
@@ -207,13 +239,14 @@ public sealed class EngineLifecycleTests
     }
 
     /// <summary>
-    /// Update sources the test drives: each run is announced (<see cref="Next"/>), loads author 100 once the gate is
-    /// open, calls <see cref="Loaded"/>, and then runs until it is cancelled.
+    /// Update sources the test drives: each run is announced (<see cref="Next"/>), loads author 100 (with
+    /// <paramref name="followers"/>) once the gate is open, calls <see cref="Loaded"/>, and then runs until it is cancelled.
     /// </summary>
-    private sealed class GatedSources : IFeatureUpdateSourceFactory
+    private sealed class GatedSources(double followers = 5) : IFeatureUpdateSourceFactory
     {
         public const string Type = "gated@1";
 
+        private readonly double _followers = followers;
         private readonly TaskCompletionSource _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly List<TaskCompletionSource<Run>> _runs = new();
         private int _runCount;
@@ -263,7 +296,7 @@ public sealed class EngineLifecycleTests
                 await owner._gate.Task.WaitAsync(cancellationToken);
                 writer.BeginReload();
                 var builder = writer.Begin(100L, 1);
-                builder.Set(writer.Schema.FieldIndex("a_followers"), ScalarValue.FromFloat64(5));
+                builder.Set(writer.Schema.FieldIndex("a_followers"), ScalarValue.FromFloat64(owner._followers));
                 builder.Commit();
                 writer.CompleteReload(UpdatePosition.Empty);
                 owner.Loaded?.Invoke(run, cancellationToken);

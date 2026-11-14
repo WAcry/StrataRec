@@ -75,16 +75,16 @@ public interface IPlanBindings : ILocalTableProvider, IBindingInstances
 /// was loaded.</remarks>
 public sealed class UnloadedBindings : IPlanBindings
 {
-    private readonly Dictionary<string, LocalFeatureTable> _tables = new(StringComparer.Ordinal);
+    private readonly Dictionary<TableKey, LocalFeatureTable> _tables = new();
     private readonly Dictionary<BindingKey, object> _instances = new();
 
     public LocalFeatureTable Acquire(LocalTableSpec spec)
     {
         ArgumentNullException.ThrowIfNull(spec);
-        if (!_tables.TryGetValue(spec.Identity, out var table))
+        if (!_tables.TryGetValue(spec.Key, out var table))
         {
             table = UnloadedLocalTables.Instance.Acquire(spec);
-            _tables[spec.Identity] = table;
+            _tables[spec.Key] = table;
         }
 
         return table;

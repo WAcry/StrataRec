@@ -43,7 +43,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
     private readonly BindingHost _host;
     private readonly object _gate = new();
     private readonly List<BindingHost.TableEntry> _tables = new();
-    private readonly Dictionary<string, BindingHost.TableEntry> _tablesByIdentity = new(StringComparer.Ordinal);
+    private readonly Dictionary<TableKey, BindingHost.TableEntry> _tablesByKey = new();
     private readonly List<BindingHost.ClientEntry> _clients = new();
     private readonly Dictionary<BindingKey, BindingHost.ClientEntry> _clientsByKey = new();
     private readonly Dictionary<object, BindingHost.ClientEntry> _clientsByInstance = new(ReferenceEqualityComparer.Instance);
@@ -101,14 +101,14 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_tablesByIdentity.TryGetValue(spec.Identity, out var held))
+            if (_tablesByKey.TryGetValue(spec.Key, out var held))
             {
                 return held.Table;
             }
 
             var entry = _host.Acquire(spec);
             _tables.Add(entry);
-            _tablesByIdentity[spec.Identity] = entry;
+            _tablesByKey[spec.Key] = entry;
             return entry.Table;
         }
     }
@@ -425,7 +425,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
             _disposed = true;
             tables = new List<BindingHost.TableEntry>(_tables);
             _tables.Clear();
-            _tablesByIdentity.Clear();
+            _tablesByKey.Clear();
         }
 
         CancelLookups(); // before the lease is marked retired, so the callbacks of the cancellation can count as a user

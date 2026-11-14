@@ -127,7 +127,7 @@ public sealed class LocalGroupTable
 
     public LocalTableSpec Spec { get; }
 
-    /// <summary>The table, shared with every plan whose spec has the same identity.</summary>
+    /// <summary>The table, shared with every plan whose spec has the same key (<see cref="LocalTableSpec.Key"/>).</summary>
     public LocalFeatureTable Table { get; }
 
     /// <summary>Table field of each group member: <c>TableFields[i]</c> holds <see cref="FetchGroup.Fields"/>[i].</summary>
@@ -309,7 +309,7 @@ internal sealed class FeatureSourceResolver
         try
         {
             spec = tableMode == LocalTableMode.Cache
-                ? LocalTableSpec.CreateCache(schema, supply.Options!, supply.Binding, _artifact, pointer, _baseDirectory)
+                ? LocalTableSpec.CreateCache(schema, supply.Options!, supply.Binding, supply.Connector!, _artifact, pointer, _baseDirectory)
                 : LocalTableSpec.Create(schema, supply.Options!, supply.Binding, supply.BootstrapFactory!, supply.Name, _artifact, pointer, _baseDirectory);
         }
         catch (FeatureUpdateException ex)

@@ -44,11 +44,12 @@ public sealed class BindingHostOptions
 
 /// <summary>
 /// Owns what the engine's plans bind (design 6.4, 6.6): the local feature tables, and the instances bindings name (model
-/// clients, candidate sources, feature connectors). Each is created once per identity and shared with every plan whose
-/// spec has the same identity (<see cref="LocalTableSpec.Identity"/>, <see cref="BindingSpec.Identity"/>), so a plan swap
-/// takes over what is loaded instead of loading it again; each is loaded off the request path before a plan that needs
-/// it is served, and stopped or disposed once nothing uses it. The one component with these lifecycles; plans hold
-/// what they bind through one <see cref="BindingLease"/> each.
+/// clients, candidate sources, feature connectors). Each is created once per key and shared with every plan whose spec
+/// has the same key (<see cref="LocalTableSpec.Key"/>, <see cref="BindingSpec.Key"/>: the identity of the configuration,
+/// and the factory or connector object the data comes from, so engines with different registries never share), so a
+/// plan swap takes over what is loaded instead of loading it again; each is loaded off the request path before a plan
+/// that needs it is served, and stopped or disposed once nothing uses it. The one component with these lifecycles;
+/// plans hold what they bind through one <see cref="BindingLease"/> each.
 /// </summary>
 /// <remarks>
 /// <para><b>Readiness.</b> A table is ready once its first load is complete (<see cref="LocalFeatureTable.IsLoaded"/>); an
@@ -82,7 +83,7 @@ public sealed class BindingHostOptions
 public sealed partial class BindingHost : IAsyncDisposable, IDisposable
 {
     private readonly object _gate = new();
-    private readonly Dictionary<string, TableEntry> _byIdentity = new(StringComparer.Ordinal);
+    private readonly Dictionary<TableKey, TableEntry> _tables = new();
     private readonly HashSet<TableEntry> _entries = new(); // every entry whose source may still run, for shutdown
     private readonly Dictionary<BindingKey, ClientEntry> _clients = new();
     private readonly HashSet<ClientEntry> _clientEntries = new(); // every instance not yet disposed, for shutdown
@@ -114,7 +115,7 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
         {
             lock (_gate)
             {
-                return _byIdentity.Count;
+                return _tables.Count;
             }
         }
     }
@@ -164,7 +165,7 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
             _disposed = true;
             entries = new List<TableEntry>(_entries);
             clients = new List<ClientEntry>(_clientEntries);
-            _byIdentity.Clear();
+            _tables.Clear();
         }
 
         var stopping = new List<Task>(entries.Count);
@@ -223,14 +224,14 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
         return pending;
     }
 
-    /// <summary>The held table of the spec's identity with one more reference, or a new one.</summary>
+    /// <summary>The held table of the spec's key with one more reference, or a new one.</summary>
     internal TableEntry Acquire(LocalTableSpec spec)
     {
         ArgumentNullException.ThrowIfNull(spec);
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_byIdentity.TryGetValue(spec.Identity, out var held) && !held.FirstLoadFailed)
+            if (_tables.TryGetValue(spec.Key, out var held) && !held.FirstLoadFailed)
             {
                 held.References++;
                 return held;
@@ -239,7 +240,7 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
             // New, or the held one failed its first load: a fresh table, so another load really retries. The failed one
             // stays with the leases that hold it until they let go.
             var entry = new TableEntry(this, spec, new LocalFeatureTable(spec.Schema, spec.Options)) { References = 1 };
-            _byIdentity[spec.Identity] = entry;
+            _tables[spec.Key] = entry;
             _entries.Add(entry);
             return entry;
         }
@@ -254,9 +255,9 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
                 return;
             }
 
-            if (_byIdentity.TryGetValue(entry.Spec.Identity, out var held) && held == entry)
+            if (_tables.TryGetValue(entry.Spec.Key, out var held) && held == entry)
             {
-                _byIdentity.Remove(entry.Spec.Identity);
+                _tables.Remove(entry.Spec.Key);
             }
         }
 
