@@ -68,6 +68,22 @@ public sealed class ModelSignatureTests
             + "which ModelScorer@1 sends as float32 [-1].", error.Message);
     }
 
+    [Fact]
+    public void AnIntColumnMappedToTheFloat32Model_IsAMismatch_WhoseFixIsAFloat32DerivedFeature()
+    {
+        // linear@1 declares float32 [-1]; an int64 column is sent as int64 [-1], whatever the model declares (design 6.9).
+        var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
+            "\"log_followers\": \"col.author.log_followers\"", "\"log_followers\": \"col.entity_id\""));
+
+        var compilation = PlanCompiler.Compile(host.Request, host.Environment);
+
+        var error = Assert.Single(compilation.Diagnostics, IsModelError);
+        Assert.Equal(("/nodes/ctr_ranker/config/inputs/log_followers", "MODEL_TENSOR_MISMATCH"), (error.Pointer, error.Code));
+        Assert.Equal("Model 'ctr_model' version 'default' declares input 'log_followers' as float32 [-1], but it maps col.entity_id (int64), "
+            + "which ModelScorer@1 sends as int64 [-1].", error.Message);
+        Assert.Contains("or map a float32 derived feature of col.entity_id instead", error.Hint);
+    }
+
     /// <summary>The scorer's own errors; the log tap that reads ctr_ranker's inputs fails with it and reports its own.</summary>
     private static bool IsModelError(ConfigDiagnostic d) => d.IsError && d.Code.StartsWith("MODEL_", StringComparison.Ordinal);
 
