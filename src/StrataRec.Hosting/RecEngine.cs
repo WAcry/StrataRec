@@ -768,23 +768,36 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// invariant 3). Disposing the source at once could leave the token never cancelled: the wait may end before the
     /// source's timer fires, and a caller's cancellation may end the request, inline in Cancel, before the registration
     /// that cancels the linked token has run, and disposing removes it. The callbacks run on the pool, so one that blocks
-    /// does not hold the request; one that throws is logged. A provider that never ends keeps its source.
+    /// does not hold the request; one that throws is logged. A provider that never ends keeps its source. Whatever the
+    /// cancellation or its log does, the source is disposed once the provider has ended, and not before (review 20 #3).
     /// </summary>
     private async Task AbandonProviderAsync(CancellationTokenSource deadline, Task provider, string pipelineId, string requestId)
     {
-        var callbacks = deadline.CancelAsync();
         try
         {
-            await callbacks.ConfigureAwait(false);
+            var callbacks = deadline.CancelAsync();
+            try
+            {
+                await callbacks.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    LogProviderCancellationCallbacksFailed(_logger, callbacks.Exception ?? ex, pipelineId, requestId);
+                }
+                catch (Exception)
+                {
+                    // A failing logger cannot report itself.
+                }
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            LogProviderCancellationCallbacksFailed(_logger, callbacks.Exception ?? ex, pipelineId, requestId);
+            await provider.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            _ = provider.Exception; // a late failure nobody awaits any more
+            deadline.Dispose();
         }
-
-        await provider.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-        _ = provider.Exception; // a late failure nobody awaits any more
-        deadline.Dispose();
     }
 
     [LoggerMessage(EventId = 1102, Level = LogLevel.Warning,

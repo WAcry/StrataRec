@@ -1,4 +1,5 @@
 using System.Threading.Tasks.Sources;
+using Microsoft.Extensions.Logging;
 using StrataRec.Experiments.Assignment;
 using StrataRec.Hosting;
 using StrataRec.Pipeline.Planning;
@@ -248,6 +249,99 @@ public sealed class AssignmentProviderTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
         await AssertEnds(provider);
+    }
+
+    /// <summary>
+    /// Registers a cancellation callback that throws, and ends when told to (with a failure): a provider whose cleanup
+    /// fails, and which outlives the request. Keeps its token, to tell when its source is disposed.
+    /// </summary>
+    private sealed class FailingCleanupProvider : IAssignmentProvider
+    {
+        private readonly TaskCompletionSource<IReadOnlyList<string>> _end = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public CancellationToken Token { get; private set; }
+
+        public void End() => _end.SetException(new InvalidOperationException("the provider failed late"));
+
+        public ValueTask<IReadOnlyList<string>> AssignAsync(AssignmentContext context, CancellationToken cancellationToken)
+        {
+            Token = cancellationToken;
+            _ = cancellationToken.WaitHandle; // the handle a disposed source closes
+            cancellationToken.Register(static () => throw new InvalidOperationException("the provider's cleanup failed"));
+            return new(_end.Task);
+        }
+    }
+
+    /// <summary>A logger whose event 1102 throws once it is recorded.</summary>
+    private sealed class ThrowingOn1102 : ILoggerFactory, ILogger
+    {
+        public TaskCompletionSource<Exception?> Logged { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ILogger CreateLogger(string categoryName) => this;
+
+        public void AddProvider(ILoggerProvider provider)
+        {
+        }
+
+        public void Dispose()
+        {
+        }
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (eventId.Id == 1102)
+            {
+                Logged.TrySetResult(exception);
+                throw new InvalidOperationException("the logger failed");
+            }
+        }
+    }
+
+    [Fact]
+    public async Task AnAbandonedProviderWhoseCallbackAndLoggerThrow_KeepsItsTokenUntilItEnds_ThenItIsDisposed()
+    {
+        // Review 20 #3: the callback's failure is logged (1102), and the logger throws too. That used to end the cleanup
+        // there: the provider's late failure was never observed and its token source never disposed.
+        var provider = new FailingCleanupProvider();
+        var logger = new ThrowingOn1102();
+        var host = HomeFeedTestHost.Load();
+        var engine = new RecEngine(host.Environment, provider, loggerFactory: logger) { AssignmentWaitTimers = new ImmediateTimers() };
+        Assert.True(engine.Load(host.Request).Applied);
+
+        var result = await engine.ExecuteAsync(Request("req-cleanup-fails"));
+
+        Assert.Equal("deadline exceeded during assignment", result.Error);
+        var logged = await logger.Logged.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Contains("the provider's cleanup failed", logged!.ToString());
+        Assert.True(provider.Token.IsCancellationRequested);
+        Assert.False(Disposed(provider.Token)); // the provider is still running: its token stays valid
+
+        provider.End();
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (!Disposed(provider.Token) && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(5);
+        }
+
+        Assert.True(Disposed(provider.Token), "the abandoned provider's token source was not disposed after it ended");
+    }
+
+    private static bool Disposed(CancellationToken token)
+    {
+        try
+        {
+            _ = token.WaitHandle;
+            return false;
+        }
+        catch (ObjectDisposedException)
+        {
+            return true;
+        }
     }
 
     /// <summary>Answers when told to: a provider whose answer comes at a moment the test picks.</summary>
