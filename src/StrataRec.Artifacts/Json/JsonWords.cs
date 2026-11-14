@@ -34,7 +34,7 @@ public static class JsonWords
         switch (value.GetValueKind())
         {
             case JsonValueKind.String:
-                return "the string " + Quote(value.GetValue<string>());
+                return TryText(value, out var text) ? "the string " + Quote(text) : "a string that is not valid Unicode";
             case JsonValueKind.Number:
                 return "the number " + Cut(node.ToJsonString());
             case JsonValueKind.True:
@@ -118,6 +118,24 @@ public static class JsonWords
         }
 
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// A string value's text. Describing a value is how an error about it is told, so it must not fail itself: a string
+    /// whose escapes are not valid UTF-16 (<c>"\uD800"</c>, an unpaired surrogate) has no text, and is said to be so.
+    /// </summary>
+    public static bool TryText(JsonValue value, out string text)
+    {
+        try
+        {
+            text = value.GetValue<string>();
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            text = string.Empty;
+            return false;
+        }
     }
 
     private static string Cut(string text) => text.Length <= MaxQuotedLength ? text : text[..MaxQuotedLength] + "…";

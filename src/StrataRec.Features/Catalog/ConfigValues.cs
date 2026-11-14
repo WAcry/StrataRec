@@ -37,11 +37,16 @@ public static class ConfigValues
             case StorageKind.Bool when node is JsonValue v && v.GetValueKind() is JsonValueKind.True or JsonValueKind.False:
                 value = ScalarValue.FromBool(v.GetValue<bool>());
                 return true;
-            case StorageKind.Int32 or StorageKind.Int64 when TryInteger(node, out var integer):
+            case StorageKind.Int32 or StorageKind.Int64 when node is JsonValue v && v.GetValueKind() == JsonValueKind.Number:
+                if (!JsonIntegers.TryGetInt64(node, out var integer))
+                {
+                    error = JsonIntegers.IsIntegral(v.ToJsonString()) ? OutOfRange(type, node) : Expected(type, JsonWords.Value(node));
+                    return false;
+                }
+
                 if (type.Kind == StorageKind.Int32 && !Int32Range.Fits(integer))
                 {
-                    error = $"must be within the int32 range [{int.MinValue}, {int.MaxValue}], got {JsonWords.Value(node)}; " +
-                            $"declare the type as {type.Promoted().AsNonNullable()} for larger values";
+                    error = OutOfRange(type, node);
                     return false;
                 }
 
@@ -50,11 +55,14 @@ public static class ConfigValues
             case StorageKind.Float32 or StorageKind.Float64 when node is JsonValue v && v.GetValueKind() == JsonValueKind.Number:
                 value = ScalarValue.FromFloat64(v.GetValue<double>());
                 return true;
-            case StorageKind.String when node is JsonValue v && v.GetValueKind() == JsonValueKind.String:
-                value = ScalarValue.FromString(v.GetValue<string>());
-                return true;
-            case StorageKind.Text when node is JsonValue v && v.GetValueKind() == JsonValueKind.String:
-                value = ScalarValue.FromText(v.GetValue<string>());
+            case StorageKind.String or StorageKind.Text when node is JsonValue v && v.GetValueKind() == JsonValueKind.String:
+                if (!JsonWords.TryText(v, out var text))
+                {
+                    error = Expected(type, JsonWords.Value(node));
+                    return false;
+                }
+
+                value = type.Kind == StorageKind.String ? ScalarValue.FromString(text) : ScalarValue.FromText(text);
                 return true;
             case StorageKind.Vector when node is JsonArray a:
                 if (type.Dimension > 0 && a.Count != type.Dimension)
@@ -83,16 +91,17 @@ public static class ConfigValues
                 var longs = new long[a.Count];
                 for (var i = 0; i < longs.Length; i++)
                 {
-                    if (!TryInteger(a[i], out longs[i]))
+                    if (!JsonIntegers.TryGetInt64(a[i], out longs[i]))
                     {
-                        error = Element(type, i, a[i]);
+                        error = a[i] is JsonValue e && e.GetValueKind() == JsonValueKind.Number && JsonIntegers.IsIntegral(e.ToJsonString())
+                            ? OutOfRange(type, a[i], i)
+                            : Element(type, i, a[i]);
                         return false;
                     }
 
                     if (type.Kind == StorageKind.ListInt32 && !Int32Range.Fits(longs[i]))
                     {
-                        error = $"must be an array of integers within the int32 range [{int.MinValue}, {int.MaxValue}]; element {i} is " +
-                                $"{JsonWords.Value(a[i])}; declare the type as {type.Promoted().AsNonNullable()} for larger values";
+                        error = OutOfRange(type, a[i], i);
                         return false;
                     }
                 }
@@ -103,13 +112,11 @@ public static class ConfigValues
                 var strings = new string[a.Count];
                 for (var i = 0; i < strings.Length; i++)
                 {
-                    if (a[i] is not JsonValue e || e.GetValueKind() != JsonValueKind.String)
+                    if (a[i] is not JsonValue e || e.GetValueKind() != JsonValueKind.String || !JsonWords.TryText(e, out strings[i]))
                     {
                         error = Element(type, i, a[i]);
                         return false;
                     }
-
-                    strings[i] = e.GetValue<string>();
                 }
 
                 value = ScalarValue.FromStringList(strings);
@@ -147,27 +154,18 @@ public static class ConfigValues
     private static string Element(ColumnType type, int index, JsonNode? element) =>
         $"must be {Describe(type)}; element {index} is {JsonWords.Value(element)}";
 
-    /// <summary>A JSON number with no fraction (<c>3</c>, <c>3.0</c>, <c>3e2</c>) that a long holds.</summary>
-    private static bool TryInteger(JsonNode? node, out long integer)
+    /// <summary>
+    /// The message for an integer outside the range of <paramref name="type"/> (of its elements, with
+    /// <paramref name="element"/>); for int32 storage, with the fix of declaring the int64 form.
+    /// </summary>
+    private static string OutOfRange(ColumnType type, JsonNode? value, int element = -1)
     {
-        integer = 0;
-        if (node is not JsonValue v || v.GetValueKind() != JsonValueKind.Number)
-        {
-            return false;
-        }
-
-        if (v.TryGetValue(out integer))
-        {
-            return true;
-        }
-
-        var d = v.GetValue<double>();
-        if (Math.Floor(d) == d && Math.Abs(d) < 9.2e18)
-        {
-            integer = (long)d;
-            return true;
-        }
-
-        return false;
+        var int32 = type.Kind is StorageKind.Int32 or StorageKind.ListInt32;
+        var range = int32 ? $"the int32 range [{int.MinValue}, {int.MaxValue}]" : $"the int64 range [{long.MinValue}, {long.MaxValue}]";
+        var fits64 = JsonIntegers.TryGetInt64(value, out _);
+        var fix = int32 && fits64 ? $"; declare the type as {type.Promoted().AsNonNullable()} for larger values" : string.Empty;
+        return element < 0
+            ? $"must be within {range}, got {JsonWords.Value(value)}{fix}"
+            : $"must be an array of integers within {range}; element {element} is {JsonWords.Value(value)}{fix}";
     }
 }

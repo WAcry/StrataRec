@@ -101,6 +101,10 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         "OPERATOR_UNKNOWN", "/nodes/ctr_ranker/op", "\"op\": \"ModelScorr@1\"")] // a tap takes its columns from this node
     [InlineData(Pipeline, "\"key\": [\"ctx.request.user_id\", \"ctx.request.session_id\"]", "\"key\": [\"ctx.request.usr_id\", \"ctx.request.session_id\"]",
         "EXPR_UNKNOWN_NAME", "/funnel_groups/deep_trace/key/0", "ctx.request.usr_id")] // a tap samples by this group
+    [InlineData(Pipeline, "\"all\":        { \"key\": [\"ctx.request.id\"], \"rate\": 1.0 }", "\"all\":        { \"key\": [\"ctx.request.id\"], \"rate\": 2 }",
+        "FUNNEL_BAD_RATE", "/funnel_groups/all/rate", "\"rate\": 2")] // two taps sample by this group (review 32 #9)
+    [InlineData(Pipeline, "\"key\": [\"ctx.request.user_id\", \"ctx.request.session_id\"]", "\"key\": []",
+        "FUNNEL_NO_KEY", "/funnel_groups/deep_trace/key", "\"key\": []")]
     [InlineData("experiments/exp_mmr_diversity.jsonc", "\"diversity_cap\": null,", "\"diversty_cap\": null,",
         "PATCH_DELETE_MISSING", "/arms/mmr/nodes/diversty_cap", "\"diversty_cap\"")] // the arm's parameters are not reported again
     public void Text_ADeclarationWithAnError_IsTheOnlyError(string file, string old, string replacement, string code, string pointer, string at)

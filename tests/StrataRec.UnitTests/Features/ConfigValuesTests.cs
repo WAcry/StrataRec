@@ -41,6 +41,73 @@ public class ConfigValuesTests
         Assert.Equal(expected, value.AsInt64());
     }
 
+    // ---- integers, exactly (review 32 #1: through a double, 9007199254740993.0 became 9007199254740992) ----------------
+
+    [Theory]
+    [InlineData("9007199254740993.0", "int64", 9007199254740993L)]
+    [InlineData("9.007199254740993e15", "int64", 9007199254740993L)]
+    [InlineData("-9223372036854775808.0", "int64", long.MinValue)]
+    [InlineData("2147483647.0", "int32", 2147483647L)]
+    [InlineData("-2.147483648e9", "int32", -2147483648L)]
+    public void ABigIntegerWrittenWithAFractionOrAnExponent_IsExact(string json, string type, long expected)
+    {
+        Assert.True(ConfigValues.TryToScalar(JsonNode.Parse(json), ColumnType.Parse(type), out var value, out var error), error);
+
+        Assert.Equal(expected, value.AsInt64());
+    }
+
+    [Theory]
+    [InlineData("[9007199254740993, 9007199254740993.0, 9.007199254740993e15]", "list<int64>", 9007199254740993L)]
+    [InlineData("[2147483647, 2147483647.0, 2.147483647e9]", "list<int32>", 2147483647L)]
+    public void ABigIntegerElementWrittenWithAFractionOrAnExponent_IsExact(string json, string type, long expected)
+    {
+        Assert.True(ConfigValues.TryToScalar(JsonNode.Parse(json), ColumnType.Parse(type), out var value, out var error), error);
+
+        Assert.Equal(new[] { expected, expected, expected }, value.AsInt64List());
+    }
+
+    [Theory]
+    [InlineData("9007199254740992.5", "int64", "must be an integer (int64), got the number 9007199254740992.5")]
+    [InlineData("2147483647.5", "int32", "must be an integer (int32), got the number 2147483647.5")]
+    [InlineData("[1, 9007199254740992.5]", "list<int64>", "must be an array of integers (list<int64>); element 1 is the number 9007199254740992.5")]
+    [InlineData("[2147483646.5]", "list<int32>", "must be an array of integers (list<int32>); element 0 is the number 2147483646.5")]
+    public void AnIntegerWithANonZeroFraction_IsRejected_HoweverBig(string json, string type, string error)
+    {
+        Assert.False(ConfigValues.TryToScalar(JsonNode.Parse(json), ColumnType.Parse(type), out _, out var actual));
+
+        Assert.Equal(error, actual);
+    }
+
+    [Theory]
+    [InlineData("9223372036854775808", "int64",
+        "must be within the int64 range [-9223372036854775808, 9223372036854775807], got the number 9223372036854775808")]
+    [InlineData("1e19", "int64", "must be within the int64 range [-9223372036854775808, 9223372036854775807], got the number 1e19")]
+    [InlineData("[1, 9223372036854775808.0]", "list<int64>",
+        "must be an array of integers within the int64 range [-9223372036854775808, 9223372036854775807]; element 1 is the number 9223372036854775808.0")]
+    [InlineData("2147483648.0", "int32",
+        "must be within the int32 range [-2147483648, 2147483647], got the number 2147483648.0; declare the type as int64 for larger values")]
+    [InlineData("1e19", "int32", "must be within the int32 range [-2147483648, 2147483647], got the number 1e19")] // int64 would not hold it either
+    [InlineData("[2.147483648e9]", "list<int32>",
+        "must be an array of integers within the int32 range [-2147483648, 2147483647]; element 0 is the number 2.147483648e9; declare the type as list<int64> for larger values")]
+    public void AnIntegerOutOfRange_SaysTheRange(string json, string type, string error)
+    {
+        Assert.False(ConfigValues.TryToScalar(JsonNode.Parse(json), ColumnType.Parse(type), out _, out var actual));
+
+        Assert.Equal(error, actual);
+    }
+
+    [Fact]
+    public void AStringThatIsNotValidUnicode_IsRejected_NotThrown()
+    {
+        var unpaired = "\"" + (char)92 + "uD800\"";
+
+        Assert.False(ConfigValues.TryToScalar(JsonNode.Parse(unpaired), ColumnType.Parse("string"), out _, out var scalar));
+        Assert.False(ConfigValues.TryToScalar(JsonNode.Parse("[\"a\", " + unpaired + "]"), ColumnType.Parse("list<string>"), out _, out var list));
+
+        Assert.Equal("must be a string, got a string that is not valid Unicode", scalar);
+        Assert.Equal("must be an array of strings (list<string>); element 1 is a string that is not valid Unicode", list);
+    }
+
     [Fact]
     public void NullIsMissing_ForANullableType()
     {
