@@ -659,39 +659,66 @@ internal sealed partial class UnifiedCompilation
             }
         }
 
-        // Compiled in timeline order (each node by the lowest order any combination gives it; fallbacks, which have none,
-        // after the timeline), not by id: a node declares the columns it writes without a declaration as it compiles
-        // (an implicit output: recall.*, GroupAggregate@1's), and the nodes that run after it must know them whatever
-        // their ids. By id, a reader named before its writer ('author_cap' before 'author_rank') did not know the column.
-        var timeline = new List<(string Id, long Order)>(ids.Count);
+        // Each distinct definition of a node is compiled at its own place on the timeline (its order; a fallback, which
+        // has none, after the timeline; equal orders by node id): a node declares the columns it writes without a
+        // declaration as it compiles (an implicit output: recall.*, GroupAggregate@1's), and a node that runs after it,
+        // in any combination, must know them. By id, a reader named before its writer ('author_cap' before
+        // 'author_rank') did not know the column; by a node's lowest order, neither did an arm that moves a reader after
+        // the writer (external review).
+        var timeline = new List<NodeDefinition>();
         foreach (var id in ids)
         {
             if (DefineNodeVariants(id) is { } variants)
             {
-                timeline.Add((id, FirstOrder(variants)));
+                AddDistinctDefinitions(variants, timeline);
             }
         }
 
-        timeline.Sort(static (a, b) => a.Order != b.Order ? a.Order.CompareTo(b.Order) : string.CompareOrdinal(a.Id, b.Id));
-        foreach (var (id, _) in timeline)
+        timeline.Sort(static (a, b) =>
+            a.Order != b.Order ? a.Order.CompareTo(b.Order)
+            : a.Variants != b.Variants ? string.CompareOrdinal(a.Variants.NodeId, b.Variants.NodeId)
+            : a.Combinations[0].CompareTo(b.Combinations[0]));
+        foreach (var definition in timeline)
         {
-            CompileNodeVariants(_variants[id]);
+            var variants = definition.Variants;
+            var first = definition.Combinations[0];
+            var start = _diagnostics.Count;
+            var compiled = _builder.CompileNode(variants.NodeId, variants.Definitions[first]!, _pipelineLabel);
+            foreach (var c in definition.Combinations)
+            {
+                variants.Variants[c] = compiled;
+                variants.Failed[c] = compiled is null;
+            }
+
+            Settle(start, ArmPatches(variants.ArmsOf(first)));
         }
     }
 
-    /// <summary>The lowest order of a node's definitions; <see cref="long.MaxValue"/> for a fallback or a node without one.</summary>
-    private static long FirstOrder(NodeVariants variants)
-    {
-        var first = long.MaxValue;
-        foreach (var definition in variants.Definitions)
-        {
-            if (definition?["order"] is JsonValue order && order.TryGetValue<long>(out var value) && value < first)
-            {
-                first = value;
-            }
-        }
+    /// <summary>A distinct definition of a node: the combinations that define it so, compiled once, at its order.</summary>
+    private sealed record NodeDefinition(NodeVariants Variants, long Order, List<int> Combinations);
 
-        return first;
+    /// <summary>Groups a node's combinations by definition (equal content, compiled once).</summary>
+    private static void AddDistinctDefinitions(NodeVariants variants, List<NodeDefinition> timeline)
+    {
+        var byHash = new Dictionary<string, NodeDefinition>(StringComparer.Ordinal);
+        for (var c = 0; c < variants.Definitions.Length; c++)
+        {
+            if (variants.Definitions[c] is not { } node || variants.Failed[c])
+            {
+                continue;
+            }
+
+            var hash = ContentHash.Compute(node);
+            if (!byHash.TryGetValue(hash, out var definition))
+            {
+                var order = node["order"] is JsonValue value && value.TryGetValue<long>(out var o) ? o : long.MaxValue;
+                definition = new NodeDefinition(variants, order, new List<int>());
+                byHash[hash] = definition;
+                timeline.Add(definition);
+            }
+
+            definition.Combinations.Add(c);
+        }
     }
 
     /// <summary>Each combination's definition of a node (<see cref="NodeVariants.Definitions"/>), compiled afterwards.</summary>
@@ -752,32 +779,6 @@ internal sealed partial class UnifiedCompilation
 
         variants.IsFallback = fallbackRole == true;
         return variants;
-    }
-
-    /// <summary>Compiles each distinct definition of a node once (<see cref="DefineNodeVariants"/>).</summary>
-    private void CompileNodeVariants(NodeVariants variants)
-    {
-        var byHash = new Dictionary<string, (CompiledNode? Node, bool Failed)>(StringComparer.Ordinal);
-        for (var c = 0; c < variants.Definitions.Length; c++)
-        {
-            if (variants.Definitions[c] is not { } node || variants.Failed[c])
-            {
-                continue;
-            }
-
-            var start = _diagnostics.Count;
-            var hash = ContentHash.Compute(node);
-            if (!byHash.TryGetValue(hash, out var compiled))
-            {
-                var result = _builder.CompileNode(variants.NodeId, node, _pipelineLabel);
-                compiled = (result, result is null);
-                byHash[hash] = compiled;
-            }
-
-            variants.Variants[c] = compiled.Node;
-            variants.Failed[c] = compiled.Failed;
-            Settle(start, ArmPatches(variants.ArmsOf(c)));
-        }
     }
 
     /// <summary>Compiles every tap variant (design 8.3, 12.3). Runs after the nodes: <c>columns_from</c> needs them.</summary>
