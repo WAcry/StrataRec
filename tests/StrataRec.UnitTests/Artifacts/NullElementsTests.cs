@@ -71,6 +71,47 @@ public sealed class NullElementsTests
         Assert.Equal(pointer, NullElements.Find(JsonDocument.Parse("""{ "items": [null] }""").RootElement, type, ArtifactSerializer.Options)?.Pointer);
 
     [Fact]
+    public void APopulatePreference_IsReadOnlyWhereTheSerializerPopulates()
+    {
+        // Review 48: a type's preference falls back to replacing where a member's value cannot be populated (an array,
+        // an immutable or read-only collection, a struct); without a setter, the serializer then skips the value.
+        AssertCheckedAsRead<PopulatedList>(read: true);
+        AssertCheckedAsRead<PopulatedSet>(read: true);
+        AssertCheckedAsRead<PopulatedArray>(read: false);
+        AssertCheckedAsRead<PopulatedImmutableArray>(read: false);
+        AssertCheckedAsRead<PopulatedReadOnlyList>(read: false);
+        AssertCheckedAsRead<PopulatedEnumerable>(read: false);
+        Assert.Null(NullElements.Find(JsonDocument.Parse("""{ "held": { "items": [null] } }""").RootElement, typeof(PopulatedStruct), ArtifactSerializer.Options));
+    }
+
+    [Fact]
+    public void AnIgnoredMember_IsNotRead_EvenThroughAConstructorParameter()
+    {
+        const string json = """{ "items": [null] }""";
+
+        Assert.Empty(JsonSerializer.Deserialize<IgnoredWithParameter>(json, ArtifactSerializer.Options)!.Items);
+        Assert.True(ArtifactSerializer.TryBind<IgnoredWithParameter>(JsonNode.Parse(json), "the config", out _, out var error), error?.Message);
+    }
+
+    [Fact]
+    public void ExtensionDataTheSerializerDoesNotFill_IsNotChecked()
+    {
+        const string json = """{ "other": null }""";
+
+        Assert.Empty(JsonSerializer.Deserialize<UnfilledExtension>(json, ArtifactSerializer.Options)!.Other);
+        Assert.True(ArtifactSerializer.TryBind<UnfilledExtension>(JsonNode.Parse(json), "the config", out _, out var error), error?.Message);
+    }
+
+    /// <summary>The check reads a member as the serializer does: a null in what it reads is an error, in what it skips nothing.</summary>
+    private static void AssertCheckedAsRead<T>(bool read)
+        where T : class, IReadsItems
+    {
+        Assert.Equal(read, JsonSerializer.Deserialize<T>("""{ "items": ["a"] }""", ArtifactSerializer.Options)!.Seen.Contains("a"));
+        var error = NullElements.Find(JsonDocument.Parse("""{ "items": [null] }""").RootElement, typeof(T), ArtifactSerializer.Options);
+        Assert.Equal(read ? "/items/0" : null, error?.Pointer);
+    }
+
+    [Fact]
     public void ANullableStructAtTheRoot_IsReadAsTheStruct()
     {
         var error = Assert.Throws<ArtifactFormatException>(() => ArtifactSerializer.Deserialize<Held?>("""{ "items": [null] }"""));
@@ -182,7 +223,78 @@ public sealed class NullElementsTests
         public int?[] Counts { get; init; } = [];
     }
 
-    /// <summary>Its constructor takes nulls and drops them.</summary>
+    public interface IReadsItems
+    {
+        IEnumerable<string> Seen { get; }
+    }
+
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
+    public sealed class PopulatedList : IReadsItems
+    {
+        public List<string> Items { get; } = [];
+
+        IEnumerable<string> IReadsItems.Seen => Items;
+    }
+
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
+    public sealed class PopulatedSet : IReadsItems
+    {
+        public ISet<string> Items { get; } = new HashSet<string>();
+
+        IEnumerable<string> IReadsItems.Seen => Items;
+    }
+
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
+    public sealed class PopulatedArray : IReadsItems
+    {
+        public string[] Items { get; } = [];
+
+        IEnumerable<string> IReadsItems.Seen => Items;
+    }
+
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
+    public sealed class PopulatedImmutableArray : IReadsItems
+    {
+        public ImmutableArray<string> Items { get; } = [];
+
+        IEnumerable<string> IReadsItems.Seen => Items;
+    }
+
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
+    public sealed class PopulatedReadOnlyList : IReadsItems
+    {
+        public IReadOnlyList<string> Items { get; } = new List<string>();
+
+        IEnumerable<string> IReadsItems.Seen => Items;
+    }
+
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
+    public sealed class PopulatedEnumerable : IReadsItems
+    {
+        public IEnumerable<string> Items { get; } = new List<string>();
+
+        IEnumerable<string> IReadsItems.Seen => Items;
+    }
+
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
+    public sealed class PopulatedStruct
+    {
+        public Held Held { get; } = new([]);
+    }
+
+    public sealed class IgnoredWithParameter(List<string>? items)
+    {
+        [JsonIgnore]
+        public List<string> Items { get; } = items ?? [];
+    }
+
+    public sealed class UnfilledExtension
+    {
+        [JsonExtensionData]
+        public Dictionary<string, object> Other { get; private set; } = [];
+    }
+
+    /// <summary>Its constructor takes nulls and drops them.</summary>    /// <summary>Its constructor takes nulls and drops them.</summary>
     public sealed class FilteringConstructor(List<string?> items)
     {
         public List<string> Items { get; } = Without(items);

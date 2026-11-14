@@ -98,9 +98,10 @@ internal static class NullElements
                             return error;
                         }
                     }
-                    else if (members.ExtensionData is { } extension)
+                    else if (members.ExtensionData is { Read: true } extension)
                     {
-                        // The object's other members, at its own level: entries of the extension map.
+                        // The object's other members, at its own level: entries of the extension map (when the
+                        // serializer fills it).
                         var entry = extension.Nullability?.GenericTypeArguments is { Length: 2 } pair ? pair[1] : null;
                         if (Element(property.Value, Value(extension.Property.PropertyType, options), entry, path, new Step(property.Name, false), options) is { } error)
                         {
@@ -248,9 +249,10 @@ internal static class NullElements
                     };
 
                     // What the serializer fills: through a setter, a constructor parameter, or the getter's object when
-                    // it populates. An ignored member has no accessors; a computed one only a getter.
-                    var read = parameter is not null || property.Set is not null || (property.Get is not null
-                        && (property.ObjectCreationHandling ?? info.PreferredPropertyObjectCreationHandling ?? options.PreferredObjectCreationHandling) == JsonObjectCreationHandling.Populate);
+                    // it populates. An ignored member has no accessors, and its constructor parameter is not read
+                    // either (review 48); a computed one has only a getter.
+                    var ignored = property.Get is null && property.Set is null;
+                    var read = !ignored && (parameter is not null || property.Set is not null || PopulatedWithoutSetter(property, info, options));
                     var member = new Member(property, nullability, read);
                     if (property.IsExtensionData)
                     {
@@ -265,6 +267,41 @@ internal static class NullElements
 
             return new Members { Named = named, ExtensionData = extension };
         }
+    }
+
+    /// <summary>
+    /// Whether the serializer fills a member without a setter through its getter's object. Set on the member, the
+    /// serializer has checked that it can (or refused the contract); a type's or the options' preference falls back to
+    /// replacing where the value cannot be populated (a struct, an array, an immutable or read-only collection), and a
+    /// member replaced without a setter is skipped (review 48).
+    /// </summary>
+    private static bool PopulatedWithoutSetter(JsonPropertyInfo property, JsonTypeInfo declaring, JsonSerializerOptions options)
+    {
+        if (property.Get is null)
+        {
+            return false;
+        }
+
+        if (property.ObjectCreationHandling is { } handling)
+        {
+            return handling == JsonObjectCreationHandling.Populate;
+        }
+
+        if ((declaring.PreferredPropertyObjectCreationHandling ?? options.PreferredObjectCreationHandling) != JsonObjectCreationHandling.Populate
+            || property.PropertyType.IsValueType)
+        {
+            return false;
+        }
+
+        var value = options.GetTypeInfo(property.PropertyType);
+        return value.Kind switch
+        {
+            JsonTypeInfoKind.Object => true,
+            // A collection the serializer can create, and so add to: a mutable one, not an array, an immutable
+            // collection or a read-only interface (NullElementsTests compares each with the serializer).
+            JsonTypeInfoKind.Enumerable or JsonTypeInfoKind.Dictionary => value.CreateObject is not null,
+            _ => false,
+        };
     }
 
     /// <param name="Read">Whether the serializer reads the member's value from the document.</param>

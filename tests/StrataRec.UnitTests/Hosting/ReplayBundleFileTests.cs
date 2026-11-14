@@ -123,11 +123,13 @@ public sealed class ReplayBundleFileTests
         Assert.Contains("record the request again", error.Hint);
     }
 
-    [Fact]
-    public void AnotherFormat_IsRejectedAtFormat_BeforeItsLayoutIsReadAsThisOne()
+    [Theory]
+    [InlineData("")]
+    [InlineData("\uFEFF")] // a text that kept its file's byte order mark (review 48: the version was not read, the layout was)
+    public void AnotherFormat_IsRejectedAtFormat_BeforeItsLayoutIsReadAsThisOne(string prefix)
     {
         // Another format's layout: read as this one it would be a structural error somewhere inside.
-        var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(Edit(b =>
+        var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(prefix + Edit(b =>
         {
             b["format"] = "stratarec.replay_bundle/2026-01-01.1";
             b["request"]!["assignment"] = JsonNode.Parse("""{ "source": "builtin", "arms": [], "unknown_arms": 1 }""");

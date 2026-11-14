@@ -61,7 +61,9 @@ public static class ReplayBundleFile
     {
         try
         {
-            var reader = new Utf8JsonReader(Encoding.UTF8.GetBytes(json), new JsonReaderOptions
+            // A text can keep its file's byte order mark (U+FEFF, EF BB BF here), which the full parse skips too.
+            ReadOnlySpan<byte> utf8 = Encoding.UTF8.GetBytes(json);
+            var reader = new Utf8JsonReader(utf8.StartsWith("\uFEFF"u8) ? utf8[3..] : utf8, new JsonReaderOptions
             {
                 CommentHandling = JsonCommentHandling.Skip,
                 AllowTrailingCommas = true,
