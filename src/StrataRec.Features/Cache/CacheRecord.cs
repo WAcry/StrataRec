@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
-using System.IO.Hashing;
 using System.Runtime.InteropServices;
 using System.Text;
+using StrataRec.Core.Hashing;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Features.Local;
@@ -54,16 +54,26 @@ internal static class CacheRecord
     public static int PrefixSize(int fieldCount) => ValidityOffset + ((fieldCount + 7) / 8);
 
     /// <summary>The fingerprint of a table's field set, as records written for it carry.</summary>
+    /// <remarks>
+    /// Over the canonical encoding of <see cref="StableHash"/>, where every string is tagged and length-prefixed: field
+    /// names are free text (a tab or a newline is legal), so a separator-joined text would let two different field sets
+    /// spell the same bytes, e.g. <c>["a\tfloat64\nb", "c"]</c> and <c>["a", "b\tfloat64\nc"]</c>, and read each
+    /// other's records.
+    /// </remarks>
     public static ulong Fingerprint(LocalTableSchema schema)
     {
-        var text = new StringBuilder("stratarec.cache.record/").Append(Format).Append('\n')
-            .Append(schema.KeyType == EntityKeyType.String ? "string" : "int64").Append('\n');
+        using var hash = new StableHash.Builder();
+        hash.Add("stratarec.cache.record");
+        hash.Add((long)Format);
+        hash.Add(schema.KeyType == EntityKeyType.String ? "string" : "int64");
+        hash.Add((long)schema.Fields.Count);
         foreach (var field in schema.Fields)
         {
-            text.Append(field.Name).Append('\t').Append(field.Type.ToString()).Append('\n');
+            hash.Add(field.Name);
+            hash.Add(field.Type.ToString());
         }
 
-        return XxHash3.HashToUInt64(Encoding.UTF8.GetBytes(text.ToString()));
+        return hash.Finish();
     }
 
     /// <summary>Reads the header; <paramref name="writtenMs"/> and <paramref name="absent"/> are meaningful when <see cref="CacheRecordHeader.Ok"/>.</summary>

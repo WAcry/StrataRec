@@ -25,8 +25,9 @@ namespace StrataRec.Redis;
 /// <c>SET … PX</c>. Keys are not hash-tagged, so a keyspace spreads over the cluster's shards.</para>
 /// <para><b>Failing fast.</b> The connection is made at load, but a server that is down then does not fail the load: the
 /// tier is an optimisation, so the plan serves from the connector while the client reconnects in the background, and
-/// commands sent while it is disconnected fail at once rather than queue. A wrong password or a missing secret does fail
-/// the load. Commands time out after one second; the engine stops waiting for a read much earlier (the tier's
+/// commands sent while it is disconnected fail at once rather than queue. Credentials the server refuses (a wrong password
+/// or user, or none where the server requires one) and a missing secret do fail the load: they are a wrong setting, which
+/// reconnecting does not fix. Commands time out after one second; the engine stops waiting for a read much earlier (the tier's
 /// <c>timeout_ms</c>), and a read that throws or is late sends its keys to the connector.</para>
 /// </remarks>
 public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDisposable
@@ -37,13 +38,17 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
     private const int CommandTimeoutMs = 1000;
 
     private readonly RedisStoreSettings _settings;
-    private ConnectionMultiplexer? _connection;
+    private readonly Func<ConfigurationOptions, Task<ConnectionMultiplexer>> _connect;
+    private Task<ConnectionMultiplexer>? _connecting;
     private IDatabase? _database;
     private volatile bool _cluster;
 
-    internal RedisCacheStore(RedisStoreSettings settings)
+    /// <param name="settings">The checked settings.</param>
+    /// <param name="connect">Connects; tests pass one they can hold.</param>
+    internal RedisCacheStore(RedisStoreSettings settings, Func<ConfigurationOptions, Task<ConnectionMultiplexer>>? connect = null)
     {
         _settings = settings;
+        _connect = connect ?? (static options => ConnectionMultiplexer.ConnectAsync(options));
     }
 
     public string StoreType => Type;
@@ -69,11 +74,68 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
             options.Password = (await password.ResolveAsync(cancellationToken).ConfigureAwait(false)).Reveal();
         }
 
-        var connection = await ConnectionMultiplexer.ConnectAsync(options).WaitAsync(cancellationToken).ConfigureAwait(false);
+        // The connect itself cannot be cancelled: a cancelled load stops waiting for it, and the store keeps it, so that
+        // its disposal waits for a connection that completes later and disposes it (review 19).
+        var connecting = _connect(options);
+        Volatile.Write(ref _connecting, connecting);
+        var connection = await connecting.WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (connection.IsConnected
+                ? _settings.User is { } user && !await AuthenticatedAsAsync(connection, user).ConfigureAwait(false)
+                : await RefusedCredentialsAsync(connection).ConfigureAwait(false))
+        {
+            // The connection is disposed with the store, which the host disposes after a failed load.
+            throw new BindingException(
+                _settings.Password?.Pointer ?? (_settings.User is null ? string.Empty : "/user"),
+                $"The Redis server at {_settings.Endpoint} refused the credentials" + (_settings.User is null ? "." : $" of user '{_settings.User}'."),
+                _settings.Password is { } secret
+                    ? $"check the secret '{secret.Name}'" + (_settings.User is null ? string.Empty : " and the user") + ": the server does not accept them"
+                    : "the server requires a password: add \"password\": \"secret://<name>\"");
+        }
+
         connection.ConnectionRestored += (_, _) => _cluster = IsCluster(connection);
-        _connection = connection;
         _database = connection.GetDatabase(_settings.Database);
         _cluster = IsCluster(connection);
+    }
+
+    /// <summary>
+    /// Whether a connection that did not connect failed because the server refused its credentials, not because the server
+    /// is down: the client keeps the last failure of each server, and a command sent while disconnected fails at once
+    /// (<see cref="BacklogPolicy.FailFast"/>) with it.
+    /// </summary>
+    private static async Task<bool> RefusedCredentialsAsync(ConnectionMultiplexer connection)
+    {
+        try
+        {
+            await connection.GetDatabase().PingAsync().ConfigureAwait(false);
+            return false; // connected in the meantime
+        }
+        catch (RedisConnectionException ex)
+        {
+            return ex.FailureType == ConnectionFailureType.AuthenticationFailure
+                || ex.InnerException is RedisConnectionException { FailureType: ConnectionFailureType.AuthenticationFailure };
+        }
+        catch (Exception)
+        {
+            return false; // anything else: as if the server were down
+        }
+    }
+
+    /// <summary>
+    /// Whether a connection is <paramref name="user"/>'s. A server whose default user needs no password accepts the
+    /// connection even when it refused the user's credentials (<c>AUTH</c> failed, the connection stays the default
+    /// user's), so the client connects; <c>ACL WHOAMI</c> tells. A server that cannot answer it (before Redis 6, or a user
+    /// not allowed to ask) is trusted.
+    /// </summary>
+    private static async Task<bool> AuthenticatedAsAsync(ConnectionMultiplexer connection, string user)
+    {
+        try
+        {
+            return (string?)await connection.GetDatabase().ExecuteAsync("ACL", "WHOAMI").ConfigureAwait(false) == user;
+        }
+        catch (Exception)
+        {
+            return true; // cannot tell
+        }
     }
 
     /// <summary>Whether the connection is to a cluster (whose multi-key commands cannot span hash slots).</summary>
@@ -134,13 +196,29 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
         return sets;
     }
 
+    /// <summary>
+    /// Closes the connection, also one a cancelled load left connecting: the disposal then waits for the connect to end
+    /// (within the connect timeout) and disposes what it made.
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
-        if (_connection is { } connection)
+        if (Volatile.Read(ref _connecting) is not { } connecting)
         {
-            await connection.CloseAsync(allowCommandsToComplete: false).ConfigureAwait(false);
-            await connection.DisposeAsync().ConfigureAwait(false);
+            return;
         }
+
+        ConnectionMultiplexer connection;
+        try
+        {
+            connection = await connecting.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            return; // it made no connection
+        }
+
+        await connection.CloseAsync(allowCommandsToComplete: false).ConfigureAwait(false);
+        await connection.DisposeAsync().ConfigureAwait(false);
     }
 
     private RedisKey[] Keys(CacheKeyspace keyspace, ReadOnlySpan<EntityKey> keys)

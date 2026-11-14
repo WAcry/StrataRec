@@ -17,6 +17,9 @@ namespace StrataRec.Features.Cache;
 /// <para><b>The queue belongs to the instance, not to a table.</b> Plans that share the instance share its queue, and
 /// the store is disposed only after the loop stopped, so no write runs on a disposed store; what is still queued then
 /// is dropped.</para>
+/// <para><b>The loop never faults.</b> It catches what the store throws, and what an observer throws: a metric listener
+/// that throws when a batch is counted. Such a failure is kept and reported by <see cref="DisposeAsync"/> (the host logs
+/// it); the loop goes on writing.</para>
 /// </remarks>
 public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
 {
@@ -29,6 +32,7 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
     private Task? _writer;
     private long _queuedBytes;
     private bool _disposed;
+    private Exception? _observerFailure;
 
     public DistributedCacheTier(IFeatureCacheStore store, long queueBytes = DefaultQueueBytes)
     {
@@ -100,9 +104,10 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
         var reader = _queue.Reader;
         try
         {
-            while (await reader.WaitToReadAsync(_stopping.Token).ConfigureAwait(false))
+            // Once the disposal began, nothing more is sent: what is still queued is dropped by DisposeAsync, counted.
+            while (!_stopping.IsCancellationRequested && await reader.WaitToReadAsync(_stopping.Token).ConfigureAwait(false))
             {
-                while (reader.TryRead(out var write))
+                while (!_stopping.IsCancellationRequested && reader.TryRead(out var write))
                 {
                     Interlocked.Add(ref _queuedBytes, -write.Bytes);
                     CacheWriteOutcome outcome;
@@ -119,17 +124,41 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
                         outcome = _stopping.IsCancellationRequested ? CacheWriteOutcome.Dropped : CacheWriteOutcome.Failed;
                     }
 
-                    write.Cache.CountWrites(CacheTier.Distributed, outcome, write.Count);
+                    Count(write, outcome);
                 }
             }
         }
         catch (OperationCanceledException) when (_stopping.IsCancellationRequested)
         {
-            // Disposed: what is still queued is dropped below.
+            // Disposed: what is still queued is dropped by DisposeAsync.
+        }
+        catch (Exception ex)
+        {
+            Observed(ex); // not expected; the loop must not fault all the same (see remarks)
         }
     }
 
-    /// <summary>Stops the write loop (cancelling a write in progress), drops what is still queued, then disposes the store.</summary>
+    /// <summary>Counts a batch's outcome; a metric listener that throws is reported at disposal, not by the caller.</summary>
+    private void Count(in PendingWrite write, CacheWriteOutcome outcome)
+    {
+        try
+        {
+            write.Cache.CountWrites(CacheTier.Distributed, outcome, write.Count);
+        }
+        catch (Exception ex)
+        {
+            Observed(ex);
+        }
+    }
+
+    private void Observed(Exception exception) => Interlocked.CompareExchange(ref _observerFailure, exception, null);
+
+    /// <summary>
+    /// Stops the write loop (cancelling a write in progress, and sending no further batch), waits until it really
+    /// exited, drops what is still queued (counted), then disposes the store, exactly once whatever failed before. Throws,
+    /// after all that, what went wrong on the way (a callback the store registered on the cancelled token, a metric
+    /// listener, the store's disposal), so that the host logs it.
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
         Task? writer;
@@ -144,28 +173,64 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
             writer = _writer;
         }
 
-        _queue.Writer.TryComplete();
-        await _stopping.CancelAsync().ConfigureAwait(false);
-        if (writer is not null)
+        List<Exception>? failures = null;
+        try
         {
-            await writer.ConfigureAwait(false); // never faults: the loop catches what the store throws
+            _queue.Writer.TryComplete();
+            try
+            {
+                await _stopping.CancelAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                (failures ??= []).Add(ex); // a callback on the token threw; the token is cancelled all the same
+            }
+
+            if (writer is not null)
+            {
+                await writer.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing); // never faults: see remarks
+            }
+        }
+        finally
+        {
+            try
+            {
+                while (_queue.Reader.TryRead(out var write))
+                {
+                    Interlocked.Add(ref _queuedBytes, -write.Bytes);
+                    Count(write, CacheWriteOutcome.Dropped);
+                }
+            }
+            finally
+            {
+                _stopping.Dispose();
+                try
+                {
+                    switch (Store)
+                    {
+                        case IAsyncDisposable asyncDisposable:
+                            await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+                            break;
+                        case IDisposable disposable:
+                            disposable.Dispose();
+                            break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    (failures ??= []).Add(ex);
+                }
+            }
         }
 
-        while (_queue.Reader.TryRead(out var write))
+        if (Volatile.Read(ref _observerFailure) is { } observed)
         {
-            Interlocked.Add(ref _queuedBytes, -write.Bytes);
-            write.Cache.CountWrites(CacheTier.Distributed, CacheWriteOutcome.Dropped, write.Count);
+            (failures ??= []).Add(observed);
         }
 
-        _stopping.Dispose();
-        switch (Store)
+        if (failures is not null)
         {
-            case IAsyncDisposable asyncDisposable:
-                await asyncDisposable.DisposeAsync().ConfigureAwait(false);
-                break;
-            case IDisposable disposable:
-                disposable.Dispose();
-                break;
+            throw new AggregateException("The distributed cache tier was disposed, its store too, but not cleanly.", failures);
         }
     }
 

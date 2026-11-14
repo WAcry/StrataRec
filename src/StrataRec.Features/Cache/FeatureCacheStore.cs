@@ -61,10 +61,16 @@ public interface IFeatureCacheStore
     /// <c>keys[i]</c>, or stays empty when the store has none. Throws when the read failed.
     /// </summary>
     /// <remarks>
-    /// <paramref name="keys"/> and <paramref name="records"/> are the request's pooled buffers: valid until the returned
+    /// <para>Called inline on the request's thread, like a connector's fetch: the synchronous part (up to the first
+    /// asynchronous wait) runs there and the engine does not bound it; only the returned task is waited for, within the
+    /// tier's <c>timeout_ms</c> and the source's budget. So send the request and return: do the I/O asynchronously, as
+    /// <c>redis@1</c> does, and never block before returning. An answer the engine first finds complete after the tier's
+    /// time or the source's deadline is late, however it arrived: its records are not used, and its keys go to the
+    /// connector if the source has time left. Chunks not sent yet when the tier's time is up are not sent.</para>
+    /// <para><paramref name="keys"/> and <paramref name="records"/> are the request's pooled buffers: valid until the returned
     /// task completes, also when the engine stopped waiting for it earlier, and not after. Write nothing into
     /// <paramref name="records"/> after completing; the bytes it points at must stay unchanged (a fresh array per value, or
-    /// memory the store never reuses).
+    /// memory the store never reuses).</para>
     /// </remarks>
     ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<EntityKey> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken);
 

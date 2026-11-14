@@ -536,6 +536,7 @@ internal sealed class FeatureSourceResolver
             {
                 ok &= TryDistributed(sourceName, shared, pointer + "/cache/distributed", out distributed);
                 distributedTimeoutMs = shared.TimeoutMs;
+                ok &= TryRetention(sourceName, ttlMs, staleMs, pointer + "/cache");
             }
         }
 
@@ -557,6 +558,25 @@ internal sealed class FeatureSourceResolver
             Distributed = distributed,
             DistributedTimeoutMs = distributedTimeoutMs,
         };
+    }
+
+    /// <summary>
+    /// Whether the distributed tier can be given the longest time to live a record of this binding needs (the TTL with all
+    /// its jitter, plus the stale window): a <see cref="TimeSpan"/>. Diagnosed at the setting that takes it past.
+    /// </summary>
+    private bool TryRetention(string sourceName, long ttlMs, long staleMs, string pointer)
+    {
+        if (ttlMs == 0 || LocalTableCache.RetentionMs(ttlMs, staleMs) <= LocalTableCache.MaxRetentionMs)
+        {
+            return true; // a ttl_ms that is missing or wrong is diagnosed already
+        }
+
+        var setting = LocalTableCache.MaxLifetime(ttlMs) > LocalTableCache.MaxRetentionMs ? "ttl_ms" : "stale_if_error_ms";
+        _diagnostics.Error("CACHE_RETENTION", _artifact, pointer + "/" + setting,
+            $"The distributed cache of source '{sourceName}' would keep a record for up to {LocalTableCache.RetentionMs(ttlMs, staleMs)} ms "
+            + $"(ttl_ms with its 10% jitter, plus stale_if_error_ms), more than the {LocalTableCache.MaxRetentionMs} ms a time to live can be.",
+            $"lower ttl_ms or stale_if_error_ms so that ttl_ms × 1.1 + stale_if_error_ms is at most {LocalTableCache.MaxRetentionMs} (about 29,000 years)");
+        return false;
     }
 
     /// <summary>The distributed tier of a cache binding: its store, created by its factory and shared by identity like any

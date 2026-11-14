@@ -279,8 +279,12 @@ public sealed partial class FeatureFetcher
         var calls = _memory.Rent<ValueTask<bool>>(chunks);
         for (var c = 0; c < chunks; c++)
         {
+            // A store's synchronous part runs here, unbounded (see IFeatureCacheStore.GetAsync): once one has taken the
+            // tier's time, the chunks not sent yet are not sent; their keys go to the connector like a late chunk's.
             var offset = c * chunkSize;
-            calls[c] = StoreCall(read, tier, offset, Math.Min(chunkSize, read.MissCount - offset), cancellationToken);
+            calls[c] = Stopwatch.GetTimestamp() >= read.StoreDeadline || read.Cancellation!.Token.IsCancellationRequested || cancellationToken.IsCancellationRequested
+                ? new ValueTask<bool>(false)
+                : StoreCall(read, tier, offset, Math.Min(chunkSize, read.MissCount - offset), cancellationToken);
         }
 
         var cache = read.Cache;
@@ -472,7 +476,7 @@ public sealed partial class FeatureFetcher
     {
         IoOutcome.Timeout => $"distributed cache of source '{read.Group.SourceName}' timed out after {read.StoreBudgetMs} ms",
         IoOutcome.Cancelled => $"distributed cache of source '{read.Group.SourceName}' was cancelled",
-        _ => $"distributed cache of source '{read.Group.SourceName}' failed: {ex?.Message}",
+        _ => $"distributed cache of source '{read.Group.SourceName}' failed: {(ex is null ? "(no exception)" : ExceptionText.Of(ex))}",
     };
 
     /// <summary>
@@ -618,15 +622,34 @@ public sealed partial class FeatureFetcher
     /// connector did not answer is served stale if a tier has a record within <c>stale_if_error_ms</c> (the newer one),
     /// and fails otherwise.
     /// </summary>
+    /// <remarks>
+    /// The window is judged now, when the fallback is chosen: the candidates were classified when the read started (the
+    /// table's) and when the distributed tier answered, and the connector's wait in between may have taken a record past
+    /// its window. Such a record is not served.
+    /// </remarks>
     private static void Settle(CacheRead read)
     {
         int staleLocal = 0, staleDistributed = 0;
+        var nowMs = read.Cache.NowMs();
         for (var m = 0; m < read.MissCount; m++)
         {
             switch (read.Sources[m])
             {
-                case CacheSource.Pending:
-                    if (read.LocalStale[m])
+                case CacheSource.Pending or CacheSource.StaleCandidate:
+                    var key = read.MissKeys[m];
+                    var localMs = read.LocalStale[m] ? read.Version.VersionOf(read.Records[read.MissKey[m]]) : 0;
+                    var local = read.LocalStale[m] && read.Cache.Classify(localMs, key, nowMs) != CacheFreshness.Expired;
+                    var sharedMs = read.Sources[m] == CacheSource.StaleCandidate ? CacheRecord.WrittenMs(read.Bytes[m].Span) : 0;
+                    var shared = read.Sources[m] == CacheSource.StaleCandidate && read.Cache.Classify(sharedMs, key, nowMs) != CacheFreshness.Expired;
+                    if (shared && !(local && localMs > sharedMs))
+                    {
+                        read.Sources[m] = CacheSource.StaleDistributed;
+                        staleDistributed++;
+                        break;
+                    }
+
+                    read.Bytes[m] = default;
+                    if (local)
                     {
                         read.Sources[m] = CacheSource.StaleLocal;
                         staleLocal++;
@@ -635,20 +658,6 @@ public sealed partial class FeatureFetcher
                     {
                         read.Sources[m] = CacheSource.Failed;
                         read.FailedKeys++;
-                    }
-
-                    break;
-                case CacheSource.StaleCandidate:
-                    if (read.LocalStale[m] && read.Version.VersionOf(read.Records[read.MissKey[m]]) > CacheRecord.WrittenMs(read.Bytes[m].Span))
-                    {
-                        read.Sources[m] = CacheSource.StaleLocal;
-                        read.Bytes[m] = default;
-                        staleLocal++;
-                    }
-                    else
-                    {
-                        read.Sources[m] = CacheSource.StaleDistributed;
-                        staleDistributed++;
                     }
 
                     break;

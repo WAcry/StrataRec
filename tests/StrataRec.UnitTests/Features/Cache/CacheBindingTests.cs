@@ -2,6 +2,7 @@ using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
+using StrataRec.Features.Cache;
 using StrataRec.Features.Catalog;
 using StrataRec.Features.Runtime;
 using StrataRec.Redis;
@@ -58,6 +59,51 @@ public class CacheBindingTests
         Assert.Equal((code, pointer), (error.Code, error.Pointer));
         Assert.False(string.IsNullOrEmpty(error.Hint), error.ToString());
         Assert.DoesNotContain("hunter2", error.ToString()); // a pasted credential is never quoted
+    }
+
+    /// <summary>
+    /// Review 19: the distributed tier keeps a record for up to ttl_ms × 1.1 + stale_if_error_ms, given to the store as a
+    /// <see cref="TimeSpan"/>. Exactly what one holds is accepted and written back with it; a millisecond more is an error
+    /// at the setting, not an overflow on the first write-back.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task TheLongestRetentionOfADistributedTier_IsWhatATimeToLiveHolds(long pastIt)
+    {
+        const long Ttl = 1_000;
+        var stale = LocalTableCache.MaxRetentionMs - LocalTableCache.MaxLifetime(Ttl) + pastIt;
+        var store = new FakeCacheStore();
+        var rig = new FeatureTestRig().CacheSource("item_store", ScriptedConnector.Values((_, _) => 1.0), ttlMs: Ttl, staleIfErrorMs: stale, distributed: store);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        if (pastIt > 0)
+        {
+            var error = Assert.Single(Errors(rig.TryBuild()));
+            Assert.Equal(("CACHE_RETENTION", "/sources/item_store/cache/stale_if_error_ms"), (error.Code, error.Pointer));
+            Assert.Contains("ttl_ms × 1.1 + stale_if_error_ms is at most", error.Hint);
+            return;
+        }
+
+        rig.Build();
+        Assert.Equal(FeatureState.Ok, (await rig.NewRequest([1]).EnsureAsync(clicks)).State);
+        await store.WhenWrittenAsync(1);
+        Assert.True(store.TryGet("item_store:item:1", out _, out var timeToLive));
+        Assert.Equal(TimeSpan.FromTicks(LocalTableCache.MaxRetentionMs * TimeSpan.TicksPerMillisecond), timeToLive);
+    }
+
+    [Fact]
+    public void ATtlWhoseLifetimeAloneIsLongerThanATimeToLive_IsAnErrorAtTheTtl_WhenThereIsADistributedTier()
+    {
+        const long Ttl = 9_007_199_254_740_991; // 2^53 - 1, the most a configuration writes exactly (RFC 8785)
+        var withTier = new FeatureTestRig().CacheSource("item_store", ScriptedConnector.Values((_, _) => 1.0), ttlMs: Ttl, distributed: new FakeCacheStore());
+        withTier.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        var error = Assert.Single(Errors(withTier.TryBuild()));
+        Assert.Equal(("CACHE_RETENTION", "/sources/item_store/cache/ttl_ms"), (error.Code, error.Pointer));
+
+        // In process only, nothing converts it: the table judges ages in milliseconds.
+        var inProcess = new FeatureTestRig().CacheSource("item_store", ScriptedConnector.Values((_, _) => 1.0), ttlMs: Ttl);
+        inProcess.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        Assert.False(inProcess.TryBuild().HasErrors);
     }
 
     [Fact]
