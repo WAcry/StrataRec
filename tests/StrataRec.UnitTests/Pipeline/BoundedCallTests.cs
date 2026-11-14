@@ -167,11 +167,13 @@ public sealed class BoundedCallTests
         var budget = new AttemptBudget(CancellationToken.None, Deadline(600_000));
         var site = new Site(memory);
 
-        var running = Task.Run(async () =>
+        // Marked as the call is sent, after its timeout's timer was set: that timer runs its callback in the context it was
+        // set in (ObservedCancellationSource), and it fires with the wait's timeout; marked before, it would be held.
+        var running = Task.Run(async () => await Run(site.With(_ =>
         {
             gate.Mark();
-            return await Run(site.With(_ => new ValueTask<int>(client.Task)), budget, memory, timeoutMs: 200);
-        });
+            return new ValueTask<int>(client.Task);
+        }), budget, memory, timeoutMs: 200));
         Assert.True(gate.WaitHeld(), "the wait never resumed on a thread of its own");
         Assert.False(running.IsCompleted);
         if (completion == "answers")

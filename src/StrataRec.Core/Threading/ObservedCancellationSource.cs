@@ -116,6 +116,12 @@ public class ObservedCancellationSource : CancellationTokenSource
     /// but from the timer through <see cref="CancelObservedAsync"/>: the timer thread only queues the callbacks. Set once,
     /// before the token is handed out; disposing the source stops the timer.
     /// </summary>
+    /// <remarks>
+    /// Unlike <c>CancelAfter</c>'s timer, the timer runs its callback in the execution context it was set in (the
+    /// system's timers flow it; suppressing the flow would allocate a context per timer whenever the request has
+    /// async-locals, as a traced request does): the cancellation, and its log, belong to the request's trace. The
+    /// context is let go with the source.
+    /// </remarks>
     /// <param name="delay">At most <see cref="uint.MaxValue"/> − 1 ms, as for <c>CancelAfter</c>.</param>
     public void CancelAfterObserved(TimeSpan delay)
     {
