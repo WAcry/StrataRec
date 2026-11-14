@@ -28,6 +28,15 @@ public sealed class RunCommandDeadlineTests
             Directory.Delete(directory, recursive: true);
         }
 
+        // A value the parser cannot convert is its usage error, not a crash out of the validator (review 38).
+        foreach (var value in new[] { "abc", "0" })
+        {
+            var usage = new StringWriter();
+            Assert.Equal(2, await StrataRec.CommandLine.StrataRecCommandLine.InvokeAsync(
+                ["run", "-c", HomeFeedTestHost.SampleRoot(), "-r", "request.json", "--deadline-ms", value], Tool.Environment, TextWriter.Null, usage));
+            Assert.Contains(value == "0" ? "--deadline-ms must be positive." : "Cannot parse argument 'abc'", usage.ToString());
+        }
+
         static async Task<bool> Succeeded(string request, int? deadlineMs)
         {
             var output = new StringWriter();

@@ -205,12 +205,19 @@ public sealed class PublishCommandTests
         Assert.Equal(1, await BuildCommand.RunAsync(Tool.Environment, root, "local", null, store, null, null, TextWriter.Null, CancellationToken.None, errors));
         Assert.Contains("error SEQ_EXHAUSTED", errors.ToString());
 
-        // --seq takes 1 to 2^53 - 1.
+        // --seq takes 1 to 2^53 - 1; what is no long at all is the parser's usage error, not a crash (review 38).
         foreach (var seq in new[] { "0", "9007199254740992" })
         {
             var usage = new StringWriter();
             Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(["build", "-c", root, "-s", store, "--seq", seq], Tool.Environment, TextWriter.Null, usage));
             Assert.Contains("--seq must be from 1 to 9007199254740991", usage.ToString());
+        }
+
+        foreach (var arguments in new[] { new[] { "--seq", "abc" }, ["--seq", "9223372036854775808"], ["--seq=abc"] })
+        {
+            var usage = new StringWriter();
+            Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(["build", "-c", root, "-s", store, .. arguments], Tool.Environment, TextWriter.Null, usage));
+            Assert.Contains("Cannot parse argument", usage.ToString());
         }
     }
 

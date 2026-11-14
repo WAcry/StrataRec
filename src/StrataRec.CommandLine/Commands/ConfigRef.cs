@@ -341,7 +341,23 @@ internal sealed class ConfigRef
             return null;
         }
 
-        return ManifestBuilder.Parse(json, Text, diagnostics) is { } manifest ? (manifest, ManifestBuilder.ContentId(manifest), store) : null;
+        if (ManifestBuilder.Parse(json, Text, diagnostics) is not { } manifest)
+        {
+            return null;
+        }
+
+        try
+        {
+            return (manifest, ManifestBuilder.ContentId(manifest), store);
+        }
+        catch (JsonCanonicalizationException ex)
+        {
+            // Not written exactly, so no id: a sequence beyond 2^53 a tool other than build wrote (review 38).
+            diagnostics.Error("MANIFEST_NOT_CANONICAL", Text, ex.Pointer.ToString(),
+                $"The manifest has no content id: its canonical JSON (RFC 8785) cannot hold it exactly ({ex.Reason}).",
+                $"write integers of at most {BuildCommand.MaxSeq} (2^53 - 1) here, as 'stratarec build' does");
+            return null;
+        }
     }
 
     /// <summary>The diagnostic artifact of a manifest, as <see cref="ManifestBuilder.LoadAsync"/> labels its errors.</summary>

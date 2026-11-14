@@ -115,7 +115,8 @@ internal static class PublishedRelease
         }
 
         diagnostics.Error("SEQ_EXHAUSTED", "manifest:" + id, "/seq",
-            $"The published manifest has sequence {published.Seq}: the next is beyond {BuildCommand.MaxSeq} (2^53 - 1), the largest a manifest's JSON writes exactly.",
+            $"The published manifest has sequence {published.Seq}: the next is beyond {BuildCommand.MaxSeq} (2^53 - 1), the largest safe integer, up to which a " +
+            "manifest's JSON writes every integer exactly.",
             "sequence numbers end there: a controller that numbers releases by time uses milliseconds or seconds, not finer units");
         return null;
     }

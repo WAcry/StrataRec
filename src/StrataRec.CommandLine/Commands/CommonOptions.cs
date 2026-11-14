@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.CommandLine.Parsing;
 using System.Text.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Experiments.Compilation;
@@ -51,6 +52,24 @@ internal static class CommonOptions
     /// <summary>The bundle paths of <see cref="Bundles"/>: the arguments, then those of <c>-b</c>.</summary>
     public static string[] BundlePaths(ParseResult parse, (Argument<string[]> Arguments, Option<string[]> Option) bundles) =>
         [.. parse.GetValue(bundles.Arguments) ?? [], .. parse.GetValue(bundles.Option) ?? []];
+
+    /// <summary>
+    /// The value an option's token converted to, for a validator that checks its range; null when it did not convert,
+    /// which System.CommandLine reports as a usage error of its own. Reading a failed conversion throws, out of the parse,
+    /// which ended the process (review 38: <c>--seq abc</c> exited 134 instead of 2).
+    /// </summary>
+    public static T? Converted<T>(OptionResult result)
+        where T : struct
+    {
+        try
+        {
+            return result.GetValueOrDefault<T?>();
+        }
+        catch (InvalidOperationException)
+        {
+            return null; // the conversion error is the parse's already
+        }
+    }
 
     public static Option<string> Format() => new Option<string>("--format", "-f")
     {

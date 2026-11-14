@@ -61,7 +61,7 @@ internal static class RunCommand
         };
         deadline.Validators.Add(static result =>
         {
-            if (result.GetValueOrDefault<int?>() is <= 0)
+            if (CommonOptions.Converted<int>(result) is <= 0)
             {
                 result.AddError("--deadline-ms must be positive.");
             }

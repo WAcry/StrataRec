@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Artifacts.Storage;
+using StrataRec.CommandLine;
 using StrataRec.CommandLine.Commands;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Manifests;
@@ -449,6 +450,15 @@ public sealed class ManifestRefCliTests
         var notAManifest = Path.Combine(store, "not-a-manifest.json");
         File.WriteAllText(notAManifest, """{ "pipeline_id": "home_feed", "environment": "local", "artifacts": {} }""");
         await Expect(1, "MANIFEST_SCHEMA", notAManifest, "release manifest", manifest: notAManifest, store: store, pointer: "/artifacts");
+
+        // A manifest file whose seq canonical JSON cannot hold exactly has no content id (review 38: an unhandled exception).
+        var beyond = Path.Combine(store, "beyond-2-53.json");
+        File.WriteAllText(beyond, System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(file), "\"seq\": \\d+", "\"seq\": 9007199254740993"));
+        await Expect(1, "MANIFEST_NOT_CANONICAL", beyond, "write integers of at most 9007199254740991", manifest: beyond, store: store, pointer: "/seq");
+        var publishErrors = new StringWriter();
+        Assert.Equal(1, await StrataRecCommandLine.InvokeAsync(["publish", "-s", store, beyond], Tool.Environment, TextWriter.Null, publishErrors));
+        Assert.Contains($"error MANIFEST_NOT_CANONICAL {beyond}/seq", publishErrors.ToString());
+        Assert.DoesNotContain("Unhandled", publishErrors.ToString());
 
         // A damaged, then a missing artifact blob: reported by the manifest loader at the manifest's pointer.
         var manifest = ManifestStores.Read(file);

@@ -29,8 +29,8 @@ namespace StrataRec.CommandLine.Commands;
 internal static class BuildCommand
 {
     /// <summary>
-    /// The largest sequence number, 2^53 − 1: a manifest is canonical JSON (RFC 8785), which writes integers as doubles, so
-    /// a larger one is not written exactly (review 37).
+    /// The largest sequence number build makes, 2^53 − 1, the largest safe integer: a manifest is canonical JSON (RFC 8785),
+    /// which writes integers as doubles, so every integer up to it is written exactly and some beyond it are not (review 37).
     /// </summary>
     internal const long MaxSeq = 9_007_199_254_740_991;
 
@@ -43,14 +43,14 @@ internal static class BuildCommand
         var manifest = new Option<string?>("--manifest", "-m") { Description = "Write the manifest here instead of stdout." };
         var seq = new Option<long?>("--seq")
         {
-            Description = "The manifest's sequence number (design 10.2), from 1 to 2^53 - 1. By default the next release: one more than the manifest the store's " +
+            Description = "The manifest's sequence number (design 10.2), from 1 to 2^53 - 1 (the largest safe integer). By default the next release: one more than the manifest the store's " +
                           "pointer for the pipeline and environment names ('stratarec publish' writes it), keeping its min_accepted_seq; 1 when none is published.",
         };
         seq.Validators.Add(static result =>
         {
-            if (result.GetValueOrDefault<long?>() is < 1 or > MaxSeq)
+            if (CommonOptions.Converted<long>(result) is < 1 or > MaxSeq)
             {
-                result.AddError($"--seq must be from 1 to {MaxSeq} (2^53 - 1, the largest integer a manifest's JSON writes exactly).");
+                result.AddError($"--seq must be from 1 to {MaxSeq} (2^53 - 1, the largest safe integer: a manifest's JSON writes every integer up to it exactly).");
             }
         });
         var restore = new Option<string[]>("--restore")
