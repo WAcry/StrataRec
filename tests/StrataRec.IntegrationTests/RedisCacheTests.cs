@@ -7,6 +7,7 @@ using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Features.Cache;
 using StrataRec.Hosting;
+using StrataRec.Hosting.Bindings;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Redis;
 
@@ -84,14 +85,129 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         Assert.InRange((await server.Connection.GetDatabase().KeyTimeToLiveAsync(key))!.Value, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(660));
     }
 
-    private static RedisCacheStore Create(string endpoint, string prefix)
+    /// <summary>
+    /// Review 19: credentials the server refuses are a wrong setting, unlike a server that is down. A dedicated ACL user on
+    /// the test's Redis (so that a shared server needs no restart): its wrong password fails the load at the setting,
+    /// never quoting the secret; its right one loads and serves.
+    /// </summary>
+    [RedisFact]
+    public async Task CredentialsTheServerRefuses_FailTheLoadAtThePassword_AndTheRightOnesLoad()
+    {
+        var user = "stratarec-test-" + Guid.NewGuid().ToString("N");
+        var admin = server.Connection.GetDatabase();
+        await admin.ExecuteAsync("ACL", "SETUSER", user, "on", ">right-secret", "~*", "+@all");
+        try
+        {
+            var secrets = new Secrets { ["redis-password"] = "wrong-secret" };
+            await using (var refused = Create(server.Endpoint, RedisServer.UniquePrefix(), user, secrets))
+            {
+                var error = await Assert.ThrowsAsync<BindingException>(() => refused.LoadAsync(CancellationToken.None).AsTask());
+                Assert.Equal("/password", error.Pointer);
+                Assert.Contains(user, error.Reason);
+                Assert.Contains("redis-password", error.Hint);
+                Assert.DoesNotContain("wrong-secret", error.ToString());
+            }
+
+            secrets["redis-password"] = "right-secret";
+            var prefix = RedisServer.UniquePrefix();
+            await using var accepted = Create(server.Endpoint, prefix, user, secrets);
+            await accepted.LoadAsync(CancellationToken.None);
+            var items = new CacheKeyspace("item_store", "item", EntityKeyType.Int64);
+            await accepted.SetAsync(items, new[] { new CacheStoreEntry(EntityKey.FromInt64(1), new byte[] { 7 }, TimeSpan.FromMinutes(1)) }, CancellationToken.None);
+            var record = new ReadOnlyMemory<byte>[1];
+            await accepted.GetAsync(items, new[] { EntityKey.FromInt64(1) }, record, CancellationToken.None);
+            Assert.Equal(new byte[] { 7 }, record[0].ToArray());
+        }
+        finally
+        {
+            await admin.ExecuteAsync("ACL", "DELUSER", user);
+        }
+    }
+
+    /// <summary>
+    /// Review 19: a server whose default user needs a password refuses the connection itself. A wrong password fails the
+    /// load at the setting, none at all fails it at the binding (the hint says to add one), the right one loads. A server
+    /// that is down still loads (<see cref="RedisDownTests"/>).
+    /// </summary>
+    [DockerRedisFact]
+    public async Task AServerThatRequiresAPassword_RefusesAWrongOneOrNone_AtLoad()
+    {
+        var endpoint = await server.StartRequirePassAsync();
+        var secrets = new Secrets { ["redis-password"] = "wrong-secret" };
+        await using (var wrong = Create(endpoint, RedisServer.UniquePrefix(), secrets: secrets))
+        {
+            var error = await Assert.ThrowsAsync<BindingException>(() => wrong.LoadAsync(CancellationToken.None).AsTask());
+            Assert.Equal("/password", error.Pointer);
+            Assert.DoesNotContain("wrong-secret", error.ToString());
+        }
+
+        await using (var none = Create(endpoint, RedisServer.UniquePrefix()))
+        {
+            var error = await Assert.ThrowsAsync<BindingException>(() => none.LoadAsync(CancellationToken.None).AsTask());
+            Assert.Equal(string.Empty, error.Pointer);
+            Assert.Contains("\"password\"", error.Hint);
+        }
+
+        secrets["redis-password"] = RedisServer.RequiredPassword;
+        await using var right = Create(endpoint, RedisServer.UniquePrefix(), secrets: secrets);
+        await right.LoadAsync(CancellationToken.None);
+        var record = new ReadOnlyMemory<byte>[1];
+        await right.GetAsync(new CacheKeyspace("item_store", "item", EntityKeyType.Int64), new[] { EntityKey.FromInt64(1) }, record, CancellationToken.None);
+        Assert.True(record[0].IsEmpty);
+    }
+
+    /// <summary>Review 19: through the engine, refused credentials reject the plan at the binding's password setting.</summary>
+    [RedisFact]
+    public async Task AnEngineWhoseRedisRefusesItsCredentials_RejectsThePlanAtThePassword()
+    {
+        var user = "stratarec-test-" + Guid.NewGuid().ToString("N");
+        var admin = server.Connection.GetDatabase();
+        await admin.ExecuteAsync("ACL", "SETUSER", user, "on", ">right-secret", "~*", "+@all");
+        try
+        {
+            var root = HomeFeedTestHost.LoadModified(r => CacheEngineTests.CacheItems(r,
+                $$"""{ "store": "redis@1", "endpoint": "{{server.Endpoint}}", "user": "{{user}}", "password": "secret://redis-password" }""")).Root;
+            var environment = new PlanEnvironment { BaseDirectory = root, CacheStores = new FeatureCacheStoreRegistry().AddRedis() };
+            await using var engine = new RecEngine(environment, bindingOptions: new BindingHostOptions { Secrets = new Secrets { ["redis-password"] = "wrong-secret" } });
+
+            var load = await engine.LoadAsync(CacheEngineTests.Compile(root));
+
+            Assert.False(load.Applied);
+            var error = Assert.Single(load.Diagnostics, d => d.IsError);
+            Assert.Equal(("BINDING_LOAD_FAILED", "/sources/item_store/cache/distributed/password"), (error.Code, error.Pointer));
+            Assert.DoesNotContain("wrong-secret", error.ToString());
+        }
+        finally
+        {
+            await admin.ExecuteAsync("ACL", "DELUSER", user);
+        }
+    }
+
+    private static RedisCacheStore Create(string endpoint, string prefix, string? user = null, ISecretResolver? secrets = null)
     {
         var settings = new Dictionary<string, JsonElement>
         {
             ["endpoint"] = JsonSerializer.SerializeToElement(endpoint),
             ["key_prefix"] = JsonSerializer.SerializeToElement(prefix),
         };
-        return (RedisCacheStore)new RedisCacheStoreFactory().Create(new BindingContext("item_store", settings, Path.GetTempPath(), secrets: null));
+        if (user is not null)
+        {
+            settings["user"] = JsonSerializer.SerializeToElement(user);
+        }
+
+        if (secrets is not null)
+        {
+            settings["password"] = JsonSerializer.SerializeToElement("secret://redis-password");
+        }
+
+        return (RedisCacheStore)new RedisCacheStoreFactory().Create(new BindingContext("item_store", settings, Path.GetTempPath(), secrets));
+    }
+
+    /// <summary>A secret store in memory.</summary>
+    private sealed class Secrets : Dictionary<string, string>, ISecretResolver
+    {
+        public ValueTask<string?> ResolveAsync(string name, CancellationToken cancellationToken) =>
+            new(TryGetValue(name, out var value) ? value : null);
     }
 }
 
@@ -136,21 +252,46 @@ public sealed class RedisFactAttribute : FactAttribute
     }
 }
 
+/// <summary>A <see cref="FactAttribute"/> that needs docker, to start a Redis of its own (<see cref="RedisServer.StartRequirePassAsync"/>).</summary>
+public sealed class DockerRedisFactAttribute : FactAttribute
+{
+    public DockerRedisFactAttribute()
+    {
+        if (RedisServer.DockerUnavailable is { } why)
+        {
+            Skip = why;
+        }
+    }
+}
+
 /// <summary>
 /// The Redis of <see cref="RedisCacheTests"/>: <c>STRATAREC_REDIS</c> when set, else a <c>redis:7</c> container on a free
 /// loopback port, removed when the tests end. Each test writes under its own key prefix, so a shared server needs no
-/// flush and runs do not see each other's records.
+/// flush and runs do not see each other's records. A test that needs a server configured otherwise (a password on the
+/// default user) starts its own container through docker, also removed at the end.
 /// </summary>
 public sealed class RedisServer : IAsyncLifetime
 {
     public const string Variable = "STRATAREC_REDIS";
 
-    private static readonly Lazy<string?> WhyUnavailable = new(Check);
-    private string? _container;
+    /// <summary>The password of the default user of <see cref="StartRequirePassAsync"/>'s server.</summary>
+    public const string RequiredPassword = "right-secret";
+
+    private static readonly Lazy<string?> WhyDockerUnavailable = new(() => Docker("info", "--format", "{{.ServerVersion}}").ExitCode == 0
+        ? null
+        : "docker is not available to start a Redis configured for this test (redis:7 with --requirepass)");
+
+    private readonly List<string> _containers = new();
     private ConnectionMultiplexer? _connection;
+    private string? _requirePass;
 
     /// <summary>Why the Redis tests cannot run here, or null when they can.</summary>
-    public static string? Unavailable => WhyUnavailable.Value;
+    public static string? Unavailable => Environment.GetEnvironmentVariable(Variable) is { Length: > 0 }
+        ? null
+        : DockerUnavailable is null ? null : $"no Redis to test against: set {Variable}=host:port of a Redis server, or make docker available to start redis:7";
+
+    /// <summary>Why this machine cannot start Redis containers, or null when it can.</summary>
+    public static string? DockerUnavailable => WhyDockerUnavailable.Value;
 
     public string Endpoint { get; private set; } = string.Empty;
 
@@ -166,35 +307,21 @@ public sealed class RedisServer : IAsyncLifetime
             return;
         }
 
-        if (Environment.GetEnvironmentVariable(Variable) is { Length: > 0 } endpoint)
+        Endpoint = Environment.GetEnvironmentVariable(Variable) is { Length: > 0 } endpoint ? endpoint : Start();
+        _connection = await ConnectedAsync(Endpoint);
+    }
+
+    /// <summary>A server whose default user needs <see cref="RequiredPassword"/>: started on first use, removed at the end.</summary>
+    public async Task<string> StartRequirePassAsync()
+    {
+        if (_requirePass is null)
         {
-            Endpoint = endpoint;
-        }
-        else
-        {
-            var run = Docker("run", "-d", "--rm", "-p", "127.0.0.1::6379", "redis:7");
-            Assert.True(run.ExitCode == 0, "docker run redis:7 failed: " + run.Error);
-            _container = run.Output.Trim();
-            var port = Docker("port", _container, "6379/tcp");
-            Assert.True(port.ExitCode == 0, "docker port failed: " + port.Error);
-            Endpoint = port.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0];
+            var endpoint = Start("redis-server", "--requirepass", RequiredPassword);
+            await (await ConnectedAsync(endpoint + ",password=" + RequiredPassword)).DisposeAsync();
+            _requirePass = endpoint;
         }
 
-        // The container accepts connections a moment after it starts: retry until it answers, within a generous bound.
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
-        _connection = await ConnectionMultiplexer.ConnectAsync(Endpoint + ",abortConnect=false,connectTimeout=2000");
-        while (true)
-        {
-            try
-            {
-                await _connection.GetDatabase().PingAsync();
-                return;
-            }
-            catch (RedisException) when (DateTime.UtcNow < deadline)
-            {
-                await Task.Delay(100);
-            }
-        }
+        return _requirePass;
     }
 
     public async Task DisposeAsync()
@@ -204,22 +331,41 @@ public sealed class RedisServer : IAsyncLifetime
             await _connection.DisposeAsync();
         }
 
-        if (_container is not null)
+        foreach (var container in _containers)
         {
-            Docker("rm", "-f", _container);
+            Docker("rm", "-f", container);
         }
     }
 
-    private static string? Check()
+    /// <summary>Starts a <c>redis:7</c> container on a free loopback port: its endpoint.</summary>
+    private string Start(params string[] command)
     {
-        if (Environment.GetEnvironmentVariable(Variable) is { Length: > 0 })
-        {
-            return null;
-        }
+        var run = Docker(["run", "-d", "--rm", "-p", "127.0.0.1::6379", "redis:7", .. command]);
+        Assert.True(run.ExitCode == 0, "docker run redis:7 failed: " + run.Error);
+        var container = run.Output.Trim();
+        _containers.Add(container);
+        var port = Docker("port", container, "6379/tcp");
+        Assert.True(port.ExitCode == 0, "docker port failed: " + port.Error);
+        return port.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0];
+    }
 
-        return Docker("info", "--format", "{{.ServerVersion}}").ExitCode == 0
-            ? null
-            : $"no Redis to test against: set {Variable}=host:port of a Redis server, or make docker available to start redis:7";
+    /// <summary>A server accepts connections a moment after its container starts: retries until it answers, within a generous bound.</summary>
+    private static async Task<ConnectionMultiplexer> ConnectedAsync(string configuration)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+        var connection = await ConnectionMultiplexer.ConnectAsync(configuration + ",abortConnect=false,connectTimeout=2000");
+        while (true)
+        {
+            try
+            {
+                await connection.GetDatabase().PingAsync();
+                return connection;
+            }
+            catch (RedisException) when (DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(100);
+            }
+        }
     }
 
     private static (int ExitCode, string Output, string Error) Docker(params string[] arguments)
