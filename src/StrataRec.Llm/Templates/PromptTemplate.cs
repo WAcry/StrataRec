@@ -34,8 +34,10 @@ namespace StrataRec.Llm.Templates;
 /// <para><b>Errors</b> are reported at the template's config pointer with the character offset of the tag at fault and a
 /// hint.</para>
 /// <para><b>Cost.</b> Rendering walks the compiled template and reads each value straight from its column or the request:
-/// it writes into a pooled builder and formats numbers on the stack, so the prompt string it returns is its only
-/// allocation.</para>
+/// it writes into a builder kept per thread and formats numbers on the stack, so once a thread has rendered, the prompt
+/// string it returns is its only allocation. A builder that grew beyond 256 Ki characters is not kept, so a prompt that
+/// long also allocates its builder each time: keeping that much memory for every thread's life is the worse cost
+/// (review 29).</para>
 /// </remarks>
 public sealed class PromptTemplate
 {

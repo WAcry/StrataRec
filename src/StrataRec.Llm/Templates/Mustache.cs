@@ -4,7 +4,7 @@ using System.Text;
 namespace StrataRec.Llm.Templates;
 
 /// <summary>A piece of a parsed Mustache template: literal text or a tag.</summary>
-public abstract class MustacheNode
+internal abstract class MustacheNode
 {
     private protected MustacheNode(int offset, int length)
     {
@@ -20,7 +20,7 @@ public abstract class MustacheNode
 }
 
 /// <summary>Literal text, rendered as written: <see cref="MustacheNode.Length"/> characters of the template from <see cref="MustacheNode.Offset"/>.</summary>
-public sealed class MustacheText : MustacheNode
+internal sealed class MustacheText : MustacheNode
 {
     internal MustacheText(int offset, int length)
         : base(offset, length)
@@ -29,7 +29,7 @@ public sealed class MustacheText : MustacheNode
 }
 
 /// <summary>What a tag does.</summary>
-public enum MustacheTagKind : byte
+internal enum MustacheTagKind : byte
 {
     /// <summary><c>{{name}}</c>, <c>{{{name}}}</c> or <c>{{&amp; name}}</c>: the value.</summary>
     Variable = 1,
@@ -42,7 +42,7 @@ public enum MustacheTagKind : byte
 }
 
 /// <summary>A variable or a section of a parsed template.</summary>
-public sealed class MustacheTag : MustacheNode
+internal sealed class MustacheTag : MustacheNode
 {
     private static readonly MustacheNode[] NoChildren = [];
 
@@ -80,14 +80,14 @@ public sealed class MustacheTag : MustacheNode
 }
 
 /// <summary>A template the parser rejects: where (the offset of the tag at fault), why, and how to fix it.</summary>
-public readonly record struct MustacheError(int Offset, string Code, string Message, string Hint);
+internal readonly record struct MustacheError(int Offset, string Code, string Message, string Hint);
 
 /// <summary>
 /// What a template renders: the values of its tags. The renderer walks the template and asks for each tag; the
 /// implementation keeps whatever context its names need (a context stack, the current row).
 /// </summary>
 /// <remarks>A struct implementation (a <c>ref struct</c> included) is called without boxing or allocation.</remarks>
-public interface IMustacheData
+internal interface IMustacheData
 {
     /// <summary>Appends the value of a <see cref="MustacheTagKind.Variable"/> tag.</summary>
     void Write(MustacheTag variable, StringBuilder output);
@@ -121,7 +121,7 @@ public interface IMustacheData
 /// <para>No HTML escaping: a prompt is not HTML, and escaping would put entities like <c>&amp;quot;</c> in front of the
 /// model. So <c>{{name}}</c> renders like <c>{{{name}}}</c>, a deliberate difference from mustache(5).</para>
 /// </remarks>
-public sealed class MustacheTemplate
+internal sealed class MustacheTemplate
 {
     private readonly MustacheNode[] _nodes;
 
@@ -139,6 +139,13 @@ public sealed class MustacheTemplate
 
     /// <summary>The number of variables and sections (see <see cref="MustacheTag.Id"/>).</summary>
     public int TagCount { get; }
+
+    /// <summary>
+    /// The deepest nesting of sections a template may have. Binding and rendering recurse once per level, so without a
+    /// bound a long template of nested sections overflowed the stack and ended the process at load (review 29); a prompt
+    /// needs a few levels at most.
+    /// </summary>
+    public const int MaxDepth = 32;
 
     /// <summary>Parses <paramref name="source"/>; false with the first error when it is not a supported template.</summary>
     public static bool TryParse(string source, [NotNullWhen(true)] out MustacheTemplate? template, out MustacheError error)
@@ -174,6 +181,14 @@ public sealed class MustacheTemplate
                 case '!':
                     break;
                 case '#' or '^':
+                    if (open.Count == MaxDepth)
+                    {
+                        error = new MustacheError(tag.Start, "MUSTACHE_TOO_DEEP",
+                            $"{Quote(source, tag)} opens a section {MaxDepth + 1} levels deep; a template may nest at most {MaxDepth}.",
+                            "nest fewer sections: compute the condition as a derived feature and test that one value");
+                        return false;
+                    }
+
                     var children = new List<MustacheNode>();
                     open.Add(new OpenSection(tag, ids++, current, children));
                     current = children;

@@ -251,6 +251,14 @@ public sealed class OperatorCompileContext
     /// <summary>The client bound to model <paramref name="name"/>, shared with every plan of the same binding (design 6.4).</summary>
     public (IModelClient Client, int? TimeoutMs)? Model(string name, string configKey)
     {
+        // A config can bind null or "" to a required string; that is a config error at its key, not an exception (review 29).
+        if (string.IsNullOrEmpty(name))
+        {
+            Error(configKey, "MODEL_UNBOUND", $"'{configKey.TrimStart('/')}' must name a model.",
+                "set it to a model name that the bindings' 'models' declare");
+            return null;
+        }
+
         if (_clients.TryGetModel(name, out var client, out var timeout, out var error, out var hint))
         {
             return (client, timeout);

@@ -191,6 +191,19 @@ public sealed class MustacheParserTests
         Assert.False(string.IsNullOrWhiteSpace(error.Hint));
     }
 
+    [Fact]
+    public void SectionsNestedDeeperThanMaxDepth_AreAnError_AtTheFirstTooDeepTag()
+    {
+        // Review 29: binding and rendering recurse per level, and 15,000 levels overflowed the stack at load.
+        static string Nested(int depth) => string.Concat(Enumerable.Repeat("{{#s}}", depth)) + "x" + string.Concat(Enumerable.Repeat("{{/s}}", depth));
+
+        Assert.True(MustacheTemplate.TryParse(Nested(MustacheTemplate.MaxDepth), out _, out _));
+        Assert.False(MustacheTemplate.TryParse(Nested(MustacheTemplate.MaxDepth + 1), out _, out var error));
+        Assert.Equal(("MUSTACHE_TOO_DEEP", MustacheTemplate.MaxDepth * 6), (error.Code, error.Offset));
+        Assert.False(MustacheTemplate.TryParse(Nested(15_000), out _, out var deep));
+        Assert.Equal("MUSTACHE_TOO_DEEP", deep.Code);
+    }
+
     private static IEnumerable<MustacheNode> Flatten(IEnumerable<MustacheNode> nodes) =>
         nodes.SelectMany(n => n is MustacheTag tag ? new[] { n }.Concat(Flatten(tag.Children)) : new[] { n });
 

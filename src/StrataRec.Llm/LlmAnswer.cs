@@ -139,8 +139,9 @@ public static class LlmAnswer
             return text;
         }
 
-        var inside = text[(newline + 1)..^Fence.Length];
-        return inside.Contains(Fence, StringComparison.Ordinal) ? text : inside.Trim();
+        // Only the outer fence: backticks inside, such as in a JSON string, are content (review 29); anything else after the
+        // array, a second code block included, fails the strict parse.
+        return text[(newline + 1)..^Fence.Length].Trim();
     }
 
     /// <summary>The start of an answer for a message: at most <paramref name="max"/> characters, quoted, on one line.</summary>
@@ -199,12 +200,20 @@ public static class LlmAnswer
         }
 
         var keys = table.StringIds;
-        for (var p = 0; p < window.Length; p++)
+        try
         {
-            if (reader.ValueTextEquals(keys.Get(window[p])))
+            for (var p = 0; p < window.Length; p++)
             {
-                return p;
+                if (reader.ValueTextEquals(keys.Get(window[p])))
+                {
+                    return p;
+                }
             }
+        }
+        catch (InvalidOperationException)
+        {
+            // A JSON string that is not valid Unicode (an unpaired surrogate escape such as \uD800) is valid JSON but names
+            // no entity: an unknown element, like any other string that is not a window row's id (review 29).
         }
 
         return -1;

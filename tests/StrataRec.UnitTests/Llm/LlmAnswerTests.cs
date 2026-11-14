@@ -16,7 +16,8 @@ public sealed class LlmAnswerTests
     [InlineData("```\n```", "")]
     [InlineData("```js\n[1]\n```", "```js\n[1]\n```")] // another language: not unwrapped
     [InlineData("```[1]```", "```[1]```")] // no line for the opening fence
-    [InlineData("```json\n[1]\n```\n```json\n[2]\n```", "```json\n[1]\n```\n```json\n[2]\n```")] // two fences
+    [InlineData("```json\n[1]\n```\n```json\n[2]\n```", "[1]\n```\n```json\n[2]")] // two fences: the outer one only, the rest fails the parse
+    [InlineData("```json\n[2,\"```\",1]\n```", "[2,\"```\",1]")] // backticks in a JSON string are content (review 29)
     [InlineData("[1]", "[1]")]
     [InlineData("```", "```")]
     public void OneFenceAroundTheWholeAnswer_IsRemoved(string text, string inside)
@@ -52,6 +53,34 @@ public sealed class LlmAnswerTests
         Assert.Null(error);
         Assert.Equal(new[] { 1, 0 }, positions);
         Assert.Equal(new AnswerCounts(2, 2, 1), counts);
+    }
+
+    [Fact]
+    public void BackticksInAFencedAnswer_AreContent_NotASecondFence()
+    {
+        // Review 29: the whole inside was scanned for another fence, so a string holding ``` failed a valid answer.
+        var (ranks, rankCounts, rankError) = Parse("```json\n[2,\"```\",1]\n```", AnswerKind.Rank, 10, 20, 30);
+        var (ids, idCounts, idError) = Parse("```json\n[\"code```id\"]\n```", AnswerKind.EntityId, "a", "code```id");
+        var (_, _, twoBlocks) = Parse("```json\n[1]\n```\n```json\n[2]\n```", AnswerKind.Rank, 10, 20, 30);
+
+        Assert.Null(rankError);
+        Assert.Equal(new[] { 1, 0 }, ranks);
+        Assert.Equal(new AnswerCounts(2, 1, 0), rankCounts);
+        Assert.Null(idError);
+        Assert.Equal(new[] { 1 }, ids);
+        Assert.Equal(new AnswerCounts(1, 0, 0), idCounts);
+        Assert.NotNull(twoBlocks); // a second code block is not one strict JSON array
+    }
+
+    [Fact]
+    public void AStringThatIsNotValidUnicode_IsAnUnknownElement()
+    {
+        // Review 29: an unpaired surrogate escape is valid JSON but cannot equal an id; it threw instead.
+        var (positions, counts, error) = Parse("""["\uD800", "b", "\uDC00x"]""", AnswerKind.EntityId, "a", "b");
+
+        Assert.Null(error);
+        Assert.Equal(new[] { 1 }, positions);
+        Assert.Equal(new AnswerCounts(1, 2, 0), counts);
     }
 
     [Theory]

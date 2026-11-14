@@ -229,6 +229,8 @@ public sealed class LlmRerankerTests
     [InlineData("""{ "model": "llm", "output": "answer", "answer": "rank", "prompts": { } }""", "/prompts", "LLM_PROMPTS")]
     [InlineData("""{ "model": "llm", "output": "", "answer": "rank", "prompts": { "user": "x" } }""", "/output", "MODEL_OUTPUT")]
     [InlineData("""{ "model": "nope", "output": "answer", "answer": "rank", "prompts": { "user": "x" } }""", "/model", "MODEL_UNBOUND")]
+    [InlineData("""{ "model": null, "output": "answer", "answer": "rank", "prompts": { "user": "x" } }""", "/model", "MODEL_UNBOUND")] // threw (review 29)
+    [InlineData("""{ "model": "", "output": "answer", "answer": "rank", "prompts": { "user": "x" } }""", "/model", "MODEL_UNBOUND")]
     public void TheAnswerKind_ThePrompts_TheOutput_AndTheModel_AreRequired(string config, string key, string code)
     {
         var error = Error(TryCompile(new TextModels("[1]"), config));
