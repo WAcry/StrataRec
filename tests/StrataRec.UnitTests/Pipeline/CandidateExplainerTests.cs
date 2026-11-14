@@ -177,6 +177,24 @@ public sealed class CandidateExplainerTests
     }
 
     [Fact]
+    public async Task AHookThatThrows_AnExceptionWhoseMessageThrowsToo_ChangesOnlyTheReason()
+    {
+        // Review 34: the guard read ex.Message, which threw out of it and failed the node.
+        var plan = Compile("int64", reorder: "explain_throws", reorderPolicy: "fail_request");
+        var plain = await Run(plan, null);
+
+        var result = await Run(plan, new[] { Key("int64", 2) });
+
+        Assert.True(plain.Succeeded, plain.Error);
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(plain.Items.Select(i => i.Id), result.Items.Select(i => i.Id));
+        var step = result.Explanation!.Candidates[0].Steps.Single(s => s.Node == "reorder");
+        Assert.Equal(ExplainStepKind.Ran, step.Kind);
+        Assert.Equal("the operator could not explain itself: UndescribableException: " +
+                     "StrataRec.UnitTests.Pipeline.CandidateExplainerTests+UndescribableException (reading its message threw)", step.Reason);
+    }
+
+    [Fact]
     public async Task RepeatedIds_AreExplainedOnce_AndIdsOfTheOtherKeyType_AreNeverFound()
     {
         var result = await Run(Compile("int64"), new[] { Key("int64", 2), Key("string", 2), Key("int64", 2) });
@@ -369,6 +387,14 @@ public sealed class CandidateExplainerTests
                     context.SetOrder(order.AsSpan(0, 1));
                     context.Fail("gave up after reordering");
                 }
+                else if (mode == "explain_throws")
+                {
+                    context.SetOrder(order);
+                    foreach (var row in order)
+                    {
+                        ((ScalarColumn<double>)context.Output(flag)).Set(row, 1.0);
+                    }
+                }
                 else
                 {
                     context.SetOrder(order);
@@ -380,6 +406,11 @@ public sealed class CandidateExplainerTests
 
             public void Explain(ExplainContext context)
             {
+                if (mode == "explain_throws")
+                {
+                    throw new UndescribableException();
+                }
+
                 for (var t = 0; t < context.Count; t++)
                 {
                     context.Reason(t, "reversed");
@@ -387,6 +418,12 @@ public sealed class CandidateExplainerTests
                 }
             }
         }
+    }
+
+    /// <summary>An exception whose message cannot be read: describing it must not throw past the hook's guard.</summary>
+    private sealed class UndescribableException : Exception
+    {
+        public override string Message => throw new InvalidOperationException("cannot describe this exception");
     }
 
     /// <summary><c>AppendThenFail@1</c>: <c>MultiSourceRecall@1</c> that fails once it has appended its candidates.</summary>

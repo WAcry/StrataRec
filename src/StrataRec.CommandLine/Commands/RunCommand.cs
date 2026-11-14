@@ -193,8 +193,7 @@ internal static class RunCommand
             if (result.Recording is { } bundle)
             {
                 ReplayBundleFile.Save(bundle, recordPath);
-                errors.WriteLine($"recorded {request.RequestId} to {recordPath}; replay it with: " +
-                                 $"stratarec replay -c {InitCommand.Quote(config)} {InitCommand.Quote(recordPath)}");
+                errors.WriteLine($"recorded {request.RequestId} to {recordPath}; replay it with: {ReplayCommandLine(config, recordPath)}");
             }
             else
             {
@@ -214,6 +213,15 @@ internal static class RunCommand
         }
         return result.Succeeded ? 0 : 1;
     }
+
+    /// <summary>
+    /// The command that replays a bundle just recorded, to copy into a shell: each path quoted for the shell, and one that
+    /// starts with '-' written ./-b, which the command line would otherwise read as an option (review 34).
+    /// </summary>
+    internal static string ReplayCommandLine(string config, string bundle) =>
+        $"stratarec replay -c {InitCommand.Quote(AsPath(config))} {InitCommand.Quote(AsPath(bundle))}";
+
+    private static string AsPath(string path) => path.StartsWith('-') ? "./" + path : path;
 
     /// <summary>
     /// Reads and binds the request file strictly, like an artifact (<see cref="ArtifactSerializer.TryBind{T}"/>): a

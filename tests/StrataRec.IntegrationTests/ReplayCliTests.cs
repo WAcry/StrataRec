@@ -32,9 +32,44 @@ public sealed class ReplayCliTests
         }
 
         var error = new StringWriter();
-        Assert.NotEqual(0, await StrataRecCommandLine.InvokeAsync(new[] { "replay", "-c", sample }, Tool.Environment, TextWriter.Null, error));
+        Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(new[] { "replay", "-c", sample }, Tool.Environment, TextWriter.Null, error));
         Assert.Contains("Give the bundles to replay: 'stratarec replay -c <workspace> <bundle.json or directory>...'.", error.ToString());
         Directory.Delete(bundles, recursive: true);
+    }
+
+    [Fact]
+    public async Task TheReplayCommandRunPrints_ReadsAPathThatLooksLikeAnOption_AsAPath()
+    {
+        // Review 34: 'run --record=-b' printed 'stratarec replay -c ws -b', where -b is the bundle option.
+        Assert.Equal("stratarec replay -c ws ./-b", RunCommand.ReplayCommandLine("ws", "-b"));
+        Assert.Equal("stratarec replay -c ./-ws 'my b.json'", RunCommand.ReplayCommandLine("-ws", "my b.json"));
+        Assert.Equal("stratarec replay -c ws /tmp/-b", RunCommand.ReplayCommandLine("ws", "/tmp/-b"));
+
+        // As printed, the path is an argument: a missing file is reported as such, not as an option missing its value.
+        var output = new StringWriter();
+        var error = new StringWriter();
+        Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(new[] { "replay", "-c", HomeFeedTestHost.SampleRoot(), "./-b" }, Tool.Environment, output, error));
+        Assert.DoesNotContain("Required argument", error.ToString());
+        Assert.Contains("./-b: not replayed", output.ToString());
+    }
+
+    /// <summary>
+    /// Review 34: a command line that does not parse is a usage error, exit 2, never an exception (a -b without its value
+    /// threw from the validator) nor 1, which says the configuration has errors or, for diff, that something differs.
+    /// </summary>
+    [Theory]
+    [InlineData("Required argument missing for option: '-b'.", "replay", "-b")]
+    [InlineData("Required argument missing for option: '-b'.", "compare", "--baseline", "x", "-b")]
+    [InlineData("Unrecognized command or argument '--nope'.", "diff", "--to", "x", "--nope")]
+    [InlineData("Unrecognized command or argument '--nope'.", "validate", "--nope")]
+    public async Task ACommandLineThatDoesNotParse_IsAUsageError(string message, params string[] args)
+    {
+        var error = new StringWriter();
+
+        var code = await StrataRecCommandLine.InvokeAsync(args, Tool.Environment, TextWriter.Null, error);
+
+        Assert.Equal(2, code);
+        Assert.Contains(message, error.ToString());
     }
 
     [Fact]

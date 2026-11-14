@@ -28,7 +28,8 @@ public interface IExplainableOperator
 /// <summary>
 /// What an <see cref="IExplainableOperator"/> sees of an explained request: the targets (by index, 0 to
 /// <see cref="Count"/>), their rows and liveness before and after the node, the request's columns and parameters, and
-/// where to write each target's reason and terms. Work here is per target, never per row of the table.
+/// where to write each target's reason and terms. Work here is per target, never per row of the table; an expression's
+/// values land in a pooled column of the table's capacity (<see cref="Evaluate"/>).
 /// </summary>
 public sealed class ExplainContext
 {

@@ -113,7 +113,7 @@ public sealed class ArtifactSchemasTests
 
         var feature = arm["properties"]!["features"]!["additionalProperties"]!;
         Assert.Null(feature["required"]);
-        Assert.False(feature["additionalProperties"]!.GetValue<bool>());
+        Assert.Equal("""{"type":"null"}""", feature["additionalProperties"]!.ToJsonString()); // an unknown member may only be deleted
     }
 
     [Fact]
@@ -141,13 +141,13 @@ public sealed class ArtifactSchemasTests
 
         Assert.Equal("""["object","null"]""", schema["type"]!.ToJsonString());
         Assert.Null(schema["required"]);
-        Assert.False(schema["additionalProperties"]!.GetValue<bool>()); // an unknown key is still an error
+        Assert.Equal("""{"type":"null"}""", schema["additionalProperties"]!.ToJsonString()); // an unknown key may only be deleted (review 34)
         var properties = schema["properties"]!;
         Assert.Equal("""{"type":["string","null"],"enum":["x","y",null]}""", properties["a"]!.ToJsonString());
         Assert.Equal("""{"type":["integer","null"]}""", properties["b"]!.ToJsonString());
         Assert.Equal("""["array","null"]""", properties["c"]!["type"]!.ToJsonString());
         Assert.Equal("""["d"]""", properties["c"]!["items"]!["required"]!.ToJsonString()); // a patch replaces an array whole
-        Assert.Equal("""{"type":["object","null"],"properties":{"f":{"type":["boolean","null"]}},"additionalProperties":false}""", properties["e"]!.ToJsonString());
+        Assert.Equal("""{"type":["object","null"],"properties":{"f":{"type":["boolean","null"]}},"additionalProperties":{"type":"null"}}""", properties["e"]!.ToJsonString());
         Assert.Equal("""{"enum":["k",null]}""", properties["g"]!.ToJsonString());
         Assert.Equal("""{"description":"any value"}""", properties["h"]!.ToJsonString());
         Assert.Null(properties["m"]!["additionalProperties"]!["required"]);

@@ -146,7 +146,9 @@ public sealed class DebugOptions
     /// after every node of the run that served: live or not, its rank, the values of the columns the node read and wrote,
     /// and the operator's reason where it gives one. At most <see cref="MaxExplainIds"/>; ids of the other key type or
     /// more ids than that fail the request with <see cref="RecErrorKind.InvalidRequest"/> before anything runs. Costs
-    /// nothing when null; when set, work and memory grow with ids × nodes, not with the candidates.
+    /// nothing when null. When set, the recording grows with ids × nodes; finding ranks scans the live rows after a node
+    /// that reorders or filters them, and an operator explaining itself evaluates into a pooled column of the table's size,
+    /// as a debug request may.
     /// </summary>
     public IReadOnlyList<EntityKey>? ExplainIds { get; init; }
 

@@ -25,7 +25,12 @@ namespace StrataRec.CommandLine;
 /// </remarks>
 public static class StrataRecCommandLine
 {
-    /// <summary>Runs one command, as the <c>stratarec</c> tool would with <paramref name="args"/>; returns its exit code.</summary>
+    /// <summary>
+    /// Runs one command, as the <c>stratarec</c> tool would with <paramref name="args"/>; returns its exit code. A command
+    /// line that does not parse (an unknown option, an option without its value) prints the errors and the command's help
+    /// and exits with 2, the code of a usage error: 1 means the configuration has errors, or for <c>diff</c> that something
+    /// differs, which a script must not read into a typo.
+    /// </summary>
     /// <param name="args">The command line after the program's name, e.g. <c>["validate", "-c", "config"]</c>.</param>
     /// <param name="environment">
     /// What the calling binary provides to plans: its operators, connectors, clients, candidate sources, update sources and
@@ -52,7 +57,13 @@ public static class StrataRecCommandLine
             configuration.Error = error;
         }
 
-        return CreateRootCommand(environment).Parse(args).InvokeAsync(configuration, cancellationToken);
+        return Invoke(CreateRootCommand(environment).Parse(args), configuration, cancellationToken);
+    }
+
+    private static async Task<int> Invoke(ParseResult parse, InvocationConfiguration configuration, CancellationToken cancellationToken)
+    {
+        var code = await parse.InvokeAsync(configuration, cancellationToken).ConfigureAwait(false);
+        return parse.Errors.Count > 0 ? 2 : code;
     }
 
     /// <summary>

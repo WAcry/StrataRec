@@ -39,7 +39,8 @@ internal static class CommonOptions
         command.Options.Add(option);
         command.Validators.Add(result =>
         {
-            if ((result.GetValue(arguments)?.Length ?? 0) + (result.GetValue(option)?.Length ?? 0) == 0)
+            // By the tokens, not the values: reading the value of a -b without one throws, and that is its own parse error.
+            if (result.GetResult(option) is null && (result.GetResult(arguments)?.Tokens.Count ?? 0) == 0)
             {
                 result.AddError($"Give the bundles to replay: 'stratarec {command.Name} -c <workspace> <bundle.json or directory>...'.");
             }

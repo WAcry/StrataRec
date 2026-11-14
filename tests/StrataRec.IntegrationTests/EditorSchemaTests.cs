@@ -177,6 +177,8 @@ public sealed class EditorSchemaTests
     [InlineData("""{ "log_taps": { "served": { "columns": { "bookmark_rate": "col.item.bookmark_rate" } } } }""")]
     [InlineData("""{ "features": { "item.bookmarks_7d": { "type": "float32", "source": "item_store", "field": "i_bmk_7d", "default": 0.0 } } }""")]
     [InlineData("""{ "columns": { "score.extra": { "type": "float32", "default": 0.0 } }, "derived_features": { "item.x": { "type": "float32", "expr": "1.0" } } }""")]
+    // Review 34: switching a node's op deletes the old operator's config members, which the new one's schema does not have.
+    [InlineData("""{ "nodes": { "rank_sort": { "op": "ExpressionFilter@1", "config": { "score_col": null, "k": null, "predicate": "true" } } } }""")]
     public void TheExperimentSchema_AcceptsMergePatches(string patch)
     {
         var errors = SchemaCheck.Errors(ExperimentSchema.Value, Experiment(patch));
@@ -184,14 +186,15 @@ public sealed class EditorSchemaTests
     }
 
     [Theory]
-    [InlineData("""{ "nodes": { "top": { "op": "TopK@1", "config": { "scor_col": "s" } } } }""", "/arms/b/nodes/top/config/scor_col", "")]
+    [InlineData("""{ "nodes": { "top": { "op": "TopK@1", "config": { "scor_col": "s" } } } }""", "/arms/b/nodes/top/config/scor_col", "type")] // only null: a deletion
     [InlineData("""{ "nodes": { "top": { "op": "TopK@1", "config": { "k": "3" } } } }""", "/arms/b/nodes/top/config/k", "type")]
     [InlineData("""{ "nodes": { "top": { "op": "TopK@9" } } }""", "/arms/b/nodes/top/op", "enum")]
-    [InlineData("""{ "nodes": { "safety_filter": { "ordr": 360 } } }""", "/arms/b/nodes/safety_filter/ordr", "")]
+    [InlineData("""{ "nodes": { "safety_filter": { "ordr": 360 } } }""", "/arms/b/nodes/safety_filter/ordr", "type")]
     [InlineData("""{ "nodes": { "safety_filter": { "order": "late" } } }""", "/arms/b/nodes/safety_filter/order", "type")]
     [InlineData("""{ "nodes": null }""", "/arms/b/nodes", "type")]
     [InlineData("""{ "output": { "limit_param": "k" } }""", "/arms/b/output", "")]
-    [InlineData("""{ "features": { "item.x": { "type": "float32", "sorce": "item_store" } } }""", "/arms/b/features/item.x/sorce", "")]
+    [InlineData("""{ "output": null }""", "/arms/b/output", "")] // the sections are a fixed list, never deleted
+    [InlineData("""{ "features": { "item.x": { "type": "float32", "sorce": "item_store" } } }""", "/arms/b/features/item.x/sorce", "type")]
     public void TheExperimentSchema_RejectsMistakesInAPatch(string patch, string at, string keyword)
     {
         var errors = SchemaCheck.Errors(ExperimentSchema.Value, Experiment(patch));

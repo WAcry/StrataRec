@@ -175,8 +175,11 @@ public static class ArtifactSchemas
     /// <summary>
     /// Turns the schema of a value into the schema of an RFC 7396 merge patch of it, in place: no member is required
     /// (an object changes only the members it names), and every value may be <c>null</c> (which deletes it). What the
-    /// value may not be stays: an unknown key or a value of another type is still an error. Array items are not patches
-    /// (a patch replaces an array whole), and an <c>if</c> is a condition, not a value: both are left as they are.
+    /// value may not be stays: an unknown key with a value, or a value of another type, is still an error. An unknown key
+    /// may be <c>null</c>: a patch that switches a node's <c>op</c> deletes the members of the old operator's config, which
+    /// the new one's schema does not have (review 34); deleting a member that is not there changes nothing. Array items
+    /// are not patches (a patch replaces an array whole), and an <c>if</c> is a condition, not a value: both are left as
+    /// they are.
     /// </summary>
     /// <remarks>
     /// Whether a patched entry is new, and must then be complete (design 11.3), depends on the baseline, which a schema of
@@ -200,6 +203,10 @@ public static class ArtifactSchemas
         if (schema["additionalProperties"] is JsonObject additional)
         {
             MergePatch(additional);
+        }
+        else if (schema["additionalProperties"] is JsonValue closed && closed.GetValueKind() == JsonValueKind.False)
+        {
+            schema["additionalProperties"] = new JsonObject { ["type"] = "null" };
         }
 
         foreach (var keyword in Applicators)

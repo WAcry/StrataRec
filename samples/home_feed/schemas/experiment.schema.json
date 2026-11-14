@@ -76,7 +76,9 @@
                   ]
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": {
+                "type": "null"
+              }
             }
           },
           "columns": {
@@ -110,7 +112,9 @@
                   ]
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": {
+                "type": "null"
+              }
             }
           },
           "nodes": {
@@ -231,7 +235,9 @@
                   ]
                 }
               },
-              "additionalProperties": false,
+              "additionalProperties": {
+                "type": "null"
+              },
               "allOf": [
                 {
                   "if": {
@@ -293,7 +299,9 @@
                             }
                           }
                         },
-                        "additionalProperties": false
+                        "additionalProperties": {
+                          "type": "null"
+                        }
                       }
                     }
                   }
@@ -326,7 +334,9 @@
                             ]
                           }
                         },
-                        "additionalProperties": false
+                        "additionalProperties": {
+                          "type": "null"
+                        }
                       }
                     }
                   }
@@ -365,7 +375,9 @@
                             ]
                           }
                         },
-                        "additionalProperties": false
+                        "additionalProperties": {
+                          "type": "null"
+                        }
                       }
                     }
                   }
@@ -452,7 +464,9 @@
                             ]
                           }
                         },
-                        "additionalProperties": false
+                        "additionalProperties": {
+                          "type": "null"
+                        }
                       }
                     }
                   }
@@ -532,7 +546,9 @@
                             ]
                           }
                         },
-                        "additionalProperties": false
+                        "additionalProperties": {
+                          "type": "null"
+                        }
                       }
                     }
                   }
@@ -629,7 +645,9 @@
                             ]
                           }
                         },
-                        "additionalProperties": false
+                        "additionalProperties": {
+                          "type": "null"
+                        }
                       }
                     }
                   }
@@ -733,7 +751,9 @@
                             ]
                           }
                         },
-                        "additionalProperties": false
+                        "additionalProperties": {
+                          "type": "null"
+                        }
                       }
                     }
                   }
@@ -792,7 +812,9 @@
                             ]
                           }
                         },
-                        "additionalProperties": false
+                        "additionalProperties": {
+                          "type": "null"
+                        }
                       }
                     }
                   }
@@ -870,7 +892,9 @@
                             ]
                           }
                         },
-                        "additionalProperties": false
+                        "additionalProperties": {
+                          "type": "null"
+                        }
                       }
                     }
                   }
@@ -913,7 +937,9 @@
                             }
                           }
                         },
-                        "additionalProperties": false
+                        "additionalProperties": {
+                          "type": "null"
+                        }
                       }
                     }
                   }
@@ -1007,7 +1033,9 @@
                             ]
                           }
                         },
-                        "additionalProperties": false
+                        "additionalProperties": {
+                          "type": "null"
+                        }
                       }
                     }
                   }
@@ -1054,7 +1082,9 @@
                             ]
                           }
                         },
-                        "additionalProperties": false
+                        "additionalProperties": {
+                          "type": "null"
+                        }
                       }
                     }
                   }
@@ -1108,7 +1138,9 @@
                             ]
                           }
                         },
-                        "additionalProperties": false
+                        "additionalProperties": {
+                          "type": "null"
+                        }
                       }
                     }
                   }
@@ -1141,7 +1173,9 @@
                   ]
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": {
+                "type": "null"
+              }
             }
           },
           "log_taps": {
@@ -1184,7 +1218,9 @@
                       ]
                     }
                   },
-                  "additionalProperties": false
+                  "additionalProperties": {
+                    "type": "null"
+                  }
                 },
                 "rows": {
                   "type": [
@@ -1218,7 +1254,9 @@
                       ]
                     }
                   },
-                  "additionalProperties": false
+                  "additionalProperties": {
+                    "type": "null"
+                  }
                 },
                 "context": {
                   "type": [
@@ -1258,7 +1296,9 @@
                   ]
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": {
+                "type": "null"
+              }
             }
           },
           "features": {
@@ -1310,7 +1350,9 @@
                   ]
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": {
+                "type": "null"
+              }
             }
           },
           "derived_features": {
@@ -1347,7 +1389,9 @@
                   ]
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": {
+                "type": "null"
+              }
             }
           }
         },

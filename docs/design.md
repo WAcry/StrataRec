@@ -1430,7 +1430,7 @@ flowchart LR
 1. **编写格式**：Git 仓库中的 JSONC（允许注释的 JSON），每个实验一个文件。
 2. **结构定义**：从 C# 配置类型生成 JSON Schema（2020-12 版），C# 类型是唯一的来源。Schema 由服务这个工作区的二进制生成，包含它注册的算子，包括宿主自己的算子：`stratarec schema --out <工作区>/schemas` 为每类文件写一个 `<kind>.schema.json`，`init` 也会写出这些文件，生成的结果随工作区一起提交。每个文件在顶层用 `"$schema": "../schemas/pipeline.schema.json"` 指明自己的 Schema，编辑器（例如 VS Code）据此自动补全、悬停显示说明、即时报错；AI agent 据此生成合法配置。
    - 流水线的 Schema 按节点的 `op` 校验它的 `config`：每个算子一组 `if`/`then`，`op` 是带说明的枚举。
-   - 实验臂的 Schema 是流水线可修改部分的合并补丁形式：没有必填项，任何值都可以是 `null`（删除），对象仍然封闭，拼错的键照样报错。
+   - 实验臂的 Schema 是流水线可修改部分的合并补丁形式：没有必填项，任何值都可以是 `null`（删除），对象里未知的键只能写 `null`（切换 `op` 时删除旧算子的配置），拼错的键带值时照样报错。
    - 二进制升级后 Schema 可能变了，`validate` 发现 `schemas/` 与这个二进制写出的不同时给出警告 `SCHEMAS_STALE`。
 3. **规范形式**：构建时去掉注释和顶层的 `$schema`（它只给编辑器用，不属于产物，不计入内容哈希），按 RFC 8785（JSON Canonicalization Scheme）规范化，再计算 sha256。相同内容总是得到相同哈希，与键顺序和空白无关。
 4. **传输与存储**：规范 JSON 经 zstd 压缩。

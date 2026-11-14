@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Types;
@@ -133,21 +135,34 @@ internal static class Output
 
         var caret = new System.Text.StringBuilder(before.Length + at - start + 1);
         caret.Append(' ', before.Length);
-        for (var i = start; i < at; i++)
+        // By code point (review 34): a mark, a format character or a variation selector takes no cell, whatever block it is
+        // in; then a wide character two (a full-width space) and any other one.
+        for (var i = start; i < at;)
         {
-            var c = line[i];
-            if (c == '\t')
+            if (Rune.DecodeFromUtf16(line.AsSpan(i, at - i), out var rune, out var used) != OperationStatus.Done)
+            {
+                if (char.IsHighSurrogate(line[i]) && i + 1 == at)
+                {
+                    break; // the column is the pair's low surrogate: the caret goes under the character
+                }
+
+                caret.Append(' '); // an unpaired surrogate, drawn as one replacement character
+                i++;
+                continue;
+            }
+
+            i += used;
+            if (rune.Value == '\t')
             {
                 caret.Append('\t');
             }
-            else if (char.IsHighSurrogate(c) || IsWide(c))
+            else if (Rune.GetUnicodeCategory(rune) is UnicodeCategory.NonSpacingMark or UnicodeCategory.EnclosingMark or UnicodeCategory.Format)
             {
-                caret.Append('\u3000'); // a pair is one character: its low surrogate adds nothing
+                // no cell
             }
-            else if (!char.IsLowSurrogate(c) && CharUnicodeInfo.GetUnicodeCategory(c) is not
-                     (UnicodeCategory.NonSpacingMark or UnicodeCategory.EnclosingMark or UnicodeCategory.Format))
+            else
             {
-                caret.Append(' ');
+                caret.Append(IsWide(rune.Value) ? '\u3000' : ' ');
             }
         }
 
@@ -155,10 +170,16 @@ internal static class Output
         return $"    {before}{line[start..end]}{after}\n    {caret}";
     }
 
-    /// <summary>East Asian wide and full-width characters of the BMP, which terminals draw in two cells.</summary>
-    private static bool IsWide(char c) => c is (>= '\u1100' and <= '\u115F') or (>= '\u2E80' and <= '\u303E') or (>= '\u3041' and <= '\u33FF')
-        or (>= '\u3400' and <= '\u4DBF') or (>= '\u4E00' and <= '\u9FFF') or (>= '\uA000' and <= '\uA4CF') or (>= '\uAC00' and <= '\uD7A3')
-        or (>= '\uF900' and <= '\uFAFF') or (>= '\uFE30' and <= '\uFE4F') or (>= '\uFF00' and <= '\uFF60') or (>= '\uFFE0' and <= '\uFFE6');
+    /// <summary>
+    /// East Asian wide and full-width characters, which terminals draw in two cells: the CJK, Hangul and full-width blocks,
+    /// the emoji blocks and the supplementary ideographic planes. Other characters, those of other supplementary blocks
+    /// included, take one.
+    /// </summary>
+    private static bool IsWide(int c) => c is (>= 0x1100 and <= 0x115F) or (>= 0x2E80 and <= 0x303E) or (>= 0x3041 and <= 0x33FF)
+        or (>= 0x3400 and <= 0x4DBF) or (>= 0x4E00 and <= 0x9FFF) or (>= 0xA000 and <= 0xA4CF) or (>= 0xAC00 and <= 0xD7A3)
+        or (>= 0xF900 and <= 0xFAFF) or (>= 0xFE30 and <= 0xFE4F) or (>= 0xFF00 and <= 0xFF60) or (>= 0xFFE0 and <= 0xFFE6)
+        or (>= 0x1F300 and <= 0x1F64F) or (>= 0x1F680 and <= 0x1F6FF) or (>= 0x1F900 and <= 0x1F9FF) or (>= 0x1FA70 and <= 0x1FAFF)
+        or (>= 0x20000 and <= 0x3FFFD);
 
     public static void WriteDiagnostic(Utf8JsonWriter json, ConfigDiagnostic d, SourceLocation? location = null)
     {
