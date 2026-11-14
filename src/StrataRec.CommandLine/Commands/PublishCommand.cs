@@ -6,9 +6,9 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
-/// <c>stratarec publish</c>: the smallest release controller of design 10.1 item 3, without emergency stops or staged
-/// rollout. It points the manifest's (pipeline, environment) at the manifest, in the pointer files of the store's
-/// directory (<see cref="FileSystemManifestSource"/>), which nodes serving releases poll.
+/// <c>stratarec publish</c>: the smallest release controller of design 10.1 item 3, without staged rollout (its emergency
+/// stop is <see cref="RevokeCommand"/>). It points the manifest's (pipeline, environment) at the manifest, in the pointer
+/// files of the store's directory (<see cref="FileSystemManifestSource"/>), which nodes serving releases poll.
 /// </summary>
 /// <remarks>
 /// <para>A pointer only moves forward and only to something a node can read: every artifact of the manifest must be in the
@@ -131,47 +131,25 @@ internal static class PublishCommand
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        using var turn = TakeTurn(path, diagnostics, id);
+        using var turn = TakeTurn(path, Label(id), diagnostics);
         if (turn is null)
         {
             return null;
         }
 
         (string Id, long Seq)? previous = null;
-        string? current;
-        try
+        var (readPointer, pointed) = await PublishedRelease.ReadAsync(pointers, path, store, manifest.PipelineId, manifest.Environment,
+            "the sequence of what is published", "or delete the pointer to publish without comparing with the manifest it names", diagnostics, cancellationToken)
+            .ConfigureAwait(false);
+        if (!readPointer)
         {
-            current = await pointers.GetManifestIdAsync(manifest.PipelineId, manifest.Environment, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
-        {
-            diagnostics.Error("POINTER_UNREADABLE", path, string.Empty, ex.Message,
-                "fix the pointer, or delete it to publish without comparing with the manifest it named");
             return null;
         }
 
         var floor = manifest.MinAcceptedSeq;
-        if (current is not null)
+        if (pointed is { } last)
         {
-            var unread = new DiagnosticBag();
-            if (await ManifestBuilder.ReadAsync(store, current, unread, cancellationToken).ConfigureAwait(false) is not { } published)
-            {
-                diagnostics.AddRange(unread.Items);
-                diagnostics.Error("POINTER_MANIFEST_UNREADABLE", path, string.Empty,
-                    $"The pointer names manifest '{current}', which the store cannot read, so the sequence of what is published is unknown.",
-                    "restore that manifest to the store, or delete the pointer to publish without comparing with it");
-                return null;
-            }
-
-            // Its sequence and floor say nothing of this pipeline's releases when it is another's (review 37).
-            if (!ManifestBuilder.CheckIdentity(published, current, manifest.PipelineId, manifest.Environment, diagnostics))
-            {
-                diagnostics.Error("POINTER_MANIFEST_FOREIGN", path, string.Empty,
-                    $"The pointer names manifest '{current}' of another pipeline or environment, so the sequence of what is published is unknown.",
-                    "delete the pointer to publish without comparing with it");
-                return null;
-            }
-
+            var (current, published) = last;
             previous = (current, published.Seq);
             if (current == id)
             {
@@ -218,7 +196,7 @@ internal static class PublishCommand
     /// with the process), so two publishes of one pointer on this machine cannot both compare with the same old pointer.
     /// Null after reporting that another publish holds it.
     /// </summary>
-    private static FileStream? TakeTurn(string pointer, DiagnosticBag diagnostics, string id)
+    internal static FileStream? TakeTurn(string pointer, string artifact, DiagnosticBag diagnostics)
     {
         var path = Path.Combine(Path.GetDirectoryName(pointer)!, "." + Path.GetFileName(pointer) + ".lock");
         try
@@ -227,7 +205,7 @@ internal static class PublishCommand
         }
         catch (IOException ex)
         {
-            diagnostics.Error("PUBLISH_BUSY", Label(id), string.Empty, $"Another publish of this pointer is running ({ex.Message}).",
+            diagnostics.Error("PUBLISH_BUSY", artifact, string.Empty, $"Another publish of this pointer is running ({ex.Message}).",
                 "wait for it to end and publish again");
             return null;
         }

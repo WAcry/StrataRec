@@ -80,7 +80,7 @@ public static class ManifestBuilder
             Seq = seq,
             MinAcceptedSeq = minAcceptedSeq,
             Previous = previous,
-            Requires = RequiredCapabilities(request),
+            Requires = RequiredCapabilities(request.Pipeline, request.Experiments, request.Bindings),
             Artifacts = new ManifestArtifacts
             {
                 Catalog = await store.PutAsync(catalog!.Document, cancellationToken).ConfigureAwait(false),
@@ -90,6 +90,62 @@ public static class ManifestBuilder
                 Policy = policy,
             },
             Experiments = experiments,
+        };
+    }
+
+    /// <summary>
+    /// The emergency stop of design 10.6: <paramref name="manifest"/> without <paramref name="experiments"/>, as the next
+    /// release (its <c>seq</c> one more, <paramref name="manifestId"/> its <c>previous</c>) that revokes every earlier one
+    /// (<c>min_accepted_seq</c> its own <c>seq</c>), so a node that restarts does not bring them back from a last-known-good
+    /// manifest. Nothing is compiled or validated: removing experiments keeps a valid release valid (design 11.6), which is
+    /// what makes the stop take seconds. The artifacts are read as a node reads them, and the capabilities required are
+    /// computed again: the experiment that needs a capability a rolled-back binary lacks is removed this way (design 10.4).
+    /// Null after reporting errors.
+    /// </summary>
+    /// <param name="experiments">Experiments of the manifest; a name it does not release changes nothing.</param>
+    public static async ValueTask<ReleaseManifest?> RevokeAsync(
+        ReleaseManifest manifest,
+        string manifestId,
+        IReadOnlyCollection<string> experiments,
+        IArtifactStore store,
+        DiagnosticBag diagnostics,
+        CancellationToken cancellationToken = default)
+    {
+        if (await LoadAsync(manifest, manifestId, store, diagnostics, cancellationToken).ConfigureAwait(false) is not { } request)
+        {
+            return null;
+        }
+
+        var revoked = new HashSet<string>(experiments, StringComparer.Ordinal);
+        var kept = new List<ExperimentPlacement>(request.Experiments.Count);
+        foreach (var placement in request.Experiments)
+        {
+            if (!revoked.Contains(placement.Experiment.ExperimentId))
+            {
+                kept.Add(placement);
+            }
+        }
+
+        var entries = new Dictionary<string, ManifestExperiment>(StringComparer.Ordinal);
+        foreach (var (name, entry) in manifest.Experiments)
+        {
+            if (!revoked.Contains(name))
+            {
+                entries[name] = entry;
+            }
+        }
+
+        var seq = manifest.Seq + 1;
+        return new ReleaseManifest
+        {
+            PipelineId = manifest.PipelineId,
+            Environment = manifest.Environment,
+            Seq = seq,
+            MinAcceptedSeq = seq,
+            Previous = manifestId,
+            Requires = RequiredCapabilities(request.Pipeline, kept, request.Bindings),
+            Artifacts = manifest.Artifacts,
+            Experiments = entries,
         };
     }
 
@@ -336,15 +392,15 @@ public static class ManifestBuilder
     internal static string Label(string manifestId) => "manifest:" + manifestId;
 
     /// <summary>Operators, connectors and clients named by the configuration (design 10.4).</summary>
-    private static List<string> RequiredCapabilities(PlanCompileRequest request)
+    private static List<string> RequiredCapabilities(PipelineArtifact pipeline, IReadOnlyList<ExperimentPlacement> experiments, SourceBindingArtifact bindings)
     {
         var required = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (var (_, node) in request.Pipeline.Nodes)
+        foreach (var (_, node) in pipeline.Nodes)
         {
             required.Add(node.Op);
         }
 
-        foreach (var placement in request.Experiments)
+        foreach (var placement in experiments)
         {
             foreach (var (_, patch) in placement.Experiment.Arms)
             {
@@ -361,7 +417,7 @@ public static class ManifestBuilder
             }
         }
 
-        foreach (var type in request.Bindings.RequiredTypes())
+        foreach (var type in bindings.RequiredTypes())
         {
             required.Add(type);
         }

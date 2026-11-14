@@ -100,6 +100,7 @@ public static class StrataRecCommandLine
         root.Add(ValidateCommand.Create(environment));
         root.Add(BuildCommand.Create(environment));
         root.Add(PublishCommand.Create(environment));
+        root.Add(RevokeCommand.Create(environment));
         root.Add(ExplainPlanCommand.Create(environment));
         root.Add(RunCommand.Create(environment));
         root.Add(ReplayCommand.Create(environment));

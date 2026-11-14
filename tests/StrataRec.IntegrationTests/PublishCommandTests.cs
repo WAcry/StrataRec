@@ -194,7 +194,7 @@ public sealed class PublishCommandTests
         var (code, _, publishErrors) = await Publish(store, second);
         Assert.Equal(1, code);
         Assert.Contains("error POINTER_MANIFEST_FOREIGN", publishErrors);
-        Assert.Contains("hint: delete the pointer to publish without comparing with it", publishErrors);
+        Assert.Contains("hint: fix the pointer, or delete the pointer to publish without comparing with the manifest it names", publishErrors);
         Assert.Equal(foreign, await pointers.GetManifestIdAsync("home_feed", "local", CancellationToken.None));
         File.Delete(pointers.GetPointerPath("home_feed", "local"));
         Assert.Equal(0, (await Publish(store, second)).Code);

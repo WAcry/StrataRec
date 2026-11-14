@@ -1,4 +1,5 @@
 using System.CommandLine;
+using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Artifacts.Storage;
 using StrataRec.Experiments.Compilation;
@@ -19,6 +20,10 @@ namespace StrataRec.CommandLine.Commands;
 /// <c>stratarec diff --to</c> compares with; the first release is 1. So build and publish follow each other without
 /// anyone keeping count. A configuration that is the published one's, but for those fields, is no new release: build
 /// writes the published manifest, which publish then finds published already, so a pipeline can run both again.</para>
+/// <para>An experiment that <c>stratarec revoke</c> removed stays out (design 10.6): while the published manifest is a
+/// revocation, a build that releases one of the experiments it revoked, unchanged, fails at the release file's entry, so a
+/// release that follows the stop (a routine one, from CI) does not bring the stopped experiment back. A changed experiment
+/// is the owner's fix and is released; <c>--restore</c> releases one unchanged.</para>
 /// <para>A release controller that numbers releases itself passes <c>--seq</c>, and the store's pointers are not read.</para>
 /// </remarks>
 internal static class BuildCommand
@@ -48,19 +53,27 @@ internal static class BuildCommand
                 result.AddError($"--seq must be from 1 to {MaxSeq} (2^53 - 1, the largest integer a manifest's JSON writes exactly).");
             }
         });
-        var command = new Command("build", "Validate, upload artifacts by content hash and emit a release manifest. Exits with 1 when the configuration has errors.") { config, environment, pipeline, store, manifest, seq };
+        var restore = new Option<string[]>("--restore")
+        {
+            Description = "Release this experiment again although 'stratarec revoke' removed it and it has not changed since (without it, build refuses to). Repeatable.",
+            Arity = ArgumentArity.OneOrMore,
+            AllowMultipleArgumentsPerToken = true,
+        };
+        var command = new Command("build", "Validate, upload artifacts by content hash and emit a release manifest. Exits with 1 when the configuration has errors " +
+            "or releases a revoked experiment unchanged.") { config, environment, pipeline, store, manifest, seq, restore };
         command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(config)!, parse.GetValue(environment)!, parse.GetValue(pipeline),
             parse.GetValue(store)!, parse.GetValue(manifest), parse.GetValue(seq), parse.InvocationConfiguration.Output, cancellationToken,
-            parse.InvocationConfiguration.Error));
+            parse.InvocationConfiguration.Error, parse.GetValue(restore)));
         return command;
     }
 
     /// <param name="errors">Where diagnostics and the manifest id go; standard error by default.</param>
     /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
     /// <param name="seq">The manifest's sequence number; null for the next release (see remarks).</param>
+    /// <param name="restore">Revoked experiments to release again unchanged (see remarks).</param>
     internal static async Task<int> RunAsync(
         PlanEnvironment provided, string config, string environment, string? pipeline, string storeRoot, string? manifestPath, long? seq, TextWriter output,
-        CancellationToken cancellationToken, TextWriter? errors = null)
+        CancellationToken cancellationToken, TextWriter? errors = null, string[]? restore = null)
     {
         errors ??= Console.Error;
         var diagnostics = new DiagnosticBag();
@@ -74,6 +87,7 @@ internal static class BuildCommand
         var store = new FileSystemArtifactStore(storeRoot);
         var pipelineId = request.Pipeline.PipelineId;
         (string Id, ReleaseManifest Manifest)? published = null;
+        long next = 1;
         if (seq is null)
         {
             var (read, pointed) = await ReadPublishedAsync(storeRoot, store, pipelineId, environment, diagnostics, cancellationToken).ConfigureAwait(false);
@@ -83,11 +97,28 @@ internal static class BuildCommand
                 return 1;
             }
 
+            if (pointed is { } last)
+            {
+                if (PublishedRelease.NextSeq(last.Id, last.Manifest, diagnostics) is not { } following)
+                {
+                    Output.Diagnostics(diagnostics.Items, "text", errors);
+                    return 1;
+                }
+
+                next = following;
+                if (!await KeepsRevokedOutAsync(workspace, request, environment, store, last, restore ?? Array.Empty<string>(), diagnostics, cancellationToken)
+                        .ConfigureAwait(false))
+                {
+                    Output.Diagnostics(diagnostics.Items, "text", errors, locator: DiagnosticLocator.ForWorkspace(config));
+                    return 1;
+                }
+            }
+
             published = pointed;
         }
 
         var manifest = published is { } current
-            ? await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, store, diagnostics, current.Manifest.Seq + 1, current.Manifest.MinAcceptedSeq,
+            ? await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, store, diagnostics, next, current.Manifest.MinAcceptedSeq,
                 current.Id, cancellationToken).ConfigureAwait(false)
             : await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, store, diagnostics, seq ?? 1, cancellationToken: cancellationToken).ConfigureAwait(false);
         if (manifest is null)
@@ -115,6 +146,12 @@ internal static class BuildCommand
         else
         {
             await File.WriteAllTextAsync(manifestPath, text + "\n", cancellationToken).ConfigureAwait(false);
+        }
+
+        if (diagnostics.Items.Count > 0)
+        {
+            // The warnings 'validate' prints: a release is where they matter most.
+            Output.Diagnostics(diagnostics.Items, "text", errors, locator: DiagnosticLocator.ForWorkspace(config));
         }
 
         errors.WriteLine($"manifest {manifestId} (seq {manifest.Seq}, {Output.Count(manifest.Requires.Count, "capability", "capabilities")}, " +
@@ -150,51 +187,60 @@ internal static class BuildCommand
         string storeRoot, FileSystemArtifactStore store, string pipelineId, string environment, DiagnosticBag diagnostics, CancellationToken cancellationToken)
     {
         var pointers = new FileSystemManifestSource(storeRoot);
-        string? current;
+        string path;
         try
         {
-            current = await pointers.GetManifestIdAsync(pipelineId, environment, cancellationToken).ConfigureAwait(false);
+            path = pointers.GetPointerPath(pipelineId, environment);
         }
-        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException)
+        catch (ArgumentException ex)
         {
             diagnostics.Error("POINTER_UNREADABLE", storeRoot, string.Empty,
-                $"The pointer of pipeline '{pipelineId}' in environment '{environment}' could not be read, so the next sequence is unknown: {ex.Message}",
-                "fix the pointer ('stratarec publish' writes it), or pass --seq");
+                $"Pipeline '{pipelineId}' in environment '{environment}' has no pointer file name, so the next sequence is unknown: {ex.Message}",
+                "name environments with letters, digits, '_', '-' and '.', or pass --seq");
             return (false, null);
         }
 
-        if (current is null)
+        return await PublishedRelease.ReadAsync(pointers, path, store, pipelineId, environment, "the next sequence", "or pass --seq", diagnostics, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Whether this build keeps out the experiments the published revocations removed (see remarks): false, after
+    /// reporting at the release file's entry, when it releases one of them as it was and <paramref name="restore"/> does
+    /// not name it. A revocation whose history cannot be read is warned about, and keeps nothing out.
+    /// </summary>
+    private static async Task<bool> KeepsRevokedOutAsync(
+        ConfigWorkspace workspace, PlanCompileRequest request, string environment, IArtifactStore store, (string Id, ReleaseManifest Manifest) published,
+        string[] restore, DiagnosticBag diagnostics, CancellationToken cancellationToken)
+    {
+        var (revoked, unread) = await PublishedRelease.RevokedAsync(store, published.Id, published.Manifest, cancellationToken).ConfigureAwait(false);
+        if (unread is not null)
         {
-            return (true, null);
+            diagnostics.Warning("REVOCATIONS_UNKNOWN", "manifest:" + published.Id, "/previous",
+                $"The published manifest revokes earlier ones, and manifest '{unread}' before it cannot be read: what the revocations removed is not known, " +
+                "and this build does not keep it out.",
+                "restore that manifest to the store");
         }
 
-        var read = new DiagnosticBag();
-        if (await ManifestBuilder.ReadAsync(store, current, read, cancellationToken).ConfigureAwait(false) is not { } published)
+        var releaseFile = workspace.Releases.TryGetValue(request.Pipeline.PipelineId + "/" + environment, out var release)
+            ? release.Path
+            : "releases/" + request.Pipeline.PipelineId + "." + environment + ".jsonc";
+        var kept = true;
+        foreach (var placement in request.Experiments)
         {
-            diagnostics.AddRange(read.Items);
-            diagnostics.Error("POINTER_MANIFEST_UNREADABLE", pointers.GetPointerPath(pipelineId, environment), string.Empty,
-                $"The pointer names manifest '{current}', which the store cannot read, so the next sequence is unknown.",
-                "restore that manifest to the store, or pass --seq");
-            return (false, null);
+            var name = placement.Experiment.ExperimentId;
+            if (revoked.TryGetValue(name, out var revocation)
+                && Array.IndexOf(restore, name) < 0
+                && ContentHash.Compute(workspace.Experiments[name].Document) == revocation.Artifact)
+            {
+                diagnostics.Error("EXPERIMENT_REVOKED", releaseFile, "/experiments/" + JsonPointer.Escape(name),
+                    $"Experiment '{name}' was revoked by manifest '{revocation.ManifestId}' (seq {revocation.Seq}), which is published, and this build " +
+                    "releases it again as it was.",
+                    $"remove it here until it is fixed (a changed experiment is released), or pass --restore {name} to release it as it is");
+                kept = false;
+            }
         }
 
-        // Its sequence, floor and id say nothing of this pipeline's releases when it is another's (review 37).
-        if (!ManifestBuilder.CheckIdentity(published, current, pipelineId, environment, diagnostics))
-        {
-            diagnostics.Error("POINTER_MANIFEST_FOREIGN", pointers.GetPointerPath(pipelineId, environment), string.Empty,
-                $"The pointer names manifest '{current}' of another pipeline or environment, so the next sequence is unknown.",
-                "fix the pointer, or pass --seq");
-            return (false, null);
-        }
-
-        if (published.Seq >= MaxSeq)
-        {
-            diagnostics.Error("SEQ_EXHAUSTED", "manifest:" + current, "/seq",
-                $"The published manifest has sequence {published.Seq}: the next is beyond {MaxSeq} (2^53 - 1), the largest a manifest's JSON writes exactly.",
-                "sequence numbers end there: a controller that numbers releases by time uses milliseconds or seconds, not finer units");
-            return (false, null);
-        }
-
-        return (true, (current, published));
+        return kept;
     }
 }
