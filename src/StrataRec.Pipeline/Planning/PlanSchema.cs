@@ -173,7 +173,6 @@ public sealed class PlanSchema
     private readonly Dictionary<string, ParamLeaf> _params = new(StringComparer.Ordinal);
     private readonly List<ParamLeaf> _paramList = new();
     private readonly Dictionary<string, ILookupTable> _tables = new(StringComparer.Ordinal);
-    private readonly HashSet<(string Node, int Logical)> _versionReferences = new();
 
     public PlanSchema(EntityKeyType keyType)
     {
@@ -207,8 +206,6 @@ public sealed class PlanSchema
     public IReadOnlyList<ParamLeaf> Params => _paramList;
 
     public int SlotCount => _slotTypes.Count;
-
-    public IReadOnlyCollection<(string Node, int Logical)> VersionReferences => _versionReferences;
 
     public TableSchema CreateTableSchema() => new(KeyType, _slotTypes);
 
@@ -382,7 +379,6 @@ public sealed class PlanSchema
                         return false;
                     }
 
-                    schema._versionReferences.Add((node, versioned.Id));
                     var slot = schema.GetNodeSlot(node, versioned);
                     symbol = new Symbol(SymbolKind.Column, name, versioned.Type.AsNullable(), versioned.Id, slot);
                     return true;
