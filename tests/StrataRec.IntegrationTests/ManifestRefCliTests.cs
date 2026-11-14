@@ -350,7 +350,7 @@ public sealed class ManifestRefCliTests
         (code, _, errors) = await Run(Path.Combine(root, "requests", "user_1001.json"), manifest: relativeId, store: store);
         Assert.Equal(1, code);
         Assert.Contains("author_snapshot", errors);
-        Assert.Contains($"relative paths in the manifest's bindings resolve against the current directory, {Environment.CurrentDirectory}", errors);
+        Assert.Contains($"relative paths in a manifest's bindings resolve against the current directory, {Environment.CurrentDirectory}", errors);
 
         // 'primary' falls back to 'backup', which a run on primary's manifest does not load.
         var fallback = ReviewRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);

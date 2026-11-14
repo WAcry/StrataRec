@@ -107,6 +107,11 @@ internal static class BuildCommand
         errors.WriteLine($"manifest {manifestId} (seq {manifest.Seq}, {Output.Count(manifest.Requires.Count, "capability", "capabilities")}, " +
                          $"{Output.Count(manifest.Experiments.Count, "experiment")})" +
                          (unchanged ? ": unchanged, the release the pointer names has this configuration" : string.Empty));
+        if (!unchanged)
+        {
+            errors.WriteLine($"publish it with: stratarec publish -s {InitCommand.Quote(storeRoot)} {manifestId}");
+        }
+
         return 0;
     }
 

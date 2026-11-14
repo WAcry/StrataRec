@@ -148,10 +148,9 @@ internal static class RunCommand
         if (diagnostics.HasErrors || !engine.TryGetRequestSchema(pipelineId, out var schema))
         {
             Output.Diagnostics(diagnostics.Items, "text", errors, locator: locator);
-            if (reference.IsManifest)
+            if (reference.IsManifest && ConfigRef.CurrentDirectoryNote(diagnostics.Items) is { } note)
             {
-                // A manifest has no root: the file a binding names was looked for here, which a reader may not expect.
-                errors.WriteLine($"relative paths in the manifest's bindings resolve against the current directory, {Environment.CurrentDirectory}");
+                errors.WriteLine(note);
             }
 
             return 1;

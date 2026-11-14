@@ -145,6 +145,7 @@ public sealed class PublishCommandTests
         Assert.Equal(flooredId, ManifestBuilder.ContentId(ManifestStores.Read(file)));
         Assert.Contains("(seq 3, ", errors.ToString());
         Assert.Contains(": unchanged, the release the pointer names has this configuration", errors.ToString());
+        Assert.DoesNotContain("publish it with", errors.ToString()); // it is
         Assert.Contains("is published already", (await Publish(store, file)).Output);
 
         // Changed: seq 4, the floor kept, the published manifest as previous; diff --to compares with it.
@@ -174,6 +175,7 @@ public sealed class PublishCommandTests
             errors.ToString());
         var manifest = ManifestStores.Read(file);
         var id = ManifestBuilder.ContentId(manifest);
+        Assert.EndsWith($"publish it with: stratarec publish -s {InitCommand.Quote(store)} {id}", errors.ToString().TrimEnd());
         Assert.Equal(0, (await Publish(store, id)).Code);
         return (id, manifest);
     }

@@ -270,6 +270,10 @@ internal sealed class ReplayEngines : IAsyncDisposable
     {
         _errors.WriteLine($"manifest {source} of pipeline '{pipeline}', recorded by a bundle, does not load from {_store}:");
         Output.Diagnostics(diagnostics.Items, "text", _errors);
+        if (ConfigRef.CurrentDirectoryNote(diagnostics.Items) is { } note)
+        {
+            _errors.WriteLine(note);
+        }
         foreach (var d in diagnostics.Items)
         {
             if (d.IsError)

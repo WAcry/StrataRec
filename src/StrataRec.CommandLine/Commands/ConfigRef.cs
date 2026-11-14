@@ -67,6 +67,31 @@ internal sealed class ConfigRef
     /// </summary>
     public DiagnosticLocator? Locator(string prefix = "") => IsManifest ? null : new DiagnosticLocator().Add(prefix, Text);
 
+    /// <summary>
+    /// The line to print after the errors of a manifest that did not load when one names a path in the current directory:
+    /// a manifest has no root, so the relative paths of its bindings resolved there, which a reader who sees only the
+    /// absolute path may not expect (decisions). Null when no error names one.
+    /// </summary>
+    public static string? CurrentDirectoryNote(IReadOnlyList<ConfigDiagnostic> diagnostics) =>
+        CurrentDirectoryNote(diagnostics, static d => d.IsError ? d.Message : null);
+
+    /// <summary>The same for an error's text.</summary>
+    public static string? CurrentDirectoryNote(string error) => CurrentDirectoryNote([error], static text => text);
+
+    private static string? CurrentDirectoryNote<T>(IReadOnlyList<T> errors, Func<T, string?> message)
+    {
+        var directory = Environment.CurrentDirectory;
+        foreach (var error in errors)
+        {
+            if (message(error) is { } text && text.Contains(directory, StringComparison.Ordinal))
+            {
+                return $"relative paths in a manifest's bindings resolve against the current directory, {directory}: run the command where the node runs";
+            }
+        }
+
+        return null;
+    }
+
     public override string ToString() => Text;
 
     /// <summary>A workspace directory (<c>-c</c>); whether it exists is reported when it loads, as a workspace error.</summary>

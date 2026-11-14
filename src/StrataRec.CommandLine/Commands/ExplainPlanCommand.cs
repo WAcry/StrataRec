@@ -62,6 +62,11 @@ internal static class ExplainPlanCommand
         if (compilation?.Plan is not { } plan)
         {
             Output.Diagnostics(diagnostics.Items, format, errors, locator: reference.Locator());
+            if (format == "text" && reference.IsManifest && ConfigRef.CurrentDirectoryNote(diagnostics.Items) is { } note)
+            {
+                errors.WriteLine(note);
+            }
+
             return 1;
         }
 

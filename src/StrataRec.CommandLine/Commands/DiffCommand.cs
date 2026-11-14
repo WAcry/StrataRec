@@ -92,6 +92,11 @@ internal static class DiffCommand
             }
 
             Output.Diagnostics(diagnostics.Items, format, errors, locator: locator);
+            if (format == "text" && (fromRef.IsManifest || toRef.IsManifest) && ConfigRef.CurrentDirectoryNote(diagnostics.Items) is { } note)
+            {
+                errors.WriteLine(note);
+            }
+
             return 2;
         }
 
