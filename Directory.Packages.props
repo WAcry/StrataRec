@@ -13,8 +13,7 @@
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.15" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.15" />
     <PackageVersion Include="System.CommandLine" Version="2.0.15" />
-    <!-- 2.x, not 3.x: 3.0 is a new major (RESPite transport) and too new to run in production yet. -->
-    <PackageVersion Include="StackExchange.Redis" Version="2.13.17" />
+    <PackageVersion Include="StackExchange.Redis" Version="3.4.35" />
     <!-- Build-time analyzers -->
     <!-- 3.3.4, not 5.x: 5.x references Roslyn 4.12 and fails with CS9057 on the .NET 8 SDK's compiler (4.11).
          3.3.4 enforces RS0030 the same way on SDK 8 and newer (CI builds with both). -->
