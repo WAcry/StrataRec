@@ -88,9 +88,9 @@ public static class ReplayBundleFile
                 reader.Skip();
             }
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
-            // Malformed JSON: the full parse reports it with its position.
+            // Malformed JSON, or a format string that is not valid Unicode: the full parse reports it with its position.
         }
 
         return null;

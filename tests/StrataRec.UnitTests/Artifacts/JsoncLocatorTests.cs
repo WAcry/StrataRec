@@ -101,6 +101,31 @@ public class JsoncLocatorTests
         Assert.Equal(new JsoncLocation(1, written + 1, true), Locate(text, "/expr", offset));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)] // the low surrogate: review 32 #8 returned the column of the next character
+    [InlineData(2)]
+    public void AnOffsetInARawNonBmpCharacter_IsTheColumnOfThatUtf16Unit(int offset)
+    {
+        const string text = "{ \"expr\": \"😀x\" }";
+        var first = text.IndexOf("😀", StringComparison.Ordinal) + 1;
+
+        Assert.Equal(new JsoncLocation(1, first + offset, true), Locate(text, "/expr", offset));
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(1, 6)] // the second escape of the pair
+    [InlineData(2, 12)]
+    public void AnOffsetInAnEscapedSurrogatePair_IsTheColumnOfThatEscape(int offset, int columns)
+    {
+        var backslash = (char)92;
+        var text = "{ \"expr\": \"" + backslash + "ud83d" + backslash + "ude00x\" }";
+        var first = text.IndexOf(backslash) + 1;
+
+        Assert.Equal(new JsoncLocation(1, first + columns, true), Locate(text, "/expr", offset));
+    }
+
     [Fact]
     public void AnOffsetIntoAString_OnALaterLine()
     {

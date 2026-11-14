@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 
@@ -46,6 +47,62 @@ public class JsonBindingErrorsTests
     }
 
     public sealed class Empty;
+
+    [JsonPolymorphic]
+    [JsonDerivedType(typeof(Counted), "counted")]
+    public class Shape;
+
+    public sealed class Counted : Shape
+    {
+        public int Count { get; init; }
+    }
+
+    [JsonPolymorphic]
+    [JsonDerivedType(typeof(Circle), "circle")]
+    public abstract class AbstractShape;
+
+    public sealed class Circle : AbstractShape
+    {
+        public double Radius { get; init; }
+    }
+
+    public sealed class Shapes
+    {
+        public Shape? Item { get; init; }
+
+        public List<AbstractShape> Drawn { get; init; } = new();
+    }
+
+    public enum Speed
+    {
+        Fast,
+        Slow,
+        VeryFast,
+    }
+
+    [JsonConverter(typeof(JsonStringEnumConverter<Gear>))]
+    public enum Gear
+    {
+        Low,
+        High,
+    }
+
+    public sealed class SnakeSpeedConverter() : JsonStringEnumConverter<Speed>(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false);
+
+    public sealed class Modes
+    {
+        [JsonConverter(typeof(JsonStringEnumConverter<Speed>))]
+        public Speed? Mode { get; init; }
+
+        [JsonConverter(typeof(SnakeSpeedConverter))]
+        public Speed Snake { get; init; }
+
+        public Gear Gear { get; init; }
+
+        public List<Gear> Gears { get; init; } = new();
+
+        public Speed Plain { get; init; }
+    }
 
     // ---- unknown keys ------------------------------------------------------------------------------------------------
 
@@ -211,10 +268,144 @@ public class JsonBindingErrorsTests
     [Fact]
     public void PathSegments_ReadsDotsBracketsAndIndexes()
     {
-        var segments = JsonBindingErrors.PathSegments("$.nodes['a.b'].config.keys[2]", null);
+        var segments = JsonBindingErrors.PathSegments("$.nodes['a.b'].config.keys[2]", null, out var certain);
 
+        Assert.True(certain);
         Assert.Equal(new[] { ("nodes", false), ("a.b", false), ("config", false), ("keys", false), ("2", true) },
             segments.Select(s => (s.Token, s.IsIndex)));
+    }
+
+    [Fact]
+    public void AKeyThatLooksLikePathSyntax_NextToItsShortPrefix_IsTheOneTheRestOfThePathFits()
+    {
+        // Review 32 #5: with "a" beside "a'].b", the error in "a'].b" was an unknown key "b']" in entry "a".
+        var ex = Assert.Throws<ArtifactFormatException>(() => ArtifactSerializer.Deserialize<PipelineArtifact>(
+            """{"pipeline_id":"p","nodes":{"a":{"op":"TopK@1","order":1},"a'].b":{"op":"TopK@1","order":"bad"}}}"""));
+
+        Assert.Equal("/nodes/a'].b/order", ex.Pointer);
+        Assert.Equal("""'order' must be an integer or null, got the string "bad".""", ex.Reason);
+    }
+
+    [Fact]
+    public void APathTheDocumentFitsTwoWays_IsReportedWhereBothReadingsAgree_WithoutAnUnknownKey()
+    {
+        // Both "named/a'].b/count" and "named/a/b']/count" exist; the error is in the first, but the path cannot say so.
+        var document = JsonNode.Parse("""
+            { "model": "m", "named": { "a'].b": { "name": "n", "count": "x" }, "a": { "name": "n", "b']": { "count": 1 } } } }
+            """);
+
+        Assert.False(ArtifactSerializer.TryBind<Sample>(document, "the sample", out _, out var error));
+
+        Assert.Equal("/named", error.Pointer);
+        Assert.Equal("A value inside 'named' is not valid; a key there contains \"']\", so the error cannot say which value.", error.Message);
+        Assert.Equal(new[] { "named" },
+            JsonBindingErrors.PathSegments("$.named['a'].b'].count", document, out var certain).Select(s => s.Token));
+        Assert.False(certain);
+    }
+
+    // ---- the contract the serializer used: polymorphism and converters ------------------------------------------------
+
+    [Theory]
+    [InlineData("""{ "$type": "counted", "count": "bad" }""", "/count", """'count' must be an integer, got the string "bad".""", null)]
+    [InlineData("""{ "$type": "counted", "cout": 1 }""", "/cout", "Unknown key 'cout' in the shape.", "did you mean 'count'?")]
+    [InlineData("""{ "$type": "square" }""", "/$type", """'$type' must be one of "counted", got the string "square".""", null)]
+    public void APolymorphicObject_IsReadWithTheTypeItsDiscriminatorSelects(string json, string pointer, string message, string? hint)
+    {
+        // Review 32 #6: the base contract (no properties) made count an unknown key, with the hint "it takes no keys".
+        var error = Error<Shape>(json, "the shape");
+
+        Assert.Equal((pointer, message, hint), (error.Pointer, error.Message, error.Hint));
+    }
+
+    [Fact]
+    public void APolymorphicObject_Nested_IsReadWithItsDerivedType()
+    {
+        var error = Error<Shapes>("""{ "item": { "$type": "counted", "count": "bad" } }""");
+
+        Assert.Equal("/item/count", error.Pointer);
+        Assert.Equal("""'count' must be an integer, got the string "bad".""", error.Message);
+    }
+
+    [Fact]
+    public void AnAbstractPolymorphicObject_WithoutItsDiscriminator_SaysWhichKeyIsMissing()
+    {
+        // The serializer throws NotSupportedException here, not JsonException: it must not escape as one.
+        var error = Error<Shapes>("""{ "drawn": [{ "$type": "circle", "radius": 1 }, { "radius": 2 }] }""");
+
+        Assert.Equal("/drawn/1", error.Pointer);
+        Assert.Equal("'$type' is required in element 1 of 'drawn'.", error.Message);
+        Assert.Equal("'$type' names the kind of object: one of \"circle\"", error.Hint);
+    }
+
+    [Theory]
+    [InlineData("""{ "mode": "Medium" }""", "/mode", """'mode' must be one of "Fast", "Slow", "VeryFast" or null, got the string "Medium".""")]
+    [InlineData("""{ "snake": 1 }""", "/snake", """'snake' must be one of "fast", "slow", "very_fast", got the number 1.""")] // no integers allowed
+    [InlineData("""{ "gear": "Neutral" }""", "/gear", """'gear' must be one of "Low", "High", got the string "Neutral".""")] // converter on the type
+    [InlineData("""{ "gears": ["High", "Top"] }""", "/gears/1", """Element 1 of 'gears' must be one of "Low", "High", got the string "Top".""")]
+    [InlineData("""{ "plain": "Fast" }""", "/plain", """'plain' must be an integer, got the string "Fast".""")] // the serializer's own enum converter reads numbers
+    public void AnEnum_IsDescribedByTheConverterThatReadsIt(string json, string pointer, string message)
+    {
+        // Review 32 #6: a string enum converter (allowIntegerValues: false, or on the member) was told "must be an integer".
+        var error = Error<Modes>(json);
+
+        Assert.Equal((pointer, message), (error.Pointer, error.Message));
+    }
+
+    // ---- documents that cannot be read as written ---------------------------------------------------------------------
+
+    [Fact]
+    public void AStringThatIsNotValidUnicode_InAnArtifact_IsAControlledError()
+    {
+        // Review 32 #4: describing the value decoded it again and threw InvalidOperationException.
+        var json = """{"pipeline_id":"p","nodes":{"a":{"op":"TopK@1","order":""" + Unpaired + "}}}";
+
+        var ex = Assert.Throws<ArtifactFormatException>(() => ArtifactSerializer.Deserialize<PipelineArtifact>(json, "p.json"));
+
+        Assert.Contains("not valid Unicode", ex.Reason, StringComparison.Ordinal);
+        Assert.Contains("(line 1, column ", ex.Reason, StringComparison.Ordinal);
+        NoDotNetNames(ex.Reason, ex.Hint);
+    }
+
+    [Theory]
+    [InlineData("label", "/label")] // a string member: the serializer itself fails on it
+    [InlineData("window", "/window")] // a number member
+    public void AStringThatIsNotValidUnicode_InANode_IsReportedAtTheString(string member, string pointer)
+    {
+        var node = JsonNode.Parse("{ \"model\": \"m\", \"" + member + "\": " + Unpaired + " }");
+
+        Assert.False(ArtifactSerializer.TryBind<Sample>(node, "the sample", out _, out var error));
+
+        Assert.Equal(pointer, error.Pointer);
+        Assert.Equal("This value is a string that is not valid Unicode.", error.Message);
+        Assert.NotNull(error.Hint);
+    }
+
+    [Fact]
+    public void AKeyThatIsNotValidUnicode_InANode_IsReportedAtItsObject()
+    {
+        var node = JsonNode.Parse("""{ "model": "m", "named": { """ + Unpaired + """: { "name": "n" } } }""");
+
+        Assert.False(ArtifactSerializer.TryBind<Sample>(node, "the sample", out _, out var error));
+
+        Assert.Equal("/named", error.Pointer);
+        Assert.Equal("This value has a key that is not valid Unicode.", error.Message);
+    }
+
+    [Fact]
+    public void AKeyWrittenTwice_InANode_IsReportedAtItsObject()
+    {
+        var node = JsonNode.Parse("""{ "model": "m", "order": "x", "label": "a", "label": "b" }""");
+
+        Assert.False(ArtifactSerializer.TryBind<Sample>(node, "the sample", out _, out var error));
+
+        Assert.Equal(string.Empty, error.Pointer);
+        Assert.Equal("The sample has a key written twice.", error.Message);
+    }
+
+    [Fact]
+    public void JsonWords_DescribeAStringThatIsNotValidUnicode_WithoutDecodingIt()
+    {
+        Assert.Equal("a string that is not valid Unicode", JsonWords.Value(JsonNode.Parse(Unpaired)));
     }
 
     // ---- artifacts -----------------------------------------------------------------------------------------------------
@@ -263,6 +454,9 @@ public class JsonBindingErrorsTests
     {
         Error<Sample>(json);
     }
+
+    /// <summary>A JSON string holding an unpaired surrogate escape, built so no tool turns the escape into a character.</summary>
+    private static readonly string Unpaired = "\"" + (char)92 + "uD800\"";
 
     private static JsonBindingError Error<T>(string json, string subject = "the sample")
         where T : class

@@ -75,23 +75,22 @@ public static class ConfigTypes
 
         if (ColumnType.TryParse(leaf, out type, out _))
         {
-            if (site != TypeSite.Column && type.Nullable)
+            if (site == TypeSite.Feature && type.Nullable)
             {
-                message = site == TypeSite.Feature
-                    ? $"Feature types are written without '?'; nullability comes from 'default' (got '{written}')."
-                    : $"Parameter types are written without '?': a parameter always has a value (got '{written}').";
-                hint = site == TypeSite.Feature
-                    ? "remove the '?' and omit 'default' to make the feature nullable"
-                    : $"write '{Wrap(type.AsNonNullable().ToString(), isMap)}'";
+                message = $"Feature types are written without '?'; nullability comes from 'default' (got '{written}').";
+                hint = "remove the '?' and omit 'default' to make the feature nullable";
                 return false;
             }
 
-            if (site == TypeSite.Parameter && type.Kind is not (StorageKind.Int64 or StorageKind.Float64 or StorageKind.Bool or StorageKind.String))
+            if (site == TypeSite.Parameter && !IsParameterLeaf(type))
             {
-                var promoted = type.Promoted();
-                message = $"'{leaf}' is not a parameter type.";
-                hint = promoted.Kind is StorageKind.Int64 or StorageKind.Float64
-                    ? $"write '{Wrap(promoted.ToString(), isMap)}'; parameter types: {Spellings(site)}"
+                // Both mistakes at once (int32?) get one fix: the parameter type the spelling meant, which params accept.
+                message = type.Nullable
+                    ? $"Parameter types are written without '?': a parameter always has a value (got '{written}')."
+                    : $"'{leaf}' is not a parameter type.";
+                var meant = type.AsNonNullable().Promoted();
+                hint = IsParameterLeaf(meant)
+                    ? $"write '{Wrap(meant.ToString(), isMap)}'; parameter types: {Spellings(site)}"
                     : "parameter types: " + Spellings(site);
                 return false;
             }
@@ -146,4 +145,8 @@ public static class ConfigTypes
     };
 
     private static string Wrap(string leaf, bool isMap) => isMap ? $"map<string,{leaf}>" : leaf;
+
+    /// <summary>A type a parameter (or a map parameter's values) takes: int64, float64, bool or string, never nullable.</summary>
+    private static bool IsParameterLeaf(ColumnType type) =>
+        !type.Nullable && type.Kind is StorageKind.Int64 or StorageKind.Float64 or StorageKind.Bool or StorageKind.String;
 }
