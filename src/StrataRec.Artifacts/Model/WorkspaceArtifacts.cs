@@ -34,7 +34,7 @@ public sealed class ReleaseExperiment
     public required string Layer { get; init; }
 }
 
-/// <summary>Repository policy <c>policy.jsonc</c> (design 11.4): patchable paths, owners, log budget.</summary>
+/// <summary>Repository policy <c>policy.jsonc</c> (design 11.4): patchable paths and owners.</summary>
 public sealed class PolicyArtifact
 {
     /// <summary>RFC 6901 prefixes experiments may add, delete and modify under.</summary>
@@ -45,9 +45,6 @@ public sealed class PolicyArtifact
 
     /// <summary>RFC 6901 prefix → owning teams that must approve changes (mapped to code review).</summary>
     public Dictionary<string, List<string>> Owners { get; init; } = new();
-
-    /// <summary>Estimated log bytes per request allowed per pipeline (design 8.6).</summary>
-    public long? LogBytesPerRequestBudget { get; init; }
 }
 
 /// <summary>Static lookup table for <c>lookup(table, key, default)</c> (design 7.6).</summary>

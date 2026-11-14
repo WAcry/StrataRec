@@ -32,13 +32,6 @@
           "type": "string"
         }
       }
-    },
-    "log_bytes_per_request_budget": {
-      "description": "Estimated log bytes per request allowed per pipeline (design 8.6).",
-      "type": [
-        "integer",
-        "null"
-      ]
     }
   },
   "additionalProperties": false

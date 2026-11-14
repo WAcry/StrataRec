@@ -15,7 +15,7 @@ public sealed class ArtifactEntryTests
         { """{ "experiment_patchable": ["/params"], "experiment_patchable": ["/nodes"] }""", "Duplicate key 'experiment_patchable'" },
         { """{ "experiment_patchable": ["/par\uD800ams"] }""", "unpaired UTF-16 surrogate" },
         { """{ "experiment_patchable": ["/params"] """, "" }, // a syntax error
-        { """{ "log_bytes_per_request_budget": "1" }""", "'log_bytes_per_request_budget' must be an integer or null, got the string \"1\"." },
+        { """{ "log_bytes_per_request_budget": 1 }""", "Unknown key 'log_bytes_per_request_budget'" }, // removed: nothing enforced it
         { """{ "owners": null }""", "'owners' must be an object, got null." },
         { """{ "experiment_patchable": ["/params", null] }""", "Item 1 of 'experiment_patchable' must be a string, got null." },
         { """{ "experiment_patchabel": [] }""", "Unknown key 'experiment_patchabel'" },
