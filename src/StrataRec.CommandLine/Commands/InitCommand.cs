@@ -153,10 +153,13 @@ internal static class InitCommand
         output.WriteLine("Next:");
         output.WriteLine("  # static checks: types, data flow, every experiment arm");
         output.WriteLine($"  stratarec validate -c {config}{select}");
-        output.WriteLine($"  # run the request (assigned to {InitTemplates.ExperimentId}/{InitTemplates.AssignedArm}); --trace adds each node's outcome");
-        output.WriteLine($"  stratarec run -c {config} -r {request} --trace");
+        output.WriteLine($"  # run the request (assigned to {InitTemplates.ExperimentId}/{InitTemplates.AssignedArm}); --trace adds each node's outcome,");
+        output.WriteLine("  # and without --format text the result is the JSON a service returns");
+        output.WriteLine($"  stratarec run -c {config} -r {request} --format text --trace");
         output.WriteLine("  # the same request in the control arm (--arms overrides the request's assignment)");
-        output.WriteLine($"  stratarec run -c {config} -r {request} --arms {InitTemplates.ExperimentId}/{InitTemplates.ControlArm}");
+        output.WriteLine($"  stratarec run -c {config} -r {request} --format text --arms {InitTemplates.ExperimentId}/{InitTemplates.ControlArm}");
+        output.WriteLine($"  # why item {InitTemplates.CutItem} is not returned: what each node read and did to it");
+        output.WriteLine($"  stratarec run -c {config} -r {request} --format text --explain {InitTemplates.CutItem}");
         output.WriteLine("  # the compiled plan: nodes in order, the experiment and the parameters its arms set");
         output.WriteLine($"  stratarec explain-plan -c {config}{select}");
         return 0;

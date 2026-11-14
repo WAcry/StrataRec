@@ -35,6 +35,9 @@ internal static class InitTemplates
 
     public const string RequestPath = "requests/example.jsonc";
 
+    /// <summary>An item recall returns and the top k cuts, in the boost arm: the printed explain example drops it.</summary>
+    public const long CutItem = 8;
+
     public static string PipelinePath(string pipeline) => $"pipelines/{pipeline}.jsonc";
 
     /// <summary>The files, in the order init lists them.</summary>

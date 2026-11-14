@@ -215,7 +215,7 @@ public sealed class InitCommandTests
             }
         }
 
-        Assert.Equal(4, commands.Count);
+        Assert.Equal(5, commands.Count);
         Assert.Contains(commands, c => c.Contains("--trace", StringComparison.Ordinal));
         Assert.Contains(commands, c => c.Contains($"--arms {Control}", StringComparison.Ordinal));
         foreach (var command in commands)
@@ -225,11 +225,15 @@ public sealed class InitCommandTests
             Assert.True(result.Code == 0, $"{command}: exit {result.Code}\n{result.Stderr}\n{result.Stdout}");
             if (command.StartsWith("stratarec run ", StringComparison.Ordinal))
             {
-                using var output = JsonDocument.Parse(result.Stdout);
-                Assert.True(output.RootElement.GetProperty("succeeded").GetBoolean());
-                Assert.NotEmpty(output.RootElement.GetProperty("items").EnumerateArray());
+                var lines = result.Stdout.Split('\n');
+                Assert.StartsWith("request example: succeeded, served by feed, ", lines[0]);
+                Assert.Contains(lines, l => l.StartsWith("  items      1. ", StringComparison.Ordinal));
                 var expected = command.Contains("--arms", StringComparison.Ordinal) ? Control : Boost;
-                Assert.Equal(expected, Assert.Single(output.RootElement.GetProperty("experiments").GetProperty("assigned").EnumerateArray()).GetString());
+                Assert.Contains(lines, l => l.StartsWith($"  arms      {expected}", StringComparison.Ordinal));
+                if (command.Contains("--explain", StringComparison.Ordinal))
+                {
+                    Assert.Contains($"  explain   {InitTemplates.CutItem}: dropped by rank", lines); // the example says why
+                }
             }
         }
     }
@@ -271,7 +275,7 @@ public sealed class InitCommandTests
             }
         }
 
-        Assert.Equal(4, commands.Count);
+        Assert.Equal(5, commands.Count);
         foreach (var command in commands)
         {
             var result = await Bash(temp.Path, command);
