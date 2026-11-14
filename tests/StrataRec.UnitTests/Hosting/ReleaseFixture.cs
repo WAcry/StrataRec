@@ -126,11 +126,21 @@ internal sealed class WatchedStore(IArtifactStore inner) : IArtifactStore
     /// <summary>Completes when a held read was cancelled.</summary>
     public TaskCompletionSource HeldReadCancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    /// <summary>A held read registers a callback on its token that throws, as a transport's cleanup may.</summary>
+    public bool ThrowOnCancel { get; set; }
+
     public async ValueTask<byte[]?> TryGetAsync(string contentId, CancellationToken cancellationToken = default)
     {
         Interlocked.Increment(ref _reads);
         if (contentId == Hold)
         {
+            if (ThrowOnCancel)
+            {
+                // Not disposed when the wait ends: the wait's continuation may run inside the cancellation, before this
+                // callback, and would unregister it.
+                _ = cancellationToken.Register(static () => throw new InvalidOperationException("artifact cleanup failed"));
+            }
+
             HeldReadStarted.TrySetResult();
             try
             {
@@ -301,25 +311,40 @@ internal sealed class ManualTimers : TimeProvider
     }
 }
 
-/// <summary>Keeps every log entry, with its category; thread-safe.</summary>
+/// <summary>Keeps every log entry, with its category; thread-safe. While <see cref="Fails"/> is set, it throws after keeping one.</summary>
 internal sealed class ReleaseLog : ILoggerProvider
 {
+    private volatile bool _fails;
+
     public ConcurrentQueue<(string Category, LogLevel Level, EventId EventId, string Message, Exception? Exception)> Entries { get; } = new();
 
-    public ILogger CreateLogger(string categoryName) => new Logger(categoryName, Entries);
+    /// <summary>Every entry throws, as a logger whose sink failed may.</summary>
+    public bool Fails
+    {
+        get => _fails;
+        set => _fails = value;
+    }
+
+    public ILogger CreateLogger(string categoryName) => new Logger(categoryName, this);
 
     public void Dispose()
     {
     }
 
-    private sealed class Logger(string category, ConcurrentQueue<(string, LogLevel, EventId, string, Exception?)> entries) : ILogger
+    private sealed class Logger(string category, ReleaseLog log) : ILogger
     {
         public IDisposable? BeginScope<TState>(TState state)
             where TState : notnull => null;
 
         public bool IsEnabled(LogLevel logLevel) => true;
 
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
-            entries.Enqueue((category, logLevel, eventId, formatter(state, exception), exception));
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            log.Entries.Enqueue((category, logLevel, eventId, formatter(state, exception), exception));
+            if (log.Fails)
+            {
+                throw new InvalidOperationException("the log sink failed");
+            }
+        }
     }
 }

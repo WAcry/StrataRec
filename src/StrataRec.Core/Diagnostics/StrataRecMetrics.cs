@@ -146,7 +146,7 @@ public static class StrataRecMetrics
     /// wait, at a shutdown, or passed on from the caller's token) whose callbacks threw; one per cancellation. The
     /// callbacks ran on the thread pool and the request was not affected (<see cref="Threading.ObservedCancellationSource"/>).
     /// Tags: <c>stratarec.token</c> = <c>assignment</c> | <c>node</c> | <c>call</c> | <c>fetch</c> | <c>log_drain</c> |
-    /// <c>binding_load</c> | <c>local_table</c> | <c>signature_lookup</c> | <c>plan_load</c> | <c>cache_writer</c>.
+    /// <c>binding_load</c> | <c>local_table</c> | <c>signature_lookup</c> | <c>plan_load</c> | <c>cache_writer</c> | <c>release</c>.
     /// </summary>
     public static readonly Counter<long> CancellationCallbackErrors = Meter.CreateCounter<long>(Names.CancellationCallbackErrors, "{cancellation}",
         "Cancellations of tokens held by external code whose callbacks threw.");

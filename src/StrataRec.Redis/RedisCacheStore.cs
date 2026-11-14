@@ -27,8 +27,10 @@ namespace StrataRec.Redis;
 /// tier is an optimisation, so the plan serves from the connector while the client reconnects in the background, and
 /// commands sent while it is disconnected fail at once rather than queue. Credentials the server refuses (a wrong password
 /// or user, or none where the server requires one) and a missing secret do fail the load: they are a wrong setting, which
-/// reconnecting does not fix. Commands time out after one second; the engine stops waiting for a read much earlier (the tier's
-/// <c>timeout_ms</c>), and a read that throws or is late sends its keys to the connector.</para>
+/// reconnecting does not fix (<see cref="LoadAsync"/> says how they are told apart). A server that accepts connections
+/// and does not answer holds a load up to three connect timeouts of 2 s. Commands time out after one second; the engine
+/// stops waiting for a read much earlier (the tier's <c>timeout_ms</c>), and a read that throws or is late sends its keys
+/// to the connector.</para>
 /// </remarks>
 public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDisposable
 {
@@ -36,6 +38,12 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
 
     /// <summary>How long a command may take before the client fails it.</summary>
     private const int CommandTimeoutMs = 1000;
+
+    /// <summary>
+    /// Connects that must succeed, at most, before the server is taken for down (see <see cref="LoadAsync"/>): a second
+    /// one tells a refusal from a connection the server, or the network, dropped before the handshake.
+    /// </summary>
+    private const int StrictConnects = 2;
 
     private readonly RedisStoreSettings _settings;
     private readonly Func<ConfigurationOptions, Task<ConnectionMultiplexer>> _connect;
@@ -54,6 +62,20 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
     public string StoreType => Type;
 
     /// <summary>Resolves the password and connects. A server that cannot be reached does not fail the load (see remarks).</summary>
+    /// <remarks>
+    /// <para>Whether the server refuses the store is read from a connection that saw it. StackExchange.Redis records a
+    /// refusal on its connection before it ends the connect, and publishes it (to the connection's failure events and to
+    /// the failures of later commands) only after (investigations 1 and 3): a connect that returns disconnected may not
+    /// show yet why, and a probe made afterwards can fail, from a timeout or a reset, before it reads a refusal of its own.
+    /// But a connect that must succeed reports, when it gives up, the refusal its own connection recorded. So the store
+    /// first connects that way (<see cref="StrictConnects"/> times at most, one attempt each), and that connection, once
+    /// up, is the store's: one command then tells whether the server accepts the credentials
+    /// (<see cref="CommandRefusalAsync"/>).</para>
+    /// <para>Only when every such connect failed without a refusal is the server taken for down: then a connection that
+    /// reconnects in the background, whose failure, if it shows one already, is still read. A server that drops two
+    /// connections before it answers their handshakes and refuses the third is the one case not told from a server that is
+    /// down (review 35); it is then served as one: from the connector.</para>
+    /// </remarks>
     public async ValueTask LoadAsync(CancellationToken cancellationToken)
     {
         var options = new ConfigurationOptions
@@ -63,9 +85,9 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
             ClientName = "stratarec",
             ConnectTimeout = 2000,
 
-            // One attempt: a connection that did not come up keeps reconnecting in the background (AbortOnConnectFail is
-            // false), so the client's default of three only triples how long a load waits on a server that does not answer
-            // (review 24), and how long a disposal waits for a cancelled load's connection.
+            // One attempt per connect: a connection that did not come up keeps reconnecting in the background
+            // (AbortOnConnectFail is false), so the client's default of three only triples how long a load waits on a
+            // server that does not answer (review 24), and how long a disposal waits for a cancelled load's connection.
             ConnectRetry = 1,
             AsyncTimeout = CommandTimeoutMs,
             SyncTimeout = CommandTimeoutMs,
@@ -79,12 +101,18 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
             options.Password = (await password.ResolveAsync(cancellationToken).ConfigureAwait(false)).Reveal();
         }
 
-        // The connect itself cannot be cancelled: a cancelled load stops waiting for it, and the store keeps it, so that
-        // its disposal waits for a connection that completes later and disposes it (review 19).
-        var connecting = _connect(options);
-        Volatile.Write(ref _connecting, connecting);
-        var connection = await connecting.WaitAsync(cancellationToken).ConfigureAwait(false);
-        if (await RefusalAsync(connection, options, cancellationToken).ConfigureAwait(false) is { } refused)
+        ConnectionMultiplexer? connection = null;
+        for (var attempt = 0; attempt < StrictConnects && connection is null; attempt++)
+        {
+            var strict = options.Clone();
+            strict.AbortOnConnectFail = true;
+            connection = await ConnectAsync(strict, cancellationToken).ConfigureAwait(false);
+        }
+
+        // Every connect that must succeed failed, and none was refused: the server is down, for all the load can tell. A
+        // connect that need not succeed returns its connection, up or not.
+        connection ??= (await ConnectAsync(options, cancellationToken).ConfigureAwait(false))!;
+        if (await CommandRefusalAsync(connection).ConfigureAwait(false) is { } refused)
         {
             throw refused; // the connection is disposed with the store, which the host disposes after a failed load
         }
@@ -95,116 +123,62 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
     }
 
     /// <summary>
-    /// Why the server refuses this store, if it does: its credentials, or (with <c>tls</c>) the TLS handshake. Any
-    /// other failure is the server being down, which does not fail the load.
+    /// Connects with <paramref name="options"/>. A connect that must succeed (<c>AbortOnConnectFail</c>) and fails throws
+    /// the refusal it saw, if any (<see cref="RefusalIn"/>), and returns null otherwise.
     /// </summary>
     /// <remarks>
-    /// <para>Connected, one command tells (<see cref="CommandRefusedAsync"/>), since it reaches the server.</para>
-    /// <para>Not connected, the client's failure may not tell yet. StackExchange.Redis tells the connect that its connection
-    /// ended before it publishes the refusal that ended it, and a dropped connection's failure can replace a refusal it
-    /// published. A connect that must succeed reports the refusal its own connection saw, read when it gives up, so one is
-    /// tried, once, with the store's settings; it costs a second connect timeout only when the server is down.</para>
-    /// <para>A refusal is evidence whichever connection saw it, and a connection that saw nothing is no evidence of the
-    /// contrary (investigation 3, review 35): the probe can fail before it reads the refusal the store's connection already
-    /// has, from a timeout or a reset, and the load then took the server for down. So the connection's own evidence is
-    /// kept too: a command on it, which fails at once with the failure it published, before and after the probe, and the
-    /// refusals it publishes meanwhile. Only a probe that connects and is answered says the credentials are accepted.</para>
+    /// The connect itself cannot be cancelled: a cancelled load stops waiting for it, and the store keeps it, so that its
+    /// disposal waits for a connection that completes later and disposes it (review 19). The store keeps the latest one:
+    /// the load makes no other after a cancellation, and a connect that failed made no connection.
     /// </remarks>
-    private async Task<BindingException?> RefusalAsync(ConnectionMultiplexer connection, ConfigurationOptions options, CancellationToken cancellationToken)
+    private async Task<ConnectionMultiplexer?> ConnectAsync(ConfigurationOptions options, CancellationToken cancellationToken)
     {
-        if (connection.IsConnected)
-        {
-            return await CommandRefusedAsync(connection, _settings.User).ConfigureAwait(false) ? CredentialsRefused() : null;
-        }
-
-        var published = 0;
-        void Failed(object? sender, ConnectionFailedEventArgs failure)
-        {
-            if (failure.FailureType == ConnectionFailureType.AuthenticationFailure || (failure.Exception is { } ex && IsRefusal(ex)))
-            {
-                Volatile.Write(ref published, 1);
-            }
-        }
-
-        connection.ConnectionFailed += Failed;
+        var connecting = _connect(options);
+        Volatile.Write(ref _connecting, connecting);
         try
         {
-            if (await CommandRefusedAsync(connection, _settings.User).ConfigureAwait(false))
-            {
-                return CredentialsRefused();
-            }
-
-            var probe = options.Clone();
-            probe.AbortOnConnectFail = true;
-            probe.ConnectRetry = 1;
-            var probing = _connect(probe);
-            ConnectionMultiplexer? probed = null;
-            try
-            {
-                probed = await probing.WaitAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                _ = DisposeOnceConnectedAsync(probing);
-                throw;
-            }
-            catch (Exception ex) when (RefusalIn(ex) is { } refused)
-            {
-                return refused;
-            }
-            catch (Exception)
-            {
-                // The probe did not connect and saw no refusal: that proves nothing, so the connection's evidence decides.
-            }
-
-            if (probed is not null)
-            {
-                await using (probed.ConfigureAwait(false))
-                {
-                    return await CommandRefusedAsync(probed, _settings.User).ConfigureAwait(false) ? CredentialsRefused() : null;
-                }
-            }
-
-            return Volatile.Read(ref published) == 1 || await CommandRefusedAsync(connection, _settings.User).ConfigureAwait(false)
-                ? CredentialsRefused()
-                : null;
+            return await connecting.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
-        finally
+        catch (Exception ex) when (options.AbortOnConnectFail && !cancellationToken.IsCancellationRequested)
         {
-            connection.ConnectionFailed -= Failed;
+            return RefusalIn(ex) is { } refused ? throw refused : null;
         }
     }
 
     /// <summary>
-    /// Whether the server refused a connection's credentials, by one command:
+    /// Why the server refuses a connection, by one command, if it does:
     /// <list type="bullet">
-    /// <item>With a <paramref name="user"/> and connected: <c>ACL WHOAMI</c>. A server whose default user needs no
-    /// password accepts the connection even when it refused the user's credentials (<c>AUTH</c> failed, the connection
-    /// stays the default user's). A server that cannot answer it (before Redis 6, or a user not allowed to ask) is
-    /// trusted.</item>
-    /// <item>Otherwise: a <c>PING</c>, answered <c>NOAUTH</c> by a server that requires a password.</item>
+    /// <item>With a <c>user</c> and connected: <c>ACL WHOAMI</c>. A server whose default user needs no password accepts the
+    /// connection even when it refused the user's credentials (<c>AUTH</c> failed, the connection stays the default
+    /// user's). A server that cannot answer it (before Redis 6, or a user not allowed to ask) is trusted.</item>
+    /// <item>Otherwise: a <c>PING</c>, answered <c>NOAUTH</c> by a server that requires a password; on a connection that is
+    /// down, it fails at once with the failure the connection published, if any.</item>
     /// </list>
+    /// Anything else (a server that is down, or cannot tell) is no refusal.
     /// </summary>
-    private static async Task<bool> CommandRefusedAsync(ConnectionMultiplexer connection, string? user)
+    private async Task<BindingException?> CommandRefusalAsync(ConnectionMultiplexer connection)
     {
         var database = connection.GetDatabase();
         try
         {
-            if (user is not null && connection.IsConnected)
+            if (_settings.User is { } user && connection.IsConnected)
             {
-                return (string?)await database.ExecuteAsync("ACL", "WHOAMI").ConfigureAwait(false) != user;
+                return (string?)await database.ExecuteAsync("ACL", "WHOAMI").ConfigureAwait(false) == user ? null : CredentialsRefused();
             }
 
             await database.PingAsync().ConfigureAwait(false);
-            return false; // the server answers this connection
+            return null; // the server answers this connection
         }
         catch (Exception ex)
         {
-            return IsRefusal(ex); // anything else: as if the server were down, or (WHOAMI) cannot tell
+            return RefusalIn(ex);
         }
     }
 
-    /// <summary>The refusal a failed connect reports, if any: a failed TLS handshake, or refused credentials.</summary>
+    /// <summary>
+    /// The refusal a failure reports, if any: a failed TLS handshake (first: the client reports it as an authentication
+    /// failure too), or refused credentials.
+    /// </summary>
     private BindingException? RefusalIn(Exception failure)
     {
         if (Find(failure, static e => e is System.Security.Authentication.AuthenticationException) is { } tls)
@@ -260,19 +234,6 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
         }
 
         return null;
-    }
-
-    /// <summary>A connect the load stopped waiting for: disposed once it completes, if it connected.</summary>
-    private static async Task DisposeOnceConnectedAsync(Task<ConnectionMultiplexer> connecting)
-    {
-        try
-        {
-            await (await connecting.ConfigureAwait(false)).DisposeAsync().ConfigureAwait(false);
-        }
-        catch (Exception)
-        {
-            // It did not connect, or its disposal failed: nothing is left to release.
-        }
     }
 
     /// <summary>Whether the connection is to a cluster (whose multi-key commands cannot span hash slots).</summary>

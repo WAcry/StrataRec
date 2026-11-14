@@ -40,6 +40,12 @@ public enum CancellationSite : byte
 
     /// <summary>The writer of a distributed cache tier: cancelled when the tier is disposed.</summary>
     CacheWriter,
+
+    /// <summary>
+    /// A serving node's release work, held by the manifest source, the artifact store and the status reporter: cancelled
+    /// when the host's startup is cancelled or the host stops.
+    /// </summary>
+    Release,
 }
 
 /// <summary>
@@ -77,7 +83,7 @@ public class ObservedCancellationSource : CancellationTokenSource
 {
     private static readonly string[] SiteNames =
     {
-        "assignment", "node", "call", "fetch", "log_drain", "binding_load", "local_table", "signature_lookup", "plan_load", "cache_writer",
+        "assignment", "node", "call", "fetch", "log_drain", "binding_load", "local_table", "signature_lookup", "plan_load", "cache_writer", "release",
     };
 
     /// <summary>One tag array per site, built once: counting a failure allocates nothing.</summary>

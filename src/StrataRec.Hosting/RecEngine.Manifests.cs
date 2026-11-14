@@ -1,5 +1,6 @@
 using StrataRec.Artifacts.Model;
 using StrataRec.Artifacts.Storage;
+using StrataRec.Core.Threading;
 using StrataRec.Hosting.Manifests;
 
 namespace StrataRec.Hosting;
@@ -112,7 +113,9 @@ public sealed partial class RecEngine
     /// <remarks>
     /// Each outcome is logged and counted (<c>stratarec.plan.loads</c>; events 1001, 1002 and 1004–1008). Failures are
     /// results, not exceptions; a store that throws something other than I/O and integrity errors (a transport's own
-    /// exception) does propagate, as does cancellation.
+    /// exception) does propagate, as does cancellation. The store's reads are part of the load: they get the load's own
+    /// token, cancelled with <paramref name="cancellationToken"/> and by the engine's disposal, whose callbacks run on the
+    /// thread pool (<see cref="ObservedCancellationSource"/>), not on the thread that cancels.
     /// </remarks>
     /// <param name="manifestId">The manifest's content id (<see cref="ManifestBuilder.ContentId"/>): plans, results and
     /// replay bundles carry it.</param>
@@ -166,15 +169,32 @@ public sealed partial class RecEngine
                 "this binary lacks " + string.Join(", ", missing), missing);
         }
 
-        var request = await ManifestBuilder.LoadAsync(manifest, manifestId, store, diagnostics, cancellationToken).ConfigureAwait(false);
-        if (request is null)
+        // A load from here on, as LoadAsync's (see there): registered before the download, so a disposal cancels the
+        // download too, and the store gets the load's token, whose callbacks run on the pool, never the caller's.
+        PlanLoadResult loaded;
+        var load = BeginLoad(cancellationToken);
+        try
         {
-            PlanLoadTelemetry.ArtifactsFailed(_logger, pipelineId, manifestId, diagnostics);
-            return Result(manifest, manifestId, ManifestLoadStatus.Rejected, diagnostics, TimeSpan.Zero, ManifestLoadResult.RejectedReason(diagnostics.Items));
+            var request = await ManifestBuilder.LoadAsync(manifest, manifestId, store, diagnostics, load.Cancellation.Token).ConfigureAwait(false);
+            load.Cancellation.Token.ThrowIfCancellationRequested(); // a store that swallowed the cancellation: not a rejection
+            if (request is null)
+            {
+                PlanLoadTelemetry.ArtifactsFailed(_logger, pipelineId, manifestId, diagnostics);
+                return Result(manifest, manifestId, ManifestLoadStatus.Rejected, diagnostics, TimeSpan.Zero, ManifestLoadResult.RejectedReason(diagnostics.Items));
+            }
+
+            // Compile and load, as any plan; it logs and counts its own outcome.
+            loaded = await LoadWithBindingsAsync(request, sequence, released: true, load, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (DisposedDuring(load, cancellationToken))
+        {
+            throw Disposed(ex);
+        }
+        finally
+        {
+            EndLoad(load);
         }
 
-        // Compile and load, as any plan; LoadAsync logs and counts its own outcome.
-        var loaded = await LoadAsync(request, sequence, cancellationToken).ConfigureAwait(false);
         diagnostics.AddRange(loaded.Diagnostics);
         var (status, reason) = loaded switch
         {

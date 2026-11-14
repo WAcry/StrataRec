@@ -424,10 +424,8 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         {
             return await LoadWithBindingsAsync(request, order, released: sequence.HasValue, load, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (load.Cancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        catch (Exception ex) when (DisposedDuring(load, cancellationToken))
         {
-            // Only the engine's disposal cancels a load other than through the caller's token (see DisposeAsync); the
-            // load stopped wherever it was: waiting for tables, or compiling against its released lease.
             throw Disposed(ex);
         }
         finally
@@ -435,6 +433,14 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             EndLoad(load);
         }
     }
+
+    /// <summary>
+    /// Whether what a load threw comes from the engine's disposal: only that cancels a load other than through the
+    /// caller's token (see <see cref="DisposeAsync"/>), and the load stopped wherever it was: downloading, waiting for
+    /// tables, or compiling against its released lease.
+    /// </summary>
+    private static bool DisposedDuring(PendingLoad load, CancellationToken cancellationToken) =>
+        load.Cancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested;
 
     /// <summary>Registers a load and opens its lease; a disposed engine takes no load.</summary>
     private PendingLoad BeginLoad(CancellationToken cancellationToken)
@@ -563,10 +569,10 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         }
         finally
         {
-            // Once swapped, nothing owns the replaced plan's lease but this load, whatever the telemetry above did (a
-            // metric listener's callback may throw): its tables that the new plan does not share stop their sources, and
-            // its instances go once its last request has ended. Requests still running on the old plan read the versions
-            // they pinned.
+            // Once swapped, nothing owns the replaced plan's lease but this load, whatever happened after the swap (the
+            // telemetry does not throw, but the lease must not depend on it): its tables that the new plan does not
+            // share stop their sources, and its instances go once its last request has ended. Requests still running on
+            // the old plan read the versions they pinned.
             replaced?.Bindings.Dispose();
         }
 

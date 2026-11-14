@@ -310,8 +310,12 @@ public sealed class BindingLifetimeTests
         Assert.Equal(1, models.Created[0].Loads);
     }
 
+    /// <summary>
+    /// A metric listener that throws right after the swap loses its record, and nothing else: the load is applied (it used
+    /// to throw, the plan served already, review 35), and the replaced plan's lease is retired.
+    /// </summary>
     [Fact]
-    public async Task AMetricCallbackThatThrowsAfterTheSwap_StillRetiresTheReplacedPlansLease()
+    public async Task AMetricCallbackThatThrowsAfterTheSwap_LosesItsRecord_AndTheLoadIsApplied_AndRetiresTheReplacedPlansLease()
     {
         // Only this test's second load reports this sequence, so tests running alongside are not affected.
         const long Throwing = 7_160_002;
@@ -323,10 +327,12 @@ public sealed class BindingLifetimeTests
                 l.EnableMeasurementEvents(instrument);
             }
         };
+        var thrown = 0;
         listener.SetMeasurementEventCallback<long>((_, value, _, _) =>
         {
             if (value == Throwing)
             {
+                Interlocked.Increment(ref thrown);
                 throw new InvalidOperationException("metric callback failed");
             }
         });
@@ -342,10 +348,10 @@ public sealed class BindingLifetimeTests
 
         Rebind(root, generation: 2);
         BindCounting(root, latencyMs: 0);
-        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => engine.LoadAsync(Compile(root), sequence: Throwing));
-        Assert.Equal("metric callback failed", failure.Message);
+        Assert.True((await engine.LoadAsync(Compile(root), sequence: Throwing)).Applied);
+        Assert.Equal(1, Volatile.Read(ref thrown));
 
-        // The swap happened before the callback threw: the new plan serves, and the replaced plan's lease is retired.
+        // The new plan serves, and the replaced plan's lease is retired.
         await old.Disposed.Task.WaitAsync(Wait);
         Assert.True((await engine.ExecuteAsync(Request("req-after-the-metric-failure"))).Succeeded);
         await engine.DisposeAsync().AsTask().WaitAsync(Wait);

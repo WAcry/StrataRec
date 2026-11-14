@@ -141,55 +141,117 @@ internal sealed class RequestTelemetry
     }
 }
 
-/// <summary>Plan lifecycle metrics and event logs (design 13.1 "plan", 13.2): loads are rare, so tags are built per load.</summary>
+/// <summary>
+/// Plan lifecycle metrics and event logs (design 13.1 "plan", 13.2): loads are rare, so tags are built per load. None of
+/// it throws: a metric listener or a logger that throws loses its record, and a load's outcome (a plan published, a
+/// release's status and retries) never depends on it.
+/// </summary>
 internal static partial class PlanLoadTelemetry
 {
     public static void Applied(ExecutionPlan plan, long sequence)
     {
-        var pipeline = new KeyValuePair<string, object?>(StrataRecTags.Pipeline, plan.PipelineId);
-        StrataRecMetrics.PlanLoads.Add(1, pipeline, new KeyValuePair<string, object?>(StrataRecTags.Outcome, "applied"));
-        StrataRecMetrics.PlanVariants.Record(plan.Nodes.Length, pipeline);
-        StrataRecMetrics.PlanSequence.Record(sequence, pipeline);
+        try
+        {
+            var pipeline = new KeyValuePair<string, object?>(StrataRecTags.Pipeline, plan.PipelineId);
+            StrataRecMetrics.PlanLoads.Add(1, pipeline, new KeyValuePair<string, object?>(StrataRecTags.Outcome, "applied"));
+            StrataRecMetrics.PlanVariants.Record(plan.Nodes.Length, pipeline);
+            StrataRecMetrics.PlanSequence.Record(sequence, pipeline);
+        }
+        catch (Exception)
+        {
+            // See the summary.
+        }
     }
 
-    public static void LogApplied(ILogger logger, ExecutionPlan plan, long sequence) =>
-        LogApplied(logger, plan.PipelineId, plan.ManifestId, sequence, plan.Nodes.Length, Math.Round(plan.CompileTime.TotalMilliseconds, 1));
+    public static void LogApplied(ILogger logger, ExecutionPlan plan, long sequence)
+    {
+        try
+        {
+            LogApplied(logger, plan.PipelineId, plan.ManifestId, sequence, plan.Nodes.Length, Math.Round(plan.CompileTime.TotalMilliseconds, 1));
+        }
+        catch (Exception)
+        {
+            // See the summary.
+        }
+    }
 
     public static void CompileFailed(ILogger logger, string pipelineId, string manifestId, DiagnosticBag diagnostics)
     {
-        Count(pipelineId, "compile_failed");
-        LogCompileFailed(logger, pipelineId, manifestId, diagnostics.ErrorCount, FirstError(diagnostics));
+        try
+        {
+            Count(pipelineId, "compile_failed");
+            LogCompileFailed(logger, pipelineId, manifestId, diagnostics.ErrorCount, FirstError(diagnostics));
+        }
+        catch (Exception)
+        {
+            // See the summary.
+        }
     }
 
     public static void BindingsFailed(ILogger logger, string pipelineId, string manifestId, DiagnosticBag diagnostics)
     {
-        Count(pipelineId, "bindings_failed");
-        LogBindingsFailed(logger, pipelineId, manifestId, diagnostics.ErrorCount, FirstError(diagnostics));
+        try
+        {
+            Count(pipelineId, "bindings_failed");
+            LogBindingsFailed(logger, pipelineId, manifestId, diagnostics.ErrorCount, FirstError(diagnostics));
+        }
+        catch (Exception)
+        {
+            // See the summary.
+        }
     }
 
     public static void Stale(ILogger logger, string pipelineId, string manifestId, long sequence, long current)
     {
-        Count(pipelineId, "stale");
-        LogStale(logger, pipelineId, manifestId, sequence, current);
+        try
+        {
+            Count(pipelineId, "stale");
+            LogStale(logger, pipelineId, manifestId, sequence, current);
+        }
+        catch (Exception)
+        {
+            // See the summary.
+        }
     }
 
     public static void Incompatible(ILogger logger, string pipelineId, string manifestId, long sequence, IReadOnlyList<string> missing)
     {
-        Count(pipelineId, "incompatible");
-        LogIncompatible(logger, pipelineId, manifestId, sequence, string.Join(", ", missing));
+        try
+        {
+            Count(pipelineId, "incompatible");
+            LogIncompatible(logger, pipelineId, manifestId, sequence, string.Join(", ", missing));
+        }
+        catch (Exception)
+        {
+            // See the summary.
+        }
     }
 
     public static void Revoked(ILogger logger, string pipelineId, string manifestId, long sequence, long minAcceptedSeq)
     {
-        Count(pipelineId, "revoked");
-        LogRevoked(logger, pipelineId, manifestId, sequence, minAcceptedSeq);
+        try
+        {
+            Count(pipelineId, "revoked");
+            LogRevoked(logger, pipelineId, manifestId, sequence, minAcceptedSeq);
+        }
+        catch (Exception)
+        {
+            // See the summary.
+        }
     }
 
     /// <summary>The manifest, or an artifact it names, could not be read: missing, damaged, of another identity.</summary>
     public static void ArtifactsFailed(ILogger logger, string pipelineId, string manifestId, DiagnosticBag diagnostics)
     {
-        Count(pipelineId, "artifacts_failed");
-        LogArtifactsFailed(logger, pipelineId, manifestId, diagnostics.ErrorCount, FirstError(diagnostics));
+        try
+        {
+            Count(pipelineId, "artifacts_failed");
+            LogArtifactsFailed(logger, pipelineId, manifestId, diagnostics.ErrorCount, FirstError(diagnostics));
+        }
+        catch (Exception)
+        {
+            // See the summary.
+        }
     }
 
     private static void Count(string pipelineId, string outcome) =>

@@ -125,6 +125,23 @@ public sealed class CandidateExplainerTests
         Assert.Equal("cut: score.final 1.5 ties the last kept row's; ties go by entity_id ascending (k = 3)", candidates[1].Steps[4].Reason);
     }
 
+    /// <summary>
+    /// Review 35 #7: a float32 score's reason gives the result at the column's precision, and a term at float32's only
+    /// where float32 holds it. The terms are float64: one outside float32's range used to read as Infinity or 0, which
+    /// made the sum say Infinity × 0 = 1.
+    /// </summary>
+    [Theory]
+    [InlineData("1e100", "1e-100", "score.final = 1E+100 × 1E-100 + 0.5 = 1.5")]
+    [InlineData("1e-50", "1e50", "score.final = 1E-50 × 1E+50 + 0.5 = 1.5")]
+    [InlineData("col.item.quality", "1.0 + col.item.boost", "score.final = 0.5 × 2 + 0.5 = 1.5")]
+    public async Task AFloat32Score_IsExplainedWithItsTermsAsTheyWere(string baseExpr, string multiplier, string reason)
+    {
+        var result = await Run(Compile("int64", baseExpr: baseExpr, multiplier: multiplier, scoreType: "float32"), new[] { Key("int64", 2) });
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(reason, result.Explanation!.Candidates[0].Steps.Single(s => s.Node == "score").Reason);
+    }
+
     [Theory]
     [InlineData("fail")]
     [InlineData("commit")]
@@ -280,7 +297,7 @@ public sealed class CandidateExplainerTests
     /// <param name="recallFails">The recall appends 1 and 2 and fails; its fallback <c>recall_backup</c> appends 2, 3 and 7.</param>
     private static ExecutionPlan Compile(
         string keyType, string baseExpr = "col.item.quality", string multiplier = "1.0 + col.item.boost", string? reorder = null,
-        string reorderPolicy = "skip", bool recallFails = false)
+        string reorderPolicy = "skip", bool recallFails = false, string scoreType = "float64")
     {
         string Id(int n) => keyType == "string" ? $"\"i{n}\"" : n.ToString(System.Globalization.CultureInfo.InvariantCulture);
         string Ids(params int[] ns) => "[" + string.Join(", ", ns.Select(Id)) + "]";
@@ -322,7 +339,7 @@ public sealed class CandidateExplainerTests
         Write(root, "pipelines/p.jsonc", $$"""
             { "pipeline_id": "p", "entity_key_type": "{{keyType}}",
               "request_schema": { "surface": { "type": "string" } },
-              "columns": { "score.final": { "type": "float64", "default": 0.0 }, "flag": { "type": "float64", "default": 0.0 } },
+              "columns": { "score.final": { "type": "{{scoreType}}", "default": 0.0 }, "flag": { "type": "float64", "default": 0.0 } },
               "param_schema": { "quotas": { "type": "map<string,int64>" }, "backup_quotas": { "type": "map<string,int64>" },
                                 "k": { "type": "int64" }, "top": { "type": "int64" } },
               "params": { "quotas": { "main": 10 }, "backup_quotas": { "backup": 10 }, "k": 2, "top": 3 },

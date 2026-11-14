@@ -252,7 +252,10 @@ public sealed class CompositeMultiplierScorerFactory : IOperatorFactory
         {
             context.Term(target, name, value);
             var number = value.IsMissing ? double.NaN : value.AsFloat64(); // score terms are non-nullable float64
-            text.Append(Format(number, single));
+
+            // A term is a float64, and may lie outside float32's range where the result does not: at float32's precision
+            // only where float32 holds it, never as an Infinity or a 0 it was not.
+            text.Append(Format(number, single && (number == 0 || !double.IsFinite(number) || float.IsNormal((float)number))));
             return number;
         }
 

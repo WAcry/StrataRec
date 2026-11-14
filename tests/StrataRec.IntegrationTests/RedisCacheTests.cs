@@ -159,14 +159,43 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
     /// <summary>
     /// The CI flake's first cause (an investigation reproduced it): StackExchange.Redis tells the connect that its
     /// connection ended before it publishes the refusal that ended it. Holding that publication (the client logs it as
-    /// event 89 just before) until the load has decided made a refused load succeed, every time. The probe the load then
-    /// makes copies the options, logger included, so it may be held too; it fails the load all the same, because a connect
-    /// that gives up reads the refusal the client recorded, not the published one (review 24).
+    /// event 89 just before) until the load has decided made a refused load succeed, every time. The first connect must
+    /// succeed now: when it gives up, it reads the refusal the client recorded, not the published one (review 24, 35).
     /// </summary>
     [DockerRedisFact]
     public async Task ARefusalTheClientHasNotPublishedYet_StillFailsTheLoad()
     {
         var endpoint = await server.StartRequirePassAsync();
+        var error = await RefusedWhileThePublicationIsHeldAsync(endpoint);
+
+        Assert.Equal(string.Empty, error.Pointer);
+        Assert.Contains("\"password\"", error.Hint);
+    }
+
+    /// <summary>
+    /// Investigation 3 and review 35: the connection that saw the refusal had not published it, and the next connection
+    /// failed before it saw one of its own (here a proxy resets it; in CI a timeout). With the store's connection made
+    /// first and a probe after it, both said nothing and the load succeeded. The connection that sees the refusal now
+    /// reports it itself, whatever the connections after it do.
+    /// </summary>
+    [DockerRedisFact]
+    public async Task ARefusalTheClientHasNotPublishedYet_FailsTheLoad_WhateverTheConnectionsAfterItDo()
+    {
+        var endpoint = await server.StartRequirePassAsync();
+        await using var proxy = new DroppingProxy(endpoint, drops: accepted => accepted > 2);
+
+        var error = await RefusedWhileThePublicationIsHeldAsync(proxy.Endpoint);
+
+        Assert.Equal(string.Empty, error.Pointer);
+        Assert.Contains("\"password\"", error.Hint);
+    }
+
+    /// <summary>
+    /// The load's refusal, with the client's publication of the first connect's refusals held (<see cref="HoldRefusalLog"/>)
+    /// until the load has decided; then it checks that a publication was held, and released by the test.
+    /// </summary>
+    private static async Task<BindingException> RefusedWhileThePublicationIsHeldAsync(string endpoint)
+    {
         using var publish = new ManualResetEventSlim();
         var log = new HoldRefusalLog(publish);
         var connects = 0;
@@ -183,13 +212,18 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         await using var store = new RedisCacheStore(new RedisStoreSettings(endpoint, RedisServer.UniquePrefix(), null, null, false, 0), Connect);
         BindingException error;
 
-        // Each hold blocks a pool thread, and the probe reads its replies on the pool: without spare threads the test's own
-        // holds starved the probe, which then timed out before it read the refusal (investigation 3; CI, review 35).
+        // Each hold blocks a pool thread, and the connect reads the refusal on the pool: without spare threads the test's
+        // own holds could starve it until its timeout (investigation 3).
         ThreadPool.GetMinThreads(out var workers, out var completionPorts);
         ThreadPool.SetMinThreads(Math.Max(workers, 64), completionPorts);
         try
         {
             error = await RefusedAsync(store, () => $"held {log.Held}, timed out {log.TimedOut}");
+
+            // The race was set up: the publication was held while the load decided, and never released by the hold's
+            // bound (a client that renumbers the event, or stops logging it, would otherwise turn this into a plain
+            // refusal test). The client logs the event after it has ended the connect, so it may come after the load.
+            Assert.True(SpinWait.SpinUntil(() => log.Held > 0, TimeSpan.FromSeconds(30)), "the client never logged a refused handshake as event 89");
         }
         finally
         {
@@ -197,19 +231,15 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
             ThreadPool.SetMinThreads(workers, completionPorts);
         }
 
-        Assert.Equal(string.Empty, error.Pointer);
-        Assert.Contains("\"password\"", error.Hint);
-
-        // The race was set up: the publication was held while the load decided, and never released by the hold's bound
-        // (a client that renumbers the event, or stops logging it, would otherwise turn this into a plain refusal test).
-        Assert.True(log.Held > 0, "the client never logged a refused handshake as event 89");
         Assert.Equal(0, log.TimedOut);
+        return error;
     }
 
     /// <summary>
     /// The CI flake's second cause: the client keeps a connection's first failure, so when its first connections are
     /// dropped, the refusal a later one gets never reaches a command's failure. A proxy in front of the server that
-    /// requires a password resets the first two connections (the client's interactive and subscription ones).
+    /// requires a password resets the first two connections (the first connect's interactive and subscription ones): the
+    /// second connect that must succeed reads the refusal.
     /// </summary>
     [DockerRedisFact]
     public async Task ARefusalHiddenByAnEarlierDroppedConnection_StillFailsTheLoad()
@@ -222,25 +252,6 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
 
         Assert.Equal(string.Empty, error.Pointer);
         Assert.True(proxy.Dropped == 2, $"the proxy dropped {proxy.Dropped} connections");
-    }
-
-    /// <summary>
-    /// Investigation 3 (review 35): the store's connection was refused, and the probe failed before it read the refusal (here
-    /// the proxy resets it; in CI a timeout): a probe that saw nothing is no evidence, so the refusal the connection saw
-    /// still fails the load. The connection's own two connections pass; every later one (the probe's, the connection's
-    /// reconnects) is reset.
-    /// </summary>
-    [DockerRedisFact]
-    public async Task ARefusalTheConnectionSaw_StillFailsTheLoad_WhenTheProbeFailsBeforeItSeesOne()
-    {
-        var endpoint = await server.StartRequirePassAsync();
-        await using var proxy = new DroppingProxy(endpoint, drops: accepted => accepted > 2);
-
-        await using var store = new RedisCacheStore(new RedisStoreSettings(proxy.Endpoint, RedisServer.UniquePrefix(), null, null, false, 0));
-        var error = await RefusedAsync(store, () => $"the proxy dropped {proxy.Dropped} connections");
-
-        Assert.Equal(string.Empty, error.Pointer);
-        Assert.Contains("\"password\"", error.Hint);
     }
 
     /// <summary>

@@ -2,6 +2,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using StrataRec.Artifacts.Model;
 using StrataRec.Artifacts.Storage;
+using StrataRec.Core.Threading;
 using StrataRec.Hosting.Manifests;
 using StrataRec.Pipeline.Planning;
 
@@ -20,6 +21,10 @@ namespace StrataRec.Hosting;
 /// one task: pipelines are polled one after another, and a load delays the polls after it. Stopping the host cancels it,
 /// a load in progress included (the current plan stays), and waits for it to end, before the container disposes the
 /// engine.</para>
+/// <para>The source, the store and the reporter get tokens of the framework's (<see cref="CancellationSite.Release"/>), never
+/// the host's: their callbacks run on the thread pool when the host cancels, and what they throw is counted, not thrown
+/// on the host's timer. Nothing waits for those callbacks. Neither a logger nor a metric listener that throws changes
+/// what the polling does: the record is lost, the schedule and the reports are not.</para>
 /// </remarks>
 internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyncDisposable, IDisposable
 {
@@ -32,7 +37,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     private readonly HashSet<string> _served = new(StringComparer.Ordinal);
     private readonly ReleaseOptions _options;
     private readonly ILogger _logger;
-    private readonly CancellationTokenSource _stopping = new();
+    private readonly ObservedCancellationSource _stopping = new(CancellationSite.Release);
     private Task? _polling;
     private bool _stopRequested;
     private bool _disposed;
@@ -62,6 +67,10 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     public async Task StartingAsync(CancellationToken cancellationToken)
     {
         RequireServices();
+
+        // From here on the token the extensions get: cancelled with the host's, its callbacks on the pool.
+        using var startup = new ObservedCancellationSource(CancellationSite.Release, cancellationToken);
+        cancellationToken = startup.Token;
         var errors = new DiagnosticBag();
         var statuses = new List<string>(_pipelines.Count);
         foreach (var state in _pipelines)
@@ -141,7 +150,11 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
 
     public Task StoppingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    /// <summary>Cancels the polling, a load in progress included, and waits for it to end (or for the host's stop timeout).</summary>
+    /// <summary>
+    /// Cancels the polling, a load in progress included, and waits for it to end, or for the host's stop timeout. The
+    /// callbacks the extensions registered on the token are not waited for: they run on the pool, and the host's timeout
+    /// bounds the stop whatever they do.
+    /// </summary>
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         if (_disposed)
@@ -150,9 +163,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         }
 
         _stopRequested = true;
-
-        // Off this thread: the callbacks of a store or source on the token are theirs to run, not the stopping host's.
-        var cancelled = _stopping.CancelAsync();
+        _ = _stopping.CancelObservedAsync();
         try
         {
             if (_polling is { } polling)
@@ -164,8 +175,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         {
             // The host's stop timeout: it stops waiting; the polling ends on its own, its load cancelled.
         }
-
-        await cancelled.ConfigureAwait(false);
     }
 
     public Task StoppedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -182,16 +191,21 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         }
 
         _disposed = true;
-        var cancelled = _stopping.CancelAsync();
+        _ = _stopping.CancelObservedAsync();
         if (!_stopRequested && _polling is { } polling)
         {
             await polling.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         }
 
-        await cancelled.ConfigureAwait(false);
-        if (_polling is null || _polling.IsCompleted)
+        // Disposed once nothing holds its token: now, or when a polling that outlived the host's stop timeout ends.
+        if (_polling is { IsCompleted: false } running)
         {
-            _stopping.Dispose(); // a polling still running keeps its token
+            _ = running.ContinueWith(static (_, stopping) => ((IDisposable)stopping!).Dispose(), _stopping, CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+        else
+        {
+            _stopping.Dispose();
         }
     }
 
@@ -225,7 +239,16 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
                 await Task.Delay(_options.PollInterval, Clock, stopping).ConfigureAwait(false);
                 foreach (var state in _pipelines)
                 {
-                    await PollPipelineAsync(state, stopping).ConfigureAwait(false);
+                    try
+                    {
+                        await PollPipelineAsync(state, stopping).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (!stopping.IsCancellationRequested)
+                    {
+                        // A defect: the polling must outlive it, or the node would serve its plans and never take another
+                        // release. This pipeline is polled again at the next interval, the others now.
+                        PollFailed(ex, state);
+                    }
                 }
             }
         }
@@ -252,7 +275,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         {
             state.PointerDelay = NextDelay(state.PointerDelay);
             state.PointerRetryAt = Clock.GetUtcNow() + state.PointerDelay;
-            LogPointerFailed(_logger, ex, state.PipelineId, _environment, (long)state.PointerDelay.TotalMilliseconds);
+            PointerFailed(ex, state);
             return;
         }
 
@@ -311,7 +334,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
             diagnostics.Error("MANIFEST_LOAD_FAILED", ManifestBuilder.Label(manifestId), string.Empty,
                 $"Loading the manifest threw {ex.GetType().Name}: {ex.Message}", "the node tries again; check the artifact store and the manifest source");
             result = Unread(state.PipelineId, manifestId, diagnostics);
-            LogAttemptFailed(_logger, ex, state.PipelineId, manifestId);
+            AttemptFailed(ex, state.PipelineId, manifestId);
         }
 
         state.Final = result.Status != ManifestLoadStatus.Rejected;
@@ -319,7 +342,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         {
             state.RetryDelay = NextDelay(state.RetryDelay);
             state.RetryAt = Clock.GetUtcNow() + state.RetryDelay;
-            LogRetrying(_logger, state.PipelineId, manifestId, (long)state.RetryDelay.TotalMilliseconds);
+            Retrying(state);
         }
         else if (result.Applied)
         {
@@ -393,7 +416,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
-            LogReporterFailed(_logger, ex, result.PipelineId, result.ManifestId);
+            ReporterFailed(ex, result);
         }
     }
 
@@ -403,7 +426,14 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         {
             if (diagnostic.Severity == DiagnosticSeverity.Warning)
             {
-                StrataRecStartup.LogWarning(_logger, diagnostic.Code, diagnostic.Artifact, diagnostic.Pointer, diagnostic.Message, diagnostic.Hint ?? "none");
+                try
+                {
+                    StrataRecStartup.LogWarning(_logger, diagnostic.Code, diagnostic.Artifact, diagnostic.Pointer, diagnostic.Message, diagnostic.Hint ?? "none");
+                }
+                catch (Exception)
+                {
+                    // As for the records below.
+                }
             }
         }
     }
@@ -454,6 +484,68 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
 
     private static string PipelineLabel(string pipelineId) => "pipeline:" + pipelineId;
 
+    // Every record of the polling is written through one of these, which drop what a logger throws: the record is lost,
+    // and nothing else changes (the schedule of retries, the report, the polling itself).
+    private void PointerFailed(Exception exception, PipelineState state)
+    {
+        try
+        {
+            LogPointerFailed(_logger, exception, state.PipelineId, _environment, (long)state.PointerDelay.TotalMilliseconds);
+        }
+        catch (Exception)
+        {
+            // See above.
+        }
+    }
+
+    private void AttemptFailed(Exception exception, string pipelineId, string manifestId)
+    {
+        try
+        {
+            LogAttemptFailed(_logger, exception, pipelineId, manifestId);
+        }
+        catch (Exception)
+        {
+            // See above.
+        }
+    }
+
+    private void Retrying(PipelineState state)
+    {
+        try
+        {
+            LogRetrying(_logger, state.PipelineId, state.ManifestId!, (long)state.RetryDelay.TotalMilliseconds);
+        }
+        catch (Exception)
+        {
+            // See above.
+        }
+    }
+
+    private void ReporterFailed(Exception exception, ManifestLoadResult result)
+    {
+        try
+        {
+            LogReporterFailed(_logger, exception, result.PipelineId, result.ManifestId);
+        }
+        catch (Exception)
+        {
+            // See above.
+        }
+    }
+
+    private void PollFailed(Exception exception, PipelineState state)
+    {
+        try
+        {
+            LogPollFailed(_logger, exception, state.PipelineId);
+        }
+        catch (Exception)
+        {
+            // See above.
+        }
+    }
+
     [LoggerMessage(EventId = 1009, Level = LogLevel.Warning,
         Message = "The manifest pointer of pipeline '{PipelineId}' in environment '{Environment}' could not be read; reading it again in {RetryMs} ms")]
     private static partial void LogPointerFailed(ILogger logger, Exception exception, string pipelineId, string environment, long retryMs);
@@ -469,6 +561,10 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     [LoggerMessage(EventId = 1012, Level = LogLevel.Information,
         Message = "Manifest '{ManifestId}' of pipeline '{PipelineId}' was not applied; trying it again in {RetryMs} ms unless its pointer moves")]
     private static partial void LogRetrying(ILogger logger, string pipelineId, string manifestId, long retryMs);
+
+    [LoggerMessage(EventId = 1013, Level = LogLevel.Error,
+        Message = "Polling the manifest pointer of pipeline '{PipelineId}' threw; polling it again at the next interval")]
+    private static partial void LogPollFailed(ILogger logger, Exception exception, string pipelineId);
 
     /// <summary>What the polling knows of one pipeline; touched by one task at a time (the startup, then the polling).</summary>
     private sealed class PipelineState(string pipelineId)

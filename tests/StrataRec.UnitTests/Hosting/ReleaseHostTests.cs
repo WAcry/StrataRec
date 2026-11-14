@@ -265,8 +265,105 @@ public sealed class ReleaseHostTests : IDisposable
         Assert.Single(_reports.All); // the cancelled attempt is no outcome
     }
 
+    /// <summary>
+    /// Review 35 #2: a logger that throws used to end the polling for good (the pointer's failure was logged in a catch),
+    /// and the node went on serving its plan without ever taking another release. Now it loses its records, and nothing
+    /// else: the pointer is read again on its schedule, a rejected manifest is tried again, and applied.
+    /// </summary>
+    [Fact]
+    public async Task ALoggerThatThrows_ChangesNothingThePollingDoes()
+    {
+        var (_, first) = await _fixture.Pipeline("p").BuildAsync("p", seq: 1);
+        await _fixture.PublishAsync("p", first);
+        var log = new ReleaseLog();
+        using var host = Build(["p"], _clock, log: log);
+        var engine = host.Services.GetRequiredService<IRecEngine>();
+        await host.StartAsync();
+        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        log.Fails = true;
+
+        // 1 s: the pointer is unreadable (event 1009).
+        File.WriteAllText(_fixture.Pointers.GetPointerPath("p", "local"), "{ not json");
+        await _clock.AdvanceAsync(Poll);
+
+        // 2 s: a manifest whose pipeline artifact is not in the store yet (events 1008 and 1012); 3 s: uploaded, applied (1001).
+        var (second, secondId) = await _fixture.Pipeline("p", k: 3).BuildAsync("p", seq: 2);
+        var blob = _fixture.Store.GetBlobPath(second.Artifacts.Pipeline);
+        var bytes = File.ReadAllBytes(blob);
+        File.Delete(blob);
+        await _fixture.PublishAsync("p", secondId);
+        await _clock.AdvanceAsync(Poll);
+        File.WriteAllBytes(blob, bytes);
+        await _clock.AdvanceAsync(Poll);
+
+        log.Fails = false;
+        Assert.Equal(
+            new[] { (0.0, first, ManifestLoadStatus.Applied), (2, secondId, ManifestLoadStatus.Rejected), (3, secondId, ManifestLoadStatus.Applied) },
+            _reports.Attempts());
+        Assert.Equal(secondId, (await engine.ExecuteAsync(ReleaseFixture.Request("p"))).ManifestId);
+        var events = log.Entries.Select(e => e.EventId.Id).ToList();
+        Assert.Contains(1009, events);
+        Assert.Contains(1012, events);
+        Assert.DoesNotContain(1013, events); // nothing escaped to the polling's last guard
+        await host.StopAsync();
+    }
+
+    /// <summary>
+    /// Review 35 #1: the manifest source gets a token of the framework's at startup, not the host's. A callback it
+    /// registered that throws used to come out of the host's cancellation (out of the startup timeout's timer, that ends
+    /// the process).
+    /// </summary>
+    [Fact]
+    public async Task ASourceCallbackThatThrows_DoesNotComeOutOfTheHostsCancellation()
+    {
+        var (_, id) = await _fixture.Pipeline("p").BuildAsync("p", seq: 1);
+        await _fixture.PublishAsync("p", id);
+        var source = new HeldSource(_fixture.Pointers) { Hold = true, ThrowOnCancel = true };
+        using var host = Build(["p"], source: source);
+        using var starting = new CancellationTokenSource();
+
+        var start = host.StartAsync(starting.Token);
+        await source.HeldStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        starting.Cancel(); // threw the source's AggregateException here
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => start.WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.Empty(host.Services.GetRequiredService<IRecEngine>().PipelineIds());
+    }
+
+    /// <summary>
+    /// Review 35 #3: stopping waited for the callbacks a source registered on the polling's token, without bound; one
+    /// that blocks held the host's stop past its timeout. The host's stop token bounds the stop now.
+    /// </summary>
+    [Fact]
+    public async Task AStop_IsNotHeldByASourceCallbackThatBlocks()
+    {
+        var (_, id) = await _fixture.Pipeline("p").BuildAsync("p", seq: 1);
+        await _fixture.PublishAsync("p", id);
+        using var blocked = new ManualResetEventSlim();
+        var source = new HeldSource(_fixture.Pointers) { BlockOnCancel = blocked };
+        var host = Build(["p"], _clock, source: source);
+        await host.StartAsync();
+        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        source.Hold = true;
+        _clock.Advance(Poll);
+        await source.HeldStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        try
+        {
+            using var stopBy = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+            await host.StopAsync(stopBy.Token).WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        finally
+        {
+            blocked.Set();
+        }
+
+        await Task.Run(host.Dispose).WaitAsync(TimeSpan.FromSeconds(30));
+    }
+
     private IHost Build(
-        string[] pipelines, TimeProvider? clock = null, TimeSpan? maxRetry = null, IArtifactStore? store = null, ReleaseLog? log = null)
+        string[] pipelines, TimeProvider? clock = null, TimeSpan? maxRetry = null, IArtifactStore? store = null, ReleaseLog? log = null,
+        IManifestSource? source = null)
     {
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
         {
@@ -275,7 +372,7 @@ public sealed class ReleaseHostTests : IDisposable
             EnvironmentName = "Production",
         });
         builder.Logging.ClearProviders().AddProvider(log ?? new ReleaseLog());
-        builder.Services.AddSingleton<IManifestSource>(_fixture.Pointers);
+        builder.Services.AddSingleton<IManifestSource>(source ?? _fixture.Pointers);
         builder.Services.AddSingleton<IArtifactStore>(store ?? _fixture.Store);
         builder.Services.AddSingleton<IReleaseStatusReporter>(new Reporter(_reports, clock ?? _clock));
         builder.Services.AddStrataRec(options =>
@@ -320,6 +417,43 @@ public sealed class ReleaseHostTests : IDisposable
         /// <summary>Seconds since the manual clock's start, manifest and status of each outcome.</summary>
         public List<(double Seconds, string ManifestId, ManifestLoadStatus Status)> Attempts() =>
             All.Select(r => ((r.At - ManualTimers.Start).TotalSeconds, r.Result.ManifestId, r.Result.Status)).ToList();
+    }
+
+    /// <summary>
+    /// A manifest source that, while <see cref="Hold"/> is set, waits on its token until it is cancelled, with a callback of
+    /// its own on the token registered first: one that throws, or one that blocks until released.
+    /// </summary>
+    private sealed class HeldSource(IManifestSource inner) : IManifestSource
+    {
+        private volatile bool _hold;
+
+        public bool Hold
+        {
+            get => _hold;
+            set => _hold = value;
+        }
+
+        public bool ThrowOnCancel { get; init; }
+
+        public ManualResetEventSlim? BlockOnCancel { get; init; }
+
+        public TaskCompletionSource HeldStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask<string?> GetManifestIdAsync(string pipelineId, string environment, CancellationToken cancellationToken)
+        {
+            if (Hold)
+            {
+                // Not disposed when the wait ends: the wait's continuation may run inside the cancellation, before this
+                // callback, and would unregister it.
+                _ = ThrowOnCancel
+                    ? cancellationToken.Register(static () => throw new InvalidOperationException("pointer cleanup failed"))
+                    : BlockOnCancel is { } blocked ? cancellationToken.Register(() => blocked.Wait()) : default;
+                HeldStarted.TrySetResult();
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+
+            return await inner.GetManifestIdAsync(pipelineId, environment, cancellationToken);
+        }
     }
 
     private sealed class Reporter(Reports reports, TimeProvider clock) : IReleaseStatusReporter

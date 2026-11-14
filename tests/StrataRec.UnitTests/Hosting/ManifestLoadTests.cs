@@ -228,6 +228,71 @@ public sealed class ManifestLoadTests : IDisposable
         Assert.Equal($"Manifest '{incompatibleId}' (sequence 3) for pipeline '{Pipeline}' is incompatible: this binary lacks Missing@1; the current plan stays", incompatibleEvent);
     }
 
+    /// <summary>
+    /// Review 35 #4: the download is part of the load, so disposing the engine cancels it, as it cancels a load waiting
+    /// for its tables; the store did not use to get any cancellation but the caller's.
+    /// </summary>
+    [Fact]
+    public async Task DisposingTheEngine_CancelsADownloadInProgress()
+    {
+        var (current, currentId) = await _fixture.Pipeline("p").BuildAsync("p", seq: 1);
+        var (next, nextId) = await _fixture.Pipeline("p", k: 3).BuildAsync("p", seq: 2);
+        var store = new WatchedStore(_fixture.Store) { Hold = next.Artifacts.Pipeline };
+        var engine = new RecEngine(_fixture.Environment);
+        Assert.True((await engine.LoadManifestAsync(current, currentId, store)).Applied);
+
+        var load = engine.LoadManifestAsync(next, nextId, store);
+        await store.HeldReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await engine.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30));
+
+        await store.HeldReadCancelled.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        var thrown = await Assert.ThrowsAsync<ObjectDisposedException>(() => load.WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.IsAssignableFrom<OperationCanceledException>(thrown.InnerException);
+    }
+
+    /// <summary>
+    /// Review 35 #1: the store gets the load's token, not the caller's. A callback the store registered that throws used to
+    /// come out of the caller's cancellation (out of its <c>CancelAfter</c> timer, that ends the process); it runs on the
+    /// pool now, and the load ends as cancelled with the current plan serving.
+    /// </summary>
+    [Fact]
+    public async Task AStoreCallbackThatThrows_DoesNotComeOutOfTheCallersCancellation()
+    {
+        var (current, currentId) = await _fixture.Pipeline("p").BuildAsync("p", seq: 1);
+        var (next, nextId) = await _fixture.Pipeline("p", k: 3).BuildAsync("p", seq: 2);
+        var store = new WatchedStore(_fixture.Store) { Hold = next.Artifacts.Pipeline, ThrowOnCancel = true };
+        await using var engine = new RecEngine(_fixture.Environment);
+        Assert.True((await engine.LoadManifestAsync(current, currentId, store)).Applied);
+        using var caller = new CancellationTokenSource();
+
+        var load = engine.LoadManifestAsync(next, nextId, store, caller.Token);
+        await store.HeldReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        caller.Cancel(); // threw the store's AggregateException here
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => load.WaitAsync(TimeSpan.FromSeconds(30)));
+        await store.HeldReadCancelled.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.True(engine.TryGetPipeline("p", out var served));
+        Assert.Equal(currentId, served.Plan.ManifestId);
+    }
+
+    /// <summary>
+    /// A metric listener or a logger that throws loses its record, and nothing else: the plan is applied and the outcome
+    /// reported as it is (a load used to throw after it had published its plan).
+    /// </summary>
+    [Fact]
+    public async Task ALoggerThatThrows_DoesNotChangeTheOutcome()
+    {
+        var (current, currentId) = await _fixture.Pipeline("p").BuildAsync("p", seq: 1);
+        var log = new ReleaseLog { Fails = true };
+        using var loggers = LoggerFactory.Create(builder => builder.AddProvider(log));
+        await using var engine = new RecEngine(_fixture.Environment, loggerFactory: loggers);
+
+        Assert.Equal(ManifestLoadStatus.Applied, (await engine.LoadManifestAsync(current, currentId, _fixture.Store)).Status);
+        Assert.Equal(ManifestLoadStatus.Stale, (await engine.LoadManifestAsync(current, currentId, _fixture.Store)).Status);
+
+        Assert.Equal(new[] { 1001, 1004 }, log.Entries.Where(e => e.Category == typeof(RecEngine).FullName).Select(e => e.EventId.Id));
+    }
+
     [Fact]
     public async Task ADisposedEngine_TakesNoManifest()
     {
