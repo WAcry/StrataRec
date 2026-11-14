@@ -1693,6 +1693,8 @@ config/
 └── tables/score_calibration.parquet
 ```
 
+新工作区可以用 `stratarec init` 生成：它写出一份最小的、能离线运行的工作区（目录、本地绑定、一条从召回到 top-k 的流水线、一个实验、发布文件、夹具和示例请求），再在其上修改。
+
 1. **`stratarec validate`** 执行全部静态检查：Schema、类型、数据流、足迹冲突、成对校验和日志预算。哪些桶可能同时命中，由发布文件中的层决定，所以把实验放进某一层的改动和实验本身一样经过 PR 和 CI。
 2. **`stratarec build`** 规范化产物、计算哈希和所需能力，把产物上传到 `blobs/sha256/<hash>`，并输出一份构建结果：全部产物的哈希和发布文件中每个实验所在的层。
 3. **发布控制器**（命令行工具或小服务）保存哪些实验被紧急停止。状态存放在对象存储中，用条件写入防止并发修改。控制器把最新的构建结果去掉已停止的实验，合成 manifest，先做 manifest 校验（第 10.5 节），再写入对象存储，更新某个节点分组的指针，按分组推进。每次修改都生成一个新的 manifest，manifest 的历史就是配置变化的审计记录。流量不经过这里：扩量、缩量由实验平台决定；实验先随 manifest 上线，平台开始分配之前它不影响任何请求，平台分配给不在 manifest 里的实验的桶被忽略并计数（第 11.1 节）。
@@ -2252,7 +2254,7 @@ stratarec/
 │   ├── StrataRec.Hosting/       # IRecEngine、调试选项、ASP.NET Core 集成（可选包）
 │   ├── StrataRec.Llm/           # 可选包：生成式与大模型类算子、Mustache 提示词渲染，核心包不依赖它
 │   ├── StrataRec.Redis/         # 可选包：redis@1，cache 供给方式的分布式层（基于 StackExchange.Redis），核心包不依赖它
-│   └── StrataRec.Cli/           # validate、build、diff、explain-plan、draft、replay、lint；引用两个可选包
+│   └── StrataRec.Cli/           # init、validate、build、run、diff、explain-plan、draft、replay、lint；引用两个可选包
 ├── extensions/                  # 可选扩展包，宿主按需引用
 │   ├── StrataRec.Models.GrpcTensor/   # grpc_tensor@1 模型客户端
 │   ├── StrataRec.Connectors.Kafka/    # kafka@1 更新流来源（第 6.6 节）

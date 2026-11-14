@@ -9,9 +9,10 @@ namespace StrataRec.Cli.Commands;
 /// from a pruned copy of the sample.
 /// </summary>
 /// <remarks>
-/// It never deletes and, without <c>--force</c>, never writes into a directory that has anything in it: a mistyped
-/// directory must not end up with a workspace scattered over its files. With <c>--force</c> it writes its own files
-/// over files of the same names and leaves every other file as it is.
+/// It never deletes and, without <c>--force</c>, never writes into a directory that has anything in it but hidden entries:
+/// a mistyped directory must not end up with a workspace scattered over its files, while a repository just made with
+/// <c>git init</c> (<c>.git</c>, <c>.gitignore</c>, an editor's settings) is where a workspace is meant to start. With
+/// <c>--force</c> it writes its own files over files of the same names and leaves every other file as it is.
 /// </remarks>
 internal static class InitCommand
 {
@@ -19,7 +20,7 @@ internal static class InitCommand
     {
         var directory = new Argument<string?>("directory")
         {
-            Description = "Where to create the workspace (created if missing); default: the current directory. It must be empty unless --force.",
+            Description = "Where to create the workspace (created if missing); default: the current directory. It must be empty (hidden entries such as .git aside) unless --force.",
             Arity = ArgumentArity.ZeroOrOne,
         };
         var pipeline = new Option<string>("--pipeline", "-p")
@@ -162,7 +163,10 @@ internal static class InitCommand
         return true;
     }
 
-    /// <summary>What to name in the way of an init without --force: a file it would overwrite, else the first entry; null when empty.</summary>
+    /// <summary>
+    /// What to name in the way of an init without --force: a file it would overwrite, else the first entry that is not
+    /// hidden; null when there is none (init writes no hidden file, so a hidden entry is never overwritten).
+    /// </summary>
     private static string? InTheWay(string root, List<string> existing)
     {
         if (existing.Count > 0)
@@ -173,7 +177,11 @@ internal static class InitCommand
         var entries = new List<string>();
         foreach (var entry in Directory.EnumerateFileSystemEntries(root))
         {
-            entries.Add(Path.GetFileName(entry) + (Directory.Exists(entry) ? "/" : string.Empty));
+            var name = Path.GetFileName(entry);
+            if (!name.StartsWith('.'))
+            {
+                entries.Add(name + (Directory.Exists(entry) ? "/" : string.Empty));
+            }
         }
 
         if (entries.Count == 0)

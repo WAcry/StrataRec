@@ -25,6 +25,16 @@ dotnet run --project src/StrataRec.Cli -- schema pipeline          # 各类产�
 dotnet run --project src/StrataRec.Cli -- operators                # 算子及其声明的效果
 ```
 
+从零开始写一条流水线时，先生成一份最小的工作区，再在上面改：
+
+```sh
+dotnet run --project src/StrataRec.Cli -- init my-feed            # 目录须为空（.git 等隐藏条目除外）；--pipeline 指定流水线 ID
+dotnet run --project src/StrataRec.Cli -- validate -c my-feed
+dotnet run --project src/StrataRec.Cli -- run      -c my-feed -r my-feed/requests/example.jsonc --trace
+```
+
+`init` 写出目录、本地绑定、一条从召回到 top-k 的流水线、一个实验、发布文件、夹具和示例请求，每个文件开头的注释说明先改哪里，最后打印接下来可以照抄的命令。`home_feed` 是演示全部功能的完整示例。
+
 `validate` 对示例会报一个预期内的警告：MMR 实验读取的分数会被另一层的校准实验修改，而这两个臂可能同时分配。
 
 ## 示例工作区

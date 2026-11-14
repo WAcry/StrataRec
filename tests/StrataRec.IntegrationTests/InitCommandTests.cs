@@ -87,6 +87,27 @@ public sealed class InitCommandTests
         Assert.Contains($"overwrite the {InitTemplates.Files(InitTemplates.DefaultPipeline).Length} files", errors);
     }
 
+    [Fact]
+    public void Init_IntoARepositoryWithOnlyHiddenEntries_WritesTheWorkspace_AndLeavesThemAlone()
+    {
+        using var temp = new TempDirectory();
+        Directory.CreateDirectory(Path.Combine(temp.Path, ".git"));
+        File.WriteAllText(Path.Combine(temp.Path, ".gitignore"), "bin/\n");
+
+        Assert.Equal(0, Init(temp.Path, InitTemplates.DefaultPipeline, force: false, out _, out var errors));
+        Assert.Empty(errors);
+        Assert.True(File.Exists(Path.Combine(temp.Path, "policy.jsonc")));
+        Assert.Equal("bin/\n", File.ReadAllText(Path.Combine(temp.Path, ".gitignore")));
+        Assert.True(Directory.Exists(Path.Combine(temp.Path, ".git")));
+
+        // A visible file next to the hidden ones is still in the way.
+        using var other = new TempDirectory();
+        Directory.CreateDirectory(Path.Combine(other.Path, ".git"));
+        File.WriteAllText(Path.Combine(other.Path, "notes.txt"), "mine");
+        Assert.Equal(2, Init(other.Path, InitTemplates.DefaultPipeline, force: false, out _, out errors));
+        Assert.Contains("'notes.txt' is in the way", errors);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("1feed")]
