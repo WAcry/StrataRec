@@ -57,6 +57,9 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
     public OperatorDescriptor Descriptor { get; } = new("PairwiseRanker", 1, Effects.RowOrder | Effects.ColumnWriter, typeof(PairwiseRankerConfig),
         "Reranks the leading rows by a model's pairwise preferences, aggregated into expected wins.");
 
+    /// <summary>The most pairs a node may compare: two rows of each must fit in one array.</summary>
+    internal const int MaxPairsLimit = 1 << 29;
+
     public Operator? Compile(OperatorCompileContext context)
     {
         var config = context.BindConfig<PairwiseRankerConfig>();
@@ -86,6 +89,16 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
         if (config.MaxPairs < 1)
         {
             context.Error("/max_pairs", "RANKER_MAX_PAIRS", "max_pairs must be at least 1.");
+            return null;
+        }
+
+        // The two rows of every pair are gathered into one buffer per input: beyond this a request could not hold them,
+        // and fails at load rather than on its first request (review 28).
+        if (config.MaxPairs > MaxPairsLimit)
+        {
+            context.Error("/max_pairs", "RANKER_MAX_PAIRS",
+                $"max_pairs is {config.MaxPairs}, more than {MaxPairsLimit.ToString(CultureInfo.InvariantCulture)}: the two rows of every pair are gathered into one buffer.",
+                "compare a smaller window: the pairs grow with its square (a window of 50 is 1225 pairs)");
             return null;
         }
 
