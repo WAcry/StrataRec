@@ -123,7 +123,7 @@ public sealed class ObservedCancellationSourceTests
         // As CancellationTokenSource.Cancel throws it: the callbacks' exceptions in one AggregateException.
         var thrown = await Assert.ThrowsAsync<AggregateException>(() => callbacks);
         Assert.Equal("cleanup failed", Assert.IsType<InvalidOperationException>(Assert.Single(thrown.InnerExceptions)).Message);
-        Assert.True(source.CancelObservedAsync().IsCompletedSuccessfully); // cancelled already: nothing runs again
+        Assert.Same(callbacks, source.CancelObservedAsync()); // cancelled already: nothing runs again, the same callbacks
         Assert.True(SpinWait.SpinUntil(() => counted.Of("assignment") == 1, Patience));
         Thread.Sleep(50);
         Assert.Equal(1, counted.Of("assignment"));
@@ -144,6 +144,102 @@ public sealed class ObservedCancellationSourceTests
     }
 
     /// <summary>A source with a logger of its own: records what it was told, and throws if asked to.</summary>
+    /// <summary>Review 23 #3: a cancellation through the base Cancel ran its callbacks already; one disposal disposes.</summary>
+    [Fact]
+    public void ACancellationThroughTheBaseCancel_IsDisposedByOneDisposal()
+    {
+        var source = new ObservedCancellationSource(CancellationSite.Call);
+        var handle = source.Token.WaitHandle;
+        var ran = 0;
+        source.Token.Register(() => ran++);
+
+        ((CancellationTokenSource)source).Cancel();
+        source.Dispose();
+
+        Assert.Equal(1, ran);
+        Assert.True(Disposed(source));
+        Assert.True(handle.SafeWaitHandle.IsClosed);
+    }
+
+    [Fact]
+    public void ADisposalBeforeAnyCancellation_IsAtOnce_AndALaterCancellationIsNone()
+    {
+        var source = new ObservedCancellationSource(CancellationSite.Call);
+        var ran = 0;
+        source.Token.Register(() => ran++);
+
+        source.Dispose();
+        var callbacks = source.CancelObservedAsync();
+
+        Assert.True(Disposed(source));
+        Assert.True(callbacks.IsCompletedSuccessfully);
+        Assert.Equal(0, ran);
+    }
+
+    /// <summary>Review 23 #2: a second disposal must not dispose ahead of the callbacks the first one waits for.</summary>
+    [Fact]
+    public async Task DisposedTwiceWhileItsCallbacksRun_IsDisposedOnceTheyHaveRun()
+    {
+        var source = new ObservedCancellationSource(CancellationSite.Call);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var ran = 0;
+        source.Token.Register(() =>
+        {
+            entered.Set();
+            release.Wait(Patience);
+            ran++;
+        });
+
+        var callbacks = source.CancelObservedAsync();
+        Assert.True(entered.Wait(Patience));
+        source.Dispose();
+        source.Dispose();
+        Assert.False(Disposed(source)); // the callbacks are still running
+
+        release.Set();
+        await callbacks.WaitAsync(Patience);
+        Assert.Equal(1, ran);
+        Assert.True(SpinWait.SpinUntil(() => Disposed(source), Patience));
+    }
+
+    /// <summary>Of two concurrent cancellations, one cancels; the other returns its callbacks or a completed task.</summary>
+    [Fact]
+    public async Task OfTwoCancellations_OneRunsTheCallbacks_Once()
+    {
+        var source = new ObservedCancellationSource(CancellationSite.Call);
+        using var release = new ManualResetEventSlim();
+        var ran = 0;
+        source.Token.Register(() =>
+        {
+            release.Wait(Patience);
+            Interlocked.Increment(ref ran);
+        });
+
+        var first = source.CancelObservedAsync();
+        var second = source.CancelObservedAsync();
+
+        Assert.Same(first, second);
+        release.Set();
+        await first.WaitAsync(Patience);
+        Assert.Equal(1, ran);
+        source.Dispose();
+        Assert.True(Disposed(source));
+    }
+
+    private static bool Disposed(CancellationTokenSource source)
+    {
+        try
+        {
+            _ = source.Token;
+            return false;
+        }
+        catch (ObjectDisposedException)
+        {
+            return true;
+        }
+    }
+
     private sealed class Logging(CancellationSite site, RequestEventLog events, string requestId) : ObservedCancellationSource(site, default, events, requestId)
     {
         public TaskCompletionSource<AggregateException> Failed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);

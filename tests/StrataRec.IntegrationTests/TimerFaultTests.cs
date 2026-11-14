@@ -65,6 +65,26 @@ public sealed class TimerFaultTests
         Assert.Equal("True", Value(output, "disposed")); // and the disposal completes once they have run
     }
 
+    /// <summary>
+    /// Review 23 #1 and #2: the cancellation and the disposal of a source may meet in any order. Two cancellations at once
+    /// (the timer and the linked token), and a disposal repeated while a cancellation is still starting, must neither
+    /// drop the queued callbacks nor dispose ahead of them. The pool's only worker is held while every round queues its
+    /// callbacks, so none has run when its source is disposed; then every callback must run, once, and every source end
+    /// disposed. The rounds hit the windows the review found within a few dozen.
+    /// </summary>
+    [Fact]
+    public void CancellationsAndDisposals_InAnyOrder_RunEveryQueuedCallbackOnce_AndDisposeAfterThem()
+    {
+        var output = TimerFaultChild.Start("cancel-races", out var exitCode, singleWorker: true);
+
+        Assert.True(exitCode == 0, $"the child exited with {exitCode}:\n{output}");
+        Assert.Equal("True", Value(output, "single_worker"));
+        Assert.Equal(Value(output, "rounds"), Value(output, "two_cancellations_ran"));
+        Assert.Equal(Value(output, "rounds"), Value(output, "two_cancellations_disposed"));
+        Assert.Equal(Value(output, "rounds"), Value(output, "double_disposal_ran"));
+        Assert.Equal(Value(output, "rounds"), Value(output, "double_disposal_disposed"));
+    }
+
     private static string Value(string output, string key)
     {
         foreach (var line in output.Split('\n'))
@@ -101,7 +121,7 @@ internal static class TimerFaultChild
             WorkingDirectory = AppContext.BaseDirectory,
         };
         start.ArgumentList.Add(typeof(TimerFaultChild).Assembly.Location);
-        if (site == "cancel-then-dispose")
+        if (site is "cancel-then-dispose" or "cancel-races")
         {
             start.ArgumentList.Add(site);
         }
@@ -172,6 +192,114 @@ internal static class TimerFaultChild
         Console.WriteLine($"ran={Volatile.Read(ref ran)}");
         Console.WriteLine($"disposed={disposed}");
         return 0;
+    }
+
+    /// <summary>
+    /// The rounds of <see cref="TimerFaultTests.CancellationsAndDisposals_InAnyOrder_RunEveryQueuedCallbackOnce_AndDisposeAfterThem"/>,
+    /// with the pool's only worker held until all are queued.
+    /// </summary>
+    public static int CancelRaces()
+    {
+        const int Rounds = 2000;
+        ThreadPool.SetMinThreads(1, 1);
+        var single = ThreadPool.SetMaxThreads(1, 1);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        ThreadPool.UnsafeQueueUserWorkItem(_ => { entered.Set(); release.Wait(); }, null);
+        entered.Wait();
+
+        // Two cancellations at once, then the disposal once both have returned.
+        var twoRan = 0;
+        var two = new ObservedCancellationSource[Rounds];
+        using (var start = new Barrier(3))
+        {
+            var current = default(ObservedCancellationSource);
+            void Canceller()
+            {
+                for (var i = 0; i < Rounds; i++)
+                {
+                    start.SignalAndWait();
+                    _ = current!.CancelObservedAsync();
+                    start.SignalAndWait();
+                }
+            }
+
+            var a = new Thread(Canceller);
+            var b = new Thread(Canceller);
+            a.Start();
+            b.Start();
+            for (var i = 0; i < Rounds; i++)
+            {
+                current = two[i] = new ObservedCancellationSource(CancellationSite.Call);
+                current.Token.Register(() => Interlocked.Increment(ref twoRan));
+                start.SignalAndWait();
+                start.SignalAndWait();
+                current.Dispose();
+            }
+
+            a.Join();
+            b.Join();
+        }
+
+        // One cancellation, and the disposal twice as soon as the token is cancelled: while it may still be starting.
+        var doubleRan = 0;
+        var twice = new ObservedCancellationSource[Rounds];
+        using (var go = new Barrier(2))
+        {
+            var current = default(ObservedCancellationSource);
+            var canceller = new Thread(() =>
+            {
+                for (var i = 0; i < Rounds; i++)
+                {
+                    go.SignalAndWait();
+                    _ = current!.CancelObservedAsync();
+                    go.SignalAndWait();
+                }
+            });
+            canceller.Start();
+            for (var i = 0; i < Rounds; i++)
+            {
+                current = twice[i] = new ObservedCancellationSource(CancellationSite.Call);
+                current.Token.Register(() => Interlocked.Increment(ref doubleRan));
+                go.SignalAndWait();
+                var token = current.Token;
+                SpinWait.SpinUntil(() => token.IsCancellationRequested);
+                current.Dispose();
+                current.Dispose();
+                go.SignalAndWait();
+            }
+
+            canceller.Join();
+        }
+
+        release.Set();
+        SpinWait.SpinUntil(() => Volatile.Read(ref twoRan) == Rounds && Volatile.Read(ref doubleRan) == Rounds, Patience);
+        SpinWait.SpinUntil(() => DisposedCount(two) == Rounds && DisposedCount(twice) == Rounds, Patience);
+        Console.WriteLine($"single_worker={single}");
+        Console.WriteLine($"rounds={Rounds}");
+        Console.WriteLine($"two_cancellations_ran={Volatile.Read(ref twoRan)}");
+        Console.WriteLine($"two_cancellations_disposed={DisposedCount(two)}");
+        Console.WriteLine($"double_disposal_ran={Volatile.Read(ref doubleRan)}");
+        Console.WriteLine($"double_disposal_disposed={DisposedCount(twice)}");
+        return 0;
+    }
+
+    private static int DisposedCount(ObservedCancellationSource[] sources)
+    {
+        var disposed = 0;
+        foreach (var source in sources)
+        {
+            try
+            {
+                _ = source.Token;
+            }
+            catch (ObjectDisposedException)
+            {
+                disposed++;
+            }
+        }
+
+        return disposed;
     }
 
     public static int Run(string site)

@@ -12,6 +12,7 @@ internal static class Program
         {
             ["timer-fault", var site] => TimerFaultChild.Run(site),
             ["cancel-then-dispose"] => TimerFaultChild.CancelThenDispose(),
+            ["cancel-races"] => TimerFaultChild.CancelRaces(),
             _ => 0,
         };
 }

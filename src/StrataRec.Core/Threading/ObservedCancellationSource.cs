@@ -87,15 +87,19 @@ public class ObservedCancellationSource : CancellationTokenSource
 
     private static readonly Action<Task, object?> DisposeBaseAfter = static (_, state) => ((ObservedCancellationSource)state!).DisposeBase();
 
-    /// <summary>In <see cref="_cancellation"/>: the source was disposed before a cancellation published its callbacks.</summary>
-    private static readonly Task Disposing = new(static () => { });
+    // The bits of _state. Each is only ever set, by one atomic Or on the one field, so every party sees them in one order.
+    private const int Cancelling = 1; // one caller won the cancellation: the only one that calls CancelAsync
+    private const int Published = 2; // that caller has published its callbacks in _callbacks
+    private const int DisposeRequested = 4;
+    private const int BaseDisposed = 8;
 
     private readonly CancellationTokenRegistration _link;
     private readonly RequestEventLog? _events;
     private readonly string? _requestId;
     private readonly CancellationSite _site;
     private ITimer? _timer;
-    private Task? _cancellation; // the first cancellation's callbacks, or Disposing; set once (see Dispose)
+    private Task? _callbacks; // the winning cancellation's callbacks, once Published
+    private int _state;
 
     /// <param name="site">The token's site, for the metric and the request event.</param>
     /// <param name="linkedTo">A token this one is cancelled with; none by default.</param>
@@ -141,26 +145,45 @@ public class ObservedCancellationSource : CancellationTokenSource
     }
 
     /// <summary>
-    /// Cancels the token now. The token observes the cancellation before this returns; its callbacks run on the thread
-    /// pool. Returns the task that runs them: it faults with what they threw, which is counted and reported whether or
-    /// not anyone awaits it, so a caller that does not need to know when they are done can drop it. A source cancelled
-    /// already, or disposed, is left as it is (a completed task).
+    /// Cancels the token now. The token observes the cancellation before this returns, and its callbacks run on the
+    /// thread pool. Returns the task that runs them. It faults with what they threw, which is counted and reported
+    /// whether or not anyone awaits it, so a caller that does not need to know when they are done can drop it.
     /// </summary>
+    /// <remarks>
+    /// Of concurrent cancellations (the timer, the linked token, the framework), one wins and cancels. The others add no
+    /// callbacks and return its task, or a completed one while it is still starting: the token observes the cancellation
+    /// a moment later. A source whose disposal was requested is not cancelled (a completed task): whoever held the token
+    /// has ended.
+    /// </remarks>
     public Task CancelObservedAsync()
     {
-        Task callbacks;
-        try
+        var state = Interlocked.Or(ref _state, Cancelling);
+        if ((state & Cancelling) != 0)
         {
-            callbacks = CancelAsync();
-        }
-        catch (ObjectDisposedException)
-        {
-            return Task.CompletedTask; // see below
+            return Volatile.Read(ref _callbacks) ?? Task.CompletedTask;
         }
 
-        // Published before anything else, for a disposal that comes now (Dispose). If the disposal came first, it saw the
-        // token cancelled and left the base disposal to this cancellation, once its callbacks have run.
-        if (Interlocked.CompareExchange(ref _cancellation, callbacks, null) == Disposing)
+        Task callbacks;
+        if ((state & DisposeRequested) != 0)
+        {
+            callbacks = Task.CompletedTask;
+        }
+        else
+        {
+            try
+            {
+                callbacks = CancelAsync();
+            }
+            catch (ObjectDisposedException)
+            {
+                callbacks = Task.CompletedTask; // not through Dispose: nothing to cancel
+            }
+        }
+
+        // Published, then the disposal checked, in that order (see Dispose): if the disposal came while this cancellation
+        // started, it left the base disposal to it, after the callbacks.
+        Volatile.Write(ref _callbacks, callbacks);
+        if ((Interlocked.Or(ref _state, Published) & DisposeRequested) != 0)
         {
             DisposeAfter(callbacks);
         }
@@ -168,20 +191,10 @@ public class ObservedCancellationSource : CancellationTokenSource
         if (!callbacks.IsCompleted)
         {
             _ = callbacks.ContinueWith(Observe, this, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-            return callbacks;
         }
-
-        if (callbacks.IsFaulted)
+        else if (callbacks.IsFaulted)
         {
-            var failure = callbacks.Exception!; // observed here either way
-            if (failure.InnerException is ObjectDisposedException)
-            {
-                // CancelAsync returns, rather than throws, the disposal of a source disposed already (between the timer's
-                // due time and its callback, say): whoever held the token has finished with it. No callback ran.
-                return Task.CompletedTask;
-            }
-
-            Failed(failure);
+            Failed(callbacks.Exception!);
         }
 
         return callbacks;
@@ -200,39 +213,65 @@ public class ObservedCancellationSource : CancellationTokenSource
     /// to run. The base disposal clears the registrations, and a cancellation's callbacks are taken from them only when
     /// its work item runs on the pool, so disposing in between would drop every callback, silently (the callbacks' task
     /// still succeeds). Whoever held the token may well have ended before that work item ran: it saw the cancellation
-    /// flag. Disposal and cancellation meet in one exchange on <see cref="_cancellation"/>, whichever comes first: a
-    /// cancellation that published its callbacks has them waited for; one that has cancelled but not yet published finds
-    /// the disposal there and disposes after its callbacks itself. Nothing is allocated unless callbacks are still to run.
+    /// flag.
     /// </summary>
+    /// <remarks>
+    /// <para>The disposal and the cancellation meet on <see cref="_state"/>, whose bits are set by atomic Ors of the one
+    /// field, so they are totally ordered: of the disposal's <c>DisposeRequested</c> and the winning cancellation's
+    /// <c>Published</c>, the later sees the earlier, and exactly one of them disposes after the callbacks. Requested with
+    /// no cancellation started, the disposal is at once, and a later cancellation is none.</para>
+    /// <para>The first disposal arranges everything; later ones return. The base disposal runs once. A cancellation
+    /// through the base <c>Cancel</c> runs its callbacks before it returns, so it needs no waiting. Nothing is allocated
+    /// unless callbacks are still running.</para>
+    /// </remarks>
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        if (!disposing)
         {
-            Interlocked.Exchange(ref _timer, null)?.Dispose();
-            _link.Dispose();
-            var published = Interlocked.CompareExchange(ref _cancellation, Disposing, null);
-            if (published is null)
-            {
-                if (IsCancellationRequested)
-                {
-                    return; // cancelled, callbacks not yet published: the cancellation disposes after them
-                }
-            }
-            else if (published != Disposing && !published.IsCompleted)
-            {
-                DisposeAfter(published);
-                return;
-            }
+            base.Dispose(disposing);
+            return;
         }
 
-        base.Dispose(disposing);
+        Interlocked.Exchange(ref _timer, null)?.Dispose();
+        _link.Dispose();
+        var state = Interlocked.Or(ref _state, DisposeRequested);
+        if ((state & DisposeRequested) != 0)
+        {
+            return; // the first disposal arranged it
+        }
+
+        if ((state & Cancelling) == 0)
+        {
+            DisposeBase(); // no cancellation started, so no callback is queued
+        }
+        else if ((state & Published) != 0)
+        {
+            DisposeAfter(Volatile.Read(ref _callbacks)!);
+        }
+
+        // Otherwise a cancellation is starting: it sees the request when it publishes, and disposes after its callbacks.
     }
 
-    private void DisposeAfter(Task callbacks) =>
-        _ = callbacks.ContinueWith(DisposeBaseAfter, this, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    private void DisposeAfter(Task callbacks)
+    {
+        if (callbacks.IsCompleted)
+        {
+            DisposeBase();
+        }
+        else
+        {
+            _ = callbacks.ContinueWith(DisposeBaseAfter, this, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+    }
 
-    /// <summary>The base disposal once the callbacks have run; disposing twice is harmless.</summary>
-    private void DisposeBase() => base.Dispose(true);
+    /// <summary>The base disposal, once.</summary>
+    private void DisposeBase()
+    {
+        if ((Interlocked.Or(ref _state, BaseDisposed) & BaseDisposed) == 0)
+        {
+            base.Dispose(true);
+        }
+    }
 
     /// <summary>The linked token was cancelled: so is this one, its callbacks on the pool (see the remarks).</summary>
     private void CancelLinked() => _ = CancelObservedAsync();
