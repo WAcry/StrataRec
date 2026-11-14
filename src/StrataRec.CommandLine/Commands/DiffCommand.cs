@@ -225,10 +225,10 @@ internal static class DiffCommand
         var oneSided = diff.Combinations.Count - differing;
         o.WriteLine();
         o.WriteLine(diff.HasDifferences
-            ? $"{diff.Compared.Count} combination(s) compared: {differing} differ" +
-              (oneSided > 0 ? $", {oneSided} exist on one side only" : string.Empty) +
-              (diff.Structure.Count > 0 ? $"; {diff.Structure.Count} structural change(s)" : string.Empty)
-            : $"no differences in {diff.Compared.Count} combination(s): {string.Join(", ", diff.Compared)}");
+            ? $"{Output.Count(diff.Compared.Count, "combination")} compared: {differing} {(differing == 1 ? "differs" : "differ")}" +
+              (oneSided > 0 ? $", {oneSided} {(oneSided == 1 ? "exists" : "exist")} on one side only" : string.Empty) +
+              (diff.Structure.Count > 0 ? $"; {Output.Count(diff.Structure.Count, "structural change")}" : string.Empty)
+            : $"no differences in {Output.Count(diff.Compared.Count, "combination")}: {string.Join(", ", diff.Compared)}");
 
         static string Values(JsonChange change) => change.Kind switch
         {

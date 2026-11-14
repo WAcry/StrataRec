@@ -33,7 +33,7 @@ public sealed class DiffCommandTests
 
         var text = new StringWriter();
         Assert.Equal(0, await DiffCommand.RunAsync(Tool.Environment, HomeFeedTestHost.SampleRoot(), copy, null, "local", null, Array.Empty<string>(), "text", text, CancellationToken.None));
-        Assert.Contains("no differences in 7 combination(s)", text.ToString());
+        Assert.Contains("no differences in 7 combinations", text.ToString());
     }
 
     [Fact]

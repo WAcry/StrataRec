@@ -294,7 +294,7 @@ internal static class CompareCommand
         output.WriteLine();
         output.WriteLine($"identical results           {report.Identical} of {report.Bundles}");
         output.WriteLine($"top-{report.TopK} overlap mean / min  {Pair(report.Overlap.Mean, report.Overlap.Min)}");
-        output.WriteLine($"kendall tau mean / min      {Pair(report.KendallTau.Mean, report.KendallTau.Min)} ({report.KendallTau.Count} request(s) with 2+ shared items)");
+        output.WriteLine($"kendall tau mean / min      {Pair(report.KendallTau.Mean, report.KendallTau.Min)} ({Output.Count(report.KendallTau.Count, "request")} with 2+ shared items)");
         output.WriteLine($"{report.ScoreColumn} distribution KS      {Fixed(report.ScoreKs)}; per-item delta mean {Fixed(report.ScoreDelta.Mean)}");
         foreach (var change in report.FeatureMissing)
         {
