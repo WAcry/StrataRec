@@ -8,11 +8,19 @@ namespace StrataRec.Experiments.Assignment;
 /// salts, holdouts) is the platform's; the engine only applies the arms it answers.
 /// </summary>
 /// <remarks>
-/// The engine asks only for requests that do not carry the platform's answer already (<c>RecRequest.Assignment</c>) and
-/// are not forced (<c>DebugOptions.ForceArms</c>). The call shares the request's deadline: its token is cancelled at the
-/// deadline, and a provider that ignores the token is not waited for beyond it (the request fails as past its deadline).
-/// The engine keeps no mapping between the platform's ids and the plan's: the provider translates, using the plan's
-/// metadata in <see cref="AssignmentContext"/>.
+/// <para>The engine asks only for requests that do not carry the platform's answer already (<c>RecRequest.Assignment</c>)
+/// and are not forced (<c>DebugOptions.ForceArms</c>). It keeps no mapping between the platform's ids and the plan's: the
+/// provider translates, using the plan's metadata in <see cref="AssignmentContext"/>.</para>
+/// <para>The call runs inline on the request's thread, as calls to connectors, candidate sources and models do; the
+/// engine does not move it to the thread pool. What the provider does before it returns its <see cref="ValueTask{T}"/> is
+/// therefore not bounded: the request waits for it however long it takes. Do the platform's I/O asynchronously, or answer
+/// quickly from a local SDK. The asynchronous part shares the request's deadline: its token is cancelled at the deadline,
+/// and a provider still pending then is not waited for (the request fails as past its deadline). A provider the request
+/// stops waiting for, at the deadline or because the caller cancelled, has its token cancelled, and the token stays
+/// valid until the provider ends, so a provider that ends on its token always ends.</para>
+/// <para>An answer is used only if the engine observes it before the deadline and before the caller cancels. One it sees
+/// only later, such as a synchronous answer after blocking past the deadline, is dropped: the request fails as past its
+/// deadline, or is cancelled.</para>
 /// </remarks>
 public interface IAssignmentProvider
 {
