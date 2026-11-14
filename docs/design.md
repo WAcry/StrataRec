@@ -605,7 +605,7 @@ internal sealed class RequestMemory
 其中生成式召回和大模型类算子（`GenerativeRetriever@1`、`LlmReranker@1`、`LlmAnnotator@1`、`SlateGenerator@1`）由扩展包 `StrataRec.Llm` 提供，其余属于核心标准算子库（第 16.1 节）。几个与生成式模型相关的规则在框架层面统一处理：
 
 1. **提示词用 Mustache 模板。** 模板写在产物里，引用列和 `ctx` 字段。Mustache 没有逻辑，提示词里不会出现第二种表达式语言；模板引用的名字在加载期按列和请求 Schema 检查。
-2. **成本上限带默认值。** 成对算子用 `max_pairs` 限制比较的对数，生成类算子用 `max_output_tokens` 限制输出长度，两者都有算子定义的默认值，可以在节点配置中调整。成对比较的数量随候选数平方增长，所以只在前 `window` 名里两两比较；窗口的对数 `window · (window − 1) / 2` 在加载时与 `max_pairs` 比较，超过是配置错误，请求期不截断（理由见 `decisions.md`）。生成输出达到 `max_output_tokens` 时停止读取并计数。
+2. **成本上限带默认值。** 成对算子用 `max_pairs` 限制比较的对数，生成类算子用 `max_output_tokens` 限制输出长度，两者都有算子定义的默认值，可以在节点配置中调整。成对比较的数量随候选数平方增长，所以只在前 `window` 名里两两比较；窗口的对数 `window · (window − 1) / 2` 在加载时与 `max_pairs` 比较，超过是配置错误，请求期不截断（理由见 `decisions.md`）。`max_output_tokens` 随调用交给模型客户端，由客户端在生成时执行，因为只有它有分词器；它回报生成的 token 数和是否在上限处截断，引擎对所有模型调用统一计数（`stratarec.model.output_tokens`、`stratarec.model.truncated`）。
 3. **输出按声明的结构校验。** 生成的文本按算子声明的输出结构解析。不在候选表中的 ID 被忽略并计数；整体解析失败时节点结果为 `Failed`，再按 `on_failure` 处理。大模型调用延迟高，常见做法是只处理前 20 名，并配 `"on_failure": "skip"`，失败时保持模型排序的结果。
 4. **生成的候选可能没有特征。** 生成式召回追加的行和其他召回一样，由拉取规划补齐特征；特征源里查不到的新物品按特征目录的默认值或可空类型处理（第 6.7 节）。
 5. **不确定性靠种子和记录。** 支持随机种子的模型客户端会收到 `ctx.request.seed`；无论模型是否确定，回放包都记录它的原始输出，回放结果因此可以复现（第 5.7 节）。
@@ -2203,7 +2203,7 @@ trace 只在调试请求中生成，内容不做屏蔽（第 8.9 节）。
 2. **权限。** 按 RFC 6901 路径前缀和 owner 控制谁能修改什么（第 11.4 节）；基线和特征目录的修改需要 owner 评审。
 3. **表达式沙箱。** 表达式只能调用白名单中的纯函数，嵌套深度有上限（第 7.9 节）。
 4. **请求资源上限。** 每个请求有截止时间，每个 `RowSource` 有行数上限；请求的总行数、拉取键数和模型调用批次数都由行数上限确定（第 4.8 节）。
-5. **模型调用成本上限。** 成对比较类算子的 `max_pairs` 和生成类算子的 `max_output_tokens` 都有默认值：前者在加载时检查，后者由算子在请求期执行并计数（第 5.9 节）。
+5. **模型调用成本上限。** 成对比较类算子的 `max_pairs` 和生成类算子的 `max_output_tokens` 都有默认值：前者在加载时检查，后者由模型客户端在生成时执行，引擎计数（第 5.9 节）。
 6. **调试与草稿。** 只接受宿主认证过的请求，有频率限制，不写持久日志；草稿只在专用预览部署上执行，预览节点重新执行全部校验。
 7. **密钥。** 产物中只出现密钥引用，由宿主解析。
 
@@ -2245,18 +2245,18 @@ stratarec/
 │   ├── StrataRec.Expressions/   # ColumnExpr：解析、类型检查、IR 优化、向量化后端、可选融合后端
 │   ├── StrataRec.Features/      # 特征目录、实体键、拉取规划、IFeatureSourceConnector、暂存区与回填、本地特征表、IFeatureUpdateSource、snapshot_files@1、衍生特征
 │   ├── StrataRec.Pipeline/      # 节点模型、效果类别、调度、截止时间与降级、标准算子（含 ModelScorer 与签名检查）
-│   ├── StrataRec.Models/        # IModelClient 契约、模型签名、内置客户端（linear@1、random@1）
+│   ├── StrataRec.Models/        # IModelClient 契约、模型签名、内置客户端（linear@1、random@1、fixed_text@1）
 │   ├── StrataRec.Experiments/   # 分配映射、补丁合并、足迹与冲突检测、联合计划、参数快照、触发记录
 │   ├── StrataRec.Logging/       # 漏斗组、探针编译、协调采样、异步管道、编码器、ILogSink
 │   ├── StrataRec.Artifacts/     # RFC 8785 规范化、JSON Schema 生成、产物存储与加载、manifest、能力匹配
 │   ├── StrataRec.Hosting/       # IRecEngine、调试选项、ASP.NET Core 集成（可选包）
-│   └── StrataRec.Cli/           # validate、build、diff、explain-plan、draft、replay、lint
+│   ├── StrataRec.Llm/           # 可选包：生成式与大模型类算子、Mustache 提示词渲染，核心包不依赖它
+│   ├── StrataRec.Redis/         # 可选包：redis@1，cache 供给方式的分布式层（基于 StackExchange.Redis），核心包不依赖它
+│   └── StrataRec.Cli/           # validate、build、diff、explain-plan、draft、replay、lint；引用两个可选包
 ├── extensions/                  # 可选扩展包，宿主按需引用
 │   ├── StrataRec.Models.GrpcTensor/   # grpc_tensor@1 模型客户端
-│   ├── StrataRec.Llm/                 # 生成式与大模型类算子、Mustache 提示词渲染
 │   ├── StrataRec.Connectors.Kafka/    # kafka@1 更新流来源（第 6.6 节）
-│   ├── StrataRec.Metrics.VictoriaMetrics/ # VictoriaMetrics 对数分桶（vmrange）指标导出（第 13.1 节）
-│   └── StrataRec.Redis/               # redis@1：cache 供给方式的分布式层（基于 StackExchange.Redis），核心包不依赖它
+│   └── StrataRec.Metrics.VictoriaMetrics/ # VictoriaMetrics 对数分桶（vmrange）指标导出（第 13.1 节）
 ├── control-plane/               # 发布控制器、manifest 校验、草稿服务的参考实现
 ├── schemas/                     # 各类产物的 JSON Schema，由 StrataRec.Artifacts 生成并提交
 ├── samples/                     # 基于公开数据集（如 MovieLens）的端到端示例

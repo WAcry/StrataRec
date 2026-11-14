@@ -31,6 +31,7 @@ dotnet run --project src/StrataRec.Cli -- --help
 | `StrataRec.Experiments` | 外部分配的映射、补丁校验、足迹、联合计划、触发 |
 | `StrataRec.Hosting` | `IRecEngine`、计划加载与切换、DI |
 | `StrataRec.Redis` | `redis@1`：`cache` 供给方式的分布式层（StackExchange.Redis），核心包不依赖它 |
+| `StrataRec.Llm` | 生成式与大模型类算子（`LlmReranker@1`）、Mustache 提示词；依赖 `StrataRec.Pipeline`，核心包不依赖它 |
 | `StrataRec.Cli` | `stratarec` 命令行工具 |
 
 依赖关系按表格自上而下，不允许引入循环引用。
