@@ -20,6 +20,7 @@ public sealed class ResultColumns
     private readonly string[] _names;
     private readonly ScalarValue[][] _values;
     private IReadOnlyList<RankedItem>? _rows;
+    private object? _rowsLock;
 
     /// <param name="ids">The items' ids in rank order: item i has rank i + 1.</param>
     /// <param name="names">The output columns' names, in the output's order.</param>
@@ -130,28 +131,25 @@ public sealed class ResultColumns
     /// The items as rows, a dictionary of the output columns each: what a result's <c>Items</c> return. Made once, the
     /// first time they are read, from any thread.
     /// </summary>
-    public IReadOnlyList<RankedItem> Rows
+    public IReadOnlyList<RankedItem> Rows =>
+        // Built under a lock the first time only, so threads reading first together do not each build a dictionary per
+        // row (a publish race built them all, kept one); later reads take the published rows without it.
+        Volatile.Read(ref _rows) ?? LazyInitializer.EnsureInitialized(ref _rows, ref _rowsLock, BuildRows);
+
+    private IReadOnlyList<RankedItem> BuildRows()
     {
-        get
+        var items = new RankedItem[_ids.Length];
+        for (var i = 0; i < items.Length; i++)
         {
-            if (Volatile.Read(ref _rows) is { } rows)
+            var columns = new Dictionary<string, ScalarValue>(_names.Length, StringComparer.Ordinal);
+            for (var c = 0; c < _names.Length; c++)
             {
-                return rows;
+                columns[_names[c]] = _values[c][i];
             }
 
-            var items = new RankedItem[_ids.Length];
-            for (var i = 0; i < items.Length; i++)
-            {
-                var columns = new Dictionary<string, ScalarValue>(_names.Length, StringComparer.Ordinal);
-                for (var c = 0; c < _names.Length; c++)
-                {
-                    columns[_names[c]] = _values[c][i];
-                }
-
-                items[i] = new RankedItem(_ids[i], i + 1, columns);
-            }
-
-            return Interlocked.CompareExchange(ref _rows, items, null) ?? items;
+            items[i] = new RankedItem(_ids[i], i + 1, columns);
         }
+
+        return items;
     }
 }

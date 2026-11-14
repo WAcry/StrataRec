@@ -183,7 +183,7 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         "error REQUEST_INVALID /deadline_ms: 'deadline_ms' must be a number or null, got the string \"200\".")]
     // Review 32: a null pipeline_id was an unhandled exception; duplicate members are rejected as in a service's request body.
     [InlineData("\"pipeline_id\": \"home_feed\"", "\"pipeline_id\": null", "\"pipeline_id\"",
-        "error REQUEST_INVALID /pipeline_id: 'pipeline_id' must name a pipeline, got null.\n    hint: give the id of the pipeline to run, e.g. \"pipeline_id\": \"home_feed\"")]
+        "error REQUEST_INVALID /pipeline_id: 'pipeline_id' must be a string, got null.")]
     [InlineData("\"pipeline_id\": \"home_feed\"", "\"pipeline_id\": \"\"", "\"pipeline_id\"",
         "error REQUEST_INVALID /pipeline_id: 'pipeline_id' must name a pipeline, got an empty string.")]
     [InlineData("\"request_id\": \"req-1001\"", "\"request_id\": \"req-1001\", \"request_id\": \"req-1002\"", "\"request_id\": \"req-1002\"",

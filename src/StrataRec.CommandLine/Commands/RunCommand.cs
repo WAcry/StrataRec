@@ -373,11 +373,10 @@ internal static class RunCommand
             return null;
         }
 
-        // A required member written as null binds (it is present): it names no pipeline.
-        if (string.IsNullOrEmpty(file.PipelineId))
+        // null is the binder's error (a non-nullable member); an empty string binds, and names no pipeline.
+        if (file.PipelineId.Length == 0)
         {
-            problems.Error("REQUEST_INVALID", requestPath, "/pipeline_id",
-                $"'pipeline_id' must name a pipeline, got {(file.PipelineId is null ? "null" : "an empty string")}.",
+            problems.Error("REQUEST_INVALID", requestPath, "/pipeline_id", "'pipeline_id' must name a pipeline, got an empty string.",
                 "give the id of the pipeline to run, e.g. \"pipeline_id\": \"home_feed\"");
         }
 

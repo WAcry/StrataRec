@@ -56,7 +56,7 @@ public static class ArtifactSerializer
         {
             if (node.Deserialize<T>(Options) is { } value)
             {
-                return value;
+                return NullElements.Find(value, Options) is { } nullElement ? throw Failed(nullElement, sourceName, null) : value;
             }
         }
         catch (JsonException ex)
@@ -79,7 +79,7 @@ public static class ArtifactSerializer
         {
             if (JsonSerializer.Deserialize<T>(json, Options) is { } value)
             {
-                return value;
+                return NullElements.Find(value, Options) is { } nullElement ? throw Failed(nullElement, sourceName, null) : value;
             }
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException)
@@ -142,8 +142,20 @@ public static class ArtifactSerializer
             return false;
         }
 
-        error = value is null ? JsonBindingErrors.Null(typeof(T), Options, subject) : null;
-        return value is not null;
+        if (value is null)
+        {
+            error = JsonBindingErrors.Null(typeof(T), Options, subject);
+            return false;
+        }
+
+        error = NullElements.Find(value, Options);
+        if (error is not null)
+        {
+            value = null;
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -185,6 +197,10 @@ public static class ArtifactSerializer
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
             NumberHandling = JsonNumberHandling.Strict,
             WriteIndented = true,
+
+            // null where a member is not nullable is an error at its pointer, as the generated JSON Schema says: bound,
+            // it was a null an operator or loader dereferenced (review 44). Elements of collections are not covered.
+            RespectNullableAnnotations = true,
         };
         options.MakeReadOnly(populateMissingResolver: true);
         return options;

@@ -85,7 +85,7 @@ public sealed class ReplayBundleFileTests
         var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(json));
 
         Assert.Equal(pointer, error.Pointer);
-        Assert.Contains("must not be null", error.Reason);
+        Assert.Matches("must not be null|got null", error.Reason); // a member: the binder; an element of a list or map: the walk
         Assert.Contains("stratarec schema replay_bundle", error.Hint);
     }
 

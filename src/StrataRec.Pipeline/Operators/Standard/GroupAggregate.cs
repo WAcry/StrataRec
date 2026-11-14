@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
@@ -66,6 +67,15 @@ public sealed class GroupAggregateFactory : IOperatorFactory
         var config = context.BindConfig<GroupAggregateConfig>();
         if (config is null)
         {
+            // The outputs the config names cannot be declared: marked unusable, their readers fail without a second error.
+            if (context.Config["outputs"] is JsonObject named)
+            {
+                foreach (var (name, _) in named)
+                {
+                    Unusable(context, name);
+                }
+            }
+
             return null;
         }
 
@@ -268,7 +278,8 @@ public sealed class GroupAggregateFactory : IOperatorFactory
             var n = live.Length;
             var column = output.Value is { } v ? context.Read(v) : null;
             var counts = memory.RentCleared<long>(groups);
-            var totals = memory.RentCleared<double>(groups);
+            var totals = memory.RentCleared<double>(groups); // the sum, min or max; the running mean for mean and std
+            var squares = output.Function == Function.Std ? memory.RentCleared<double>(groups) : null;
             for (var i = 0; i < n; i++)
             {
                 var g = groupOf[i];
@@ -289,30 +300,31 @@ public sealed class GroupAggregateFactory : IOperatorFactory
                 }
 
                 var x = Read(column, live[i]);
-                totals[g] = counts[g] == 0 ? x : output.Function switch
+                var k = ++counts[g];
+                switch (output.Function)
                 {
-                    Function.Min => Math.Min(totals[g], x),
-                    Function.Max => Math.Max(totals[g], x),
-                    _ => totals[g] + x,
-                };
-                counts[g]++;
-            }
+                    case Function.Min:
+                        totals[g] = k == 1 ? x : Math.Min(totals[g], x);
+                        break;
+                    case Function.Max:
+                        totals[g] = k == 1 ? x : Math.Max(totals[g], x);
+                        break;
+                    case Function.Sum:
+                        totals[g] = k == 1 ? x : totals[g] + x;
+                        break;
+                    default:
+                        // Welford's update, in row order: equal values leave the mean exactly the value and the squares 0
+                        // (a mean from the sum is off by its rounding, and the deviations from it made a std of equal
+                        // values > 0, a z-score of ±1); a mean of large values does not overflow through their sum.
+                        var delta = x - totals[g];
+                        totals[g] += delta / k;
+                        if (squares is not null)
+                        {
+                            squares[g] += delta * (x - totals[g]);
+                        }
 
-            if (output.Function == Function.Std)
-            {
-                // Two passes: the squared deviations from the group's mean, which does not cancel as sum of squares does.
-                var deviations = memory.RentCleared<double>(groups);
-                for (var i = 0; i < n; i++)
-                {
-                    var g = groupOf[i];
-                    if (g >= 0 && column is not null && column.IsValid(live[i]))
-                    {
-                        var d = Read(column, live[i]) - (totals[g] / counts[g]);
-                        deviations[g] += d * d;
-                    }
+                        break;
                 }
-
-                totals = deviations;
             }
 
             var present = context.Memory.Rent<bool>(n).AsSpan(0, n);
@@ -325,8 +337,7 @@ public sealed class GroupAggregateFactory : IOperatorFactory
                     values[i] = output.Function switch
                     {
                         Function.Count => counts[g],
-                        Function.Mean => totals[g] / counts[g],
-                        Function.Std => Math.Sqrt(totals[g] / counts[g]),
+                        Function.Std => Math.Sqrt(squares![g] / counts[g]),
                         _ => totals[g],
                     };
                 }

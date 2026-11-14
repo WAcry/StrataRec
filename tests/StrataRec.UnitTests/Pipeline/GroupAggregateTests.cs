@@ -150,6 +150,40 @@ public sealed class GroupAggregateTests
         Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
     }
 
+    [Theory]
+    [InlineData(10000000000000004.0, 17)] // review 44: the mean from the sum was one ulp off, and the deviations from it a std of 2
+    [InlineData(0.1, 17)]                  // the same at the scale of a score: a z-score of ±1 for equal scores
+    [InlineData(1e308, 2)]                 // the mean of values whose sum overflows
+    public async Task EqualValues_HaveTheirValueAsMean_AndAStdOfZero(double value, int count)
+    {
+        var items = Enumerable.Range(1, count).Select(i => ((long)i, (long?)1, "a", (double?)value, 0.0)).ToArray();
+        var plan = TryCompileOver(items, ("agg", """
+            { "op": "GroupAggregate@1", "order": 200, "config": { "outputs": {
+                "all.mean": { "fn": "mean", "value_col": "item.score" }, "author.std": { "fn": "std", "value_col": "item.score" } } } }
+            """)).Plan!;
+
+        var rows = ById(await Run(plan));
+
+        Assert.All(rows.Values, row => Assert.Equal((value, 0.0), (row["all_mean"].AsFloat64(), row["author_std"].AsFloat64())));
+    }
+
+    [Fact]
+    public async Task Std_OfValuesAtLargeAndSmallScales_IsThePopulationStd()
+    {
+        double[] values = [1e9 + 1, 1e9 + 2, 1e9 + 3, 1e9 + 4, -0.5];
+        var items = values.Select((v, i) => ((long)(i + 1), (long?)1, "a", (double?)v, 0.0)).ToArray();
+        var plan = TryCompileOver(items, ("agg", """
+            { "op": "GroupAggregate@1", "order": 200, "config": { "outputs": {
+                "all.mean": { "fn": "mean", "value_col": "item.score" }, "author.std": { "fn": "std", "value_col": "item.score" } } } }
+            """)).Plan!;
+
+        var row = ById(await Run(plan))[1];
+
+        var mean = values.Average();
+        Assert.Equal(mean, row["all_mean"].AsFloat64(), 6);
+        Assert.Equal(Math.Sqrt(values.Sum(v => (v - mean) * (v - mean)) / values.Length), row["author_std"].AsFloat64(), 6);
+    }
+
     private static Dictionary<long, IReadOnlyDictionary<string, ScalarValue>> ById(PipelineResult result)
     {
         Assert.True(result.Succeeded, result.Error);
@@ -181,7 +215,9 @@ public sealed class GroupAggregateTests
     /// A workspace of one pipeline: recall of the six items, then <paramref name="nodes"/>, and every column the tests read
     /// in the output.
     /// </summary>
-    private static PlanCompilation TryCompile(params (string Name, string Node)[] nodes)
+    private static PlanCompilation TryCompile(params (string Name, string Node)[] nodes) => TryCompileOver(Items, nodes);
+
+    private static PlanCompilation TryCompileOver((long Id, long? Author, string Tag, double? Score, double Weight)[] items, params (string Name, string Node)[] nodes)
     {
         var root = Directory.CreateTempSubdirectory("stratarec-group-aggregate-").FullName;
         Write(root, "catalog/c.jsonc", """
@@ -212,14 +248,14 @@ public sealed class GroupAggregateTests
             { "pipeline_id": "p", "entity_key_type": "int64",
               "columns": { "declared.count": { "type": "int32", "default": 0 }, "declared.mean": { "type": "float32", "default": 0.0 } },
               "param_schema": { "quotas": { "type": "map<string,int64>" }, "k": { "type": "int64" } },
-              "params": { "quotas": { "s": 10 }, "k": 10 },
+              "params": { "quotas": { "s": 100 }, "k": 100 },
               "nodes": {
                 "recall": { "order": 100, "op": "MultiSourceRecall@1", "config": { "quotas_param": "quotas" } },
                 {{string.Join(",\n", named)}} },
               "output": { "limit_param": "k", "columns": { {{string.Join(", ", columns)}} } } }
             """);
-        Write(root, "fixtures/ids.json", "{ \"items\": [" + string.Join(", ", Items.Select(i => i.Id)) + "] }");
-        Write(root, "fixtures/items.json", "{ " + string.Join(", ", Items.Select(i =>
+        Write(root, "fixtures/ids.json", "{ \"items\": [" + string.Join(", ", items.Select(i => i.Id)) + "] }");
+        Write(root, "fixtures/items.json", "{ " + string.Join(", ", items.Select(i =>
             $"\"{i.Id}\": {{ \"author\": {Json(i.Author)}, \"tag\": \"{i.Tag}\", \"score\": {Json(i.Score)}, \"weight\": {Json(i.Weight)} }}")) + " }");
 
         var diagnostics = new DiagnosticBag();

@@ -170,6 +170,18 @@ public sealed class OperatorCompileContext
             return false;
         }
 
+        if (implicitType is { } type && logical.Implicit && type != logical.Type)
+        {
+            // An undeclared column takes its type from the first variant or node that writes it, and every combination
+            // runs on one schema: another variant writing another type would be read, or written, as the first one's.
+            Error(configKey, "COLUMN_TYPE_MISMATCH",
+                $"{Descriptor.Id} writes '{name}' as {type} here, but as {logical.Type} at {logical.Pointer}: a column has one type in every arm combination.",
+                type.Kind == logical.Type.Kind
+                    ? $"declare it under /columns as {type.AsNullable()}, which both can write"
+                    : "write one of them to another column");
+            return false;
+        }
+
         foreach (var existing in _outputs)
         {
             if (existing.LogicalId == logical.Id)

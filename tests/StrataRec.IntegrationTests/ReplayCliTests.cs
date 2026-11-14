@@ -203,7 +203,7 @@ public sealed class ReplayCliTests
         using var report = JsonDocument.Parse(output.ToString());
         var bundles = report.RootElement.GetProperty("bundles");
         Assert.Equal(2, bundles.GetArrayLength());
-        Assert.Contains("/runs/0: must not be null", bundles[0].GetProperty("error").GetString());
+        Assert.Contains("/runs/0: Item 0 of 'runs' must be an object, got null.", bundles[0].GetProperty("error").GetString());
         Assert.True(bundles[1].TryGetProperty("diff", out _));
         var summary = report.RootElement.GetProperty("summary");
         Assert.Equal(("partial", 1, 1), (summary.GetProperty("status").GetString(), summary.GetProperty("replayed").GetInt32(), summary.GetProperty("unreadable").GetInt32()));

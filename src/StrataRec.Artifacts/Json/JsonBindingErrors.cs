@@ -267,6 +267,9 @@ public static class JsonBindingErrors
 
     private static JsonTypeInfo TypeInfo(JsonSerializerOptions options, Type type) => options.GetTypeInfo(type);
 
+    /// <summary>What a value of <paramref name="type"/> is in JSON words: <c>a string</c>, <c>an object</c>.</summary>
+    internal static string Phrase(JsonSerializerOptions options, Type type) => Phrase(Expect(Unwrap(options, TypeInfo(options, type))));
+
     private static JsonTypeInfo Unwrap(JsonSerializerOptions options, JsonTypeInfo info) =>
         Nullable.GetUnderlyingType(info.Type) is { } underlying ? options.GetTypeInfo(underlying) : info;
 

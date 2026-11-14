@@ -120,6 +120,54 @@ public class CandidateTableTests
         memory.Release();
     }
 
+    [Theory]
+    [InlineData(5000)]
+    [InlineData(500)]
+    [InlineData(25)]
+    public void StringIds_AppendedInBatches_AllocateNoMoreThanTheirDictionaryGrownStepByStep(int batch)
+    {
+        // Review 44: reserving exactly each batch's need resized the id dictionary on every batch (866 KB for batches of
+        // 500, where the dictionary and list grown by Add are 583 KB), and doubling alone overshot the last batch.
+        // Measured on this thread, which runs the code under test alone; the first round warms the pools.
+        var ids = Enumerable.Range(0, 5000).Select(i => "id-" + i).ToArray();
+        long Appended()
+        {
+            var memory = new RequestMemory();
+            var table = new CandidateTable(new TableSchema(EntityKeyType.String, new[] { ColumnType.String }), ids.Length, memory);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var start = 0; start < ids.Length; start += batch)
+            {
+                table.AppendRows(new ArraySegment<string>(ids, start, Math.Min(batch, ids.Length - start)));
+            }
+
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Equal(ids.Length, table.Rows.Count);
+            memory.Release();
+            return allocated;
+        }
+
+        long GrownByAdd()
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var codes = new Dictionary<string, int>(StringComparer.Ordinal);
+            var values = new List<string>();
+            foreach (var id in ids)
+            {
+                codes.Add(id, values.Count);
+                values.Add(id);
+            }
+
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+
+        Appended();
+        GrownByAdd();
+        var batches = Appended();
+        var grown = GrownByAdd();
+
+        Assert.True(batches <= grown, $"{batches} B in batches of {batch}, {grown} B grown by Add");
+    }
+
     [Fact]
     public void Rollback_ReleasesKeysThatWereNeverLookedUp_ForStringKeysToo()
     {

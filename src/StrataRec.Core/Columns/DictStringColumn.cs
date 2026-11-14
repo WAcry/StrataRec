@@ -44,10 +44,23 @@ public sealed class DictStringColumn : ColumnBuffer
     /// mostly distinct (string entity ids): grown step by step, the dictionary allocated about three times what it keeps
     /// (583 KB for 5,000 ids, 204 KB reserved; performance audit). Not for low-cardinality columns, which need no room.
     /// </summary>
-    public void ReserveDistinct(int additional)
+    /// <remarks>
+    /// Grows at least to double, but not past what can still come: a writer adding its ids in batches would otherwise
+    /// resize to exactly each batch's need, every batch (5,000 ids in batches of 500 allocated 867 KB, more than growing
+    /// step by step; review 44), and doubling alone overshoots the last batch to twice the table.
+    /// </remarks>
+    /// <param name="additional">The distinct values about to be added.</param>
+    /// <param name="later">How many more could be added after them (a table's free rows): the most worth reserving.</param>
+    public void ReserveDistinct(int additional, int later)
     {
-        _codesByValue.EnsureCapacity(_dictionary.Count + additional);
-        _dictionary.EnsureCapacity(_dictionary.Count + additional);
+        var needed = _dictionary.Count + additional;
+        var capacity = _codesByValue.EnsureCapacity(0);
+        if (needed > capacity)
+        {
+            needed = Math.Max(needed, (int)Math.Min(2L * capacity, (long)needed + later));
+            _codesByValue.EnsureCapacity(needed);
+            _dictionary.EnsureCapacity(needed);
+        }
     }
 
     public string Get(int row) => _dictionary[_codes[row]];
