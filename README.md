@@ -15,7 +15,7 @@ dotnet build StrataRec.sln          # 警告视为错误
 dotnet test StrataRec.sln           # 单元测试 + 集成测试
 
 dotnet run --project src/StrataRec.Cli -- validate     -c samples/home_feed
-dotnet run --project src/StrataRec.Cli -- explain-plan -c samples/home_feed
+dotnet run --project src/StrataRec.Cli -- explain-plan -c samples/home_feed   # --arms exp/arm：这个组合实际执行的节点、定义和每个节点读写的列
 dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r samples/home_feed/requests/user_1001.json --trace --logs   # 冷进程第一个请求含 JIT，超时可加 --deadline-ms 5000
 dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r samples/home_feed/requests/user_1001.json --record bundles/1001.json
 dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r samples/home_feed/requests/user_1001.json --format text --explain 17,1   # 可读的结果；每个 id 落在哪、每个节点之后的状态

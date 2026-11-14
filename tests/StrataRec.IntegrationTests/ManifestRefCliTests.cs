@@ -34,6 +34,12 @@ public sealed class ManifestRefCliTests
 
             Assert.Equal(Normalized(workspace, "workspace:home_feed/local"), Normalized(byId, id));
             Assert.Equal(Normalized(byId, id), Normalized(byFile, id)); // a file has the id build gave its manifest
+            if (format == "text")
+            {
+                // The same warning; a workspace's at its file, line and column, a manifest's (no files) at its artifact.
+                Assert.Matches(@"exp_mmr_diversity\.jsonc:\d+:\d+: warning INTERACTION_READ ", workspace);
+                Assert.Contains("warning INTERACTION_READ experiment:exp_mmr_diversity/arms/mmr/", byId);
+            }
         }
 
         async Task<string> Explain(string? config, string? manifest, string? from, string[] arms)
@@ -51,7 +57,7 @@ public sealed class ManifestRefCliTests
             {
                 var lines = output.Split('\n');
                 Assert.StartsWith($"pipeline home_feed  ({manifestId}, compiled in ", lines[0]);
-                return string.Join('\n', lines.Skip(1));
+                return string.Join('\n', lines.Skip(1).TakeWhile(l => !l.Contains(" INTERACTION_READ ", StringComparison.Ordinal))); // warnings: below
             }
 
             var document = JsonNode.Parse(output)!.AsObject();
@@ -72,6 +78,13 @@ public sealed class ManifestRefCliTests
 
         var plan = JsonNode.Parse(output.ToString())!;
         Assert.Equal("""["exp_freshness_calibration/calibrated"]""", plan["combination"]!.ToJsonString());
+
+        // Each node's data flow in this combination: the columns it reads (not the entity id) and writes, by name.
+        var nodes = plan["timeline"]!.AsArray().ToDictionary(n => n!["node"]!.GetValue<string>(), n => n!);
+        Assert.Equal("""["item.is_policy_safe","item.report_rate"]""", nodes["safety_filter"]["reads"]!.ToJsonString());
+        Assert.Equal("[]", nodes["safety_filter"]["writes"]!.ToJsonString());
+        Assert.Equal("""["item.age_hours","score.final"]""", nodes["freshness_calibration"]["reads"]!.ToJsonString());
+        Assert.Equal("""["score.final"]""", nodes["freshness_calibration"]["writes"]!.ToJsonString());
         var served = plan["taps"]!["served"]!;
         Assert.Equal("""{"output":true}""", served["attach"]!.ToJsonString());
         Assert.Equal("col.score.final@fusion", served["columns"]!["pre_calibration"]!.GetValue<string>()); // the arm's tap variant

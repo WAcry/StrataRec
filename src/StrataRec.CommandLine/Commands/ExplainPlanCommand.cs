@@ -86,7 +86,7 @@ internal static class ExplainPlanCommand
         }
         else
         {
-            WriteText(output, plan, compilation.Report, selected);
+            WriteText(output, plan, compilation.Report, selected, reference.Locator());
         }
 
         return 0;
@@ -106,7 +106,7 @@ internal static class ExplainPlanCommand
         return ids;
     }
 
-    private static void WriteText(TextWriter o, ExecutionPlan plan, PlanReport report, EffectivePlan? selected)
+    private static void WriteText(TextWriter o, ExecutionPlan plan, PlanReport report, EffectivePlan? selected, DiagnosticLocator? locator)
     {
         o.WriteLine($"pipeline {plan.PipelineId}  ({plan.ManifestId}, compiled in {plan.CompileTime.TotalMilliseconds:0.0} ms)");
         if (plan.Experiments.Length > 0)
@@ -126,7 +126,7 @@ internal static class ExplainPlanCommand
 
         if (selected is not null)
         {
-            WriteSelectedText(o, plan, selected);
+            WriteSelectedText(o, plan, selected, locator);
             return;
         }
 
@@ -173,12 +173,12 @@ internal static class ExplainPlanCommand
         o.WriteLine($"{Output.Count(report.Nodes.Count, "node")}, {Output.Count(total, "compiled variant")}, {Output.Count(report.CombinationsChecked, "arm combination")} validated");
         foreach (var warning in plan.Warnings)
         {
-            o.WriteLine(warning.ToString());
+            o.WriteLine(Output.Text(warning, locator?.Locate(warning)));
         }
     }
 
     /// <summary>The plan of one arm combination (<see cref="EffectivePlan"/>): what <c>diff</c> compares, in the same terms.</summary>
-    private static void WriteSelectedText(TextWriter o, ExecutionPlan plan, EffectivePlan selected)
+    private static void WriteSelectedText(TextWriter o, ExecutionPlan plan, EffectivePlan selected, DiagnosticLocator? locator)
     {
         o.WriteLine($"timeline for {PlanDiff.Label(selected.ArmIds)}:");
         var definitions = selected.NodesDocument();
@@ -200,6 +200,11 @@ internal static class ExplainPlanCommand
                     o.WriteLine($"         {name,-24} {Output.Compact(value)}");
                 }
             }
+
+            // The data flow of this plan: which node a column comes from and which nodes read it.
+            var (reads, writes) = Flow(plan, node.Node);
+            o.WriteLine($"         {"<- reads",-24} {(reads.Count == 0 ? "(no columns)" : string.Join(", ", reads))}");
+            o.WriteLine($"         {"-> writes",-24} {(writes.Count == 0 ? "(no columns)" : string.Join(", ", writes))}");
         }
 
         o.WriteLine("parameters:");
@@ -252,7 +257,7 @@ internal static class ExplainPlanCommand
         o.WriteLine($"  {"columns",-28} {Expressions(selected.Output.Columns)}");
         foreach (var warning in plan.Warnings)
         {
-            o.WriteLine(warning.ToString());
+            o.WriteLine(Output.Text(warning, locator?.Locate(warning)));
         }
 
         static string Expressions((string Name, Expressions.CompiledExpression Expression)[] expressions)
@@ -265,6 +270,31 @@ internal static class ExplainPlanCommand
 
             return parts.Count == 0 ? "(none)" : string.Join("; ", parts);
         }
+    }
+
+    /// <summary>
+    /// The columns a node reads (but the entity id, which every row has) and those it writes, by name, as the compiled node
+    /// declares them: what the executor fetches before it, and versions after it.
+    /// </summary>
+    private static (List<string> Reads, List<string> Writes) Flow(ExecutionPlan plan, CompiledNode node)
+    {
+        var columns = plan.Schema.Columns;
+        var reads = new List<string>(node.ReadColumns.Length);
+        foreach (var logical in node.ReadColumns)
+        {
+            if (columns[logical].Kind != ColumnKind.EntityId)
+            {
+                reads.Add(columns[logical].Name);
+            }
+        }
+
+        var writes = new List<string>(node.Outputs.Length);
+        foreach (var output in node.Outputs)
+        {
+            writes.Add(output.Name);
+        }
+
+        return (reads, writes);
     }
 
     private static string When(CompiledNode node) =>
@@ -311,7 +341,7 @@ internal static class ExplainPlanCommand
             layers.Add(plan.Layers[l].Name);
         }
 
-        var text = $"{distinct.Count} variant(s) over {slot.Variants.Length} combination(s) of {string.Join(", ", layers)}";
+        var text = $"{Output.Count(distinct.Count, "variant")} over {Output.Count(slot.Variants.Length, "combination")} of {string.Join(", ", layers)}";
         return absent > 0 ? text + $", absent in {absent}" : text;
     }
 
@@ -431,6 +461,9 @@ internal static class ExplainPlanCommand
                 json.WriteString("op", node.Node.Descriptor.Id);
                 json.WritePropertyName("definition");
                 definitions[node.Id]!.WriteTo(json);
+                var (reads, writes) = Flow(plan, node.Node);
+                WriteStrings(json, "reads", reads);
+                WriteStrings(json, "writes", writes);
                 WriteSites(json, plan, node.Slot);
                 json.WriteEndObject();
             }
