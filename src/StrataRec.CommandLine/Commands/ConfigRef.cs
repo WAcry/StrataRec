@@ -24,15 +24,15 @@ internal enum ConfigRefKind
 
 /// <summary>
 /// A configuration named on the command line: a workspace directory, the content id of a release manifest in an artifact
-/// store, or a manifest file whose artifacts are in the store (design 10.1, 13.4). <c>explain-plan</c>, <c>diff</c>,
-/// <c>replay</c> and <c>compare</c> resolve every configuration here, so a ref means the same to each of them, and a
-/// manifest compiles to the plan a node loading it would serve, under the manifest's content id.
+/// store, or a manifest file whose artifacts are in the store (design 10.1, 13.4). <c>run</c>, <c>explain-plan</c>,
+/// <c>diff</c>, <c>replay</c> and <c>compare</c> resolve every configuration here, so a ref means the same to each of
+/// them, and a manifest compiles to the plan a node loading it would serve, under the manifest's content id.
 /// </summary>
 /// <remarks>
-/// <para>None of these commands loads bindings (local tables, model files, snapshots), so a manifest needs little on disk
-/// but the store: only the fixtures that read their data file when created (<c>memory@1</c>, <c>memory_list@1</c>), whose
-/// relative paths resolve against the current directory (<see cref="PlanEnvironment"/>). <c>run</c> loads every binding,
-/// relative to a workspace root, and takes only workspaces.</para>
+/// <para>Only <c>run</c> loads bindings (local tables, model files, snapshots), as a node does; the others need little on
+/// disk but the store: only the fixtures that read their data file when created (<c>memory@1</c>, <c>memory_list@1</c>).
+/// A manifest's relative paths resolve against the current directory (<see cref="PlanEnvironment"/>), a workspace's
+/// against its root.</para>
 /// <para>Problems with the command line itself (two configurations, a manifest without a store, a ref that names
 /// nothing) are usage errors, reported by <see cref="Parse"/> and <see cref="Select"/>; problems with what a ref names (an
 /// id the store lacks, a damaged blob, a manifest that does not compile) are reported when it loads.</para>

@@ -13,17 +13,26 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
-/// <c>stratarec run</c>: executes a request against a workspace locally (fixtures via <c>memory@1</c> and friends) and
-/// prints the result as JSON (<see cref="RecResultJson"/>, the document a service answers with): items, assignment and
-/// trigger record, with <c>--trace</c> every node's outcome and the node that produced each output column, and with
-/// <c>--explain</c> the explained candidates (design 13.3). <c>--format text</c> prints the same for reading
-/// (<see cref="ResultText"/>).
+/// <c>stratarec run</c>: executes a request locally against a workspace (fixtures via <c>memory@1</c> and friends) or a
+/// release manifest, and prints the result as JSON (<see cref="RecResultJson"/>, the document a service answers with):
+/// items, assignment and trigger record, with <c>--trace</c> every node's outcome and the node that produced each output
+/// column, and with <c>--explain</c> the explained candidates (design 13.3). <c>--format text</c> prints the same for
+/// reading (<see cref="ResultText"/>).
 /// </summary>
+/// <remarks>
+/// A manifest is loaded as a node loads it (<see cref="RecEngine.LoadManifestAsync"/>): its capabilities checked, its
+/// bindings loaded, relative paths in them resolving against the current directory (<see cref="ConfigRef"/>), so a
+/// release can be tried before and after it is published. Only the manifest's pipeline is loaded: a plan that falls back
+/// to another pipeline is warned about, since a request that fails here does not fall back.
+/// </remarks>
 internal static class RunCommand
 {
     public static Command Create(PlanEnvironment provided)
     {
-        var config = CommonOptions.Config();
+        var config = CommonOptions.ConfigOrManifest();
+        var manifest = CommonOptions.Manifest();
+        manifest.Description += " Only its pipeline is loaded, as a node loads it, bindings included.";
+        var store = CommonOptions.Store();
         var environment = CommonOptions.Environment();
         var request = new Option<string>("--request", "-r")
         {
@@ -41,7 +50,7 @@ internal static class RunCommand
         var logs = new Option<bool>("--logs", "-l") { Description = "Include the log batches the request's taps captured (nothing is written)." };
         var record = new Option<string?>("--record")
         {
-            Description = "Also write a replay bundle of the request to this file (design 13.4); replay it with 'stratarec replay -c <workspace> <file>'.",
+            Description = "Also write a replay bundle of the request to this file (design 13.4); the command that replays it is printed.",
         };
         var deadline = new Option<int?>("--deadline-ms")
         {
@@ -67,14 +76,15 @@ internal static class RunCommand
                              "and the trace and explained candidates when asked for.";
         format.DefaultValueFactory = _ => "json";
         var command = new Command("run",
-            "Execute a request locally and print the result (JSON, or text with --format text). Exits with 0 when the request succeeds, 1 when it fails (the result says why) or the " +
-            "configuration does not load, 2 when the request file or an --explain id is invalid.")
+            "Execute a request locally on a workspace or a release manifest and print the result (JSON, or text with --format text). Exits with 0 when the request " +
+            "succeeds, 1 when it fails (the result says why) or the configuration does not load, 2 when the request file or an --explain id is invalid, and on usage errors.")
         {
-            config, environment, request, arms, trace, logs, record, deadline, explain, format,
+            config, manifest, store, environment, request, arms, trace, logs, record, deadline, explain, format,
         };
-        command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(config)!, parse.GetValue(environment)!, parse.GetValue(request)!,
+        command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(config), parse.GetValue(environment)!, parse.GetValue(request)!,
             parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(trace), parse.InvocationConfiguration.Output, cancellationToken, parse.GetValue(logs),
-            parse.GetValue(record), parse.GetValue(deadline), parse.InvocationConfiguration.Error, parse.GetValue(explain), parse.GetValue(format)!));
+            parse.GetValue(record), parse.GetValue(deadline), parse.InvocationConfiguration.Error, parse.GetValue(explain), parse.GetValue(format)!,
+            parse.GetValue(manifest), parse.GetValue(store)));
         return command;
     }
 
@@ -104,18 +114,26 @@ internal static class RunCommand
     }
 
     /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
+    /// <param name="config">The workspace (<c>-c</c>); with <paramref name="manifest"/> null too, the workspace <c>config</c>.</param>
     /// <param name="errors">Where diagnostics and progress go; standard error by default.</param>
+    /// <param name="manifest">A manifest id or file (<c>--manifest</c>), read with <paramref name="store"/>.</param>
     internal static async Task<int> RunAsync(
-        PlanEnvironment provided, string config, string environment, string requestPath, string[] arms, bool trace, TextWriter output,
+        PlanEnvironment provided, string? config, string environment, string requestPath, string[] arms, bool trace, TextWriter output,
         CancellationToken cancellationToken, bool logs = false, string? recordPath = null, int? deadlineMs = null, TextWriter? errors = null,
-        string[]? explain = null, string format = "json")
+        string[]? explain = null, string format = "json", string? manifest = null, string? store = null)
     {
         errors ??= Console.Error;
+        var problems = new DiagnosticBag();
+        var (reference, ok) = ConfigRef.Select(config, manifest, store, "config", problems, provided);
+        if (!ok)
+        {
+            Output.Diagnostics(problems.Items, "text", errors);
+            return 2;
+        }
 
         // Mistakes in the request file are reported like configuration errors, at file:line:column.
-        var problems = new DiagnosticBag();
-        var locator = DiagnosticLocator.ForWorkspace(config).AddFile(requestPath);
-        var file = await ReadRequestAsync(requestPath, config, problems, cancellationToken).ConfigureAwait(false);
+        var locator = (reference!.Locator() ?? new DiagnosticLocator()).AddFile(requestPath);
+        var file = await ReadRequestAsync(requestPath, reference.IsManifest ? null : reference.Text, problems, cancellationToken).ConfigureAwait(false);
         if (file is null)
         {
             Output.Diagnostics(problems.Items, "text", errors, locator: locator);
@@ -123,13 +141,25 @@ internal static class RunCommand
         }
 
         var pipelineId = file.PipelineId;
-        // The engine loads the workspace's local feature tables (design 6.6) before it serves; disposing it stops their sources.
-        await using var engine = new RecEngine(CommonOptions.ForRoot(provided, config));
-        var diagnostics = await ServiceCollectionExtensions.LoadWorkspaceAsync(engine, config, environment, new[] { pipelineId }, cancellationToken).ConfigureAwait(false);
+        // The engine loads the local feature tables (design 6.6) and instances the plan binds before it serves; disposing
+        // it stops their sources.
+        await using var engine = new RecEngine(reference.PlanEnvironment());
+        var (diagnostics, notice) = await LoadAsync(engine, reference, environment, pipelineId, requestPath, cancellationToken).ConfigureAwait(false);
         if (diagnostics.HasErrors || !engine.TryGetRequestSchema(pipelineId, out var schema))
         {
             Output.Diagnostics(diagnostics.Items, "text", errors, locator: locator);
+            if (reference.IsManifest)
+            {
+                // A manifest has no root: the file a binding names was looked for here, which a reader may not expect.
+                errors.WriteLine($"relative paths in the manifest's bindings resolve against the current directory, {Environment.CurrentDirectory}");
+            }
+
             return 1;
+        }
+
+        if (notice is not null)
+        {
+            Output.Diagnostics(new[] { notice }, "text", errors);
         }
 
         // The inputs as a service reads them (RequestSchema.TryRead): the same rules and words, here at file:line:column.
@@ -193,7 +223,7 @@ internal static class RunCommand
             if (result.Recording is { } bundle)
             {
                 ReplayBundleFile.Save(bundle, recordPath);
-                errors.WriteLine($"recorded {request.RequestId} to {recordPath}; replay it with: {ReplayCommandLine(config, recordPath)}");
+                errors.WriteLine($"recorded {request.RequestId} to {recordPath}; replay it with: {ReplayCommandLine(reference, recordPath)}");
             }
             else
             {
@@ -221,6 +251,57 @@ internal static class RunCommand
     internal static string ReplayCommandLine(string config, string bundle) =>
         $"stratarec replay -c {InitCommand.Quote(AsPath(config))} {InitCommand.Quote(AsPath(bundle))}";
 
+    /// <summary>The same for a run on <paramref name="reference"/>: a bundle of a manifest replays on it, from its store.</summary>
+    private static string ReplayCommandLine(ConfigRef reference, string bundle) => reference.IsManifest
+        ? $"stratarec replay -s {InitCommand.Quote(AsPath(reference.Store!))} {InitCommand.Quote(AsPath(bundle))}"
+        : ReplayCommandLine(reference.Text, bundle);
+
+    /// <summary>
+    /// Loads what the request runs into <paramref name="engine"/>: its pipeline (and the one it falls back to) from a
+    /// workspace, or the manifest, which must release the request's pipeline, as a node loads it. Every diagnostic of the
+    /// load, and the warning that a manifest's fallback is not loaded, if it has one.
+    /// </summary>
+    private static async Task<(DiagnosticBag Diagnostics, ConfigDiagnostic? Notice)> LoadAsync(
+        RecEngine engine, ConfigRef reference, string environment, string pipelineId, string requestPath, CancellationToken cancellationToken)
+    {
+        if (!reference.IsManifest)
+        {
+            return (await ServiceCollectionExtensions.LoadWorkspaceAsync(engine, reference.Text, environment, new[] { pipelineId }, cancellationToken)
+                .ConfigureAwait(false), null);
+        }
+
+        var diagnostics = new DiagnosticBag();
+        if (await reference.ReadManifestAsync(diagnostics, cancellationToken).ConfigureAwait(false) is not { } read)
+        {
+            return (diagnostics, null);
+        }
+
+        if (read.Manifest.PipelineId != pipelineId)
+        {
+            diagnostics.Error("REQUEST_INVALID", requestPath, "/pipeline_id",
+                $"The request runs pipeline '{pipelineId}', and the manifest releases pipeline '{read.Manifest.PipelineId}'.",
+                $"pass a manifest of pipeline '{pipelineId}', or set \"pipeline_id\": \"{read.Manifest.PipelineId}\"");
+            return (diagnostics, null);
+        }
+
+        var loaded = await engine.LoadManifestAsync(read.Manifest, read.Id, read.Store, cancellationToken).ConfigureAwait(false);
+        diagnostics.AddRange(loaded.Diagnostics);
+        if (!loaded.Applied && !diagnostics.HasErrors)
+        {
+            diagnostics.Error("MANIFEST_NOT_APPLIED", "manifest:" + read.Id, string.Empty, $"The manifest was not applied: {loaded.Reason}.");
+        }
+
+        ConfigDiagnostic? notice = null;
+        if (loaded.Applied && engine.TryGetPipeline(pipelineId, out var served) && served.FallbackPipeline is { } fallback && fallback != pipelineId)
+        {
+            notice = new ConfigDiagnostic(DiagnosticSeverity.Warning, "RUN_FALLBACK_NOT_LOADED", "manifest:" + read.Id, string.Empty,
+                $"Pipeline '{pipelineId}' falls back to '{fallback}', which a run on one manifest does not load: a request that fails here does not fall back.",
+                "run on the workspace (-c) to try the fallback too");
+        }
+
+        return (diagnostics, notice);
+    }
+
     private static string AsPath(string path) => path.StartsWith('-') ? "./" + path : path;
 
     /// <summary>
@@ -229,8 +310,8 @@ internal static class RunCommand
     /// an error at its line (<see cref="Jsonc"/>) rather than one of the two values. A top-level <c>$schema</c> is the
     /// editor's, as in a workspace file (<see cref="ArtifactSchemas.TryRemoveSchemaMember"/>). Null after reporting.
     /// </summary>
-    /// <param name="config">The workspace, whose <c>schemas/</c> the hint about <c>$schema</c> names.</param>
-    private static async Task<RequestFile?> ReadRequestAsync(string requestPath, string config, DiagnosticBag problems, CancellationToken cancellationToken)
+    /// <param name="config">The workspace, whose <c>schemas/</c> the hint about <c>$schema</c> names; null for a manifest.</param>
+    private static async Task<RequestFile?> ReadRequestAsync(string requestPath, string? config, DiagnosticBag problems, CancellationToken cancellationToken)
     {
         JsonNode? document;
         try
@@ -248,8 +329,10 @@ internal static class RunCommand
             return null;
         }
 
-        var schema = Path.Combine(Path.GetFullPath(config), ArtifactSchemas.DirectoryName, ArtifactSchemas.FileName(SchemaFiles.RequestKind));
-        var reference = Path.GetRelativePath(Path.GetDirectoryName(Path.GetFullPath(requestPath))!, schema).Replace('\\', '/');
+        var reference = config is null
+            ? null
+            : Path.GetRelativePath(Path.GetDirectoryName(Path.GetFullPath(requestPath))!,
+                Path.Combine(Path.GetFullPath(config), ArtifactSchemas.DirectoryName, ArtifactSchemas.FileName(SchemaFiles.RequestKind))).Replace('\\', '/');
         if (!ArtifactSchemas.TryRemoveSchemaMember(document, reference, out var schemaError))
         {
             problems.Error("REQUEST_INVALID", requestPath, schemaError.Pointer, schemaError.Message, schemaError.Hint);

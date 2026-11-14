@@ -87,9 +87,8 @@ internal static class CommonOptions
 
     /// <summary>
     /// What the binary provides (<paramref name="provided"/>, <see cref="StrataRecCommandLine"/>) placed in a config root:
-    /// relative paths in its bindings resolve against the root. A manifest has no root (null): its bindings are compiled,
-    /// never loaded, by the commands that read manifests, and the few that read a file when created resolve against the
-    /// current directory.
+    /// relative paths in its bindings resolve against the root. A manifest has no root (null): its relative paths resolve
+    /// against the current directory, as for a host that sets no base directory (<see cref="ConfigRef"/>).
     /// </summary>
     public static PlanEnvironment ForRoot(PlanEnvironment provided, string? configRoot) =>
         provided with { BaseDirectory = configRoot is null ? null : Path.GetFullPath(configRoot) };

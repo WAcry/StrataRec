@@ -12,8 +12,8 @@ namespace StrataRec.IntegrationTests;
 
 /// <summary>
 /// Configurations named by a release manifest in an artifact store (<c>--manifest</c> with <c>--store</c>, or a ref of any
-/// kind): <c>explain-plan</c>, <c>replay</c> (also on the manifest each bundle recorded) and <c>compare</c>, and every
-/// error of a ref, with its hint.
+/// kind): <c>run</c>, <c>explain-plan</c>, <c>replay</c> (also on the manifest each bundle recorded) and <c>compare</c>,
+/// and every error of a ref, with its hint.
 /// </summary>
 public sealed class ManifestRefCliTests
 {
@@ -295,6 +295,94 @@ public sealed class ManifestRefCliTests
         Assert.Equal((id, file), (root2.GetProperty("baseline").GetProperty("config").GetString(), root2.GetProperty("candidate").GetProperty("config").GetString()));
         Assert.Equal((id, id), (root2.GetProperty("baseline").GetProperty("manifest").GetString(), root2.GetProperty("candidate").GetProperty("manifest").GetString()));
         Assert.Equal(1, root2.GetProperty("comparison").GetProperty("identical").GetInt32());
+    }
+
+    /// <summary>
+    /// <c>run --manifest</c> loads the release as a node does, bindings included (the snapshot of a local table, here named
+    /// absolutely: a manifest's relative paths resolve against the current directory), and serves what the workspace it
+    /// was built from serves; the bundle it records replays on the manifest from the store, as the printed command says.
+    /// </summary>
+    [Fact]
+    public async Task Run_OnAManifest_ServesWhatItsWorkspaceServes_AndSaysHowToReplayIt()
+    {
+        var root = ManifestStores.Workspace(AbsoluteSnapshot);
+        var store = ManifestStores.NewStore();
+        var (id, _) = await ManifestStores.BuildAsync(root, store);
+        var request = Path.Combine(root, "requests", "user_1001.json");
+        var bundle = Path.Combine(store, "recorded.json");
+
+        var (code, workspace, errors) = await Run(request, config: root);
+        Assert.True(code == 0, errors);
+        (code, var released, errors) = await Run(request, manifest: id, store: store, record: bundle);
+        Assert.True(code == 0, errors);
+
+        using var fromWorkspace = JsonDocument.Parse(workspace);
+        using var fromManifest = JsonDocument.Parse(released);
+        Assert.Equal(id, fromManifest.RootElement.GetProperty("manifest").GetString());
+        Assert.Equal(fromWorkspace.RootElement.GetProperty("items").GetRawText(), fromManifest.RootElement.GetProperty("items").GetRawText());
+        Assert.Contains($"replay it with: stratarec replay -s {store} {bundle}", errors);
+        var replayErrors = new StringWriter();
+        Assert.True(0 == await ReplayCommand.RunAsync(Tool.Environment, null, "local", [bundle], Array.Empty<string>(), "json", true, TextWriter.Null,
+            CancellationToken.None, store: store, errors: replayErrors), replayErrors.ToString());
+    }
+
+    /// <summary>
+    /// A manifest that does not release the request's pipeline says which it releases; one whose bindings do not load
+    /// says where relative paths resolve; one whose plan falls back to another pipeline warns that the run does not load it.
+    /// </summary>
+    [Fact]
+    public async Task Run_OnAManifest_SaysWhatItCannotDo()
+    {
+        var root = ManifestStores.Workspace(AbsoluteSnapshot);
+        var store = ManifestStores.NewStore();
+        var (id, _) = await ManifestStores.BuildAsync(root, store);
+        var other = Path.Combine(store, "other.json");
+        File.WriteAllText(other, File.ReadAllText(Path.Combine(root, "requests", "user_1001.json")).Replace("\"home_feed\"", "\"other_feed\"", StringComparison.Ordinal));
+
+        var (code, _, errors) = await Run(other, manifest: id, store: store);
+        Assert.Equal(1, code);
+        Assert.Contains("REQUEST_INVALID", errors);
+        Assert.Contains("The request runs pipeline 'other_feed', and the manifest releases pipeline 'home_feed'.", errors);
+
+        // The sample's own bindings name the snapshot relative to the workspace.
+        var relative = ManifestStores.Workspace();
+        var (relativeId, _) = await ManifestStores.BuildAsync(relative, store);
+        (code, _, errors) = await Run(Path.Combine(root, "requests", "user_1001.json"), manifest: relativeId, store: store);
+        Assert.Equal(1, code);
+        Assert.Contains("author_snapshot", errors);
+        Assert.Contains($"relative paths in the manifest's bindings resolve against the current directory, {Environment.CurrentDirectory}", errors);
+
+        // 'primary' falls back to 'backup', which a run on primary's manifest does not load.
+        var fallback = ReviewRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
+        var bindings = Path.Combine(fallback, "bindings", "local.jsonc");
+        File.WriteAllText(bindings, File.ReadAllText(bindings).Replace("\"fixtures/recall_popular.json\"",
+            JsonSerializer.Serialize(Path.Combine(fallback, "fixtures", "recall_popular.json")), StringComparison.Ordinal));
+        var primary = Path.Combine(store, "primary.json");
+        Assert.Equal(0, await BuildCommand.RunAsync(Tool.Environment, fallback, "local", "primary", store, primary, 1, TextWriter.Null, CancellationToken.None));
+        var failing = Path.Combine(store, "primary-request.json");
+        File.WriteAllText(failing, """{ "pipeline_id": "primary", "request_id": "r", "deadline_ms": 30000 }""");
+        (code, _, errors) = await Run(failing, manifest: primary, store: store);
+        Assert.Equal(1, code); // its source fails, and nothing to fall back to here
+        Assert.Contains("warning RUN_FALLBACK_NOT_LOADED", errors);
+        Assert.Contains("Pipeline 'primary' falls back to 'backup', which a run on one manifest does not load", errors);
+    }
+
+    /// <summary>The sample's local table snapshot, named absolutely (see <see cref="ManifestStores.Workspace"/>).</summary>
+    private static void AbsoluteSnapshot(string root)
+    {
+        var path = Path.Combine(root, "bindings", "local.jsonc");
+        File.WriteAllText(path, File.ReadAllText(path).Replace("\"fixtures/author_snapshot\"",
+            JsonSerializer.Serialize(Path.Combine(root, "fixtures", "author_snapshot")), StringComparison.Ordinal));
+    }
+
+    private static async Task<(int Code, string Output, string Errors)> Run(
+        string request, string? config = null, string? manifest = null, string? store = null, string? record = null)
+    {
+        var output = new StringWriter();
+        var errors = new StringWriter();
+        var code = await RunCommand.RunAsync(Tool.Environment, config, "local", request, Array.Empty<string>(), false, output, CancellationToken.None,
+            recordPath: record, errors: errors, manifest: manifest, store: store);
+        return (code, output.ToString(), errors.ToString());
     }
 
     [Fact]
