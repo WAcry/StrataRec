@@ -170,7 +170,7 @@ internal static class ExplainPlanCommand
             total += node.Variants;
         }
 
-        o.WriteLine($"{report.Nodes.Count} nodes, {total} compiled variants, {report.CombinationsChecked} arm combinations validated");
+        o.WriteLine($"{Output.Count(report.Nodes.Count, "node")}, {Output.Count(total, "compiled variant")}, {Output.Count(report.CombinationsChecked, "arm combination")} validated");
         foreach (var warning in plan.Warnings)
         {
             o.WriteLine(warning.ToString());

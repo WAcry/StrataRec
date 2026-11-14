@@ -244,7 +244,7 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         ValidateCommand.Run(Tool.Environment, root, "local", null, "text", warningsAsErrors: false, output);
         var lines = output.ToString().Split('\n').Select(l => l.TrimEnd('\r')).ToList();
         Assert.True(lines.Count(l => l.Contains(": error ", StringComparison.Ordinal)) == expectedErrors, output.ToString());
-        Assert.Contains($"{expectedErrors} error(s), ", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains(expectedErrors == 1 ? "1 error, " : $"{expectedErrors} errors, ", output.ToString(), StringComparison.Ordinal);
         return lines;
     }
 

@@ -38,6 +38,17 @@ public class ErrorCulpritTests
         Assert.Equal((offset, length), (d.Offset, d.Length));
     }
 
+    [Theory]
+    [InlineData("col.item.age_hours ?? 'old'", "give a float64 such as 0.0")]
+    [InlineData("ctx.request.surface ?? 0", "give a string such as ''")]
+    [InlineData("ctx.request.recent_item_ids ?? 0", "give a list<int64>")]
+    public void ADefaultOfAnotherType_SaysWhichTypeTheDefaultTakes(string source, string hint)
+    {
+        var d = Assert.Single(CompilerTests.HomeFeed().Errors(source));
+
+        Assert.Equal("the default after '??' is used where the value before it is missing: " + hint, d.Hint);
+    }
+
     [Fact]
     public void AnUnusableName_FailsTheExpressionWithoutAnErrorOfItsOwn()
     {

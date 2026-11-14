@@ -22,7 +22,7 @@ internal static class BuildCommand
         var store = new Option<string>("--store", "-s") { Description = "Artifact store directory (blobs/sha256/...).", Required = true };
         var manifest = new Option<string?>("--manifest", "-m") { Description = "Write the manifest here instead of stdout." };
         var seq = new Option<long>("--seq") { Description = "Manifest sequence number.", DefaultValueFactory = _ => 1 };
-        var command = new Command("build", "Validate, upload artifacts by content hash and emit a release manifest.") { config, environment, pipeline, store, manifest, seq };
+        var command = new Command("build", "Validate, upload artifacts by content hash and emit a release manifest. Exits with 1 when the configuration has errors.") { config, environment, pipeline, store, manifest, seq };
         command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(config)!, parse.GetValue(environment)!, parse.GetValue(pipeline),
             parse.GetValue(store)!, parse.GetValue(manifest), parse.GetValue(seq), parse.InvocationConfiguration.Output, cancellationToken,
             parse.InvocationConfiguration.Error));

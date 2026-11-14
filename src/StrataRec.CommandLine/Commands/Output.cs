@@ -58,11 +58,15 @@ internal static class Output
                 writer.WriteLine();
             }
 
-            writer.WriteLine($"{errors} error(s), {warnings} warning(s)");
+            writer.WriteLine($"{Count(errors, "error")}, {Count(warnings, "warning")}");
         }
 
         return errors > 0 || (warningsAsErrors && warnings > 0) ? 1 : 0;
     }
+
+    /// <summary><paramref name="count"/> with its noun, singular for one: "1 experiment", "2 experiments", "0 errors".</summary>
+    public static string Count(int count, string noun, string? plural = null) =>
+        count.ToString(CultureInfo.InvariantCulture) + " " + (count == 1 ? noun : plural ?? noun + "s");
 
     /// <summary>
     /// One diagnostic as text. Located, it starts with <c>file:line:column:</c>, which terminals and editors open at the
