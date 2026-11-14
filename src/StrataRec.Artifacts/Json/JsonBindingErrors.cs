@@ -129,13 +129,14 @@ public static class JsonBindingErrors
         if (expected == Kind.Integer && at.Node is JsonValue number && IntegerRange(info.Type) is var (min, max))
         {
             var text = number.ToJsonString();
-            var integral = decimal.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) && decimal.Truncate(d) == d;
-            if (!integral)
+            // A number decimal cannot hold (1e40) is beyond every integer type: out of range, not fractional.
+            var parsed = decimal.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var d);
+            if (parsed && decimal.Truncate(d) != d)
             {
                 return new JsonBindingError(pointer, $"{at.Name} must be an integer, got {JsonWords.Value(at.Node)}.", null);
             }
 
-            if (d < min || d > max)
+            if (!parsed || d < min || d > max)
             {
                 return new JsonBindingError(pointer,
                     $"{at.Name} must be an integer from {min.ToString(CultureInfo.InvariantCulture)} to {max.ToString(CultureInfo.InvariantCulture)}, got {JsonWords.Value(at.Node)}.",
