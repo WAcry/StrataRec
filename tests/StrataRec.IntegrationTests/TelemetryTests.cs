@@ -25,7 +25,7 @@ public sealed class MetricsTests
     {
         StrataRecTags.Pipeline, StrataRecTags.Node, StrataRecTags.Source, StrataRecTags.SourceKind, StrataRecTags.Model,
         StrataRecTags.Outcome, StrataRecTags.Arm, StrataRecTags.Column, StrataRecTags.Tap, StrataRecTags.LogDelivery, StrataRecTags.Entity,
-        StrataRecTags.CacheTier, StrataRecTags.Token,
+        StrataRecTags.CacheTier, StrataRecTags.Token, StrataRecTags.Feature,
     };
 
     [Fact]
@@ -84,6 +84,25 @@ public sealed class MetricsTests
         Assert.NotEmpty(itemKeys);
         Assert.All(itemKeys, m => Assert.InRange(m.Value, 1, 25));
         Assert.Empty(capture.Of(StrataRecMetrics.Names.SourceErrors));
+
+        // Missing ratio: what each feature source had of the values the request asked for, per feature. Some recalled items
+        // have no i_safe in the fixture, and one recalled item's author (105) has no record in the author snapshot.
+        var values = capture.Of(StrataRecMetrics.Names.SourceValues);
+        Assert.All(values, m =>
+        {
+            Assert.Equal("feature", Tag(m, StrataRecTags.SourceKind));
+            Assert.Contains(Tag(m, StrataRecTags.Outcome), new[] { "present", "missing" });
+            Assert.True(m.Value > 0);
+        });
+        double Values(string source, string feature, string outcome) => values
+            .Where(m => Tag(m, StrataRecTags.Source) == source && Tag(m, StrataRecTags.Feature) == feature && Tag(m, StrataRecTags.Outcome) == outcome)
+            .Sum(m => m.Value);
+        Assert.True(Values("item_store", "item.clicks_7d", "present") > 0);
+        Assert.Equal(0, Values("item_store", "item.clicks_7d", "missing"));
+        Assert.True(Values("item_store", "item.is_policy_safe", "present") > 0);
+        Assert.True(Values("item_store", "item.is_policy_safe", "missing") > 0);
+        Assert.True(Values("author_store", "author.followers", "present") > 0);
+        Assert.True(Values("author_store", "author.followers", "missing") > 0);
 
         // Local table: the load the engine waited for (11 authors in the snapshot) and the keys the request looked up.
         var author = new Dictionary<string, object?> { [StrataRecTags.Source] = "author_store", [StrataRecTags.Entity] = "author" };

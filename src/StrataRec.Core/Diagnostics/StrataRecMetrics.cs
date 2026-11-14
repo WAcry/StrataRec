@@ -8,11 +8,11 @@ namespace StrataRec.Core.Diagnostics;
 /// exponential histograms, VictoriaMetrics, fixed buckets) is configured by the host per name.
 /// </summary>
 /// <remarks>
-/// <para>Label rules (design 13.1): tags take only bounded values — pipeline, node, data source, model, outcome
-/// category, tap, and the experiment arm on request-level instruments only. Durations, row counts and sizes are tagged
-/// by what was measured (node, source, model), never crossed with outcomes; outcome categories go on counters. User,
-/// entity, candidate and request ids are never tags.</para>
-/// <para>Tag arrays are built once per compiled plan (per node, arm, source, model, tap) and passed as-is, so a
+/// <para>Label rules (design 13.1): tags take only bounded values — pipeline, node, data source, catalog feature,
+/// model, outcome category, tap, and the experiment arm on request-level instruments only. Durations, row counts and
+/// sizes are tagged by what was measured (node, source, model), never crossed with outcomes; outcome categories go on
+/// counters. User, entity, candidate and request ids are never tags.</para>
+/// <para>Tag arrays are built once per compiled plan (per node, arm, source, feature, model, tap) and passed as-is, so a
 /// measurement allocates nothing, with or without listeners.</para>
 /// <para>Histograms advise bucket boundaries that grow by a fixed ratio (<see cref="InstrumentAdvice{T}"/>): exporters
 /// with fixed buckets can adopt them; exponential-histogram exporters ignore them.</para>
@@ -45,6 +45,7 @@ public static class StrataRecMetrics
         public const string SourceDuration = "stratarec.source.duration";
         public const string SourceErrors = "stratarec.source.errors";
         public const string SourceKeys = "stratarec.source.keys";
+        public const string SourceValues = "stratarec.source.values";
         public const string LocalKeys = "stratarec.local.keys";
         public const string LocalBytes = "stratarec.local.bytes";
         public const string LocalRecords = "stratarec.local.records";
@@ -195,6 +196,21 @@ public static class StrataRecMetrics
     /// <summary>Keys per feature connector call. Tags: <c>stratarec.source</c>, <c>stratarec.source.kind</c>.</summary>
     public static readonly Histogram<long> SourceKeys = Meter.CreateHistogram<long>(Names.SourceKeys, "{key}",
         "Keys per feature source call.", null, new InstrumentAdvice<long> { HistogramBucketBoundaries = CountBuckets });
+
+    /// <summary>
+    /// Values a feature source was asked for, by whether it had them: the missing ratio is
+    /// <c>missing / (present + missing)</c>, per source and per feature (design 6.7, 13.1). A source, or one of its fields,
+    /// that stops returning data shows here before it shows in ranking quality. Each distinct key of a read counts once per
+    /// requested feature, and only when the source answered for it: the keys of a chunk that failed or timed out are
+    /// counted by <see cref="SourceErrors"/> instead; a <c>local</c> source answers every key, a <c>cache</c> source every
+    /// key its local tier had fresh or its distributed tier or connector answered. Rows without a key (a missing foreign or
+    /// context key) are not asked for. A default does not make a value present, and a non-finite value the source returned
+    /// is present (its replacement is <see cref="ColumnNonFinite"/>). Tags: <c>stratarec.source</c>,
+    /// <c>stratarec.source.kind</c> = <c>feature</c>, <c>stratarec.feature</c>, <c>stratarec.outcome</c> = <c>present</c> |
+    /// <c>missing</c>. Features are bounded by the catalog, like node ids by the pipelines; a host that wants per-source
+    /// totals only drops <c>stratarec.feature</c> with a view.
+    /// </summary>
+    public static readonly Counter<long> SourceValues = Meter.CreateCounter<long>(Names.SourceValues, "{value}", "Feature values requested from sources, by present or missing.");
 
     // Local feature tables (design 6.6): one per source and entity, tagged stratarec.source and stratarec.entity.
 

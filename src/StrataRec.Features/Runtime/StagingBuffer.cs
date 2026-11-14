@@ -1,3 +1,4 @@
+using System.Numerics;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Types;
@@ -99,6 +100,31 @@ internal sealed class StagingArea
     {
         var chunk = key / ChunkSize;
         return Bits.Get(_written, FirstBit(fieldIndex, chunk) + key - (chunk * ChunkSize));
+    }
+
+    /// <summary>
+    /// How many keys of <paramref name="chunk"/> the connector wrote a value of the field for (and did not withdraw): one
+    /// popcount per 64 keys of the chunk's region of the "written" bitmap. Only for a chunk whose call has completed.
+    /// </summary>
+    public int CountWritten(int fieldIndex, int chunk)
+    {
+        var first = FirstBit(fieldIndex, chunk) >> 6;
+        var keys = ChunkKeyCount(chunk);
+        if (keys <= 0)
+        {
+            return 0;
+        }
+
+        var words = _written.AsSpan(first, Bits.WordCount(keys));
+        var count = 0;
+        for (var w = 0; w < words.Length - 1; w++)
+        {
+            count += BitOperations.PopCount(words[w]);
+        }
+
+        // Bits past the chunk's keys are never set (the writer checks every key), but the last word is masked anyway.
+        var tail = keys & 63;
+        return count + BitOperations.PopCount(tail == 0 ? words[^1] : words[^1] & ((1UL << tail) - 1));
     }
 
     /// <summary>The staged value of a fetch key, or missing when the connector wrote none.</summary>

@@ -788,6 +788,11 @@ public sealed partial class FeatureFetcher
             error ??= status.Error;
         }
 
+        if (CountsValues && failedChunks < pending.ChunkCount && pending.Staging is { } staging)
+        {
+            CountFetchedValues(pending, staging);
+        }
+
         // Some chunks failed: the source partially failed (design 6.7) and readers become Degraded. The failed chunks'
         // keys are treated like keys absent from the response; their staging is never read.
         var degraded = failedChunks > 0 || partial;
@@ -806,6 +811,55 @@ public sealed partial class FeatureFetcher
 
             Backfill(pending, _plan.Features[f], i);
             SetFetchedState(f, degraded, error);
+        }
+    }
+
+    /// <summary>
+    /// Counts what the source had of the values a fetch asked for (<see cref="StrataRecMetrics.SourceValues"/>): every key
+    /// of a chunk that answered in time, once per fetched feature, present where the connector wrote the field. The keys of
+    /// a failed or timed-out chunk are not counted (that call is an error, and its staging is never read).
+    /// </summary>
+    private void CountFetchedValues(PendingFetch pending, StagingArea staging)
+    {
+        var answered = 0;
+        for (var c = 0; c < pending.ChunkCount; c++)
+        {
+            answered += pending.ChunkFailed[c] ? 0 : staging.ChunkKeyCount(c);
+        }
+
+        for (var i = 0; i < pending.Features.Length; i++)
+        {
+            var present = 0;
+            for (var c = 0; c < pending.ChunkCount; c++)
+            {
+                present += pending.ChunkFailed[c] ? 0 : staging.CountWritten(i, c);
+            }
+
+            CountValues(_plan.Features[pending.Features[i]], present, answered - present);
+        }
+    }
+
+    /// <summary>
+    /// Whether this request counts <see cref="StrataRecMetrics.SourceValues"/>: only while a listener is enabled, so a
+    /// request without one pays this check alone, and never in a replay, which is not traffic (design 13.4).
+    /// </summary>
+    private bool CountsValues => StrataRecMetrics.SourceValues.Enabled && _hook is not { Replays: true };
+
+    /// <summary>
+    /// Records what a source had of one feature's values in one read or fetch: one add per outcome, none for a zero, with
+    /// the tags the plan built for the feature.
+    /// </summary>
+    private static void CountValues(FeatureRuntimeInfo feature, int present, int missing)
+    {
+        var tags = feature.ValueTags;
+        if (present > 0)
+        {
+            StrataRecMetrics.SourceValues.Add(present, tags.Present);
+        }
+
+        if (missing > 0)
+        {
+            StrataRecMetrics.SourceValues.Add(missing, tags.Missing);
         }
     }
 
@@ -1104,6 +1158,16 @@ public sealed partial class FeatureFetcher
             {
                 var fetch = fetches[n];
                 var status = await fetch.Call.ConfigureAwait(false);
+                if (CountsValues && fetch.Staging is { } answered && status.Outcome != FetchOutcome.Failed)
+                {
+                    // The one key was asked for (a missing context key sends nothing) and answered in time.
+                    for (var i = 0; i < fetch.Features.Length; i++)
+                    {
+                        var present = answered.HasValue(i, 0) ? 1 : 0;
+                        CountValues(_plan.Features[fetch.Features[i]], present, 1 - present);
+                    }
+                }
+
                 for (var i = 0; i < fetch.Features.Length; i++)
                 {
                     var f = fetch.Features[i];
