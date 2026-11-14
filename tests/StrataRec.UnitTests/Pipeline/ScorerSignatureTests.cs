@@ -160,7 +160,7 @@ public sealed class ScorerSignatureTests
     }
 
     [Theory]
-    [InlineData("float32?", "Model input 'x' maps col.x, which is nullable (float32?): a model needs a value in every row.", "give col.x a default")]
+    [InlineData("float32?", "Model input 'x' maps col.x, which is nullable (float32?): a model needs a value in every row.", "make col.x non-nullable (a feature with a default")]
     [InlineData("vec<float32,4>?", "Model input 'x' maps col.x, which is nullable (vec<float32,4>?): a model needs a value in every row.", "'??'")]
     [InlineData("string", "Model input 'x' maps col.x (string), which ModelScorer@1 cannot send as a tensor.", "int32, int64 or vec<float32,N>")]
     [InlineData("list<int64>", "Model input 'x' maps col.x (list<int64>), which ModelScorer@1 cannot send as a tensor.", "an operator that builds other tensors")]

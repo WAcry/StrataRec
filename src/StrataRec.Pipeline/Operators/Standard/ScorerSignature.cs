@@ -82,7 +82,8 @@ internal static class ScorerSignature
         var pointer = "/inputs/" + JsonPointer.Escape(name);
         return type.Nullable
             ? new Problem(pointer, "MODEL_INPUT_TYPE", $"Model input '{name}' maps {source}, which is nullable ({type}): a model needs a value in every row.",
-                $"give {source} a default, which makes it non-nullable, or map a derived feature that settles the missing case with '??' (design 6.9)")
+                $"make {source} non-nullable (a feature with a default, a request input declared without '?'), or map a derived feature "
+                + "that settles the missing case with '??' (design 6.9)")
             : new Problem(pointer, "MODEL_INPUT_TYPE", $"Model input '{name}' maps {source} ({type}), which ModelScorer@1 cannot send as a tensor.",
                 "map a float32, float64, bool, int32, int64 or vec<float32,N> column or context value (a derived feature, design 6.9), "
                 + "or call the model from an operator that builds other tensors");
