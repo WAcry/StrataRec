@@ -1428,8 +1428,11 @@ flowchart LR
 ### 9.1 编写格式、Schema 与规范形式
 
 1. **编写格式**：Git 仓库中的 JSONC（允许注释的 JSON），每个实验一个文件。
-2. **结构定义**：从 C# 算子配置类型生成 JSON Schema（2020-12 版），连同特征目录、流水线和实验的 Schema 一起发布。编辑器据此自动补全和即时报错，AI agent 据此生成合法配置，CI 据此做第一层校验。C# 配置类型是唯一的 Schema 来源。
-3. **规范形式**：构建时去掉注释，按 RFC 8785（JSON Canonicalization Scheme）规范化，再计算 sha256。相同内容总是得到相同哈希，与键顺序和空白无关。
+2. **结构定义**：从 C# 配置类型生成 JSON Schema（2020-12 版），C# 类型是唯一的来源。Schema 由服务这个工作区的二进制生成，包含它注册的算子，包括宿主自己的算子：`stratarec schema --out <工作区>/schemas` 为每类文件写一个 `<kind>.schema.json`，`init` 也会写出这些文件，生成的结果随工作区一起提交。每个文件在顶层用 `"$schema": "../schemas/pipeline.schema.json"` 指明自己的 Schema，编辑器（例如 VS Code）据此自动补全、悬停显示说明、即时报错；AI agent 据此生成合法配置。
+   - 流水线的 Schema 按节点的 `op` 校验它的 `config`：每个算子一组 `if`/`then`，`op` 是带说明的枚举。
+   - 实验臂的 Schema 是流水线可修改部分的合并补丁形式：没有必填项，任何值都可以是 `null`（删除），对象仍然封闭，拼错的键照样报错。
+   - 二进制升级后 Schema 可能变了，`validate` 发现 `schemas/` 与这个二进制写出的不同时给出警告 `SCHEMAS_STALE`。
+3. **规范形式**：构建时去掉注释和顶层的 `$schema`（它只给编辑器用，不属于产物，不计入内容哈希），按 RFC 8785（JSON Canonicalization Scheme）规范化，再计算 sha256。相同内容总是得到相同哈希，与键顺序和空白无关。
 4. **传输与存储**：规范 JSON 经 zstd 压缩。
 
 配置层面用到的语法全部来自被广泛采用的标准：
@@ -1661,7 +1664,7 @@ flowchart LR
 
 ```text
 $ stratarec validate -c config -p home_feed
-config/experiments/exp_mmr_diversity.jsonc:15:9: warning INTERACTION_READ /arms/mmr/nodes/mmr_diversifier: Node 'mmr_diversifier' added by 'exp_mmr_diversity/mmr' reads 'score.final', which 'exp_freshness_calibration/calibrated' changes through 'freshness_calibration'; the two arms can be assigned together.
+config/experiments/exp_mmr_diversity.jsonc:16:9: warning INTERACTION_READ /arms/mmr/nodes/mmr_diversifier: Node 'mmr_diversifier' added by 'exp_mmr_diversity/mmr' reads 'score.final', which 'exp_freshness_calibration/calibrated' changes through 'freshness_calibration'; the two arms can be assigned together.
     "mmr_diversifier": {
     ^
     hint: confirm in review that the added node should see the other experiment's values; otherwise put the experiments in the same layer
@@ -1703,7 +1706,8 @@ config/
 │   ├── exp_mmr_diversity.jsonc
 │   └── exp_freshness_calibration.jsonc
 ├── releases/home_feed.prod.jsonc      # 本环境的目录、绑定、表，以及在线的实验和它们所在的层
-└── tables/score_calibration.parquet
+├── tables/score_calibration.parquet
+└── schemas/                           # 各类文件的 JSON Schema，由服务它的二进制写出（stratarec schema --out），文件用 "$schema" 引用
 ```
 
 新工作区可以用 `stratarec init` 生成：它写出一份最小的、能离线运行的工作区（目录、本地绑定、一条从召回到 top-k 的流水线、一个实验、发布文件、夹具和示例请求），再在其上修改。
@@ -2275,7 +2279,6 @@ stratarec/
 │   ├── StrataRec.Connectors.Kafka/    # kafka@1 更新流来源（第 6.6 节）
 │   └── StrataRec.Metrics.VictoriaMetrics/ # VictoriaMetrics 对数分桶（vmrange）指标导出（第 13.1 节）
 ├── control-plane/               # 发布控制器、manifest 校验、草稿服务的参考实现
-├── schemas/                     # 各类产物的 JSON Schema，由 StrataRec.Artifacts 生成并提交
 ├── samples/                     # home_feed：演示全部功能的工作区；StrataRec.Samples.Host：在 ASP.NET Core 服务里嵌入引擎、四个扩展点各一个自定义组件
 └── tests/
     ├── UnitTests/

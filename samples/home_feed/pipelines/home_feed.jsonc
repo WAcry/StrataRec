@@ -1,5 +1,6 @@
 // The home feed baseline (design 9.3): recall → filter → coarse score → truncate → model → fusion → sort → diversity.
 {
+  "$schema": "../schemas/pipeline.schema.json",
   "pipeline_id": "home_feed",
   "entity_key_type": "int64",
   "request_schema": {

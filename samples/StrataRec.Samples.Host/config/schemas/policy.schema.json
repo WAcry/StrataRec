@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PolicyArtifact",
+  "allowComments": true,
+  "allowTrailingCommas": true,
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "The JSON Schema of this file, for editors: a path relative to the file (e.g. ../schemas/policy.schema.json, as 'stratarec schema --out schemas' writes them) or a URL. The engine ignores it: it is not part of the file's content id.",
+      "type": "string"
+    },
+    "experiment_patchable": {
+      "description": "RFC 6901 prefixes experiments may add, delete and modify under.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "experiment_add_only": {
+      "description": "RFC 6901 prefixes experiments may only add new entries under.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "owners": {
+      "description": "RFC 6901 prefix → owning teams that must approve changes (mapped to code review).",
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "log_bytes_per_request_budget": {
+      "description": "Estimated log bytes per request allowed per pipeline (design 8.6).",
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

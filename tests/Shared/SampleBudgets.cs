@@ -46,9 +46,10 @@ internal static class SampleBudgets
         foreach (var path in Directory.GetFiles(root, "*.json*", SearchOption.AllDirectories))
         {
             var file = Path.GetRelativePath(root, path).Replace('\\', '/');
-            if (file.StartsWith("fixtures/", StringComparison.Ordinal) || !(file.EndsWith(".json", StringComparison.Ordinal) || file.EndsWith(".jsonc", StringComparison.Ordinal)))
+            if (file.StartsWith("fixtures/", StringComparison.Ordinal) || file.StartsWith("schemas/", StringComparison.Ordinal)
+                || !(file.EndsWith(".json", StringComparison.Ordinal) || file.EndsWith(".jsonc", StringComparison.Ordinal)))
             {
-                continue; // fixtures are data, not configuration
+                continue; // fixtures are data and schemas describe the files, neither is configuration
             }
 
             var text = File.ReadAllBytes(path);

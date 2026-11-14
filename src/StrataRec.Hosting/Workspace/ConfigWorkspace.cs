@@ -8,7 +8,7 @@ namespace StrataRec.Hosting.Workspace;
 
 /// <summary>An artifact loaded from a file: the typed model, its JSON document and its content id.</summary>
 /// <param name="Value">The strictly deserialized model.</param>
-/// <param name="Document">The parsed JSON (comments stripped); what is canonicalized and hashed.</param>
+/// <param name="Document">The parsed JSON (comments and the editor's top-level <c>$schema</c> stripped); what is canonicalized and hashed.</param>
 /// <param name="Path">Path relative to the workspace root, used as the diagnostic artifact name.</param>
 /// <param name="ContentId">RFC 8785 + sha256 content id (design 9.1).</param>
 public sealed record LoadedArtifact<T>(T Value, JsonNode Document, string Path, string ContentId);
@@ -26,10 +26,12 @@ public sealed record LoadedArtifact<T>(T Value, JsonNode Document, string Path, 
 /// ├── pipelines/&lt;pipeline_id&gt;.jsonc
 /// ├── experiments/&lt;experiment_id&gt;.jsonc
 /// ├── releases/&lt;pipeline_id&gt;.&lt;environment&gt;.jsonc     catalog, bindings, tables, experiment layers
-/// └── tables/&lt;table_id&gt;.jsonc
+/// ├── tables/&lt;table_id&gt;.jsonc
+/// └── schemas/&lt;kind&gt;.schema.json        JSON Schemas the files name in "$schema" for editors (not read here)
 /// </code>
-/// File names must match the ids inside, so a path always tells you what a file defines. Every problem is reported
-/// as a diagnostic with the file and a JSON pointer, never as an exception.
+/// File names must match the ids inside, so a path always tells you what a file defines. A file's top-level
+/// <c>$schema</c> is taken out before it is bound and hashed (<see cref="ArtifactSchemas.TryRemoveSchemaMember"/>).
+/// Every problem is reported as a diagnostic with the file and a JSON pointer, never as an exception.
 /// </remarks>
 public sealed class ConfigWorkspace
 {
@@ -379,6 +381,14 @@ public sealed class ConfigWorkspace
             return null;
         }
 
+        // "$schema" is the editor's: not part of the artifact, so neither bound nor hashed.
+        var kind = ArtifactSerializer.ArtifactName(typeof(T));
+        if (!ArtifactSchemas.TryRemoveSchemaMember(document, kind is null ? null : ArtifactSchemas.Reference(relative, kind), out var schemaError))
+        {
+            diagnostics.Error("ARTIFACT_SCHEMA", relative, schemaError.Pointer, schemaError.Message, schemaError.Hint);
+            return null;
+        }
+
         try
         {
             var value = ArtifactSerializer.Deserialize<T>(document, relative);
@@ -387,7 +397,7 @@ public sealed class ConfigWorkspace
         catch (ArtifactFormatException ex)
         {
             diagnostics.Error("ARTIFACT_SCHEMA", relative, ex.Pointer, ex.Reason,
-                ex.Hint ?? $"run 'stratarec schema {ArtifactSerializer.ArtifactName(typeof(T))}' for the JSON Schema of this file");
+                ex.Hint ?? $"run 'stratarec schema {kind}' for the JSON Schema of this file");
             return null;
         }
     }

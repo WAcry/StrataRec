@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FeatureCatalogArtifact",
+  "allowComments": true,
+  "allowTrailingCommas": true,
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "The JSON Schema of this file, for editors: a path relative to the file (e.g. ../schemas/catalog.schema.json, as 'stratarec schema --out schemas' writes them) or a URL. The engine ignores it: it is not part of the file's content id.",
+      "type": "string"
+    },
+    "catalog_id": {
+      "type": "string"
+    },
+    "description": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "entities": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "description": "context or candidate.",
+            "type": "string"
+          },
+          "key": {
+            "description": "Key reference (string) or, for cross entities, a list of references."
+          },
+          "key_type": {
+            "description": "int64/string, or a list matching key."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "scope",
+          "key",
+          "key_type"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "field": {
+            "description": "Physical field name in the store.",
+            "type": "string"
+          },
+          "default": {
+            "description": "Value used when the key legitimately has no value; makes the feature non-nullable."
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deprecated": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "source",
+          "field"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "derived_features": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "expr": {
+            "type": "string"
+          },
+          "default": true,
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "expr"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "catalog_id"
+  ],
+  "additionalProperties": false
+}

@@ -2,6 +2,7 @@
 // A request is in at most one arm per layer; which arms is the experiment platform's answer (a request file's
 // "assignment"), not part of the release.
 {
+  "$schema": "../schemas/release.schema.json",
   "pipeline_id": "home_feed",
   "environment": "local",
   "catalog": "home_feed",

@@ -1,5 +1,6 @@
 // Replace the category window cap with MMR diversification (design 9.4).
 {
+  "$schema": "../schemas/experiment.schema.json",
   "experiment_id": "exp_mmr_diversity",
   "pipeline_id": "home_feed",
   "owner": "rerank-team",

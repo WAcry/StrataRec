@@ -1,5 +1,6 @@
 // Local bindings: every source reads fixtures in this workspace, so the pipeline runs offline and deterministically.
 {
+  "$schema": "../schemas/bindings.schema.json",
   "environment": "local",
   "sources": {
     // In-memory fixtures answer synchronously in microseconds. The timeout only bounds a cold start (JIT) on a busy

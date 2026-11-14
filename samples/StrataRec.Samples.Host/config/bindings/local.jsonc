@@ -2,6 +2,7 @@
 // would name the same logical sources, model and candidate sources with production types, settings and budgets; the
 // pipeline would not change.
 {
+  "$schema": "../schemas/bindings.schema.json",
   "environment": "local",
   "sources": {
     // kv_store@1 (Components/KeyValueFeatureConnector.cs) reads its file when it loads, before the plan serves. In-process

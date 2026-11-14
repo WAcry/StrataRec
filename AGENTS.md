@@ -47,6 +47,7 @@ dotnet run --project src/StrataRec.Cli -- --help
 - 热路径（按行或按请求执行的代码）不能按行分配。请求生命周期内的缓冲从 `RequestMemory` 租借；算子不自己归还缓冲。
 - 配置只使用标准语法：JSON(C)、RFC 7396 合并补丁、RFC 6901 指针、RFC 8785 规范化、JSON Schema 2020-12、CEL 风格表达式、Mustache。不要发明 DSL。
 - 配置错误必须说明位置（JSON 指针或表达式偏移）和修复方法（hint）。
+- 改了配置类型，或改了会序列化的成员的 XML 文档注释（它们是 Schema 里的描述），要重新生成示例的 Schema，否则测试失败（失败信息里有命令）：`dotnet run --project src/StrataRec.Cli -- schema --out samples/home_feed/schemas`，以及在 `samples/StrataRec.Samples.Host` 下 `dotnet run -- stratarec schema --out config/schemas`。
 - 缺失值是显式的：可空类型（`T?`）、`??`、`has()`。绝不把缺失静默变成 0。
 - 确定性：平分时按 `entity_id` 升序；随机性只来自 `hash01` / `StableHash`。
 - 框架不做个人数据过滤（见 `docs/decisions.md`）。

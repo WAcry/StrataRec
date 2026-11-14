@@ -1,5 +1,6 @@
 // What experiments may change (design 11.4). Paths are RFC 6901 prefixes into the patchable view.
 {
+  "$schema": "schemas/policy.schema.json",
   "experiment_patchable": ["/params", "/nodes", "/log_taps"],
   "experiment_add_only": ["/columns", "/param_schema", "/features", "/derived_features", "/funnel_groups"],
   "owners": {

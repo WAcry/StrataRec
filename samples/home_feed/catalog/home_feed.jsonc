@@ -1,5 +1,6 @@
 // Features of the home feed (design 6.3). A feature with "default" is non-nullable; without one it is T?.
 {
+  "$schema": "../schemas/catalog.schema.json",
   "catalog_id": "home_feed",
   "entities": {
     "user":   { "scope": "context",   "key": "ctx.request.user_id", "key_type": "int64" },

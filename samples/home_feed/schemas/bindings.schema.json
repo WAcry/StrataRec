@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SourceBindingArtifact",
+  "allowComments": true,
+  "allowTrailingCommas": true,
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "The JSON Schema of this file, for editors: a path relative to the file (e.g. ../schemas/bindings.schema.json, as 'stratarec schema --out schemas' writes them) or a URL. The engine ignores it: it is not part of the file's content id.",
+      "type": "string"
+    },
+    "environment": {
+      "type": "string"
+    },
+    "sources": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "description": "Supply mode (design 6.6): 'fetch' (default) fetches from the connector on every request; 'local' serves the features from an in-process table that 'bootstrap' loads in the background, with no I/O on the request path; 'cache' keeps what the connector returned in an in-process table (and optionally a distributed cache) for 'cache.ttl_ms'. Settings of another mode are errors.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "fetch",
+              "local",
+              "cache",
+              null
+            ]
+          },
+          "connector": {
+            "description": "Modes fetch and cache, required: connector type and version, e.g. 'memory@1' (for cache, the origin the cache is in front of). Other members of the binding not listed here are the connector's own settings (e.g. 'data_file').",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timeout_ms": {
+            "description": "Modes fetch and cache: time limit of one connector call, in milliseconds (default 50). For cache, the whole read of the keys a request misses (the distributed cache, then the connector) stays within it.",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_batch": {
+            "description": "Modes fetch and cache: maximum keys per connector call (default 1000); larger batches are split and sent concurrently. For cache, also the keys per read of the distributed cache.",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "lookup": {
+            "description": "Mode fetch: 'context' for sources organized by context key (design 6.5).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max_bytes": {
+            "description": "Modes local and cache, required: the most memory each table of the source (one per entity) may take, as an integer and a unit B, KiB, MiB, GiB or TiB, e.g. \"512MiB\". A local load that would exceed it fails and the plan is not served; a cache that reaches it drops its expired records, then its oldest.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9]+(B|KiB|MiB|GiB|TiB)$"
+          },
+          "bootstrap": {
+            "description": "Mode local, required: the update source that loads the table in the background, e.g. { \"source\": \"snapshot_files@1\", \"uri\": \"fixtures/item_snapshot\" }. A plan is served once every table it reads has completed its first load.",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "source": {
+                "description": "Required: update-source type and version, e.g. 'snapshot_files@1'. The other members are the source's own settings: for snapshot_files@1, 'uri' (the snapshot directory or its snapshot.json, relative to the config root) and optionally 'reload' (an ISO 8601 duration such as \"PT1H\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "cache": {
+            "description": "Mode cache, required: { \"ttl_ms\": 60000 }, optionally \"stale_if_error_ms\" and a \"distributed\" cache shared by the service's instances.",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "ttl_ms": {
+                "description": "Required: how long a value fetched from the connector is served, in milliseconds. Each key's lifetime varies by ±10% with the key's hash, so values written together do not all expire together.",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "stale_if_error_ms": {
+                "description": "How much longer (milliseconds, default 0) an expired value may be served when the connector fails or times out; its readers are then Degraded.",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "distributed": {
+                "description": "A cache shared by the service's instances, read on an in-process miss before the connector, e.g. { \"store\": \"redis@1\", \"endpoint\": \"cache.internal:6379\" }. Only an optimisation: when it fails or is slow, the keys go to the connector.",
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "store": {
+                    "description": "Required: store type and version, e.g. 'redis@1'. The other members are the store's own settings: for redis@1, 'endpoint' (host:port; for a cluster, any node), and optionally 'key_prefix' (default 'stratarec:'), 'user', 'password' (a secret:// reference), 'tls' (default false) and 'database' (default 0).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "timeout_ms": {
+                    "description": "The longest a request waits for one read of the distributed cache, in milliseconds (default: half the source's timeout_ms); always within the source's timeout_ms, so the connector keeps the rest of it.",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "client": {
+            "description": "Client type and version, e.g. grpc_tensor@1, memory_list@1, linear@1.",
+            "type": "string"
+          },
+          "timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "client"
+        ]
+      }
+    },
+    "candidate_sources": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "client": {
+            "description": "Client type and version, e.g. grpc_tensor@1, memory_list@1, linear@1.",
+            "type": "string"
+          },
+          "timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "client"
+        ]
+      }
+    }
+  },
+  "required": [
+    "environment"
+  ],
+  "additionalProperties": false
+}

@@ -21,7 +21,7 @@ dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r s
 dotnet run --project src/StrataRec.Cli -- replay       -c samples/home_feed -b bundles   # 用录制的 I/O 重现并对比；compare --baseline 对比两份配置
 dotnet run --project src/StrataRec.Cli -- diff         --from <旧工作区或 manifest> --to samples/home_feed   # 按桶组合对比两份配置
 dotnet run --project src/StrataRec.Cli -- build        -c samples/home_feed -s store   # 产物按哈希写进 store；加载这份 manifest 的节点录制的包，replay -s store 就在录制时的 manifest 上回放（在工作区上录制的包仍用 -c）
-dotnet run --project src/StrataRec.Cli -- schema pipeline          # 各类产物的 JSON Schema
+dotnet run --project src/StrataRec.Cli -- schema pipeline          # 各类产物的 JSON Schema；schema --out <工作区>/schemas 写进工作区，供编辑器使用
 dotnet run --project src/StrataRec.Cli -- operators                # 算子及其声明的效果
 ```
 
@@ -36,6 +36,8 @@ dotnet run --project src/StrataRec.Cli -- run      -c my-feed -r my-feed/request
 ```
 
 `init` 写出目录、本地绑定、一条从召回到 top-k 的流水线、一个实验、发布文件、夹具和示例请求，每个文件开头的注释说明先改哪里，最后打印接下来可以照抄的命令。`home_feed` 是演示全部功能的完整示例。
+
+工作区的 `schemas/` 里是各类文件的 JSON Schema，每个文件用顶层的 `"$schema"` 引用它，所以在 VS Code 等编辑器里打开就有补全、字段说明和即时报错：节点的 `config` 按它的 `op` 检查，实验臂按补丁的形式检查。Schema 由二进制生成，包含它注册的算子；升级之后 `validate` 会报 `SCHEMAS_STALE`，用 `stratarec schema --out <工作区>/schemas` 重新生成并提交。
 
 ## 在服务里嵌入引擎
 

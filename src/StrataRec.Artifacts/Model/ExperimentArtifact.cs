@@ -8,6 +8,15 @@ namespace StrataRec.Artifacts.Model;
 /// </summary>
 public sealed class ExperimentArtifact
 {
+    /// <summary>
+    /// The sections of the patchable view (design 11.4) that come from the pipeline, in canonical order: one list for the
+    /// compiler, which joins the view, and the experiment's JSON Schema, which describes an arm's patch of it.
+    /// </summary>
+    public static IReadOnlyList<string> PipelineSections { get; } = new[] { "params", "param_schema", "columns", "nodes", "funnel_groups", "log_taps" };
+
+    /// <summary>The sections of the patchable view that come from the feature catalog, after the pipeline's.</summary>
+    public static IReadOnlyList<string> CatalogSections { get; } = new[] { "features", "derived_features" };
+
     public required string ExperimentId { get; init; }
 
     public required string PipelineId { get; init; }

@@ -2,6 +2,7 @@
 // (logistic@1) → a business boost, a custom operator (CategoryBoost@1) → sort. Its features come from a custom connector
 // (kv_store@1, catalog/trending.jsonc).
 {
+  "$schema": "../schemas/pipeline.schema.json",
   "pipeline_id": "trending_feed",
   "entity_key_type": "int64",
   "request_schema": {
