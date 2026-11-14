@@ -172,6 +172,52 @@ public sealed class RunReplayTests
         Assert.Equal(new[] { ("inputs_changed", "1"), ("not_recorded", "3") }, replay.Gaps.Select(g => (g.Reason, Assert.Single(g.Examples))));
     }
 
+    /// <summary>
+    /// Entity 1 was annotated alone twice, with two prompts. The replay's call with the second prompt first takes the call
+    /// recorded with the first (same entity, other inputs) and is answered from the one recorded with its own inputs, as
+    /// that call was: its text and its generation details.
+    /// </summary>
+    [Fact]
+    public void ASingleRowTextCall_IsAnsweredAsTheRecordedCallOfThatEntityAloneWithTheSameInputs()
+    {
+        var run = Run();
+        run.ModelCalls.Add(TextCallOf(0, TextCall("a"), new long[] { 1 }, "A"));
+        run.ModelCalls.Add(TextCallOf(1, TextCall("b"), new long[] { 1 }, "B", outputTokens: 3, truncated: true));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var writer = new ArrayOutputWriter();
+        var status = replay.InvokeModel(TextCall("b"), writer, new[] { EntityKey.FromInt64(1) });
+
+        Assert.True(status.Succeeded);
+        Assert.Equal((3, true), (status.OutputTokens, status.Truncated));
+        Assert.Equal("B", Assert.Single(writer.Texts).Value);
+        Assert.Empty(replay.Gaps);
+    }
+
+    /// <summary>
+    /// A text belongs to its whole call: a two-row call's text is not served to one of its rows, even with the same row
+    /// inputs (not recorded); an entity answered alone only with other inputs has changed inputs.
+    /// </summary>
+    [Fact]
+    public void AMultiRowCallsText_IsNotSplitByRow_AndAnEntityAnsweredOnlyWithOtherInputs_HasChangedInputs()
+    {
+        var run = Run();
+        run.ModelCalls.Add(TextCallOf(0, TextCall("a", batch: 2), new long[] { 1, 2 }, "AB"));
+        run.ModelCalls.Add(TextCallOf(1, TextCall("a"), new long[] { 3 }, "C"));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var first = new ArrayOutputWriter();
+        var split = replay.InvokeModel(TextCall("a"), first, new[] { EntityKey.FromInt64(1) });
+        var second = new ArrayOutputWriter();
+        var changed = replay.InvokeModel(TextCall("b"), second, new[] { EntityKey.FromInt64(3) });
+
+        Assert.False(split.Succeeded);
+        Assert.False(changed.Succeeded);
+        Assert.Empty(first.Texts);
+        Assert.Empty(second.Texts);
+        Assert.Equal(new[] { ("inputs_changed", "3"), ("not_recorded", "1") }, replay.Gaps.Select(g => (g.Reason, Assert.Single(g.Examples))));
+    }
+
     private const string CoreLib = "System.Private.CoreLib";
     private const string Tests = "StrataRec.UnitTests";
 
@@ -316,6 +362,27 @@ public sealed class RunReplayTests
         Outputs = new Dictionary<string, JsonElement> { ["score"] = JsonSerializer.SerializeToElement(scores) },
     };
 
+    /// <summary>A generative call of model <c>m</c>: one prompt, <c>user</c>, and a token limit.</summary>
+    internal static ModelCall TextCall(string prompt, int batch = 1) => new()
+    {
+        Model = "m", Inputs = new[] { NamedInput.FromText("user", prompt) }, BatchSize = batch, Options = new ModelCallOptions(MaxOutputTokens: 64),
+    };
+
+    /// <summary>A successful recorded generative call of model <c>m</c> for <paramref name="keys"/>, answering <paramref name="text"/>.</summary>
+    internal static ReplayModelCall TextCallOf(int seq, ModelCall call, long[] keys, string text, int? outputTokens = null, bool? truncated = null) => new()
+    {
+        Seq = seq,
+        Node = "annotator",
+        Model = "m",
+        BatchSize = call.BatchSize,
+        Status = "ok",
+        Keys = Json("[" + string.Join(",", keys) + "]"),
+        InputDigests = RowDigests(call).ToList(),
+        Texts = new Dictionary<string, string> { ["answer"] = text },
+        OutputTokens = outputTokens,
+        Truncated = truncated,
+    };
+
     internal static (ModelStatus Status, float[] Scores) Invoke(RunReplay replay, ModelCall call, params long[] keys)
     {
         var writer = new ArrayOutputWriter();
@@ -327,11 +394,11 @@ public sealed class RunReplayTests
     {
         public Dictionary<string, float[]> Floats { get; } = new();
 
+        public Dictionary<string, string> Texts { get; } = new();
+
         public Memory<float> GetFloat32(string name, int elementCount) => Floats[name] = new float[elementCount];
 
-        public void SetText(string name, string text)
-        {
-        }
+        public void SetText(string name, string text) => Texts[name] = text;
     }
 
     internal static (long[] Ids, StrataRec.Pipeline.Sources.CandidateSourceStatus Status) Retrieve(RunReplay replay, string node, int limit)

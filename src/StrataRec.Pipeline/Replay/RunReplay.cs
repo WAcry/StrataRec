@@ -479,6 +479,12 @@ public sealed class RunReplay : IFeatureCallHook
     /// a successful recorded call that scored the same entity with the same inputs, whichever call and row that was. An
     /// entity scored only with other inputs is an <c>inputs_changed</c> gap; one never scored is <c>not_recorded</c>.
     /// </summary>
+    /// <remarks>
+    /// Float outputs are split by row. Text outputs are not: a text belongs to its whole call, so a multi-row call's text is
+    /// replayed only with that call. A single-row call is the exception: when a successful recorded call answered that one
+    /// entity alone with the same inputs, it is answered as that call was, texts and generation details included (a
+    /// per-row generative call, such as <c>LlmAnnotator@1</c>'s, whose recorded call another call of the same entity took).
+    /// </remarks>
     private ModelStatus Synthesize(ModelCall call, List<ModelEntry>? calls, IModelOutputWriter outputs, EntityKey[] keys, string[] digests)
     {
         // Output layout (names and values per row) and the rows by (entity, input digest), from the successful keyed calls
@@ -517,18 +523,19 @@ public sealed class RunReplay : IFeatureCallHook
             }
         }
 
-        if (layout.Count == 0)
+        if (keys.Length == 1 && Alone(rows, keys[0], digests[0]) is { } alone)
         {
-            var gap = Gap("model", call.Model, null, "not_recorded");
-            foreach (var key in keys)
-            {
-                gap.Add(1, key.ToString());
-            }
-
-            return ModelStatus.Failed($"model '{call.Model}' has no recorded output in the replay bundle");
+            return Answer(alone, outputs);
         }
 
         var lacking = new bool[keys.Length];
+        if (layout.Count == 0)
+        {
+            Array.Fill(lacking, true);
+            ReportLacking(call.Model, keys, digests, lacking, rows, scored);
+            return ModelStatus.Failed($"model '{call.Model}' has no recorded output in the replay bundle");
+        }
+
         foreach (var (name, perRow) in layout)
         {
             var destination = outputs.GetFloat32(name, keys.Length * perRow).Span;
@@ -547,28 +554,27 @@ public sealed class RunReplay : IFeatureCallHook
             }
         }
 
-        GapCounter? missing = null;
-        GapCounter? changed = null;
-        for (var r = 0; r < keys.Length; r++)
-        {
-            if (!lacking[r])
-            {
-                continue;
-            }
-
-            if (!rows.ContainsKey((keys[r], digests[r])) && scored.Contains(keys[r]))
-            {
-                (changed ??= Gap("model", call.Model, null, "inputs_changed")).Add(1, keys[r].ToString());
-            }
-            else
-            {
-                (missing ??= Gap("model", call.Model, null, "not_recorded")).Add(1, keys[r].ToString());
-            }
-        }
-
+        ReportLacking(call.Model, keys, digests, lacking, rows, scored);
         return ModelStatus.Ok;
 
         static int PerRow(ModelEntry entry, float[] values) => entry.BatchSize > 0 ? values.Length / entry.BatchSize : 1;
+
+        // The first successful recorded call of this one entity alone, with these inputs, that answered text.
+        static ModelEntry? Alone(Dictionary<(EntityKey, string), List<(ModelEntry Entry, int Row)>> rows, EntityKey key, string digest)
+        {
+            if (rows.TryGetValue((key, digest), out var list))
+            {
+                foreach (var (entry, _) in list)
+                {
+                    if (entry.Keys!.Length == 1 && entry.Texts.Count > 0)
+                    {
+                        return entry;
+                    }
+                }
+            }
+
+            return null;
+        }
 
         // The first recorded row of the entity with these inputs that has the output in the same layout.
         static ReadOnlyMemory<float>? Recorded(Dictionary<(EntityKey, string), List<(ModelEntry Entry, int Row)>> rows, EntityKey key, string digest, string name, int perRow)
@@ -587,6 +593,34 @@ public sealed class RunReplay : IFeatureCallHook
             }
 
             return null;
+        }
+    }
+
+    /// <summary>
+    /// The gaps of the rows a synthesized call could not answer: <c>inputs_changed</c> for an entity the recording answered
+    /// only with other inputs, otherwise <c>not_recorded</c>.
+    /// </summary>
+    private void ReportLacking(
+        string model, EntityKey[] keys, string[] digests, bool[] lacking, Dictionary<(EntityKey Key, string Digest), List<(ModelEntry Entry, int Row)>> rows,
+        HashSet<EntityKey> scored)
+    {
+        GapCounter? missing = null;
+        GapCounter? changed = null;
+        for (var r = 0; r < keys.Length; r++)
+        {
+            if (!lacking[r])
+            {
+                continue;
+            }
+
+            if (!rows.ContainsKey((keys[r], digests[r])) && scored.Contains(keys[r]))
+            {
+                (changed ??= Gap("model", model, null, "inputs_changed")).Add(1, keys[r].ToString());
+            }
+            else
+            {
+                (missing ??= Gap("model", model, null, "not_recorded")).Add(1, keys[r].ToString());
+            }
         }
     }
 
