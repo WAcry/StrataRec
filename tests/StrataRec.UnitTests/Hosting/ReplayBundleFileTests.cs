@@ -168,6 +168,24 @@ public sealed class ReplayBundleFileTests
         Assert.Contains("\"layer_conflict\"", ReplayBundleFile.Serialize(bundle));
     }
 
+    [Theory]
+    [InlineData("seed")] // a number field: describing the string at fault must not decode it
+    [InlineData("format")] // read before the structure, to check the version
+    public void AStringThatIsNotValidUnicode_IsRejectedAsMalformed_NotThrownAsAnotherException(string member)
+    {
+        // Review 32 #4: "\uD800" (an unpaired surrogate escape) escaped as InvalidOperationException.
+        var unpaired = "\"" + (char)92 + "uD800\"";
+        var json = member == "seed"
+            ? """{"format":"stratarec.replay_bundle/4","request":{"seed":""" + unpaired + "}}"
+            : """{"format":""" + unpaired + ""","request":{}}""";
+
+        var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(json));
+
+        Assert.Contains("not valid Unicode", error.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("System.", error.Message, StringComparison.Ordinal);
+        Assert.NotNull(error.Hint);
+    }
+
     [Fact]
     public void UnknownProperty_IsRejectedWithItsPointer_AndPointsToTheSchema()
     {

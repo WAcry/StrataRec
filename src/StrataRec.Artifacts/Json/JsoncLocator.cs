@@ -105,23 +105,29 @@ public static class JsoncLocator
                 matched++;
             }
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
-            // Malformed after the deepest match: what was found stands.
+            // Malformed after the deepest match, or a key that is not valid Unicode (comparing it unescapes it): what was found stands.
         }
 
         var exact = matched == depth;
+        var within = 0; // UTF-16 units into the character at 'at': 1 for the low surrogate of a raw non-BMP character
         if (exact && stringOffset is { } offset && value < json.Length && json[(int)value] == (byte)'"')
         {
-            at = CharacterInString(json, (int)value, offset);
+            (at, within) = CharacterInString(json, (int)value, offset);
         }
 
         var position = Jsonc.PositionOf(json, at);
-        return new JsoncLocation(position.Line, position.Column, exact);
+        return new JsoncLocation(position.Line, position.Column + within, exact);
     }
 
-    /// <summary>The byte offset of character <paramref name="offset"/> of the string literal starting (at its quote) at <paramref name="quote"/>.</summary>
-    private static int CharacterInString(ReadOnlySpan<byte> json, int quote, int offset)
+    /// <summary>
+    /// Where UTF-16 unit <paramref name="offset"/> of the string literal starting (at its quote) at
+    /// <paramref name="quote"/> is written: the byte offset of the character holding it, and how many UTF-16 units into
+    /// that character it is (1 for the low surrogate of a non-BMP character written raw, whose two units share four
+    /// bytes; 0 otherwise).
+    /// </summary>
+    private static (int Position, int Within) CharacterInString(ReadOnlySpan<byte> json, int quote, int offset)
     {
         var position = quote + 1;
         var units = 0;
@@ -139,15 +145,25 @@ public static class JsoncLocator
                 position++;
                 units++;
             }
+            else if (b >= 0xF0)
+            {
+                // A 4-byte sequence is a surrogate pair in UTF-16: an offset at its second unit is inside it.
+                if (units + 1 == offset)
+                {
+                    return (position, 1);
+                }
+
+                position += 4;
+                units += 2;
+            }
             else
             {
-                var length = b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : 2;
-                position += length;
-                units += length == 4 ? 2 : 1; // a 4-byte sequence is a surrogate pair in UTF-16
+                position += b >= 0xE0 ? 3 : 2;
+                units++;
             }
         }
 
-        return Math.Min(position, json.Length);
+        return (Math.Min(position, json.Length), 0);
     }
 
     private static bool IsIndex(string token, out int index)

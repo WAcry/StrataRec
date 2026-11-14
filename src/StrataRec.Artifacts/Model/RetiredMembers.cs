@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace StrataRec.Artifacts.Model;
@@ -42,30 +41,6 @@ internal static class RetiredMembers
         }
 
         return null;
-    }
-
-    /// <inheritdoc cref="Find(Type, JsonNode?, string?)"/>
-    public static ArtifactFormatException? Find(Type type, string json, string? source)
-    {
-        var applies = false;
-        foreach (var member in Members)
-        {
-            applies |= member.Type == type;
-        }
-
-        if (!applies)
-        {
-            return null;
-        }
-
-        try
-        {
-            return Find(type, JsonNode.Parse(json, documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }), source);
-        }
-        catch (JsonException)
-        {
-            return null; // not JSON: the serializer's own error says where
-        }
     }
 
     /// <summary>The RFC 6901 pointer of the member at <paramref name="path"/> (<c>*</c> matches any name), or null.</summary>

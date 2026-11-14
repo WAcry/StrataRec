@@ -648,15 +648,19 @@ public sealed class PlanBuilder
                 continue; // identical re-add (checked by the experiment compiler)
             }
 
+            // Every failure is recorded, whichever check finds it: a tap of a failed group fails without a second error.
             if (!(spec.Rate >= 0 && spec.Rate <= 1))
             {
-                _diagnostics.Error("FUNNEL_BAD_RATE", artifact, pointer + "/rate", "rate must be in [0, 1].");
+                _diagnostics.Error("FUNNEL_BAD_RATE", artifact, pointer + "/rate", "rate must be in [0, 1].",
+                    "the share of requests the group samples, e.g. 0.01 for 1%, 1.0 for every request");
+                _failedGroups.Add(name);
                 continue;
             }
 
             if (spec.Key.Count == 0)
             {
                 _diagnostics.Error("FUNNEL_NO_KEY", artifact, pointer + "/key", "A funnel group needs at least one key expression.", "e.g. [\"ctx.request.id\"]");
+                _failedGroups.Add(name);
                 continue;
             }
 

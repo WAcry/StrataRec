@@ -358,18 +358,53 @@ public sealed class ConfigWorkspace
     /// The workspace-relative path of the file a diagnostic's artifact label names, for tools that print diagnostics with
     /// a file, line and column: <c>pipeline:home_feed</c> is <c>pipelines/home_feed.jsonc</c> (a file is named by the id
     /// inside it, which loading checks), <c>policy</c> is <c>policy.jsonc</c>, and a label that is a path (as loading and
-    /// release errors use) is that file. Text after the label, such as the arms of a combination
-    /// (<c>pipeline:home_feed with exp_a/x</c>), is ignored. Null for a label that names no file of the workspace (a
-    /// manifest, the workspace as a whole) or a file that does not exist.
+    /// release errors use) is that file. The whole label is matched first, since an id may contain spaces; only when it
+    /// names no file is the arm combination an error was found in (<c>pipeline:home_feed with exp_a/x + exp_b/y</c>)
+    /// taken off. Null for a label that names no file of the workspace (a manifest, the workspace as a whole) or a file
+    /// that does not exist: never another file.
     /// </summary>
     /// <param name="root">The workspace directory.</param>
     /// <param name="artifact">The diagnostic's <see cref="ConfigDiagnostic.Artifact"/>.</param>
     /// <param name="exact">True when <paramref name="artifact"/> is only the file's label, so the file says all it says.</param>
     public static string? FileOf(string root, string artifact, out bool exact)
     {
-        var space = artifact.IndexOf(' ', StringComparison.Ordinal);
-        var label = space < 0 ? artifact : artifact[..space];
-        exact = space < 0;
+        exact = true;
+        if (FileOfLabel(root, artifact) is { } file)
+        {
+            return file;
+        }
+
+        exact = false;
+        return WithoutCombination(artifact) is { } label ? FileOfLabel(root, label) : null;
+    }
+
+    /// <summary>
+    /// The label before <c> with exp_a/x + exp_b/y</c>, the arms of a combination as the plan compiler appends them, or
+    /// null when the label does not end so. Every arm id is <c>experiment/arm</c> without spaces.
+    /// </summary>
+    private static string? WithoutCombination(string artifact)
+    {
+        const string With = " with ";
+        var at = artifact.LastIndexOf(With, StringComparison.Ordinal);
+        if (at <= 0)
+        {
+            return null;
+        }
+
+        foreach (var arm in artifact[(at + With.Length)..].Split(" + "))
+        {
+            var slash = arm.IndexOf('/', StringComparison.Ordinal);
+            if (slash <= 0 || slash == arm.Length - 1 || arm.IndexOf('/', slash + 1) >= 0 || arm.Contains(' ', StringComparison.Ordinal))
+            {
+                return null;
+            }
+        }
+
+        return artifact[..at];
+    }
+
+    private static string? FileOfLabel(string root, string label)
+    {
         var colon = label.IndexOf(':', StringComparison.Ordinal);
         string stem;
         if (colon > 0)

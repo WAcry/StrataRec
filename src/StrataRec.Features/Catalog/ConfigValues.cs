@@ -1,6 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
@@ -35,8 +34,13 @@ public static class ConfigValues
 
         if (!TryAsElement(node, out var element))
         {
+            // A parsed string that is not valid Unicode, inside an array or object, which cannot be written to be read: the
+            // array's item at fault is named, as for an element (an earlier item of the wrong kind is not, the one case
+            // where the two forms differ).
             value = ScalarValue.Missing;
-            error = Expected(type, "a value holding " + NotUnicode);
+            error = node is JsonArray array && IsArray(type) && Unreadable(array) is >= 0 and var index
+                ? Element(type, index, JsonWords.Value(array[index]))
+                : Expected(type, JsonWords.Value(node));
             return false;
         }
 
@@ -70,19 +74,16 @@ public static class ConfigValues
                 value = ScalarValue.FromBool(kind == JsonValueKind.True);
                 return true;
             case StorageKind.Int32 or StorageKind.Int64 when kind == JsonValueKind.Number:
-                switch (Integer(element, out var integer))
+                if (!TryInteger(element, out var integer))
                 {
-                    case Exactness.NotInteger:
-                        error = Expected(type, JsonWords.Value(element));
-                        return false;
-                    case Exactness.OutsideInt64:
-                        error = OutsideInt64(JsonWords.Value(element));
-                        return false;
+                    error = JsonIntegers.IsIntegral(element.GetRawText()) ? OutOfRange(type, JsonWords.Value(element), fitsInt64: false)
+                        : Expected(type, JsonWords.Value(element));
+                    return false;
                 }
 
                 if (type.Kind == StorageKind.Int32 && !Int32Range.Fits(integer))
                 {
-                    error = OutsideInt32(type, JsonWords.Value(element));
+                    error = OutOfRange(type, JsonWords.Value(element), fitsInt64: true);
                     return false;
                 }
 
@@ -98,9 +99,9 @@ public static class ConfigValues
                 value = ScalarValue.FromFloat64(number);
                 return true;
             case StorageKind.String or StorageKind.Text when kind == JsonValueKind.String:
-                if (!TryGetString(element, out var text))
+                if (!JsonWords.TryText(element, out var text))
                 {
-                    error = Expected(type, NotUnicode);
+                    error = Expected(type, JsonWords.Value(element));
                     return false;
                 }
 
@@ -121,7 +122,7 @@ public static class ConfigValues
                     // A component beyond float32 would be stored as an infinity: not a number the request gave.
                     if (component.ValueKind != JsonValueKind.Number || !component.TryGetDouble(out var d) || !float.IsFinite((float)d))
                     {
-                        error = Element(type, v, component);
+                        error = Element(type, v, JsonWords.Value(component));
                         return false;
                     }
 
@@ -137,22 +138,17 @@ public static class ConfigValues
                 var l = 0;
                 foreach (var item in element.EnumerateArray())
                 {
-                    var exactness = item.ValueKind == JsonValueKind.Number ? Integer(item, out longs[l]) : Exactness.NotInteger;
-                    if (exactness == Exactness.NotInteger)
+                    if (item.ValueKind != JsonValueKind.Number || !TryInteger(item, out longs[l]))
                     {
-                        error = Element(type, l, item);
-                        return false;
-                    }
-
-                    if (exactness == Exactness.OutsideInt64)
-                    {
-                        error = $"must be an array of integers within the int64 range [{long.MinValue}, {long.MaxValue}]; element {l} is {JsonWords.Value(item)}";
+                        error = item.ValueKind == JsonValueKind.Number && JsonIntegers.IsIntegral(item.GetRawText())
+                            ? OutOfRange(type, JsonWords.Value(item), fitsInt64: false, l)
+                            : Element(type, l, JsonWords.Value(item));
                         return false;
                     }
 
                     if (type.Kind == StorageKind.ListInt32 && !Int32Range.Fits(longs[l]))
                     {
-                        error = ElementOutsideInt32(type, l, JsonWords.Value(item));
+                        error = OutOfRange(type, JsonWords.Value(item), fitsInt64: true, l);
                         return false;
                     }
 
@@ -166,19 +162,13 @@ public static class ConfigValues
                 var s = 0;
                 foreach (var item in element.EnumerateArray())
                 {
-                    if (item.ValueKind != JsonValueKind.String)
+                    if (item.ValueKind != JsonValueKind.String || !JsonWords.TryText(item, out strings[s]))
                     {
-                        error = Element(type, s, item);
+                        error = Element(type, s, JsonWords.Value(item));
                         return false;
                     }
 
-                    if (!TryGetString(item, out var entry))
-                    {
-                        error = $"must be {Describe(type)}; element {s} is {NotUnicode}";
-                        return false;
-                    }
-
-                    strings[s++] = entry;
+                    s++;
                 }
 
                 value = ScalarValue.FromStringList(strings);
@@ -206,8 +196,12 @@ public static class ConfigValues
         // Only why it failed is worked out here, on the error path: TryConvert decided.
         switch (type.Kind)
         {
-            case StorageKind.Int32 when value.Kind == StorageKind.Int64 || (value.Kind == StorageKind.Float64 && Math.Floor(value.AsFloat64()) == value.AsFloat64()):
-                error = OutsideInt32(type, Words(value));
+            case StorageKind.Int32 when value.Kind == StorageKind.Int64:
+                error = OutOfRange(type, Words(value), fitsInt64: true);
+                return false;
+            case StorageKind.Int32 or StorageKind.Int64 when value.Kind == StorageKind.Float64 && Math.Floor(value.AsFloat64()) == value.AsFloat64():
+                // An integral double ScalarValue.TryConvert refused: outside the type's range (or int64's).
+                error = OutOfRange(type, Words(value), fitsInt64: Math.Abs(value.AsFloat64()) < 9.2e18);
                 return false;
             case StorageKind.ListInt32 when value.Kind == StorageKind.ListInt64:
                 var list = value.AsInt64List();
@@ -215,7 +209,7 @@ public static class ConfigValues
                 {
                     if (!Int32Range.Fits(list[i]))
                     {
-                        error = ElementOutsideInt32(type, i, "the number " + list[i].ToString(CultureInfo.InvariantCulture));
+                        error = OutOfRange(type, "the number " + list[i].ToString(CultureInfo.InvariantCulture), fitsInt64: true, i);
                         return false;
                     }
                 }
@@ -253,22 +247,50 @@ public static class ConfigValues
         return type.Kind == StorageKind.String ? shape : $"{shape} ({name})";
     }
 
-    private const string NotUnicode = "a string that is not valid Unicode (an unpaired surrogate escape)";
-
     private static string Expected(ColumnType type, string got) => $"must be {Describe(type)}, got {got}";
 
-    private static string Element(ColumnType type, int index, in JsonElement element) =>
-        $"must be {Describe(type)}; element {index} is {JsonWords.Value(element)}";
+    private static string Element(ColumnType type, int index, string got) => $"must be {Describe(type)}; element {index} is {got}";
 
-    /// <summary>The larger type keeps the nullability written, so the suggestion can be pasted as it is.</summary>
-    private static string OutsideInt32(ColumnType type, string got) =>
-        $"must be within the int32 range [{int.MinValue}, {int.MaxValue}], got {got}; declare the type as {type.Promoted()} for larger values";
+    /// <summary>
+    /// An integer outside the range of <paramref name="type"/> (of its elements, with <paramref name="element"/>); for int32
+    /// storage of a value int64 holds, with the fix of declaring the int64 form. The larger type keeps the nullability
+    /// written, so the suggestion can be pasted as it is: <c>int64</c> for an <c>int32?</c> input would make it required.
+    /// </summary>
+    private static string OutOfRange(ColumnType type, string got, bool fitsInt64, int element = -1)
+    {
+        var int32 = type.Kind is StorageKind.Int32 or StorageKind.ListInt32;
+        var range = int32 ? $"the int32 range [{int.MinValue}, {int.MaxValue}]" : $"the int64 range [{long.MinValue}, {long.MaxValue}]";
+        var fix = int32 && fitsInt64 ? $"; declare the type as {type.Promoted()} for larger values" : string.Empty;
+        return element < 0
+            ? $"must be within {range}, got {got}{fix}"
+            : $"must be an array of integers within {range}; element {element} is {got}{fix}";
+    }
 
-    private static string OutsideInt64(string got) => $"must be within the int64 range [{long.MinValue}, {long.MaxValue}], got {got}";
+    private static bool IsArray(ColumnType type) =>
+        type.Kind is StorageKind.Vector or StorageKind.ListInt32 or StorageKind.ListInt64 or StorageKind.ListString;
 
-    private static string ElementOutsideInt32(ColumnType type, int index, string got) =>
-        $"must be an array of integers within the int32 range [{int.MinValue}, {int.MaxValue}]; element {index} is {got}; " +
-        $"declare the type as {type.Promoted()} for larger values";
+    /// <summary>
+    /// The index of the first item of <paramref name="array"/> that cannot be read: a string that is not valid Unicode (a
+    /// parsed value holds its element unread), or a container holding one; -1 when there is none.
+    /// </summary>
+    private static int Unreadable(JsonArray array)
+    {
+        for (var i = 0; i < array.Count; i++)
+        {
+            var unreadable = array[i] switch
+            {
+                JsonValue value => value.GetValueKind() == JsonValueKind.String && !JsonWords.TryText(value, out _),
+                { } container => !TryAsElement(container, out _),
+                null => false,
+            };
+            if (unreadable)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
 
     /// <summary>A typed value as the JSON that would carry it is told (<see cref="JsonWords.Value(in JsonElement)"/>).</summary>
     private static string Words(in ScalarValue value) => value.Kind switch
@@ -282,28 +304,10 @@ public static class ConfigValues
     };
 
     /// <summary>
-    /// A string value, or false for one whose escapes produce an unpaired surrogate: System.Text.Json parses such a string
-    /// and throws only when it is read, an <see cref="InvalidOperationException"/> of that one call.
-    /// </summary>
-    private static bool TryGetString(in JsonElement element, [NotNullWhen(true)] out string? text)
-    {
-        try
-        {
-            text = element.GetString()!;
-            return true;
-        }
-        catch (InvalidOperationException)
-        {
-            text = null;
-            return false;
-        }
-    }
-
-    /// <summary>
     /// The element a node holds: the parsed one when it has one (no copy), otherwise the node serialized, which only
     /// configuration built in code (and arrays, which are nodes of their own) pays for, at load. False for a node that
     /// cannot be written as JSON: one holding a parsed string whose escape is an unpaired surrogate, which cannot be read
-    /// to be written (the serializer wraps that error, or not). Nothing else in a node makes it throw.
+    /// to be written (the serializer may wrap that error). Nothing else in a node makes it throw.
     /// </summary>
     private static bool TryAsElement(JsonNode node, out JsonElement element)
     {
@@ -317,130 +321,18 @@ public static class ConfigValues
             element = JsonSerializer.SerializeToElement(node);
             return true;
         }
-        catch (Exception ex) when (ex is JsonException { InnerException: InvalidOperationException or ArgumentException } or InvalidOperationException or ArgumentException)
+        catch (Exception ex) when (ex is JsonException { InnerException: InvalidOperationException } or InvalidOperationException)
         {
             element = default;
             return false;
         }
     }
 
-    private enum Exactness
-    {
-        Integer,
-        NotInteger,
-        OutsideInt64,
-    }
-
     /// <summary>
-    /// The integer a JSON number denotes (<c>3</c>, <c>3.0</c>, <c>3e2</c>, <c>30e-1</c>), decided by its digits: a number
-    /// is converted only when its exact value is an integer a long holds. Reading it as a double first would round
-    /// <c>9007199254740993.0</c> to <c>9007199254740992</c> and accept <c>9007199254740992.5</c> as an integer: ids and
-    /// histories would change silently.
+    /// The integer a JSON number denotes (<c>3</c>, <c>3.0</c>, <c>3e2</c>), exactly (<see cref="JsonIntegers"/>): never
+    /// through a double, which would round <c>9007199254740993.0</c> and accept <c>9007199254740992.5</c>. Plain integer
+    /// text is read without allocating.
     /// </summary>
-    private static Exactness Integer(in JsonElement number, out long integer) =>
-        number.TryGetInt64(out integer) ? Exactness.Integer : ExactInteger(JsonMarshal.GetRawUtf8Value(number), out integer);
-
-    /// <summary>
-    /// Parses a JSON number token (RFC 8259 grammar, already validated by the reader) as an exact integer: the mantissa's
-    /// digits times a power of ten, an integer when no nonzero digit falls after the point.
-    /// </summary>
-    private static Exactness ExactInteger(ReadOnlySpan<byte> token, out long integer)
-    {
-        integer = 0;
-        var i = 0;
-        var negative = token[0] == (byte)'-';
-        if (negative)
-        {
-            i++;
-        }
-
-        var integerStart = i;
-        while (i < token.Length && char.IsAsciiDigit((char)token[i]))
-        {
-            i++;
-        }
-
-        var integerDigits = token[integerStart..i];
-        var fractionDigits = ReadOnlySpan<byte>.Empty;
-        if (i < token.Length && token[i] == (byte)'.')
-        {
-            var fractionStart = ++i;
-            while (i < token.Length && char.IsAsciiDigit((char)token[i]))
-            {
-                i++;
-            }
-
-            fractionDigits = token[fractionStart..i];
-        }
-
-        long exponent = 0;
-        if (i < token.Length && (token[i] | 0x20) == (byte)'e')
-        {
-            i++;
-            var exponentNegative = token[i] == (byte)'-';
-            if (token[i] is (byte)'-' or (byte)'+')
-            {
-                i++;
-            }
-
-            for (; i < token.Length; i++)
-            {
-                exponent = Math.Min((exponent * 10) + (token[i] - '0'), 1_000_000); // saturates: far beyond any long either way
-            }
-
-            exponent = exponentNegative ? -exponent : exponent;
-        }
-
-        // The mantissa's digits without leading or trailing zeros; each trailing zero raises the power of ten.
-        var digits = integerDigits.Length + fractionDigits.Length;
-        var first = 0;
-        while (first < digits && Digit(integerDigits, fractionDigits, first) == 0)
-        {
-            first++;
-        }
-
-        if (first == digits)
-        {
-            return Exactness.Integer; // zero, however written
-        }
-
-        var last = digits - 1;
-        while (Digit(integerDigits, fractionDigits, last) == 0)
-        {
-            last--;
-        }
-
-        var scale = exponent - fractionDigits.Length + (digits - 1 - last);
-        if (scale < 0)
-        {
-            return Exactness.NotInteger; // a nonzero digit after the point
-        }
-
-        if (last - first + 1 + scale > 19)
-        {
-            return Exactness.OutsideInt64; // twenty digits or more
-        }
-
-        ulong magnitude = 0;
-        for (var d = first; d <= last; d++)
-        {
-            magnitude = (magnitude * 10) + (ulong)Digit(integerDigits, fractionDigits, d);
-        }
-
-        for (var s = 0L; s < scale; s++)
-        {
-            magnitude *= 10; // at most 19 digits: no overflow of a ulong
-        }
-
-        if (magnitude > (negative ? (ulong)long.MaxValue + 1 : long.MaxValue))
-        {
-            return Exactness.OutsideInt64;
-        }
-
-        integer = negative ? (long)(0 - magnitude) : (long)magnitude;
-        return Exactness.Integer;
-
-        static int Digit(ReadOnlySpan<byte> integerPart, ReadOnlySpan<byte> fractionPart, int index) =>
-            (index < integerPart.Length ? integerPart[index] : fractionPart[index - integerPart.Length]) - '0';
-    }
+    private static bool TryInteger(in JsonElement number, out long integer) =>
+        number.TryGetInt64(out integer) || JsonIntegers.TryParse(number.GetRawText(), out integer);
 }

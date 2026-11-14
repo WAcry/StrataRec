@@ -64,6 +64,10 @@ public static class ArtifactSerializer
             throw RetiredMembers.Find(typeof(T), node, sourceName)
                   ?? Failed(JsonBindingErrors.Describe(ex, node, typeof(T), Options, Subject(typeof(T))), sourceName, ex);
         }
+        catch (Exception ex) when (NotBindable(ex, node, typeof(T), Subject(typeof(T))) is { } error)
+        {
+            throw Failed(error, sourceName, ex);
+        }
 
         throw Failed(JsonBindingErrors.Null(typeof(T), Options, Subject(typeof(T))), sourceName, null);
     }
@@ -78,24 +82,35 @@ public static class ArtifactSerializer
                 return value;
             }
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (ex is JsonException or NotSupportedException)
         {
-            if (RetiredMembers.Find(typeof(T), json, sourceName) is { } retired)
+            // The document is read again strictly, as a workspace file is: a string or key that is not valid Unicode,
+            // a key written twice or a syntax error is told at its line and column, and the translator only ever walks
+            // a document every part of which can be read.
+            JsonNode? document;
+            try
+            {
+                document = Jsonc.Parse(json, sourceName);
+            }
+            catch (JsoncException jsonc)
+            {
+                throw Unreadable(jsonc, sourceName);
+            }
+
+            if (RetiredMembers.Find(typeof(T), document, sourceName) is { } retired)
             {
                 throw retired;
             }
 
-            JsonNode? document;
-            try
+            var error = ex is JsonException binding
+                ? JsonBindingErrors.Describe(binding, document, typeof(T), Options, Subject(typeof(T)))
+                : JsonBindingErrors.MissingDiscriminator(document, typeof(T), Options, Subject(typeof(T)));
+            if (error is null)
             {
-                document = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
-            }
-            catch (JsonException)
-            {
-                throw SyntaxError(json, sourceName, ex);
+                throw; // not about the document
             }
 
-            throw Failed(JsonBindingErrors.Describe(ex, document, typeof(T), Options, Subject(typeof(T))), sourceName, ex);
+            throw Failed(error, sourceName, ex);
         }
 
         throw Failed(JsonBindingErrors.Null(typeof(T), Options, Subject(typeof(T))), sourceName, null);
@@ -120,10 +135,28 @@ public static class ArtifactSerializer
             error = JsonBindingErrors.Describe(ex, node, typeof(T), Options, subject);
             return false;
         }
+        catch (Exception ex) when (NotBindable(ex, node, typeof(T), subject) is { } found)
+        {
+            value = null;
+            error = found;
+            return false;
+        }
 
         error = value is null ? JsonBindingErrors.Null(typeof(T), Options, subject) : null;
         return value is not null;
     }
+
+    /// <summary>
+    /// The error for a document the serializer rejects with an exception other than a <see cref="JsonException"/>: one
+    /// with a part that cannot be read (writing a leniently parsed node reads it), or an object of an abstract
+    /// polymorphic type without its discriminator. Null when the exception is not about the document, so it propagates.
+    /// </summary>
+    private static JsonBindingError? NotBindable(Exception exception, JsonNode? node, Type type, string subject) => exception switch
+    {
+        InvalidOperationException or ArgumentException => JsonBindingErrors.Unreadable(node, subject),
+        NotSupportedException => JsonBindingErrors.MissingDiscriminator(node, type, Options, subject),
+        _ => null,
+    };
 
     public static JsonNode ToNode<T>(T value) => JsonSerializer.SerializeToNode(value, Options)!;
 
@@ -133,20 +166,11 @@ public static class ArtifactSerializer
     private static ArtifactFormatException Failed(JsonBindingError error, string? sourceName, Exception? inner) =>
         new(sourceName, error.Pointer, error.Message, inner, error.Hint);
 
-    /// <summary>A document that is not JSON at all: the JSONC reader says where, with a line and column.</summary>
-    private static ArtifactFormatException SyntaxError(string json, string? sourceName, JsonException inner)
+    /// <summary>A document the JSONC reader rejects (syntax, invalid Unicode, a duplicate key): it says where, with a line and column.</summary>
+    private static ArtifactFormatException Unreadable(JsoncException ex, string? sourceName)
     {
-        try
-        {
-            Jsonc.Parse(json, sourceName);
-        }
-        catch (JsoncException ex)
-        {
-            var where = ex.Line is { } line ? $" (line {line}, column {ex.Column})" : string.Empty;
-            return new ArtifactFormatException(sourceName, string.Empty, ex.Reason + where, ex, ex.Hint);
-        }
-
-        return new ArtifactFormatException(sourceName, string.Empty, "The document is not valid JSON.", inner);
+        var where = ex.Line is { } line ? $" (line {line}, column {ex.Column})" : string.Empty;
+        return new ArtifactFormatException(sourceName, string.Empty, ex.Reason + where, ex, ex.Hint);
     }
 
     private static JsonSerializerOptions CreateOptions()

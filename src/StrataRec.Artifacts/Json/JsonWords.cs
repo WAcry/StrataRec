@@ -34,7 +34,7 @@ public static class JsonWords
         switch (value.GetValueKind())
         {
             case JsonValueKind.String:
-                return "the string " + Quote(value.GetValue<string>());
+                return TryText(value, out var text) ? "the string " + Quote(text) : "a string that is not valid Unicode";
             case JsonValueKind.Number:
                 return "the number " + Cut(node.ToJsonString());
             case JsonValueKind.True:
@@ -48,32 +48,20 @@ public static class JsonWords
 
     /// <summary>
     /// <see cref="Value(JsonNode?)"/> for a value read without building nodes (a request body read once); the same words
-    /// for the same JSON. An absent value (<see cref="JsonValueKind.Undefined"/>) is <c>nothing</c>; a string whose escapes
-    /// are not Unicode (an unpaired surrogate, which System.Text.Json parses and refuses to read) is quoted as written.
+    /// for the same JSON, a string that is not valid Unicode included. An absent value (<see cref="JsonValueKind.Undefined"/>)
+    /// is <c>nothing</c>.
     /// </summary>
     public static string Value(in JsonElement element) => element.ValueKind switch
     {
         JsonValueKind.Null => "null",
         JsonValueKind.Object => "an object",
         JsonValueKind.Array => "an array",
-        JsonValueKind.String => "the string " + QuoteString(element),
+        JsonValueKind.String => TryText(element, out var text) ? "the string " + Quote(text) : "a string that is not valid Unicode",
         JsonValueKind.Number => "the number " + Cut(element.GetRawText()),
         JsonValueKind.True => "true",
         JsonValueKind.False => "false",
         _ => "nothing",
     };
-
-    private static string QuoteString(in JsonElement element)
-    {
-        try
-        {
-            return Quote(element.GetString()!);
-        }
-        catch (InvalidOperationException)
-        {
-            return Cut(element.GetRawText()); // the escapes as written, already in quotes
-        }
-    }
 
     /// <summary>A kind of token, for a reader that only knows the token: <c>a number</c>, <c>an object</c>, …</summary>
     public static string Token(JsonTokenType token) => token switch
@@ -147,6 +135,39 @@ public static class JsonWords
         }
 
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// A string value's text. Describing a value is how an error about it is told, so it must not fail itself: a string
+    /// whose escapes are not valid UTF-16 (<c>"\uD800"</c>, an unpaired surrogate) has no text, and is said to be so.
+    /// </summary>
+    public static bool TryText(JsonValue value, out string text)
+    {
+        try
+        {
+            text = value.GetValue<string>();
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            text = string.Empty;
+            return false;
+        }
+    }
+
+    /// <summary><see cref="TryText(JsonValue, out string)"/> for a string element.</summary>
+    public static bool TryText(in JsonElement value, out string text)
+    {
+        try
+        {
+            text = value.GetString()!;
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            text = string.Empty;
+            return false;
+        }
     }
 
     private static string Cut(string text) => text.Length <= MaxQuotedLength ? text : text[..MaxQuotedLength] + "…";
