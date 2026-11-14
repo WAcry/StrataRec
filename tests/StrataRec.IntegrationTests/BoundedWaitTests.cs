@@ -39,7 +39,9 @@ public sealed class BoundedWaitTests
         var host = HomeFeedTestHost.Load(SampleTiming.AsWritten); // ctr_ranker: timeout_ms 50, fallback ctr_backup
         using var models = new GatedModels();
         var pool = new CountingPool();
-        var engine = Engine(host, pool, models: models);
+        var logs = new ListLoggerFactory();
+        using var events = new RequestEventLog(logs.CreateLogger("events"), autoFlush: false, heldAfter: TimeSpan.Zero);
+        var engine = Engine(host, pool, models: models, events: events);
 
         var result = await engine.ExecuteAsync(Request("req-node-timeout")).AsTask().WaitAsync(Patience);
 
@@ -56,6 +58,11 @@ public sealed class BoundedWaitTests
         Assert.Equal(("timeout", true), (call.Status, call.Threw)); // as the request saw it
         Assert.Empty(call.Outputs);
         Assert.Equal(ReplayTiming.TimedOut, Assert.Single(run.Nodes.Single(n => n.Node == "ctr_ranker").Attempts, a => a.Node == "ctr_ranker").Timing);
+
+        // Still held when the event log looks (design 13.2): one report for the request, naming the pipeline.
+        events.Flush();
+        var held = Assert.Single(logs.Entries, e => e.State.TryGetValue("Event", out var v) && v is RequestEvent.BuffersHeld);
+        Assert.Equal(("home_feed", "req-node-timeout"), (held.State["Subject"], held.State["SampleRequestId"]));
 
         // The model answers late, writing its outputs into buffers still rented, and only then lets go of the memory.
         models.Open();
@@ -210,7 +217,8 @@ public sealed class BoundedWaitTests
         Debug = new DebugOptions { Record = true, Trace = true, ForceArms = ReplayTests.ControlArms, OnRecording = onRecording },
     };
 
-    private static RecEngine Engine(HomeFeedTestHost host, IBufferPool pool, IModelClientFactory? models = null, ICandidateSourceFactory? sources = null)
+    private static RecEngine Engine(
+        HomeFeedTestHost host, IBufferPool pool, IModelClientFactory? models = null, ICandidateSourceFactory? sources = null, RequestEventLog? events = null)
     {
         var engine = new RecEngine(
             new PlanEnvironment
@@ -219,7 +227,7 @@ public sealed class BoundedWaitTests
                 Models = models is null ? ModelClientRegistry.CreateDefault() : new ModelClientRegistry().Add(models),
                 CandidateSources = sources is null ? CandidateSourceRegistry.CreateDefault() : new CandidateSourceRegistry().Add(sources),
             },
-            executor: new PipelineExecutor(pool));
+            executor: new PipelineExecutor(pool, null, events));
         var load = engine.Load(host.Request);
         Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
         return engine;

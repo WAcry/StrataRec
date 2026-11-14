@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using StrataRec.Core.Diagnostics;
 
 namespace StrataRec.Core.Memory;
 
@@ -46,6 +47,10 @@ public interface IRequestEndObserver
 /// after it has produced its result. The last release returns all buffers and then tells the
 /// <see cref="IRequestEndObserver"/>, if any: the one moment from which nothing of the request can still run.</para>
 /// <para>The ledger is itself a pooled array of struct entries, so renting allocates nothing per buffer.</para>
+/// <para>A buffer the pool will not take back (a host's <see cref="IBufferPool"/> throws) is left to the GC, the others are
+/// still returned, and the failure goes to the event log as <see cref="RequestEvent.BufferReturnFailed"/> (design 13.2).
+/// <see cref="Release"/> never throws for the pool: the last release often runs on a client's thread, as the continuation
+/// of a call the request abandoned, where an exception would reach no one.</para>
 /// </remarks>
 public sealed class RequestMemory
 {
@@ -53,6 +58,9 @@ public sealed class RequestMemory
 
     private readonly IBufferPool _pool;
     private readonly IRequestEndObserver? _ended;
+    private readonly RequestEventLog? _events;
+    private readonly string _subject;
+    private readonly string? _requestId;
     private readonly object _gate = new();
     private Lease[] _leases = Array.Empty<Lease>(); // guarded by _gate until the last Release
     private int _leaseCount;
@@ -60,10 +68,17 @@ public sealed class RequestMemory
     private bool _returned;
 
     /// <param name="ended">Told once, after the last <see cref="Release"/> has returned every buffer.</param>
-    public RequestMemory(IBufferPool? pool = null, IRequestEndObserver? ended = null)
+    /// <param name="events">Told of buffers the pool would not take back; null reports nothing.</param>
+    /// <param name="subject">The event's subject (the pipeline).</param>
+    /// <param name="requestId">The event's sample request.</param>
+    public RequestMemory(
+        IBufferPool? pool = null, IRequestEndObserver? ended = null, RequestEventLog? events = null, string? subject = null, string? requestId = null)
     {
         _ended = ended;
         _pool = pool ?? SharedArrayBufferPool.Instance;
+        _events = events;
+        _subject = subject ?? string.Empty;
+        _requestId = requestId;
     }
 
     /// <summary>Total bytes currently rented (approximate, for metrics).</summary>
@@ -144,29 +159,39 @@ public sealed class RequestMemory
             RentedBytes = 0;
         }
 
-        try
+        // Once _returned is set no Rent touches the ledger (it checks under the lock and gives a late lease straight back),
+        // so the ledger can be walked outside the lock without copying it.
+        var leases = _leases;
+        var count = _leaseCount;
+        _leases = Array.Empty<Lease>();
+        _leaseCount = 0;
+        Exception? failure = null;
+        var failed = 0;
+        for (var i = 0; i < count; i++)
         {
-            // Once _returned is set no Rent touches the ledger (it checks under the lock and gives a late lease straight
-            // back), so the ledger can be walked outside the lock without copying it.
-            var leases = _leases;
-            var count = _leaseCount;
-            _leases = Array.Empty<Lease>();
-            _leaseCount = 0;
-            for (var i = 0; i < count; i++)
+            try
             {
                 leases[i].Returner.Return(_pool, leases[i].Array);
             }
-
-            if (leases.Length > 0)
+            catch (Exception ex)
             {
-                ArrayPool<Lease>.Shared.Return(leases, clearArray: true);
+                failure ??= ex;
+                failed++;
             }
         }
-        finally
+
+        if (leases.Length > 0)
         {
-            _ended?.RequestEnded(); // also when a custom pool threw: what the request borrowed must not stay borrowed
+            ArrayPool<Lease>.Shared.Return(leases, clearArray: true);
         }
 
+        if (failure is not null)
+        {
+            _events?.Report(RequestEvent.BufferReturnFailed, _subject, _requestId,
+                $"the buffer pool did not take back {failed} of {count} buffer(s), left to the GC: {ExceptionText.Of(failure)}");
+        }
+
+        _ended?.RequestEnded(); // also when the pool threw: what the request borrowed must not stay borrowed
         return 0;
     }
 

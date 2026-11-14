@@ -277,18 +277,18 @@ public sealed class PipelineExecutor
     public async ValueTask<PipelineResult> ExecuteAsync(ExecutionPlan plan, PipelineRequest request, CancellationToken cancellationToken = default)
     {
         var start = Stopwatch.GetTimestamp();
-        var memory = new RequestMemory(_pool, request.OnEnd); // first: from here the run owns telling OnEnd
-        FeatureFetcher? fetcher = null;
-        RequestState? state = null;
-        var position = 0;
 
         // A replay is not traffic: no metrics, event logs or spans (its timings are not real, and the recorded request
         // was already counted), and never a persistent log (design 8.6 item 6).
         var replay = request.Replay;
+        var events = replay is null ? _events : null;
+        var memory = new RequestMemory(_pool, request.OnEnd, events, plan.PipelineId, request.RequestId); // from here the run owns telling OnEnd
+        FeatureFetcher? fetcher = null;
+        RequestState? state = null;
+        var position = 0;
         // A replay that records keeps its node decisions, parameters and result (its calls are answered, not recorded),
         // which is what a replay report compares with the original run.
         var recorder = request.Record || request.OnRecording is not null ? new RunRecorder() : null;
-        var events = replay is null ? _events : null;
         try
         {
             var context = new ScalarValue[plan.Schema.ContextFields.Count];
@@ -456,6 +456,7 @@ public sealed class PipelineExecutor
                 if (abandoned > 0)
                 {
                     StrataRecMetrics.AbandonedIo.Add(abandoned, tags);
+                    events?.WatchHeld(memory, plan.PipelineId, request.RequestId);
                 }
 
                 if (state?.Counters.OutOfRange is > 0 and var outOfRange)

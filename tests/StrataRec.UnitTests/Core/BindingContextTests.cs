@@ -151,7 +151,7 @@ public sealed class BindingContextTests
         var memory = new RequestMemory(new ThrowingPool(), observer);
         _ = memory.Rent<float>(16);
 
-        Assert.Throws<InvalidOperationException>(() => memory.Release());
+        Assert.Equal(0, memory.Release()); // the pool's failure is reported, never thrown (RequestMemoryEventTests)
         Assert.Equal(1, observer.Ended);
     }
 

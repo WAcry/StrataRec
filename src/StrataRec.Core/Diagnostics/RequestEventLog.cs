@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using Microsoft.Extensions.Logging;
+using StrataRec.Core.Memory;
 
 namespace StrataRec.Core.Diagnostics;
 
@@ -46,6 +48,19 @@ public enum RequestEvent : byte
     /// (<see cref="Threading.CancellationSite"/>). The request was not affected.
     /// </summary>
     CancellationCallbacksFailed,
+
+    /// <summary>
+    /// The host's buffer pool threw while taking back a request's buffers (design 13.2); subject: the pipeline. The
+    /// others were returned, these were left to the GC. The request was not affected.
+    /// </summary>
+    BufferReturnFailed,
+
+    /// <summary>
+    /// A request's buffers were still rented <see cref="RequestEventLog.HeldAfter"/> after it returned (design 4.8,
+    /// 13.2); subject: the pipeline. External calls it abandoned at a timeout have not finished: a client or connector
+    /// that ignores its cancellation token keeps them, and the plan instances the request used, for as long as it runs.
+    /// </summary>
+    BuffersHeld,
 }
 
 /// <summary>
@@ -57,6 +72,9 @@ public enum RequestEvent : byte
 /// <remarks>
 /// <para>The request path only increments counters in a slot found by a dictionary lookup on keys that already exist;
 /// it allocates only the first time a pair is seen. Samples are references to strings the request already has.</para>
+/// <para>Requests that returned while calls they abandoned still hold their buffers are watched (<see cref="WatchHeld"/>):
+/// a flush reports each one still held <see cref="HeldAfter"/> after it returned, once, and stops watching it. Only such
+/// requests are watched, so the list is bounded by their rate times <see cref="HeldAfter"/> plus a window.</para>
 /// <para>A timer flushes the windows. It holds the log only weakly, so an engine that is dropped stops flushing and its
 /// timer is finalized; <see cref="Dispose"/> flushes the last partial window.</para>
 /// </remarks>
@@ -65,20 +83,29 @@ public sealed partial class RequestEventLog : IDisposable
     /// <summary>Default summary window.</summary>
     public static readonly TimeSpan DefaultWindow = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// Default <see cref="HeldAfter"/>. A call abandoned at a timeout normally ends within milliseconds of its
+    /// cancellation; one still running half a minute later is ignoring its token.
+    /// </summary>
+    public static readonly TimeSpan DefaultHeldAfter = TimeSpan.FromSeconds(30);
+
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<(RequestEvent Event, string Subject), EventWindow> _events = new();
     private readonly ConcurrentDictionary<(IoKind Kind, string Name), HealthWindow> _health = new();
     private readonly object _flushGate = new();
+    private readonly List<HeldMemory> _held = new(); // guarded by itself
     private readonly Timer? _timer;
     private long _windowStart;
 
     /// <param name="logger">Where summaries and health changes go.</param>
     /// <param name="window">Summary window; <see cref="DefaultWindow"/> when null.</param>
     /// <param name="autoFlush">False leaves flushing to the caller (tests).</param>
-    public RequestEventLog(ILogger logger, TimeSpan? window = null, bool autoFlush = true)
+    /// <param name="heldAfter"><see cref="HeldAfter"/>; <see cref="DefaultHeldAfter"/> when null.</param>
+    public RequestEventLog(ILogger logger, TimeSpan? window = null, bool autoFlush = true, TimeSpan? heldAfter = null)
     {
         _logger = logger;
         Window = window ?? DefaultWindow;
+        HeldAfter = heldAfter ?? DefaultHeldAfter;
         _windowStart = Stopwatch.GetTimestamp();
         if (autoFlush)
         {
@@ -101,6 +128,9 @@ public sealed partial class RequestEventLog : IDisposable
 
     public TimeSpan Window { get; }
 
+    /// <summary>How long after its request returned a request's buffers may stay rented before <see cref="RequestEvent.BuffersHeld"/>.</summary>
+    public TimeSpan HeldAfter { get; }
+
     /// <summary>Counts one occurrence; the first one of a window becomes the sample.</summary>
     /// <param name="subject">A bounded name: source, model, <c>pipeline/node</c>, pipeline.</param>
     /// <param name="requestId">Sample request id.</param>
@@ -121,6 +151,20 @@ public sealed partial class RequestEventLog : IDisposable
         }
     }
 
+    /// <summary>
+    /// Watches a request that returned while calls it abandoned still hold its memory (design 4.8): if its buffers are still
+    /// rented <see cref="HeldAfter"/> after now, a flush reports <see cref="RequestEvent.BuffersHeld"/> for it, once.
+    /// </summary>
+    /// <param name="subject">The pipeline.</param>
+    public void WatchHeld(RequestMemory memory, string subject, string? requestId)
+    {
+        var since = Stopwatch.GetTimestamp();
+        lock (_held)
+        {
+            _held.Add(new HeldMemory(memory, subject, requestId, since));
+        }
+    }
+
     /// <summary>Closes the current window: writes one summary per (event, subject) seen and every health change.</summary>
     public void Flush()
     {
@@ -129,6 +173,7 @@ public sealed partial class RequestEventLog : IDisposable
             var now = Stopwatch.GetTimestamp();
             var seconds = Math.Round(Stopwatch.GetElapsedTime(_windowStart, now).TotalSeconds, 1);
             _windowStart = now;
+            ReportHeld(now);
             foreach (var (key, window) in _events)
             {
                 var count = window.Take(out var request, out var detail);
@@ -171,6 +216,35 @@ public sealed partial class RequestEventLog : IDisposable
         Flush();
     }
 
+    /// <summary>Reports the watched requests held for <see cref="HeldAfter"/> or more and stops watching them and the returned ones.</summary>
+    private void ReportHeld(long now)
+    {
+        lock (_held)
+        {
+            var kept = 0;
+            for (var i = 0; i < _held.Count; i++)
+            {
+                var held = _held[i];
+                if (held.Memory.IsReturned)
+                {
+                    continue;
+                }
+
+                var age = Stopwatch.GetElapsedTime(held.Since, now);
+                if (age >= HeldAfter)
+                {
+                    Report(RequestEvent.BuffersHeld, held.Subject, held.RequestId, string.Create(CultureInfo.InvariantCulture,
+                        $"buffers still rented {age.TotalSeconds:0} s after the request returned: calls it abandoned at a timeout have not finished"));
+                    continue;
+                }
+
+                _held[kept++] = held;
+            }
+
+            _held.RemoveRange(kept, _held.Count - kept);
+        }
+    }
+
     private static void Tick(object? state)
     {
         if (((WeakReference<RequestEventLog>)state!).TryGetTarget(out var log))
@@ -197,6 +271,8 @@ public sealed partial class RequestEventLog : IDisposable
     [LoggerMessage(EventId = 2003, Level = LogLevel.Information,
         Message = "{Kind} '{Name}' recovered: {Failures} of {Calls} call(s) failed in the last {WindowSeconds} s")]
     private static partial void LogDependencyRecovered(ILogger logger, IoKind kind, string name, long failures, long calls, double windowSeconds);
+
+    private readonly record struct HeldMemory(RequestMemory Memory, string Subject, string? RequestId, long Since);
 
     /// <summary>Occurrences of one (event, subject) in the current window, plus the window's sample.</summary>
     private sealed class EventWindow
