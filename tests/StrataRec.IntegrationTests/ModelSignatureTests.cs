@@ -22,8 +22,8 @@ public sealed class ModelSignatureTests
     }
 
     [Theory]
-    [InlineData("int64 input", "/nodes/ctr_ranker/config/inputs/smoothed_ctr", "MODEL_TENSOR_UNSUPPORTED")]
-    [InlineData("matrix input", "/nodes/ctr_ranker/config/inputs/smoothed_ctr", "MODEL_TENSOR_UNSUPPORTED")]
+    [InlineData("int64 input", "/nodes/ctr_ranker/config/inputs/smoothed_ctr", "MODEL_TENSOR_MISMATCH")]
+    [InlineData("matrix input", "/nodes/ctr_ranker/config/inputs/smoothed_ctr", "MODEL_TENSOR_MISMATCH")]
     [InlineData("extra input", "/nodes/ctr_ranker/config/model", "MODEL_INPUT_MISSING")]
     [InlineData("matrix output", "/nodes/ctr_ranker/config/outputs/p_click", "MODEL_TENSOR_UNSUPPORTED")]
     public void AVersionTheScorerCannotCall_IsALoadError_AtItsConfigKey(string mismatch, string pointer, string code)
@@ -63,8 +63,9 @@ public sealed class ModelSignatureTests
             : Linear());
 
         var error = Assert.Single(compilation.Diagnostics, IsModelError);
-        Assert.Equal(("/nodes/ctr_ranker/config/inputs/log_followers", "MODEL_TENSOR_UNSUPPORTED"), (error.Pointer, error.Code));
-        Assert.Equal("Model 'ctr_model' version 'v2' declares input 'log_followers' as int64 [-1].", error.Message);
+        Assert.Equal(("/nodes/ctr_ranker/config/inputs/log_followers", "MODEL_TENSOR_MISMATCH"), (error.Pointer, error.Code));
+        Assert.Equal("Model 'ctr_model' version 'v2' declares input 'log_followers' as int64 [-1], but it maps col.author.log_followers (float32), "
+            + "which ModelScorer@1 sends as float32 [-1].", error.Message);
     }
 
     /// <summary>The scorer's own errors; the log tap that reads ctr_ranker's inputs fails with it and reports its own.</summary>

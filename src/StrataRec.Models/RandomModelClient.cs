@@ -10,8 +10,9 @@ namespace StrataRec.Models;
 /// service, and the pipelines and experiments that call the model stay unchanged (design 6.4 item 1).
 /// </summary>
 /// <remarks>
-/// <para>The settings declare the signature it mimics; every tensor is float32 <c>[-1]</c>, what <c>ModelScorer@1</c>
-/// sends and reads, so the scorer's load-time signature check passes as it would against the real model:</para>
+/// <para>The settings declare the signature it mimics, every tensor float32 <c>[-1]</c>: what <c>ModelScorer@1</c> reads,
+/// and sends for float32, float64 and bool columns, so the scorer's load-time signature check passes as it would against
+/// the real model:</para>
 /// <code>
 /// { "client": "random@1",
 ///   "inputs": ["smoothed_ctr", "log_followers"],   // the model's input names
@@ -26,6 +27,9 @@ namespace StrataRec.Models;
 /// else: reordering and rebatching keep it, a new request seed changes it, and rows with equal inputs score equally, as
 /// they would from a real model (ties rank by <c>entity_id</c>). The canonical encoding treats −0.0 as 0.0 and every NaN
 /// alike, as <c>hash01</c> does. 24 bits keep every value exact in float32 and below 1.</para>
+/// <para>It cannot stand in for a model that takes int64 or vector inputs: the scorer sends int columns as int64
+/// <c>[rows]</c> and vectors as float32 <c>[rows, N]</c>, and its load-time check reports the mismatch at the input. A call
+/// with an input that is not float32 with one value per row fails.</para>
 /// <para>A call without a seed fails, unless the binding fixes one: no hidden default seed. A call allocates nothing (the
 /// hash's byte buffer is pooled); the client is immutable, needs no load and holds nothing to release.</para>
 /// </remarks>
@@ -113,7 +117,7 @@ public sealed class RandomModelClient : IModelClient
                 return ModelStatus.Failed($"Missing input '{_inputs[j]}'.");
             }
 
-            if (inputs[slot].ElementType != TensorElementType.Float32 || inputs[slot].Float32.Length < batch)
+            if (inputs[slot].ElementType != TensorElementType.Float32 || inputs[slot].Shape is not { Length: 1 } || inputs[slot].Float32.Length < batch)
             {
                 return ModelStatus.Failed($"Input '{_inputs[j]}' must be float32 with one value per row ({batch}).");
             }
