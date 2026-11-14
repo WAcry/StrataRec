@@ -24,7 +24,7 @@ public static class ColumnValues
             ScalarColumn<bool> b => ScalarValue.FromBool(b[row]),
             ScalarColumn<int> i => ScalarValue.FromInt64(i[row]),
             ScalarColumn<long> l => ScalarValue.FromInt64(l[row]),
-            ScalarColumn<float> f => ScalarValue.FromFloat64(f[row]),
+            ScalarColumn<float> f => ScalarValue.FromFloat32(f[row]),
             ScalarColumn<double> d => ScalarValue.FromFloat64(d[row]),
             DictStringColumn s => ScalarValue.FromString(s.Get(row)),
             TextColumn t => ScalarValue.FromText(t.Get(row)),

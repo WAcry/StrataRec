@@ -26,8 +26,8 @@ public sealed class RecResultJsonOptions
 /// (<see cref="DebugOptions"/>).</para>
 /// <para>An item's output columns are an object of their own, so no column name (<c>id</c>, <c>rank</c>) can collide with
 /// the item's members. An int64 id is a JSON number, written exactly; a string id a string. A missing value is
-/// <c>null</c> (never 0), and so is a non-finite float, which JSON cannot represent; floats are written exactly (the
-/// shortest text that reads back as the same double), not rounded.</para>
+/// <c>null</c> (never 0), and so is a non-finite float, which JSON cannot represent; floats are written exactly, not
+/// rounded: the shortest text that reads back as the same double, or for a float32 column as the same float.</para>
 /// <para>Formatting and escaping are the writer's: a service writes compact, the CLI indented.</para>
 /// </remarks>
 public static class RecResultJson
@@ -266,7 +266,8 @@ public static class RecResultJson
 
     /// <summary>
     /// A value as JSON: missing is <c>null</c>, and so is a non-finite float (or vector component), which JSON cannot
-    /// represent; integers exact, floats in their shortest round-trip form.
+    /// represent; integers exact, floats in their shortest round-trip form, a float32 value (a float32 column's, a vector
+    /// component) as the float: <c>0.1</c>, not the double <c>0.10000000149011612</c> it widens to.
     /// </summary>
     public static void WriteValue(Utf8JsonWriter json, in ScalarValue value)
     {
@@ -277,6 +278,9 @@ public static class RecResultJson
                 break;
             case StorageKind.Int64: // also int32 values: ScalarValue holds them promoted
                 json.WriteNumberValue(value.AsInt64());
+                break;
+            case StorageKind.Float64 when value.IsFloat32 && double.IsFinite(value.AsFloat64()):
+                json.WriteNumberValue((float)value.AsFloat64());
                 break;
             case StorageKind.Float64 when double.IsFinite(value.AsFloat64()):
                 json.WriteNumberValue(value.AsFloat64());

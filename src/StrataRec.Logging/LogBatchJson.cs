@@ -211,6 +211,12 @@ public static class LogBatchJson
     /// </param>
     public static bool TryReadValue(JsonElement json, ColumnType type, out ScalarValue value, out string? error, bool nonFiniteAsStrings = false)
     {
+        // The double as written; a float32 value (as every value of a float32 column is) also prints as the float it is.
+        static ScalarValue Float(ColumnType type, double d) =>
+            type.Kind == StorageKind.Float32 && ((double)(float)d).Equals(d)
+                ? ScalarValue.FromFloat32((float)d)
+                : ScalarValue.FromFloat64(d);
+
         value = ScalarValue.Missing;
         error = null;
         if (json.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
@@ -235,10 +241,10 @@ public static class LogBatchJson
                 value = ScalarValue.FromInt64(integer);
                 return true;
             case StorageKind.Float32 or StorageKind.Float64 when json.ValueKind == JsonValueKind.Number:
-                value = ScalarValue.FromFloat64(json.GetDouble());
+                value = Float(type, json.GetDouble());
                 return true;
             case StorageKind.Float32 or StorageKind.Float64 when nonFiniteAsStrings && TryNonFinite(json, out var named):
-                value = ScalarValue.FromFloat64(named);
+                value = Float(type, named);
                 return true;
             case StorageKind.String when json.ValueKind == JsonValueKind.String:
                 value = ScalarValue.FromString(json.GetString());

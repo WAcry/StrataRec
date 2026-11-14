@@ -204,8 +204,13 @@ public sealed class CompositeMultiplierScorerFactory : IOperatorFactory
         /// The base utility, each multiplier and each addend for a scored row (design 13.3 item 3), and the score they make
         /// in the operator's order: the base, times each multiplier, plus each addend, in float64.
         /// </summary>
+        /// <remarks>
+        /// The terms are the exact doubles; the reason is written at the precision of the column it explains, so for a float32
+        /// column its numbers are floats and its result is the value the column holds (the operator narrows the same double).
+        /// </remarks>
         public void Explain(ExplainContext context)
         {
+            var single = output.Type.Kind == StorageKind.Float32;
             var terms = new ScalarValue[1 + multipliers.Length + addends.Length][];
             terms[0] = context.Evaluate(baseExpr);
             for (var m = 0; m < multipliers.Length; m++)
@@ -226,32 +231,33 @@ public sealed class CompositeMultiplierScorerFactory : IOperatorFactory
                 }
 
                 var text = new StringBuilder();
-                var score = Term(context, t, "base", terms[0][t], text);
+                var score = Term(context, t, "base", terms[0][t], text, single);
                 for (var m = 0; m < multipliers.Length; m++)
                 {
                     text.Append(" × ");
-                    score *= Term(context, t, "multiplier." + multipliers[m].Name, terms[1 + m][t], text);
+                    score *= Term(context, t, "multiplier." + multipliers[m].Name, terms[1 + m][t], text, single);
                 }
 
                 for (var a = 0; a < addends.Length; a++)
                 {
                     text.Append(" + ");
-                    score += Term(context, t, "addend." + addends[a].Name, terms[1 + multipliers.Length + a][t], text);
+                    score += Term(context, t, "addend." + addends[a].Name, terms[1 + multipliers.Length + a][t], text, single);
                 }
 
-                context.Reason(t, $"{output.Name} = {text} = {Format(score)}");
+                context.Reason(t, $"{output.Name} = {text} = {Format(score, single)}");
             }
         }
 
-        private static double Term(ExplainContext context, int target, string name, in ScalarValue value, StringBuilder text)
+        private static double Term(ExplainContext context, int target, string name, in ScalarValue value, StringBuilder text, bool single)
         {
             context.Term(target, name, value);
             var number = value.IsMissing ? double.NaN : value.AsFloat64(); // score terms are non-nullable float64
-            text.Append(Format(number));
+            text.Append(Format(number, single));
             return number;
         }
 
-        private static string Format(double value) => value.ToString("R", CultureInfo.InvariantCulture);
+        private static string Format(double value, bool single) =>
+            single ? ((float)value).ToString("R", CultureInfo.InvariantCulture) : value.ToString("R", CultureInfo.InvariantCulture);
 
         public override ValueTask ExecuteAsync(OperatorContext context)
         {

@@ -34,6 +34,19 @@ public sealed class LogValueReadTests
         Assert.Equal(value, read);
     }
 
+    [Theory]
+    [InlineData("float32", "0.10000000149011612", true, "0.1")] // the exact double of float32 0.1, as logs write it
+    [InlineData("float32", "0.1", false, "0.1")] // not a float32: kept as the double, printed as one
+    [InlineData("float64", "0.10000000149011612", false, "0.10000000149011612")]
+    public void AFloat32ColumnsValue_ReadsBackAsTheSameDouble_PrintedAsTheFloat(string type, string json, bool float32, string text)
+    {
+        using var document = JsonDocument.Parse(json);
+
+        Assert.True(LogBatchJson.TryReadValue(document.RootElement, ColumnType.Parse(type), out var value, out _));
+        Assert.Equal(double.Parse(json, System.Globalization.CultureInfo.InvariantCulture), value.AsFloat64()); // the value is not narrowed
+        Assert.Equal((float32, text), (value.IsFloat32, value.ToString()));
+    }
+
     [Fact]
     public void NonFiniteValues_WereWrittenAsNull_AndReadBackMissing()
     {

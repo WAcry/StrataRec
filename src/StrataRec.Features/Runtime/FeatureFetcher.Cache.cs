@@ -1308,7 +1308,7 @@ public sealed partial class FeatureFetcher
 
         public void Int64(int f, long value) => Set(f, ScalarValue.FromInt64(value));
 
-        public void Float32(int f, float value) => Set(f, ScalarValue.FromFloat64(value));
+        public void Float32(int f, float value) => Set(f, ScalarValue.FromFloat32(value));
 
         public void Float64(int f, double value) => Set(f, ScalarValue.FromFloat64(value));
 

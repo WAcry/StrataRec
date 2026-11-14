@@ -54,7 +54,10 @@ public sealed class ExplainEndToEndTests
         Assert.All(survivor.GetProperty("steps").EnumerateArray(), s => Assert.Equal("ran", s.GetProperty("step").GetString()));
         var fusion = Step(survivor, "fusion");
         var ctr = fusion.GetProperty("values").GetProperty("score.ctr").GetDouble();
-        Assert.Equal(ctr, fusion.GetProperty("terms").GetProperty("base").GetDouble()); // the base utility is col.score.ctr
+        // The base utility is col.score.ctr: the float32 value, printed as the float, and the term, the double it widens to.
+        Assert.Equal((float)ctr, (float)fusion.GetProperty("terms").GetProperty("base").GetDouble());
+        Assert.Equal(fusion.GetProperty("values").GetProperty("score.final").GetDouble(), double.Parse(fusion.GetProperty("reason").GetString()!.Split(" = ")[^1],
+            System.Globalization.CultureInfo.InvariantCulture)); // the reason's result is what the float32 column holds
         Assert.True(fusion.GetProperty("terms").TryGetProperty("multiplier.quality", out _));
         Assert.StartsWith("score.final = ", fusion.GetProperty("reason").GetString());
         var sort = Step(survivor, "rank_sort");
@@ -91,7 +94,7 @@ public sealed class ExplainEndToEndTests
         var lines = text.ToString();
         Assert.Contains("  explain   pipeline home_feed", lines);
         Assert.Contains("  explain   17: dropped by safety_filter", lines);
-        Assert.Contains("safety_filter: dropped (was rank 17); item.is_policy_safe true, item.report_rate 0.07999999821186066; dropped: ", lines);
+        Assert.Contains("safety_filter: dropped (was rank 17); item.is_policy_safe true, item.report_rate 0.08; dropped: ", lines);
 
         var json = new StringWriter();
         Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, sample, "local", [bundle], Array.Empty<string>(), "json", expectIdentical: true, json,

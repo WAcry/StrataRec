@@ -161,7 +161,7 @@ internal static class ExplainPlanCommand
                 }
             }
 
-            o.WriteLine($"  {leaf.Name,-28} {Format(plan.Params.Baseline[i]),-12}{(overrides.Count > 0 ? "  " + string.Join("; ", overrides) : string.Empty)}");
+            o.WriteLine($"  {leaf.Name,-28} {Format(plan.Params.Baseline[i]),-12}{(overrides.Count > 0 ? "  " + string.Join("; ", overrides) : string.Empty)}".TrimEnd());
         }
 
         var total = 0;
@@ -192,7 +192,7 @@ internal static class ExplainPlanCommand
             }
 
             var order = node.Node.Order is { } at ? at.ToString(CultureInfo.InvariantCulture) : string.Empty;
-            o.WriteLine($"  {order,5}  {node.Id,-24} {node.Node.Descriptor.Id,-28}{When(node.Node)}{Sites(plan, node.Slot)}");
+            o.WriteLine($"  {order,5}  {node.Id,-24} {node.Node.Descriptor.Id,-28}{When(node.Node)}{Sites(plan, node.Slot)}".TrimEnd());
             foreach (var (name, value) in definitions[node.Id]!.AsObject())
             {
                 if (name is not ("order" or "op" or "when"))

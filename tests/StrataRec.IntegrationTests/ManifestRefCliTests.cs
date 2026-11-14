@@ -36,6 +36,7 @@ public sealed class ManifestRefCliTests
             Assert.Equal(Normalized(byId, id), Normalized(byFile, id)); // a file has the id build gave its manifest
             if (format == "text")
             {
+                Assert.DoesNotContain(workspace.Split('\n'), line => line.TrimEnd('\r').EndsWith(' ')); // columns padded, lines not
                 // The same warning; a workspace's at its file, line and column, a manifest's (no files) at its artifact.
                 Assert.Matches(@"exp_mmr_diversity\.jsonc:\d+:\d+: warning INTERACTION_READ ", workspace);
                 Assert.Contains("warning INTERACTION_READ experiment:exp_mmr_diversity/arms/mmr/", byId);

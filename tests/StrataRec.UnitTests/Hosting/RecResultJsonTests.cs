@@ -54,6 +54,22 @@ public sealed class RecResultJsonTests
     public void EveryKind_HasAJsonName(RecErrorKind kind, string name) => Assert.Equal(name, RecResultJson.Name(kind));
 
     [Fact]
+    public void AFloat32Value_IsWrittenAsTheFloat_AndADoubleAsTheDouble()
+    {
+        var json = Write(Result(new RankedItem(EntityKey.FromInt64(7), 1, new Dictionary<string, ScalarValue>
+        {
+            ["p_click"] = ScalarValue.FromFloat32(0.1f), // a float32 column's value
+            ["widened"] = ScalarValue.FromFloat64(0.1f), // the same number in a float64 column
+            ["nan"] = ScalarValue.FromFloat32(float.NaN),
+        })));
+
+        Assert.Contains("""
+            "columns":{"p_click":0.1,"widened":0.10000000149011612,"nan":null}
+            """, json, StringComparison.Ordinal);
+        Assert.Equal(0.1f, (float)JsonDocument.Parse(json).RootElement.GetProperty("items")[0].GetProperty("columns").GetProperty("p_click").GetDouble());
+    }
+
+    [Fact]
     public void EveryKindOfValue_IsWrittenAsItsJson_MissingAndNonFiniteAsNull()
     {
         var columns = new Dictionary<string, ScalarValue>

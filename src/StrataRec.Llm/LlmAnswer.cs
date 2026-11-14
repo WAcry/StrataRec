@@ -393,7 +393,7 @@ public static class LlmAnswer
             case StorageKind.Float64 when number.TryGetDouble(out var d) && double.IsFinite(d):
                 return ScalarValue.FromFloat64(d);
             case StorageKind.Float32 when number.TryGetSingle(out var f) && float.IsFinite(f):
-                return ScalarValue.FromFloat64(f);
+                return ScalarValue.FromFloat32(f);
             case StorageKind.Int64 or StorageKind.Int32:
                 unusable = $"it is not an integer in the {(kind == StorageKind.Int64 ? "int64" : "int32")} range";
                 return ScalarValue.Missing;

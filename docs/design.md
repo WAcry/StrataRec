@@ -2201,19 +2201,19 @@ $ stratarec run -c samples/home_feed -r samples/home_feed/requests/user_1001.jso
   explain   pipeline home_feed
   explain   17: dropped by safety_filter
               recall: entered at rank 17; recall.sources_mask 3, recall.best_rank 5, recall.best_score 1.66, recall.primary_source 'two_tower'
-              safety_filter: dropped (was rank 17); item.is_policy_safe true, item.report_rate 0.07999999821186066; dropped: (col.item.is_policy_safe ?? true) && col.item.report_rate < 0.05 is false
+              safety_filter: dropped (was rank 17); item.is_policy_safe true, item.report_rate 0.08; dropped: (col.item.is_policy_safe ?? true) && col.item.report_rate < 0.05 is false
               not live in 7 other nodes
   explain   13: returned at rank 2
               recall: entered at rank 13; recall.sources_mask 1, recall.best_rank 13, recall.best_score 0.87, recall.primary_source 'two_tower'
               ...
-              coarse_top_k: rank 4 (was 13); score.coarse 0.10402508825063705; kept: score.coarse 0.10402508825063705 ranks 4 of the 30 kept (k = 30)
-              fusion: rank 4; item.report_rate 0.00839999970048666, score.ctr 0.5873607993125916, score.final 1.017778754234314; score.final = 0.5873607993125916 × 1.7328000023961068 = 1.0177787944562378
-              freshness_calibration: rank 4; item.age_hours 100.30000305175781, score.final 1.0807480812072754
-              rank_sort: rank 4; score.final 1.0807480812072754; kept: score.final 1.0807480812072754 ranks 4 of the 30 kept (k = 1000)
-              mmr_diversifier: rank 2 (was 4); item.embedding vec[4], score.final 1.0807480812072754
+              coarse_top_k: rank 4 (was 13); score.coarse 0.10402509; kept: score.coarse 0.10402509 ranks 4 of the 30 kept (k = 30)
+              fusion: rank 4; item.report_rate 0.0084, score.ctr 0.5873608, score.final 1.0177788; score.final = 0.5873608 × 1.7328 = 1.0177788
+              freshness_calibration: rank 4; item.age_hours 100.3, score.final 1.0807481
+              rank_sort: rank 4; score.final 1.0807481; kept: score.final 1.0807481 ranks 4 of the 30 kept (k = 1000)
+              mmr_diversifier: rank 2 (was 4); item.embedding vec[4], score.final 1.0807481
 ```
 
-组合打分的说明按 float64 重算算式，所以和 float32 列里存的分数（这里 `score.final 1.017778754234314`）在第八位前后可能不同。
+float32 列的值按 float32 的最短形式显示（`0.08`，不是它扩展成的 double `0.07999999821186066`），结果的 JSON 也一样。组合打分按 float64 重算算式，说明里的数按输出列的精度写，所以算式的结果就是列里存的值；各项的精确 double 在 JSON 的 `terms` 里。
 
 trace 和解释只在调试请求中生成，内容不做屏蔽（第 8.9 节）。
 

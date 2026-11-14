@@ -601,7 +601,7 @@ public sealed class TableVersion
             case StorageKind.Bool: return ScalarValue.FromBool(page[at] != 0);
             case StorageKind.Int32: return ScalarValue.FromInt64(BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(at)));
             case StorageKind.Int64: return ScalarValue.FromInt64(BinaryPrimitives.ReadInt64LittleEndian(page.AsSpan(at)));
-            case StorageKind.Float32: return ScalarValue.FromFloat64(BinaryPrimitives.ReadSingleLittleEndian(page.AsSpan(at)));
+            case StorageKind.Float32: return ScalarValue.FromFloat32(BinaryPrimitives.ReadSingleLittleEndian(page.AsSpan(at)));
             case StorageKind.Float64: return ScalarValue.FromFloat64(BinaryPrimitives.ReadDoubleLittleEndian(page.AsSpan(at)));
             case StorageKind.String: return ScalarValue.FromString(StringOf(BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(at))));
             case StorageKind.Text: return ScalarValue.FromText(new string(MemoryMarshal.Cast<byte, char>(VarBytes(page, record.Offset, field, 2))));

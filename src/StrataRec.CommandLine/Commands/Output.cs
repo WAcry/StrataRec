@@ -204,7 +204,10 @@ internal static class Output
         json.WriteEndObject();
     }
 
-    /// <summary>Writes a value as JSON; missing becomes null.</summary>
+    /// <summary>
+    /// Writes a value as JSON, exactly: missing is null, a float in its shortest round-trip form (a float32 value as the
+    /// float, <see cref="ScalarValue.IsFloat32"/>), NaN and ±∞, which JSON numbers cannot be, as strings.
+    /// </summary>
     public static void WriteValue(Utf8JsonWriter json, in ScalarValue value)
     {
         switch (value.Kind)
@@ -220,13 +223,17 @@ internal static class Output
                 break;
             case StorageKind.Float32 or StorageKind.Float64:
                 var d = value.AsFloat64();
-                if (double.IsFinite(d))
+                if (!double.IsFinite(d))
                 {
-                    json.WriteNumberValue(Math.Round(d, 6));
+                    json.WriteStringValue(Logging.LogBatchJson.NonFiniteName(d));
+                }
+                else if (value.IsFloat32)
+                {
+                    json.WriteNumberValue((float)d);
                 }
                 else
                 {
-                    json.WriteStringValue(d.ToString(CultureInfo.InvariantCulture));
+                    json.WriteNumberValue(d);
                 }
 
                 break;

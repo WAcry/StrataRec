@@ -14,9 +14,18 @@ namespace StrataRec.Core.Values;
 /// (design 4.3). A value with <see cref="IsMissing"/> = true represents a legitimately absent value of a nullable type
 /// (design 6.7, layer 3).
 /// </para>
+/// <para>
+/// A float64 value read from float32 storage (<see cref="FromFloat32"/>) remembers it, only so that its text is the float's
+/// own: <c>0.1</c>, not <c>0.10000000149011612</c>, the double that float32 0.1 is. People read results, explanations and
+/// replay reports in that text; the value, equality and hash are the double's, so a float32 value equals the same number
+/// from float64 storage and comparisons never depend on where a value came from.
+/// </para>
 /// </summary>
 public readonly struct ScalarValue : IEquatable<ScalarValue>
 {
+    /// <summary>The reference of a float64 value that came from float32 storage; no other value has it.</summary>
+    private static readonly object SinglePrecision = new();
+
     private readonly long _bits;
     private readonly object? _ref;
 
@@ -39,6 +48,12 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
     public static ScalarValue FromInt64(long value) => new(StorageKind.Int64, value, null);
 
     public static ScalarValue FromFloat64(double value) => new(StorageKind.Float64, BitConverter.DoubleToInt64Bits(value), null);
+
+    /// <summary>A float32 value, held promoted like every float, that prints as the float it is (see the type's remarks).</summary>
+    public static ScalarValue FromFloat32(float value) => new(StorageKind.Float64, BitConverter.DoubleToInt64Bits(value), SinglePrecision);
+
+    /// <summary>True for a value made by <see cref="FromFloat32"/>: its double is exactly a float32 and prints as one.</summary>
+    public bool IsFloat32 => Kind == StorageKind.Float64 && ReferenceEquals(_ref, SinglePrecision);
 
     public static ScalarValue FromString(string? value) =>
         value is null ? Missing : new(StorageKind.String, 0, value);
@@ -88,6 +103,11 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
         var kind = target.Promoted().Kind;
         if (kind == Kind)
         {
+            if (target.Kind == StorageKind.Float64 && IsFloat32)
+            {
+                converted = FromFloat64(AsFloat64()); // a float64 value prints as the double it is
+            }
+
             return target.Kind switch
             {
                 StorageKind.Vector => target.Dimension == 0 || AsVector().Length == target.Dimension,
@@ -192,6 +212,7 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
         0 => "null",
         StorageKind.Bool => AsBool() ? "true" : "false",
         StorageKind.Int64 => _bits.ToString(CultureInfo.InvariantCulture),
+        StorageKind.Float64 when IsFloat32 => ((float)AsFloat64()).ToString("R", CultureInfo.InvariantCulture),
         StorageKind.Float64 => AsFloat64().ToString("R", CultureInfo.InvariantCulture),
         StorageKind.String or StorageKind.Text => "'" + AsString() + "'",
         StorageKind.Vector => "vec[" + AsVector().Length.ToString(CultureInfo.InvariantCulture) + "]",
