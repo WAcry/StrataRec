@@ -80,6 +80,21 @@ public sealed partial class RecEngine
                 Debug = request.Debug,
             };
 
+            // The caller's mistakes first, as ExecuteAsync checks them (review 33): inputs the replayed plan rejects are an
+            // invalid request at their pointer, and no fallback pipeline serves them, so a replay on a changed schema
+            // answers what the engine would answer the request now.
+            if (plan.RequestSchema.Check(inputs) is { } invalid)
+            {
+                var rejected = Rejected(request, RecErrorKind.InvalidRequest, RequestSchema.Describe(invalid), pointer: invalid.Pointer);
+                return Outcome(bundle, rejected, null, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null, notes, 0, plan.ManifestId);
+            }
+
+            if (options?.ExplainIds is { } explainIds && ExplainTargets.Check(explainIds, plan.TableSchema.KeyType, request.PipelineId) is { } explainError)
+            {
+                return Outcome(bundle, Rejected(request, RecErrorKind.InvalidRequest, explainError), null, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null,
+                    notes, 0, plan.ManifestId);
+            }
+
             var known = new List<string>();
             foreach (var arm in options?.Arms ?? recordedArms)
             {
@@ -102,13 +117,6 @@ public sealed partial class RecEngine
             {
                 return Outcome(bundle, Rejected(request, RecErrorKind.InvalidRequest, ex.Message), null, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null, notes, 0,
                     plan.ManifestId);
-            }
-
-            var explainIds = options?.ExplainIds;
-            if (explainIds is not null && ExplainTargets.Check(explainIds, plan.TableSchema.KeyType, request.PipelineId) is { } explainError)
-            {
-                return Outcome(bundle, Rejected(request, RecErrorKind.InvalidRequest, explainError), null, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null,
-                    notes, 0, plan.ManifestId);
             }
 
             // The platform's arms the recorded request ignored are part of its assignment record; arms passed to the replay

@@ -435,7 +435,7 @@ internal static class ReplayCommand
         var elapsed = report.ElapsedMs.ToString("0.###", CultureInfo.InvariantCulture);
         output.WriteLine(outcome.Aborted
             ? $"  result    aborted where the recording was ({outcome.AbortReason}): no result, in {result.ServedBy}, {elapsed} ms"
-            : $"  result    {(result.Succeeded ? "succeeded" : "failed: " + result.Error)}, {result.Items.Count} item(s), served by {result.ServedBy}, {elapsed} ms");
+            : $"  result    {(result.Succeeded ? "succeeded" : "failed: " + result.Error)}, {Output.Count(result.Items.Count, "item")}, served by {result.ServedBy}, {elapsed} ms");
         output.WriteLine(diff switch
         {
             { Identical: true, LeftAborted: true } => "  diff      aborted, as recorded; node decisions up to the abort are compared below",

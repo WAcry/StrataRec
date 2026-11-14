@@ -2,10 +2,12 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Bindings;
 using StrataRec.Hosting;
 using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Operators.Standard;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Pipeline.Sources;
 
 namespace StrataRec.UnitTests.Hosting;
 
@@ -82,7 +84,27 @@ public sealed class StrataRecStartupTests : IDisposable
         await host.StopAsync();
     }
 
-    private IHost Build(CapturedLog log, Action<StrataRecOptions> configure)
+    [Fact]
+    public async Task WithServicesStartingConcurrently_AServiceRegisteredLater_StartsWithThePlansLoaded()
+    {
+        // Review 33: the load ran in StartAsync, which a host starting its services concurrently does not wait for, so a web
+        // server registered after AddStrataRec could listen with no plan loaded. The load is now in StartingAsync, which
+        // every service completes before any starts. The source's load takes a while, as a remote one would.
+        Workspace(Path.Combine(_contentRoot, "config"), client: "slow_list@1");
+        var later = new LaterService();
+        using var host = Build(new CapturedLog(), options =>
+        {
+            options.ConfigRoot = "config";
+            options.PlanEnvironment = new PlanEnvironment { CandidateSources = CandidateSourceRegistry.CreateDefault().Add(new SlowListFactory()) };
+        }, concurrently: true, later);
+
+        await host.StartAsync();
+
+        Assert.Equal(new[] { "p" }, later.SawPipelines);
+        await host.StopAsync();
+    }
+
+    private IHost Build(CapturedLog log, Action<StrataRecOptions> configure, bool concurrently = false, LaterService? later = null)
     {
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
         {
@@ -91,12 +113,58 @@ public sealed class StrataRecStartupTests : IDisposable
             EnvironmentName = "Production",
         });
         builder.Logging.ClearProviders().AddProvider(log);
+        builder.Services.Configure<HostOptions>(options => options.ServicesStartConcurrently = concurrently);
         builder.Services.AddStrataRec(configure);
+        if (later is not null)
+        {
+            builder.Services.AddHostedService(provider => later.With(provider.GetRequiredService<IRecEngine>()));
+        }
+
         return builder.Build();
     }
 
+    /// <summary>A service registered after AddStrataRec, as a web server is: records what the engine serves when it starts.</summary>
+    private sealed class LaterService : IHostedService
+    {
+        private IRecEngine? _engine;
+
+        public IReadOnlyList<string>? SawPipelines { get; private set; }
+
+        public LaterService With(IRecEngine engine)
+        {
+            _engine = engine;
+            return this;
+        }
+
+        public Task StartAsync(CancellationToken cancellationToken)
+        {
+            SawPipelines = _engine!.PipelineIds();
+            return Task.CompletedTask;
+        }
+
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    /// <summary><c>memory_list@1</c> whose load takes 300 ms.</summary>
+    private sealed class SlowListFactory : ICandidateSourceFactory
+    {
+        public string ClientType => "slow_list@1";
+
+        public ICandidateSource Create(BindingContext context) => new SlowList(new MemoryListCandidateSourceFactory().Create(context));
+
+        private sealed class SlowList(ICandidateSource inner) : ICandidateSource, ILoadable
+        {
+            public string ClientType => "slow_list@1";
+
+            public ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken) =>
+                inner.RetrieveAsync(query, sink, cancellationToken);
+
+            public async ValueTask LoadAsync(CancellationToken cancellationToken) => await Task.Delay(300, cancellationToken);
+        }
+    }
+
     /// <summary>One pipeline <c>p</c>: a source reading a data file, then a TopK (or another operator with its config).</summary>
-    private static void Workspace(string root, string data = """{ "items": [8, 9] }""", string topK = "\"k\": 2", string op = "TopK@1")
+    private static void Workspace(string root, string data = """{ "items": [8, 9] }""", string topK = "\"k\": 2", string op = "TopK@1", string client = "memory_list@1")
     {
         foreach (var dir in new[] { "catalog", "bindings", "pipelines", "fixtures" })
         {
@@ -106,8 +174,8 @@ public sealed class StrataRecStartupTests : IDisposable
         File.WriteAllText(Path.Combine(root, "catalog", "c.jsonc"), """{ "catalog_id": "c" }""");
         File.WriteAllText(Path.Combine(root, "fixtures", "ids.json"), data);
         File.WriteAllText(Path.Combine(root, "bindings", "local.jsonc"), """
-            { "environment": "local", "candidate_sources": { "s": { "client": "memory_list@1", "data_file": "fixtures/ids.json" } } }
-            """);
+            { "environment": "local", "candidate_sources": { "s": { "client": "{{client}}", "data_file": "fixtures/ids.json" } } }
+            """.Replace("{{client}}", client, StringComparison.Ordinal));
         File.WriteAllText(Path.Combine(root, "pipelines", "p.jsonc"), $$"""
             { "pipeline_id": "p", "entity_key_type": "int64",
               "request_schema": { "user_id": { "type": "int64" } },

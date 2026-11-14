@@ -60,7 +60,9 @@ internal static class RunCommand
                           "the result's 'explanation' says where each ended and its state after every node (design 13.3).",
             AllowMultipleArgumentsPerToken = true,
         };
-        var command = new Command("run", "Execute a request locally and print the result as JSON.")
+        var command = new Command("run",
+            "Execute a request locally and print the result as JSON. Exits with 0 when the request succeeds, 1 when it fails (the result says why) or the " +
+            "configuration does not load, 2 when the request file or an --explain id is invalid.")
         {
             config, environment, request, arms, trace, logs, record, deadline, explain,
         };

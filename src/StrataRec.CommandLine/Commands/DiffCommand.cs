@@ -16,8 +16,11 @@ internal static class DiffCommand
 {
     private const string Description =
         "Compare two configurations by arm combination: the nodes (merged definitions), parameters, taps, funnel groups and output " +
-        "a request runs, and the layers, experiments and arms either side lacks. Exits with 0 when nothing differs, 1 when something does, 2 on errors.\n" +
-        "--format json: { from: {ref, pipeline}, to: {ref, pipeline}, differences: bool, " +
+        "a request runs, and the layers, experiments and arms either side lacks. Exits with 0 when nothing differs, 1 when something does, 2 on errors.";
+
+    /// <summary>The shape of <c>--format json</c>: in <c>diff --help</c>, not in the list of commands.</summary>
+    private const string JsonFormat =
+        "Output format. json: { from: {ref, pipeline}, to: {ref, pipeline}, differences: bool, " +
         "structure: [{kind: layer|experiment|arm, id, change: added|removed|moved, from_layer, to_layer}], compared: [combination], " +
         "combinations: [{combination, arms: [arm], missing_on?: from|to, reason?, changes: [{pointer, change: added|removed|changed, from?, to?}]}] }. " +
         "A pointer is RFC 6901 into the combination's plan: /nodes/<id>/..., /params/<leaf>, /taps/<id>/..., /funnel_groups/<group>/..., /output/... " +
@@ -36,6 +39,7 @@ internal static class DiffCommand
         environment.Description = "Environment of a workspace side: selects releases/<pipeline>.<env>.jsonc and bindings/<env>.jsonc. A manifest names its own.";
         var pipeline = CommonOptions.Pipeline();
         var format = CommonOptions.Format();
+        format.Description = JsonFormat;
         var arms = new Option<string[]>("--arms", "-a")
         {
             Description = "Compare exactly this combination (experiment/arm, comma or space separated), as explain-plan --arms selects it, " +

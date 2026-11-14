@@ -5,8 +5,8 @@ using StrataRec.Artifacts.Json;
 namespace StrataRec.UnitTests.Artifacts;
 
 /// <summary>
-/// <see cref="StrictJson"/>: what System.Text.Json parses but a request must not hold (review 32): a member given twice,
-/// and an escape that is not Unicode, each at its pointer, nothing thrown.
+/// <see cref="StrictJson"/>: what System.Text.Json parses but a request must not hold (reviews 32 and 33): a member given
+/// twice, an escape that is not Unicode, and bytes that are not UTF-8, each at its pointer, nothing thrown.
 /// </summary>
 public sealed class StrictJsonTests
 {
@@ -76,6 +76,37 @@ public sealed class StrictJsonTests
         Assert.Equal("use a complete surrogate pair such as \\ud83d\\ude00, or write the character directly", error.Hint);
     }
 
+    /// <summary>
+    /// Bytes that are not UTF-8 (review 33): <see cref="JsonDocument"/> parses them and throws only when the text is read;
+    /// a string at its pointer, a member name at its object. <c>#</c> stands for the bytes.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "x": "a#b" }""", new byte[] { 0xFF }, "/x", "The string is not valid UTF-8 text.")]
+    [InlineData("""{ "x": ["ok", "#"] }""", new byte[] { 0x80 }, "/x/1", "The string is not valid UTF-8 text.")] // a lone continuation byte
+    [InlineData("""{ "x": "#" }""", new byte[] { 0xC0, 0xAF }, "/x", "The string is not valid UTF-8 text.")] // an overlong form of '/'
+    [InlineData("""{ "x": "#" }""", new byte[] { 0xE2, 0x82 }, "/x", "The string is not valid UTF-8 text.")] // a truncated sequence
+    [InlineData("""{ "x": "#" }""", new byte[] { 0xED, 0xA0, 0x80 }, "/x", "The string is not valid UTF-8 text.")] // a surrogate, encoded
+    [InlineData("""{ "x": "\n#" }""", new byte[] { 0xFF }, "/x", "The string is not valid UTF-8 text.")] // escaped as well
+    [InlineData("""{ "ok": 1, "x": { "a": 1, "#": 2 } }""", new byte[] { 0xFF }, "/x", "The name of member 2 of this object is not valid UTF-8 text.")]
+    public void BytesThatAreNotUtf8_AreAtTheirValue_OrTheObjectOfTheirName(string json, byte[] bytes, string pointer, string message)
+    {
+        using var document = JsonDocument.Parse(WithBytes(json, bytes));
+
+        var error = StrictJson.Check(document.RootElement);
+
+        Assert.NotNull(error);
+        Assert.Equal((pointer, message), (error.Pointer, error.Message));
+        Assert.Equal("send the body as UTF-8 (Content-Type: application/json; charset=utf-8)", error.Hint);
+    }
+
+    [Fact]
+    public void TextInEveryUtf8Length_HasNoProblem()
+    {
+        using var document = JsonDocument.Parse(Encoding.UTF8.GetBytes("""{ "aé€😀": "aé€😀" }"""));
+
+        Assert.Null(StrictJson.Check(document.RootElement));
+    }
+
     [Fact]
     public void AValidObject_OfPlainNames_AllocatesNothing()
     {
@@ -88,5 +119,28 @@ public sealed class StrictJsonTests
 
         Assert.Null(error);
         Assert.Equal(0, allocated);
+    }
+
+    [Fact]
+    public void AValidObject_OfTextBeyondAscii_AllocatesNothing()
+    {
+        using var document = JsonDocument.Parse(Encoding.UTF8.GetBytes("""{ "inputs": { "région": "île-de-France", "标签": ["新闻", "😀"] } }"""));
+        Assert.Null(StrictJson.Check(document.RootElement)); // warm
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var error = StrictJson.Check(document.RootElement);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Null(error);
+        Assert.Equal(0, allocated);
+    }
+
+    /// <summary>The UTF-8 of <paramref name="json"/> with its one <c>#</c> replaced by <paramref name="bytes"/>.</summary>
+    internal static byte[] WithBytes(string json, byte[] bytes)
+    {
+        var text = Encoding.UTF8.GetBytes(json);
+        var at = Array.IndexOf(text, (byte)'#');
+        Assert.True(at >= 0 && Array.IndexOf(text, (byte)'#', at + 1) < 0, "one # in the JSON");
+        return [.. text[..at], .. bytes, .. text[(at + 1)..]];
     }
 }

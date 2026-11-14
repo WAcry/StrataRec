@@ -19,7 +19,8 @@ internal static class ValidateCommand
         var pipeline = CommonOptions.Pipeline();
         var format = CommonOptions.Format();
         var strict = new Option<bool>("--warnings-as-errors") { Description = "Fail on warnings (e.g. experiment interactions) too." };
-        var command = new Command("validate", "Run all static checks on a configuration workspace.") { config, environment, pipeline, format, strict };
+        var command = new Command("validate",
+            "Run all static checks on a configuration workspace. Exits with 0 when there are no errors, 1 when there are (or warnings, with --warnings-as-errors).") { config, environment, pipeline, format, strict };
         command.SetAction(parse => Run(provided, parse.GetValue(config)!, parse.GetValue(environment)!, parse.GetValue(pipeline), parse.GetValue(format)!,
             parse.GetValue(strict), parse.InvocationConfiguration.Output));
         return command;
@@ -89,7 +90,8 @@ internal static class ValidateCommand
 
         var status = compilation.Succeeded ? "ok" : "FAILED";
         var exhaustive = report.CombinationCheckExhaustive ? string.Empty : " (targeted)";
-        return $"{id}: {status} — {report.Nodes.Count} nodes, {variants} compiled variants, {request.Experiments.Count} experiments, " +
-               $"{report.Arms.Count} arms, {report.CombinationsChecked} arm combinations checked{exhaustive}";
+        return $"{id}: {status} — {Output.Count(report.Nodes.Count, "node")}, {Output.Count(variants, "compiled variant")}, " +
+               $"{Output.Count(request.Experiments.Count, "experiment")}, {Output.Count(report.Arms.Count, "arm")}, " +
+               $"{Output.Count(report.CombinationsChecked, "arm combination")} checked{exhaustive}";
     }
 }
