@@ -35,8 +35,10 @@ public sealed record JsonChange(string Pointer, JsonChangeKind Kind, JsonNode? B
 /// value, member order irrelevant): arrays have no stable element identity (an inserted element would shift every later
 /// index), so element-wise changes would be guesses. A JSON <c>null</c> member is a value, distinct from an absent one.
 /// </para>
-/// <para>Changes come out in pointer order: members are visited in ordinal order of their names, whatever order the
-/// documents list them in, so equal inputs always give the same report.</para>
+/// <para>Changes come out in ordinal order of their pointers, whatever order the documents list their members in, so equal
+/// inputs always give the same report. They are sorted at the end, not visited in name order: escaping (<c>/</c> becomes
+/// <c>~1</c>, <c>~</c> becomes <c>~0</c>) and the <c>/</c> between a member and its children both reorder pointers
+/// relative to names (review 24).</para>
 /// </remarks>
 public static class JsonDiff
 {
@@ -48,6 +50,7 @@ public static class JsonDiff
     {
         var changes = new List<JsonChange>();
         Compare(before, after, string.Empty, changes);
+        changes.Sort(static (a, b) => string.CompareOrdinal(a.Pointer, b.Pointer));
         return changes;
     }
 
@@ -60,7 +63,7 @@ public static class JsonDiff
         if (before is JsonObject left && after is JsonObject right)
         {
             RuntimeHelpers.EnsureSufficientExecutionStack();
-            var names = new SortedSet<string>(StringComparer.Ordinal);
+            var names = new HashSet<string>(StringComparer.Ordinal);
             foreach (var member in left)
             {
                 names.Add(member.Key);
