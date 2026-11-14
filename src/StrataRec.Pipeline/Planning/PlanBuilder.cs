@@ -99,6 +99,11 @@ public sealed class PlanBuilder
     private readonly List<CompiledFunnelGroup> _groups = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private PlanSchema? _schema;
+
+    /// <summary>Nodes and funnel groups declared with an error, reported where they are declared: what refers to them fails
+    /// without a second error.</summary>
+    private readonly HashSet<string> _failedNodes = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _failedGroups = new(StringComparer.Ordinal);
     private IExpressionScope? _scope;
     private ClientResolver? _clients;
     private SchemaSources? _sources;
@@ -176,13 +181,9 @@ public sealed class PlanBuilder
 
         foreach (var table in sources.Tables)
         {
-            try
+            if (DataLookupTable.Create(table, _diagnostics) is { } lookup)
             {
-                schema.AddLookupTable(DataLookupTable.Create(table));
-            }
-            catch (FormatException ex)
-            {
-                _diagnostics.Error("TABLE_INVALID", "table:" + table.TableId, "/entries", ex.Message);
+                schema.AddLookupTable(lookup);
             }
         }
 
@@ -194,6 +195,17 @@ public sealed class PlanBuilder
     /// reporting errors.
     /// </summary>
     public CompiledNode? CompileNode(string nodeId, JsonObject definition, string artifact)
+    {
+        var node = CompileNodeCore(nodeId, definition, artifact);
+        if (node is null)
+        {
+            _failedNodes.Add(nodeId); // what refers to it fails without a second error (a tap's columns_from)
+        }
+
+        return node;
+    }
+
+    private CompiledNode? CompileNodeCore(string nodeId, JsonObject definition, string artifact)
     {
         var schema = Schema;
         var pointer = "/nodes/" + JsonPointer.Escape(nodeId);
@@ -357,7 +369,11 @@ public sealed class PlanBuilder
             }
         }
 
-        if (group < 0)
+        if (group < 0 && _failedGroups.Contains(spec.Group))
+        {
+            ok = false; // the group's declaration has an error, reported there
+        }
+        else if (group < 0)
         {
             var names = new List<string>();
             foreach (var g in _groups)
@@ -465,7 +481,11 @@ public sealed class PlanBuilder
                 }
             }
 
-            if (model is null || model.Operator.NamedInputs.Count == 0)
+            if (model is null && nodeId is not null && _failedNodes.Contains(nodeId))
+            {
+                ok = false; // the node did not compile; its error is reported at the node
+            }
+            else if (model is null || model.Operator.NamedInputs.Count == 0)
             {
                 _diagnostics.Error("TAP_BAD_COLUMNS_FROM", artifact, pointer + "/columns_from", $"'{from}' does not name a compiled model node's inputs.",
                     "use '<node_id>.inputs' for a ModelScorer node");
@@ -666,7 +686,11 @@ public sealed class PlanBuilder
                 ExpressionErrors.Report(_diagnostics, errors, artifact, pointer + "/key/" + i, spec.Key[i]);
             }
 
-            if (keys.Count == spec.Key.Count)
+            if (keys.Count != spec.Key.Count)
+            {
+                _failedGroups.Add(name);
+            }
+            else
             {
                 _groups.Add(new CompiledFunnelGroup
                 {
@@ -1651,7 +1675,7 @@ public sealed class PlanBuilder
     {
         if (!ConfigValues.TryToScalar(node, leaf.Type, out value, out var error))
         {
-            _diagnostics.Error("PARAM_BAD_VALUE", artifact, pointer, $"Parameter '{leaf.Name}': {error}.");
+            _diagnostics.Error("PARAM_BAD_VALUE", artifact, pointer, $"Parameter '{leaf.Name}' {error}.");
             return false;
         }
 
@@ -1829,7 +1853,7 @@ public sealed class PlanBuilder
             var value = ScalarValue.Missing;
             if (hasDefault && !ConfigValues.TryToScalar(spec.Default, type.AsNonNullable(), out value, out var defaultError))
             {
-                _diagnostics.Error("COLUMN_BAD_DEFAULT", artifact, pointer + "/default", defaultError);
+                _diagnostics.Error("COLUMN_BAD_DEFAULT", artifact, pointer + "/default", $"The default of '{name}' {defaultError}.");
                 schema.MarkUnusable("col." + name);
                 continue;
             }
@@ -1879,15 +1903,16 @@ public sealed class PlanBuilder
             if (spec.Enum is not null)
             {
                 enumValues = new List<ScalarValue>();
-                foreach (var e in spec.Enum)
+                for (var i = 0; i < spec.Enum.Count; i++)
                 {
-                    if (ConfigValues.TryToScalar(e, leafType, out var ev, out var enumError))
+                    if (ConfigValues.TryToScalar(spec.Enum[i], leafType, out var ev, out var enumError))
                     {
                         enumValues.Add(ev);
                     }
                     else
                     {
-                        _diagnostics.Error("PARAM_BAD_ENUM", artifact, pointer + "/enum", enumError);
+                        _diagnostics.Error("PARAM_BAD_ENUM", artifact, pointer + "/enum/" + i, $"Each value of the enum {enumError}.",
+                            "list values of the parameter's type");
                     }
                 }
             }

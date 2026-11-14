@@ -181,7 +181,7 @@ public sealed class FeatureCatalog
             var def = ScalarValue.Missing;
             if (hasDefault && !ConfigValues.TryToScalar(spec.Default, type, out def, out var defError))
             {
-                diagnostics.Error("FEATURE_BAD_DEFAULT", artifactName, pointer + "/default", defError);
+                diagnostics.Error("FEATURE_BAD_DEFAULT", artifactName, pointer + "/default", $"The default of '{name}' {defError}.");
                 unusable.Add(name);
                 continue;
             }
@@ -228,7 +228,7 @@ public sealed class FeatureCatalog
             var def = ScalarValue.Missing;
             if (hasDefault && !ConfigValues.TryToScalar(spec.Default, type, out def, out var defError))
             {
-                diagnostics.Error("FEATURE_BAD_DEFAULT", artifactName, pointer + "/default", defError);
+                diagnostics.Error("FEATURE_BAD_DEFAULT", artifactName, pointer + "/default", $"The default of '{name}' {defError}.");
                 unusable.Add(name);
                 continue;
             }
@@ -245,6 +245,30 @@ public sealed class FeatureCatalog
                 Description = spec.Description,
                 Pointer = pointer,
             };
+        }
+
+        // An entity keyed by a feature declared with an error has no key: it and its features fail with that error, and
+        // so does an entity keyed by one of their features.
+        for (var changed = true; changed;)
+        {
+            changed = false;
+            foreach (var entity in new List<EntityDefinition>(entities.Values))
+            {
+                if (entity.KeyIsFeature && unusable.Contains(entity.CandidateKeyColumn!))
+                {
+                    entities.Remove(entity.Name);
+                    foreach (var feature in new List<FeatureDefinition>(features.Values))
+                    {
+                        if (feature.Entity == entity)
+                        {
+                            features.Remove(feature.Name);
+                            unusable.Add(feature.Name);
+                        }
+                    }
+
+                    changed = true;
+                }
+            }
         }
 
         ValidateForeignKeys(entities, features, unusable, diagnostics, artifactName);

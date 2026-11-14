@@ -432,9 +432,10 @@ internal sealed partial class UnifiedCompilation
             {
                 if (!schema.TryGetParam(ov.Leaf, out var leaf))
                 {
-                    if (!schema.IsUnusable("param." + ov.Leaf))
+                    // A parameter declared with an error (an unknown type) is reported at its declaration; an invalid
+                    // arm's own declarations were dropped with it, and its leaves were checked against them already.
+                    if (arm.Valid && !schema.IsUnusable("param." + ov.Leaf))
                     {
-                        // A parameter declared with an error (an unknown type) is reported at its declaration.
                         var declared = new List<string>(schema.Params.Count);
                         foreach (var p in schema.Params)
                         {

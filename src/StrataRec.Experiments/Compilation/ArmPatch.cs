@@ -152,7 +152,7 @@ internal static class ArmAnalyzer
                 {
                     diagnostics.Error("PATCH_NOT_ALLOWED", arm.Artifact, pointer,
                         $"Experiments may not change '{op.Path}'.",
-                        $"patchable paths: {string.Join(", ", policy.ExperimentPatchable)}; add-only: {string.Join(", ", policy.ExperimentAddOnly)} (config/policy.jsonc)");
+                        $"patchable paths: {string.Join(", ", policy.ExperimentPatchable)}; add-only: {string.Join(", ", policy.ExperimentAddOnly)} (experiment_patchable and experiment_add_only in policy.jsonc)");
                     arm.Valid = false;
                     continue;
                 }

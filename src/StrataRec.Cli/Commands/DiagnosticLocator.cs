@@ -23,6 +23,7 @@ internal readonly record struct SourceLocation(string File, int Line, int Column
 internal sealed class DiagnosticLocator
 {
     private readonly List<(string Prefix, string Directory)> _workspaces = new();
+    private readonly HashSet<string> _files = new(StringComparer.Ordinal);
     private readonly Dictionary<string, byte[]?> _texts = new(StringComparer.Ordinal);
 
     /// <summary>Locates the diagnostics of the one workspace at <paramref name="directory"/>.</summary>
@@ -35,9 +36,21 @@ internal sealed class DiagnosticLocator
         return this;
     }
 
+    /// <summary>Locates diagnostics whose artifact is <paramref name="path"/>, a file outside any workspace (a request file).</summary>
+    public DiagnosticLocator AddFile(string path)
+    {
+        _files.Add(path);
+        return this;
+    }
+
     /// <summary>The diagnostic's file, line and column, or null when its artifact is not a file of a known workspace.</summary>
     public SourceLocation? Locate(ConfigDiagnostic diagnostic)
     {
+        if (_files.Contains(diagnostic.Artifact))
+        {
+            return At(diagnostic.Artifact, diagnostic.Artifact, diagnostic, exact: true);
+        }
+
         foreach (var (prefix, directory) in _workspaces)
         {
             string label;
@@ -59,18 +72,21 @@ internal sealed class DiagnosticLocator
                 return null;
             }
 
-            var file = Display(directory, relative);
-            exact &= prefix.Length == 0;
-            if (diagnostic.Line is { } line)
-            {
-                return new SourceLocation(file, line, diagnostic.Column ?? 1, exact);
-            }
-
-            var at = Text(Path.Combine(directory, relative)) is { } text ? JsoncLocator.Locate(text, diagnostic.Pointer, diagnostic.Offset) : null;
-            return at is { } found ? new SourceLocation(file, found.Line, found.Column, exact) : new SourceLocation(file, 1, 1, exact);
+            return At(Display(directory, relative), Path.Combine(directory, relative), diagnostic, exact && prefix.Length == 0);
         }
 
         return null;
+    }
+
+    private SourceLocation At(string file, string path, ConfigDiagnostic diagnostic, bool exact)
+    {
+        if (diagnostic.Line is { } line)
+        {
+            return new SourceLocation(file, line, diagnostic.Column ?? 1, exact);
+        }
+
+        var at = Text(path) is { } text ? JsoncLocator.Locate(text, diagnostic.Pointer, diagnostic.Offset) : null;
+        return at is { } found ? new SourceLocation(file, found.Line, found.Column, exact) : new SourceLocation(file, 1, 1, exact);
     }
 
     /// <summary>The path as a terminal opens it from the current directory, with '/' separators.</summary>

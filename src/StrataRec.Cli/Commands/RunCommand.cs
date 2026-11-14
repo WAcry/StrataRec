@@ -64,78 +64,47 @@ internal static class RunCommand
         string config, string environment, string requestPath, string[] arms, bool trace, TextWriter output, CancellationToken cancellationToken, bool logs = false,
         string? recordPath = null, int? deadlineMs = null)
     {
-        JsonObject document;
-        try
+        // Mistakes in the request file are reported like configuration errors, at file:line:column.
+        var problems = new DiagnosticBag();
+        var locator = DiagnosticLocator.ForWorkspace(config).AddFile(requestPath);
+        var file = await ReadRequestAsync(requestPath, problems, cancellationToken).ConfigureAwait(false);
+        if (file is null)
         {
-            document = Jsonc.Parse(await File.ReadAllBytesAsync(requestPath, cancellationToken).ConfigureAwait(false), requestPath) as JsonObject
-                       ?? throw new JsonException("the request must be a JSON object");
-        }
-        catch (Exception ex) when (ex is IOException or JsonException)
-        {
-            Console.Error.WriteLine($"{requestPath}: {ex.Message}");
+            Output.Diagnostics(problems.Items, "text", Console.Error, locator: locator);
             return 2;
         }
 
-        var pipelineId = document["pipeline_id"]?.GetValue<string>();
+        var pipelineId = file.PipelineId;
         // The engine loads the workspace's local feature tables (design 6.6) before it serves; disposing it stops their sources.
         await using var engine = new RecEngine(CommonOptions.PlanEnvironment(config));
-        var diagnostics = ServiceCollectionExtensions.LoadWorkspace(engine, config, environment, pipelineId is null ? null : new[] { pipelineId });
-        if (diagnostics.HasErrors || pipelineId is null || !engine.TryGetPipeline(pipelineId, out var pipeline))
+        var diagnostics = ServiceCollectionExtensions.LoadWorkspace(engine, config, environment, new[] { pipelineId });
+        if (diagnostics.HasErrors || !engine.TryGetPipeline(pipelineId, out var pipeline))
         {
-            if (pipelineId is null)
-            {
-                diagnostics.Error("REQUEST_INVALID", requestPath, "/pipeline_id", "The request needs a pipeline_id.");
-            }
-
-            Output.Diagnostics(diagnostics.Items, "text", Console.Error, locator: DiagnosticLocator.ForWorkspace(config));
+            Output.Diagnostics(diagnostics.Items, "text", Console.Error, locator: locator);
             return 1;
         }
 
-        var inputs = new RequestInputs();
-        if (document["inputs"] is JsonObject values)
+        var inputs = ReadInputs(file, pipeline.Plan.RequestInputs, requestPath, problems);
+        if (problems.HasErrors)
         {
-            foreach (var (name, value) in values)
-            {
-                if (!pipeline.Plan.RequestInputs.TryGetValue(name, out var field))
-                {
-                    Console.Error.WriteLine($"{requestPath}: /inputs/{name}: not declared in request_schema of '{pipelineId}'.");
-                    return 2;
-                }
-
-                if (value is null)
-                {
-                    continue;
-                }
-
-                if (!ConfigValues.TryToScalar(value, field.InputType, out var scalar, out var error))
-                {
-                    Console.Error.WriteLine($"{requestPath}: /inputs/{name}: {error}");
-                    return 2;
-                }
-
-                inputs.Set(name, scalar);
-            }
-        }
-
-        if (!TryReadArms(document, "force_arms", requestPath, out var forceArms) || !TryReadArms(document, "assignment", requestPath, out var assignment))
-        {
+            Output.Diagnostics(problems.Items, "text", Console.Error, locator: locator);
             return 2;
         }
 
         // --arms wins over the file's force_arms. A present force_arms is forced even when empty (the baseline), as an
         // empty DebugOptions.ForceArms is to the engine: presence, not length, decides.
         var cliArms = ExplainPlanCommand.SplitArms(arms);
-        IReadOnlyList<string>? forced = cliArms.Count > 0 ? cliArms : forceArms;
+        IReadOnlyList<string>? forced = cliArms.Count > 0 ? cliArms : file.ForceArms;
 
         var request = new RecRequest
         {
             PipelineId = pipelineId,
-            RequestId = document["request_id"]?.GetValue<string>() ?? "cli",
+            RequestId = file.RequestId ?? "cli",
             Inputs = inputs,
-            Assignment = assignment,
-            Deadline = TimeSpan.FromMilliseconds(deadlineMs ?? document["deadline_ms"]?.GetValue<double>() ?? 1000),
-            TimeMs = document["time_ms"]?.GetValue<long>(),
-            Seed = document["seed"]?.GetValue<long>(),
+            Assignment = file.Assignment,
+            Deadline = TimeSpan.FromMilliseconds(deadlineMs ?? file.DeadlineMs ?? 1000),
+            TimeMs = file.TimeMs,
+            Seed = file.Seed,
             Debug = new DebugOptions
             {
                 ForceArms = forced,
@@ -254,36 +223,124 @@ internal static class RunCommand
     }
 
     /// <summary>
-    /// Reads an optional array of <c>experiment/arm</c> ids: null when the member is absent, an empty list for <c>[]</c>
-    /// (the platform answered no arms). A malformed member is reported with its pointer.
+    /// Reads and binds the request file strictly, like an artifact (<see cref="ArtifactSerializer.TryBind{T}"/>): a
+    /// misspelled member is an error with a did-you-mean rather than a key silently ignored. Null after reporting.
     /// </summary>
-    private static bool TryReadArms(JsonObject document, string name, string requestPath, out List<string>? arms)
+    private static async Task<RequestFile?> ReadRequestAsync(string requestPath, DiagnosticBag problems, CancellationToken cancellationToken)
     {
-        arms = null;
-        if (!document.TryGetPropertyValue(name, out var node) || node is null)
+        JsonNode? document;
+        try
         {
-            return true;
+            document = Jsonc.Parse(await File.ReadAllBytesAsync(requestPath, cancellationToken).ConfigureAwait(false), requestPath);
+        }
+        catch (JsoncException ex)
+        {
+            problems.Add(new ConfigDiagnostic(DiagnosticSeverity.Error, ex.Code, requestPath, string.Empty, ex.Reason, ex.Hint) { Line = ex.Line, Column = ex.Column });
+            return null;
+        }
+        catch (IOException ex)
+        {
+            problems.Error("FILE_UNREADABLE", requestPath, string.Empty, ex.Message);
+            return null;
         }
 
-        if (node is not JsonArray array)
+        if (!ArtifactSerializer.TryBind<RequestFile>(document, "the request", out var file, out var error))
         {
-            Console.Error.WriteLine($"{requestPath}: /{name}: expected an array of arm ids, e.g. [\"exp_x/treatment\"].");
-            return false;
+            problems.Error("REQUEST_INVALID", requestPath, error.Pointer, error.Message,
+                error.Hint ?? "run 'stratarec run --help' for the members of a request file");
+            return null;
         }
 
-        arms = new List<string>(array.Count);
-        for (var i = 0; i < array.Count; i++)
+        CheckArms(file.ForceArms, "/force_arms", requestPath, problems);
+        CheckArms(file.Assignment, "/assignment", requestPath, problems);
+        if (file.DeadlineMs is <= 0)
         {
-            if (array[i] is not JsonValue value || !value.TryGetValue<string>(out var id))
+            problems.Error("REQUEST_INVALID", requestPath, "/deadline_ms", $"'deadline_ms' must be positive, got {file.DeadlineMs}.",
+                "give the request a deadline in milliseconds, e.g. 200, or leave it out for 1000");
+        }
+
+        return problems.HasErrors ? null : file;
+    }
+
+    /// <summary>Every arm id is a string <c>experiment/arm</c>; JSON null is not one.</summary>
+    private static void CheckArms(List<string>? arms, string pointer, string requestPath, DiagnosticBag problems)
+    {
+        for (var i = 0; arms is not null && i < arms.Count; i++)
+        {
+            if (arms[i] is null)
             {
-                Console.Error.WriteLine($"{requestPath}: /{name}/{i}: an arm id is a string 'experiment/arm'.");
-                return false;
+                problems.Error("REQUEST_INVALID", requestPath, pointer + "/" + i, "An arm id must be a string, got null.",
+                    "write each arm as \"experiment/arm\", e.g. \"exp_x/treatment\"");
+            }
+        }
+    }
+
+    /// <summary>The request's inputs, each checked against the pipeline's request_schema and reported where it is written.</summary>
+    private static RequestInputs ReadInputs(RequestFile file, IReadOnlyDictionary<string, ContextField> declared, string requestPath, DiagnosticBag problems)
+    {
+        var inputs = new RequestInputs();
+        if (file.Inputs is null)
+        {
+            return inputs;
+        }
+
+        foreach (var (name, value) in file.Inputs)
+        {
+            var pointer = "/inputs/" + JsonPointer.Escape(name);
+            if (!declared.TryGetValue(name, out var field))
+            {
+                var names = new List<string>(declared.Keys);
+                names.Sort(StringComparer.Ordinal);
+                problems.Error("REQUEST_INVALID", requestPath, pointer, $"Input '{name}' is not declared in the request_schema of pipeline '{file.PipelineId}'.",
+                    NameSuggestions.DidYouMean(name, names) ??
+                    (names.Count > 0 ? "declared inputs: " + string.Join(", ", names) : "the pipeline declares no inputs; declare it under /request_schema"));
+                continue;
             }
 
-            arms.Add(id);
+            if (value is null)
+            {
+                continue; // missing, as if absent
+            }
+
+            if (!ConfigValues.TryToScalar(value, field.InputType, out var scalar, out var error))
+            {
+                problems.Error("REQUEST_INVALID", requestPath, pointer, $"Input '{name}' {error}.",
+                    $"the request_schema of pipeline '{file.PipelineId}' declares it as '{field.InputType}'");
+                continue;
+            }
+
+            inputs.Set(name, scalar);
         }
 
-        return true;
+        return inputs;
+    }
+
+    /// <summary>The request file of <c>stratarec run</c>.</summary>
+    private sealed class RequestFile
+    {
+        /// <summary>The pipeline to run, by its pipeline_id.</summary>
+        public required string PipelineId { get; init; }
+
+        /// <summary>Request id; it seeds the request's randomness when seed is absent. Defaults to "cli".</summary>
+        public string? RequestId { get; init; }
+
+        /// <summary>Values for the pipeline's request_schema, by name.</summary>
+        public JsonObject? Inputs { get; init; }
+
+        /// <summary>The arms the experiment platform answered, as "experiment/arm"; [] is the answer "no arms".</summary>
+        public List<string>? Assignment { get; init; }
+
+        /// <summary>Arms to force over the assignment, as "experiment/arm"; [] forces the baseline.</summary>
+        public List<string>? ForceArms { get; init; }
+
+        /// <summary>End-to-end deadline in milliseconds; defaults to 1000.</summary>
+        public double? DeadlineMs { get; init; }
+
+        /// <summary>Request time in Unix milliseconds; defaults to now.</summary>
+        public long? TimeMs { get; init; }
+
+        /// <summary>Seed of the request's randomness; defaults to a hash of the request id.</summary>
+        public long? Seed { get; init; }
     }
 
     private static void SaveAborted(ReplayBundle bundle, string path)
