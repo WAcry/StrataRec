@@ -4,6 +4,7 @@ using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Tables;
+using StrataRec.Core.Threading;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
@@ -501,7 +502,7 @@ public sealed partial class FeatureFetcher
         }
 
         var staging = new StagingArea(fields, keyCount, chunkSize, _memory);
-        var cancellation = _hook is { Replays: true } ? null : new FetchCancellation(cancellationToken, budget);
+        var cancellation = _hook is { Replays: true } ? null : new FetchCancellation(cancellationToken, budget, _events, _requestId);
         StagingBuffer? writer = null;
         try
         {
@@ -1084,7 +1085,7 @@ public sealed partial class FeatureFetcher
                 }
 
                 var staging = new StagingBuffer(fields, 1, _memory);
-                var cancellation = _hook is { Replays: true } ? null : new FetchCancellation(cancellationToken, budget);
+                var cancellation = _hook is { Replays: true } ? null : new FetchCancellation(cancellationToken, budget, _events, _requestId);
                 ValueTask<FetchStatus> call;
                 try
                 {
@@ -1371,26 +1372,33 @@ public sealed partial class FeatureFetcher
     /// an asynchronous call's wait is bounded on its own (see <see cref="AwaitConnectorAsync"/>).
     /// </summary>
     /// <remarks>
-    /// Reference-counted: the starting fetch holds one reference until every chunk has been sent, and each sent chunk one
-    /// until its connector has really completed. The source is disposed with the last, so a connector that ignores
+    /// <para>The budget cancels the token as an <see cref="ObservedCancellationSource"/> does: the connectors' (and the
+    /// cache store's) callbacks run on the pool, and what they throw is counted and reported, never thrown on the timer's
+    /// thread. The fetch's cancellation is the source itself, so the timer's wrapper costs no more than the object that
+    /// used to hold the source.</para>
+    /// <para>Reference-counted: the starting fetch holds one reference until every chunk has been sent, and each sent chunk
+    /// one until its connector has really completed. The source is disposed with the last, so a connector that ignores
     /// cancellation and finishes late still holds a live token; a fetch whose connectors never complete leaves its source
-    /// to the GC once the timer has fired.
+    /// to the GC once the timer has fired.</para>
     /// </remarks>
-    private sealed class FetchCancellation
+    private sealed class FetchCancellation : ObservedCancellationSource
     {
-        private readonly CancellationTokenSource _source;
         private int _references = 1;
 
-        public FetchCancellation(CancellationToken caller, int budgetMs)
+        /// <param name="events">Where a failure of the connectors' cancellation callbacks is summarized, with <paramref name="requestId"/>.</param>
+        public FetchCancellation(CancellationToken caller, int budgetMs, RequestEventLog? events, string? requestId)
+            : base(CancellationSite.Fetch, caller, events, requestId)
         {
             DeadlineTimestamp = Stopwatch.GetTimestamp() + budgetMs * Stopwatch.Frequency / 1000;
-            _source = CancellationTokenSource.CreateLinkedTokenSource(caller);
-            _source.CancelAfter(budgetMs);
-            Token = _source.Token; // read once: the property throws once the source is disposed
+            CancelAfterObserved(TimeSpan.FromMilliseconds(budgetMs));
+            Token = base.Token;
         }
 
-        /// <summary>The connectors' token: cancelled at the budget or with the caller's token.</summary>
-        public CancellationToken Token { get; }
+        /// <summary>
+        /// The connectors' token: cancelled at the budget or with the caller's token. Read once, so it stays readable after
+        /// the source is disposed; the source's own property throws then.
+        /// </summary>
+        public new CancellationToken Token { get; }
 
         /// <summary>When the fetch's budget runs out, as a <see cref="Stopwatch"/> timestamp.</summary>
         public long DeadlineTimestamp { get; }
@@ -1403,7 +1411,7 @@ public sealed partial class FeatureFetcher
         {
             if (Interlocked.Decrement(ref _references) == 0)
             {
-                _source.Dispose();
+                Dispose();
             }
         }
     }

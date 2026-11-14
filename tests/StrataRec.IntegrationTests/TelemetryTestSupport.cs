@@ -18,7 +18,7 @@ public sealed class ProcessWideListenersCollection
 }
 
 /// <summary>One logged entry, with the structured state the [LoggerMessage] generator produced.</summary>
-internal sealed record LogEntry(LogLevel Level, EventId EventId, string Message, IReadOnlyDictionary<string, object?> State);
+internal sealed record LogEntry(LogLevel Level, EventId EventId, string Message, IReadOnlyDictionary<string, object?> State, Exception? Exception = null);
 
 /// <summary>An <see cref="ILoggerFactory"/> that keeps every entry in memory.</summary>
 internal sealed class ListLoggerFactory : ILoggerFactory
@@ -53,7 +53,7 @@ internal sealed class ListLoggerFactory : ILoggerFactory
                 }
             }
 
-            entries.Enqueue(new LogEntry(logLevel, eventId, formatter(state, exception), values));
+            entries.Enqueue(new LogEntry(logLevel, eventId, formatter(state, exception), values, exception));
         }
     }
 }

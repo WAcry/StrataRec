@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Memory;
+using StrataRec.Core.Threading;
 
 namespace StrataRec.Pipeline.Operators;
 
@@ -9,11 +10,15 @@ namespace StrataRec.Pipeline.Operators;
 /// its clients (linked to the caller's token and cancelled at the deadline), and the caller's token itself.
 /// </summary>
 /// <remarks>
-/// Reference-counted: the attempt holds one reference until it ends, and each external call one until its client has
-/// really completed. The token source is disposed with the last, so a client that ignores cancellation and finishes
-/// after the attempt ended still holds a live token, cancelled (or about to be) at the deadline.
+/// <para>The node token's source: the deadline cancels the token as an <see cref="ObservedCancellationSource"/> does, so
+/// the operator's and its clients' callbacks run on the pool and what they throw is counted and reported, never thrown on
+/// the timer's thread. The budget is the source itself rather than an object holding one: one object less per
+/// attempt pays for the timer's wrapper.</para>
+/// <para>Reference-counted: the attempt holds one reference until it ends, and each external call one until its client
+/// has really completed. The source is disposed with the last, so a client that ignores cancellation and finishes after
+/// the attempt ended still holds a live token, cancelled (or about to be) at the deadline.</para>
 /// </remarks>
-internal sealed class AttemptBudget
+internal sealed class AttemptBudget : ObservedCancellationSource
 {
     /// <summary>The longest a timer or a timed wait accepts (just under 49.7 days); longer waits are capped to it.</summary>
     public static readonly TimeSpan MaxWait = TimeSpan.FromMilliseconds(uint.MaxValue - 1.0);
@@ -21,7 +26,6 @@ internal sealed class AttemptBudget
     /// <summary>The same, in milliseconds, for budgets computed as numbers.</summary>
     public const double MaxWaitMs = uint.MaxValue - 1.0;
 
-    private readonly CancellationTokenSource _source;
     private int _references = 1;
 
     /// <param name="caller">The caller's token; the node token is linked to it.</param>
@@ -29,21 +33,25 @@ internal sealed class AttemptBudget
     /// The absolute deadline as a <see cref="Stopwatch"/> timestamp; <see cref="long.MaxValue"/> for an untimed attempt
     /// (a replay takes its timing decisions from the recording).
     /// </param>
-    public AttemptBudget(CancellationToken caller, long deadline)
+    /// <param name="events">Where a failure of the node token's callbacks is summarized, with <paramref name="requestId"/>.</param>
+    public AttemptBudget(CancellationToken caller, long deadline, RequestEventLog? events = null, string? requestId = null)
+        : base(CancellationSite.Node, caller, events, requestId)
     {
         Caller = caller;
         Deadline = deadline;
-        _source = CancellationTokenSource.CreateLinkedTokenSource(caller);
         if (deadline != long.MaxValue)
         {
-            _source.CancelAfter(Until(deadline));
+            CancelAfterObserved(Until(deadline));
         }
 
-        Token = _source.Token; // read once: the property throws once the source is disposed
+        Token = base.Token;
     }
 
-    /// <summary>The node token: cancelled at the deadline or with the caller's token.</summary>
-    public CancellationToken Token { get; }
+    /// <summary>
+    /// The node token: cancelled at the deadline or with the caller's token. Read once, so it stays readable after the
+    /// budget is disposed; the source's own property throws then.
+    /// </summary>
+    public new CancellationToken Token { get; }
 
     public CancellationToken Caller { get; }
 
@@ -69,7 +77,7 @@ internal sealed class AttemptBudget
     {
         if (Interlocked.Decrement(ref _references) == 0)
         {
-            _source.Dispose();
+            Dispose();
         }
     }
 
@@ -157,7 +165,9 @@ internal interface IBoundedCall<T>
 /// otherwise; (5) the call is completed (metrics, health, span) and recorded exactly once, at the call site; (6) a client
 /// that answers synchronously costs no lease, continuation or wait, and a call that shares the node's budget allocates
 /// nothing at all; a call with an own timeout shorter than the budget costs one linked token source and its timer (about
-/// 160 B), created before it is sent so that the client's token carries the timeout.</para>
+/// 210 B), created before it is sent so that the client's token carries the timeout; (7) the timeout cancels the
+/// client's token through <see cref="ObservedCancellationSource"/>: the client's callbacks run on the pool, and what they
+/// throw is counted and reported, never thrown on the timer's thread.</para>
 /// <para>Feature fetches have their own implementation of the same rules (FeatureFetcher), with one token source and
 /// one deadline per fetch for all its chunks.</para>
 /// </remarks>
@@ -179,7 +189,7 @@ internal static class BoundedCall
     {
         memory.Hold();
         budget.AddReference();
-        var (own, token, deadline) = Bound(budget, timeoutMs);
+        var (own, token, deadline) = Bound(budget, timeoutMs, requestId, events);
         var io = target.Start();
         ValueTask<T> pending;
         try
@@ -283,7 +293,8 @@ internal static class BoundedCall
     /// The token the client gets and when the wait ends. The call's own timeout gets a token source of its own only when it
     /// comes before the node's deadline; otherwise the node token already says everything.
     /// </summary>
-    private static (CancellationTokenSource? Own, CancellationToken Token, long Deadline) Bound(AttemptBudget budget, int? timeoutMs)
+    private static (CancellationTokenSource? Own, CancellationToken Token, long Deadline) Bound(
+        AttemptBudget budget, int? timeoutMs, string requestId, RequestEventLog? events)
     {
         if (timeoutMs is { } timeout)
         {
@@ -291,8 +302,8 @@ internal static class BoundedCall
             var deadline = Stopwatch.GetTimestamp() + ((long)milliseconds * Stopwatch.Frequency / 1000);
             if (deadline < budget.Deadline)
             {
-                var own = CancellationTokenSource.CreateLinkedTokenSource(budget.Token);
-                own.CancelAfter(milliseconds);
+                var own = new ObservedCancellationSource(CancellationSite.Call, budget.Token, events, requestId);
+                own.CancelAfterObserved(TimeSpan.FromMilliseconds(milliseconds));
                 return (own, own.Token, deadline);
             }
         }

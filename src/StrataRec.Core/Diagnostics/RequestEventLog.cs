@@ -40,6 +40,12 @@ public enum RequestEvent : byte
 
     /// <summary>A run's replay recording could not be built, or the host's recording callback threw.</summary>
     RecordingFailed,
+
+    /// <summary>
+    /// Callbacks registered on a token the framework cancelled (a deadline, a timeout) threw; subject: the token's site
+    /// (<see cref="Threading.CancellationSite"/>). The request was not affected.
+    /// </summary>
+    CancellationCallbacksFailed,
 }
 
 /// <summary>

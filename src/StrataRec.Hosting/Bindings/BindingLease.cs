@@ -2,6 +2,7 @@ using System.Globalization;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Memory;
+using StrataRec.Core.Threading;
 using StrataRec.Features.Bindings;
 using StrataRec.Features.Local;
 using StrataRec.Models;
@@ -49,7 +50,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
     private readonly Dictionary<object, BindingHost.ClientEntry> _clientsByInstance = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<IModelClient, Dictionary<(string Model, string? Version), Task<SignatureLookup>>> _signatures =
         new(ReferenceEqualityComparer.Instance);
-    private readonly CancellationTokenSource _lookups = new(); // cancels the signature lookups; never disposed (see TableEntry)
+    private readonly ObservedCancellationSource _lookups = new(CancellationSite.SignatureLookup); // cancels the signature lookups; never disposed (see TableEntry)
     private bool _lookupsWaited;
     private bool _lookupsCancelled;
     private bool _answeredPending;
@@ -484,7 +485,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
             _lookupsCancelled = true;
         }
 
-        _ = EndAfterAsync(_lookups.CancelAsync());
+        _ = EndAfterAsync(_lookups.CancelObservedAsync());
     }
 
     /// <summary>Leaves the lease once the lookups' cancellation callbacks have run; a failure of theirs is logged.</summary>

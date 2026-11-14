@@ -167,11 +167,13 @@ public sealed class BoundedCallTests
         var budget = new AttemptBudget(CancellationToken.None, Deadline(600_000));
         var site = new Site(memory);
 
-        var running = Task.Run(async () =>
+        // Marked as the call is sent, after its timeout's timer was set: that timer runs its callback in the context it was
+        // set in (ObservedCancellationSource), and it fires with the wait's timeout; marked before, it would be held.
+        var running = Task.Run(async () => await Run(site.With(_ =>
         {
             gate.Mark();
-            return await Run(site.With(_ => new ValueTask<int>(client.Task)), budget, memory, timeoutMs: 200);
-        });
+            return new ValueTask<int>(client.Task);
+        }), budget, memory, timeoutMs: 200));
         Assert.True(gate.WaitHeld(), "the wait never resumed on a thread of its own");
         Assert.False(running.IsCompleted);
         if (completion == "answers")
@@ -597,8 +599,8 @@ public sealed class BoundedCallAllocationTests
     public void ASynchronousAnswer_WithAShorterOwnTimeout_CostsOneTokenSourceAndTimer()
     {
         // The token source is created before the call is sent, so that the client's token carries the timeout. About
-        // 160 B on .NET 8: the linked source, its registration on the node token and the timer. Bounded, so that anything
-        // more per call shows up here.
+        // 210 B on .NET 8: the source, its registration on the node token and the timer (160 B with CancelAfter, whose
+        // timer cancels on the timer's thread; review 20 #1). Bounded, so that anything more per call shows up here.
         var bytes = BytesPerCall(timeoutMs: 300_000, calls: 2_000);
 
         Assert.InRange(bytes, 1, 256);

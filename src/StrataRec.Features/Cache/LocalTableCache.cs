@@ -22,7 +22,10 @@ public sealed class CacheTableOptions
     /// </summary>
     public long WriteQueueBytes { get; init; }
 
-    /// <summary>The clock of write times and expiry; tests pass one they move by hand.</summary>
+    /// <summary>
+    /// The clock of write times and expiry, and the timestamps the distributed tier's time is judged by; tests pass one
+    /// they move by hand.
+    /// </summary>
     public TimeProvider Clock { get; init; } = TimeProvider.System;
 
     internal void Validate()
@@ -216,10 +219,20 @@ public sealed class LocalTableCache
 
     /// <summary>How long the distributed tier should keep a record written at <paramref name="writtenMs"/>: until no reader
     /// could use it, even stale.</summary>
-    /// <remarks>At most <see cref="RetentionMs"/>, which the binding checked against <see cref="MaxRetentionMs"/>; in ticks, so
-    /// no floating-point rounding takes the boundary past what a <see cref="TimeSpan"/> holds.</remarks>
-    internal TimeSpan StoreTimeToLive(long writtenMs, long nowMs) =>
-        TimeSpan.FromTicks(Math.Max(1, writtenMs + MaxLifetimeMs + Options.StaleIfErrorMs - nowMs) * TimeSpan.TicksPerMillisecond);
+    /// <remarks>
+    /// The retention less the record's age, at least 1 ms. The age is judged as <see cref="Classify"/> judges it: a write
+    /// time ahead of the clock (the clock stepped back during the fetch, say) counts as written now, so the result is at
+    /// most <see cref="RetentionMs"/>, which the binding checked against <see cref="MaxRetentionMs"/>; at that bound a
+    /// write time 1 ms ahead used to overflow the ticks to a negative time to live (review 21 #1). In ticks, so no
+    /// floating-point rounding takes the boundary past what a <see cref="TimeSpan"/> holds.
+    /// </remarks>
+    internal TimeSpan StoreTimeToLive(long writtenMs, long nowMs)
+    {
+        var retention = MaxLifetimeMs + Options.StaleIfErrorMs;
+        var age = writtenMs >= nowMs ? 0 : nowMs - writtenMs;
+        var remaining = age < 0 || age >= retention ? 1 : retention - age; // a negative age is one that overflowed: very old
+        return TimeSpan.FromTicks(remaining * TimeSpan.TicksPerMillisecond);
+    }
 
     /// <summary>Hands records to the writer without waiting; false (and counted) when the queue is full.</summary>
     internal bool TryWriteBack(CacheWriteBatch batch)

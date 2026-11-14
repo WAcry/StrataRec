@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using StrataRec.Core.Bindings;
+using StrataRec.Core.Threading;
 
 namespace StrataRec.Features.Cache;
 
@@ -27,7 +28,7 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
     public const long DefaultQueueBytes = 16L << 20;
 
     private readonly Channel<PendingWrite> _queue = Channel.CreateUnbounded<PendingWrite>(new UnboundedChannelOptions { SingleReader = true });
-    private readonly CancellationTokenSource _stopping = new();
+    private readonly ObservedCancellationSource _stopping = new(CancellationSite.CacheWriter);
     private readonly object _gate = new();
     private Task? _writer;
     private long _queuedBytes;
@@ -179,7 +180,7 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
             _queue.Writer.TryComplete();
             try
             {
-                await _stopping.CancelAsync().ConfigureAwait(false);
+                await _stopping.CancelObservedAsync().ConfigureAwait(false);
             }
             catch (Exception ex)
             {

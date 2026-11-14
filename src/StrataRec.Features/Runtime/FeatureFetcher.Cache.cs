@@ -229,9 +229,10 @@ public sealed partial class FeatureFetcher
         read.BudgetMs = BudgetMs(read.Group);
         if (read.BudgetMs > 0)
         {
-            read.Cancellation = new FetchCancellation(cancellationToken, read.BudgetMs);
+            read.Cancellation = new FetchCancellation(cancellationToken, read.BudgetMs, _events, _requestId);
             read.StoreBudgetMs = Math.Min(read.BudgetMs, read.Supply.DistributedTimeoutMs ?? Math.Max(1, read.BudgetMs / 2));
-            read.StoreDeadline = Stopwatch.GetTimestamp() + (read.StoreBudgetMs * Stopwatch.Frequency / 1000);
+            var clock = read.Cache.Clock; // the cache's clock times the tier too (a test moves it by hand)
+            read.StoreDeadline = clock.GetTimestamp() + (read.StoreBudgetMs * clock.TimestampFrequency / 1000);
         }
 
         _memory.Hold();
@@ -282,7 +283,7 @@ public sealed partial class FeatureFetcher
             // A store's synchronous part runs here, unbounded (see IFeatureCacheStore.GetAsync): once one has taken the
             // tier's time, the chunks not sent yet are not sent; their keys go to the connector like a late chunk's.
             var offset = c * chunkSize;
-            calls[c] = Stopwatch.GetTimestamp() >= read.StoreDeadline || read.Cancellation!.Token.IsCancellationRequested || cancellationToken.IsCancellationRequested
+            calls[c] = read.Cache.Clock.GetTimestamp() >= read.StoreDeadline || read.Cancellation!.Token.IsCancellationRequested || cancellationToken.IsCancellationRequested
                 ? new ValueTask<bool>(false)
                 : StoreCall(read, tier, offset, Math.Min(chunkSize, read.MissCount - offset), cancellationToken);
         }
@@ -410,7 +411,7 @@ public sealed partial class FeatureFetcher
             var observeNow = false;
             try
             {
-                var remaining = Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), read.StoreDeadline);
+                var remaining = read.Cache.Clock.GetElapsedTime(read.Cache.Clock.GetTimestamp(), read.StoreDeadline);
                 var wait = task.WaitAsync(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, cancellationToken);
                 observeNow = ReferenceEquals(wait, task); // completed already: no wait decided, so it is observed now
                 if (!observeNow)
@@ -442,7 +443,7 @@ public sealed partial class FeatureFetcher
     private bool StoreObserved(in IoCall io, CacheRead read, int count, ValueTask completed, CancellationToken cancellationToken)
     {
         IoOutcome? cutOff = cancellationToken.IsCancellationRequested ? IoOutcome.Cancelled
-            : Stopwatch.GetTimestamp() >= read.StoreDeadline || read.Cancellation!.Token.IsCancellationRequested ? IoOutcome.Timeout
+            : read.Cache.Clock.GetTimestamp() >= read.StoreDeadline || read.Cancellation!.Token.IsCancellationRequested ? IoOutcome.Timeout
             : null;
         var outcome = IoOutcome.Ok;
         string? error = null;
@@ -970,7 +971,10 @@ public sealed partial class FeatureFetcher
 
         public int StoreBudgetMs { get; set; }
 
-        /// <summary>When the read stops waiting for the distributed tier, as a <see cref="Stopwatch"/> timestamp.</summary>
+        /// <summary>
+        /// When the read stops waiting for the distributed tier, as a timestamp of the cache's clock
+        /// (<see cref="LocalTableCache.Clock"/>; the system's is the <see cref="Stopwatch"/>).
+        /// </summary>
         public long StoreDeadline { get; set; }
 
         /// <summary>The read's cancellation and deadline, for both tiers; null when it had no time left to send anything.</summary>

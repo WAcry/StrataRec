@@ -3,6 +3,7 @@ using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using StrataRec.Core.Diagnostics;
+using StrataRec.Core.Threading;
 
 namespace StrataRec.Logging;
 
@@ -102,7 +103,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
     private readonly Channel<LogBatch> _bestEffort;
     private readonly Task _durableLoop;
     private readonly Task _bestEffortLoop;
-    private readonly CancellationTokenSource _stop = new();
+    private readonly SinkStop _stop;
     private readonly ConcurrentDictionary<string, TapCounters> _stats = new(StringComparer.Ordinal);
     /// <summary>Consecutive failed writes per loop (0: durable, 1: best-effort); each loop touches only its own.</summary>
     private readonly long[] _failedWrites = new long[2];
@@ -120,6 +121,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
         _options = options ?? new LogPipelineOptions();
         _logger = loggerFactory?.CreateLogger<LogPipeline>() ?? NullLogger<LogPipeline>.Instance;
         _events = loggerFactory is null ? null : new RequestEventLog(_logger);
+        _stop = new SinkStop(_logger);
         ProducerId = producerId ?? $"{Environment.MachineName}/{Environment.ProcessId}/{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
         _durable = Channel.CreateBounded<LogBatch>(new BoundedChannelOptions(_options.DurableCapacity) { SingleReader = true });
         _bestEffort = Channel.CreateBounded<LogBatch>(new BoundedChannelOptions(_options.BestEffortCapacity) { SingleReader = true });
@@ -245,7 +247,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
 
         _durable.Writer.TryComplete();
         _bestEffort.Writer.TryComplete();
-        _stop.CancelAfter(_options.DrainTimeout);
+        _stop.CancelAfterObserved(_options.DrainTimeout); // the sink's callbacks run on the pool, never on the timer's thread
         try
         {
             // Bounded even if a sink ignores cancellation: shutdown must not hang on one stuck write. A write still in
@@ -419,6 +421,19 @@ public sealed partial class LogPipeline : IAsyncDisposable
             StrataRecMetrics.LogBatches.Add(dropped, counters.DroppedTags);
         }
     }
+
+    /// <summary>
+    /// The sink's token: cancelled when the drain timeout runs out. The sink's callbacks run on the pool, and what they
+    /// throw is logged (3005); on the timer's thread, it would end the process.
+    /// </summary>
+    private sealed class SinkStop(ILogger logger) : ObservedCancellationSource(CancellationSite.LogDrain)
+    {
+        protected override void CallbacksFailed(AggregateException errors) => LogSinkCancellationCallbacksFailed(logger, errors);
+    }
+
+    [LoggerMessage(EventId = 3005, Level = LogLevel.Warning,
+        Message = "A cancellation callback of the log sink's token threw when the drain timeout ran out; shutdown is not affected")]
+    private static partial void LogSinkCancellationCallbacksFailed(ILogger logger, Exception exception);
 
     [LoggerMessage(EventId = 3001, Level = LogLevel.Error,
         Message = "Log sink failed writing {Delivery} batches; durable batches are retried, best-effort batches are dropped until it recovers")]

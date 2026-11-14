@@ -25,6 +25,7 @@ public sealed class MetricsTests
     {
         StrataRecTags.Pipeline, StrataRecTags.Node, StrataRecTags.Source, StrataRecTags.SourceKind, StrataRecTags.Model,
         StrataRecTags.Outcome, StrataRecTags.Arm, StrataRecTags.Column, StrataRecTags.Tap, StrataRecTags.LogDelivery, StrataRecTags.Entity,
+        StrataRecTags.CacheTier, StrataRecTags.Token,
     };
 
     [Fact]
