@@ -1,0 +1,20 @@
+// Features of the trending feed (design 6.3). Every physical feature is served by kv_store@1, the sample's own connector
+// (bindings/local.jsonc). A feature with "default" is non-nullable; without one it is T? and reads as missing when the
+// store has no value.
+{
+  "catalog_id": "trending",
+  "entities": {
+    "user": { "scope": "context",   "key": "ctx.request.user_id", "key_type": "int64" },
+    "item": { "scope": "candidate", "key": "col.entity_id",       "key_type": "int64" }
+  },
+  "features": {
+    "user.affinity":  { "type": "float32", "source": "user_store", "field": "affinity",  "default": 0.0 },
+    "item.ctr_7d":    { "type": "float32", "source": "item_store", "field": "ctr_7d",    "default": 0.01 },
+    "item.age_hours": { "type": "float32", "source": "item_store", "field": "age_hours" },
+    "item.category":  { "type": "string",  "source": "item_store", "field": "category" }
+  },
+  "derived_features": {
+    // Model inputs are plain references; what a missing age means is decided here, once, for training and serving.
+    "item.freshness": { "type": "float32", "expr": "1.0 / (1.0 + (col.item.age_hours ?? 72.0) / 24.0)" }
+  }
+}

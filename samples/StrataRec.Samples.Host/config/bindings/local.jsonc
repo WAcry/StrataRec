@@ -1,0 +1,54 @@
+// Local bindings (design 6.4): the sample's own components, named by type like the built-in ones. Bindings for production
+// would name the same logical sources, model and candidate sources with production types, settings and budgets; the
+// pipeline would not change.
+{
+  "environment": "local",
+  "sources": {
+    // kv_store@1 (Components/KeyValueFeatureConnector.cs) reads its file when it loads, before the plan serves. In-process
+    // data answers in microseconds; the timeout only bounds a cold start (JIT) on a busy machine.
+    "user_store": { "connector": "kv_store@1", "data_file": "data/users.jsonl", "timeout_ms": 1000 },
+    "item_store": { "connector": "kv_store@1", "data_file": "data/items.jsonl", "timeout_ms": 1000, "max_batch": 50 }
+  },
+  "models": {
+    // logistic@1 (Components/LogisticModelClient.cs): its inputs are the names of its weights.
+    "engagement": {
+      "client": "logistic@1",
+      "version": "v3",
+      "bias": -3.0,
+      "weights": { "ctr": 30.0, "freshness": 1.5, "affinity": 0.8 },
+      "output": "p_engage"
+    }
+  },
+  "candidate_sources": {
+    // trending@1 (Components/TrendingCandidateSource.cs): the request input "region" picks a region's list; without it,
+    // the overall list.
+    "trending": {
+      "client": "trending@1",
+      "region_input": "region",
+      "items": [
+        { "id": 1,  "score": 950, "region": "us" },
+        { "id": 2,  "score": 920, "region": "us" },
+        { "id": 3,  "score": 900, "region": "us" },
+        { "id": 4,  "score": 870, "region": "de" },
+        { "id": 5,  "score": 860, "region": "us" },
+        { "id": 6,  "score": 840, "region": "de" },
+        { "id": 7,  "score": 830, "region": "de" },
+        { "id": 8,  "score": 800, "region": "us" },
+        { "id": 9,  "score": 780, "region": "us" },
+        { "id": 10, "score": 760, "region": "de" },
+        { "id": 11, "score": 740, "region": "us" },
+        { "id": 12, "score": 720, "region": "de" },
+        { "id": 13, "score": 700, "region": "us" },
+        { "id": 14, "score": 690, "region": "de" },
+        { "id": 15, "score": 680, "region": "us" },
+        { "id": 16, "score": 650, "region": "de" },
+        { "id": 17, "score": 640, "region": "us" },
+        { "id": 18, "score": 620, "region": "de" },
+        { "id": 19, "score": 600 },
+        { "id": 20, "score": 580 }
+      ]
+    },
+    // A built-in source next to the custom one: the editors' picks, a fixed list.
+    "editorial": { "client": "memory_list@1", "items": [21, 22, 3, 23] }
+  }
+}
