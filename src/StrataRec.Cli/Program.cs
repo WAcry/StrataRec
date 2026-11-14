@@ -4,7 +4,7 @@ using StrataRec.Cli.Commands;
 namespace StrataRec.Cli;
 
 /// <summary>
-/// <c>stratarec</c>: validate, build, explain, diff and run configurations locally (design 10.1, 13.4). Output is plain text
+/// <c>stratarec</c>: create, validate, build, explain, diff and run configurations locally (design 10.1, 13.4). Output is plain text
 /// for humans or <c>--format json</c> for CI and agents; the exit code is 0 on success, 1 on configuration errors and
 /// 2 on usage errors; <c>diff</c> follows diff(1): 0 when nothing differs, 1 when something does, 2 on any error.
 /// </summary>
@@ -15,6 +15,7 @@ public static class Program
     internal static RootCommand CreateRootCommand()
     {
         var root = new RootCommand("StrataRec: columnar recommendation pipelines with multi-layer experiments.");
+        root.Add(InitCommand.Create());
         root.Add(ValidateCommand.Create());
         root.Add(BuildCommand.Create());
         root.Add(ExplainPlanCommand.Create());
