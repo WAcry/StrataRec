@@ -138,6 +138,23 @@ public sealed class ManifestRefCliTests
         Assert.Equal(0, await CompareCommand.RunAsync(manifests[0].Id, null, "local", bundles, Array.Empty<string>(), 5, "source", "json", TextWriter.Null,
             CancellationToken.None, candidateManifest: manifests[0].Id, store: store));
 
+        // A bundle cut down to its fallback run still replays its primary pipeline, on the named manifest, every one of its
+        // calls a gap (review 25), as on a workspace.
+        var cut = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
+        var withoutPrimary = ReplayBundleFile.Load(Path.Combine(bundles, "failed-over.json"));
+        withoutPrimary.Runs.RemoveAt(0);
+        ReplayBundleFile.Save(withoutPrimary, Path.Combine(cut, "no-primary.json"));
+        foreach (var manifest in new[] { null, manifests[0].Id })
+        {
+            var output = new StringWriter();
+            Assert.Equal(0, await ReplayCommand.RunAsync(null, "local", cut, Array.Empty<string>(), "json", expectIdentical: false, output, CancellationToken.None,
+                manifest: manifest, store: store));
+            using var report = JsonDocument.Parse(output.ToString());
+            var bundle = report.RootElement.GetProperty("bundles")[0];
+            Assert.Equal(manifests[0].Id, bundle.GetProperty("manifest").GetProperty("replayed").GetString());
+            Assert.Contains(bundle.GetProperty("gaps").EnumerateArray(), g => g.GetProperty("kind").GetString() == "candidate_source" && g.GetProperty("source").GetString() == "broken");
+        }
+
         // A store without the fallback's manifest: not replayed, naming the pipeline, its manifest and why.
         File.Delete(new FileSystemArtifactStore(store).GetBlobPath(manifests[1].Id));
         var errors = new StringWriter();

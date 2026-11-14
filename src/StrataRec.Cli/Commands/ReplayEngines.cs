@@ -116,21 +116,26 @@ internal sealed class ReplayEngines : IAsyncDisposable
     }
 
     /// <summary>
-    /// The pipelines the bundle's request ran, each with the manifest it recorded and where the bundle says so; a bundle
-    /// without runs stands for its primary run on the bundle's manifest.
+    /// The pipelines the bundle's request ran, each with the manifest it recorded and where the bundle says so. The primary
+    /// pipeline is always among them: a bundle without a primary run (none recorded, or one cut from the bundle) stands
+    /// for it on the bundle's manifest, and the engine then replays it with every external call a gap, as it does on a
+    /// workspace (review 25).
     /// </summary>
     private static List<Run> Runs(ReplayBundle bundle)
     {
-        var runs = new List<Run>(Math.Max(1, bundle.Runs.Count));
+        var runs = new List<Run>(bundle.Runs.Count + 1);
+        var primary = false;
         for (var i = 0; i < bundle.Runs.Count; i++)
         {
             var run = bundle.Runs[i];
-            runs.Add(new Run(run.PipelineId, run.ManifestId, run.Role == "fallback_pipeline", $"/runs/{i}/manifest_id"));
+            var fallback = run.Role == "fallback_pipeline";
+            primary |= !fallback;
+            runs.Add(new Run(run.PipelineId, run.ManifestId, fallback, $"/runs/{i}/manifest_id"));
         }
 
-        if (runs.Count == 0)
+        if (!primary)
         {
-            runs.Add(new Run(bundle.Request.PipelineId, bundle.Manifest.Id, false, "/manifest/id"));
+            runs.Insert(0, new Run(bundle.Request.PipelineId, bundle.Manifest.Id, false, "/manifest/id"));
         }
 
         return runs;
