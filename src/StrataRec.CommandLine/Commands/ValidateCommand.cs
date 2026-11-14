@@ -43,6 +43,9 @@ internal static class ValidateCommand
                 ids.AddRange(workspace.Pipelines.Keys);
             }
 
+            // What a service loading these pipelines serves: their fallback pipelines too, checked against them.
+            ids = workspace.WithFallbacks(ids, diagnostics, out _);
+            var schemas = new Dictionary<string, RequestSchema>(StringComparer.Ordinal);
             foreach (var id in ids)
             {
                 var request = workspace.CreateCompileRequest(id, environment, diagnostics, DateOnly.FromDateTime(DateTime.UtcNow));
@@ -54,7 +57,13 @@ internal static class ValidateCommand
                 var compilation = PlanCompiler.Compile(request, CommonOptions.ForRoot(provided, workspace.Root));
                 diagnostics.AddRange(compilation.Diagnostics);
                 summaries.Add(Summary(id, request, compilation));
+                if (compilation.Plan is { } plan)
+                {
+                    schemas[id] = plan.RequestSchema;
+                }
             }
+
+            workspace.CheckFallbackInputs(ids, id => schemas.GetValueOrDefault(id), diagnostics);
         }
 
         var code = Output.Diagnostics(diagnostics.Items, format, output, warningsAsErrors, DiagnosticLocator.ForWorkspace(config));

@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Experiments.Compilation;
+using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Hosting.Workspace;
 
@@ -128,6 +129,57 @@ public sealed class ConfigWorkspace
         }
 
         return workspace;
+    }
+
+    /// <summary>
+    /// The pipelines to compile or load for <paramref name="ids"/>: those, then the <c>fallback_pipeline</c> of each that is
+    /// not among them, since a fallback that is not served silently never happens (design 5.6). A fallback not in the
+    /// workspace is an error at the pipeline's <c>/fallback_pipeline</c>, and the pipeline is added to
+    /// <paramref name="unresolved"/>. Loading and <c>validate</c> both use it, so they agree on what is served.
+    /// </summary>
+    public List<string> WithFallbacks(IEnumerable<string> ids, DiagnosticBag diagnostics, out HashSet<string> unresolved)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        var all = new List<string>(ids);
+        unresolved = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < all.Count; i++)
+        {
+            if (Pipelines.TryGetValue(all[i], out var loaded) && loaded.Value.FallbackPipeline is { } fallback && !all.Contains(fallback))
+            {
+                if (Pipelines.ContainsKey(fallback))
+                {
+                    all.Add(fallback);
+                }
+                else
+                {
+                    diagnostics.Error("FALLBACK_PIPELINE_UNKNOWN", loaded.Path, "/fallback_pipeline", $"Fallback pipeline '{fallback}' is not in the workspace.",
+                        NameSuggestions.DidYouMean(fallback, Pipelines.Keys) ?? $"create pipelines/{fallback}.jsonc or remove fallback_pipeline");
+                    unresolved.Add(all[i]);
+                }
+            }
+        }
+
+        return all;
+    }
+
+    /// <summary>
+    /// Warns, for each of <paramref name="ids"/> with a fallback pipeline, about inputs the fallback would fail requests
+    /// on (<see cref="RequestSchema.CheckFallback"/>); <paramref name="schemaOf"/> gives a pipeline's compiled schema,
+    /// null when it did not compile (its errors are reported already).
+    /// </summary>
+    public void CheckFallbackInputs(IEnumerable<string> ids, Func<string, RequestSchema?> schemaOf, DiagnosticBag diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        ArgumentNullException.ThrowIfNull(schemaOf);
+        foreach (var id in ids)
+        {
+            if (Pipelines.TryGetValue(id, out var loaded) && loaded.Value.FallbackPipeline is { } fallback && fallback != id
+                && schemaOf(id) is { } primary && schemaOf(fallback) is { } served)
+            {
+                RequestSchema.CheckFallback(primary, served, loaded.Path, diagnostics);
+            }
+        }
     }
 
     /// <summary>

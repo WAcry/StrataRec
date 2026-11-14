@@ -162,6 +162,41 @@ public sealed class RecErrorKindTests : IDisposable
     }
 
     [Fact]
+    public void Loading_WarnsAboutAFallbackThatRequiresAnInputThePrimaryDoesNotDeclare()
+    {
+        // strict_backup requires tenant_id, which strict_broken does not declare: every request that falls back fails. It
+        // was found only when such a request failed; backup declaring fewer inputs than broken is fine.
+        using var engine = new RecEngine(new PlanEnvironment { BaseDirectory = _root });
+
+        var diagnostics = ServiceCollectionExtensions.LoadWorkspace(engine, _root, "local");
+
+        Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
+        var warning = Assert.Single(diagnostics.Items, d => d.Code.StartsWith("FALLBACK_INPUT_", StringComparison.Ordinal));
+        Assert.Equal(("FALLBACK_INPUT_UNDECLARED", "/fallback_pipeline"), (warning.Code, warning.Pointer));
+        Assert.EndsWith("strict_broken.jsonc", warning.Artifact, StringComparison.Ordinal);
+        Assert.Contains("'tenant_id'", warning.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Validate_ChecksAPipelinesFallback_AsLoadingDoes()
+    {
+        // validate -p of a pipeline compiles its fallback too (a service loading it serves both) and reports the same
+        // warning at the file and line of fallback_pipeline; an unknown fallback, found before only at load, is an error.
+        var output = new StringWriter();
+        Assert.Equal(0, StrataRec.CommandLine.Commands.ValidateCommand.Run(Tool.Environment, _root, "local", "strict_broken", "text", warningsAsErrors: false, output));
+        var text = output.ToString();
+        Assert.Contains("strict_broken.jsonc:1:", text, StringComparison.Ordinal);
+        Assert.Contains("warning FALLBACK_INPUT_UNDECLARED /fallback_pipeline", text, StringComparison.Ordinal);
+        Assert.Contains("strict_backup: ok", text, StringComparison.Ordinal);
+
+        Edit(Path.Combine(_root, "pipelines", "lonely.jsonc"), "\"pipeline_id\": \"lonely\", ", "\"pipeline_id\": \"lonely\", \"fallback_pipeline\": \"bakup\", ");
+        output = new StringWriter();
+        Assert.Equal(1, StrataRec.CommandLine.Commands.ValidateCommand.Run(Tool.Environment, _root, "local", "lonely", "text", warningsAsErrors: false, output));
+        Assert.Contains("error FALLBACK_PIPELINE_UNKNOWN /fallback_pipeline: Fallback pipeline 'bakup' is not in the workspace.", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("did you mean 'backup'?", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task TheEngine_ServesItsPipelinesIdsAndRequestSchemas()
     {
         await using var engine = Load(_root);

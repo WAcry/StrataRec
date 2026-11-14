@@ -215,4 +215,40 @@ public sealed class RequestSchemaTests
             Assert.DoesNotContain(name, error.Message + " " + error.Hint, StringComparison.Ordinal);
         }
     }
+
+    [Theory]
+    [InlineData("tenant_id", "int64", null, "FALLBACK_INPUT_UNDECLARED")] // required by the fallback, unknown to the primary
+    [InlineData("tenant_id", "int64?", null, null)] // optional in the fallback: a request without it is served
+    [InlineData("region", "string?", "string?", null)] // the same declaration
+    [InlineData("region", "string", "string?", "FALLBACK_INPUT_OPTIONAL")] // optional in the primary, required in the fallback
+    [InlineData("region", "string?", "string", null)] // the fallback is more lenient
+    [InlineData("region", "int64", "string", "FALLBACK_INPUT_TYPE")] // another type
+    [InlineData("region", "int64?", "string?", "FALLBACK_INPUT_TYPE")]
+    public void CheckFallback_WarnsAboutWhatTheFallbackWouldFailARequestOn(string name, string fallbackType, string? primaryType, string? code)
+    {
+        var primaryInputs = new Dictionary<string, ColumnType> { ["user_id"] = ColumnType.Parse("int64") };
+        if (primaryType is not null)
+        {
+            primaryInputs[name] = ColumnType.Parse(primaryType);
+        }
+
+        var primary = new RequestSchema("feed", primaryInputs);
+        var fallback = new RequestSchema("backup", new Dictionary<string, ColumnType> { [name] = ColumnType.Parse(fallbackType) });
+        var diagnostics = new StrataRec.Artifacts.Model.DiagnosticBag();
+
+        RequestSchema.CheckFallback(primary, fallback, "pipelines/feed.jsonc", diagnostics);
+
+        if (code is null)
+        {
+            Assert.Empty(diagnostics.Items);
+            return;
+        }
+
+        var warning = Assert.Single(diagnostics.Items);
+        Assert.Equal((code, "pipelines/feed.jsonc", "/fallback_pipeline", false), (warning.Code, warning.Artifact, warning.Pointer, warning.IsError));
+        Assert.Contains($"'{name}'", warning.Message, StringComparison.Ordinal);
+        Assert.Contains("'backup'", warning.Message, StringComparison.Ordinal);
+        Assert.False(string.IsNullOrEmpty(warning.Hint));
+    }
+
 }

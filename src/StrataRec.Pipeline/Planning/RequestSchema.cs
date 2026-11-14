@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 using StrataRec.Artifacts.Json;
+using StrataRec.Artifacts.Model;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Features.Catalog;
@@ -79,6 +80,49 @@ public sealed class RequestSchema
     }
 
     public bool Contains(string name) => _index.ContainsKey(name);
+
+    /// <summary>
+    /// Warnings for a fallback pipeline that would fail the requests it is there to serve (design 5.6): a request that
+    /// falls back carries the inputs it was written for, those of <paramref name="primary"/>, and the fallback gets the ones
+    /// it declares. So the fallback fails it when it requires an input the primary does not declare, or declares optional;
+    /// and may fail it when an input is declared with another type. Reported at the primary's <c>/fallback_pipeline</c>.
+    /// </summary>
+    public static void CheckFallback(RequestSchema primary, RequestSchema fallback, string artifact, DiagnosticBag diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(primary);
+        ArgumentNullException.ThrowIfNull(fallback);
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        const string Pointer = "/fallback_pipeline";
+        var (p, f) = (primary.PipelineId, fallback.PipelineId);
+        foreach (var name in fallback.Names)
+        {
+            fallback.TryGetType(name, out var required);
+            if (!primary.TryGetType(name, out var given))
+            {
+                if (!required.Nullable)
+                {
+                    diagnostics.Warning("FALLBACK_INPUT_UNDECLARED", artifact, Pointer,
+                        $"Fallback pipeline '{f}' requires input '{name}' ({required}), which '{p}' does not declare: every request that falls back to it fails.",
+                        $"declare '{name}' in the request_schema of '{p}', or make it optional in '{f}' ('{required.AsNullable()}')");
+                }
+
+                continue;
+            }
+
+            if (!given.AsNonNullable().Equals(required.AsNonNullable()))
+            {
+                diagnostics.Warning("FALLBACK_INPUT_TYPE", artifact, Pointer,
+                    $"Input '{name}' is {given} in '{p}' but {required} in its fallback pipeline '{f}': a value the first accepts may not convert, and the request that falls back fails.",
+                    "declare the input with the same type in both request schemas");
+            }
+            else if (given.Nullable && !required.Nullable)
+            {
+                diagnostics.Warning("FALLBACK_INPUT_OPTIONAL", artifact, Pointer,
+                    $"Input '{name}' is optional in '{p}' ({given}) but required in its fallback pipeline '{f}' ({required}): a request without it fails when it falls back.",
+                    $"make '{name}' optional in '{f}' too, or required in '{p}'");
+            }
+        }
+    }
 
     /// <summary>Where an input is in a request body: <c>/inputs/&lt;name&gt;</c> (RFC 6901, escaped).</summary>
     public static string Pointer(string name) => "/inputs/" + JsonPointer.Escape(name);
