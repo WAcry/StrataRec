@@ -1,5 +1,6 @@
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
+using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting.Workspace;
@@ -8,6 +9,7 @@ using StrataRec.Models;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.UnitTests.Llm;
 
@@ -42,6 +44,18 @@ internal static class LlmFixture
 
     public const string AllowedVersions = "\"llm_version\": { \"type\": \"string\", \"enum\": [\"v1\", \"v2\"] }";
 
+    /// <summary>The output's columns unless a test names others: each row's title.</summary>
+    public const string DefaultOutput = "\"title\": \"col.item.title\"";
+
+    /// <summary>
+    /// The recall's attribution columns declared nullable: a row source after the recall (<c>GenerativeRetriever@1</c>)
+    /// appends rows without them, which non-nullable columns refuse at load (<c>ROW_SOURCE_AFTER_COLUMN</c>).
+    /// </summary>
+    public const string NullableRecallColumns = """
+        "recall.sources_mask": { "type": "int64?" }, "recall.best_rank": { "type": "int64?" },
+        "recall.best_score": { "type": "float64?" }, "recall.primary_source": { "type": "string?" }
+        """;
+
     /// <summary>The default request: a user with a name, a query, a budget (float32), vip, interests and a nullable nickname missing.</summary>
     public static RequestInputs Inputs() => new RequestInputs()
         .Set("user_id", 7L)
@@ -55,9 +69,11 @@ internal static class LlmFixture
     /// Compiles the workspace with node <c>rank</c> running <paramref name="op"/> with <paramref name="config"/>; returns
     /// the compilation (check <see cref="PlanCompilation.Succeeded"/>).
     /// </summary>
+    /// <param name="columns">Declarations under the pipeline's <c>columns</c>, e.g. <see cref="NullableRecallColumns"/>.</param>
+    /// <param name="output">The output's columns (the default shows each row's title).</param>
     public static PlanCompilation TryCompile(
         TextModels models, string config, string op = "LlmReranker@1", string onFailure = "fail_request", bool stringKeys = false,
-        OperatorRegistry? operators = null, long[]? recall = null)
+        OperatorRegistry? operators = null, long[]? recall = null, string columns = "", string output = DefaultOutput, string nodes = "")
     {
         var root = Directory.CreateTempSubdirectory("stratarec-llm-").FullName;
         Write(root, "catalog/c.jsonc", $$"""
@@ -97,13 +113,14 @@ internal static class LlmFixture
                 "quotas": { "type": "map<string,int64>" }, "k": { "type": "int64" }, "tone": { "type": "string" }, "boost": { "type": "float64" },
                 {{AllowedVersions}} },
               "params": { "quotas": { "s": 100 }, "k": 100, "tone": "friendly", "boost": 1.5, "llm_version": "v1" },
+              "columns": { {{columns}} },
               "nodes": {
                 "recall": { "order": 100, "op": "MultiSourceRecall@1", "config": { "quotas_param": "quotas" } },
-                "rank": { "order": 200, "op": "{{op}}", "timeout_ms": 30000, "on_failure": "{{onFailure}}", "config": {{config}} } },
-              "output": { "limit_param": "k", "columns": { "title": "col.item.title" } } }
+                "rank": { "order": 200, "op": "{{op}}", "timeout_ms": 30000, "on_failure": "{{onFailure}}", "config": {{config}} }{{(nodes.Length == 0 ? "" : ", " + nodes)}} },
+              "output": { "limit_param": "k", "columns": { {{output}} } } }
             """);
         Write(root, "fixtures/items.json", stringKeys
-            ? """{ "sku-a": { "title": "A" }, "sku-b": { "title": "B" }, "sku-c": { "title": "C" }, "sku-d": { "title": "D" }, "sku-e": { "title": "E" } }"""
+            ? """{ "sku-a": { "title": "A" }, "sku-b": { "title": "B" }, "sku-c": { "title": "C" }, "sku-d": { "title": "D" }, "sku-e": { "title": "E" }, "sku-f": { "title": "F" } }"""
             : Items);
         Write(root, "fixtures/users.json", """{ "7": { "name": "Ada", "tier": 2 } }""");
 
@@ -120,9 +137,9 @@ internal static class LlmFixture
     }
 
     public static ExecutionPlan Compile(TextModels models, string config, string onFailure = "fail_request", bool stringKeys = false, OperatorRegistry? operators = null,
-        string op = "LlmReranker@1", long[]? recall = null)
+        string op = "LlmReranker@1", long[]? recall = null, string columns = "", string output = DefaultOutput, string nodes = "")
     {
-        var compilation = TryCompile(models, config, op, onFailure, stringKeys, operators, recall);
+        var compilation = TryCompile(models, config, op, onFailure, stringKeys, operators, recall, columns, output, nodes);
         Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
         return compilation.Plan!;
     }
@@ -149,6 +166,43 @@ internal static class LlmFixture
     /// <summary>An <c>LlmReranker@1</c> config with one prompt, <c>user</c>; <paramref name="extra"/> adds keys (start it with a comma).</summary>
     public static string Rerank(string template, string answer = "rank", int window = 3, string extra = "") =>
         $$"""{ "model": "llm", "output": "answer", "answer": "{{answer}}", "window": {{window}}, "prompts": { "user": {{System.Text.Json.JsonSerializer.Serialize(template)}} }{{extra}} }""";
+
+    /// <summary>An <c>LlmAnnotator@1</c> config with one prompt, <c>user</c>, writing <c>llm.note</c>; <paramref name="extra"/> adds keys (start it with a comma).</summary>
+    public static string Annotate(string template, int window = 3, string extra = "") =>
+        $$"""{ "model": "llm", "output": "answer", "column": "llm.note", "window": {{window}}, "prompts": { "user": {{System.Text.Json.JsonSerializer.Serialize(template)}} }{{extra}} }""";
+
+    /// <summary>A <c>GenerativeRetriever@1</c> config with one prompt, <c>user</c>; <paramref name="extra"/> adds keys (start it with a comma).</summary>
+    public static string Retrieve(string template, int maxItems = 3, string extra = "") =>
+        $$"""{ "model": "llm", "output": "answer", "max_items": {{maxItems}}, "prompts": { "user": {{System.Text.Json.JsonSerializer.Serialize(template)}} }{{extra}} }""";
+
+    /// <summary>Replays <paramref name="recorded"/>'s recording on <paramref name="plan"/>, with the replay to read its gaps from.</summary>
+    public static async Task<(PipelineResult Result, RunReplay Replay)> Replay(ExecutionPlan plan, PipelineResult recorded, RequestInputs? inputs = null)
+    {
+        var replay = RunReplay.Create(recorded.Recording!, "/runs/0");
+        var result = await new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
+        {
+            RequestId = "r",
+            Inputs = inputs ?? Inputs(),
+            Deadline = RunReplay.Deadline,
+            Seed = 1234,
+            Replay = replay,
+        });
+        return (result, replay);
+    }
+
+    /// <summary>The value of output column <paramref name="column"/> per item, by entity id; null where missing.</summary>
+    public static Dictionary<long, object?> Values(PipelineResult result, string column) =>
+        result.Items.ToDictionary(i => i.Id.Int64Value, i => Value(i.Columns[column]));
+
+    /// <summary>A result value as a plain object: string, bool, long or double; null when missing.</summary>
+    public static object? Value(ScalarValue value) => value.Kind switch
+    {
+        0 => null,
+        StorageKind.Bool => value.AsBool(),
+        StorageKind.Int64 => value.AsInt64(),
+        StorageKind.Float64 => value.AsFloat64(),
+        _ => value.AsString(),
+    };
 
     /// <summary>The outcome of node <c>rank</c>.</summary>
     public static NodeOutcome Rank(PipelineResult result) => Assert.Single(result.Outcomes, o => o.NodeId == "rank");

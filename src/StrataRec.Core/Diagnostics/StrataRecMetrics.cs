@@ -63,6 +63,7 @@ public static class StrataRecMetrics
         public const string ModelOutputTokens = "stratarec.model.output_tokens";
         public const string ModelTruncated = "stratarec.model.truncated";
         public const string ModelAnswerIds = "stratarec.model.answer_ids";
+        public const string ModelAnswers = "stratarec.model.answers";
         public const string PlanCompileDuration = "stratarec.plan.compile.duration";
         public const string PlanVariants = "stratarec.plan.variants";
         public const string PlanSequence = "stratarec.plan.sequence";
@@ -321,13 +322,23 @@ public static class StrataRecMetrics
 
     /// <summary>
     /// The elements of a generated answer that an operator parses into rows (<c>LlmReranker@1</c>: window ranks or entity
-    /// ids), by what became of them: what the model got wrong is visible without reading answers (design 5.9 rule 3).
-    /// Counted once per parsed answer, only while a listener is enabled, and never in a replay. Tags: <c>stratarec.model</c>,
-    /// <c>stratarec.outcome</c> = <c>used</c> (named a row, which the new order places) | <c>unknown</c> (named no row of the
-    /// window: out of range, an id not in it, or a value of the wrong JSON type) | <c>repeated</c> (named a row an earlier
-    /// element named).
+    /// ids; <c>GenerativeRetriever@1</c>: new ids), by what became of them: what the model got wrong is visible without
+    /// reading answers (design 5.9 rule 3). Counted once per parsed answer, only while a listener is enabled, and never in a
+    /// replay. Tags: <c>stratarec.model</c>, <c>stratarec.outcome</c> = <c>used</c> (named a row, which the new order places
+    /// or the retriever appends) | <c>unknown</c> (named no row of the window: out of range, an id not in it; or a value of
+    /// the wrong JSON type) | <c>repeated</c> (named a row or id an earlier element named) | <c>present</c> (a retriever's id
+    /// the table already has, skipped) | <c>over_limit</c> (after the retriever's <c>max_items</c>, not read).
     /// </summary>
     public static readonly Counter<long> ModelAnswerIds = Meter.CreateCounter<long>(Names.ModelAnswerIds, "{id}", "Elements of generated answers, by whether they named a row.");
+
+    /// <summary>
+    /// Per-row answers of a generative model (<c>LlmAnnotator@1</c>: one call per row), by what became of them: how often
+    /// rows are left without a value, and whether the calls or the answers are why. Counted once per node run, only while a
+    /// listener is enabled, and never in a replay. Tags: <c>stratarec.model</c>, <c>stratarec.outcome</c> = <c>used</c>
+    /// (written to the row) | <c>unusable</c> (the call answered, but not a value of the column: empty, not one of the
+    /// categories, not a bool, not a number in range) | <c>failed</c> (the call failed, threw or returned no text).
+    /// </summary>
+    public static readonly Counter<long> ModelAnswers = Meter.CreateCounter<long>(Names.ModelAnswers, "{answer}", "Per-row answers of generative models, by whether they were used.");
 
     // Plans.
 

@@ -263,6 +263,6 @@ public static class LlmRegistration
     public static OperatorRegistry AddLlm(this OperatorRegistry registry)
     {
         ArgumentNullException.ThrowIfNull(registry);
-        return registry.Add(new LlmRerankerFactory());
+        return registry.Add(new LlmRerankerFactory()).Add(new LlmAnnotatorFactory()).Add(new GenerativeRetrieverFactory());
     }
 }

@@ -334,6 +334,55 @@ public sealed class LlmMetricsTests
         Assert.Single(models.Calls);
     }
 
+    /// <summary><c>stratarec.model.answers</c>: each row of an annotator's window, by what became of its answer; nothing in a replay.</summary>
+    [Fact]
+    public async Task AnAnnotatorsAnswers_AreCountedByOutcome_TaggedWithTheModel_AndNotInAReplay()
+    {
+        var models = new TextModels(call => call.Prompts["user"] switch
+        {
+            "30" => ("true", ModelStatus.Ok),
+            "10" => ("maybe", ModelStatus.Ok),
+            _ => (null, ModelStatus.Failed("overloaded")),
+        });
+        var plan = Compile(models, Annotate("{{col.entity_id}}", window: 4), op: "LlmAnnotator@1", columns: """ "llm.note": { "type": "bool?" } """);
+        using var metrics = new Measurements();
+
+        var recorded = await Run(plan, record: true);
+
+        Assert.Equal(NodeOutcomeKind.Degraded, Rank(recorded).Kind);
+        Assert.Equal(new[] { ("used", 1L), ("unusable", 1L), ("failed", 2L) }, metrics.Of(StrataRecMetrics.Names.ModelAnswers).Select(m => (m.Outcome!, m.Value)));
+        Assert.All(metrics.Of(StrataRecMetrics.Names.ModelAnswers), m => Assert.Equal("llm", m.Model));
+        Assert.Empty(metrics.Of(StrataRecMetrics.Names.ModelAnswerIds));
+        metrics.Clear();
+
+        var replayed = await Replay(plan, recorded);
+
+        Assert.Equal(Rank(recorded).Detail, Rank(replayed).Detail);
+        Assert.Empty(metrics.All);
+    }
+
+    /// <summary><c>stratarec.model.answer_ids</c> of a retriever's answer: used, unknown, repeated, present and over the limit.</summary>
+    [Fact]
+    public async Task ARetrieversAnswerElements_AreCountedByOutcome_AndNotInAReplay()
+    {
+        var plan = Compile(new TextModels("""[60, 10, "x", 60, 40, 20, 70]"""), Retrieve("ids", maxItems: 2), op: "GenerativeRetriever@1", recall: [30, 10, 50],
+            columns: NullableRecallColumns);
+        using var metrics = new Measurements();
+
+        var recorded = await Run(plan, record: true);
+
+        Assert.Equal(new long[] { 30, 10, 50, 60, 40 }, IdsOf(recorded));
+        Assert.Equal(new[] { ("used", 2L), ("unknown", 1L), ("repeated", 1L), ("present", 1L), ("over_limit", 2L) },
+            metrics.Of(StrataRecMetrics.Names.ModelAnswerIds).Select(m => (m.Outcome!, m.Value)));
+        Assert.All(metrics.Of(StrataRecMetrics.Names.ModelAnswerIds), m => Assert.Equal("llm", m.Model));
+        metrics.Clear();
+
+        var replayed = await Replay(plan, recorded);
+
+        Assert.Equal(IdsOf(recorded), IdsOf(replayed));
+        Assert.Empty(metrics.All);
+    }
+
     private static ValueTask<PipelineResult> Replay(ExecutionPlan plan, PipelineResult recorded) =>
         new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
         {
@@ -350,6 +399,7 @@ public sealed class LlmMetricsTests
         private static readonly HashSet<string> Names = new()
         {
             StrataRecMetrics.Names.ModelOutputTokens, StrataRecMetrics.Names.ModelTruncated, StrataRecMetrics.Names.ModelAnswerIds,
+            StrataRecMetrics.Names.ModelAnswers,
         };
 
         private readonly MeterListener _listener = new();
