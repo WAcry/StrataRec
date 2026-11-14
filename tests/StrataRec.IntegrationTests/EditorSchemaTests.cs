@@ -208,7 +208,15 @@ public sealed class EditorSchemaTests
         var root = CopyOfHomeFeed();
         try
         {
-            var with = Load(Path.Combine(Samples, "home_feed"));
+            // The sample has every kind but a table.
+            Directory.CreateDirectory(Path.Combine(root, "tables"));
+            File.WriteAllText(Path.Combine(root, "tables", "weights.jsonc"), """
+                {
+                  "$schema": "../schemas/table.schema.json",
+                  "table_id": "weights", "key_type": "string", "value_type": "float64", "entries": { "a": 1.5 }
+                }
+                """);
+            var with = Load(root);
             foreach (var file in WorkspaceFiles(root, requestsAreRunFiles: true))
             {
                 var path = Path.Combine(root, file);
@@ -220,7 +228,7 @@ public sealed class EditorSchemaTests
 
             var stripped = Load(root);
             var ids = ContentIds(with);
-            Assert.Equal(8, ids.Count); // policy, catalog, bindings, pipeline, 3 experiments, release
+            Assert.Equal(9, ids.Count); // policy, catalog, bindings, pipeline, 3 experiments, release, table
             Assert.Equal(ids, ContentIds(stripped));
             Assert.DoesNotContain("$schema", with.Pipelines["home_feed"].Document.ToJsonString(), StringComparison.Ordinal);
         }
