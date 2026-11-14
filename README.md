@@ -1,6 +1,6 @@
 # StrataRec
 
-面向 .NET 8+ 的进程内推荐执行引擎：列式候选表、编译一次的算子流水线、CEL 风格的表达式语言 `ColumnExpr`、声明式漏斗日志，以及用 RFC 7396 合并补丁表达的多层实验。
+面向 .NET 10+ 的进程内推荐执行引擎：列式候选表、编译一次的算子流水线、CEL 风格的表达式语言 `ColumnExpr`、声明式漏斗日志，以及用 RFC 7396 合并补丁表达的多层实验。
 
 流水线的全部行为都是标准格式的配置（JSONC、JSON Merge Patch、JSON Pointer、JSON Schema、CEL 风格表达式），并且在发布之前就能在本地完整校验：类型、数据流、实验冲突，以及所有可能同时分配的臂组合。
 
@@ -8,7 +8,7 @@
 
 ## 快速开始
 
-需要 .NET 8 SDK 或更新版本。
+需要 .NET 10 SDK 或更新版本。
 
 ```sh
 dotnet build StrataRec.sln          # 警告视为错误

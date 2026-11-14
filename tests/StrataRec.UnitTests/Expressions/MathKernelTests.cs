@@ -77,10 +77,20 @@ public class MathKernelTests
     [Fact]
     public void Log1p_IsAccurateForTinyArguments()
     {
-        foreach (var x in new[] { 1e-300, 1e-20, 1e-10, -1e-10, 1e-5, 0.5, -0.5, 10.0 })
+        // The Goldberg form keeps tiny arguments as accurate as the series (log(1 + x) would return 0 or lose most digits).
+        foreach (var x in new[] { 1e-300, 1e-20, 1e-10, -1e-10, 1e-5 })
         {
-            var expected = x < 1e-4 && x > -1e-4 ? x - (x * x / 2) + (x * x * x / 3) : Math.Log(1 + x);
+            var expected = x - (x * x / 2) + (x * x * x / 3);
             Assert.True(Math.Abs(MathKernels.Log1p(x) - expected) <= 2e-16 * Math.Abs(expected), $"log1p({x:R}) = {MathKernels.Log1p(x):R}, expected {expected:R}");
+        }
+
+        // Elsewhere it is as accurate as the vectorized log it is built on, which may be a few ulps from Math.Log.
+        foreach (var x in new[] { 0.5, -0.5, 10.0, 1e3 })
+        {
+            var actual = MathKernels.Log1p(x);
+            var expected = Math.Log(1 + x);
+            var ulps = Math.Abs(BitConverter.DoubleToInt64Bits(actual) - BitConverter.DoubleToInt64Bits(expected));
+            Assert.True(ulps <= 2, $"log1p({x:R}) = {actual:R}, Math.Log(1 + x) = {expected:R}: {ulps} ulps apart");
         }
 
         Assert.Equal(-0.0, MathKernels.Log1p(-0.0));

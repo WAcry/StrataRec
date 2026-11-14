@@ -1,6 +1,6 @@
 # AGENTS.md：在 StrataRec 上工作
 
-StrataRec 是面向 .NET 8+ 的进程内推荐执行引擎：列式候选表、编译一次的算子流水线、CEL 风格表达式 `ColumnExpr`，以及用 RFC 7396 合并补丁表达的多层实验。
+StrataRec 是面向 .NET 10+ 的进程内推荐执行引擎：列式候选表、编译一次的算子流水线、CEL 风格表达式 `ColumnExpr`，以及用 RFC 7396 合并补丁表达的多层实验。
 
 - `docs/design.md`：整体设计，代码注释中的 “design 4.6” 指它的章节号。
 - `docs/decisions.md`：实现中的决定和理由。改变设计或做出取舍时在这里补一条。
@@ -37,7 +37,7 @@ dotnet run --project src/StrataRec.Cli -- --help
 
 ## 约定
 
-- C# 12、文件级命名空间、启用 nullable、`TreatWarningsAsErrors`。私有字段用 `_camelCase`。
+- C# 14、文件级命名空间、启用 nullable、`TreatWarningsAsErrors`。私有字段用 `_camelCase`。
 - 公开类型写 XML 文档注释，说明为什么这样设计，不要复述名字。
 - **`src/` 中禁止 LINQ。** 请求可能携带大量候选，引擎采用列式（SoA）正是为了减少分配；LINQ 会分配枚举器、闭包和中间集合。用显式循环、数组、`List<T>`、`Dictionary`/`HashSet`、带序数比较器的 `Array.Sort`/`List.Sort`。构建时由 `BannedSymbols.txt`（RS0030）和移除隐式 `System.Linq` using（`Directory.Build.targets`）强制。测试和基准可以用 LINQ。
 - 热路径（按行或按请求执行的代码）不能按行分配。请求生命周期内的缓冲从 `RequestMemory` 租借；算子不自己归还缓冲。
@@ -46,4 +46,4 @@ dotnet run --project src/StrataRec.Cli -- --help
 - 缺失值是显式的：可空类型（`T?`）、`??`、`has()`。绝不把缺失静默变成 0。
 - 确定性：平分时按 `entity_id` 升序；随机性只来自 `hash01` / `StableHash`。
 - 框架不做个人数据过滤（见 `docs/decisions.md`）。
-- CI 只用 Linux（`.github/workflows/ci.yml`），在固定的 SDK 8 和 SDK 10 上构建。
+- CI 只用 Linux（`.github/workflows/ci.yml`），用 SDK 10 构建，测试跑在 .NET 10 运行时上。

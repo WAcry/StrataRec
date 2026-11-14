@@ -5,19 +5,14 @@
   <ItemGroup>
     <!-- Runtime -->
     <PackageVersion Include="System.Numerics.Tensors" Version="10.0.15" />
-    <PackageVersion Include="System.Text.Json" Version="10.0.15" />
     <PackageVersion Include="System.IO.Hashing" Version="10.0.15" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.15" />
-    <!-- 9.0+ on net8.0 for InstrumentAdvice and Gauge<T>; Logging.Abstractions 10.x already brings this exact version. -->
-    <PackageVersion Include="System.Diagnostics.DiagnosticSource" Version="10.0.15" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.15" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.15" />
     <PackageVersion Include="System.CommandLine" Version="2.0.15" />
     <PackageVersion Include="StackExchange.Redis" Version="3.4.35" />
     <!-- Build-time analyzers -->
-    <!-- 3.3.4, not 5.x: 5.x references Roslyn 4.12 and fails with CS9057 on the .NET 8 SDK's compiler (4.11).
-         3.3.4 enforces RS0030 the same way on SDK 8 and newer (CI builds with both). -->
-    <PackageVersion Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="3.3.4" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="5.6.0" />
     <!-- Test / bench -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />

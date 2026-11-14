@@ -18,16 +18,8 @@ env:
 
 jobs:
   build-test:
-    name: build and test (SDK ${{ matrix.sdk }})
+    name: build and test
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # The minimum supported SDK, pinned so a newer preinstalled SDK cannot mask a toolchain incompatibility.
-          - { sdk: "8.0", pin: true }
-          # The newest SDK (still targeting net8.0, so the .NET 8 runtime runs the tests).
-          - { sdk: "10.0", pin: false }
     services:
       # The Redis of the redis@1 integration tests (STRATAREC_REDIS below); without it they would be skipped.
       redis:
@@ -44,14 +36,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: |
-            8.0.x
-            ${{ matrix.sdk }}.x
-
-      - name: Pin the SDK
-        if: matrix.pin
-        run: |
-          echo '{ "sdk": { "version": "${{ matrix.sdk }}.100", "rollForward": "latestFeature" } }' > global.json
+          dotnet-version: 10.0.x
 
       - name: Show the SDK
         run: dotnet --version
@@ -71,7 +56,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v5
         with:
-          name: test-results-${{ matrix.sdk }}
+          name: test-results
           path: TestResults
 
   sample:
@@ -84,7 +69,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.x
 
       - name: Build the CLI
         run: dotnet build src/StrataRec.Cli -c Release
@@ -109,7 +94,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.x
 
       - name: Dry run
         run: dotnet run -c Release --project tests/StrataRec.Benchmarks -- --filter '*' --job dry

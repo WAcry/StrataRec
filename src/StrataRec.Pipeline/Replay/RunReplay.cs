@@ -122,9 +122,9 @@ public sealed class RunReplay : IFeatureCallHook
             lock (_gate)
             {
                 var gaps = new List<ReplayGap>(_gaps.Count);
-                foreach (var ((kind, source, field, reason), counter) in _gaps)
+                foreach (var ((kind, source, fieldName, reason), counter) in _gaps)
                 {
-                    gaps.Add(new ReplayGap(kind, source, field, reason, counter.Count, counter.Examples));
+                    gaps.Add(new ReplayGap(kind, source, fieldName, reason, counter.Count, counter.Examples));
                 }
 
                 gaps.Sort(static (a, b) =>
@@ -147,9 +147,9 @@ public sealed class RunReplay : IFeatureCallHook
             lock (_gate)
             {
                 var stats = new List<ReplayFieldStats>(_stats.Count);
-                foreach (var ((source, field), counts) in _stats)
+                foreach (var ((source, fieldName), counts) in _stats)
                 {
-                    stats.Add(new ReplayFieldStats(source, field, counts[0], counts[1]));
+                    stats.Add(new ReplayFieldStats(source, fieldName, counts[0], counts[1]));
                 }
 
                 stats.Sort(static (a, b) => string.CompareOrdinal(a.Source, b.Source) is var c && c != 0 ? c : string.CompareOrdinal(a.Field, b.Field));
