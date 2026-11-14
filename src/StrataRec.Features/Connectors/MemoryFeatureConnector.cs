@@ -232,15 +232,28 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
 
                     break;
                 case StorageKind.ListInt64:
-                    var longs = new long[v.GetArrayLength()];
-                    var li = 0;
-                    foreach (var e in v.EnumerateArray())
+                {
+                    // The writer copies, so the pooled buffer can go back right away (it was a new array per row).
+                    var count = v.GetArrayLength();
+                    var longs = ArrayPool<long>.Shared.Rent(Math.Max(1, count));
+                    try
                     {
-                        longs[li++] = e.GetInt64();
+                        var li = 0;
+                        foreach (var e in v.EnumerateArray())
+                        {
+                            longs[li++] = e.GetInt64();
+                        }
+
+                        writer.SetInt64List(field.FieldIndex, keyIndex, longs.AsSpan(0, count));
+                    }
+                    finally
+                    {
+                        ArrayPool<long>.Shared.Return(longs);
                     }
 
-                    writer.SetInt64List(field.FieldIndex, keyIndex, longs);
                     break;
+                }
+
                 case StorageKind.ListInt32:
                 {
                     // Decoded straight to int32 (the writer copies, so the pooled buffer can go back right away).

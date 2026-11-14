@@ -39,6 +39,17 @@ public sealed class DictStringColumn : ColumnBuffer
         return code;
     }
 
+    /// <summary>
+    /// Makes room for <paramref name="additional"/> more distinct values at once, for a writer that knows its values are
+    /// mostly distinct (string entity ids): grown step by step, the dictionary allocated about three times what it keeps
+    /// (583 KB for 5,000 ids, 204 KB reserved; performance audit). Not for low-cardinality columns, which need no room.
+    /// </summary>
+    public void ReserveDistinct(int additional)
+    {
+        _codesByValue.EnsureCapacity(_dictionary.Count + additional);
+        _dictionary.EnsureCapacity(_dictionary.Count + additional);
+    }
+
     public string Get(int row) => _dictionary[_codes[row]];
 
     public void Set(int row, string value)

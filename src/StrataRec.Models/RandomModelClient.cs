@@ -484,7 +484,7 @@ public sealed class RandomModelClientFactory : IModelClientFactory
                             "write an int64 such as \"seed\": 42 to give every request the same scores, or remove 'seed' to vary them with ctx.request.seed");
                     break;
                 default:
-                    throw new BindingException("/" + BindingContext.EscapePointerToken(name), $"Unknown setting '{name}'.",
+                    throw BindingException.Unknown(string.Empty, name, ["inputs", "outputs", "seed"],
                         $"{Type} takes 'inputs' and 'outputs' (the tensors the model declares) and optionally 'seed'");
             }
         }
@@ -528,22 +528,10 @@ public sealed class RandomModelClientFactory : IModelClientFactory
         switch (value.ValueKind)
         {
             case JsonValueKind.Array:
-                foreach (var item in value.EnumerateArray())
+                foreach (var name in SettingNames.Read(value, setting, Hint(setting)))
                 {
-                    var itemPointer = pointer + "/" + specs.Count;
-                    var name = item.ValueKind == JsonValueKind.String ? item.GetString() : null;
-                    if (string.IsNullOrEmpty(name))
-                    {
-                        throw new BindingException(itemPointer, $"'{setting}' item {specs.Count} must be a non-empty name, got {item.GetRawText()}.", Hint(setting));
-                    }
-
-                    if (!seen.Add(name))
-                    {
-                        throw new BindingException(itemPointer, $"'{name}' is listed twice in '{setting}'.", "list each name once");
-                    }
-
+                    pointers.Add(pointer + "/" + specs.Count);
                     specs.Add(new TensorSpec(name, TensorElementType.Float32, new[] { -1 }));
-                    pointers.Add(itemPointer);
                 }
 
                 break;

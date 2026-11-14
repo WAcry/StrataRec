@@ -131,25 +131,18 @@ internal static class ModelTensorRule
     /// dimension (rows, pairs, or the list's rows), or -1 for the shape a signature declares; <paramref name="dimension"/>
     /// is the vector's N, or 0. A context value has no row dimension of its own: it is repeated for every batch entry.
     /// </summary>
-    public static int[] InputShape(TensorLayout layout, bool broadcast, int length, int dimension)
+    public static int[] InputShape(TensorLayout layout, bool broadcast, int length, int dimension) => (layout, broadcast, dimension) switch
     {
-        int[] leading = layout switch
-        {
-            TensorLayout.Rows => [length],
-            TensorLayout.Pairs => broadcast ? [length] : [length, 2],
-            _ => broadcast ? [1] : [1, length],
-        };
-
-        if (dimension == 0)
-        {
-            return leading;
-        }
-
-        var shape = new int[leading.Length + 1];
-        leading.CopyTo(shape, 0);
-        shape[^1] = dimension;
-        return shape;
-    }
+        // The final array at once: one per input and batch, which a vector's shape built in two steps allocated twice.
+        (TensorLayout.Rows, _, 0) or (TensorLayout.Pairs, true, 0) => [length],
+        (TensorLayout.Rows, _, _) or (TensorLayout.Pairs, true, _) => [length, dimension],
+        (TensorLayout.Pairs, false, 0) => [length, 2],
+        (TensorLayout.Pairs, false, _) => [length, 2, dimension],
+        (_, true, 0) => [1],
+        (_, true, _) => [1, dimension],
+        (_, false, 0) => [1, length],
+        _ => [1, length, dimension],
+    };
 
     /// <summary>The shape of an output in <paramref name="layout"/>, as <see cref="InputShape"/>: one float32 per row, pair or list row.</summary>
     public static int[] OutputShape(TensorLayout layout, int length) => layout == TensorLayout.List ? [1, length] : [length];

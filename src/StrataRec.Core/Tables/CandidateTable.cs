@@ -256,6 +256,7 @@ public sealed class CandidateTable
         RequireKeyType(EntityKeyType.String);
         var first = ReserveRows(keys.Count);
         var ids = StringIds;
+        ids.ReserveDistinct(keys.Count); // entity ids are distinct: room for all at once
         for (var i = 0; i < keys.Count; i++)
         {
             ids.Set(first + i, keys[i]);

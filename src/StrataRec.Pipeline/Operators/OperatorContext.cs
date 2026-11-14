@@ -192,11 +192,12 @@ public sealed class OperatorContext
         var result = await BoundedCall.RunAsync<CandidateSourceStatus, RetrieveCall>(
             new RetrieveCall(source, query, buffer, recorder, sequence), Budget, _state.Memory, target, timeoutMs, query.RequestId, _state.Events)
             .ConfigureAwait(false);
+        // Every end named, no default arm: a new kind of end does not compile until it is decided here (architecture audit).
         return result.End switch
         {
             CallEnd.Answered => result.Value,
             CallEnd.Threw or CallEnd.TimedOut => CandidateSourceStatus.Failed(result.Error ?? "failed"),
-            _ => throw result.Exception!, // the node's budget or the caller
+            CallEnd.BudgetRanOut or CallEnd.Cancelled => throw result.Exception!, // the node's budget or the caller
         };
     }
 
@@ -243,17 +244,20 @@ public sealed class OperatorContext
         var result = await BoundedCall.RunAsync<ModelStatus, ModelInvocation>(
             new ModelInvocation(client, call, (IModelOutputWriter?)recording ?? outputs, target, recorder, recording, sequence), Budget, _state.Memory, target,
             timeoutMs, RequestId, _state.Events).ConfigureAwait(false);
-        switch (result.End)
+        // Every end named, no default arm: a new kind of end does not compile until it is decided here (architecture audit).
+        return result.End switch
         {
-            case CallEnd.Answered:
-                return result.Value;
-            case CallEnd.TimedOut:
-                return ModelStatus.Failed(result.Error!);
-            default:
-                // What the client threw, or the cancellation of the node's budget or the caller.
-                ExceptionDispatchInfo.Throw(result.Exception!);
-                return default;
-        }
+            CallEnd.Answered => result.Value,
+            CallEnd.TimedOut => ModelStatus.Failed(result.Error!),
+            CallEnd.Threw or CallEnd.BudgetRanOut or CallEnd.Cancelled => Rethrow(result.Exception!), // the client's, the budget's or the caller's
+        };
+    }
+
+    /// <summary>Throws <paramref name="exception"/> with the stack it was thrown with.</summary>
+    private static ModelStatus Rethrow(Exception exception)
+    {
+        ExceptionDispatchInfo.Throw(exception);
+        return default;
     }
 
     /// <summary>Marks the result as Degraded (completed with partial or stale inputs, design 5.6).</summary>

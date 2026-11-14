@@ -394,9 +394,16 @@ public sealed class PromptTemplate
             }
 
             var names = context.Scope;
+            Symbol symbol = default;
+            var reported = false;
             if (!(column || name.StartsWith("ctx.", StringComparison.Ordinal) || name.StartsWith("param.", StringComparison.Ordinal))
-                || !names.TryResolve(name, out var symbol))
+                || !context.TryResolveRead(name, out symbol, out reported))
             {
+                if (reported)
+                {
+                    return false; // declared with an error, reported there
+                }
+
                 var known = new List<string>();
                 foreach (var candidate in names.KnownNames)
                 {
@@ -428,7 +435,6 @@ public sealed class PromptTemplate
                 return false;
             }
 
-            context.RecordSymbol(symbol);
             var float32 = symbol.Type.Kind == StorageKind.Float32
                           || (symbol.Kind == SymbolKind.Context && context.Schema.TryGetContext(name["ctx.".Length..], out var field)
                               && field.InputType.Kind == StorageKind.Float32);

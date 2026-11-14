@@ -58,32 +58,8 @@ public static class RecResultJson
         json.WriteString("served_by", result.ServedBy);
         json.WriteString("manifest", result.ManifestId);
         WriteExperiments(json, result.Experiments);
-        json.WriteStartArray("items");
-        foreach (var item in result.Items)
-        {
-            json.WriteStartObject();
-            json.WriteNumber("rank", item.Rank);
-            if (item.Id.StringValue is { } text)
-            {
-                json.WriteString("id", text);
-            }
-            else
-            {
-                json.WriteNumber("id", item.Id.Int64Value);
-            }
-
-            json.WriteStartObject("columns");
-            foreach (var (name, value) in item.Columns)
-            {
-                json.WritePropertyName(name);
-                WriteValue(json, value);
-            }
-
-            json.WriteEndObject();
-            json.WriteEndObject();
-        }
-
-        json.WriteEndArray();
+        json.WritePropertyName("items");
+        WriteItems(json, result.Columns);
         json.WriteNumber("elapsed_ms", Math.Round(result.ElapsedMs, 3));
         if (options?.IncludeColumnProducers == true && result.ColumnProducers is { } producers)
         {
@@ -250,6 +226,37 @@ public static class RecResultJson
         }
 
         json.WriteEndObject();
+    }
+
+    /// <summary>
+    /// A result's items as a JSON array, each <c>{ "rank", "id", "columns": { … } }</c>, written from the columns (no row
+    /// dictionaries are made). The output columns are a member of their own, so a column named <c>id</c> or <c>rank</c>
+    /// cannot collide with the item's (<c>stratarec replay</c> writes its items with this too: it flattened the columns
+    /// into the item and wrote duplicate members, architecture audit).
+    /// </summary>
+    public static void WriteItems(Utf8JsonWriter json, ResultColumns items)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        ArgumentNullException.ThrowIfNull(items);
+        json.WriteStartArray();
+        var ids = items.Ids;
+        for (var i = 0; i < ids.Length; i++)
+        {
+            json.WriteStartObject();
+            json.WriteNumber("rank", i + 1);
+            WriteId(json, ids[i]);
+            json.WriteStartObject("columns");
+            for (var c = 0; c < items.Names.Count; c++)
+            {
+                json.WritePropertyName(items.Names[c]);
+                WriteValue(json, items.Column(c)[i]);
+            }
+
+            json.WriteEndObject();
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
     }
 
     private static void WriteId(Utf8JsonWriter json, Core.Keys.EntityKey id)

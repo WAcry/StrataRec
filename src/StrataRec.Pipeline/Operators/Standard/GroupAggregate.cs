@@ -51,8 +51,8 @@ public sealed class GroupAggregateOutput
 /// <remarks>
 /// It aggregates the rows alive when it runs, in their order, so floating-point sums are deterministic; values are read
 /// as float64, as <c>MmrDiversifier@1</c> reads scores (int64 values beyond 2^53 lose their last bits). Groups take
-/// dense ids (dictionary codes for strings, a sort for integers) and every buffer is rented from the request's memory:
-/// nothing is allocated per row, and the cost is O(n) per output, O(n log n) for integer keys and for rank.
+/// dense ids (<see cref="RowGroups"/>) and every buffer is rented from the request's memory: nothing is allocated per
+/// row, and the cost is O(n) per output, O(n log n) for integer keys and for rank.
 /// </remarks>
 public sealed class GroupAggregateFactory : IOperatorFactory
 {
@@ -237,7 +237,7 @@ public sealed class GroupAggregateFactory : IOperatorFactory
 
             var memory = context.Memory;
             var groupOf = memory.Rent<int>(live.Length);
-            var groups = group is { } g ? Assign(context.Read(g), live, groupOf, memory) : One(groupOf.AsSpan(0, live.Length));
+            var groups = group is { } g ? RowGroups.Assign(context.Read(g), live, groupOf, memory) : One(groupOf.AsSpan(0, live.Length));
             var perRow = memory.Rent<double>(live.Length);
             foreach (var output in outputs)
             {
@@ -255,65 +255,6 @@ public sealed class GroupAggregateFactory : IOperatorFactory
         {
             groupOf.Clear();
             return 1;
-        }
-
-        /// <summary>Dense group ids for the live rows, −1 for a row whose key is missing; the number of groups.</summary>
-        private static int Assign(ColumnBuffer? keys, ReadOnlySpan<int> live, int[] groupOf, RequestMemory memory)
-        {
-            var n = live.Length;
-            if (keys is DictStringColumn strings)
-            {
-                // Codes are dense per column already: number them as they first appear.
-                var ids = memory.RentCleared<int>(Math.Max(1, strings.Dictionary.Count));
-                var count = 0;
-                for (var i = 0; i < n; i++)
-                {
-                    var row = live[i];
-                    if (!strings.IsValid(row))
-                    {
-                        groupOf[i] = -1;
-                        continue;
-                    }
-
-                    ref var id = ref ids[strings.Codes[row]];
-                    if (id == 0)
-                    {
-                        id = ++count;
-                    }
-
-                    groupOf[i] = id - 1;
-                }
-
-                return count;
-            }
-
-            var sorted = memory.Rent<long>(n);
-            var index = memory.Rent<int>(n);
-            var present = 0;
-            for (var i = 0; i < n; i++)
-            {
-                var row = live[i];
-                groupOf[i] = -1;
-                if (keys is not null && keys.IsValid(row))
-                {
-                    sorted[present] = keys is ScalarColumn<long> l ? l[row] : ((ScalarColumn<int>)keys)[row];
-                    index[present++] = i;
-                }
-            }
-
-            Array.Sort(sorted, index, 0, present);
-            var groups = 0;
-            for (var j = 0; j < present; j++)
-            {
-                if (j == 0 || sorted[j] != sorted[j - 1])
-                {
-                    groups++;
-                }
-
-                groupOf[index[j]] = groups - 1;
-            }
-
-            return groups;
         }
 
         /// <summary>Each row's group statistic into <paramref name="values"/>; whether each row has one.</summary>

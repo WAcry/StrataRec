@@ -114,7 +114,11 @@ public sealed class PipelineResult
 
     public string? Error { get; init; }
 
-    public required IReadOnlyList<RankedItem> Items { get; init; }
+    /// <summary>The returned items column by column (<see cref="ResultColumns"/>): the form to read many rows in.</summary>
+    public required ResultColumns Columns { get; init; }
+
+    /// <summary>The returned items as rows, a dictionary of output columns each, made from <see cref="Columns"/> when first read.</summary>
+    public IReadOnlyList<RankedItem> Items => Columns.Rows;
 
     public required IReadOnlyList<NodeOutcome> Outcomes { get; init; }
 
@@ -1170,12 +1174,16 @@ public sealed class PipelineExecutor
             }
         }
 
+        // The result column by column (ResultColumns): each output column evaluated over the rows into one array; the
+        // rows' dictionaries are made only for a caller that reads Items.
+        var names = new string[output.Columns.Length];
         var values = new ScalarValue[output.Columns.Length][];
         var producers = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var c = 0; c < output.Columns.Length; c++)
         {
             var (name, expression) = output.Columns[c];
-            values[c] = new ScalarValue[count];
+            names[c] = name;
+            values[c] = count == 0 ? [] : new ScalarValue[count];
             if (count == 0)
             {
                 continue;
@@ -1203,22 +1211,16 @@ public sealed class PipelineExecutor
             await TapCapture.OutputAsync(state, rows, cancellationToken).ConfigureAwait(false);
         }
 
-        var items = new RankedItem[count];
+        var ids = new EntityKey[count];
         for (var i = 0; i < count; i++)
         {
-            var columns = new Dictionary<string, ScalarValue>(output.Columns.Length, StringComparer.Ordinal);
-            for (var c = 0; c < output.Columns.Length; c++)
-            {
-                columns[output.Columns[c].Name] = values[c][i];
-            }
-
-            items[i] = new RankedItem(state.Table.GetKey(rows[i]), i + 1, columns);
+            ids[i] = state.Table.GetKey(rows[i]);
         }
 
         return new PipelineResult
         {
             Succeeded = true,
-            Items = items,
+            Columns = new ResultColumns(ids, names, values),
             Outcomes = state.Outcomes,
             AssignedArms = plan.ArmIds(state.Arms),
             TriggeredExperiments = TriggeredIds(plan, state.Triggered),
@@ -1350,7 +1352,7 @@ public sealed class PipelineExecutor
         {
             Succeeded = false,
             Error = error,
-            Items = Array.Empty<RankedItem>(),
+            Columns = ResultColumns.Empty,
             Outcomes = outcomes,
             AssignedArms = plan.ArmIds(request.Arms),
             TriggeredExperiments = TriggeredIds(plan, triggered),

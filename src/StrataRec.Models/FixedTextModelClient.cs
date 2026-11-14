@@ -123,7 +123,7 @@ public sealed class FixedTextModelClientFactory : IModelClientFactory
                     outputs = Outputs(value);
                     break;
                 default:
-                    throw new BindingException("/" + BindingContext.EscapePointerToken(name), $"Unknown setting '{name}'.",
+                    throw BindingException.Unknown(string.Empty, name, ["inputs", "outputs"],
                         $"{Type} takes 'inputs' (the model's text input names) and 'outputs' (each text output's fixed answer), e.g. {Example}");
             }
         }
@@ -146,24 +146,7 @@ public sealed class FixedTextModelClientFactory : IModelClientFactory
             throw new BindingException("/inputs", $"'inputs' must be an array of names, got {value.GetRawText()}.", Hint);
         }
 
-        var names = new List<string>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var item in value.EnumerateArray())
-        {
-            var pointer = "/inputs/" + names.Count;
-            var name = item.ValueKind == JsonValueKind.String ? item.GetString() : null;
-            if (string.IsNullOrEmpty(name))
-            {
-                throw new BindingException(pointer, $"'inputs' item {names.Count} must be a non-empty name, got {item.GetRawText()}.", Hint);
-            }
-
-            if (!seen.Add(name))
-            {
-                throw new BindingException(pointer, $"'{name}' is listed twice in 'inputs'.", "list each name once");
-            }
-
-            names.Add(name);
-        }
+        var names = SettingNames.Read(value, "inputs", Hint);
 
         if (names.Count == 0)
         {

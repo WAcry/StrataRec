@@ -32,7 +32,7 @@ public sealed class RecResultJsonTests
         var failed = new RecResult
         {
             RequestId = "req-2", Succeeded = false, ErrorKind = RecErrorKind.InvalidRequest, Error = "Input 'x' is not declared.",
-            ErrorPointer = "/inputs/x", Items = Array.Empty<RankedItem>(), Experiments = result.Experiments, ManifestId = string.Empty, ServedBy = "home_feed",
+            ErrorPointer = "/inputs/x", Columns = ResultColumns.Empty, Experiments = result.Experiments, ManifestId = string.Empty, ServedBy = "home_feed",
         };
 
         using var document = JsonDocument.Parse(Write(failed));
@@ -128,7 +128,7 @@ public sealed class RecResultJsonTests
         var result = Result();
         var withProducers = new RecResult
         {
-            RequestId = result.RequestId, Succeeded = true, Items = result.Items, Experiments = result.Experiments, ManifestId = result.ManifestId,
+            RequestId = result.RequestId, Succeeded = true, Columns = result.Columns, Experiments = result.Experiments, ManifestId = result.ManifestId,
             ServedBy = result.ServedBy, ColumnProducers = new Dictionary<string, string> { ["score"] = "rank" },
         };
 
@@ -140,7 +140,7 @@ public sealed class RecResultJsonTests
     {
         RequestId = "req-1",
         Succeeded = true,
-        Items = items,
+        Columns = ResultColumns.FromItems(items),
         Experiments = new ExperimentRecord(new[] { "exp/a" }, new[] { "exp" }, new[] { new IgnoredArm("exp_gone/b", IgnoredArmReason.Unknown) }),
         ManifestId = "m1",
         ServedBy = "home_feed",

@@ -264,22 +264,8 @@ internal static class ReplayCommand
 
         json.WriteString("served_by", result.ServedBy);
         json.WriteNumber("elapsed_ms", Math.Round(report.ElapsedMs, 3));
-        json.WriteStartArray("items");
-        foreach (var item in result.Items)
-        {
-            json.WriteStartObject();
-            json.WriteNumber("rank", item.Rank);
-            WriteKey(json, "id", item.Id);
-            foreach (var (name, value) in item.Columns)
-            {
-                json.WritePropertyName(name);
-                Output.WriteValue(json, value);
-            }
-
-            json.WriteEndObject();
-        }
-
-        json.WriteEndArray();
+        json.WritePropertyName("items"); // as the service answers them (run prints the same)
+        RecResultJson.WriteItems(json, result.Columns);
         WriteDiff(json, "diff", report.Diff);
         json.WriteStartArray("nodes");
         foreach (var node in report.Nodes)

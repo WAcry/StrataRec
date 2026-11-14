@@ -186,82 +186,150 @@ public sealed class SlidingWindowQuotaFactory : IOperatorFactory
                 return ValueTask.CompletedTask;
             }
 
-            var column = context.Read(group);
             var memory = context.Memory;
-            var keys = memory.Rent<long>(n);
-            var hasKey = memory.Rent<bool>(n);
-            for (var i = 0; i < n; i++)
-            {
-                var row = live[i];
-                hasKey[i] = column is not null && column.IsValid(row);
-                keys[i] = !hasKey[i] ? 0 : column switch
-                {
-                    ScalarColumn<long> l => l[row],
-                    ScalarColumn<int> x => x[row],
-                    DictStringColumn s => s.Codes[row],
-                    _ => 0,
-                };
-            }
-
-            // Greedy: at each output position take the first pending row whose group is under quota in the
-            // last (window - 1) placed rows.
-            var placed = memory.Rent<int>(n);       // indices into live
-            var used = memory.RentCleared<bool>(n);
-            var placedCount = 0;
-            var firstPending = 0;
-            while (placedCount < n)
-            {
-                var chosen = -1;
-                for (var i = firstPending; i < n; i++)
-                {
-                    if (used[i])
-                    {
-                        continue;
-                    }
-
-                    if (!hasKey[i] || CountInWindow(keys, hasKey, placed, placedCount, keys[i]) < maxPerWindow)
-                    {
-                        chosen = i;
-                        break;
-                    }
-                }
-
-                if (chosen < 0)
-                {
-                    break; // remaining rows cannot be placed without violating the quota
-                }
-
-                used[chosen] = true;
-                placed[placedCount++] = chosen;
-                while (firstPending < n && used[firstPending])
-                {
-                    firstPending++;
-                }
-            }
-
-            var order = memory.Rent<int>(Math.Max(1, placedCount));
-            for (var i = 0; i < placedCount; i++)
+            var groupOf = memory.Rent<int>(n);
+            var groups = RowGroups.Assign(context.Read(group), live, groupOf.AsSpan(0, n), memory);
+            var placed = memory.Rent<int>(n);
+            var count = Place(groupOf.AsSpan(0, n), groups, window, maxPerWindow, placed, memory);
+            var order = memory.Rent<int>(Math.Max(1, count));
+            for (var i = 0; i < count; i++)
             {
                 order[i] = live[placed[i]];
             }
 
-            context.SetOrder(order.AsSpan(0, placedCount));
+            context.SetOrder(order.AsSpan(0, count));
             return ValueTask.CompletedTask;
         }
+    }
 
-        private int CountInWindow(long[] keys, bool[] hasKey, int[] placed, int placedCount, long key)
+    /// <summary>
+    /// The quota's placement: at each position, the earliest row (by index) whose group has fewer than
+    /// <paramref name="maxPerWindow"/> rows among the last <paramref name="window"/> − 1 placed; a row without a group
+    /// (−1) is never limited. Stops when no row can be placed; returns how many were, their indices in
+    /// <paramref name="placed"/>.
+    /// </summary>
+    /// <remarks>
+    /// Each group's pending rows form a queue in index order, the earliest is its head, and a group under quota is
+    /// eligible: the earliest placeable row is the smallest head among eligible groups, kept in a heap. Placing a row
+    /// counts it in the window and uncounts the row the window leaves, which may make that group eligible again. O(n log G)
+    /// for n rows in G groups; the first version rescanned the pending rows and recounted the window at every position,
+    /// O(n² · window), 9 ms for 5,000 rows in two groups (performance audit).
+    /// </remarks>
+    internal static int Place(ReadOnlySpan<int> groupOf, int groups, int window, int maxPerWindow, Span<int> placed, Core.Memory.RequestMemory memory)
+    {
+        var n = groupOf.Length;
+        var free = groups; // the rows without a group: a group of their own that is never limited
+        var total = groups + 1;
+        var head = memory.Rent<int>(total);
+        var tail = memory.Rent<int>(total);
+        var next = memory.Rent<int>(Math.Max(1, n));
+        head.AsSpan(0, total).Fill(-1);
+        for (var i = 0; i < n; i++)
         {
-            var count = 0;
-            for (var j = Math.Max(0, placedCount - (window - 1)); j < placedCount; j++)
+            var g = groupOf[i] < 0 ? free : groupOf[i];
+            next[i] = -1;
+            if (head[g] < 0)
             {
-                var p = placed[j];
-                if (hasKey[p] && keys[p] == key)
+                head[g] = i;
+            }
+            else
+            {
+                next[tail[g]] = i;
+            }
+
+            tail[g] = i;
+        }
+
+        var inWindow = memory.RentCleared<int>(total);
+        var heap = new GroupHeap(memory.Rent<int>(total), head);
+        for (var g = 0; g < total; g++)
+        {
+            if (head[g] >= 0)
+            {
+                heap.Push(g);
+            }
+        }
+
+        var count = 0;
+        while (heap.Count > 0)
+        {
+            var g = heap.Pop();
+            var row = head[g];
+            head[g] = next[row];
+            placed[count++] = row;
+            if (g != free)
+            {
+                inWindow[g]++;
+            }
+
+            // The window of the next position is the last window − 1 placed: the row placed window positions back leaves.
+            if (count >= window && groupOf[placed[count - window]] is var left and >= 0)
+            {
+                inWindow[left]--;
+                if (left != g && inWindow[left] == maxPerWindow - 1 && head[left] >= 0)
                 {
-                    count++;
+                    heap.Push(left); // was at its quota, so not in the heap
                 }
             }
 
-            return count;
+            if (head[g] >= 0 && (g == free || inWindow[g] < maxPerWindow))
+            {
+                heap.Push(g);
+            }
+        }
+
+        return count;
+    }
+
+    /// <summary>A binary min-heap of groups by the index of their head row, in a rented array.</summary>
+    private struct GroupHeap(int[] items, int[] head)
+    {
+        public int Count { get; private set; }
+
+        public void Push(int group)
+        {
+            var i = Count++;
+            items[i] = group;
+            while (i > 0)
+            {
+                var parent = (i - 1) / 2;
+                if (head[items[parent]] <= head[items[i]])
+                {
+                    break;
+                }
+
+                (items[parent], items[i]) = (items[i], items[parent]);
+                i = parent;
+            }
+        }
+
+        public int Pop()
+        {
+            var top = items[0];
+            items[0] = items[--Count];
+            var i = 0;
+            while (true)
+            {
+                var smallest = i;
+                var left = (2 * i) + 1;
+                if (left < Count && head[items[left]] < head[items[smallest]])
+                {
+                    smallest = left;
+                }
+
+                if (left + 1 < Count && head[items[left + 1]] < head[items[smallest]])
+                {
+                    smallest = left + 1;
+                }
+
+                if (smallest == i)
+                {
+                    return top;
+                }
+
+                (items[smallest], items[i]) = (items[i], items[smallest]);
+                i = smallest;
+            }
         }
     }
 }

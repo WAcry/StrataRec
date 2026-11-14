@@ -36,6 +36,10 @@ public sealed class BuiltInClientSettingsTests
         { "memory_list@1", """{ "data_file": "list.json" }""", "/data_file", "list.json' has a member 'itemz', which memory_list@1 does not take.", "did you mean 'items'?" },
         { "memory_list@1", """{ "data_file": "bad-item.json" }""", "/data_file", "bad-item.json' at /items/1: An id must be a string or an int64; got true.", null },
         { "memory_list@1", """{ "data_file": "missing.json" }""", "/data_file", "missing.json' cannot be read", "a relative path resolves against" },
+        { "random@1", """{ "inputs": ["x"], "outputs": ["p"], "sed": 1 }""", "/sed", "Unknown setting 'sed'.", "did you mean 'seed'?" },
+        { "random@1", """{ "inputs": ["x", "x"], "outputs": ["p"] }""", "/inputs/1", "'x' is listed twice in 'inputs'.", "list each name once" },
+        { "fixed_text@1", """{ "input": ["user"], "outputs": { "answer": "x" } }""", "/input", "Unknown setting 'input'.", "did you mean 'inputs'?" },
+        { "fixed_text@1", """{ "inputs": [""], "outputs": { "answer": "x" } }""", "/inputs/0", "'inputs' item 0 must be a non-empty name, got \"\".", null },
     };
 
     [Theory]
@@ -78,6 +82,8 @@ public sealed class BuiltInClientSettingsTests
     {
         "linear@1" => new LinearModelClientFactory().Create(context),
         "memory@1" => new MemoryFeatureConnectorFactory().Create(context),
+        "random@1" => new RandomModelClientFactory().Create(context),
+        "fixed_text@1" => new FixedTextModelClientFactory().Create(context),
         _ => new MemoryListCandidateSourceFactory().Create(context),
     };
 }

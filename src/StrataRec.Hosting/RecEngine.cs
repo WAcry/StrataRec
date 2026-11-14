@@ -194,7 +194,14 @@ public sealed class RecResult
     /// </summary>
     public string? ErrorPointer { get; init; }
 
-    public required IReadOnlyList<RankedItem> Items { get; init; }
+    /// <summary>
+    /// The returned items column by column: the form to read when a request returns many rows to process further (no
+    /// dictionary is made per row). Most callers read <see cref="Items"/>.
+    /// </summary>
+    public required ResultColumns Columns { get; init; }
+
+    /// <summary>The returned items as rows, each with its output columns by name; made from <see cref="Columns"/> when first read.</summary>
+    public IReadOnlyList<RankedItem> Items => Columns.Rows;
 
     public required ExperimentRecord Experiments { get; init; }
 
@@ -759,7 +766,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             // What the caller saw (design 13.1 "实验桶"): an aborted request counts as an error, so arms whose requests
             // are slow enough to be cancelled do not look healthier.
             var failed = result is not { Succeeded: true };
-            var empty = !failed && result!.Items.Count == 0;
+            var empty = !failed && result!.Columns.Count == 0;
             (pipeline?.Telemetry ?? RequestTelemetry.Unknown).Record(Stopwatch.GetElapsedTime(started).TotalSeconds, arms, failed, empty, degraded && !failed);
             if (activity is not null)
             {
@@ -1043,7 +1050,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         Succeeded = converted.Succeeded,
         ErrorKind = converted.Succeeded ? RecErrorKind.None : RecErrorKind.Failed,
         Error = $"pipeline '{request.PipelineId}' failed: {executed.Error}" + (served.Succeeded ? string.Empty : $"; fallback '{fallbackId}' failed: {served.Error}"),
-        Items = converted.Items,
+        Columns = converted.Columns,
         Experiments = new ExperimentRecord(executed.AssignedArms, executed.TriggeredExperiments, ignored),
         ManifestId = converted.ManifestId,
         ServedBy = fallbackId,
@@ -1060,7 +1067,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         Succeeded = result.Succeeded,
         ErrorKind = result.Succeeded ? RecErrorKind.None : RecErrorKind.Failed,
         Error = result.Error,
-        Items = result.Items,
+        Columns = result.Columns,
         Experiments = new ExperimentRecord(result.AssignedArms, result.TriggeredExperiments, ignored),
         ManifestId = pipeline.Plan.ManifestId,
         ServedBy = servedBy,
@@ -1080,7 +1087,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         ErrorKind = kind,
         Error = error,
         ErrorPointer = pointer,
-        Items = Array.Empty<RankedItem>(),
+        Columns = ResultColumns.Empty,
         Experiments = experiments ?? new ExperimentRecord(Array.Empty<string>(), Array.Empty<string>(), Array.Empty<IgnoredArm>()),
         ManifestId = manifestId ?? string.Empty,
         ServedBy = request.PipelineId,

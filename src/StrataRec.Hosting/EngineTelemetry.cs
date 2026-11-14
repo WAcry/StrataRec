@@ -114,7 +114,7 @@ internal sealed class RequestTelemetry
             {
                 activity.SetTag(StrataRecTags.ServedBy, result.ServedBy);
                 activity.SetTag(StrataRecTags.ManifestId, result.ManifestId);
-                activity.SetTag(StrataRecTags.Items, result.Items.Count);
+                activity.SetTag(StrataRecTags.Items, result.Columns.Count);
                 activity.SetTag(StrataRecTags.Degraded, degraded);
                 activity.SetTag(StrataRecTags.ArmsAssigned, ToArray(result.Experiments.Assigned));
                 activity.SetTag(StrataRecTags.ExperimentsTriggered, ToArray(result.Experiments.Triggered));

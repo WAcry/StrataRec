@@ -87,6 +87,35 @@ public sealed class ReplayCliTests
         Assert.DoesNotContain("for the usage", error.ToString());
     }
 
+    /// <summary>
+    /// replay writes its items as run does, the output columns in their own member: a column named id or rank cannot
+    /// collide with the item's (it flattened them into the item and wrote both 'id' members, architecture audit 1).
+    /// </summary>
+    [Fact]
+    public async Task ReplayItems_AreTheItemsRunPrints_SoAColumnNamedIdOrRankCannotCollide()
+    {
+        var root = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"score\": \"col.score.final\",",
+            "\"score\": \"col.score.final\", \"id\": \"col.entity_id + 2000\", \"rank\": \"col.entity_id + 1000\",")).Root;
+        var bundle = Path.Combine(Directory.CreateTempSubdirectory("stratarec-bundles-").FullName, "b.json");
+        var run = new StringWriter();
+        Assert.Equal(0, await RunCommand.RunAsync(Tool.Environment, root, "local", Path.Combine(root, "requests", "user_1001.json"), Array.Empty<string>(), false, run,
+            CancellationToken.None, recordPath: bundle));
+
+        var json = new StringWriter();
+        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, root, "local", [bundle], Array.Empty<string>(), "json", expectIdentical: true, json,
+            CancellationToken.None));
+
+        using var replay = JsonDocument.Parse(json.ToString(), new JsonDocumentOptions { AllowDuplicateProperties = false });
+        using var served = JsonDocument.Parse(run.ToString());
+        var items = replay.RootElement.GetProperty("items"); // one file: its report alone
+        var first = items[0];
+        var id = first.GetProperty("id").GetInt64();
+        Assert.Equal(1, first.GetProperty("rank").GetInt64());
+        Assert.Equal(id + 2000, first.GetProperty("columns").GetProperty("id").GetInt64());
+        Assert.Equal(id + 1000, first.GetProperty("columns").GetProperty("rank").GetInt64());
+        Assert.Equal(served.RootElement.GetProperty("items").GetRawText(), items.GetRawText());
+    }
+
     [Fact]
     public async Task RecordReplayAndCompare_FromTheCommandLine()
     {

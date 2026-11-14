@@ -60,6 +60,10 @@ public sealed class OperatorCompileContext
 
     public OperatorDescriptor Descriptor { get; }
 
+    /// <summary>
+    /// The names an operator may read, for looking one up without reading it (listing names, suggesting one). To read a
+    /// name outside an expression, use <see cref="TryResolveRead"/>, which records the read.
+    /// </summary>
     public IExpressionScope Scope => _scope;
 
     /// <summary>The plan schema (declared columns, parameters, features) for lookups.</summary>
@@ -358,13 +362,33 @@ public sealed class OperatorCompileContext
     private readonly HashSet<int> _selfReads = new();
 
     /// <summary>
-    /// Records a name the operator resolved through <see cref="Scope"/> itself as a read of the node, as
-    /// <see cref="CompileExpression"/>, <see cref="TryReadColumn"/> and <see cref="TryParam"/> do for theirs: the fetch
-    /// planner then fetches a feature before the node runs, and data-flow validation and experiment footprints see the
-    /// read (design 5.2, 6.8). Public for operators that resolve names outside expressions, such as a prompt template's
-    /// references (StrataRec.Llm).
+    /// Resolves a name the operator reads outside an expression (<c>col.x</c>, <c>ctx.request.y</c>, <c>param.z</c>, as
+    /// a prompt template's references are written) and records the read, as <see cref="CompileExpression"/>,
+    /// <see cref="TryReadColumn"/> and <see cref="TryParam"/> do for theirs: the fetch planner then fetches a feature before
+    /// the node runs, and data-flow validation and experiment footprints see the read (design 5.2, 6.8). One step, so a
+    /// name cannot be read without being recorded (architecture audit: resolving through <see cref="Scope"/> and recording
+    /// were two calls, and an operator that forgot the second compiled and ran without its feature fetched).
     /// </summary>
-    public void RecordSymbol(in Symbol symbol)
+    /// <returns>
+    /// False when the name is unknown, which the caller reports where it wrote the name, or declared with an error, which
+    /// was reported at the declaration: <see cref="HasErrors"/> is then set, and the caller reports nothing.
+    /// </returns>
+    public bool TryResolveRead(string name, out Symbol symbol, out bool reported)
+    {
+        reported = false;
+        if (!_scope.TryResolve(name, out symbol))
+        {
+            reported = _schema.IsUnusable(name);
+            HasErrors |= reported;
+            return false;
+        }
+
+        RecordSymbol(symbol);
+        return true;
+    }
+
+    /// <summary>Records a resolved name as a read of the node (<see cref="TryResolveRead"/>).</summary>
+    internal void RecordSymbol(in Symbol symbol)
     {
         switch (symbol.Kind)
         {

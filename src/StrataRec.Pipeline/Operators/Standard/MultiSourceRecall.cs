@@ -303,13 +303,21 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
             var rankValues = rankColumn.Values;
             var scoreValues = scoreColumn.Values;
             var primaryCodes = primaryColumn.Codes;
+            var sourceCodes = context.Memory.Rent<int>(sources.Length); // a source's code, looked up once (−1: not yet)
+            sourceCodes.AsSpan(0, sources.Length).Fill(-1);
             for (var i = 0; i < count; i++)
             {
                 var row = first + i;
                 maskValues[row] = masks[i];
                 rankValues[row] = ranks[i];
                 scoreValues[row] = scores[i];
-                primaryCodes[row] = primaryColumn.GetOrAddCode(sources[primaries[i]].Name);
+                ref var code = ref sourceCodes[primaries[i]];
+                if (code < 0)
+                {
+                    code = primaryColumn.GetOrAddCode(sources[primaries[i]].Name);
+                }
+
+                primaryCodes[row] = code;
             }
 
             maskColumn.SetValid(first, count);

@@ -55,6 +55,8 @@ dotnet run --project src/StrataRec.Cli -- run      -c my-feed -r my-feed/request
 | 模型客户端 | `IModelClient` | `logistic@1` |
 | 算子 | `IOperatorFactory` | `CategoryBoost@1` |
 
+结果的 `Items` 是逐行的（每项的输出列按名字读，`item.Columns["score"]`），返回几十行时最方便；返回大量行、还要在宿主里继续处理时读 `Columns`：按列的 id 数组和每个输出列的值数组（`result.Columns["score"][i]`），不为每行建字典。`RecResultJson` 按列写响应。
+
 ```sh
 dotnet run --project samples/StrataRec.Samples.Host                   # http://localhost:5000
 curl -s -X POST localhost:5000/recommend/trending_feed -H 'content-type: application/json' \
@@ -76,6 +78,34 @@ samples/home_feed/
   releases/home_feed.local.jsonc    发布的组成：目录、绑定和每个实验所在的层（流量分配归实验平台）
   fixtures/、requests/              本地运行用的内存数据和示例请求（请求的 assignment 即平台给出的臂）
 ```
+
+## 常见需求的写法
+
+内置算子按组合使用，大多数排序策略不需要自定义算子（`stratarec operators` 列出全部算子，`stratarec schema operator <算子>` 给出配置的 Schema）：
+
+```jsonc
+// 过滤看过的物品：请求带上列表（request_schema 里 "seen_ids": { "type": "list<int64>" }），按请求排序一次，每行二分查找
+"seen_filter": { "order": 150, "op": "ExpressionFilter@1",
+  "config": { "predicate": "!(col.entity_id in ctx.request.seen_ids)" } },
+
+// 每个作者最多两条：组内名次（顺序同 TopK），再过滤；没有作者的物品不受限
+"author_rank": { "order": 512, "op": "GroupAggregate@1",
+  "config": { "group_col": "item.author_id", "outputs": { "group.author_rank": { "fn": "rank", "value_col": "score.final" } } } },
+"author_cap": { "order": 515, "op": "ExpressionFilter@1", "config": { "predicate": "(col.group.author_rank ?? 1) <= 2" } },
+
+// 分数在请求内标准化：不分组的均值和标准差，再用表达式
+"request_stats": { "order": 460, "op": "GroupAggregate@1",
+  "config": { "outputs": { "stats.ctr_mean": { "fn": "mean", "value_col": "score.ctr" },
+                           "stats.ctr_std":  { "fn": "std",  "value_col": "score.ctr" } } } },
+"ctr_z": { "order": 465, "op": "ExpressionScorer@1",
+  "config": { "output_col": "score.ctr_z", "expr": "(col.score.ctr - col.stats.ctr_mean) / max(col.stats.ctr_std, 1e-6)" } },
+
+// 确定性的探索扰动：同一请求种子给同样的结果，可以回放（score.final 声明为 "flow": true，才能被几个节点依次改写）
+"explore": { "order": 468, "op": "ExpressionScorer@1",
+  "config": { "output_col": "score.final", "expr": "col.score.final + 0.05 * hash01(ctx.request.seed, col.entity_id)" } },
+```
+
+类目打散用 `SlidingWindowQuota@1`（任意连续 `window` 个名次里同一组最多 `max_per_window` 个），相似内容打散用 `MmrDiversifier@1`，多目标融合用 `CompositeMultiplierScorer@1`（每个乘子、加项可以被实验单独修改）；`samples/home_feed` 里都有用法。
 
 ## 基准
 
