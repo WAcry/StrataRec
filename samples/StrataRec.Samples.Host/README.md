@@ -54,7 +54,7 @@ dotnet run -- stratarec schema operator CategoryBoost@1  # 自定义算子配置
 dotnet run -- stratarec operators                        # 内置和本二进制的组件
 ```
 
-命令、选项、输出和退出码与官方 CLI 完全相同。CI 里原本跑 `stratarec validate` 的地方改跑 `dotnet run --project <宿主项目> -- stratarec validate -c <工作区>`。`stratarec run` 的请求文件比 HTTP 请求体多一个 `pipeline_id`，因为 HTTP 由路由给出流水线。
+命令、选项、输出和退出码与官方 CLI 完全相同。CI 里原本跑 `stratarec validate` 的地方改跑 `dotnet run --project <宿主项目> -- stratarec validate -c <工作区>`；`dotnet run` 在项目目录运行（`RunWorkingDirectory`），相对路径从那里算，本示例就是 `-c config`。`stratarec run` 的请求文件比 HTTP 请求体多一个 `pipeline_id`，因为 HTTP 由路由给出流水线。
 
 静态校验不做 I/O：绑定的文件在服务加载计划时才打开，需要加载才能回答的模型签名也在那时检查。服务启动时（`AddStrataRec` 注册的托管服务，在开始监听之前）加载失败会抛出列出全部错误的 `ConfigException`，服务不会启动；警告写入日志（事件 1003）。
 
