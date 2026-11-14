@@ -293,7 +293,7 @@ public sealed class MemoryListCandidateSourceFactory : ICandidateSourceFactory
 
                 foreach (var list in l.Value.EnumerateObject())
                 {
-                    lists[list.Name] = List(list.Value, l.Where.In("/" + list.Name.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal)));
+                    lists[list.Name] = List(list.Value, l.Where.In("/" + BindingContext.EscapePointerToken(list.Name)));
                 }
             }
 
@@ -383,7 +383,7 @@ public sealed class MemoryListCandidateSourceFactory : ICandidateSourceFactory
                                 : throw where.Error(at + "/score", $"A score must be a finite number; got {member.Value.GetRawText()}.");
                             break;
                         default:
-                            throw where.Error(at + "/" + member.Name, $"An item has 'id' and 'score', not '{member.Name}'.",
+                            throw where.Error(at + "/" + BindingContext.EscapePointerToken(member.Name), $"An item has 'id' and 'score', not '{member.Name}'.",
                                 Core.Diagnostics.Spelling.DidYouMean(member.Name, ["id", "score"]));
                     }
                 }

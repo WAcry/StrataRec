@@ -53,16 +53,34 @@ internal static class StatusCommand
         }
 
         var pointers = new FileSystemManifestSource(storeRoot);
+        try
+        {
+            pointers.GetPointerPath(pipelineId ?? "pipeline", environment ?? "environment");
+        }
+        catch (ArgumentException ex)
+        {
+            diagnostics.Error("POINTER_NAME_INVALID", ex.ParamName == "environment" ? "--env" : "--pipeline", string.Empty, ex.Message,
+                "pipeline ids and environment names are the file names of pointers: use letters, digits, '_', '-' and '.'");
+            Output.Diagnostics(diagnostics.Items, format, errors);
+            return 2;
+        }
+
         var store = new FileSystemArtifactStore(storeRoot);
         var releases = new List<Release>();
-        foreach (var (pipeline, env) in pointers.ListPointers())
+        foreach (var file in pointers.ListPointers(environment))
         {
-            if ((pipelineId is not null && pipeline != pipelineId) || (environment is not null && env != environment))
+            if (pipelineId is not null && file.PipelineId.Length > 0 && file.PipelineId != pipelineId)
             {
+                continue; // a directory that cannot be listed may hold the pipeline: it is reported
+            }
+
+            if (file.Error is { } error)
+            {
+                diagnostics.Error("POINTER_UNREADABLE", file.Path, string.Empty, error, "fix or remove it: nodes cannot read what it publishes");
                 continue;
             }
 
-            var path = pointers.GetPointerPath(pipeline, env);
+            var (pipeline, env, path) = (file.PipelineId, file.Environment, file.Path);
             var (read, pointed) = await PublishedRelease.ReadAsync(pointers, path, store, pipeline, env, "what it publishes", null, diagnostics, cancellationToken)
                 .ConfigureAwait(false);
             if (read && pointed is { } published)

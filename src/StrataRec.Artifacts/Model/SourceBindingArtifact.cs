@@ -26,12 +26,12 @@ public sealed class SourceBindingArtifact
     public List<string> RequiredTypes() => RequiredTypes(null);
 
     /// <summary>
-    /// <see cref="RequiredTypes()"/>, counting a model or candidate source only when <paramref name="named"/> holds its
-    /// name: a client nothing names is never created (instances are made for the nodes that use them), so a binary that
-    /// lacks its type serves the configuration. Feature sources count always: the catalog names them, and cache stores and
-    /// update sources serve them. Null counts every binding.
+    /// <see cref="RequiredTypes()"/>, without the models and candidate sources <paramref name="excluded"/> names: a client
+    /// no node uses is never created (instances are made for the nodes that use them), so a binary that lacks its type
+    /// serves the configuration. Feature sources count always: the catalog names them, and cache stores and update sources
+    /// serve them. Null excludes nothing.
     /// </summary>
-    public List<string> RequiredTypes(IReadOnlySet<string>? named)
+    public List<string> RequiredTypes(IReadOnlySet<string>? excluded)
     {
         var types = new List<string>();
         foreach (var (_, source) in Sources)
@@ -54,7 +54,7 @@ public sealed class SourceBindingArtifact
 
         foreach (var (name, model) in Models)
         {
-            if (named is null || named.Contains(name))
+            if (excluded is null || !excluded.Contains(name))
             {
                 types.Add(model.Client);
             }
@@ -62,7 +62,7 @@ public sealed class SourceBindingArtifact
 
         foreach (var (name, source) in CandidateSources)
         {
-            if (named is null || named.Contains(name))
+            if (excluded is null || !excluded.Contains(name))
             {
                 types.Add(source.Client);
             }

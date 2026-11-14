@@ -39,35 +39,59 @@ public sealed class FileSystemManifestSource : IManifestSource
         Path.Combine(Root, "pointers", Segment(environment, nameof(environment)), Segment(pipelineId, nameof(pipelineId)) + ".json");
 
     /// <summary>
-    /// The (pipeline, environment) of every pointer file under the root, sorted by environment, then pipeline (ordinal).
-    /// What is listed is a file name a pointer can have; whether its content is a valid pointer is
-    /// <see cref="GetManifestIdAsync"/>'s to say. Lock and temporary files, and anything else whose name starts with a dot,
-    /// are skipped.
+    /// The pointer files under the root, of <paramref name="environment"/> or of every environment, sorted by environment,
+    /// then pipeline (ordinal). Whether a file's content is a valid pointer is <see cref="GetManifestIdAsync"/>'s to say;
+    /// what cannot be listed is listed with its <see cref="PointerFile.Error"/>, so one bad entry does not hide the others
+    /// (review 40): a directory that cannot be read, a file name no pointer can have. Lock and temporary files, and
+    /// anything else whose name starts with a dot, are skipped.
     /// </summary>
-    public IReadOnlyList<(string PipelineId, string Environment)> ListPointers()
+    /// <exception cref="ArgumentException"><paramref name="environment"/> is not a plain file name.</exception>
+    public IReadOnlyList<PointerFile> ListPointers(string? environment = null)
     {
-        var pointers = new List<(string PipelineId, string Environment)>();
+        var pointers = new List<PointerFile>();
         var directory = Path.Combine(Root, "pointers");
-        if (!Directory.Exists(directory))
+        var environments = new List<string>();
+        if (environment is not null)
         {
-            return pointers;
+            environments.Add(Path.Combine(directory, Segment(environment, nameof(environment))));
+        }
+        else if (Directory.Exists(directory))
+        {
+            try
+            {
+                environments.AddRange(Directory.EnumerateDirectories(directory));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                pointers.Add(new PointerFile(string.Empty, string.Empty, directory, ex.Message));
+            }
         }
 
-        foreach (var environmentDirectory in Directory.EnumerateDirectories(directory))
+        foreach (var environmentDirectory in environments)
         {
-            var environment = Path.GetFileName(environmentDirectory);
-            if (environment.StartsWith('.'))
+            var name = Path.GetFileName(environmentDirectory);
+            if (name.StartsWith('.') || !Directory.Exists(environmentDirectory))
             {
                 continue;
             }
 
-            foreach (var file in Directory.EnumerateFiles(environmentDirectory, "*.json"))
+            try
             {
-                var name = Path.GetFileName(file);
-                if (!name.StartsWith('.'))
+                foreach (var file in Directory.EnumerateFiles(environmentDirectory, "*.json"))
                 {
-                    pointers.Add((name[..^".json".Length], environment));
+                    var fileName = Path.GetFileName(file);
+                    if (fileName.StartsWith('.'))
+                    {
+                        continue;
+                    }
+
+                    var pipeline = fileName[..^".json".Length];
+                    pointers.Add(new PointerFile(pipeline, name, file, PointerName(pipeline) ?? PointerName(name)));
                 }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                pointers.Add(new PointerFile(string.Empty, name, environmentDirectory, ex.Message));
             }
         }
 
@@ -77,6 +101,20 @@ public sealed class FileSystemManifestSource : IManifestSource
             return byEnvironment != 0 ? byEnvironment : string.CompareOrdinal(a.PipelineId, b.PipelineId);
         });
         return pointers;
+    }
+
+    /// <summary>Why <paramref name="name"/> cannot name a pointer file; null when it can.</summary>
+    private static string? PointerName(string name)
+    {
+        try
+        {
+            Segment(name, nameof(name));
+            return null;
+        }
+        catch (ArgumentException ex)
+        {
+            return ex.Message;
+        }
     }
 
     /// <inheritdoc/>
@@ -162,6 +200,11 @@ public sealed class FileSystemManifestSource : IManifestSource
         {
             throw Invalid(path, ex.Message, ex);
         }
+        catch (InvalidOperationException ex)
+        {
+            // A string JsonDocument accepts and cannot decode, as an unpaired surrogate escape (review 40).
+            throw Invalid(path, $"its '{ManifestMember}' is not a valid string ({ex.Message})", ex);
+        }
 
         return ContentHash.IsValid(id) ? id : throw Invalid(path, $"'{id}' is not a manifest content id (sha256:<64 lowercase hex digits>)");
     }
@@ -180,3 +223,10 @@ public sealed class FileSystemManifestSource : IManifestSource
         return name;
     }
 }
+
+/// <summary>
+/// A pointer file <see cref="FileSystemManifestSource.ListPointers"/> found: its pipeline and environment, and its path.
+/// <see cref="Error"/> says why it cannot be read as a pointer of that pipeline: its directory could not be listed (the
+/// pipeline is then empty, and the path the directory's), or its name is not one a pointer can have; null otherwise.
+/// </summary>
+public readonly record struct PointerFile(string PipelineId, string Environment, string Path, string? Error);

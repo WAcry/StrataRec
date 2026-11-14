@@ -80,7 +80,7 @@ public static class ManifestBuilder
             Seq = seq,
             MinAcceptedSeq = minAcceptedSeq,
             Previous = previous,
-            Requires = RequiredCapabilities(request.Pipeline, request.Experiments, request.Bindings),
+            Requires = RequiredCapabilities(request.Pipeline, request.Experiments, request.Bindings, Array.Empty<ExperimentPlacement>()),
             Artifacts = new ManifestArtifacts
             {
                 Catalog = await store.PutAsync(catalog!.Document, cancellationToken).ConfigureAwait(false),
@@ -118,12 +118,10 @@ public static class ManifestBuilder
 
         var revoked = new HashSet<string>(experiments, StringComparer.Ordinal);
         var kept = new List<ExperimentPlacement>(request.Experiments.Count);
+        var removed = new List<ExperimentPlacement>();
         foreach (var placement in request.Experiments)
         {
-            if (!revoked.Contains(placement.Experiment.ExperimentId))
-            {
-                kept.Add(placement);
-            }
+            (revoked.Contains(placement.Experiment.ExperimentId) ? removed : kept).Add(placement);
         }
 
         var entries = new Dictionary<string, ManifestExperiment>(StringComparer.Ordinal);
@@ -143,7 +141,7 @@ public static class ManifestBuilder
             Seq = seq,
             MinAcceptedSeq = seq,
             Previous = manifestId,
-            Requires = RequiredCapabilities(request.Pipeline, kept, request.Bindings),
+            Requires = RequiredCapabilities(request.Pipeline, kept, request.Bindings, removed),
             Artifacts = manifest.Artifacts,
             Experiments = entries,
         };
@@ -392,7 +390,9 @@ public static class ManifestBuilder
     internal static string Label(string manifestId) => "manifest:" + manifestId;
 
     /// <summary>Operators, connectors and clients named by the configuration (design 10.4).</summary>
-    private static List<string> RequiredCapabilities(PipelineArtifact pipeline, IReadOnlyList<ExperimentPlacement> experiments, SourceBindingArtifact bindings)
+    /// <param name="removed">Experiments a revocation removes from <paramref name="experiments"/>: see the binding rule inside.</param>
+    private static List<string> RequiredCapabilities(
+        PipelineArtifact pipeline, IReadOnlyList<ExperimentPlacement> experiments, SourceBindingArtifact bindings, IReadOnlyList<ExperimentPlacement> removed)
     {
         var required = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var (_, node) in pipeline.Nodes)
@@ -417,21 +417,36 @@ public static class ManifestBuilder
             }
         }
 
-        // A model or candidate source binding counts when the pipeline or a released experiment names it (a node's model,
-        // a recall quota's key, a parameter's value): one only a revoked experiment named is not required of the binary
-        // that serves the revocation, as design 10.4 needs after a binary rollback (review 39). Scanning every name
-        // over-counts a coincidence, which only makes a binary that lacks the type report the manifest incompatible.
-        var named = new HashSet<string>(StringComparer.Ordinal);
-        Names(ArtifactSerializer.ToNode(pipeline), named);
-        foreach (var placement in experiments)
+        // Every binding counts, but a model or candidate source binding that a removed experiment names and nothing kept
+        // names (a node's model, a recall quota's key, a parameter's value): the binary that serves a revocation need not
+        // have the client type only the revoked experiment used, as design 10.4 needs after a binary rollback (review 39).
+        // Only a name a removed experiment wrote frees a binding: an operator may name one the configuration does not
+        // write (its config's default), so a binding nothing names stays (review 40).
+        var excluded = new HashSet<string>(StringComparer.Ordinal);
+        if (removed.Count > 0)
         {
-            foreach (var (_, patch) in placement.Experiment.Arms)
+            foreach (var placement in removed)
             {
-                Names(patch, named);
+                foreach (var (_, patch) in placement.Experiment.Arms)
+                {
+                    Names(patch, excluded);
+                }
             }
+
+            var named = new HashSet<string>(StringComparer.Ordinal);
+            Names(ArtifactSerializer.ToNode(pipeline), named);
+            foreach (var placement in experiments)
+            {
+                foreach (var (_, patch) in placement.Experiment.Arms)
+                {
+                    Names(patch, named);
+                }
+            }
+
+            excluded.ExceptWith(named);
         }
 
-        foreach (var type in bindings.RequiredTypes(named))
+        foreach (var type in bindings.RequiredTypes(excluded))
         {
             required.Add(type);
         }

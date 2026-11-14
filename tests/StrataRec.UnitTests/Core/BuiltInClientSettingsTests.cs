@@ -31,6 +31,7 @@ public sealed class BuiltInClientSettingsTests
         { "memory_list@1", """{ "itmes": [1, 2] }""", "/itmes", "Unknown setting 'itmes'.", "did you mean 'items'?" },
         { "memory_list@1", """{ "items": [1, { "id": 2, "scroe": 0.5 }] }""", "/items/1/scroe", "An item has 'id' and 'score', not 'scroe'.", "did you mean 'score'?" },
         { "memory_list@1", """{ "items": [1.5] }""", "/items/0", "An id must be a string or an int64; got 1.5.", null },
+        { "memory_list@1", """{ "items": [{ "id": 1, "s/co~re": 1 }] }""", "/items/0/s~1co~0re", "An item has 'id' and 'score', not 's/co~re'.", null }, // review 41
         { "memory_list@1", """{ "by_input": "user_id", "lists": { "7": 7 } }""", "/lists/7", "A list must be an array", null },
         { "memory_list@1", """{ "data_file": "list.json" }""", "/data_file", "list.json' has a member 'itemz', which memory_list@1 does not take.", "did you mean 'items'?" },
         { "memory_list@1", """{ "data_file": "bad-item.json" }""", "/data_file", "bad-item.json' at /items/1: An id must be a string or an int64; got true.", null },

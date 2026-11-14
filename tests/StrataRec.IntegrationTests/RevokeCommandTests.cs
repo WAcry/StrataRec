@@ -210,6 +210,58 @@ public sealed class RevokeCommandTests
         Assert.Contains("error STORE_NOT_FOUND --store", errors);
     }
 
+    /// <summary>
+    /// A pointer that cannot be read, however it cannot, is one error, and what the other pointers publish is still shown
+    /// (review 40: an undecodable string, a file name no pointer can have and an environment that cannot be listed each
+    /// ended the command with nothing shown); a filter skips the environments it does not ask for.
+    /// </summary>
+    [Fact]
+    public async Task Status_ShowsTheOtherPointers_WhateverIsWrongWithOne()
+    {
+        var root = ManifestStores.Workspace();
+        var store = ManifestStores.NewStore();
+        await BuildAndPublishAsync(root, store);
+        var local = Path.Combine(store, "pointers", "local");
+        File.WriteAllText(Path.Combine(local, "a_bad.json"), "{\"manifest\":\"\\uD800\"}");
+        if (!OperatingSystem.IsWindows())
+        {
+            File.WriteAllText(Path.Combine(local, "a\\bad.json"), "{}"); // a name Linux allows and a pointer cannot have
+        }
+
+        var (code, output, errors) = await Status(store, "-f", "json");
+        Assert.Equal(1, code);
+        Assert.Contains("is not valid: its 'manifest' is not a valid string", errors);
+        Assert.DoesNotContain("Unhandled", errors);
+        using (var document = System.Text.Json.JsonDocument.Parse(output))
+        {
+            Assert.Equal("home_feed", Assert.Single(document.RootElement.GetProperty("published").EnumerateArray()).GetProperty("pipeline_id").GetString());
+        }
+
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+        {
+            return;
+        }
+
+        Assert.Contains("cannot name a pointer file", errors);
+        var locked = Directory.CreateDirectory(Path.Combine(store, "pointers", "z_locked")).FullName;
+        File.SetUnixFileMode(locked, UnixFileMode.None);
+        try
+        {
+            (code, output, errors) = await Status(store, "-e", "local");
+            Assert.Equal(1, code); // a_bad still
+            Assert.DoesNotContain("z_locked", errors); // not asked for
+            Assert.Contains("home_feed (local)", output);
+
+            (code, output, errors) = await Status(store);
+            Assert.Contains($"error POINTER_UNREADABLE {locked}", errors);
+            Assert.Contains("home_feed (local)", output);
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
     private static async Task<(int Code, string Output, string Errors)> Status(string store, params string[] options)
     {
         var output = new StringWriter();
@@ -219,12 +271,12 @@ public sealed class RevokeCommandTests
     }
 
     /// <summary>
-    /// A model or candidate source binding is required of the binary only while the pipeline or a released experiment names
-    /// it: the revocation of the one experiment that used a new client type is a manifest a binary without the type takes
-    /// (design 10.4; review 39: every type the bindings listed stayed required, and the rolled-back binary refused it).
+    /// A revocation frees the client types of the bindings only the revoked experiment named: a binary without the type
+    /// takes it (design 10.4; review 39: every type the bindings listed stayed required, and the rolled-back binary refused
+    /// it). A binding nothing names stays required, since an operator may use it by its config's default (review 40).
     /// </summary>
     [Fact]
-    public async Task Revoke_RequiresOnlyTheClientsWhatIsLeftNames()
+    public async Task Revoke_FreesTheClientsOnlyTheRevokedExperimentNamed()
     {
         var root = ManifestStores.Workspace();
         var store = ManifestStores.NewStore();
@@ -234,6 +286,7 @@ public sealed class RevokeCommandTests
         // The bindings gain a model of a new client type, and one arm of exp_quality_weight names it.
         var bindings = (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(blobs.GetBlobPath(first.Artifacts.Bindings)))!;
         ((System.Text.Json.Nodes.JsonObject)bindings["models"]!)["future_model"] = new System.Text.Json.Nodes.JsonObject { ["client"] = "future_client@1" };
+        ((System.Text.Json.Nodes.JsonObject)bindings["models"]!)["implicit_model"] = new System.Text.Json.Nodes.JsonObject { ["client"] = "implicit_client@1" };
         var experiment = (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(
             await File.ReadAllTextAsync(blobs.GetBlobPath(first.Experiments["exp_quality_weight"].Artifact)))!;
         var arm = (System.Text.Json.Nodes.JsonObject)((System.Text.Json.Nodes.JsonObject)experiment["arms"]!)["strong"]!;
@@ -246,7 +299,7 @@ public sealed class RevokeCommandTests
         var manifest = new ReleaseManifest
         {
             PipelineId = first.PipelineId, Environment = first.Environment, Seq = 2, MinAcceptedSeq = 0, Previous = await Pointer(store),
-            Requires = [.. first.Requires, "future_client@1"],
+            Requires = [.. first.Requires, "future_client@1", "implicit_client@1"],
             Artifacts = new ManifestArtifacts
             {
                 Pipeline = first.Artifacts.Pipeline, Catalog = first.Artifacts.Catalog, Bindings = await blobs.PutAsync(bindings), Tables = first.Artifacts.Tables,
@@ -262,12 +315,18 @@ public sealed class RevokeCommandTests
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
         Assert.DoesNotContain("future_client@1", withoutQuality!.Requires);
         Assert.Contains("linear@1", withoutQuality.Requires); // the baseline's model still is
+        Assert.Contains("implicit_client@1", withoutQuality.Requires); // nothing names it: what uses it is not known
         Assert.Contains("future_client@1", withoutMmr!.Requires);
 
-        // A binary without the type takes the revocation.
+        // A binary without the type takes the revocation (given the type no one names).
+        var withoutImplicit = new ReleaseManifest
+        {
+            PipelineId = withoutQuality.PipelineId, Environment = withoutQuality.Environment, Seq = withoutQuality.Seq, MinAcceptedSeq = withoutQuality.MinAcceptedSeq,
+            Previous = withoutQuality.Previous, Requires = withoutQuality.Requires.Where(r => r != "implicit_client@1").ToList(), Artifacts = withoutQuality.Artifacts,
+            Experiments = withoutQuality.Experiments,
+        };
         await using var engine = new RecEngine(CommonOptions.ForRoot(Tool.Environment, root));
-        var revocationId = await ManifestStores.PutAsync(store, withoutQuality);
-        var loaded = await engine.LoadManifestAsync(withoutQuality, revocationId, blobs);
+        var loaded = await engine.LoadManifestAsync(withoutImplicit, await ManifestStores.PutAsync(store, withoutImplicit), blobs);
         Assert.True(loaded.Applied, loaded.Reason);
     }
 
