@@ -15,7 +15,7 @@ dotnet test StrataRec.sln               # 单元测试 + 集成测试
 dotnet run --project src/StrataRec.Cli -- --help
 ```
 
-改动完成之前必须全部通过。测试放在被改动代码旁边：组件测试放 `tests/StrataRec.UnitTests/<Area>/`，基于 `samples/` 的端到端测试放 `tests/StrataRec.IntegrationTests`。
+改动完成之前必须全部通过。测试放在被改动代码旁边：组件测试放 `tests/StrataRec.UnitTests/<Area>/`，基于 `samples/` 的端到端测试放 `tests/StrataRec.IntegrationTests`；宿主示例的测试在 `tests/StrataRec.Samples.Host.Tests`（它带上 ASP.NET Core 共享框架，见 `docs/decisions.md`）。
 
 ## 项目结构
 

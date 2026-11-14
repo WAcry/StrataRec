@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The host sample's tests, apart from StrataRec.IntegrationTests: starting a web app on a test server brings in the
+       ASP.NET Core shared framework, and a test project with it no longer copies the packages that framework also has
+       (Microsoft.Extensions.Logging.Abstractions, ...) to its output. The integration tests run the stratarec CLI from
+       their output as a child process, with the CLI's own dependencies, which must then be there. -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>StrataRec.Samples.Host.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <!-- Starts the host sample in-process, on a test server. -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\samples\StrataRec.Samples.Host\StrataRec.Samples.Host.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\*.cs" LinkBase="Shared" />
+    <!-- The sample's workspace, which the tests copy and edit; the service itself reads it from the project directory. -->
+    <None Include="..\..\samples\StrataRec.Samples.Host\config\**\*" LinkBase="samples\StrataRec.Samples.Host\config" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- A workspace file deleted or renamed in the repository would stay in the output of an existing checkout. -->
+  <Target Name="RemoveStaleSampleCopy" BeforeTargets="_CopyOutOfDateSourceItemsToOutputDirectory">
+    <RemoveDir Directories="$(OutDir)samples" />
+  </Target>
+
+</Project>

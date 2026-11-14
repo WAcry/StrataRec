@@ -10,20 +10,30 @@ using StrataRec.Hosting;
 using StrataRec.Samples.Host;
 using StrataRec.Testing;
 
-namespace StrataRec.IntegrationTests;
+namespace StrataRec.Samples.Host.Tests;
 
 /// <summary>
 /// The host sample (samples/StrataRec.Samples.Host) started in-process: its workspace loads clean with its own components,
 /// <c>POST /recommend</c> serves items that its custom source recalled, its custom connector fed, its custom model scored
 /// and its custom operator boosted, and errors map to 404, 400 and 500.
 /// </summary>
-public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>
+public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>, IDisposable
 {
     private const string Pipeline = "trending_feed";
 
     private readonly SampleHost _host;
 
+    private readonly List<string> _copies = new(); // workspace copies this test made, deleted when it ends
+
     public HostSampleTests(SampleHost host) => _host = host;
+
+    public void Dispose()
+    {
+        foreach (var copy in _copies)
+        {
+            Directory.Delete(copy, recursive: true);
+        }
+    }
 
     /// <summary>The sample's workspace as the test output holds it.</summary>
     private static string ConfigRoot => Path.Combine(AppContext.BaseDirectory, "samples", "StrataRec.Samples.Host", "config");
@@ -226,9 +236,10 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>
             columns["category"]?.GetValue<string>(), columns["source"]!.GetValue<string>());
     }).ToList();
 
-    private static string CopyOfTheWorkspace()
+    private string CopyOfTheWorkspace()
     {
         var root = Directory.CreateTempSubdirectory("stratarec-host-sample-").FullName;
+        _copies.Add(root);
         CopyDirectory(ConfigRoot, root);
         return root;
     }

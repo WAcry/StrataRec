@@ -50,4 +50,4 @@ CI 里原本跑 `stratarec validate` 的地方改跑 `dotnet run --project <宿�
 
 ## 测试
 
-`tests/StrataRec.IntegrationTests/HostSampleTests.cs` 用 `WebApplicationFactory` 在进程内启动这个服务：工作区校验和加载都没有错误和警告；推荐结果来自四个自定义组件（分数按数据和权重逐项核对）；404、400、500 三种错误。
+`tests/StrataRec.Samples.Host.Tests/HostSampleTests.cs` 用 `WebApplicationFactory` 在进程内启动这个服务：工作区校验和加载都没有错误和警告；推荐结果来自四个自定义组件（分数按数据和权重逐项核对）；404、400、500 三种错误。

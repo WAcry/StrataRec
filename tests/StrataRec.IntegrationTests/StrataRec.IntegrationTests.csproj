@@ -12,8 +12,6 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
-    <!-- Starts the host sample (samples/StrataRec.Samples.Host) in-process, on a test server. -->
-    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
   </ItemGroup>
 
   <ItemGroup>
@@ -33,7 +31,6 @@
     <ProjectReference Include="..\..\src\StrataRec.Cli\StrataRec.Cli.csproj" />
     <ProjectReference Include="..\..\src\StrataRec.Redis\StrataRec.Redis.csproj" />
     <ProjectReference Include="..\..\src\StrataRec.Llm\StrataRec.Llm.csproj" />
-    <ProjectReference Include="..\..\samples\StrataRec.Samples.Host\StrataRec.Samples.Host.csproj" />
   </ItemGroup>
 
   <ItemGroup>
