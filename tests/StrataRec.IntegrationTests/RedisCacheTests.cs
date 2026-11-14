@@ -136,14 +136,14 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         var secrets = new Secrets { ["redis-password"] = "wrong-secret" };
         await using (var wrong = Create(endpoint, RedisServer.UniquePrefix(), secrets: secrets))
         {
-            var error = await Assert.ThrowsAsync<BindingException>(() => wrong.LoadAsync(CancellationToken.None).AsTask());
+            var error = await RefusedAsync(wrong);
             Assert.Equal("/password", error.Pointer);
             Assert.DoesNotContain("wrong-secret", error.ToString());
         }
 
         await using (var none = Create(endpoint, RedisServer.UniquePrefix()))
         {
-            var error = await Assert.ThrowsAsync<BindingException>(() => none.LoadAsync(CancellationToken.None).AsTask());
+            var error = await RefusedAsync(none);
             Assert.Equal(string.Empty, error.Pointer);
             Assert.Contains("\"password\"", error.Hint);
         }
@@ -154,6 +154,36 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         var record = new ReadOnlyMemory<byte>[1];
         await right.GetAsync(new CacheKeyspace("item_store", "item", EntityKeyType.Int64), new[] { EntityKey.FromInt64(1) }, record, CancellationToken.None);
         Assert.True(record[0].IsEmpty);
+    }
+
+    /// <summary>
+    /// The load's refusal. A load that succeeded instead failed once in CI and never locally: the failure then says what
+    /// the server answers a read, which tells a refusal the load missed from a server it took for down.
+    /// </summary>
+    private static async Task<BindingException> RefusedAsync(RedisCacheStore store)
+    {
+        try
+        {
+            await store.LoadAsync(CancellationToken.None);
+        }
+        catch (BindingException refused)
+        {
+            return refused;
+        }
+
+        string answer;
+        try
+        {
+            var record = new ReadOnlyMemory<byte>[1];
+            await store.GetAsync(new CacheKeyspace("item_store", "item", EntityKeyType.Int64), new[] { EntityKey.FromInt64(1) }, record, CancellationToken.None);
+            answer = "the read succeeded";
+        }
+        catch (Exception ex)
+        {
+            answer = ex.ToString();
+        }
+
+        throw new Xunit.Sdk.XunitException("The load accepted credentials the server refuses. A read then gave: " + answer);
     }
 
     /// <summary>Review 19: through the engine, refused credentials reject the plan at the binding's password setting.</summary>

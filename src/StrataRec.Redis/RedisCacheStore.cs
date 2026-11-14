@@ -79,9 +79,7 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
         var connecting = _connect(options);
         Volatile.Write(ref _connecting, connecting);
         var connection = await connecting.WaitAsync(cancellationToken).ConfigureAwait(false);
-        if (connection.IsConnected
-                ? _settings.User is { } user && !await AuthenticatedAsAsync(connection, user).ConfigureAwait(false)
-                : await RefusedCredentialsAsync(connection).ConfigureAwait(false))
+        if (await RefusedCredentialsAsync(connection, _settings.User).ConfigureAwait(false))
         {
             // The connection is disposed with the store, which the host disposes after a failed load.
             throw new BindingException(
@@ -98,44 +96,55 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
     }
 
     /// <summary>
-    /// Whether a connection that did not connect failed because the server refused its credentials, not because the server
-    /// is down: the client keeps the last failure of each server, and a command sent while disconnected fails at once
-    /// (<see cref="BacklogPolicy.FailFast"/>) with it.
+    /// Whether the server refused the connection's credentials, as opposed to being down (which does not fail the load).
+    /// One command tells, connected or not, and its failure is read in one place (<see cref="IsRefusal"/>):
+    /// <list type="bullet">
+    /// <item>Not connected: the client keeps the last failure of each server, and a command sent while disconnected fails
+    /// at once (<see cref="BacklogPolicy.FailFast"/>) with it.</item>
+    /// <item>Connected, with a <paramref name="user"/>: a server whose default user needs no password accepts the
+    /// connection even when it refused the user's credentials (<c>AUTH</c> failed, the connection stays the default
+    /// user's); <c>ACL WHOAMI</c> tells. A server that cannot answer it (before Redis 6, or a user not allowed to ask) is
+    /// trusted.</item>
+    /// <item>Connected, without one: a <c>PING</c>, answered <c>NOAUTH</c> by a server that requires a password, so the
+    /// load does not depend on the state the client reports at the moment it returned from connecting.</item>
+    /// </list>
     /// </summary>
-    private static async Task<bool> RefusedCredentialsAsync(ConnectionMultiplexer connection)
+    private static async Task<bool> RefusedCredentialsAsync(ConnectionMultiplexer connection, string? user)
     {
+        var database = connection.GetDatabase();
         try
         {
-            await connection.GetDatabase().PingAsync().ConfigureAwait(false);
-            return false; // connected in the meantime
+            if (user is not null && connection.IsConnected)
+            {
+                return (string?)await database.ExecuteAsync("ACL", "WHOAMI").ConfigureAwait(false) != user;
+            }
+
+            await database.PingAsync().ConfigureAwait(false);
+            return false; // the server answers this connection
         }
-        catch (RedisConnectionException ex)
+        catch (Exception ex)
         {
-            return ex.FailureType == ConnectionFailureType.AuthenticationFailure
-                || ex.InnerException is RedisConnectionException { FailureType: ConnectionFailureType.AuthenticationFailure };
-        }
-        catch (Exception)
-        {
-            return false; // anything else: as if the server were down
+            return IsRefusal(ex); // anything else: as if the server were down, or (WHOAMI) cannot tell
         }
     }
 
     /// <summary>
-    /// Whether a connection is <paramref name="user"/>'s. A server whose default user needs no password accepts the
-    /// connection even when it refused the user's credentials (<c>AUTH</c> failed, the connection stays the default
-    /// user's), so the client connects; <c>ACL WHOAMI</c> tells. A server that cannot answer it (before Redis 6, or a user
-    /// not allowed to ask) is trusted.
+    /// Whether a failure, anywhere in its chain, is the server refusing the credentials: the client's authentication
+    /// failure, or the server's own <c>NOAUTH</c> / <c>WRONGPASS</c> reply.
     /// </summary>
-    private static async Task<bool> AuthenticatedAsAsync(ConnectionMultiplexer connection, string user)
+    private static bool IsRefusal(Exception? failure)
     {
-        try
+        for (; failure is not null; failure = failure.InnerException)
         {
-            return (string?)await connection.GetDatabase().ExecuteAsync("ACL", "WHOAMI").ConfigureAwait(false) == user;
+            if (failure is RedisConnectionException { FailureType: ConnectionFailureType.AuthenticationFailure }
+                || (failure is RedisServerException server
+                    && (server.Message.StartsWith("NOAUTH", StringComparison.Ordinal) || server.Message.StartsWith("WRONGPASS", StringComparison.Ordinal))))
+            {
+                return true;
+            }
         }
-        catch (Exception)
-        {
-            return true; // cannot tell
-        }
+
+        return false;
     }
 
     /// <summary>Whether the connection is to a cluster (whose multi-key commands cannot span hash slots).</summary>
