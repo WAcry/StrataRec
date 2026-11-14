@@ -123,6 +123,9 @@ public sealed class OutputPlan
 
     public required (string Name, CompiledExpression Expression)[] Columns { get; init; }
 
+    /// <summary>The pinned versions the output's columns read (<c>col.x@node</c>), with the column that reads each.</summary>
+    public (string Column, VersionRead Read)[] VersionReads { get; init; } = Array.Empty<(string, VersionRead)>();
+
     /// <summary>
     /// Experiments overriding a parameter the output reads (<c>limit_param</c> or a parameter in an output column);
     /// a parameter trigger site (design 12.6).

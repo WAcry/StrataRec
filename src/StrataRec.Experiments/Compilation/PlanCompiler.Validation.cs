@@ -107,7 +107,7 @@ internal sealed partial class UnifiedCompilation
 
         var enumerated = new HashSet<string>(StringComparer.Ordinal);
         var reported = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var scope in _builder.DataFlowScopes(nodes, taps))
+        foreach (var scope in _builder.DataFlowScopes(nodes, taps, output))
         {
             var layers = new SortedSet<int>();
             foreach (var id in scope.Nodes)

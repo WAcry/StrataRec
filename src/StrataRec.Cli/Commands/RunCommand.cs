@@ -40,15 +40,29 @@ internal static class RunCommand
         {
             Description = "Also write a replay bundle of the request to this file (design 13.4); replay it with 'stratarec replay'.",
         };
-        var command = new Command("run", "Execute a request locally and print the result as JSON.") { config, environment, request, arms, trace, logs, record };
+        var deadline = new Option<int?>("--deadline-ms")
+        {
+            Description = "Use this request deadline (milliseconds) instead of the request file's deadline_ms. The first request of a process " +
+                          "also pays for compiling the code it runs (JIT), so a request that fits its deadline in a warm service may not fit " +
+                          "here; raise it to see the logic without the clock. Node and source budgets are unchanged.",
+        };
+        deadline.Validators.Add(static result =>
+        {
+            if (result.GetValueOrDefault<int?>() is <= 0)
+            {
+                result.AddError("--deadline-ms must be positive.");
+            }
+        });
+        var command = new Command("run", "Execute a request locally and print the result as JSON.") { config, environment, request, arms, trace, logs, record, deadline };
         command.SetAction((parse, cancellationToken) => RunAsync(parse.GetValue(config)!, parse.GetValue(environment)!, parse.GetValue(request)!,
-            parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(trace), Console.Out, cancellationToken, parse.GetValue(logs), parse.GetValue(record)));
+            parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(trace), Console.Out, cancellationToken, parse.GetValue(logs), parse.GetValue(record),
+            parse.GetValue(deadline)));
         return command;
     }
 
     internal static async Task<int> RunAsync(
         string config, string environment, string requestPath, string[] arms, bool trace, TextWriter output, CancellationToken cancellationToken, bool logs = false,
-        string? recordPath = null)
+        string? recordPath = null, int? deadlineMs = null)
     {
         JsonObject document;
         try
@@ -119,7 +133,7 @@ internal static class RunCommand
             RequestId = document["request_id"]?.GetValue<string>() ?? "cli",
             Inputs = inputs,
             Assignment = assignment,
-            Deadline = TimeSpan.FromMilliseconds(document["deadline_ms"]?.GetValue<double>() ?? 1000),
+            Deadline = TimeSpan.FromMilliseconds(deadlineMs ?? document["deadline_ms"]?.GetValue<double>() ?? 1000),
             TimeMs = document["time_ms"]?.GetValue<long>(),
             Seed = document["seed"]?.GetValue<long>(),
             Debug = new DebugOptions
@@ -133,7 +147,15 @@ internal static class RunCommand
             },
         };
 
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var result = await engine.ExecuteAsync(request, cancellationToken).ConfigureAwait(false);
+        if (!result.Succeeded && deadlineMs is null && System.Diagnostics.Stopwatch.GetElapsedTime(started) >= request.Deadline * 0.9)
+        {
+            // A one-shot process compiles what it runs on its first request: the deadline may be spent on that.
+            Console.Error.WriteLine($"the request used its whole deadline ({request.Deadline.TotalMilliseconds} ms); the first request of a process " +
+                                    "includes compiling the code it runs. Rerun with --deadline-ms 5000 to rule out the clock.");
+        }
+
         if (recordPath is not null)
         {
             if (result.Recording is { } bundle)

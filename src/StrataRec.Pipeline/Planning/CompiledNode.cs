@@ -21,6 +21,15 @@ public enum CompactMode : byte
 }
 
 /// <summary>
+/// A read of one node's own version of a column, <c>col.x@node</c> (design 4.6). Recorded on each node and tap variant
+/// that reads it, so the data-flow check judges it against the nodes of every arm combination the reader runs in, as a
+/// compile of that combination alone would, and not against nodes that only other combinations have.
+/// </summary>
+/// <param name="Node">The pinned node's id.</param>
+/// <param name="Logical">The column's logical id.</param>
+public readonly record struct VersionRead(string Node, int Logical);
+
+/// <summary>
 /// One compiled variant of a node: the operator instance plus everything the scheduler needs, all resolved to integer
 /// ids at load time (design 3.3, 12.3). Immutable and shared by all requests of a plan.
 /// </summary>
@@ -79,6 +88,9 @@ public sealed class CompiledNode
     public required int[] RequiredOutputs { get; init; }
 
     public required int[] ReadParams { get; init; }
+
+    /// <summary>Pinned versions the node reads (<c>col.x@node</c>), other than its own.</summary>
+    public VersionRead[] VersionReads { get; init; } = Array.Empty<VersionRead>();
 
     public required OutputColumn[] Outputs { get; init; }
 

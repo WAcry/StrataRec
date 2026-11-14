@@ -24,6 +24,7 @@ public sealed class OperatorCompileContext
     private readonly HashSet<int> _readFeatures = new();
     private readonly HashSet<int> _requiredOutputs = new();
     private readonly HashSet<int> _readParams = new();
+    private readonly HashSet<VersionRead> _versionReads = new();
     private readonly List<OutputColumn> _outputs = new();
 
     internal OperatorCompileContext(
@@ -73,6 +74,8 @@ public sealed class OperatorCompileContext
     internal IReadOnlyCollection<int> RequiredOutputs => _requiredOutputs;
 
     internal IReadOnlyCollection<int> ReadParams => _readParams;
+
+    internal IReadOnlyCollection<VersionRead> VersionReads => _versionReads;
 
     internal IReadOnlyList<OutputColumn> Outputs => _outputs;
 
@@ -331,14 +334,22 @@ public sealed class OperatorCompileContext
                 {
                     _requiredOutputs.Add(symbol.Id);
                 }
-                else if (column.Kind == ColumnKind.Output && symbol.FixedSlot >= 0 && symbol.Name.EndsWith("@" + NodeId, StringComparison.Ordinal)
-                    && _selfReads.Add(symbol.Id))
+                else if (column.Kind == ColumnKind.Output && symbol.FixedSlot >= 0)
                 {
-                    // The node's own version does not exist until the node commits: it would read a fresh slot.
-                    HasErrors = true;
-                    _diagnostics.Error("VERSION_REF_SELF", Artifact, Pointer + "/config",
-                        $"Node '{NodeId}' reads its own output '{symbol.Name}', which does not exist until the node has run.",
-                        $"read 'col.{column.Name}' (the version before '{NodeId}') or a version pinned to an earlier node");
+                    // A pinned version, col.x@node (the scope resolves only these to a slot of their own).
+                    var pinned = symbol.Name[(symbol.Name.IndexOf('@', StringComparison.Ordinal) + 1)..];
+                    if (pinned != NodeId)
+                    {
+                        _versionReads.Add(new VersionRead(pinned, symbol.Id));
+                    }
+                    else if (_selfReads.Add(symbol.Id))
+                    {
+                        // The node's own version does not exist until the node commits: it would read a fresh slot.
+                        HasErrors = true;
+                        _diagnostics.Error("VERSION_REF_SELF", Artifact, Pointer + "/config",
+                            $"Node '{NodeId}' reads its own output '{symbol.Name}', which does not exist until the node has run.",
+                            $"read 'col.{column.Name}' (the version before '{NodeId}') or a version pinned to an earlier node");
+                    }
                 }
 
                 break;
