@@ -1029,14 +1029,22 @@ public sealed class ModelCall
 }
 ```
 
-1. **绑定由算子负责。** `ModelScorer@1` 把存活行按 `batch_size` 分批，为每批构造形状为 `[batch]` 或 `[batch, dim]` 的输入张量，上下文特征广播到每一行，并发调用模型，把输出写进自己的槽位。所有批次都成功后才提交输出（第 4.6 节）；任何一批失败，节点结果为 `Failed`，不会留下一半来自主模型、一半来自后备模型的列。
+1. **绑定由算子负责。** `ModelScorer@1` 把存活行按 `batch_size` 分批，每个输入构造一个张量，上下文特征广播到每一行，并发调用模型，把输出写进自己的槽位。所有批次都成功后才提交输出（第 4.6 节）；任何一批失败，节点结果为 `Failed`，不会留下一半来自主模型、一半来自后备模型的列。输入张量由映射的列或上下文值的声明类型决定，与模型无关：
+
+   | 列类型 | 张量 |
+   | :--- | :--- |
+   | `float32`、`float64`、`bool`（0/1） | float32 `[batch]` |
+   | `int32`、`int64` | int64 `[batch]`，值精确 |
+   | `vec<float32,N>` | float32 `[batch, N]` |
+
+   其他类型不能作为输入。模型要的元素类型不同时，映射一个那种类型的衍生特征。这样回放和不加载客户端的校验构造的张量与线上一致（理由见 `decisions.md`）。
 2. **`inputs` 就是模型的特征契约。** 它是模型输入名到列的映射，引擎按原值传给模型。归一化、分桶这类变换要么放在模型内部，要么显式定义为衍生特征，保证训练和服务只有一份定义。所有输入都必须是非可空类型；可空特征需要先用衍生特征或默认值消解。
-3. **版本与签名。** 模型版本由参数 `ctr_model_version` 决定，换版本的实验只需要一个参数补丁；输入特征不同的新模型通过节点补丁上线。参数 Schema 用枚举列出允许的版本，加载期对每个版本调用 `GetSignatureAsync`，检查它的输入输出与 `inputs`、`outputs` 一致。签名可能要等客户端加载（读模型文件）或询问模型服务，所以是异步的：引擎加载计划时并发地取所有签名，取到之后再检查，只在加载时做，不在请求路径上（取舍见 `decisions.md`“绑定的实例”）。
+3. **版本与签名。** 模型版本由参数 `ctr_model_version` 决定，换版本的实验只需要一个参数补丁；输入特征不同的新模型通过节点补丁上线。参数 Schema 用枚举列出允许的版本，加载期对每个版本调用 `GetSignatureAsync`，检查它的输入输出与 `inputs`、`outputs` 一致，包括每个输入的元素类型和形状。签名可能要等客户端加载（读模型文件）或询问模型服务，所以是异步的：引擎加载计划时并发地取所有签名，取到之后再检查，只在加载时做，不在请求路径上（取舍见 `decisions.md`“绑定的实例”）。
 4. **后备模型。** `ctr_backup` 是 `role: fallback` 的节点，绑定到一个更小、更快的模型服务，产出相同的列。主节点的预算和后备预留见第 5.6 节；后备节点的特征和主节点一起拉取（第 6.8 节），失败时不需要额外的往返。
 5. **训练-服务一致性。** 探针可以写 `"columns_from": "ctr_ranker.inputs"`，记录的正好是送进模型的那些值（第 8.3 节）。训练数据从这份日志生成时，训练和服务使用同一份特征值。两种情况会打破这一点：主节点失败、由后备模型打分；或者日志在投递中丢失。探针信封中的 `column_producers` 记录每个分数列实际由哪个节点产出，持久投递的批次带连续序号（第 8.6 节），训练管道可以据此过滤后备样本、发现丢失。
 6. **同一个接口支持其他范式。** 成对排序、列表级重排、生成式召回和大模型重排使用同一个 `IModelClient`，区别只在算子如何构造输入、如何解释输出（第 5.9 节）。
 
-模型客户端和 `ModelScorer@1` 位于 `StrataRec.Models` 命名空间。新的模型协议（例如另一种推理服务的 RPC 格式）是一个新的 `IModelClient` 实现，随二进制发布；之后哪个模型使用它，由绑定产物决定。
+模型客户端位于 `StrataRec.Models`，`ModelScorer@1` 和其他标准算子一样在 `StrataRec.Pipeline`。新的模型协议（例如另一种推理服务的 RPC 格式）是一个新的 `IModelClient` 实现，随二进制发布；之后哪个模型使用它，由绑定产物决定。
 
 ### 6.10 特征治理
 
@@ -2236,8 +2244,8 @@ stratarec/
 │   ├── StrataRec.Core/          # 类型系统、ColumnKey、CandidateTable、RowSelection、OutputBindings、RequestMemory 与数组池
 │   ├── StrataRec.Expressions/   # ColumnExpr：解析、类型检查、IR 优化、向量化后端、可选融合后端
 │   ├── StrataRec.Features/      # 特征目录、实体键、拉取规划、IFeatureSourceConnector、暂存区与回填、本地特征表、IFeatureUpdateSource、snapshot_files@1、衍生特征
-│   ├── StrataRec.Pipeline/      # 节点模型、效果类别、调度、截止时间与降级、标准算子
-│   ├── StrataRec.Models/        # IModelClient 契约、模型签名检查、ModelScorer
+│   ├── StrataRec.Pipeline/      # 节点模型、效果类别、调度、截止时间与降级、标准算子（含 ModelScorer 与签名检查）
+│   ├── StrataRec.Models/        # IModelClient 契约、模型签名、内置客户端（linear@1、random@1）
 │   ├── StrataRec.Experiments/   # 分配映射、补丁合并、足迹与冲突检测、联合计划、参数快照、触发记录
 │   ├── StrataRec.Logging/       # 漏斗组、探针编译、协调采样、异步管道、编码器、ILogSink
 │   ├── StrataRec.Artifacts/     # RFC 8785 规范化、JSON Schema 生成、产物存储与加载、manifest、能力匹配
