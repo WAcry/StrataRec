@@ -14,6 +14,7 @@ public class JsonIntegersTests
     [InlineData("0", 0L)]
     [InlineData("-0.0", 0L)]
     [InlineData("0.0e999999999999", 0L)]
+    [InlineData("-0.000e-999999999999", 0L)] // zero under any exponent, the cap included
     [InlineData("3", 3L)]
     [InlineData("3.0", 3L)]
     [InlineData("3e2", 300L)]
@@ -65,6 +66,13 @@ public class JsonIntegersTests
     [InlineData("1e")]
     [InlineData(".5")]
     [InlineData("abc")]
+    [InlineData("01")] // review 33: JSON allows no leading zeros
+    [InlineData("-01")]
+    [InlineData("00e2")]
+    [InlineData("1.")] // nor a point without a digit after it
+    [InlineData("1.e2")]
+    [InlineData("1e+")]
+    [InlineData("+1")]
     public void TextThatIsNotANumber_IsNeither(string text)
     {
         Assert.False(JsonIntegers.TryParse(text, out _));
@@ -82,4 +90,18 @@ public class JsonIntegersTests
         Assert.False(JsonIntegers.TryGetInt64(JsonNode.Parse("\"3\""), out _));
         Assert.False(JsonIntegers.TryGetInt64(null, out _));
     }
+
+    [Fact]
+    public void ALongRunOfZeros_OffsetByAnExponent_IsReadExactly()
+    {
+        // Review 33: the exponent saturated at a fixed 1e9, which zeros enough to offset it would turn into another number.
+        // The cap now grows with the text; a short case checks the arithmetic the long one relies on.
+        var zeros = new string('0', 2_000);
+        Assert.True(JsonIntegers.TryParse("1" + zeros + "e-2000", out var one));
+        Assert.Equal(1L, one);
+        Assert.True(JsonIntegers.TryParse("1" + zeros + "e-1999", out var ten));
+        Assert.Equal(10L, ten);
+        Assert.False(JsonIntegers.TryParse("1" + zeros + "e-2001", out _)); // 0.1
+    }
+
 }

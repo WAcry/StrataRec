@@ -1,13 +1,15 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Unicode;
 
 namespace StrataRec.Artifacts.Json;
 
 /// <summary>
 /// What <see cref="Jsonc"/> rejects in a configuration file, for a value System.Text.Json has already parsed (a request
-/// body read with <see cref="JsonDocument"/>): a member given twice in one object, and a name or string whose escapes
-/// are not Unicode (an unpaired surrogate such as <c>\uD800</c>).
+/// body read with <see cref="JsonDocument"/>): a member given twice in one object, a name or string whose escapes are not
+/// Unicode (an unpaired surrogate such as <c>\uD800</c>), and a name or string whose bytes are not UTF-8 (a raw
+/// <c>0xFF</c>, which <see cref="JsonDocument"/> keeps until the text is read, review 33).
 /// </summary>
 /// <remarks>
 /// System.Text.Json parses both. What it does with them later is not an answer to the caller: a <c>JsonObject</c> throws
@@ -44,6 +46,8 @@ public static class StrictJson
                 }
 
                 return null;
+            case JsonValueKind.String when !Utf8.IsValid(JsonMarshal.GetRawUtf8Value(value)):
+                return new JsonBindingError(string.Empty, "The string is not valid UTF-8 text.", Utf8Hint);
             case JsonValueKind.String when Escaped(JsonMarshal.GetRawUtf8Value(value)) && !Readable(value):
                 return new JsonBindingError(string.Empty, $"The string {value.GetRawText()} is not valid Unicode: an escape is an unpaired surrogate.", UnicodeHint);
             default:
@@ -53,6 +57,8 @@ public static class StrictJson
 
     private const string UnicodeHint = "use a complete surrogate pair such as \\ud83d\\ude00, or write the character directly";
 
+    private const string Utf8Hint = "send the body as UTF-8 (Content-Type: application/json; charset=utf-8)";
+
     private static JsonBindingError? CheckObject(in JsonElement value)
     {
         var count = 0;
@@ -60,6 +66,13 @@ public static class StrictJson
         foreach (var member in value.EnumerateObject())
         {
             count++;
+
+            // Reported at the object: a name that is not text has no pointer.
+            if (!Utf8.IsValid(JsonMarshal.GetRawUtf8PropertyName(member)))
+            {
+                return new JsonBindingError(string.Empty, $"The name of member {count} of this object is not valid UTF-8 text.", Utf8Hint);
+            }
+
             if (Escaped(JsonMarshal.GetRawUtf8PropertyName(member)))
             {
                 if (!Readable(member))
