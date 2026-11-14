@@ -1,7 +1,6 @@
 using System.Text.Json.Serialization;
 using StrataRec.Artifacts.Json;
 using StrataRec.Core.Diagnostics;
-using StrataRec.Core.Types;
 using StrataRec.Expressions;
 using StrataRec.Models;
 
@@ -37,32 +36,26 @@ public abstract class ModelCallConfig
 
 /// <summary>
 /// Compiles what every model operator shares, in the order the operators report it: the model's binding and the
-/// versions a request may use (<see cref="Begin"/>), the inputs (<see cref="CompileInputs"/>), and the load-time check of
-/// every version's signature against the tensors the operator's layout builds (<see cref="Finish"/>). Between those
-/// steps each operator checks its own keys, so a config with errors reports them as before.
+/// versions a request may use (<see cref="Begin"/>, through <see cref="BoundModel"/>), the inputs
+/// (<see cref="CompileInputs"/>), and the load-time check of every version's signature against the tensors the operator's
+/// layout builds (<see cref="Finish"/>). Between those steps each operator checks its own keys, so a config with errors
+/// reports them as before.
 /// </summary>
 internal sealed class ModelCallCompiler
 {
     private readonly OperatorCompileContext _context;
     private readonly ModelCallConfig _config;
     private readonly TensorLayout _layout;
-    private readonly IModelClient _client;
-    private readonly int? _timeoutMs;
-    private readonly List<string?> _versions;
-    private readonly ParamRef? _versionParam;
+    private readonly BoundModel _model;
     private ModelInput[] _inputs = Array.Empty<ModelInput>();
     private ModelTensorRule.MappedInput[] _mapped = Array.Empty<ModelTensorRule.MappedInput>();
 
-    private ModelCallCompiler(
-        OperatorCompileContext context, ModelCallConfig config, TensorLayout layout, IModelClient client, int? timeoutMs, List<string?> versions, ParamRef? versionParam)
+    private ModelCallCompiler(OperatorCompileContext context, ModelCallConfig config, TensorLayout layout, BoundModel model)
     {
         _context = context;
         _config = config;
         _layout = layout;
-        _client = client;
-        _timeoutMs = timeoutMs;
-        _versions = versions;
-        _versionParam = versionParam;
+        _model = model;
     }
 
     /// <summary>
@@ -71,46 +64,8 @@ internal sealed class ModelCallCompiler
     /// </summary>
     public static ModelCallCompiler? Begin(OperatorCompileContext context, ModelCallConfig config, TensorLayout layout)
     {
-        var bound = context.Model(config.Model, "/model");
-        if (bound is null)
-        {
-            return null;
-        }
-
-        var versions = new List<string?>();
-        ParamRef? versionParam = null;
-        if (config.VersionParam is not null)
-        {
-            if (config.Version is not null)
-            {
-                context.Error("/version", "MODEL_VERSION", "Set at most one of 'version' and 'version_param'.");
-                return null;
-            }
-
-            if (!context.TryParam(config.VersionParam, "/version_param", out var p, StorageKind.String))
-            {
-                return null;
-            }
-
-            versionParam = p;
-            if (!context.Schema.TryGetParam(p.Name, out var leaf) || leaf.Enum is null)
-            {
-                context.Error("/version_param", "MODEL_VERSION_ENUM", $"Parameter '{p.Name}' must declare an enum of allowed model versions.",
-                    "every version is signature-checked at load time (design 6.9)");
-                return null;
-            }
-
-            foreach (var v in leaf.Enum)
-            {
-                versions.Add(v.AsString());
-            }
-        }
-        else
-        {
-            versions.Add(config.Version);
-        }
-
-        return new ModelCallCompiler(context, config, layout, bound.Value.Client, bound.Value.TimeoutMs, versions, versionParam);
+        var model = BoundModel.Resolve(context, config.Model, config.Version, config.VersionParam);
+        return model is null ? null : new ModelCallCompiler(context, config, layout, model);
     }
 
     /// <summary>
@@ -169,46 +124,38 @@ internal sealed class ModelCallCompiler
     public CompiledModelCall? Finish(IReadOnlyList<ModelTensorRule.MappedOutput> outputs)
     {
         var ok = true;
-        foreach (var version in _versions)
+        foreach (var version in _model.Versions)
         {
             // Null when it cannot be checked now: an error (reported), or the engine checks it at load (see ModelSignature).
-            if (_context.ModelSignature(_client, _config.Model, version, "/model") is not { } signature)
+            if (_model.Signature(_context, version) is not { } signature)
             {
                 ok &= !_context.HasErrors;
                 continue;
             }
 
-            foreach (var problem in ModelTensorRule.Check($"Model '{_config.Model}' version '{version ?? "default"}'", _layout, _mapped, outputs, signature))
+            foreach (var problem in ModelTensorRule.Check(_model.Describe(version), _layout, _mapped, outputs, signature))
             {
                 _context.Error(problem.ConfigKey, problem.Code, problem.Message, problem.Hint);
                 ok = false;
             }
         }
 
-        return ok ? new CompiledModelCall(_config.Model, _config.Version, _versionParam, _client, _timeoutMs, _inputs) : null;
+        return ok ? new CompiledModelCall(_model, _inputs) : null;
     }
 }
 
 /// <summary>
-/// The model a node calls, compiled: its client, the version (fixed or chosen per request by a parameter), and the
-/// inputs. Immutable and shared by every request of the node.
+/// The model a tensor operator calls, compiled: the bound model (its client, and the version fixed or chosen per request
+/// by a parameter) and the inputs. Immutable and shared by every request of the node.
 /// </summary>
 internal sealed class CompiledModelCall
 {
-    private readonly string? _version;
-    private readonly ParamRef? _versionParam;
-    private readonly IModelClient _client;
-    private readonly int? _timeoutMs;
+    private readonly BoundModel _model;
 
-    public CompiledModelCall(string model, string? version, ParamRef? versionParam, IModelClient client, int? timeoutMs, ModelInput[] inputs)
+    public CompiledModelCall(BoundModel model, ModelInput[] inputs)
     {
-        Model = model;
-        _version = version;
-        _versionParam = versionParam;
-        _client = client;
-        _timeoutMs = timeoutMs;
+        _model = model;
         Inputs = inputs;
-        Target = new IoTarget(IoKind.Model, model);
         var named = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var input in inputs)
         {
@@ -219,35 +166,25 @@ internal sealed class CompiledModelCall
     }
 
     /// <summary>The logical model name.</summary>
-    public string Model { get; }
+    public string Model => _model.Model;
 
     /// <summary>In ordinal order of their names.</summary>
     public ModelInput[] Inputs { get; }
 
     /// <summary>The model's telemetry target: its duration, errors and fallbacks are tagged with the model's name.</summary>
-    public IoTarget Target { get; }
+    public IoTarget Target => _model.Target;
 
     /// <summary>Model input name → source, for log taps' <c>columns_from</c> (design 6.9).</summary>
     public IReadOnlyDictionary<string, string> NamedInputs { get; }
 
     /// <summary>The version this request calls.</summary>
-    public string? Version(OperatorContext context) => _versionParam is { } p ? context.Param(p).AsString() : _version;
+    public string? Version(OperatorContext context) => _model.Version(context);
 
     /// <summary>
     /// Sends one call through <see cref="OperatorContext.InvokeModelAsync"/>, with the request's seed. <paramref name="rows"/>
     /// are the physical rows of the batch for a call whose outputs are per row, or empty (see that method).
     /// </summary>
     public Task<ModelStatus> InvokeAsync(
-        OperatorContext context, string? version, NamedInput[] inputs, int batchSize, IModelOutputWriter outputs, ReadOnlyMemory<int> rows)
-    {
-        var call = new ModelCall
-        {
-            Model = Model,
-            Version = version,
-            Inputs = inputs,
-            BatchSize = batchSize,
-            Options = new ModelCallOptions(Seed: context.Seed),
-        };
-        return context.InvokeModelAsync(_client, Target, call, outputs, rows, _timeoutMs);
-    }
+        OperatorContext context, string? version, NamedInput[] inputs, int batchSize, IModelOutputWriter outputs, ReadOnlyMemory<int> rows) =>
+        _model.InvokeAsync(context, version, inputs, batchSize, outputs, rows);
 }

@@ -90,8 +90,11 @@ public sealed class OperatorContext
     /// </summary>
     internal CancellationToken CallerCancellation => _state.CallerCancellation;
 
-    /// <summary>True while the request replays a recording: it is not traffic, so traffic metrics are not counted (design 13.4).</summary>
-    internal bool Replays => _state.Replay is not null;
+    /// <summary>
+    /// True while the request replays a recording: it is not traffic, so traffic metrics are not counted (design 13.4).
+    /// Public for operators outside this assembly that count metrics of their own (<c>stratarec.model.answer_ids</c>).
+    /// </summary>
+    public bool Replays => _state.Replay is not null;
 
     internal string? FailureReason { get; private set; }
 
@@ -238,7 +241,7 @@ public sealed class OperatorContext
         var sequence = recorder?.BeginModelCall(NodeId, call, KeysOf(rows)) ?? 0;
         var recording = recorder is null ? null : new RecordingOutputWriter(outputs);
         var result = await BoundedCall.RunAsync<ModelStatus, ModelInvocation>(
-            new ModelInvocation(client, call, (IModelOutputWriter?)recording ?? outputs, recorder, recording, sequence), Budget, _state.Memory, target,
+            new ModelInvocation(client, call, (IModelOutputWriter?)recording ?? outputs, target, recorder, recording, sequence), Budget, _state.Memory, target,
             timeoutMs, RequestId, _state.Events).ConfigureAwait(false);
         switch (result.End)
         {
@@ -315,9 +318,14 @@ public sealed class OperatorContext
         }
     }
 
-    /// <summary>A model call: records what the request saw, with the outputs only of a call that answered.</summary>
+    /// <summary>
+    /// A model call: counts what a generative client reported (<see cref="StrataRecMetrics.ModelOutputTokens"/>,
+    /// <see cref="StrataRecMetrics.ModelTruncated"/>) for every call that answered, in this one place for every model
+    /// operator, and records what the request saw, with the outputs only of a call that answered. A replay never gets here:
+    /// it is answered from the recording before the call is sent, so it counts nothing.
+    /// </summary>
     private readonly struct ModelInvocation(
-        IModelClient client, ModelCall call, IModelOutputWriter outputs, RunRecorder? recorder, RecordingOutputWriter? recording, int sequence)
+        IModelClient client, ModelCall call, IModelOutputWriter outputs, IoTarget target, RunRecorder? recorder, RecordingOutputWriter? recording, int sequence)
         : IBoundedCall<ModelStatus>
     {
         public ValueTask<ModelStatus> Send(CancellationToken token) => client.InvokeAsync(call, outputs, token);
@@ -332,7 +340,26 @@ public sealed class OperatorContext
         {
             // What the operator is thrown, so a replay throws the same (an own timeout is a failed status, not a throw).
             var thrown = result.End is CallEnd.Threw or CallEnd.BudgetRanOut or CallEnd.Cancelled ? result.Exception?.GetType() : null;
-            recorder?.ModelCall(sequence, result.Outcome, result.Error, thrown, duration, recording!);
+            var answered = result.End == CallEnd.Answered;
+            if (answered)
+            {
+                CountGenerated(result.Value, target);
+            }
+
+            recorder?.ModelCall(sequence, result.Outcome, result.Error, thrown, duration, recording!, answered ? result.Value : default);
+        }
+
+        private static void CountGenerated(in ModelStatus status, IoTarget target)
+        {
+            if (status.OutputTokens is { } tokens && StrataRecMetrics.ModelOutputTokens.Enabled)
+            {
+                StrataRecMetrics.ModelOutputTokens.Add(tokens, target.Tags);
+            }
+
+            if (status.Truncated && StrataRecMetrics.ModelTruncated.Enabled)
+            {
+                StrataRecMetrics.ModelTruncated.Add(1, target.Tags);
+            }
         }
     }
 }
