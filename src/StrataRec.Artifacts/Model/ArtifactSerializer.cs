@@ -8,8 +8,7 @@ namespace StrataRec.Artifacts.Model;
 
 /// <summary>
 /// Strict (de)serialization of artifact models: snake_case names, comments and trailing commas allowed (JSONC),
-/// unknown properties rejected so that typos surface as errors instead of being ignored. A member an earlier format
-/// had is rejected with what replaced it (<see cref="RetiredMembers"/>). Every other mismatch is described in JSON words
+/// unknown properties rejected so that typos surface as errors instead of being ignored. Every mismatch is described in JSON words
 /// by <see cref="JsonBindingErrors"/>, the same way for artifacts and for the parts of them bound later (operator
 /// configs, nodes, patch sections).
 /// </summary>
@@ -61,8 +60,7 @@ public static class ArtifactSerializer
         }
         catch (JsonException ex)
         {
-            throw RetiredMembers.Find(typeof(T), node, sourceName)
-                  ?? Failed(JsonBindingErrors.Describe(ex, node, typeof(T), Options, Subject(typeof(T))), sourceName, ex);
+            throw Failed(JsonBindingErrors.Describe(ex, node, typeof(T), Options, Subject(typeof(T))), sourceName, ex);
         }
         catch (Exception ex) when (NotBindable(ex, node, typeof(T), Subject(typeof(T))) is { } error)
         {
@@ -105,10 +103,6 @@ public static class ArtifactSerializer
         {
             // Described on the document, which the check above has read already: the translator walks a tree.
             var document = Jsonc.Parse(json, sourceName);
-            if (RetiredMembers.Find(typeof(T), document, sourceName) is { } retired)
-            {
-                throw retired;
-            }
 
             var error = ex is JsonException binding
                 ? JsonBindingErrors.Describe(binding, document, typeof(T), Options, Subject(typeof(T)))
