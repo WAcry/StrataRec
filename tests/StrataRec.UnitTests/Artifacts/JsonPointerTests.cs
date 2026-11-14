@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
+using StrataRec.Artifacts.Model;
 
 namespace StrataRec.UnitTests.Artifacts;
 
@@ -259,12 +260,12 @@ public class JsonPointerTests
             }
             """;
 
-        var policy = Jsonc.Deserialize<PolicyModel>(text)!;
+        var policy = ArtifactSerializer.Deserialize<PolicyModel>(text);
 
         Assert.Equal(JsonPointer.Create("a/b"), policy.Patchable[2]);
         Assert.Equal(new[] { "trust-safety" }, policy.Owners[JsonPointer.Parse("/nodes/safety_filter")]);
 
-        var json = JsonSerializer.Serialize(policy, Jsonc.SerializerOptions);
+        var json = JsonSerializer.Serialize(policy, ArtifactSerializer.Options);
         Assert.Contains("\"/a~1b\"", json);
         Assert.Contains("\"/nodes/safety_filter\":", json);
     }
@@ -275,10 +276,9 @@ public class JsonPointerTests
     [InlineData("""{"experiment_patchable": [], "owners": {"nodes": []}}""")]
     public void JsonConverter_RejectsInvalidPointers(string text)
     {
-        var ex = Assert.Throws<JsoncException>(() => Jsonc.Deserialize<PolicyModel>(text, "policy.jsonc"));
+        var ex = Assert.Throws<ArtifactFormatException>(() => ArtifactSerializer.Deserialize<PolicyModel>(text, "policy.jsonc"));
 
-        Assert.Equal(JsoncException.DeserializationErrorCode, ex.Code);
-        Assert.NotNull(ex.Line);
+        Assert.StartsWith("/", ex.Pointer); // at the value
     }
 
     private sealed class PolicyModel

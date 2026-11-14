@@ -2,8 +2,6 @@ using System.Buffers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
-using System.Text.Json.Serialization.Metadata;
 using System.Text.Unicode;
 
 namespace StrataRec.Artifacts.Json;
@@ -28,7 +26,7 @@ namespace StrataRec.Artifacts.Json;
 ///   </item>
 ///   <item>
 ///     Anything that is not a JSON number in number position: <c>NaN</c>, <c>Infinity</c>, hexadecimal, leading
-///     <c>+</c> or leading zeros. Quoted numbers are not converted to numbers by <see cref="Deserialize{T}(string, string?)"/>.
+///     <c>+</c> or leading zeros.
 ///   </item>
 ///   <item>Nesting deeper than <see cref="MaxDepth"/>.</item>
 /// </list>
@@ -56,17 +54,6 @@ public static class Jsonc
         MaxDepth = MaxDepth,
     };
 
-    /// <summary>
-    /// The read-only serializer options used for every artifact: comments skipped, trailing commas allowed, strict
-    /// numbers (<see cref="JsonNumberHandling.Strict"/>), duplicate properties rejected, case-sensitive names.
-    /// </summary>
-    /// <remarks>
-    /// Property names are not transformed by a naming policy: model types spell their snake_case JSON names
-    /// explicitly with <see cref="JsonPropertyNameAttribute"/>. Copy the options
-    /// (<c>new JsonSerializerOptions(Jsonc.SerializerOptions)</c>) to add converters or a source-generated resolver.
-    /// </remarks>
-    public static JsonSerializerOptions SerializerOptions { get; } = CreateSerializerOptions();
-
     /// <summary>Parses a JSONC document into a mutable <see cref="JsonNode"/> tree.</summary>
     /// <param name="json">The document text.</param>
     /// <param name="fileName">Optional file name used in error messages.</param>
@@ -91,54 +78,28 @@ public static class Jsonc
         }
     }
 
-    /// <summary>Deserializes a JSONC document into <typeparamref name="T"/> using <see cref="SerializerOptions"/>.</summary>
-    /// <param name="json">The document text.</param>
-    /// <param name="fileName">Optional file name used in error messages.</param>
-    /// <exception cref="JsoncException">
-    /// The document is not valid JSONC, or does not fit <typeparamref name="T"/> (wrong type, missing required
-    /// property, ...); <see cref="JsonException.Path"/> then holds the System.Text.Json path of the offending value.
-    /// </exception>
-    public static T? Deserialize<T>(string json, string? fileName = null) => Deserialize<T>(Encode(json, fileName), fileName);
-
-    /// <summary>Deserializes a UTF-8 encoded JSONC document into <typeparamref name="T"/>.</summary>
-    /// <inheritdoc cref="Deserialize{T}(string, string?)"/>
-    public static T? Deserialize<T>(ReadOnlySpan<byte> utf8Json, string? fileName = null)
+    /// <summary>
+    /// Parses a JSONC document as strictly as <see cref="Parse(string, string?)"/> into a <see cref="JsonElement"/> that
+    /// owns its data: for data read by key rather than edited, such as a connector's fixture file.
+    /// </summary>
+    /// <exception cref="JsoncException">The document is not valid JSONC or breaks one of the strictness rules.</exception>
+    public static JsonElement ParseElement(string json, string? fileName = null)
     {
-        var json = SkipByteOrderMark(utf8Json);
-        Validate(json, fileName);
-        try
-        {
-            return JsonSerializer.Deserialize<T>(json, SerializerOptions);
-        }
-        catch (JsonException ex) when (ex is not JsoncException)
-        {
-            var reason = StripLocation(ex.Message);
-            if (ex.LineNumber is { } line && ex.BytePositionInLine is { } bytePosition)
-            {
-                var column = ColumnOf(json, line, bytePosition);
-                throw new JsoncException(
-                    JsoncException.DeserializationErrorCode, reason, fileName, (int)line + 1, column, bytePosition, ex.Path, innerException: ex);
-            }
-
-            throw new JsoncException(
-                JsoncException.DeserializationErrorCode, reason, fileName, null, null, null, ex.Path, innerException: ex);
-        }
+        using var document = JsonDocument.Parse(Checked(json, fileName), _documentOptions);
+        return document.RootElement.Clone();
     }
 
-    private static JsonSerializerOptions CreateSerializerOptions()
+    /// <summary>
+    /// The document as UTF-8, after the checks <see cref="Parse(string, string?)"/> makes (grammar, duplicate keys,
+    /// Unicode, depth), without building a tree: for a caller that binds the bytes itself, as strictly as a parsed file.
+    /// </summary>
+    /// <exception cref="JsoncException">The document is not valid JSONC or breaks one of the strictness rules.</exception>
+    internal static ReadOnlyMemory<byte> Checked(string json, string? fileName)
     {
-        var options = new JsonSerializerOptions
-        {
-            ReadCommentHandling = JsonCommentHandling.Skip,
-            AllowTrailingCommas = true,
-            NumberHandling = JsonNumberHandling.Strict,
-            AllowDuplicateProperties = false,
-            PropertyNameCaseInsensitive = false,
-            MaxDepth = MaxDepth,
-            TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
-        };
-        options.MakeReadOnly();
-        return options;
+        var bytes = Encode(json, fileName);
+        var start = SkipByteOrderMark(bytes).Length == bytes.Length ? 0 : 3;
+        Validate(bytes.AsSpan(start), fileName);
+        return bytes.AsMemory(start);
     }
 
     private static byte[] Encode(string json, string? fileName)

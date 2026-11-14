@@ -73,30 +73,35 @@ public static class ArtifactSerializer
     }
 
     /// <inheritdoc cref="Deserialize{T}(JsonNode, string?)"/>
+    /// <remarks>
+    /// The text is checked as a workspace file is before it is bound (<see cref="Jsonc"/>: a key written twice, text that
+    /// is not valid Unicode, a syntax error, told at its line and column), so a document read from a string (a manifest,
+    /// a replay bundle, an artifact of the store) is accepted or rejected as the same document read as a file. The
+    /// serializer alone keeps the last of two equal keys.
+    /// </remarks>
     public static T Deserialize<T>(string json, string? sourceName = null)
     {
+        ReadOnlyMemory<byte> utf8;
         try
         {
-            if (JsonSerializer.Deserialize<T>(json, Options) is { } value)
+            utf8 = Jsonc.Checked(json, sourceName);
+        }
+        catch (JsoncException ex)
+        {
+            throw Unreadable(ex, sourceName);
+        }
+
+        try
+        {
+            if (JsonSerializer.Deserialize<T>(utf8.Span, Options) is { } value)
             {
                 return NullElements.Find(value, Options) is { } nullElement ? throw Failed(nullElement, sourceName, null) : value;
             }
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException)
         {
-            // The document is read again strictly, as a workspace file is: a string or key that is not valid Unicode,
-            // a key written twice or a syntax error is told at its line and column, and the translator only ever walks
-            // a document every part of which can be read.
-            JsonNode? document;
-            try
-            {
-                document = Jsonc.Parse(json, sourceName);
-            }
-            catch (JsoncException jsonc)
-            {
-                throw Unreadable(jsonc, sourceName);
-            }
-
+            // Described on the document, which the check above has read already: the translator walks a tree.
+            var document = Jsonc.Parse(json, sourceName);
             if (RetiredMembers.Find(typeof(T), document, sourceName) is { } retired)
             {
                 throw retired;
@@ -201,6 +206,10 @@ public static class ArtifactSerializer
             // null where a member is not nullable is an error at its pointer, as the generated JSON Schema says: bound,
             // it was a null an operator or loader dereferenced (review 44). Elements of collections are not covered.
             RespectNullableAnnotations = true,
+
+            // A key written twice is an error, as the JSONC reader says (Deserialize checks the text first, with a line and
+            // column); set here too for a host that binds with these options itself.
+            AllowDuplicateProperties = false,
         };
         options.MakeReadOnly(populateMissingResolver: true);
         return options;

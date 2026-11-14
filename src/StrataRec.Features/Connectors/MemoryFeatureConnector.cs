@@ -350,7 +350,7 @@ public sealed class MemoryFeatureConnectorFactory : IFeatureConnectorFactory
         }
         else if (settings.TryGetValue("data_file", out var file))
         {
-            data = Read(file, context.BaseDirectory);
+            data = DataFile.Read(file, context.BaseDirectory).Root;
         }
         else
         {
@@ -379,28 +379,5 @@ public sealed class MemoryFeatureConnectorFactory : IFeatureConnectorFactory
         }
 
         return new MemoryFeatureConnector(data, latency, fail);
-    }
-
-    private static JsonElement Read(JsonElement setting, string baseDirectory)
-    {
-        if (setting.ValueKind != JsonValueKind.String || setting.GetString() is not { Length: > 0 } relative)
-        {
-            throw new BindingException("/data_file", $"'data_file' must be the path of a JSON file; got {setting.GetRawText()}.");
-        }
-
-        var path = Path.Combine(baseDirectory, relative); // a rooted path stays as it is
-        try
-        {
-            using var document = JsonDocument.Parse(File.ReadAllText(path), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
-            return document.RootElement.Clone();
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            throw new BindingException("/data_file", $"'{path}' cannot be read: {ex.Message}", $"a relative path resolves against {baseDirectory}");
-        }
-        catch (JsonException ex)
-        {
-            throw new BindingException("/data_file", $"'{path}' is not JSON: {ex.Message}");
-        }
     }
 }

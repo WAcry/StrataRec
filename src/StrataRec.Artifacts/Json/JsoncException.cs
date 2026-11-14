@@ -24,9 +24,6 @@ public sealed class JsoncException : JsonException
     /// <summary>A string escape produces an unpaired UTF-16 surrogate, or the input text is not valid Unicode.</summary>
     public const string InvalidUnicodeCode = "JSONC_INVALID_UNICODE";
 
-    /// <summary>The document is well-formed but does not deserialize into the requested type.</summary>
-    public const string DeserializationErrorCode = "JSONC_DESERIALIZE";
-
     internal JsoncException(
         string code,
         string reason,

@@ -31,7 +31,7 @@ internal static class Output
         if (format == "json")
         {
             using var stream = new MemoryStream();
-            using (var json = new Utf8JsonWriter(stream, CommonOptions.JsonOptions))
+            using (var json = new Utf8JsonWriter(stream, CommonOptions.JsonWriterOptions))
             {
                 json.WriteStartObject();
                 json.WriteNumber("errors", errors);
@@ -326,7 +326,7 @@ internal static class Output
     public static string ToJson(Action<Utf8JsonWriter> write)
     {
         using var stream = new MemoryStream();
-        using (var json = new Utf8JsonWriter(stream, CommonOptions.JsonOptions))
+        using (var json = new Utf8JsonWriter(stream, CommonOptions.JsonWriterOptions))
         {
             write(json);
         }

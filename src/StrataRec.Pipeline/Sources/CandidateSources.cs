@@ -3,6 +3,7 @@ using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Values;
+using StrataRec.Features.Connectors;
 
 namespace StrataRec.Pipeline.Sources;
 
@@ -239,117 +240,83 @@ public sealed class MemoryListCandidateSourceFactory : ICandidateSourceFactory
     {
         ArgumentNullException.ThrowIfNull(context);
         var members = new Dictionary<string, (JsonElement Value, Where Where)>(StringComparer.Ordinal);
-        JsonDocument? file = null;
-        try
+        foreach (var (name, _) in context.Settings)
         {
-            foreach (var (name, _) in context.Settings)
+            if (Array.IndexOf(Settings, name) < 0)
             {
-                if (Array.IndexOf(Settings, name) < 0)
-                {
-                    throw BindingException.Unknown(string.Empty, name, Settings, Takes);
-                }
+                throw BindingException.Unknown(string.Empty, name, Settings, Takes);
+            }
+        }
+
+        if (context.Settings.TryGetValue("data_file", out var dataFile))
+        {
+            var (root, path) = DataFile.Read(dataFile, context.BaseDirectory);
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                throw new BindingException("/data_file", $"'{path}' must hold a JSON object of memory_list@1's members.", Takes);
             }
 
-            if (context.Settings.TryGetValue("data_file", out var dataFile))
+            foreach (var member in root.EnumerateObject())
             {
-                (file, var path) = Read(dataFile, context.BaseDirectory);
-                foreach (var member in file.RootElement.EnumerateObject())
+                if (Array.IndexOf(Members, member.Name) < 0)
                 {
-                    if (Array.IndexOf(Members, member.Name) < 0)
-                    {
-                        var guess = Core.Diagnostics.Spelling.DidYouMean(member.Name, Members);
-                        throw new BindingException("/data_file", $"'{path}' has a member '{member.Name}', which memory_list@1 does not take.",
-                            guess is null ? Takes : guess + " " + Takes);
-                    }
-
-                    members[member.Name] = (member.Value, new Where(path, "/" + member.Name));
-                }
-            }
-
-            foreach (var (name, value) in context.Settings)
-            {
-                if (name != "data_file")
-                {
-                    members[name] = (value, new Where(null, "/" + name)); // the binding's own settings override the file's
-                }
-            }
-
-            var items = members.TryGetValue("items", out var i) ? List(i.Value, i.Where) : Array.Empty<MemoryListCandidateSource.Entry>();
-            string? byInput = null;
-            if (members.TryGetValue("by_input", out var b))
-            {
-                byInput = b.Value.ValueKind == JsonValueKind.String && b.Value.GetString() is { Length: > 0 } input
-                    ? input
-                    : throw b.Where.Error(string.Empty, $"'by_input' must name a request input; got {b.Value.GetRawText()}.");
-            }
-
-            var lists = new Dictionary<string, MemoryListCandidateSource.Entry[]>(StringComparer.Ordinal);
-            if (members.TryGetValue("lists", out var l))
-            {
-                if (l.Value.ValueKind != JsonValueKind.Object)
-                {
-                    throw l.Where.Error(string.Empty, $"'lists' must be an object of input value to list; got {l.Value.GetRawText()}.");
+                    var guess = Core.Diagnostics.Spelling.DidYouMean(member.Name, Members);
+                    throw new BindingException("/data_file", $"'{path}' has a member '{member.Name}', which memory_list@1 does not take.",
+                        guess is null ? Takes : guess + " " + Takes);
                 }
 
-                foreach (var list in l.Value.EnumerateObject())
-                {
-                    lists[list.Name] = List(list.Value, l.Where.In("/" + BindingContext.EscapePointerToken(list.Name)));
-                }
+                members[member.Name] = (member.Value, new Where(path, "/" + member.Name));
             }
+        }
 
-            var latency = 0;
-            if (members.TryGetValue("latency_ms", out var t))
+        foreach (var (name, value) in context.Settings)
+        {
+            if (name != "data_file")
             {
-                latency = t.Value.ValueKind == JsonValueKind.Number && t.Value.TryGetInt32(out var ms) && ms >= 0
-                    ? ms
-                    : throw t.Where.Error(string.Empty, $"'latency_ms' must be a whole number of milliseconds, 0 or more; got {t.Value.GetRawText()}.");
+                members[name] = (value, new Where(null, "/" + name)); // the binding's own settings override the file's
             }
+        }
 
-            var fail = false;
-            if (members.TryGetValue("fail", out var f))
+        var items = members.TryGetValue("items", out var i) ? List(i.Value, i.Where) : Array.Empty<MemoryListCandidateSource.Entry>();
+        string? byInput = null;
+        if (members.TryGetValue("by_input", out var b))
+        {
+            byInput = b.Value.ValueKind == JsonValueKind.String && b.Value.GetString() is { Length: > 0 } input
+                ? input
+                : throw b.Where.Error(string.Empty, $"'by_input' must name a request input; got {b.Value.GetRawText()}.");
+        }
+
+        var lists = new Dictionary<string, MemoryListCandidateSource.Entry[]>(StringComparer.Ordinal);
+        if (members.TryGetValue("lists", out var l))
+        {
+            if (l.Value.ValueKind != JsonValueKind.Object)
             {
-                fail = f.Value.ValueKind is JsonValueKind.True or JsonValueKind.False
-                    ? f.Value.GetBoolean()
-                    : throw f.Where.Error(string.Empty, $"'fail' must be true or false; got {f.Value.GetRawText()}.");
+                throw l.Where.Error(string.Empty, $"'lists' must be an object of input value to list; got {l.Value.GetRawText()}.");
             }
 
-            return MemoryListCandidateSource.Create(items, byInput, lists, latency, fail);
-        }
-        finally
-        {
-            file?.Dispose();
-        }
-    }
-
-    private static (JsonDocument Document, string Path) Read(JsonElement setting, string baseDirectory)
-    {
-        if (setting.ValueKind != JsonValueKind.String || setting.GetString() is not { Length: > 0 } relative)
-        {
-            throw new BindingException("/data_file", $"'data_file' must be the path of a JSON file; got {setting.GetRawText()}.");
+            foreach (var list in l.Value.EnumerateObject())
+            {
+                lists[list.Name] = List(list.Value, l.Where.In("/" + BindingContext.EscapePointerToken(list.Name)));
+            }
         }
 
-        var path = Path.Combine(baseDirectory, relative); // a rooted path stays as it is
-        JsonDocument document;
-        try
+        var latency = 0;
+        if (members.TryGetValue("latency_ms", out var t))
         {
-            document = JsonDocument.Parse(File.ReadAllText(path), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            throw new BindingException("/data_file", $"'{path}' cannot be read: {ex.Message}", $"a relative path resolves against {baseDirectory}");
-        }
-        catch (JsonException ex)
-        {
-            throw new BindingException("/data_file", $"'{path}' is not JSON: {ex.Message}");
+            latency = t.Value.ValueKind == JsonValueKind.Number && t.Value.TryGetInt32(out var ms) && ms >= 0
+                ? ms
+                : throw t.Where.Error(string.Empty, $"'latency_ms' must be a whole number of milliseconds, 0 or more; got {t.Value.GetRawText()}.");
         }
 
-        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        var fail = false;
+        if (members.TryGetValue("fail", out var f))
         {
-            document.Dispose();
-            throw new BindingException("/data_file", $"'{path}' must hold a JSON object of memory_list@1's members.", Takes);
+            fail = f.Value.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? f.Value.GetBoolean()
+                : throw f.Where.Error(string.Empty, $"'fail' must be true or false; got {f.Value.GetRawText()}.");
         }
 
-        return (document, path);
+        return MemoryListCandidateSource.Create(items, byInput, lists, latency, fail);
     }
 
     /// <summary>A list: ids or <c>{"id", "score"}</c> objects, best first; scores default to a descending ramp.</summary>

@@ -81,7 +81,7 @@ internal static class CommonOptions
     /// The CLI's JSON output: indented, and with quotes, '&lt;' and non-ASCII text as written, since it goes to a terminal or a
     /// program, never into HTML (the default encoder writes <c>'</c> as <c>\u0027</c>).
     /// </summary>
-    public static JsonWriterOptions JsonOptions => new() { Indented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+    public static JsonWriterOptions JsonWriterOptions => new() { Indented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     /// <summary>
     /// <c>-c</c> where <c>--manifest</c> is the alternative: no default value, so that giving both is an error; neither is

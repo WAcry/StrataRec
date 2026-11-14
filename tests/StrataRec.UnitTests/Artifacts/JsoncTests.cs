@@ -201,88 +201,6 @@ public class JsoncTests
         Assert.Throws<ArgumentNullException>(() => Jsonc.Parse((string)null!));
     }
 
-    [Fact]
-    public void Deserialize_ReadsJsoncIntoModel()
-    {
-        const string text = """
-            {
-              // node configuration
-              "op": "Filter@1",
-              "order": 300,
-              "weights": { "a": 0.5, "b": 1, },
-            }
-            """;
-
-        var config = Jsonc.Deserialize<NodeConfig>(text, FileName);
-
-        Assert.NotNull(config);
-        Assert.Equal("Filter@1", config.Op);
-        Assert.Equal(300, config.Order);
-        Assert.Equal(0.5, config.Weights["a"]);
-    }
-
-    [Fact]
-    public void Deserialize_TypeMismatch_ReportsPathAndPosition()
-    {
-        const string text = "{\n  \"op\": \"Filter@1\",\n  \"order\": \"late\"\n}";
-
-        var ex = Assert.Throws<JsoncException>(() => Jsonc.Deserialize<NodeConfig>(text, FileName));
-
-        Assert.Equal(JsoncException.DeserializationErrorCode, ex.Code);
-        Assert.Equal("$.order", ex.Path);
-        Assert.Equal(3, ex.Line);
-        Assert.Contains("home_feed.jsonc(3,", ex.Message);
-        Assert.Contains("(at $.order)", ex.Message);
-        Assert.DoesNotContain("LineNumber", ex.Message);
-    }
-
-    [Fact]
-    public void Deserialize_QuotedNumber_IsRejected()
-    {
-        var ex = Assert.Throws<JsoncException>(() => Jsonc.Deserialize<NodeConfig>("""{"op": "x", "order": "5"}"""));
-
-        Assert.Equal(JsoncException.DeserializationErrorCode, ex.Code);
-    }
-
-    [Fact]
-    public void Deserialize_MissingRequiredProperty_IsRejected()
-    {
-        var ex = Assert.Throws<JsoncException>(() => Jsonc.Deserialize<NodeConfig>("""{"order": 5}"""));
-
-        Assert.Equal(JsoncException.DeserializationErrorCode, ex.Code);
-        Assert.Contains("op", ex.Reason);
-    }
-
-    [Fact]
-    public void Deserialize_DuplicateKey_IsRejectedBeforeBinding()
-    {
-        var ex = Assert.Throws<JsoncException>(() => Jsonc.Deserialize<NodeConfig>("""{"op": "a", "op": "b"}"""));
-
-        Assert.Equal(JsoncException.DuplicateKeyCode, ex.Code);
-    }
-
-    [Fact]
-    public void Deserialize_DuplicateDictionaryKey_IsRejected()
-    {
-        var ex = Assert.Throws<JsoncException>(() => Jsonc.Deserialize<Dictionary<string, int>>("""{"a": 1, "a": 2}"""));
-
-        Assert.Equal(JsoncException.DuplicateKeyCode, ex.Code);
-    }
-
-    [Fact]
-    public void SerializerOptions_AreSharedAndReadOnly()
-    {
-        var options = Jsonc.SerializerOptions;
-
-        Assert.Same(options, Jsonc.SerializerOptions);
-        Assert.True(options.IsReadOnly);
-        Assert.Equal(JsonCommentHandling.Skip, options.ReadCommentHandling);
-        Assert.True(options.AllowTrailingCommas);
-        Assert.Equal(JsonNumberHandling.Strict, options.NumberHandling);
-        Assert.False(options.AllowDuplicateProperties);
-        Assert.Throws<InvalidOperationException>(() => options.AllowTrailingCommas = false);
-    }
-
     // Review finding 10: the byte overload must reject ill-formed UTF-8 even in unescaped string values, which
     // Utf8JsonReader skips over without validating, just as the string overload rejects ill-formed UTF-16.
     [Fact]
@@ -325,33 +243,10 @@ public class JsoncTests
     }
 
     [Fact]
-    public void Deserialize_Bytes_InvalidUtf8_IsRejected()
-    {
-        var bytes = new byte[] { 0x7B, 0x22, 0x6F, 0x70, 0x22, 0x3A, 0x22, 0xFE, 0x22, 0x7D }; // {"op":"<FE>"}
-
-        var ex = Assert.Throws<JsoncException>(() => Jsonc.Deserialize<NodeConfig>(bytes));
-
-        Assert.Equal(JsoncException.InvalidUnicodeCode, ex.Code);
-    }
-
-    [Fact]
     public void Parse_Bytes_ValidMultiByteUtf8_IsAccepted()
     {
         var node = Jsonc.Parse(Encoding.UTF8.GetBytes("{\"k\": \"\u00e9\u4e2d\ud83d\ude00\"} // \u00e9"));
 
         Assert.Equal("\u00e9\u4e2d\ud83d\ude00", node!["k"]!.GetValue<string>());
-    }
-
-    private sealed class NodeConfig
-    {
-        [JsonPropertyName("op")]
-        [JsonRequired]
-        public string Op { get; set; } = string.Empty;
-
-        [JsonPropertyName("order")]
-        public int Order { get; set; }
-
-        [JsonPropertyName("weights")]
-        public Dictionary<string, double> Weights { get; set; } = new();
     }
 }
