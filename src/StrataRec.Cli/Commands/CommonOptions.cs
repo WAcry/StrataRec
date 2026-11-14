@@ -4,6 +4,8 @@ using StrataRec.Artifacts.Model;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Features.Cache;
 using StrataRec.Hosting.Workspace;
+using StrataRec.Llm;
+using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Redis;
 
@@ -61,12 +63,14 @@ internal static class CommonOptions
     /// <summary>The engine environment for a workspace: fixture paths resolve against the config root.</summary>
     public static PlanEnvironment PlanEnvironment(ConfigWorkspace workspace) => PlanEnvironment(workspace.Root);
 
-    /// <summary>The engine environment for a config root: what this binary provides (the built-in registries and
-    /// <c>redis@1</c> for distributed caches), with relative paths resolving against the root. A manifest has no root
-    /// (null): its bindings are compiled, never loaded, by the commands that read manifests.</summary>
+    /// <summary>The engine environment for a config root: what this binary provides (the built-in registries,
+    /// <c>redis@1</c> for distributed caches and the generative operators of StrataRec.Llm), with relative paths resolving
+    /// against the root. A manifest has no root (null): its bindings are compiled, never loaded, by the commands that read
+    /// manifests. <c>operators</c> and <c>schema</c> use it too, so they list what the other commands accept.</summary>
     public static PlanEnvironment PlanEnvironment(string? configRoot) => new()
     {
         BaseDirectory = configRoot is null ? null : Path.GetFullPath(configRoot),
+        Operators = OperatorRegistry.CreateDefault().AddLlm(),
         CacheStores = new FeatureCacheStoreRegistry().AddRedis(),
     };
 
