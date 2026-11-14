@@ -27,15 +27,15 @@ public sealed class RandomModelClientTests
         var signature = await lookup;
         Assert.Equal(new[] { "log_followers", "smoothed_ctr" }, signature.Inputs.Select(s => s.Name));
         Assert.Equal(new[] { "p_click", "p_like" }, signature.Outputs.Select(s => s.Name));
-        Assert.All(signature.Inputs.Concat(signature.Outputs), s => Assert.True(ScorerSignature.IsRowTensor(s), s.ToString()));
+        Assert.All(signature.Inputs.Concat(signature.Outputs), s => Assert.True(ModelTensorRule.AcceptsOutput(TensorLayout.Rows, s), s.ToString()));
         Assert.Equal(signature, await client.GetSignatureAsync("ctr_model", null, CancellationToken.None));
 
         // What ModelScorer@1 checks at load for the sample's ctr_ranker node: the stand-in passes as the real model would.
-        var inputs = new ScorerSignature.MappedInput[]
+        var inputs = new ModelTensorRule.MappedInput[]
         {
             new("smoothed_ctr", "col.item.smoothed_ctr", ColumnType.Float32), new("log_followers", "col.author.log_followers", ColumnType.Float32),
         };
-        Assert.Empty(ScorerSignature.Check("Model 'ctr_model' version 'v13'", inputs, new Dictionary<string, string> { ["p_click"] = "score.ctr" }, signature));
+        Assert.Empty(ModelTensorRule.Check("Model 'ctr_model' version 'v13'", TensorLayout.Rows, inputs, new ModelTensorRule.MappedOutput[] { new("p_click", "/outputs/p_click") }, signature));
         await Assert.ThrowsAsync<ArgumentException>(async () => await client.GetSignatureAsync("other_model", null, CancellationToken.None));
     }
 
@@ -156,6 +156,30 @@ public sealed class RandomModelClientTests
         Assert.Equal(ModelStatus.Failed("Input 'log_followers' must be float32 with one value per row (3)."), await client.InvokeAsync(shortInput, new Outputs(), CancellationToken.None));
         Assert.Equal(ModelStatus.Failed("Input 'log_followers' must be float32 with one value per row (1)."), await client.InvokeAsync(int64Input, new Outputs(), CancellationToken.None));
         Assert.Equal(ModelStatus.Failed("Input 'log_followers' must be float32 with one value per row (1)."), await client.InvokeAsync(vectorInput, new Outputs(), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task AnInputWhoseShapeIsNotTheBatch_FailsTheCall_AndALongerBackingBufferIsAllowed()
+    {
+        var client = Create(SampleSettings);
+
+        ModelCall Call(int batch, int rows, int floats) => new()
+        {
+            Model = "ctr_model",
+            BatchSize = batch,
+            Inputs = new[] { NamedInput.FromFloat32("log_followers", new[] { rows }, new float[floats]), NamedInput.FromFloat32("smoothed_ctr", new[] { rows }, new float[floats]) },
+            Options = new ModelCallOptions(Seed: 1),
+        };
+
+        Assert.Equal(ModelStatus.Failed("Input 'log_followers' must be float32 with one value per row (2)."),
+            await client.InvokeAsync(Call(batch: 2, rows: 3, floats: 3), new Outputs(), CancellationToken.None)); // enough data, but three rows
+        Assert.Equal(ModelStatus.Failed("Input 'log_followers' must be float32 with one value per row (2)."),
+            await client.InvokeAsync(Call(batch: 2, rows: 1, floats: 2), new Outputs(), CancellationToken.None));
+        Assert.Equal(ModelStatus.Failed("The call's batch size is -1; it must not be negative."),
+            await client.InvokeAsync(Call(batch: -1, rows: -1, floats: 1), new Outputs(), CancellationToken.None));
+        var outputs = new Outputs();
+        Assert.Equal(ModelStatus.Ok, await client.InvokeAsync(Call(batch: 2, rows: 2, floats: 5), outputs, CancellationToken.None));
+        Assert.Equal(2, outputs.Values["p_click"].Length);
     }
 
     /// <summary>

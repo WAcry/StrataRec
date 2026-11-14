@@ -107,6 +107,11 @@ public sealed class RandomModelClient : IModelClient
         }
 
         var batch = call.BatchSize;
+        if (batch < 0)
+        {
+            return ModelStatus.Failed($"The call's batch size is {batch}; it must not be negative.");
+        }
+
         var inputs = call.Inputs.Span;
         var ordered = true; // the call sends the inputs in the hash order, as ModelScorer@1 does: no lookups per row
         for (var j = 0; j < _inputs.Length; j++)
@@ -117,7 +122,8 @@ public sealed class RandomModelClient : IModelClient
                 return ModelStatus.Failed($"Missing input '{_inputs[j]}'.");
             }
 
-            if (inputs[slot].ElementType != TensorElementType.Float32 || inputs[slot].Shape is not { Length: 1 } || inputs[slot].Float32.Length < batch)
+            // [batch] exactly: its data may be a longer buffer, but its shape says how many rows it holds.
+            if (inputs[slot].ElementType != TensorElementType.Float32 || inputs[slot].Shape is not [var rows] || rows != batch || inputs[slot].Float32.Length < batch)
             {
                 return ModelStatus.Failed($"Input '{_inputs[j]}' must be float32 with one value per row ({batch}).");
             }

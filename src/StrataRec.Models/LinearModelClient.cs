@@ -104,6 +104,11 @@ public sealed class LinearModelClient : IModelClient
     private ModelStatus Compute(ModelCall call, IModelOutputWriter outputs)
     {
         var batch = call.BatchSize;
+        if (batch < 0)
+        {
+            return ModelStatus.Failed($"The call's batch size is {batch}; it must not be negative.");
+        }
+
         var inputs = call.Inputs.Span;
         foreach (var output in _outputs)
         {
@@ -117,7 +122,8 @@ public sealed class LinearModelClient : IModelClient
                     return ModelStatus.Failed($"Missing input '{name}'.");
                 }
 
-                if (input.Value.ElementType != TensorElementType.Float32 || input.Value.Shape is not { Length: 1 } || input.Value.Float32.Length < batch)
+                // [batch] exactly: its data may be a longer buffer, but its shape says how many rows it holds.
+                if (input.Value.ElementType != TensorElementType.Float32 || input.Value.Shape is not [var rows] || rows != batch || input.Value.Float32.Length < batch)
                 {
                     return ModelStatus.Failed($"Input '{name}' must be float32 with one value per row ({batch}).");
                 }

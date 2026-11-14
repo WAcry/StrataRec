@@ -46,6 +46,36 @@ public sealed class LinearModelClientTests
         Assert.Equal(ModelStatus.Failed("Input 'x' must be float32 with one value per row (3)."), await client.InvokeAsync(shortInput, new Outputs(), CancellationToken.None));
     }
 
+    [Fact]
+    public async Task AnInputWhoseShapeIsNotTheBatch_FailsTheCall_EvenWithEnoughData()
+    {
+        var client = Create();
+        var longer = Call(2, NamedInput.FromFloat32("x", new[] { 3 }, new float[3])); // three rows' worth for a batch of two
+        var shorter = Call(2, NamedInput.FromFloat32("x", new[] { 1 }, new float[2]));
+
+        Assert.Equal(ModelStatus.Failed("Input 'x' must be float32 with one value per row (2)."), await client.InvokeAsync(longer, new Outputs(), CancellationToken.None));
+        Assert.Equal(ModelStatus.Failed("Input 'x' must be float32 with one value per row (2)."), await client.InvokeAsync(shorter, new Outputs(), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ABackingBufferLongerThanTheTensor_IsAllowed()
+    {
+        var outputs = new Outputs();
+
+        var status = await Create().InvokeAsync(Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new[] { 0.5f, -1f, 99f, 99f })), outputs, CancellationToken.None);
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Equal(new[] { 2f, -1f }, outputs.Values["p"]);
+    }
+
+    [Fact]
+    public async Task ANegativeBatchSize_FailsTheCall()
+    {
+        var status = await Create().InvokeAsync(Call(-1, NamedInput.FromFloat32("x", new[] { -1 }, new float[1])), new Outputs(), CancellationToken.None);
+
+        Assert.Equal(ModelStatus.Failed("The call's batch size is -1; it must not be negative."), status);
+    }
+
     private static IModelClient Create() =>
         new LinearModelClientFactory().Create(new BindingContext("m", JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(Settings)!, AppContext.BaseDirectory, null));
 
