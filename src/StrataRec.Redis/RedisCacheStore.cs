@@ -79,15 +79,9 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
         var connecting = _connect(options);
         Volatile.Write(ref _connecting, connecting);
         var connection = await connecting.WaitAsync(cancellationToken).ConfigureAwait(false);
-        if (await RefusedCredentialsAsync(connection, _settings.User).ConfigureAwait(false))
+        if (await RefusalAsync(connection, options, cancellationToken).ConfigureAwait(false) is { } refused)
         {
-            // The connection is disposed with the store, which the host disposes after a failed load.
-            throw new BindingException(
-                _settings.Password?.Pointer ?? (_settings.User is null ? string.Empty : "/user"),
-                $"The Redis server at {_settings.Endpoint} refused the credentials" + (_settings.User is null ? "." : $" of user '{_settings.User}'."),
-                _settings.Password is { } secret
-                    ? $"check the secret '{secret.Name}'" + (_settings.User is null ? string.Empty : " and the user") + ": the server does not accept them"
-                    : "the server requires a password: add \"password\": \"secret://<name>\"");
+            throw refused; // the connection is disposed with the store, which the host disposes after a failed load
         }
 
         connection.ConnectionRestored += (_, _) => _cluster = IsCluster(connection);
@@ -96,20 +90,61 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
     }
 
     /// <summary>
-    /// Whether the server refused the connection's credentials, as opposed to being down (which does not fail the load).
-    /// One command tells, connected or not, and its failure is read in one place (<see cref="IsRefusal"/>):
+    /// Why the server refuses this store, if it does: its credentials, or (with <c>tls</c>) the TLS handshake. Any
+    /// other failure is the server being down, which does not fail the load.
+    /// </summary>
+    /// <remarks>
+    /// <para>Connected, one command tells (<see cref="CommandRefusedAsync"/>), since it reaches the server.</para>
+    /// <para>Not connected, the client's failure does not tell. StackExchange.Redis (2.13) tells the connect that its
+    /// connection ended before it publishes the refusal that ended it. It also keeps a connection's first failure, so a
+    /// dropped first connection hides a later refusal. A command failing fast then carries a plain connection failure,
+    /// and a load against a server that refuses the credentials succeeded (CI once; reproduced deterministically by an
+    /// investigation). A connect that must succeed reports the refusal it saw, read when it gives up. So one is tried,
+    /// once, with the store's settings. It costs a second connect timeout only when the server is down.</para>
+    /// </remarks>
+    private async Task<BindingException?> RefusalAsync(ConnectionMultiplexer connection, ConfigurationOptions options, CancellationToken cancellationToken)
+    {
+        if (connection.IsConnected)
+        {
+            return await CommandRefusedAsync(connection, _settings.User).ConfigureAwait(false) ? CredentialsRefused() : null;
+        }
+
+        var probe = options.Clone();
+        probe.AbortOnConnectFail = true;
+        probe.ConnectRetry = 1;
+        var probing = _connect(probe);
+        ConnectionMultiplexer probed;
+        try
+        {
+            probed = await probing.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _ = DisposeOnceConnectedAsync(probing);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return RefusalIn(ex);
+        }
+
+        await using (probed.ConfigureAwait(false))
+        {
+            return await CommandRefusedAsync(probed, _settings.User).ConfigureAwait(false) ? CredentialsRefused() : null;
+        }
+    }
+
+    /// <summary>
+    /// Whether the server refused a connection's credentials, by one command:
     /// <list type="bullet">
-    /// <item>Not connected: the client keeps the last failure of each server, and a command sent while disconnected fails
-    /// at once (<see cref="BacklogPolicy.FailFast"/>) with it.</item>
-    /// <item>Connected, with a <paramref name="user"/>: a server whose default user needs no password accepts the
-    /// connection even when it refused the user's credentials (<c>AUTH</c> failed, the connection stays the default
-    /// user's); <c>ACL WHOAMI</c> tells. A server that cannot answer it (before Redis 6, or a user not allowed to ask) is
+    /// <item>With a <paramref name="user"/> and connected: <c>ACL WHOAMI</c>. A server whose default user needs no
+    /// password accepts the connection even when it refused the user's credentials (<c>AUTH</c> failed, the connection
+    /// stays the default user's). A server that cannot answer it (before Redis 6, or a user not allowed to ask) is
     /// trusted.</item>
-    /// <item>Connected, without one: a <c>PING</c>, answered <c>NOAUTH</c> by a server that requires a password, so the
-    /// load does not depend on the state the client reports at the moment it returned from connecting.</item>
+    /// <item>Otherwise: a <c>PING</c>, answered <c>NOAUTH</c> by a server that requires a password.</item>
     /// </list>
     /// </summary>
-    private static async Task<bool> RefusedCredentialsAsync(ConnectionMultiplexer connection, string? user)
+    private static async Task<bool> CommandRefusedAsync(ConnectionMultiplexer connection, string? user)
     {
         var database = connection.GetDatabase();
         try
@@ -128,23 +163,75 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
         }
     }
 
+    /// <summary>The refusal a failed connect reports, if any: a failed TLS handshake, or refused credentials.</summary>
+    private BindingException? RefusalIn(Exception failure)
+    {
+        if (Find(failure, static e => e is System.Security.Authentication.AuthenticationException) is { } tls)
+        {
+            return new BindingException(
+                "/tls",
+                $"The TLS handshake with the Redis server at {_settings.Endpoint} failed: {tls.Message}",
+                "the server's certificate must be trusted by this host and name the endpoint's host; set \"tls\": false if the server does not use TLS");
+        }
+
+        return IsRefusal(failure) ? CredentialsRefused() : null;
+    }
+
+    private BindingException CredentialsRefused() => new(
+        _settings.Password?.Pointer ?? (_settings.User is null ? string.Empty : "/user"),
+        $"The Redis server at {_settings.Endpoint} refused the credentials" + (_settings.User is null ? "." : $" of user '{_settings.User}'."),
+        _settings.Password is { } secret
+            ? $"check the secret '{secret.Name}'" + (_settings.User is null ? string.Empty : " and the user") + ": the server does not accept them"
+            : "the server requires a password: add \"password\": \"secret://<name>\"");
+
     /// <summary>
-    /// Whether a failure, anywhere in its chain, is the server refusing the credentials: the client's authentication
-    /// failure, or the server's own <c>NOAUTH</c> / <c>WRONGPASS</c> reply.
+    /// Whether a failure, anywhere in its tree (inner exceptions, and every branch of an aggregate), is the server
+    /// refusing the credentials: the client's authentication failure, or the server's own <c>NOAUTH</c> /
+    /// <c>WRONGPASS</c> reply.
     /// </summary>
-    private static bool IsRefusal(Exception? failure)
+    private static bool IsRefusal(Exception failure) => Find(failure, static e =>
+        e is RedisConnectionException { FailureType: ConnectionFailureType.AuthenticationFailure }
+        || (e is RedisServerException server
+            && (server.Message.StartsWith("NOAUTH", StringComparison.Ordinal) || server.Message.StartsWith("WRONGPASS", StringComparison.Ordinal)))) is not null;
+
+    /// <summary>The first exception of <paramref name="failure"/>'s tree that matches, depth first.</summary>
+    private static Exception? Find(Exception? failure, Func<Exception, bool> match)
     {
         for (; failure is not null; failure = failure.InnerException)
         {
-            if (failure is RedisConnectionException { FailureType: ConnectionFailureType.AuthenticationFailure }
-                || (failure is RedisServerException server
-                    && (server.Message.StartsWith("NOAUTH", StringComparison.Ordinal) || server.Message.StartsWith("WRONGPASS", StringComparison.Ordinal))))
+            if (match(failure))
             {
-                return true;
+                return failure;
+            }
+
+            if (failure is AggregateException aggregate)
+            {
+                foreach (var inner in aggregate.InnerExceptions)
+                {
+                    if (Find(inner, match) is { } found)
+                    {
+                        return found;
+                    }
+                }
+
+                return null;
             }
         }
 
-        return false;
+        return null;
+    }
+
+    /// <summary>A connect the load stopped waiting for: disposed once it completes, if it connected.</summary>
+    private static async Task DisposeOnceConnectedAsync(Task<ConnectionMultiplexer> connecting)
+    {
+        try
+        {
+            await (await connecting.ConfigureAwait(false)).DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // It did not connect, or its disposal failed: nothing is left to release.
+        }
     }
 
     /// <summary>Whether the connection is to a cluster (whose multi-key commands cannot span hash slots).</summary>

@@ -157,6 +157,61 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
     }
 
     /// <summary>
+    /// The CI flake's first cause (an investigation reproduced it): StackExchange.Redis tells the connect that its
+    /// connection ended before it publishes the refusal that ended it. Holding that publication (the client logs it as
+    /// event 89 just before) until the load has decided made a refused load succeed, every time. The probe the load then
+    /// makes connects without the hold.
+    /// </summary>
+    [DockerRedisFact]
+    public async Task ARefusalTheClientHasNotPublishedYet_StillFailsTheLoad()
+    {
+        var endpoint = await server.StartRequirePassAsync();
+        using var publish = new ManualResetEventSlim();
+        var connects = 0;
+        Task<ConnectionMultiplexer> Connect(ConfigurationOptions options)
+        {
+            if (Interlocked.Increment(ref connects) == 1)
+            {
+                options.LoggerFactory = new HoldRefusalLog(publish);
+            }
+
+            return ConnectionMultiplexer.ConnectAsync(options);
+        }
+
+        await using var store = new RedisCacheStore(new RedisStoreSettings(endpoint, RedisServer.UniquePrefix(), null, null, false, 0), Connect);
+        BindingException error;
+        try
+        {
+            error = await RefusedAsync(store);
+        }
+        finally
+        {
+            publish.Set();
+        }
+
+        Assert.Equal(string.Empty, error.Pointer);
+        Assert.Contains("\"password\"", error.Hint);
+    }
+
+    /// <summary>
+    /// The CI flake's second cause: the client keeps a connection's first failure, so when its first connections are
+    /// dropped, the refusal a later one gets never reaches a command's failure. A proxy in front of the server that
+    /// requires a password resets the first two connections (the client's interactive and subscription ones).
+    /// </summary>
+    [DockerRedisFact]
+    public async Task ARefusalHiddenByAnEarlierDroppedConnection_StillFailsTheLoad()
+    {
+        var endpoint = await server.StartRequirePassAsync();
+        await using var proxy = new DroppingProxy(endpoint, drop: 2);
+
+        await using var store = new RedisCacheStore(new RedisStoreSettings(proxy.Endpoint, RedisServer.UniquePrefix(), null, null, false, 0));
+        var error = await RefusedAsync(store);
+
+        Assert.Equal(string.Empty, error.Pointer);
+        Assert.True(proxy.Dropped == 2, $"the proxy dropped {proxy.Dropped} connections");
+    }
+
+    /// <summary>
     /// The load's refusal. A load that succeeded instead failed once in CI and never locally: the failure then says what
     /// the server answers a read, which tells a refusal the load missed from a server it took for down.
     /// </summary>
@@ -238,6 +293,116 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
     {
         public ValueTask<string?> ResolveAsync(string name, CancellationToken cancellationToken) =>
             new(TryGetValue(name, out var value) ? value : null);
+    }
+}
+
+/// <summary>
+/// A logger that holds the client's thread where it is about to publish a refused handshake (event 89 with an
+/// authentication failure), until released: the investigation's deterministic reproduction of the publication race.
+/// </summary>
+internal sealed class HoldRefusalLog(ManualResetEventSlim release) : Microsoft.Extensions.Logging.ILoggerFactory
+{
+    public Microsoft.Extensions.Logging.ILogger CreateLogger(string categoryName) => new Hold(release);
+
+    public void AddProvider(Microsoft.Extensions.Logging.ILoggerProvider provider)
+    {
+    }
+
+    public void Dispose()
+    {
+    }
+
+    private sealed class Hold(ManualResetEventSlim release) : Microsoft.Extensions.Logging.ILogger
+    {
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (eventId.Id == 89 && exception is RedisConnectionException { FailureType: ConnectionFailureType.AuthenticationFailure })
+            {
+                release.Wait(TimeSpan.FromSeconds(30));
+            }
+        }
+    }
+}
+
+/// <summary>A TCP proxy on the loopback that resets its first connections and forwards the others to a server.</summary>
+internal sealed class DroppingProxy : IAsyncDisposable
+{
+    private readonly System.Net.Sockets.TcpListener _listener = new(System.Net.IPAddress.Loopback, 0);
+    private readonly CancellationTokenSource _stop = new();
+    private readonly string _target;
+    private readonly int _drop;
+    private readonly Task _accepting;
+    private int _accepted;
+
+    public DroppingProxy(string target, int drop)
+    {
+        _target = target;
+        _drop = drop;
+        _listener.Start();
+        _accepting = AcceptAsync();
+    }
+
+    public string Endpoint => _listener.LocalEndpoint.ToString()!;
+
+    public int Dropped => Math.Min(Volatile.Read(ref _accepted), _drop);
+
+    public async ValueTask DisposeAsync()
+    {
+        _stop.Cancel();
+        _listener.Stop();
+        await _accepting.ConfigureAwait(false);
+        _stop.Dispose();
+    }
+
+    private async Task AcceptAsync()
+    {
+        while (!_stop.IsCancellationRequested)
+        {
+            System.Net.Sockets.TcpClient client;
+            try
+            {
+                client = await _listener.AcceptTcpClientAsync(_stop.Token);
+            }
+            catch (Exception)
+            {
+                return;
+            }
+
+            if (Interlocked.Increment(ref _accepted) <= _drop)
+            {
+                client.Client.LingerState = new System.Net.Sockets.LingerOption(true, 0); // closing resets the connection
+                client.Dispose();
+                continue;
+            }
+
+            _ = ForwardAsync(client);
+        }
+    }
+
+    private async Task ForwardAsync(System.Net.Sockets.TcpClient client)
+    {
+        using (client)
+        using (var server = new System.Net.Sockets.TcpClient())
+        {
+            try
+            {
+                var colon = _target.LastIndexOf(':');
+                await server.ConnectAsync(_target[..colon], int.Parse(_target[(colon + 1)..]), _stop.Token);
+                var up = client.GetStream().CopyToAsync(server.GetStream(), _stop.Token);
+                var down = server.GetStream().CopyToAsync(client.GetStream(), _stop.Token);
+                await Task.WhenAny(up, down);
+            }
+            catch (Exception)
+            {
+                // A closed side or the proxy stopping ends the forwarding.
+            }
+        }
     }
 }
 
