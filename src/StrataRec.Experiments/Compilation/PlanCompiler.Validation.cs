@@ -428,16 +428,18 @@ internal sealed partial class UnifiedCompilation
     }
 
     /// <summary>
-    /// Compiles the bare baseline on its own when arms add schema entries or parameter leaves (design 11.6): the
-    /// unified schema contains every addition, so without this an addition could make an invalid baseline resolve,
-    /// and removing that experiment would break the baseline.
+    /// Compiles the bare baseline on its own whenever there is an arm (design 11.6): the unified schema has whatever any
+    /// arm declares, so an invalid baseline could resolve there, and removing that experiment (a revocation, which does
+    /// not compile again) would publish a release no node can load. Not only when arms add schema entries or parameter
+    /// leaves: a node an arm adds declares its outputs implicitly, and listing the ways an arm can declare a name missed
+    /// that one (external review, P1). One more compile of the baseline, without building a plan, per plan compile.
     /// </summary>
     private void ValidateBaselineAlone()
     {
         var needed = false;
         foreach (var arm in _arms)
         {
-            needed |= arm.Valid && (arm.Additions.Count > 0 || arm.ExtraParamLeaves.Count > 0);
+            needed |= arm.Valid;
         }
 
         if (!needed)
@@ -445,11 +447,22 @@ internal sealed partial class UnifiedCompilation
             return;
         }
 
+        // What a check of the unified plan has already found here (a tap after a node only an arm adds, say) it said
+        // more precisely, for the arm combinations: the same code at the same place is not said again.
+        var found = new HashSet<(string, string, string)>();
+        foreach (var d in _diagnostics.Items)
+        {
+            found.Add((d.Code, d.Artifact, d.Pointer));
+        }
+
         var scratch = new DiagnosticBag();
         new UnifiedCompilation(WithoutExperiments(_request), _environment, _view, scratch, buildPlan: false, _bindings).Run();
         foreach (var d in scratch.Items)
         {
-            Report(d, Array.Empty<ArmPatch>());
+            if (!found.Contains((d.Code, d.Artifact, d.Pointer)))
+            {
+                Report(d, Array.Empty<ArmPatch>());
+            }
         }
     }
 
