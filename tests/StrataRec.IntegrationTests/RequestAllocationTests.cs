@@ -2,6 +2,7 @@ using System.Diagnostics.Metrics;
 using System.Globalization;
 using System.Text;
 using StrataRec.Core.Diagnostics;
+using StrataRec.Core.Keys;
 using StrataRec.Hosting;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
@@ -26,6 +27,21 @@ public sealed class RequestAllocationTests
         // Before the rented key index, 3,750 more candidates cost ~2.1 MB per request (dictionaries, key lists, a string
         // per key); now both sizes allocate the same.
         Assert.True(large - small < 4 * 1024, $"250 candidates: {small} B per request, 4,000 candidates: {large} B per request");
+    }
+
+    [Fact]
+    public void AnExplainedRequest_CostsWhatItsTargetsAndNodesCost_NotWhatItsCandidatesCost()
+    {
+        // Design 13.3: targets are found by key once and followed, so explaining three ids allocates the same at 250 and at
+        // 4,000 candidates (steps, values and reasons: targets × nodes). The ids are early in both recall lists.
+        var smallPlan = Plan(250);
+        var largePlan = Plan(4_000);
+        var plain = Measure(smallPlan);
+        var small = Measure(smallPlan, explain: true);
+        var large = Measure(largePlan, explain: true);
+
+        Assert.True(small > plain, $"explaining allocated nothing: {plain} B without, {small} B with");
+        Assert.True(large - small < 4 * 1024, $"explained, 250 candidates: {small} B per request, 4,000 candidates: {large} B per request");
     }
 
     [Fact]
@@ -93,10 +109,22 @@ public sealed class RequestAllocationTests
 
     private static ExecutionPlan Plan(int candidates) => HomeFeedTestHost.LoadModified(root => Scale(root, candidates)).Plan();
 
-    private static long Measure(ExecutionPlan plan)
+    private static long Measure(ExecutionPlan plan, bool explain = false)
     {
         var executor = new PipelineExecutor();
         var request = HomeFeedTestHost.NewRequest();
+        if (explain)
+        {
+            request = new PipelineRequest
+            {
+                RequestId = request.RequestId,
+                Inputs = request.Inputs,
+                Deadline = request.Deadline,
+                TimeMs = request.TimeMs,
+                ExplainIds = new[] { EntityKey.FromInt64(1), EntityKey.FromInt64(2), EntityKey.FromInt64(3) },
+            };
+        }
+
         return MeasureBest(() => executor.ExecuteAsync(plan, request), r => r.Items.Count);
     }
 

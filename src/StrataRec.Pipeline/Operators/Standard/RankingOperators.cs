@@ -68,17 +68,57 @@ public sealed class TopKFactory : IOperatorFactory
         return new TopK(score, config.K ?? 0, kParam, config.Ascending);
     }
 
-    private sealed class TopK(ColumnRef score, int fixedK, ParamRef? kParam, bool ascending) : Operator
+    private sealed class TopK(ColumnRef score, int fixedK, ParamRef? kParam, bool ascending) : Operator, IExplainableOperator
     {
+        private int K(ScalarValue parameter) => kParam is null ? fixedK : parameter.IsMissing ? 0 : (int)Math.Clamp(parameter.AsInt64(), 0, int.MaxValue);
+
+        /// <summary>
+        /// For each row it ranked: k, the row's key and the last kept row's key (design 13.3), and whether the key, a tie on
+        /// it (broken by <c>entity_id</c>) or a missing key put the row past the cut.
+        /// </summary>
+        public void Explain(ExplainContext context)
+        {
+            var k = K(kParam is { } p ? context.Param(p) : default);
+            var keys = context.Read(score);
+            var live = context.LiveRows;
+            var last = live.Length > 0 && keys is not null ? live[^1] : -1;
+            var lastKey = last >= 0 ? ColumnValues.Get(keys!, last) : ScalarValue.Missing;
+            ulong lastSortKey = 0;
+            var lastPresent = last >= 0 && RowRanking.TryGetSortKey(keys!, last, out lastSortKey);
+            for (var t = 0; t < context.Count; t++)
+            {
+                if (!context.WasAlive(t))
+                {
+                    continue;
+                }
+
+                var row = context.Row(t);
+                var key = keys is null ? ScalarValue.Missing : ColumnValues.Get(keys, row);
+                context.Term(t, "k", ScalarValue.FromInt64(k));
+                context.Term(t, "key", key);
+                context.Term(t, "last_kept_key", lastKey);
+                if (context.IsAlive(t))
+                {
+                    context.Reason(t, $"kept: {score.Name} {key} ranks {context.Rank(t)} of the {live.Length} kept (k = {k})");
+                    continue;
+                }
+
+                ulong sortKey = 0;
+                var present = keys is not null && RowRanking.TryGetSortKey(keys, row, out sortKey);
+                context.Reason(t, (present, lastPresent) switch
+                {
+                    _ when k == 0 => "cut: k = 0 keeps no row",
+                    (false, _) => $"cut: no {score.Name} (missing or NaN ranks last; k = {k})",
+                    (true, true) when sortKey == lastSortKey =>
+                        $"cut: {score.Name} {key} ties the last kept row's; ties go by entity_id ascending (k = {k})",
+                    _ => $"cut: {score.Name} {key} ranks after the last kept {lastKey} (k = {k})",
+                });
+            }
+        }
+
         public override ValueTask ExecuteAsync(OperatorContext context)
         {
-            var k = fixedK;
-            if (kParam is { } p)
-            {
-                var value = context.Param(p);
-                k = value.IsMissing ? 0 : (int)Math.Clamp(value.AsInt64(), 0, int.MaxValue);
-            }
-
+            var k = K(kParam is { } p ? context.Param(p) : default);
             var live = context.LiveRows;
             var rows = context.Memory.Rent<int>(Math.Max(1, live.Length));
             live.CopyTo(rows);

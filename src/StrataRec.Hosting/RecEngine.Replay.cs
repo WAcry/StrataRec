@@ -49,7 +49,7 @@ public sealed partial class RecEngine
             Deadline = RunReplay.Deadline,
             Seed = recordedRequest.Seed,
             TimeMs = recordedRequest.TimeMs,
-            Debug = new DebugOptions { Trace = true, CaptureLogs = true },
+            Debug = new DebugOptions { Trace = true, CaptureLogs = true, ExplainIds = options?.ExplainIds },
         };
         var recordedArms = primaryRecord?.Arms ?? recordedRequest.Assignment.Arms;
         if (Enter(recordedRequest.PipelineId, out var disposed) is not { } pipeline)
@@ -102,6 +102,13 @@ public sealed partial class RecEngine
             {
                 return Outcome(bundle, Rejected(request, RecErrorKind.InvalidRequest, ex.Message), null, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null, notes, 0,
                     plan.ManifestId);
+            }
+
+            var explainIds = options?.ExplainIds;
+            if (explainIds is not null && ExplainTargets.Check(explainIds, plan.TableSchema.KeyType, request.PipelineId) is { } explainError)
+            {
+                return Outcome(bundle, Rejected(request, RecErrorKind.InvalidRequest, explainError), null, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null,
+                    notes, 0, plan.ManifestId);
             }
 
             // The platform's arms the recorded request ignored are part of its assignment record; arms passed to the replay
@@ -182,6 +189,7 @@ public sealed partial class RecEngine
         Seed = request.Seed,
         TimeMs = request.TimeMs,
         CaptureLogs = true,
+        ExplainIds = request.Debug?.ExplainIds,
         OnRecording = replayed.Add,
         Replay = replay,
         OnEnd = pipeline.Bindings.Join(), // last: the executor, called next, ends it on every outcome
@@ -395,6 +403,7 @@ public sealed partial class RecEngine
         Trace = result.Trace,
         LogBatches = result.LogBatches,
         Recording = bundle,
+        Explanation = result.Explanation,
         ElapsedMs = result.ElapsedMs,
     };
 

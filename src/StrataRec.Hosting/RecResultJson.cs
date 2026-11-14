@@ -21,8 +21,9 @@ public sealed class RecResultJsonOptions
 /// <para>The document: <c>request_id</c>, <c>succeeded</c>, for a failure <c>error_kind</c> (<see cref="Name"/>),
 /// <c>error</c> and <c>error_pointer</c> when there are, <c>served_by</c>, <c>manifest</c>, <c>experiments</c>
 /// (<c>assigned</c>, <c>triggered</c>, <c>ignored</c> with <c>id</c> and <c>reason</c>), <c>items</c> (<c>rank</c>,
-/// <c>id</c>, <c>columns</c>) and <c>elapsed_ms</c>; then <c>column_producers</c> when asked for, and <c>trace</c> and
-/// <c>logs</c> when the request asked for them (<see cref="DebugOptions"/>).</para>
+/// <c>id</c>, <c>columns</c>) and <c>elapsed_ms</c>; then <c>column_producers</c> when asked for, and <c>trace</c>,
+/// <c>logs</c> and <c>explanation</c> (<see cref="WriteExplanation"/>) when the request asked for them
+/// (<see cref="DebugOptions"/>).</para>
 /// <para>An item's output columns are an object of their own, so no column name (<c>id</c>, <c>rank</c>) can collide with
 /// the item's members. An int64 id is a JSON number, written exactly; a string id a string. A missing value is
 /// <c>null</c> (never 0), and so is a non-finite float, which JSON cannot represent; floats are written exactly (the
@@ -117,7 +118,150 @@ public static class RecResultJson
             json.WriteEndArray();
         }
 
+        if (result.Explanation is { } explanation)
+        {
+            json.WritePropertyName("explanation");
+            WriteExplanation(json, explanation);
+        }
+
         json.WriteEndObject();
+    }
+
+    /// <summary>
+    /// Explained candidates (design 13.3) as one JSON object: <c>pipeline</c> (the run explained) and <c>candidates</c>, each
+    /// with <c>id</c>, <c>verdict</c> (<c>returned</c>, <c>beyond_limit</c>, <c>dropped</c>, <c>not_recalled</c>,
+    /// <c>no_result</c>), <c>rank</c> or <c>dropped_by</c> where they apply, and <c>steps</c>: per node <c>node</c>,
+    /// <c>step</c> (<c>ran</c>, <c>rolled_back</c>, <c>skipped</c>), <c>detail</c>, <c>change</c> (<c>entered</c>,
+    /// <c>stayed</c>, <c>dropped</c>, <c>absent</c>), <c>present</c>, <c>alive</c>, <c>rank</c>, <c>rank_before</c> when it
+    /// differs, <c>values</c> (column → value), <c>reason</c> and <c>terms</c> (name → value) when there are.
+    /// </summary>
+    public static void WriteExplanation(Utf8JsonWriter json, RunExplanation explanation)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        ArgumentNullException.ThrowIfNull(explanation);
+        json.WriteStartObject();
+        json.WriteString("pipeline", explanation.PipelineId);
+        json.WriteStartArray("candidates");
+        foreach (var candidate in explanation.Candidates)
+        {
+            json.WriteStartObject();
+            WriteId(json, candidate.Id);
+            json.WriteString("verdict", VerdictName(candidate.Verdict));
+            if (candidate.Rank is { } rank)
+            {
+                json.WriteNumber("rank", rank);
+            }
+
+            if (candidate.DroppedBy is { } droppedBy)
+            {
+                json.WriteString("dropped_by", droppedBy);
+            }
+
+            json.WriteStartArray("steps");
+            foreach (var step in candidate.Steps)
+            {
+                WriteStep(json, step);
+            }
+
+            json.WriteEndArray();
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
+        json.WriteEndObject();
+    }
+
+    /// <summary>The JSON name of a verdict: <c>returned</c>, <c>beyond_limit</c>, <c>dropped</c>, <c>not_recalled</c>, <c>no_result</c>.</summary>
+    public static string VerdictName(ExplainVerdict verdict) => verdict switch
+    {
+        ExplainVerdict.Returned => "returned",
+        ExplainVerdict.BeyondLimit => "beyond_limit",
+        ExplainVerdict.Dropped => "dropped",
+        ExplainVerdict.NotRecalled => "not_recalled",
+        ExplainVerdict.NoResult => "no_result",
+        _ => throw new ArgumentOutOfRangeException(nameof(verdict)),
+    };
+
+    /// <summary>The JSON name of a step kind: <c>ran</c>, <c>rolled_back</c>, <c>skipped</c>.</summary>
+    public static string StepName(ExplainStepKind kind) => kind switch
+    {
+        ExplainStepKind.Ran => "ran",
+        ExplainStepKind.RolledBack => "rolled_back",
+        ExplainStepKind.Skipped => "skipped",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+    };
+
+    /// <summary>The JSON name of a change: <c>entered</c>, <c>stayed</c>, <c>dropped</c>, <c>absent</c>.</summary>
+    public static string ChangeName(ExplainChange change) => change switch
+    {
+        ExplainChange.Entered => "entered",
+        ExplainChange.Stayed => "stayed",
+        ExplainChange.Dropped => "dropped",
+        ExplainChange.Absent => "absent",
+        _ => throw new ArgumentOutOfRangeException(nameof(change)),
+    };
+
+    private static void WriteStep(Utf8JsonWriter json, ExplainStep step)
+    {
+        json.WriteStartObject();
+        json.WriteString("node", step.Node);
+        json.WriteString("step", StepName(step.Kind));
+        if (step.Detail is not null)
+        {
+            json.WriteString("detail", step.Detail);
+        }
+
+        json.WriteString("change", ChangeName(step.Change));
+        json.WriteBoolean("present", step.Present);
+        json.WriteBoolean("alive", step.Alive);
+        if (step.Rank is { } rank)
+        {
+            json.WriteNumber("rank", rank);
+        }
+
+        if (step.RankBefore is { } before && before != step.Rank)
+        {
+            json.WriteNumber("rank_before", before);
+        }
+
+        WriteNamed(json, "values", step.Values);
+        if (step.Reason is not null)
+        {
+            json.WriteString("reason", step.Reason);
+        }
+
+        WriteNamed(json, "terms", step.Terms);
+        json.WriteEndObject();
+    }
+
+    /// <summary>Named values as an object, in their order; nothing when there are none.</summary>
+    private static void WriteNamed(Utf8JsonWriter json, string name, IReadOnlyList<ExplainValue> values)
+    {
+        if (values.Count == 0)
+        {
+            return;
+        }
+
+        json.WriteStartObject(name);
+        foreach (var value in values)
+        {
+            json.WritePropertyName(value.Name);
+            WriteValue(json, value.Value);
+        }
+
+        json.WriteEndObject();
+    }
+
+    private static void WriteId(Utf8JsonWriter json, Core.Keys.EntityKey id)
+    {
+        if (id.StringValue is { } text)
+        {
+            json.WriteString("id", text);
+        }
+        else
+        {
+            json.WriteNumber("id", id.Int64Value);
+        }
     }
 
     /// <summary>

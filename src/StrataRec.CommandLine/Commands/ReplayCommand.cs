@@ -34,14 +34,20 @@ internal static class ReplayCommand
             AllowMultipleArgumentsPerToken = true,
         };
         var expectIdentical = new Option<bool>("--expect-identical") { Description = "Exit with 1 unless every replay reproduces its recorded result exactly." };
+        var explain = new Option<string[]>("--explain")
+        {
+            Description = $"Explain these candidates in each replayed run (entity ids of the pipeline's key type, comma or space separated, at most " +
+                          $"{DebugOptions.MaxExplainIds}; design 13.3).",
+            AllowMultipleArgumentsPerToken = true,
+        };
         var command = new Command("replay", "Replay recorded requests on a workspace, a release manifest, or (with only --store) the manifest each bundle " +
             "recorded, and diff against the recorded results. Exits with 2 unless every bundle was replayed; the report is printed either way.")
         {
-            config, manifest, store, environment, format, bundle, arms, expectIdentical,
+            config, manifest, store, environment, format, bundle, arms, expectIdentical, explain,
         };
         command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(config), parse.GetValue(environment)!, parse.GetValue(bundle)!,
             parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(format)!, parse.GetValue(expectIdentical), parse.InvocationConfiguration.Output,
-            cancellationToken, parse.GetValue(manifest), parse.GetValue(store), parse.InvocationConfiguration.Error));
+            cancellationToken, parse.GetValue(manifest), parse.GetValue(store), parse.InvocationConfiguration.Error, parse.GetValue(explain)));
         return command;
     }
 
@@ -52,7 +58,7 @@ internal static class ReplayCommand
     /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
     internal static async Task<int> RunAsync(
         PlanEnvironment provided, string? config, string environment, string bundlePath, string[] armArgs, string format, bool expectIdentical, TextWriter output, CancellationToken cancellationToken,
-        string? manifest = null, string? store = null, TextWriter? errors = null)
+        string? manifest = null, string? store = null, TextWriter? errors = null, string[]? explain = null)
     {
         errors ??= Console.Error;
         var diagnostics = new DiagnosticBag();
@@ -75,7 +81,7 @@ internal static class ReplayCommand
         var results = new List<BundleReplay>();
         foreach (var file in files)
         {
-            results.Add(await ReplayFileAsync(engines, file, options, errors, cancellationToken).ConfigureAwait(false));
+            results.Add(await ReplayFileAsync(engines, file, options, errors, cancellationToken, explain).ConfigureAwait(false));
         }
 
         if (files.Count == 0)
@@ -159,7 +165,10 @@ internal static class ReplayCommand
     }
 
     /// <summary>Replays one bundle file on the engine <paramref name="engines"/> chooses for it.</summary>
-    internal static async Task<BundleReplay> ReplayFileAsync(ReplayEngines engines, string file, ReplayOptions options, TextWriter errors, CancellationToken cancellationToken)
+    /// <param name="explain">The <c>--explain</c> ids, read as the key type of the pipeline the bundle replays on; an id that is
+    /// not one is the bundle's error.</param>
+    internal static async Task<BundleReplay> ReplayFileAsync(
+        ReplayEngines engines, string file, ReplayOptions options, TextWriter errors, CancellationToken cancellationToken, string[]? explain = null)
     {
         string? error;
         var unresolved = false;
@@ -167,6 +176,19 @@ internal static class ReplayCommand
         {
             var bundle = ReplayBundleFile.Load(file);
             var (engine, problem, hint) = await engines.ForAsync(bundle, cancellationToken).ConfigureAwait(false);
+            if (engine is not null && explain is { Length: > 0 } && engine.TryGetPipeline(bundle.Request.PipelineId, out var loaded))
+            {
+                var pipelineId = bundle.Request.PipelineId;
+                var ids = RunCommand.ParseExplainIds(explain, loaded.Plan.TableSchema.KeyType, pipelineId, out var explainError);
+                if (explainError is not null)
+                {
+                    errors.WriteLine($"{file}: {explainError}");
+                    return new BundleReplay(file, null, $"{file}: {explainError}", false);
+                }
+
+                options = new ReplayOptions { Arms = options.Arms, ExplainIds = ids };
+            }
+
             if (engine is not null)
             {
                 return new BundleReplay(file, await engine.ReplayAsync(bundle, options, cancellationToken).ConfigureAwait(false), null, false);
@@ -291,6 +313,12 @@ internal static class ReplayCommand
 
         json.WriteEndArray();
         WriteStrings(json, "notes", report.Notes);
+        if (result.Explanation is { } explanation)
+        {
+            json.WritePropertyName("explanation");
+            RecResultJson.WriteExplanation(json, explanation); // as 'run' writes it
+        }
+
         json.WriteEndObject();
     }
 
@@ -454,6 +482,11 @@ internal static class ReplayCommand
         foreach (var note in report.Notes)
         {
             output.WriteLine($"  note      {note}");
+        }
+
+        if (result.Explanation is { } explanation)
+        {
+            ExplanationText.Write(output, explanation, "  explain   ");
         }
 
         output.WriteLine();

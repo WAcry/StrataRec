@@ -62,6 +62,10 @@ public static class RecommendEndpoint
                 Assignment = assignment,
                 Deadline = settings.Deadline,
                 // Debug options (trace, forced arms, recording) are the host's to authorize, e.g. for internal callers only.
+                // To let an authorized caller ask "why is item 42 not in my feed", read its ids (as the pipeline's key
+                // type, ExplainTargets.TryParse) into Debug = new DebugOptions { ExplainIds = ... }; the result document
+                // then carries "explanation". The engine bounds the ids (DebugOptions.MaxExplainIds) and rejects ids of
+                // the other key type as an invalid request; who may ask stays the host's decision.
             };
         }
 

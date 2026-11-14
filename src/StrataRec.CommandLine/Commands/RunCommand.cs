@@ -3,9 +3,11 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Keys;
 using StrataRec.Core.Values;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Replay;
+using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.CommandLine.Commands;
@@ -13,7 +15,8 @@ namespace StrataRec.CommandLine.Commands;
 /// <summary>
 /// <c>stratarec run</c>: executes a request against a workspace locally (fixtures via <c>memory@1</c> and friends) and
 /// prints the result as JSON (<see cref="RecResultJson"/>, the document a service answers with): items, assignment and
-/// trigger record, and with <c>--trace</c> every node's outcome and the node that produced each output column.
+/// trigger record, with <c>--trace</c> every node's outcome and the node that produced each output column, and with
+/// <c>--explain</c> the explained candidates (design 13.3).
 /// </summary>
 internal static class RunCommand
 {
@@ -51,18 +54,53 @@ internal static class RunCommand
                 result.AddError("--deadline-ms must be positive.");
             }
         });
-        var command = new Command("run", "Execute a request locally and print the result as JSON.") { config, environment, request, arms, trace, logs, record, deadline };
+        var explain = new Option<string[]>("--explain")
+        {
+            Description = $"Explain these candidates (entity ids of the pipeline's key type, comma or space separated, at most {DebugOptions.MaxExplainIds}): " +
+                          "the result's 'explanation' says where each ended and its state after every node (design 13.3).",
+            AllowMultipleArgumentsPerToken = true,
+        };
+        var command = new Command("run", "Execute a request locally and print the result as JSON.")
+        {
+            config, environment, request, arms, trace, logs, record, deadline, explain,
+        };
         command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(config)!, parse.GetValue(environment)!, parse.GetValue(request)!,
             parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(trace), parse.InvocationConfiguration.Output, cancellationToken, parse.GetValue(logs),
-            parse.GetValue(record), parse.GetValue(deadline), parse.InvocationConfiguration.Error));
+            parse.GetValue(record), parse.GetValue(deadline), parse.InvocationConfiguration.Error, parse.GetValue(explain)));
         return command;
+    }
+
+    /// <summary>
+    /// The ids of <c>--explain</c> (comma or space separated) read as the pipeline's key type; null, after reporting, when
+    /// one is not an id of that type. None given is null: nothing to explain.
+    /// </summary>
+    internal static IReadOnlyList<EntityKey>? ParseExplainIds(string[]? args, EntityKeyType keyType, string pipelineId, out string? error)
+    {
+        error = null;
+        var ids = new List<EntityKey>();
+        foreach (var arg in args ?? Array.Empty<string>())
+        {
+            foreach (var part in arg.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (!ExplainTargets.TryParse(part, keyType, out var id))
+                {
+                    error = $"--explain: '{part}' is not an entity id of pipeline '{pipelineId}', whose ids are {ExplainTargets.Name(keyType)}s";
+                    return null;
+                }
+
+                ids.Add(id);
+            }
+        }
+
+        return ids.Count == 0 ? null : ids;
     }
 
     /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
     /// <param name="errors">Where diagnostics and progress go; standard error by default.</param>
     internal static async Task<int> RunAsync(
         PlanEnvironment provided, string config, string environment, string requestPath, string[] arms, bool trace, TextWriter output,
-        CancellationToken cancellationToken, bool logs = false, string? recordPath = null, int? deadlineMs = null, TextWriter? errors = null)
+        CancellationToken cancellationToken, bool logs = false, string? recordPath = null, int? deadlineMs = null, TextWriter? errors = null,
+        string[]? explain = null)
     {
         errors ??= Console.Error;
 
@@ -98,6 +136,15 @@ internal static class RunCommand
             return 2;
         }
 
+        // The ids as the pipeline keys its candidates: 42 is an int64 for an int64-keyed pipeline, a string otherwise.
+        engine.TryGetPipeline(pipelineId, out var loaded);
+        var explainIds = ParseExplainIds(explain, loaded.Plan.TableSchema.KeyType, pipelineId, out var explainError);
+        if (explainError is not null)
+        {
+            errors.WriteLine(explainError);
+            return 2;
+        }
+
         // --arms wins over the file's force_arms. A present force_arms is forced even when empty (the baseline), as an
         // empty DebugOptions.ForceArms is to the engine: presence, not length, decides.
         var cliArms = ExplainPlanCommand.SplitArms(arms);
@@ -118,6 +165,7 @@ internal static class RunCommand
                 Trace = trace,
                 CaptureLogs = logs,
                 Record = recordPath is not null,
+                ExplainIds = explainIds,
                 // A request cancelled with Ctrl-C returns no result: its bundle comes through the callback.
                 OnRecording = recordPath is null ? null : bundle => SaveAborted(bundle, recordPath, errors),
             },
