@@ -84,6 +84,23 @@ public sealed class LlmAnswerTests
     }
 
     [Theory]
+    [InlineData('\uD800')]
+    [InlineData('\uDC00')]
+    public void ARawUnpairedSurrogate_IsAnUnknownElement_NeverTheReplacementCharacter(char lone)
+    {
+        // Review 30: a client's string can hold an unpaired surrogate itself, not only its JSON escape. UTF-8 encoding
+        // replaced it with U+FFFD, which matched an entity whose id is U+FFFD.
+        var answer = "[\"" + lone + "\", \"a\", \"x\uD83D\uDE00\"]";
+        var (positions, counts, error) = Parse(answer, AnswerKind.EntityId, "\uFFFD", "a", "x\uD83D\uDE00");
+        var (_, _, outside) = Parse("[" + lone + "]", AnswerKind.Rank, 10, 20);
+
+        Assert.Null(error);
+        Assert.Equal(new[] { 1, 2 }, positions); // a valid pair (an emoji) still matches
+        Assert.Equal(new AnswerCounts(2, 1, 0), counts);
+        Assert.NotNull(outside); // outside a string it is not JSON
+    }
+
+    [Theory]
     [InlineData("[1, 2,]")] // RFC 8259: no trailing commas
     [InlineData("[1 /* first */]")] // nor comments
     [InlineData("[1] [2]")] // nor a second value

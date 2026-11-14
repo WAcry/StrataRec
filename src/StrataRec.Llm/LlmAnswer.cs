@@ -205,6 +205,47 @@ public static class LlmAnswer
     }
 
     /// <summary>
+    /// The answer in UTF-8 for the JSON reader, rented from the request. A client's string may hold an unpaired surrogate,
+    /// which UTF-8 cannot encode: the encoder would replace it with U+FFFD, a different character that can be another
+    /// entity's id (review 30). So each one is written as its JSON escape (<c>\uD800</c>) instead: inside a string it is the
+    /// escaped lone surrogate the walk already counts as an unknown element; outside one the answer is not valid JSON.
+    /// </summary>
+    private static int ToUtf8(ReadOnlySpan<char> text, RequestMemory memory, out byte[] bytes)
+    {
+        if (text.IndexOfAnyInRange('\uD800', '\uDFFF') < 0)
+        {
+            bytes = memory.Rent<byte>(Encoding.UTF8.GetMaxByteCount(text.Length));
+            return Encoding.UTF8.GetBytes(text, bytes);
+        }
+
+        // Rare: at most six ASCII bytes for each char, and four UTF-8 bytes for each pair.
+        bytes = memory.Rent<byte>(checked(text.Length * 6));
+        var length = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (char.IsHighSurrogate(c) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+            {
+                length += Encoding.UTF8.GetBytes(text.Slice(i, 2), bytes.AsSpan(length));
+                i++;
+            }
+            else if (char.IsSurrogate(c))
+            {
+                bytes[length++] = (byte)'\\';
+                bytes[length++] = (byte)'u';
+                ((int)c).TryFormat(bytes.AsSpan(length, 4), out _, "X4", CultureInfo.InvariantCulture);
+                length += 4;
+            }
+            else
+            {
+                length += Encoding.UTF8.GetBytes(text.Slice(i, 1), bytes.AsSpan(length));
+            }
+        }
+
+        return length;
+    }
+
+    /// <summary>
     /// The strict walk every array answer takes: trim, unfence, one JSON array and nothing after it; each element is handed
     /// to <paramref name="elements"/> on its first token (a nested array or object is skipped afterwards) and counted by
     /// what it returns.
@@ -219,8 +260,7 @@ public static class LlmAnswer
             return "the answer is empty";
         }
 
-        var bytes = memory.Rent<byte>(Encoding.UTF8.GetMaxByteCount(text.Length));
-        var length = Encoding.UTF8.GetBytes(text, bytes);
+        var length = ToUtf8(text, memory, out var bytes);
         var reader = new Utf8JsonReader(bytes.AsSpan(0, length), new JsonReaderOptions { CommentHandling = JsonCommentHandling.Disallow });
         int used = 0, unknown = 0, repeated = 0, present = 0, overLimit = 0;
         try

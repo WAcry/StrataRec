@@ -195,6 +195,46 @@ public sealed class RunReplayTests
     }
 
     /// <summary>
+    /// Review 30: two annotators share a model; the first one's call for entity 50 failed, the second one's succeeded. When
+    /// the first no longer calls 50 in the replay, the second's call must get its own recorded answer, not the failure left
+    /// by the other prompt. A recorded failure still answers the call it was (same entity, same inputs).
+    /// </summary>
+    [Fact]
+    public void ARecordedFailure_AnswersOnlyTheCallWithItsInputs_NotAnotherCallOfTheSameEntity()
+    {
+        var run = Run();
+        run.ModelCalls.Add(FailedTextCallOf(0, TextCall("note 50"), new long[] { 50 }, "note-service-overloaded"));
+        run.ModelCalls.Add(TextCallOf(1, TextCall("why 50"), new long[] { 50 }, "WHY 50"));
+        run.ModelCalls.Add(FailedTextCallOf(2, TextCall("note 60"), new long[] { 60 }, "note-service-overloaded"));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var why = new ArrayOutputWriter();
+        var answered = replay.InvokeModel(TextCall("why 50"), why, new[] { EntityKey.FromInt64(50) });
+        var note = replay.InvokeModel(TextCall("note 60"), new ArrayOutputWriter(), new[] { EntityKey.FromInt64(60) });
+
+        Assert.True(answered.Succeeded, answered.Error);
+        Assert.Equal("WHY 50", Assert.Single(why.Texts).Value);
+        Assert.False(note.Succeeded);
+        Assert.Equal("note-service-overloaded", note.Error);
+        Assert.Empty(replay.Gaps);
+    }
+
+    /// <summary>A recorded failure whose inputs changed in the replay is reported as a gap of the entity, not replayed.</summary>
+    [Fact]
+    public void ARecordedFailure_WhoseInputsChanged_IsAGap_NotTheRecordedFailure()
+    {
+        var run = Run();
+        run.ModelCalls.Add(FailedTextCallOf(0, TextCall("note 50"), new long[] { 50 }, "note-service-overloaded"));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var status = replay.InvokeModel(TextCall("note 50, revised"), new ArrayOutputWriter(), new[] { EntityKey.FromInt64(50) });
+
+        Assert.False(status.Succeeded);
+        Assert.NotEqual("note-service-overloaded", status.Error);
+        Assert.Equal(("not_recorded", "50"), (Assert.Single(replay.Gaps).Reason, Assert.Single(Assert.Single(replay.Gaps).Examples)));
+    }
+
+    /// <summary>
     /// A text belongs to its whole call: a two-row call's text is not served to one of its rows, even with the same row
     /// inputs (not recorded); an entity answered alone only with other inputs has changed inputs.
     /// </summary>
@@ -381,6 +421,19 @@ public sealed class RunReplayTests
         Texts = new Dictionary<string, string> { ["answer"] = text },
         OutputTokens = outputTokens,
         Truncated = truncated,
+    };
+
+    /// <summary>A recorded generative call of model <c>m</c> for <paramref name="keys"/> that failed with <paramref name="error"/>.</summary>
+    internal static ReplayModelCall FailedTextCallOf(int seq, ModelCall call, long[] keys, string error) => new()
+    {
+        Seq = seq,
+        Node = "notes",
+        Model = "m",
+        BatchSize = call.BatchSize,
+        Status = "error",
+        Error = error,
+        Keys = Json("[" + string.Join(",", keys) + "]"),
+        InputDigests = RowDigests(call).ToList(),
     };
 
     internal static (ModelStatus Status, float[] Scores) Invoke(RunReplay replay, ModelCall call, params long[] keys)

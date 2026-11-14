@@ -288,11 +288,17 @@ public sealed class RunReplay : IFeatureCallHook
 
     /// <summary>
     /// Answers a model call. A call without keys is matched by the digest of its whole input. A keyed call
-    /// (<paramref name="keys"/>: the entity of each batch row) takes the next recorded call with the same keys: when that
-    /// call failed, or every row's inputs are unchanged, it is replayed as recorded; otherwise each row's output comes from
-    /// whichever successful call scored that entity with the same inputs (<see cref="Synthesize"/>). A recorded failure is
-    /// returned, or thrown again when the client threw (see <see cref="ReplayedExceptions"/>).
+    /// (<paramref name="keys"/>: the entity of each batch row) takes the next recorded call with the same keys and the same
+    /// inputs in every row, and replays it as recorded; otherwise each row's output comes from whichever successful call
+    /// scored that entity with the same inputs (<see cref="Synthesize"/>). A recorded failure is returned, or thrown again
+    /// when the client threw (see <see cref="ReplayedExceptions"/>).
     /// </summary>
+    /// <remarks>
+    /// A recorded failure answers only the call it was: same entities, same inputs. Taken by entities alone, the failure of
+    /// another call of the same model and entity (another node, another prompt) answered this one, and hid the success the
+    /// recording has for its own inputs (review 30). A call whose inputs changed since a recorded failure is synthesized
+    /// like any other, so its rows are reported as gaps rather than failed for a reason that was about other inputs.
+    /// </remarks>
     internal ModelStatus InvokeModel(ModelCall call, IModelOutputWriter outputs, EntityKey[]? keys)
     {
         lock (_gate)
@@ -318,8 +324,8 @@ public sealed class RunReplay : IFeatureCallHook
                 digests[r] = ReplayJson.Hex(ModelInputDigest.Row(call, order, r));
             }
 
-            var positional = Take(calls, entry => entry.Keys is not null && entry.Keys.AsSpan().SequenceEqual(keys));
-            if (positional is not null && (positional.Outcome != IoOutcome.Ok || positional.Digests.AsSpan().SequenceEqual(digests)))
+            var positional = Take(calls, entry => entry.Keys is not null && entry.Keys.AsSpan().SequenceEqual(keys) && entry.Digests.AsSpan().SequenceEqual(digests));
+            if (positional is not null)
             {
                 return Answer(positional, outputs);
             }
