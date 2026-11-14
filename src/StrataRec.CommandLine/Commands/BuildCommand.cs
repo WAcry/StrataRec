@@ -12,6 +12,15 @@ namespace StrataRec.CommandLine.Commands;
 /// <c>stratarec build</c> (design 10.1 item 2): validates, uploads canonical artifacts to a content-addressed store and
 /// writes the release manifest. Nothing is uploaded when validation fails.
 /// </summary>
+/// <remarks>
+/// <para>Without <c>--seq</c>, the manifest is the next release of its pipeline in its environment (design 10.2): its
+/// <c>seq</c> is one more than that of the manifest the store's pointer names (<c>stratarec publish</c> writes it), it
+/// keeps that manifest's <c>min_accepted_seq</c>, as an ordinary release does, and names it as <c>previous</c>, which
+/// <c>stratarec diff --to</c> compares with; the first release is 1. So build and publish follow each other without
+/// anyone keeping count. A configuration that is the published one's, but for those fields, is no new release: build
+/// writes the published manifest, which publish then finds published already, so a pipeline can run both again.</para>
+/// <para>A release controller that numbers releases itself passes <c>--seq</c>, and the store's pointers are not read.</para>
+/// </remarks>
 internal static class BuildCommand
 {
     public static Command Create(PlanEnvironment provided)
@@ -21,7 +30,11 @@ internal static class BuildCommand
         var pipeline = CommonOptions.Pipeline();
         var store = new Option<string>("--store", "-s") { Description = "Artifact store directory (blobs/sha256/...).", Required = true };
         var manifest = new Option<string?>("--manifest", "-m") { Description = "Write the manifest here instead of stdout." };
-        var seq = new Option<long>("--seq") { Description = "Manifest sequence number.", DefaultValueFactory = _ => 1 };
+        var seq = new Option<long?>("--seq")
+        {
+            Description = "The manifest's sequence number (design 10.2). By default the next release: one more than the manifest the store's pointer for the " +
+                          "pipeline and environment names ('stratarec publish' writes it), keeping its min_accepted_seq; 1 when none is published.",
+        };
         var command = new Command("build", "Validate, upload artifacts by content hash and emit a release manifest. Exits with 1 when the configuration has errors.") { config, environment, pipeline, store, manifest, seq };
         command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(config)!, parse.GetValue(environment)!, parse.GetValue(pipeline),
             parse.GetValue(store)!, parse.GetValue(manifest), parse.GetValue(seq), parse.InvocationConfiguration.Output, cancellationToken,
@@ -31,8 +44,9 @@ internal static class BuildCommand
 
     /// <param name="errors">Where diagnostics and the manifest id go; standard error by default.</param>
     /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
+    /// <param name="seq">The manifest's sequence number; null for the next release (see remarks).</param>
     internal static async Task<int> RunAsync(
-        PlanEnvironment provided, string config, string environment, string? pipeline, string storeRoot, string? manifestPath, long seq, TextWriter output,
+        PlanEnvironment provided, string config, string environment, string? pipeline, string storeRoot, string? manifestPath, long? seq, TextWriter output,
         CancellationToken cancellationToken, TextWriter? errors = null)
     {
         errors ??= Console.Error;
@@ -45,16 +59,42 @@ internal static class BuildCommand
         }
 
         var store = new FileSystemArtifactStore(storeRoot);
-        var manifest = await ManifestBuilder.BuildAsync(workspace, request.Pipeline.PipelineId, environment, store, diagnostics, seq, cancellationToken).ConfigureAwait(false);
+        var pipelineId = request.Pipeline.PipelineId;
+        (string Id, ReleaseManifest Manifest)? published = null;
+        if (seq is null)
+        {
+            var (read, pointed) = await ReadPublishedAsync(storeRoot, store, pipelineId, environment, diagnostics, cancellationToken).ConfigureAwait(false);
+            if (!read)
+            {
+                Output.Diagnostics(diagnostics.Items, "text", errors);
+                return 1;
+            }
+
+            published = pointed;
+        }
+
+        var manifest = published is { } current
+            ? await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, store, diagnostics, current.Manifest.Seq + 1, current.Manifest.MinAcceptedSeq,
+                current.Id, cancellationToken).ConfigureAwait(false)
+            : await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, store, diagnostics, seq ?? 1, cancellationToken: cancellationToken).ConfigureAwait(false);
         if (manifest is null)
         {
             Output.Diagnostics(diagnostics.Items, "text", errors, locator: DiagnosticLocator.ForWorkspace(config));
             return 1;
         }
 
-        var node = ArtifactSerializer.ToNode(manifest);
-        var manifestId = await store.PutAsync(node, cancellationToken).ConfigureAwait(false);
-        var text = node.ToJsonString(ArtifactSerializer.Options);
+        string manifestId;
+        var unchanged = published is { } was && ManifestBuilder.ContentId(Renumbered(manifest, was.Manifest)) == was.Id;
+        if (unchanged)
+        {
+            (manifestId, manifest) = published!.Value; // stored when it was built
+        }
+        else
+        {
+            manifestId = await store.PutAsync(ArtifactSerializer.ToNode(manifest), cancellationToken).ConfigureAwait(false);
+        }
+
+        var text = ArtifactSerializer.ToNode(manifest).ToJsonString(ArtifactSerializer.Options);
         if (manifestPath is null)
         {
             output.WriteLine(text);
@@ -64,7 +104,62 @@ internal static class BuildCommand
             await File.WriteAllTextAsync(manifestPath, text + "\n", cancellationToken).ConfigureAwait(false);
         }
 
-        errors.WriteLine($"manifest {manifestId} ({Output.Count(manifest.Requires.Count, "capability", "capabilities")}, {Output.Count(manifest.Experiments.Count, "experiment")})");
+        errors.WriteLine($"manifest {manifestId} (seq {manifest.Seq}, {Output.Count(manifest.Requires.Count, "capability", "capabilities")}, " +
+                         $"{Output.Count(manifest.Experiments.Count, "experiment")})" +
+                         (unchanged ? ": unchanged, the release the pointer names has this configuration" : string.Empty));
         return 0;
+    }
+
+    /// <summary><paramref name="manifest"/> with the release fields of <paramref name="like"/>: equal ids then mean the same configuration.</summary>
+    private static ReleaseManifest Renumbered(ReleaseManifest manifest, ReleaseManifest like) => new()
+    {
+        PipelineId = manifest.PipelineId,
+        Environment = manifest.Environment,
+        Seq = like.Seq,
+        MinAcceptedSeq = like.MinAcceptedSeq,
+        Previous = like.Previous,
+        Requires = manifest.Requires,
+        Artifacts = manifest.Artifacts,
+        Experiments = manifest.Experiments,
+    };
+
+    /// <summary>
+    /// The manifest the store's pointer names for the pipeline in the environment, and its id; none when nothing is
+    /// published. Not read, after reporting, when the pointer or that manifest cannot be: the next sequence is then
+    /// unknown, and publishing would fail on it too.
+    /// </summary>
+    private static async Task<(bool Read, (string Id, ReleaseManifest Manifest)? Published)> ReadPublishedAsync(
+        string storeRoot, FileSystemArtifactStore store, string pipelineId, string environment, DiagnosticBag diagnostics, CancellationToken cancellationToken)
+    {
+        var pointers = new FileSystemManifestSource(storeRoot);
+        string? current;
+        try
+        {
+            current = await pointers.GetManifestIdAsync(pipelineId, environment, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            diagnostics.Error("POINTER_UNREADABLE", storeRoot, string.Empty,
+                $"The pointer of pipeline '{pipelineId}' in environment '{environment}' could not be read, so the next sequence is unknown: {ex.Message}",
+                "fix the pointer ('stratarec publish' writes it), or pass --seq");
+            return (false, null);
+        }
+
+        if (current is null)
+        {
+            return (true, null);
+        }
+
+        var read = new DiagnosticBag();
+        if (await ManifestBuilder.ReadAsync(store, current, read, cancellationToken).ConfigureAwait(false) is not { } published)
+        {
+            diagnostics.AddRange(read.Items);
+            diagnostics.Error("POINTER_MANIFEST_UNREADABLE", pointers.GetPointerPath(pipelineId, environment), string.Empty,
+                $"The pointer names manifest '{current}', which the store cannot read, so the next sequence is unknown.",
+                "restore that manifest to the store, or pass --seq");
+            return (false, null);
+        }
+
+        return (true, (current, published));
     }
 }

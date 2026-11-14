@@ -116,6 +116,68 @@ public sealed class PublishCommandTests
         Assert.Equal("MANIFEST_UNKNOWN", Assert.Single(ManifestStores.Errors(errors)).Code);
     }
 
+    /// <summary>
+    /// Without --seq, build makes the next release of what the store's pointer names (design 10.2): one more seq, the same
+    /// min_accepted_seq, and it as previous, which diff compares with; the same configuration is no new release, so build
+    /// and publish run again change nothing. A pointer build cannot read stops it, unless --seq says the number.
+    /// </summary>
+    [Fact]
+    public async Task Build_WithoutSeq_IsTheNextReleaseOfWhatIsPublished()
+    {
+        var root = ManifestStores.Workspace();
+        var store = ManifestStores.NewStore();
+        var (first, firstManifest) = await BuildNext(root, store);
+        Assert.Equal((1L, 0L, (string?)null), (firstManifest.Seq, firstManifest.MinAcceptedSeq, firstManifest.Previous));
+
+        // Published with a floor, as a controller that revoked something would: the next release keeps it.
+        var flooredManifest = new ReleaseManifest
+        {
+            PipelineId = firstManifest.PipelineId, Environment = firstManifest.Environment, Seq = 3, MinAcceptedSeq = 3, Previous = first,
+            Requires = firstManifest.Requires, Artifacts = firstManifest.Artifacts, Experiments = firstManifest.Experiments,
+        };
+        var flooredId = await ManifestStores.PutAsync(store, flooredManifest);
+        Assert.Equal(0, (await Publish(store, flooredId)).Code);
+
+        // The same configuration: the published manifest, and publishing it changes nothing.
+        var errors = new StringWriter();
+        var file = Path.Combine(store, "again.json");
+        Assert.Equal(0, await BuildCommand.RunAsync(Tool.Environment, root, "local", null, store, file, null, TextWriter.Null, CancellationToken.None, errors));
+        Assert.Equal(flooredId, ManifestBuilder.ContentId(ManifestStores.Read(file)));
+        Assert.Contains("(seq 3, ", errors.ToString());
+        Assert.Contains(": unchanged, the release the pointer names has this configuration", errors.ToString());
+        Assert.Contains("is published already", (await Publish(store, file)).Output);
+
+        // Changed: seq 4, the floor kept, the published manifest as previous; diff --to compares with it.
+        var path = Path.Combine(root, "pipelines", "home_feed.jsonc");
+        File.WriteAllText(path, System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(path), "\"final_top_k\": \\d+,", "\"final_top_k\": 7,"));
+        var (next, nextManifest) = await BuildNext(root, store);
+        Assert.Equal((4L, 3L, flooredId), (nextManifest.Seq, nextManifest.MinAcceptedSeq, nextManifest.Previous));
+        Assert.Equal(0, (await Publish(store, next)).Code);
+        var diff = new StringWriter();
+        Assert.Equal(1, await StrataRecCommandLine.InvokeAsync(["diff", "--to", next, "-s", store], Tool.Environment, diff, TextWriter.Null));
+        Assert.Contains("final_top_k", diff.ToString());
+
+        // A pointer that cannot be read: the next number is unknown; --seq says it.
+        File.WriteAllText(Path.Combine(store, "pointers", "local", "home_feed.json"), "{ not json");
+        errors = new StringWriter();
+        Assert.Equal(1, await BuildCommand.RunAsync(Tool.Environment, root, "local", null, store, null, null, TextWriter.Null, CancellationToken.None, errors));
+        Assert.Contains("error POINTER_UNREADABLE", errors.ToString());
+        Assert.Contains("hint: fix the pointer ('stratarec publish' writes it), or pass --seq", errors.ToString());
+        Assert.Equal(0, await BuildCommand.RunAsync(Tool.Environment, root, "local", null, store, null, 9, TextWriter.Null, CancellationToken.None, TextWriter.Null));
+    }
+
+    private static async Task<(string Id, ReleaseManifest Manifest)> BuildNext(string root, string store)
+    {
+        var file = Path.Combine(store, $"manifest-{Guid.NewGuid():N}.json");
+        var errors = new StringWriter();
+        Assert.True(0 == await BuildCommand.RunAsync(Tool.Environment, root, "local", null, store, file, null, TextWriter.Null, CancellationToken.None, errors),
+            errors.ToString());
+        var manifest = ManifestStores.Read(file);
+        var id = ManifestBuilder.ContentId(manifest);
+        Assert.Equal(0, (await Publish(store, id)).Code);
+        return (id, manifest);
+    }
+
     /// <summary>Builds the workspace copy at <paramref name="root"/> with its <c>final_top_k</c> set, so the manifest differs; its id.</summary>
     private static async Task<string> BuildAsync(string root, string store, long seq, int finalTopK)
     {

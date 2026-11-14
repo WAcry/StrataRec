@@ -26,6 +26,8 @@ public static class ManifestBuilder
         IArtifactStore store,
         DiagnosticBag diagnostics,
         long seq = 1,
+        long minAcceptedSeq = 0,
+        string? previous = null,
         CancellationToken cancellationToken = default)
     {
         var request = workspace.CreateCompileRequest(pipelineId, environment, diagnostics);
@@ -76,7 +78,8 @@ public static class ManifestBuilder
             PipelineId = pipelineId,
             Environment = environment,
             Seq = seq,
-            MinAcceptedSeq = 0,
+            MinAcceptedSeq = minAcceptedSeq,
+            Previous = previous,
             Requires = RequiredCapabilities(request),
             Artifacts = new ManifestArtifacts
             {

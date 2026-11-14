@@ -175,7 +175,8 @@ internal static class PublishCommand
                 diagnostics.Error("PUBLISH_NOT_NEWER", Label(id), "/seq",
                     $"Sequence {manifest.Seq} is not greater than {published.Seq}, the sequence of '{current}', which the pointer of pipeline "
                     + $"'{manifest.PipelineId}' in environment '{manifest.Environment}' names now: nodes would not take it as newer.",
-                    $"build the manifest with --seq {published.Seq + 1} or higher (stratarec build --seq), also to roll back (design 10.2)");
+                    $"build it again without --seq, which makes the next release of what is published, or with --seq {published.Seq + 1} or higher; " +
+                    "a rollback is a new build too (design 10.2)");
                 return null;
             }
 
