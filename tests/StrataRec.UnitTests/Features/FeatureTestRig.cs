@@ -338,16 +338,39 @@ internal sealed class TestLocalTables : ILocalTableProvider
     }
 }
 
-/// <summary>A clock a test moves by hand (cache write times and expiry); starts at 2026-01-01.</summary>
+/// <summary>
+/// A clock a test moves by hand (cache write times and expiry); starts at 2026-01-01. Its timestamps (what the
+/// distributed tier's time is judged by) are the system's until <see cref="HoldTimestamps"/>.
+/// </summary>
 internal sealed class ManualClock : TimeProvider
 {
     private long _ticks = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero).UtcTicks;
+    private long _timestamp = -1;
+    private long _stepPerRead;
 
     public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref _ticks), TimeSpan.Zero);
 
     public long NowMs => GetUtcNow().ToUnixTimeMilliseconds();
 
     public void AdvanceMs(long milliseconds) => Interlocked.Add(ref _ticks, milliseconds * TimeSpan.TicksPerMillisecond);
+
+    /// <summary>
+    /// From now on the timestamps stand still, but for <see cref="AdvanceTimestamps"/> and, if given, a step every time
+    /// one is read: a deadline taken from them passes only when the test says.
+    /// </summary>
+    public void HoldTimestamps(TimeSpan stepPerRead = default)
+    {
+        Interlocked.Exchange(ref _stepPerRead, stepPerRead.Ticks * TimestampFrequency / TimeSpan.TicksPerSecond);
+        Interlocked.Exchange(ref _timestamp, base.GetTimestamp());
+    }
+
+    public void AdvanceTimestamps(TimeSpan by) => Interlocked.Add(ref _timestamp, by.Ticks * TimestampFrequency / TimeSpan.TicksPerSecond);
+
+    public override long GetTimestamp()
+    {
+        var step = Interlocked.Read(ref _stepPerRead);
+        return Interlocked.Read(ref _timestamp) < 0 ? base.GetTimestamp() : Interlocked.Add(ref _timestamp, step) - step;
+    }
 }
 
 /// <summary><c>test_cache@1</c>: serves distributed cache stores registered by source name.</summary>

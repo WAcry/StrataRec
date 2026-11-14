@@ -22,7 +22,10 @@ public sealed class CacheTableOptions
     /// </summary>
     public long WriteQueueBytes { get; init; }
 
-    /// <summary>The clock of write times and expiry; tests pass one they move by hand.</summary>
+    /// <summary>
+    /// The clock of write times and expiry, and the timestamps the distributed tier's time is judged by; tests pass one
+    /// they move by hand.
+    /// </summary>
     public TimeProvider Clock { get; init; } = TimeProvider.System;
 
     internal void Validate()

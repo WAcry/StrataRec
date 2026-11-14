@@ -115,24 +115,89 @@ public class CacheStoreCallTests
         Assert.Equal(pastTheSourceDeadline ? (double?)null : 1.0, record.Found ? version.Read(0, record).AsFloat64() : null);
     }
 
-    /// <summary>Review 19: once the tier's time is up (here an earlier chunk's synchronous part took it), no further chunk is sent.</summary>
+    /// <summary>
+    /// Review 19: once the tier's time is up (here the first chunk's synchronous part took it), no further chunk is sent.
+    /// The tier's time is judged by the cache's clock, held by the test (review 21 #2): the first chunk is sent with time
+    /// left, whatever the machine does, and its call moves the clock past the tier's time.
+    /// </summary>
     [Fact]
     public async Task OnceTheTiersTimeIsUp_NoFurtherChunkIsSent_AndTheConnectorAnswersEveryKey()
     {
-        var store = new SlowStore(blockMs: 40);
+        ManualClock? clock = null;
+        var store = new ClockedStore(() => clock!.AdvanceTimestamps(TimeSpan.FromSeconds(1)));
+        var connector = ScriptedConnector.Values((key, _) => key * 1.0);
+        var rig = new FeatureTestRig().CacheSource("item_store", connector, distributed: store, distributedTimeoutMs: 20, maxBatch: 2);
+        clock = rig.Clock;
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+        store.Prepare(rig.Tables["item_store"].Cache!, rig.Clock.NowMs, 111.0);
+        rig.Clock.HoldTimestamps();
+
+        var request = rig.NewRequest([1, 2, 3, 4]); // two chunks
+        var result = await request.EnsureAsync(clicks);
+
+        Assert.Equal(1, store.Calls); // the first chunk, sent with time left; not the second
+        Assert.Equal(FeatureState.Ok, result.State);
+        Assert.Equal(new[] { 1.0, 2, 3, 4 }, Enumerable.Range(0, 4).Select(r => request.Value(clicks, r).AsFloat64())); // not 111
+        Assert.Equal(new long[] { 1, 2, 3, 4 }, connector.Calls.SelectMany(c => c.Keys).Select(k => k.Int64Value).Order());
+    }
+
+    /// <summary>
+    /// Review 21 #2: the tier's time is up before the first chunk is sent (the request's thread was preempted, say; here
+    /// every look at the clock moves it a second). No chunk is sent, and the connector answers every key.
+    /// </summary>
+    [Fact]
+    public async Task TheTiersTimeUpBeforeTheFirstChunk_SendsNone_AndTheConnectorAnswersEveryKey()
+    {
+        var store = new ClockedStore(() => { });
         var connector = ScriptedConnector.Values((key, _) => key * 1.0);
         var rig = new FeatureTestRig().CacheSource("item_store", connector, distributed: store, distributedTimeoutMs: 20, maxBatch: 2);
         var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
         rig.Build();
         store.Prepare(rig.Tables["item_store"].Cache!, rig.Clock.NowMs, 111.0);
+        rig.Clock.HoldTimestamps(stepPerRead: TimeSpan.FromSeconds(1));
 
-        var request = rig.NewRequest([1, 2, 3, 4]); // two chunks
+        var request = rig.NewRequest([1, 2, 3, 4]);
         var result = await request.EnsureAsync(clicks);
 
-        Assert.Equal(1, store.Calls);
+        Assert.Equal(0, store.Calls);
         Assert.Equal(FeatureState.Ok, result.State);
         Assert.Equal(new[] { 1.0, 2, 3, 4 }, Enumerable.Range(0, 4).Select(r => request.Value(clicks, r).AsFloat64()));
         Assert.Equal(new long[] { 1, 2, 3, 4 }, connector.Calls.SelectMany(c => c.Keys).Select(k => k.Int64Value).Order());
+    }
+
+    /// <summary>
+    /// A store that runs <paramref name="whileSending"/> in its synchronous part (where the test moves the clock), then
+    /// answers a fresh record for every key.
+    /// </summary>
+    private sealed class ClockedStore(Action whileSending) : IFeatureCacheStore
+    {
+        private ReadOnlyMemory<byte> _record;
+        private int _calls;
+
+        public string StoreType => TestCacheStoreFactory.Type;
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        public void Prepare(LocalTableCache cache, long writtenMs, double value)
+        {
+            var writer = new CacheRecordWriter(cache.Layout, 64);
+            writer.Begin(writtenMs, cache.Fingerprint, absent: false);
+            writer.Float64(0, value);
+            var (offset, length) = writer.End();
+            _record = writer.Bytes.AsMemory(offset, length);
+        }
+
+        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<EntityKey> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _calls);
+            whileSending();
+            records.Span.Fill(_record);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask SetAsync(CacheKeyspace keyspace, ReadOnlyMemory<CacheStoreEntry> entries, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
     }
 
     /// <summary>
