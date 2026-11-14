@@ -84,6 +84,77 @@ public sealed class ManifestRefCliTests
     }
 
     [Fact]
+    public async Task Replay_OfARequestThatFailedOver_RunsTheFallbackPipelineOnTheManifestItRecorded()
+    {
+        // Two pipelines released separately: 'primary' (its source fails) falls back to 'backup' (review 24 P2).
+        var root = ReviewRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
+        var bindings = Path.Combine(root, "bindings", "local.jsonc");
+        File.WriteAllText(bindings, File.ReadAllText(bindings).Replace("\"fixtures/recall_popular.json\"",
+            JsonSerializer.Serialize(Path.Combine(root, "fixtures", "recall_popular.json")), StringComparison.Ordinal));
+        var store = ManifestStores.NewStore();
+        var manifests = new List<(string File, string Id)>();
+        foreach (var pipeline in new[] { "primary", "backup" })
+        {
+            var file = Path.Combine(store, pipeline + ".json");
+            Assert.Equal(0, await BuildCommand.RunAsync(root, "local", pipeline, store, file, 1, TextWriter.Null, CancellationToken.None));
+            manifests.Add((file, ContentHash.Compute(ArtifactSerializer.ToNode(ManifestStores.Read(file)))));
+        }
+
+        // A node serving both releases records a request that failed over.
+        var bundles = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
+        ReplayBundle recording;
+        await using (var engine = new RecEngine(CommonOptions.PlanEnvironment(root)))
+        {
+            foreach (var (file, id) in manifests)
+            {
+                var request = await ManifestBuilder.LoadAsync(ManifestStores.Read(file), id, new FileSystemArtifactStore(store), new DiagnosticBag());
+                Assert.True((await engine.LoadAsync(request!, 1)).Applied);
+            }
+
+            var result = await engine.ExecuteAsync(new RecRequest
+            {
+                PipelineId = "primary", RequestId = "req-failover", Inputs = new Core.Values.RequestInputs(), Deadline = TimeSpan.FromSeconds(30),
+                Debug = new DebugOptions { Record = true },
+            });
+            Assert.Equal("backup", result.ServedBy);
+            recording = result.Recording!;
+            Assert.Equal(new[] { manifests[0].Id, manifests[1].Id }, recording.Runs.Select(r => r.ManifestId));
+            ReplayBundleFile.Save(recording, Path.Combine(bundles, "failed-over.json"));
+        }
+
+        // Only the store: each run on the manifest it recorded. The primary's manifest named: the fallback still on its own.
+        foreach (var manifest in new[] { null, manifests[0].Id })
+        {
+            var output = new StringWriter();
+            Assert.Equal(0, await ReplayCommand.RunAsync(null, "local", bundles, Array.Empty<string>(), "json", expectIdentical: true, output, CancellationToken.None,
+                manifest: manifest, store: store));
+            using var report = JsonDocument.Parse(output.ToString());
+            var bundle = report.RootElement.GetProperty("bundles")[0];
+            Assert.True(bundle.GetProperty("diff").GetProperty("identical").GetBoolean(), output.ToString());
+            Assert.Equal("backup", bundle.GetProperty("served_by").GetString());
+        }
+
+        // compare resolves each side the same way: the primary's manifest on both sides fails over as recorded.
+        Assert.Equal(0, await CompareCommand.RunAsync(manifests[0].Id, null, "local", bundles, Array.Empty<string>(), 5, "source", "json", TextWriter.Null,
+            CancellationToken.None, candidateManifest: manifests[0].Id, store: store));
+
+        // A store without the fallback's manifest: not replayed, naming the pipeline, its manifest and why.
+        File.Delete(new FileSystemArtifactStore(store).GetBlobPath(manifests[1].Id));
+        var errors = new StringWriter();
+        Assert.Equal(2, await ReplayCommand.RunAsync(null, "local", bundles, Array.Empty<string>(), "text", expectIdentical: false, TextWriter.Null, CancellationToken.None,
+            store: store, errors: errors));
+        Assert.Contains($"pipeline 'backup' ran on manifest {manifests[1].Id}, which does not load: MANIFEST_UNKNOWN", errors.ToString());
+
+        // An engine without the fallback pipeline says so instead of passing the primary's failure off as the replay.
+        await using var primaryOnly = new RecEngine(CommonOptions.PlanEnvironment(root), bindingOptions: new Hosting.Bindings.BindingHostOptions { Load = false });
+        var primary = await ManifestBuilder.LoadAsync(ManifestStores.Read(manifests[0].File), manifests[0].Id, new FileSystemArtifactStore(store), new DiagnosticBag());
+        Assert.True((await primaryOnly.LoadAsync(primary!, 1)).Applied);
+        var outcome = await primaryOnly.ReplayAsync(recording);
+        Assert.False(outcome.Result.Succeeded);
+        Assert.Contains(outcome.Report.Notes, n => n.Contains("this engine has not loaded 'backup'", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Replay_WithOnlyAStore_ReplaysEachBundleOnTheManifestItRecorded_AndReportsWorkspaceBundles()
     {
         var root = ManifestStores.Workspace();

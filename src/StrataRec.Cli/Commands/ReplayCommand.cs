@@ -134,7 +134,7 @@ internal static class ReplayCommand
 
     /// <summary>One bundle's replay, or why it was not replayed.</summary>
     /// <param name="Unresolved">Not replayed because the configuration it recorded is not available (not because the bundle is unreadable).</param>
-    private sealed record BundleReplay(string File, ReplayOutcome? Outcome, string? Error, bool Unresolved);
+    internal sealed record BundleReplay(string File, ReplayOutcome? Outcome, string? Error, bool Unresolved);
 
     private static (int Replayed, int Unreadable, int Unresolved, int Identical) Counts(List<BundleReplay> results)
     {
@@ -157,43 +157,8 @@ internal static class ReplayCommand
         return replayed == 0 ? "failed" : replayed < results.Count ? "partial" : "ok";
     }
 
-    /// <summary>Loads a configuration into a fresh replay engine (<see cref="ConfigRef.LoadReplayEngineAsync"/>); prints diagnostics and returns null on errors.</summary>
-    internal static async Task<RecEngine?> LoadEngineAsync(ConfigRef reference, string environment, string format, TextWriter errors, CancellationToken cancellationToken)
-    {
-        var diagnostics = new DiagnosticBag();
-        var engine = await reference.LoadReplayEngineAsync(environment, diagnostics, cancellationToken).ConfigureAwait(false);
-        if (engine is null)
-        {
-            Output.Diagnostics(diagnostics.Items, format, errors);
-        }
-
-        return engine;
-    }
-
-    /// <summary>Replays one bundle file; a malformed bundle is an error naming the file, the pointer and the fix.</summary>
-    internal static async Task<(ReplayOutcome? Outcome, string? Error)> ReplayFileAsync(RecEngine engine, string file, ReplayOptions options, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var bundle = ReplayBundleFile.Load(file);
-            return (await engine.ReplayAsync(bundle, options, cancellationToken).ConfigureAwait(false), null);
-        }
-        catch (ReplayBundleException ex)
-        {
-            var error = $"{file}: {ex.Message}" + (ex.Hint is null ? string.Empty : $" (hint: {ex.Hint})");
-            Console.Error.WriteLine(error);
-            return (null, error);
-        }
-        catch (IOException ex)
-        {
-            var error = $"{file}: {ex.Message}";
-            Console.Error.WriteLine(error);
-            return (null, error);
-        }
-    }
-
     /// <summary>Replays one bundle file on the engine <paramref name="engines"/> chooses for it.</summary>
-    private static async Task<BundleReplay> ReplayFileAsync(ReplayEngines engines, string file, ReplayOptions options, TextWriter errors, CancellationToken cancellationToken)
+    internal static async Task<BundleReplay> ReplayFileAsync(ReplayEngines engines, string file, ReplayOptions options, TextWriter errors, CancellationToken cancellationToken)
     {
         string? error;
         var unresolved = false;

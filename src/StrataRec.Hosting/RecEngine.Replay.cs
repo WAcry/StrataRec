@@ -118,6 +118,14 @@ public sealed partial class RecEngine
                 if (executed.Succeeded || pipeline.FallbackPipeline is not { } fallbackId || fallbackId == request.PipelineId
                     || (fallback = Enter(fallbackId, out _)) is null)
                 {
+                    if (!executed.Succeeded && fallbackRecord is not null)
+                    {
+                        // Not a difference of the replayed configuration's behavior: what the request failed over to is absent.
+                        notes.Add(pipeline.FallbackPipeline is { } configured && configured != request.PipelineId
+                            ? $"the recording ran fallback pipeline '{fallbackRecord.PipelineId}' (manifest {fallbackRecord.ManifestId}), and this engine has not loaded '{configured}': the replay ends with the primary pipeline's failure"
+                            : $"the recording ran fallback pipeline '{fallbackRecord.PipelineId}', and the replayed configuration has none");
+                    }
+
                     result = ToResult(request, pipeline, executed, ignored, request.PipelineId);
                 }
                 else if (fallbackRecord is null && primaryRecord is { Result.Succeeded: false } failed)

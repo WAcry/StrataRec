@@ -70,8 +70,10 @@ internal static class CompareCommand
             return 2;
         }
 
-        await using var baseline = await ReplayCommand.LoadEngineAsync(baselineConfig, environment, format, errors, cancellationToken).ConfigureAwait(false);
-        await using var candidate = await ReplayCommand.LoadEngineAsync(candidateRef!, environment, format, errors, cancellationToken).ConfigureAwait(false);
+        // Each side resolves a bundle's pipelines as replay does: a fallback pipeline the request ran comes from the side's
+        // workspace, or from the manifest it recorded when the side is a manifest (ReplayEngines).
+        await using var baseline = await ReplayEngines.CreateAsync(baselineConfig, store, environment, format, errors, cancellationToken).ConfigureAwait(false);
+        await using var candidate = await ReplayEngines.CreateAsync(candidateRef!, store, environment, format, errors, cancellationToken).ConfigureAwait(false);
         if (baseline is null || candidate is null)
         {
             return 1;
@@ -85,21 +87,21 @@ internal static class CompareCommand
         {
             // The first replay in the process pays for JIT compilation; unwarmed, that lands in whichever side replays
             // first and inflates its latency percentiles.
-            await ReplayCommand.ReplayFileAsync(baseline, files[0], options, cancellationToken).ConfigureAwait(false);
-            await ReplayCommand.ReplayFileAsync(candidate, files[0], options, cancellationToken).ConfigureAwait(false);
+            await ReplayCommand.ReplayFileAsync(baseline, files[0], options, TextWriter.Null, cancellationToken).ConfigureAwait(false);
+            await ReplayCommand.ReplayFileAsync(candidate, files[0], options, TextWriter.Null, cancellationToken).ConfigureAwait(false);
         }
 
         foreach (var file in files)
         {
-            var (before, error) = await ReplayCommand.ReplayFileAsync(baseline, file, options, cancellationToken).ConfigureAwait(false);
-            if (before is null)
+            var before = await ReplayCommand.ReplayFileAsync(baseline, file, options, errors, cancellationToken).ConfigureAwait(false);
+            if (before.Outcome is null)
             {
-                pairs.Add(new ReplayPair(file, string.Empty, null, null, error));
+                pairs.Add(new ReplayPair(file, string.Empty, null, null, before.Error));
                 continue;
             }
 
-            var (after, candidateError) = await ReplayCommand.ReplayFileAsync(candidate, file, options, cancellationToken).ConfigureAwait(false);
-            pairs.Add(new ReplayPair(file, before.Bundle.Request.RequestId, before, after, candidateError));
+            var after = await ReplayCommand.ReplayFileAsync(candidate, file, options, errors, cancellationToken).ConfigureAwait(false);
+            pairs.Add(new ReplayPair(file, before.Outcome.Bundle.Request.RequestId, before.Outcome, after.Outcome, after.Error));
         }
 
         if (pairs.Count == 0)

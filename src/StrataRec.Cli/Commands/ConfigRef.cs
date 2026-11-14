@@ -30,8 +30,10 @@ internal enum ConfigRefKind
 /// manifest compiles to the plan a node loading it would serve, under the manifest's content id.
 /// </summary>
 /// <remarks>
-/// <para>None of these commands loads bindings (local tables, model files, fixtures), so a manifest needs nothing on disk
-/// but the store. <c>run</c> does load them, relative to a workspace root, and takes only workspaces.</para>
+/// <para>None of these commands loads bindings (local tables, model files, snapshots), so a manifest needs little on disk
+/// but the store: only the fixtures that read their data file when created (<c>memory@1</c>, <c>memory_list@1</c>), whose
+/// relative paths resolve against the current directory (<see cref="PlanEnvironment"/>). <c>run</c> loads every binding,
+/// relative to a workspace root, and takes only workspaces.</para>
 /// <para>Problems with the command line itself (two configurations, a manifest without a store, a ref that names
 /// nothing) are usage errors, reported by <see cref="Parse"/> and <see cref="Select"/>; problems with what a ref names (an
 /// id the store lacks, a damaged blob, a manifest that does not compile) are reported when it loads.</para>
@@ -206,44 +208,34 @@ internal sealed class ConfigRef
     }
 
     /// <summary>
-    /// An engine serving the ref for replay: every pipeline of a workspace (a bundle names its pipeline), or the manifest's
-    /// pipeline at its sequence number. It loads no table and no client, since a replay answers every external call and
-    /// local read from the recording (design 13.4): neither their data, their model files, their snapshot files nor their
-    /// secrets are needed. Null after reporting errors; the caller disposes the engine.
+    /// An engine for replay, with no pipeline loaded yet (<see cref="LoadIntoAsync"/>). It loads no table and no client,
+    /// since a replay answers every external call and local read from the recording (design 13.4): their model files,
+    /// snapshot files and secrets are not needed, only the data files of fixtures that read them when created, at paths
+    /// that resolve as <see cref="PlanEnvironment"/> says.
     /// </summary>
-    public async Task<RecEngine?> LoadReplayEngineAsync(string environment, DiagnosticBag diagnostics, CancellationToken cancellationToken)
+    public RecEngine CreateReplayEngine() => new(PlanEnvironment(), bindingOptions: new BindingHostOptions { Load = false });
+
+    /// <summary>
+    /// Loads the ref into <paramref name="engine"/>: every pipeline of a workspace's release, or the manifest's pipeline at
+    /// its sequence number. Returns the manifest's pipeline (empty for a workspace), or null after reporting errors.
+    /// </summary>
+    public async Task<string?> LoadIntoAsync(RecEngine engine, string environment, DiagnosticBag diagnostics, CancellationToken cancellationToken)
     {
-        var engine = new RecEngine(PlanEnvironment(), bindingOptions: new BindingHostOptions { Load = false });
         var errorsBefore = diagnostics.ErrorCount;
-        try
+        var pipeline = string.Empty;
+        if (Kind == ConfigRefKind.Workspace)
         {
-            if (Kind == ConfigRefKind.Workspace)
-            {
-                diagnostics.AddRange(ServiceCollectionExtensions.LoadWorkspace(engine, Text, environment).Items);
-            }
-            else if (await ReadManifestAsync(diagnostics, cancellationToken).ConfigureAwait(false) is { } read
-                     && await ManifestBuilder.LoadAsync(read.Manifest, read.Id, read.Store, diagnostics, cancellationToken).ConfigureAwait(false) is { } request)
-            {
-                var result = await engine.LoadAsync(request, read.Manifest.Seq, cancellationToken).ConfigureAwait(false);
-                diagnostics.AddRange(result.Diagnostics);
-            }
-
-            if (diagnostics.ErrorCount == errorsBefore)
-            {
-                var loaded = engine;
-                engine = null;
-                return loaded;
-            }
-
-            return null;
+            diagnostics.AddRange(ServiceCollectionExtensions.LoadWorkspace(engine, Text, environment).Items);
         }
-        finally
+        else if (await ReadManifestAsync(diagnostics, cancellationToken).ConfigureAwait(false) is { } read
+                 && await ManifestBuilder.LoadAsync(read.Manifest, read.Id, read.Store, diagnostics, cancellationToken).ConfigureAwait(false) is { } request)
         {
-            if (engine is not null)
-            {
-                await engine.DisposeAsync().ConfigureAwait(false);
-            }
+            var result = await engine.LoadAsync(request, read.Manifest.Seq, cancellationToken).ConfigureAwait(false);
+            diagnostics.AddRange(result.Diagnostics);
+            pipeline = read.Manifest.PipelineId;
         }
+
+        return diagnostics.ErrorCount == errorsBefore ? pipeline : null;
     }
 
     /// <summary>
