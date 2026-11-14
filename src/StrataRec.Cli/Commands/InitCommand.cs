@@ -12,7 +12,8 @@ namespace StrataRec.Cli.Commands;
 /// It never deletes and, without <c>--force</c>, never writes into a directory that has anything in it but hidden entries:
 /// a mistyped directory must not end up with a workspace scattered over its files, while a repository just made with
 /// <c>git init</c> (<c>.git</c>, <c>.gitignore</c>, an editor's settings) is where a workspace is meant to start. With
-/// <c>--force</c> it writes its own files over files of the same names and leaves every other file as it is.
+/// <c>--force</c> it writes its own files over files of the same names and leaves every other file as it is; it never
+/// writes through a symbolic link inside the workspace, which would change a file elsewhere.
 /// </remarks>
 internal static class InitCommand
 {
@@ -57,40 +58,19 @@ internal static class InitCommand
         }
 
         var files = InitTemplates.Files(pipeline);
-        if (File.Exists(root))
-        {
-            diagnostics.Error("INIT_NOT_A_DIRECTORY", label, string.Empty, "This is a file, not a directory.", "pass the directory to create the workspace in");
-            return Fail(diagnostics, errors);
-        }
-
         var existing = new List<string>(); // the files init would overwrite
-        foreach (var file in files)
+        try
         {
-            var path = Path.Combine(root, file.Path);
-            if (File.Exists(path) || Directory.Exists(path))
+            if (!Check(root, label, files, force, existing, diagnostics))
             {
-                existing.Add(file.Path);
-            }
-        }
-
-        if (!force && Directory.Exists(root) && InTheWay(root, existing) is { } blocking)
-        {
-            diagnostics.Error("INIT_DIRECTORY_NOT_EMPTY", label, string.Empty, $"The directory is not empty: '{blocking}' is in the way.",
-                existing.Count > 0
-                    ? $"init into a new or empty directory, or pass --force to overwrite the {Plural(existing.Count, "file")} of the workspace " +
-                      "that exist here (other files stay as they are; nothing is deleted)"
-                    : "init into a new or empty directory, or pass --force to add the workspace's files to this one (no file here is overwritten or deleted)");
-            return Fail(diagnostics, errors);
-        }
-
-        // A path of the workspace that a directory takes, or a directory a file takes: reported before anything is written.
-        foreach (var file in files)
-        {
-            if (Blocked(root, file.Path) is { } blocked)
-            {
-                diagnostics.Error("INIT_PATH_TAKEN", label, string.Empty, $"'{blocked}' is in the way of {file.Path}.", $"move or rename '{blocked}' and run init again");
                 return Fail(diagnostics, errors);
             }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            diagnostics.Error("INIT_DIRECTORY_UNREADABLE", label, string.Empty, $"Cannot look into the directory: {ex.Message}",
+                "check that you may read and write it, or init into another directory");
+            return Fail(diagnostics, errors);
         }
 
         foreach (var file in files)
@@ -139,6 +119,60 @@ internal static class InitCommand
         output.WriteLine("  # the compiled plan: nodes in order, the experiment and the parameters its arms set");
         output.WriteLine($"  stratarec explain-plan -c {config}{select}");
         return 0;
+    }
+
+    /// <summary>
+    /// The checks before anything is written: the directory is one, it is empty unless <paramref name="force"/>, and every
+    /// path of the workspace is free, with no symbolic link on the way (a link would take a write outside the workspace,
+    /// review 31). Fills <paramref name="existing"/> with the files init would overwrite; false when a check failed, with its
+    /// diagnostic. Throws what the file system throws.
+    /// </summary>
+    private static bool Check(string root, string label, InitFile[] files, bool force, List<string> existing, DiagnosticBag diagnostics)
+    {
+        if (File.Exists(root))
+        {
+            diagnostics.Error("INIT_NOT_A_DIRECTORY", label, string.Empty, "This is a file, not a directory.", "pass the directory to create the workspace in");
+            return false;
+        }
+
+        foreach (var file in files)
+        {
+            var path = Path.Combine(root, file.Path);
+            if (File.Exists(path) || Directory.Exists(path))
+            {
+                existing.Add(file.Path);
+            }
+        }
+
+        if (!force && Directory.Exists(root) && InTheWay(root, existing) is { } blocking)
+        {
+            diagnostics.Error("INIT_DIRECTORY_NOT_EMPTY", label, string.Empty, $"The directory is not empty: '{blocking}' is in the way.",
+                existing.Count > 0
+                    ? $"init into a new or empty directory, or pass --force to overwrite the {Plural(existing.Count, "file")} of the workspace " +
+                      "that exist here (other files stay as they are; nothing is deleted)"
+                    : "init into a new or empty directory, or pass --force to add the workspace's files to this one (no file here is overwritten or deleted)");
+            return false;
+        }
+
+        // A symbolic link on the way, a path of the workspace that a directory takes, or a directory a file takes: reported
+        // before anything is written.
+        foreach (var file in files)
+        {
+            if (Linked(root, file.Path) is { } linked)
+            {
+                diagnostics.Error("INIT_PATH_IS_LINK", label, string.Empty, $"'{linked}' is a symbolic link: writing {file.Path} would write where it points.",
+                    $"init writes only inside the workspace: move '{linked}' away, or init into another directory");
+                return false;
+            }
+
+            if (Blocked(root, file.Path) is { } blocked)
+            {
+                diagnostics.Error("INIT_PATH_TAKEN", label, string.Empty, $"'{blocked}' is in the way of {file.Path}.", $"move or rename '{blocked}' and run init again");
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -216,9 +250,41 @@ internal static class InitCommand
         return null;
     }
 
+    /// <summary>The first path on the way to the file (its directories, then itself) that is a symbolic link; null when none is.</summary>
+    private static string? Linked(string root, string relative)
+    {
+        var slash = relative.IndexOf('/', StringComparison.Ordinal);
+        while (true)
+        {
+            var part = slash < 0 ? relative : relative[..slash];
+            if (new FileInfo(Path.Combine(root, part)).LinkTarget is not null)
+            {
+                return part;
+            }
+
+            if (slash < 0)
+            {
+                return null;
+            }
+
+            slash = relative.IndexOf('/', slash + 1);
+        }
+    }
+
+    /// <summary>Whether pipelines/ holds another pipeline; true when it cannot be listed, since naming ours is then always right.</summary>
     private static bool OtherPipelines(string root, string ours)
     {
-        foreach (var file in Directory.EnumerateFiles(Path.Combine(root, "pipelines")))
+        IEnumerable<string> files;
+        try
+        {
+            files = Directory.GetFiles(Path.Combine(root, "pipelines"));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
+
+        foreach (var file in files)
         {
             var name = Path.GetFileName(file);
             if ((name.EndsWith(".jsonc", StringComparison.Ordinal) || name.EndsWith(".json", StringComparison.Ordinal))
@@ -250,18 +316,22 @@ internal static class InitCommand
         return shown == "." ? native : Path.Join(shown, native);
     }
 
-    /// <summary>Quotes an argument a shell would split or expand.</summary>
-    private static string Quote(string argument)
+    /// <summary>
+    /// The argument as a POSIX shell reads it back: as it is when every character is plain, else in single quotes, inside
+    /// which a shell expands nothing (a quote itself is closed, escaped and reopened: <c>'\''</c>). Review 31: double quotes
+    /// still expanded <c>$</c> and backquotes.
+    /// </summary>
+    internal static string Quote(string argument)
     {
         foreach (var c in argument)
         {
-            if (!(char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.' or '/' or '\\' or ':' or '+' or '@' or '=' or ','))
+            if (!(char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.' or '/' or ':' or '+' or '@' or '=' or ',' or '%'))
             {
-                return "\"" + argument + "\"";
+                return "'" + argument.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
             }
         }
 
-        return argument;
+        return argument.Length == 0 ? "''" : argument;
     }
 
     private static string Plural(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";

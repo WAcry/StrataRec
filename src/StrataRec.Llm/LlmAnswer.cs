@@ -210,6 +210,11 @@ public static class LlmAnswer
     /// entity's id (review 30). So each one is written as its JSON escape (<c>\uD800</c>) instead: inside a string it is the
     /// escaped lone surrogate the walk already counts as an unknown element; outside one the answer is not valid JSON.
     /// </summary>
+    /// <remarks>
+    /// Except where the surrogate is the character of an escape (an odd run of backslashes before it): there the answer is
+    /// invalid JSON, and the six characters of an escape would make it valid, <c>\\uD800</c>, a string that can be another
+    /// entity's id (review 31). It is written as U+FFFD, which no escape takes either, so the answer stays invalid.
+    /// </remarks>
     private static int ToUtf8(ReadOnlySpan<char> text, RequestMemory memory, out byte[] bytes)
     {
         if (text.IndexOfAnyInRange('\uD800', '\uDFFF') < 0)
@@ -229,6 +234,10 @@ public static class LlmAnswer
                 length += Encoding.UTF8.GetBytes(text.Slice(i, 2), bytes.AsSpan(length));
                 i++;
             }
+            else if (char.IsSurrogate(c) && EscapesIt(text, i))
+            {
+                length += Encoding.UTF8.GetBytes("\uFFFD", bytes.AsSpan(length));
+            }
             else if (char.IsSurrogate(c))
             {
                 bytes[length++] = (byte)'\\';
@@ -243,6 +252,18 @@ public static class LlmAnswer
         }
 
         return length;
+    }
+
+    /// <summary>Whether the char at <paramref name="index"/> follows an odd run of backslashes: the character of an escape.</summary>
+    private static bool EscapesIt(ReadOnlySpan<char> text, int index)
+    {
+        var backslashes = 0;
+        while (index - backslashes - 1 >= 0 && text[index - backslashes - 1] == '\\')
+        {
+            backslashes++;
+        }
+
+        return backslashes % 2 == 1;
     }
 
     /// <summary>

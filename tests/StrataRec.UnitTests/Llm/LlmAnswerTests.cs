@@ -101,6 +101,37 @@ public sealed class LlmAnswerTests
     }
 
     [Theory]
+    [InlineData('\uD800')]
+    [InlineData('\uDC00')]
+    public void ARawUnpairedSurrogate_AfterAnOddRunOfBackslashes_LeavesTheAnswerInvalid(char lone)
+    {
+        // Review 31: the surrogate is the character of an escape, which makes the answer invalid JSON. Written as its own
+        // escape it made "\\uD800" (an escaped backslash and five letters), a valid string that matched that entity.
+        var escaped = "\\u" + ((int)lone).ToString("X4", System.Globalization.CultureInfo.InvariantCulture);
+        var (_, _, one) = Parse("[\"\\" + lone + "\", \"a\"]", AnswerKind.EntityId, escaped, "a");
+        var (_, _, three) = Parse("[\"\\\\\\" + lone + "\", \"a\"]", AnswerKind.EntityId, "\\" + escaped, "a");
+
+        Assert.StartsWith("it is not valid JSON (", one);
+        Assert.StartsWith("it is not valid JSON (", three);
+    }
+
+    [Theory]
+    [InlineData('\uD800')]
+    [InlineData('\uDC00')]
+    public void ARawUnpairedSurrogate_AfterAnEvenRunOfBackslashes_IsAnUnknownElement(char lone)
+    {
+        // Two backslashes are one escaped backslash: the surrogate after them is a character of the string, as without them.
+        var (positions, counts, error) = Parse("[\"\\\\" + lone + "\", \"a\"]", AnswerKind.EntityId, "\\\uFFFD", "a");
+        var (literal, _, literalError) = Parse("[\"\\\\uD800\"]", AnswerKind.EntityId, "\\uD800"); // the six characters, written as JSON
+
+        Assert.Null(error);
+        Assert.Equal(new[] { 1 }, positions);
+        Assert.Equal(new AnswerCounts(1, 1, 0), counts);
+        Assert.Null(literalError);
+        Assert.Equal(new[] { 0 }, literal);
+    }
+
+    [Theory]
     [InlineData("[1, 2,]")] // RFC 8259: no trailing commas
     [InlineData("[1 /* first */]")] // nor comments
     [InlineData("[1] [2]")] // nor a second value

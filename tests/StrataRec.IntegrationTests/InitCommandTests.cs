@@ -210,6 +210,131 @@ public sealed class InitCommandTests
         }
     }
 
+    [Theory]
+    [InlineData("plain/path-1.2")]
+    [InlineData("my feed")]
+    [InlineData("feed$USER")]
+    [InlineData("back\\slash")]
+    [InlineData("quote\"name")]
+    [InlineData("it's")]
+    [InlineData("`date`")]
+    [InlineData("a*b?[c]")]
+    [InlineData("")]
+    public async Task Quote_IsReadBackAsWritten_ByAPosixShell(string argument)
+    {
+        // Review 31: double quotes still expanded $ and backquotes, and a backslash went unquoted.
+        var (code, stdout, stderr) = await Bash(Path.GetTempPath(), $"printf '%s' {InitCommand.Quote(argument)}");
+
+        Assert.True(code == 0, stderr);
+        Assert.Equal(argument, stdout);
+    }
+
+    /// <summary>The printed commands, pasted into bash as they are, for a directory name a shell would split and expand.</summary>
+    [Fact]
+    public async Task PrintedNextCommands_WorkInBash_ForADirectoryNameAShellWouldExpand()
+    {
+        using var temp = new TempDirectory();
+        const string directory = "my feed $USER `x` 'q' \"d\" b\\s";
+        var init = await Cli(temp.Path, new[] { "init", directory });
+        Assert.True(init.Code == 0, init.Stderr);
+
+        var commands = new List<string>();
+        foreach (var line in init.Stdout.Split('\n'))
+        {
+            if (line.Trim() is var command && command.StartsWith("stratarec ", StringComparison.Ordinal))
+            {
+                commands.Add(command);
+            }
+        }
+
+        Assert.Equal(4, commands.Count);
+        foreach (var command in commands)
+        {
+            var result = await Bash(temp.Path, command);
+            Assert.True(result.Code == 0, $"{command}: exit {result.Code}\n{result.Stderr}\n{result.Stdout}");
+        }
+
+        Assert.Equal(new[] { directory }, Directory.GetDirectories(temp.Path).Select(Path.GetFileName));
+    }
+
+    [Theory]
+    [InlineData("policy.jsonc", "file")] // the file itself, pointing at a file outside
+    [InlineData("fixtures", "directory")] // a directory on the way, pointing at one outside
+    [InlineData("catalog", "nowhere")] // a dangling link
+    public void Force_NeverWritesThroughASymbolicLink_AndWritesNothing(string link, string target)
+    {
+        // Review 31: --force followed a link inside the workspace and replaced a file elsewhere.
+        using var temp = new TempDirectory();
+        var root = Path.Combine(temp.Path, "ws");
+        Directory.CreateDirectory(root);
+        var outsideFile = Path.Combine(temp.Path, "outside.txt");
+        var outsideDirectory = Path.Combine(temp.Path, "outside-dir");
+        File.WriteAllText(outsideFile, "do not change");
+        Directory.CreateDirectory(outsideDirectory);
+        var pointsAt = target switch { "file" => outsideFile, "directory" => outsideDirectory, _ => Path.Combine(temp.Path, "nowhere") };
+        if (target == "directory")
+        {
+            Directory.CreateSymbolicLink(Path.Combine(root, link), pointsAt);
+        }
+        else
+        {
+            File.CreateSymbolicLink(Path.Combine(root, link), pointsAt);
+        }
+
+        Assert.Equal(2, Init(root, InitTemplates.DefaultPipeline, force: true, out var printed, out var errors));
+
+        Assert.Empty(printed);
+        Assert.Contains("INIT_PATH_IS_LINK", errors);
+        Assert.Contains($"'{link}' is a symbolic link", errors);
+        Assert.Equal("do not change", File.ReadAllText(outsideFile));
+        Assert.Empty(Directory.GetFileSystemEntries(outsideDirectory));
+        Assert.False(File.Exists(Path.Combine(temp.Path, "nowhere")));
+        Assert.Equal(new[] { link }, Directory.GetFileSystemEntries(root).Select(Path.GetFileName)); // nothing written
+    }
+
+    [Fact]
+    public void AWorkspaceRootThatIsALink_IsWhereTheUserAskedToInit()
+    {
+        using var temp = new TempDirectory();
+        var real = Directory.CreateDirectory(Path.Combine(temp.Path, "real")).FullName;
+        var link = Path.Combine(temp.Path, "link");
+        Directory.CreateSymbolicLink(link, real);
+
+        Assert.Equal(0, Init(link, InitTemplates.DefaultPipeline, force: false, out _, out var errors));
+        Assert.Empty(errors);
+        Assert.True(File.Exists(Path.Combine(real, "policy.jsonc")));
+    }
+
+    [Fact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")] // CI is Linux only
+    public void ADirectoryItCannotRead_IsADiagnostic_NotAnUnhandledException()
+    {
+        // Review 31: the emptiness check ran outside the I/O error handling.
+        using var temp = new TempDirectory();
+        var root = Directory.CreateDirectory(Path.Combine(temp.Path, "locked")).FullName;
+        File.SetUnixFileMode(root, UnixFileMode.None);
+        try
+        {
+            try
+            {
+                Directory.GetFileSystemEntries(root);
+                return; // a user the permissions do not stop (root): nothing to test
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+
+            Assert.Equal(2, Init(root, InitTemplates.DefaultPipeline, force: false, out var printed, out var errors));
+            Assert.Empty(printed);
+            Assert.Contains("INIT_DIRECTORY_UNREADABLE", errors);
+            Assert.Contains("hint:", errors);
+        }
+        finally
+        {
+            File.SetUnixFileMode(root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
     private static int Init(string directory, string pipeline, bool force, out string printed, out string errors)
     {
         var output = new StringWriter();
@@ -274,6 +399,26 @@ public sealed class InitCommandTests
             start.ArgumentList.Add(argument);
         }
 
+        using var process = Process.Start(start)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
+        return (process.ExitCode, await stdout, await stderr);
+    }
+
+    /// <summary>Runs a command line in bash, as a user pastes it; <c>stratarec</c> is this build's CLI.</summary>
+    private static async Task<(int Code, string Stdout, string Stderr)> Bash(string workingDirectory, string commandLine)
+    {
+        var start = new ProcessStartInfo("bash")
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        start.Environment["STRATAREC_DOTNET"] = System.Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet";
+        start.Environment["STRATAREC_DLL"] = Path.Combine(AppContext.BaseDirectory, "stratarec.dll");
+        start.ArgumentList.Add("-c");
+        start.ArgumentList.Add("stratarec() { \"$STRATAREC_DOTNET\" \"$STRATAREC_DLL\" \"$@\"; }\n" + commandLine);
         using var process = Process.Start(start)!;
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
