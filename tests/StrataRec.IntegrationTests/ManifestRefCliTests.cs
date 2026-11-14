@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Artifacts.Storage;
-using StrataRec.Cli.Commands;
+using StrataRec.CommandLine.Commands;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Manifests;
 using StrataRec.Hosting.Replay;
@@ -40,7 +40,7 @@ public sealed class ManifestRefCliTests
         {
             var output = new StringWriter();
             var errors = new StringWriter();
-            Assert.True(0 == await ExplainPlanCommand.RunAsync(config, "local", null, format, arms, output, CancellationToken.None, manifest, from, errors), errors.ToString());
+            Assert.True(0 == await ExplainPlanCommand.RunAsync(Tool.Environment, config, "local", null, format, arms, output, CancellationToken.None, manifest, from, errors), errors.ToString());
             return output.ToString();
         }
 
@@ -67,7 +67,7 @@ public sealed class ManifestRefCliTests
     {
         var output = new StringWriter();
 
-        Assert.Equal(0, await ExplainPlanCommand.RunAsync(HomeFeedTestHost.SampleRoot(), "local", null, "json", new[] { "exp_freshness_calibration/calibrated" }, output,
+        Assert.Equal(0, await ExplainPlanCommand.RunAsync(Tool.Environment, HomeFeedTestHost.SampleRoot(), "local", null, "json", new[] { "exp_freshness_calibration/calibrated" }, output,
             CancellationToken.None));
 
         var plan = JsonNode.Parse(output.ToString())!;
@@ -96,14 +96,14 @@ public sealed class ManifestRefCliTests
         foreach (var pipeline in new[] { "primary", "backup" })
         {
             var file = Path.Combine(store, pipeline + ".json");
-            Assert.Equal(0, await BuildCommand.RunAsync(root, "local", pipeline, store, file, 1, TextWriter.Null, CancellationToken.None));
+            Assert.Equal(0, await BuildCommand.RunAsync(Tool.Environment, root, "local", pipeline, store, file, 1, TextWriter.Null, CancellationToken.None));
             manifests.Add((file, ContentHash.Compute(ArtifactSerializer.ToNode(ManifestStores.Read(file)))));
         }
 
         // A node serving both releases records a request that failed over.
         var bundles = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
         ReplayBundle recording;
-        await using (var engine = new RecEngine(CommonOptions.PlanEnvironment(root)))
+        await using (var engine = new RecEngine(CommonOptions.ForRoot(Tool.Environment, root)))
         {
             foreach (var (file, id) in manifests)
             {
@@ -126,7 +126,7 @@ public sealed class ManifestRefCliTests
         foreach (var manifest in new[] { null, manifests[0].Id })
         {
             var output = new StringWriter();
-            Assert.Equal(0, await ReplayCommand.RunAsync(null, "local", bundles, Array.Empty<string>(), "json", expectIdentical: true, output, CancellationToken.None,
+            Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, null, "local", bundles, Array.Empty<string>(), "json", expectIdentical: true, output, CancellationToken.None,
                 manifest: manifest, store: store));
             using var report = JsonDocument.Parse(output.ToString());
             var bundle = report.RootElement.GetProperty("bundles")[0];
@@ -135,7 +135,7 @@ public sealed class ManifestRefCliTests
         }
 
         // compare resolves each side the same way: the primary's manifest on both sides fails over as recorded.
-        Assert.Equal(0, await CompareCommand.RunAsync(manifests[0].Id, null, "local", bundles, Array.Empty<string>(), 5, "source", "json", TextWriter.Null,
+        Assert.Equal(0, await CompareCommand.RunAsync(Tool.Environment, manifests[0].Id, null, "local", bundles, Array.Empty<string>(), 5, "source", "json", TextWriter.Null,
             CancellationToken.None, candidateManifest: manifests[0].Id, store: store));
 
         // A bundle cut down to its fallback run still replays its primary pipeline, on the named manifest, every one of its
@@ -147,7 +147,7 @@ public sealed class ManifestRefCliTests
         foreach (var manifest in new[] { null, manifests[0].Id })
         {
             var output = new StringWriter();
-            Assert.Equal(0, await ReplayCommand.RunAsync(null, "local", cut, Array.Empty<string>(), "json", expectIdentical: false, output, CancellationToken.None,
+            Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, null, "local", cut, Array.Empty<string>(), "json", expectIdentical: false, output, CancellationToken.None,
                 manifest: manifest, store: store));
             using var report = JsonDocument.Parse(output.ToString());
             var bundle = report.RootElement.GetProperty("bundles")[0];
@@ -158,12 +158,12 @@ public sealed class ManifestRefCliTests
         // A store without the fallback's manifest: not replayed, naming the pipeline, its manifest and why.
         File.Delete(new FileSystemArtifactStore(store).GetBlobPath(manifests[1].Id));
         var errors = new StringWriter();
-        Assert.Equal(2, await ReplayCommand.RunAsync(null, "local", bundles, Array.Empty<string>(), "text", expectIdentical: false, TextWriter.Null, CancellationToken.None,
+        Assert.Equal(2, await ReplayCommand.RunAsync(Tool.Environment, null, "local", bundles, Array.Empty<string>(), "text", expectIdentical: false, TextWriter.Null, CancellationToken.None,
             store: store, errors: errors));
         Assert.Contains($"pipeline 'backup' ran on manifest {manifests[1].Id}, which does not load: MANIFEST_UNKNOWN", errors.ToString());
 
         // An engine without the fallback pipeline says so instead of passing the primary's failure off as the replay.
-        await using var primaryOnly = new RecEngine(CommonOptions.PlanEnvironment(root), bindingOptions: new Hosting.Bindings.BindingHostOptions { Load = false });
+        await using var primaryOnly = new RecEngine(CommonOptions.ForRoot(Tool.Environment, root), bindingOptions: new Hosting.Bindings.BindingHostOptions { Load = false });
         var primary = await ManifestBuilder.LoadAsync(ManifestStores.Read(manifests[0].File), manifests[0].Id, new FileSystemArtifactStore(store), new DiagnosticBag());
         Assert.True((await primaryOnly.LoadAsync(primary!, 1)).Applied);
         var outcome = await primaryOnly.ReplayAsync(recording);
@@ -182,7 +182,7 @@ public sealed class ManifestRefCliTests
         // Requests served by an engine that loaded the manifest, as a node does (its bindings loaded from the workspace's files).
         var request = await ManifestBuilder.LoadAsync(ManifestStores.Read(file), id,
             new FileSystemArtifactStore(store), new DiagnosticBag());
-        await using (var engine = new RecEngine(CommonOptions.PlanEnvironment(root)))
+        await using (var engine = new RecEngine(CommonOptions.ForRoot(Tool.Environment, root)))
         {
             Assert.True((await engine.LoadAsync(request!, 1)).Applied);
             foreach (var (name, userId, arms) in new[] { ("a-user", 1001L, new[] { "exp_mmr_diversity/mmr", "exp_quality_weight/strong" }), ("b-other", 1002L, Array.Empty<string>()) })
@@ -195,7 +195,7 @@ public sealed class ManifestRefCliTests
         }
 
         var output = new StringWriter();
-        Assert.Equal(0, await ReplayCommand.RunAsync(null, "local", manifestBundles, Array.Empty<string>(), "json", expectIdentical: true, output, CancellationToken.None,
+        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, null, "local", manifestBundles, Array.Empty<string>(), "json", expectIdentical: true, output, CancellationToken.None,
             store: store));
         using (var report = JsonDocument.Parse(output.ToString()))
         {
@@ -214,11 +214,11 @@ public sealed class ManifestRefCliTests
             File.Copy(bundleFile, Path.Combine(mixed, Path.GetFileName(bundleFile)));
         }
 
-        Assert.Equal(0, await RunCommand.RunAsync(root, "local", Path.Combine(root, "requests", "user_1001.json"), Array.Empty<string>(), false, TextWriter.Null,
+        Assert.Equal(0, await RunCommand.RunAsync(Tool.Environment, root, "local", Path.Combine(root, "requests", "user_1001.json"), Array.Empty<string>(), false, TextWriter.Null,
             CancellationToken.None, recordPath: Path.Combine(mixed, "c-workspace.json")));
         output = new StringWriter();
         var errors = new StringWriter();
-        Assert.Equal(2, await ReplayCommand.RunAsync(null, "local", mixed, Array.Empty<string>(), "json", expectIdentical: true, output, CancellationToken.None,
+        Assert.Equal(2, await ReplayCommand.RunAsync(Tool.Environment, null, "local", mixed, Array.Empty<string>(), "json", expectIdentical: true, output, CancellationToken.None,
             store: store, errors: errors));
         using (var report = JsonDocument.Parse(output.ToString()))
         {
@@ -234,10 +234,10 @@ public sealed class ManifestRefCliTests
         }
 
         // -c and --manifest replace the recorded configuration, as -c always did.
-        Assert.Equal(0, await ReplayCommand.RunAsync(root, "local", mixed, Array.Empty<string>(), "text", expectIdentical: true, TextWriter.Null, CancellationToken.None,
+        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, root, "local", mixed, Array.Empty<string>(), "text", expectIdentical: true, TextWriter.Null, CancellationToken.None,
             store: store));
         output = new StringWriter();
-        Assert.Equal(0, await ReplayCommand.RunAsync(null, "local", mixed, Array.Empty<string>(), "json", expectIdentical: true, output, CancellationToken.None,
+        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, null, "local", mixed, Array.Empty<string>(), "json", expectIdentical: true, output, CancellationToken.None,
             manifest: id, store: store));
         using (var report = JsonDocument.Parse(output.ToString()))
         {
@@ -254,7 +254,7 @@ public sealed class ManifestRefCliTests
         var bundle = ReplayBundleFile.Parse(ReplayCliTests.MinimalBundle("[]").Replace("\"id\": \"m\"", $"\"id\": \"{id}\"", StringComparison.Ordinal));
         Assert.Equal(id, bundle.Manifest.Id);
 
-        await using var engines = (await ReplayEngines.CreateAsync(null, store, "local", "text", TextWriter.Null, CancellationToken.None))!;
+        await using var engines = (await ReplayEngines.CreateAsync(Tool.Environment, null, store, "local", "text", TextWriter.Null, CancellationToken.None))!;
         var first = await engines.ForAsync(bundle, CancellationToken.None);
         var second = await engines.ForAsync(bundle, CancellationToken.None);
 
@@ -269,11 +269,11 @@ public sealed class ManifestRefCliTests
         var store = ManifestStores.NewStore();
         var (id, file) = await ManifestStores.BuildAsync(root, store);
         var bundles = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
-        Assert.Equal(0, await RunCommand.RunAsync(root, "local", Path.Combine(root, "requests", "user_1001.json"), Array.Empty<string>(), false, TextWriter.Null,
+        Assert.Equal(0, await RunCommand.RunAsync(Tool.Environment, root, "local", Path.Combine(root, "requests", "user_1001.json"), Array.Empty<string>(), false, TextWriter.Null,
             CancellationToken.None, recordPath: Path.Combine(bundles, "user_1001.json")));
 
         var output = new StringWriter();
-        Assert.Equal(0, await CompareCommand.RunAsync(id, null, "local", bundles, Array.Empty<string>(), 10, "score", "json", output, CancellationToken.None,
+        Assert.Equal(0, await CompareCommand.RunAsync(Tool.Environment, id, null, "local", bundles, Array.Empty<string>(), 10, "score", "json", output, CancellationToken.None,
             candidateManifest: file, store: store));
 
         using var report = JsonDocument.Parse(output.ToString());
@@ -300,12 +300,12 @@ public sealed class ManifestRefCliTests
 
         // compare's baseline is a ref of any kind: one that names nothing is a usage error too.
         var errors = new StringWriter();
-        Assert.Equal(2, await CompareCommand.RunAsync(missing, root, "local", store, Array.Empty<string>(), 10, "score", "json", TextWriter.Null, CancellationToken.None,
+        Assert.Equal(2, await CompareCommand.RunAsync(Tool.Environment, missing, root, "local", store, Array.Empty<string>(), 10, "score", "json", TextWriter.Null, CancellationToken.None,
             errors: errors));
         Assert.Contains(ManifestStores.Errors(errors.ToString()),
             e => e is ("CONFIG_REF_UNKNOWN", "--baseline", "", { } hint) && hint.Contains("a workspace directory, a manifest content id"));
         errors = new StringWriter();
-        Assert.Equal(2, await ReplayCommand.RunAsync(root, "local", store, Array.Empty<string>(), "json", false, TextWriter.Null, CancellationToken.None, manifest: id,
+        Assert.Equal(2, await ReplayCommand.RunAsync(Tool.Environment, root, "local", store, Array.Empty<string>(), "json", false, TextWriter.Null, CancellationToken.None, manifest: id,
             store: store, errors: errors));
         Assert.Contains(ManifestStores.Errors(errors.ToString()), e => e.Code == "CONFIG_CONFLICT");
     }
@@ -346,7 +346,7 @@ public sealed class ManifestRefCliTests
         int exitCode, string code, string artifact, string hint, string? config = null, string? manifest = null, string? store = null, string? pipeline = null, string pointer = "")
     {
         var errors = new StringWriter();
-        Assert.Equal(exitCode, await ExplainPlanCommand.RunAsync(config, "local", pipeline, "json", Array.Empty<string>(), TextWriter.Null, CancellationToken.None,
+        Assert.Equal(exitCode, await ExplainPlanCommand.RunAsync(Tool.Environment, config, "local", pipeline, "json", Array.Empty<string>(), TextWriter.Null, CancellationToken.None,
             manifest, store, errors));
         var error = Assert.Single(ManifestStores.Errors(errors.ToString()));
         Assert.Equal((code, artifact, pointer), (error.Code, error.Artifact, error.Pointer));

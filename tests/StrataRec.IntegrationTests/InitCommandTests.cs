@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
-using StrataRec.Cli.Commands;
+using StrataRec.CommandLine.Commands;
 
 namespace StrataRec.IntegrationTests;
 
@@ -39,7 +39,7 @@ public sealed class InitCommandTests
         Assert.True(File.Exists(Path.Combine(root, "releases", pipeline + ".local.jsonc")));
 
         var validation = new StringWriter();
-        Assert.Equal(0, ValidateCommand.Run(root, "local", null, "json", warningsAsErrors: true, validation));
+        Assert.Equal(0, ValidateCommand.Run(Tool.Environment, root, "local", null, "json", warningsAsErrors: true, validation));
         using (var report = JsonDocument.Parse(validation.ToString()))
         {
             Assert.Equal(0, report.RootElement.GetProperty("errors").GetInt32());
@@ -60,7 +60,7 @@ public sealed class InitCommandTests
 
         var plan = new StringWriter();
         var planErrors = new StringWriter();
-        Assert.True(0 == await ExplainPlanCommand.RunAsync(root, "local", null, "text", Array.Empty<string>(), plan, CancellationToken.None, errors: planErrors),
+        Assert.True(0 == await ExplainPlanCommand.RunAsync(Tool.Environment, root, "local", null, "text", Array.Empty<string>(), plan, CancellationToken.None, errors: planErrors),
             planErrors.ToString());
         Assert.StartsWith($"pipeline {pipeline} ", plan.ToString());
         Assert.Contains($"{Boost} → {BoostWeight}", plan.ToString());
@@ -165,7 +165,7 @@ public sealed class InitCommandTests
         // Two pipelines now: validate and explain-plan are told which one.
         Assert.Contains(lines, l => l.Trim() == $"stratarec validate -c {root} -p feed");
         Assert.Contains(lines, l => l.Trim() == $"stratarec explain-plan -c {root} -p feed");
-        Assert.Equal(0, ValidateCommand.Run(root, "local", "feed", "text", warningsAsErrors: true, TextWriter.Null));
+        Assert.Equal(0, ValidateCommand.Run(Tool.Environment, root, "local", "feed", "text", warningsAsErrors: true, TextWriter.Null));
     }
 
     /// <summary>
@@ -370,16 +370,17 @@ public sealed class InitCommandTests
     private static async Task<(string[] Arms, List<Item> Items)> Run(string root, string request, string[] arms)
     {
         var output = new StringWriter();
-        Assert.Equal(0, await RunCommand.RunAsync(root, "local", request, arms, trace: true, output, CancellationToken.None, deadlineMs: HomeFeedTestHost.UntimedMs));
+        Assert.Equal(0, await RunCommand.RunAsync(Tool.Environment, root, "local", request, arms, trace: true, output, CancellationToken.None, deadlineMs: HomeFeedTestHost.UntimedMs));
         using var result = JsonDocument.Parse(output.ToString());
         var json = result.RootElement;
         Assert.All(json.GetProperty("trace").EnumerateArray(), node => Assert.Equal("succeeded", node.GetProperty("outcome").GetString()));
         var items = json.GetProperty("items").EnumerateArray()
+            .Select(i => (Id: i.GetProperty("id"), Columns: i.GetProperty("columns")))
             .Select(i => new Item(
-                i.GetProperty("id").GetString()!,
-                i.GetProperty("score").GetDouble(),
-                i.GetProperty("p_click").GetDouble(),
-                i.GetProperty("age_hours").ValueKind == JsonValueKind.Null ? null : i.GetProperty("age_hours").GetDouble()))
+                i.Id.GetRawText(), // a number for an int64 entity id, a string otherwise
+                i.Columns.GetProperty("score").GetDouble(),
+                i.Columns.GetProperty("p_click").GetDouble(),
+                i.Columns.GetProperty("age_hours").ValueKind == JsonValueKind.Null ? null : i.Columns.GetProperty("age_hours").GetDouble()))
             .ToList();
         var assigned = json.GetProperty("experiments").GetProperty("assigned").EnumerateArray().Select(a => a.GetString()!).ToArray();
         return (assigned, items);

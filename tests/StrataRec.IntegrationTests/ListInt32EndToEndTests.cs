@@ -142,7 +142,10 @@ public class ListInt32EndToEndTests
         });
 
         Assert.False(rejected.Succeeded);
-        Assert.Contains($"request input '{input}' must be {(scalar is null ? "list<int32>?" : "int32?")}", rejected.Error);
+        Assert.Contains(scalar is null
+            ? $"Input '{input}' must be an array of integers within the int32 range [-2147483648, 2147483647]; element 1 is the number 3000000000"
+            : $"Input '{input}' must be within the int32 range [-2147483648, 2147483647], got the number 3000000000", rejected.Error);
+        Assert.Contains(scalar is null ? "declare the type as list<int64>?" : "declare the type as int64?", rejected.Error); // nullable kept
         Assert.True(accepted.Succeeded, accepted.Error);
     }
 

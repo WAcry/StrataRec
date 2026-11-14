@@ -1,5 +1,5 @@
 using System.Text.Json;
-using StrataRec.Cli.Commands;
+using StrataRec.CommandLine.Commands;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Replay;
@@ -132,22 +132,22 @@ public sealed class LlmGenerativeEndToEndTests
     {
         var root = HomeFeedTestHost.LoadModified(r => AddLlm(r, Ids, Reason)).Root;
         var operators = new StringWriter();
-        Assert.Equal(0, OperatorsCommand.Run("text", operators));
+        Assert.Equal(0, OperatorsCommand.Run(Tool.Environment, "text", operators));
         Assert.Contains("LlmAnnotator@1", operators.ToString());
         Assert.Contains("GenerativeRetriever@1", operators.ToString());
         foreach (var op in new[] { "LlmAnnotator@1", "GenerativeRetriever@1" })
         {
             var schema = new StringWriter();
-            Assert.Equal(0, SchemaCommand.Run("operator", op, schema, TextWriter.Null));
+            Assert.Equal(0, SchemaCommand.Run(Tool.Environment, "operator", op, schema, TextWriter.Null));
             using var document = JsonDocument.Parse(schema.ToString());
             Assert.True(document.RootElement.GetProperty("properties").TryGetProperty("prompts", out _), schema.ToString());
         }
 
         var validate = new StringWriter();
-        Assert.True(ValidateCommand.Run(root, "local", null, "text", warningsAsErrors: false, validate) == 0, validate.ToString());
+        Assert.True(ValidateCommand.Run(Tool.Environment, root, "local", null, "text", warningsAsErrors: false, validate) == 0, validate.ToString());
 
         var bundle = Path.Combine(Directory.CreateTempSubdirectory("stratarec-llm-gen-bundles-").FullName, "user_1001.json");
-        Assert.Equal(0, await RunCommand.RunAsync(root, "local", Path.Combine(root, "requests", "user_1001.json"), Array.Empty<string>(), false, TextWriter.Null,
+        Assert.Equal(0, await RunCommand.RunAsync(Tool.Environment, root, "local", Path.Combine(root, "requests", "user_1001.json"), Array.Empty<string>(), false, TextWriter.Null,
             CancellationToken.None, recordPath: bundle));
         using (var recorded = JsonDocument.Parse(File.ReadAllText(bundle)))
         {
@@ -157,7 +157,7 @@ public sealed class LlmGenerativeEndToEndTests
         }
 
         var replay = new StringWriter();
-        Assert.Equal(0, await ReplayCommand.RunAsync(root, "local", bundle, Array.Empty<string>(), "text", expectIdentical: true, replay, CancellationToken.None));
+        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, root, "local", bundle, Array.Empty<string>(), "text", expectIdentical: true, replay, CancellationToken.None));
         Assert.Contains("identical to the recorded result", replay.ToString());
     }
 

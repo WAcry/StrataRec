@@ -253,7 +253,7 @@ public sealed class ReplayAbortTests
     public void TheSchema_DescribesAbortedResultsAndOutstandingCalls()
     {
         var output = new StringWriter();
-        Assert.Equal(0, StrataRec.Cli.Commands.SchemaCommand.Run("replay_bundle", null, output, TextWriter.Null));
+        Assert.Equal(0, StrataRec.CommandLine.Commands.SchemaCommand.Run(Tool.Environment, "replay_bundle", null, output, TextWriter.Null));
 
         using var schema = JsonDocument.Parse(output.ToString());
         var result = schema.RootElement.GetProperty("properties").GetProperty("result").GetProperty("properties");

@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Artifacts.Storage;
-using StrataRec.Cli.Commands;
+using StrataRec.CommandLine.Commands;
 
 namespace StrataRec.IntegrationTests;
 
@@ -40,7 +40,7 @@ internal static class ManifestStores
     public static async Task<(string Id, string File)> BuildAsync(string root, string store)
     {
         var file = Path.Combine(store, $"manifest-{Guid.NewGuid():N}.json");
-        Assert.Equal(0, await BuildCommand.RunAsync(root, "local", null, store, file, 1, TextWriter.Null, CancellationToken.None));
+        Assert.Equal(0, await BuildCommand.RunAsync(Tool.Environment, root, "local", null, store, file, 1, TextWriter.Null, CancellationToken.None));
         var id = ContentHash.Compute(ArtifactSerializer.ToNode(Read(file)));
         Assert.True(File.Exists(new FileSystemArtifactStore(store).GetBlobPath(id)), "build stores the manifest under the id of the manifest it writes");
         return (id, file);

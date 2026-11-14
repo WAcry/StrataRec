@@ -1,5 +1,5 @@
 using System.Text.Json;
-using StrataRec.Cli.Commands;
+using StrataRec.CommandLine.Commands;
 
 namespace StrataRec.IntegrationTests;
 
@@ -31,7 +31,7 @@ public sealed class RunCommandDeadlineTests
         static async Task<bool> Succeeded(string request, int? deadlineMs)
         {
             var output = new StringWriter();
-            var code = await RunCommand.RunAsync(HomeFeedTestHost.SampleRoot(), "local", request, Array.Empty<string>(), false, output,
+            var code = await RunCommand.RunAsync(Tool.Environment, HomeFeedTestHost.SampleRoot(), "local", request, Array.Empty<string>(), false, output,
                 CancellationToken.None, deadlineMs: deadlineMs);
             using var result = JsonDocument.Parse(output.ToString());
             var succeeded = result.RootElement.GetProperty("succeeded").GetBoolean();

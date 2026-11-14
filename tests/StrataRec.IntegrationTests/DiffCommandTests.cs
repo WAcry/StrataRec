@@ -1,5 +1,5 @@
 using System.Text.Json.Nodes;
-using StrataRec.Cli.Commands;
+using StrataRec.CommandLine.Commands;
 
 namespace StrataRec.IntegrationTests;
 
@@ -32,7 +32,7 @@ public sealed class DiffCommandTests
         Assert.Equal(SampleCombinations, Strings(report["compared"]));
 
         var text = new StringWriter();
-        Assert.Equal(0, await DiffCommand.RunAsync(HomeFeedTestHost.SampleRoot(), copy, null, "local", null, Array.Empty<string>(), "text", text, CancellationToken.None));
+        Assert.Equal(0, await DiffCommand.RunAsync(Tool.Environment, HomeFeedTestHost.SampleRoot(), copy, null, "local", null, Array.Empty<string>(), "text", text, CancellationToken.None));
         Assert.Contains("no differences in 7 combination(s)", text.ToString());
     }
 
@@ -150,7 +150,7 @@ public sealed class DiffCommandTests
 
         // explain-plan --arms shows the same members: a pointer of the diff reads the new value there.
         var explained = new StringWriter();
-        Assert.Equal(0, await ExplainPlanCommand.RunAsync(after, "local", null, "json", new[] { "exp_freshness_calibration/calibrated" }, explained, CancellationToken.None));
+        Assert.Equal(0, await ExplainPlanCommand.RunAsync(Tool.Environment, after, "local", null, "json", new[] { "exp_freshness_calibration/calibrated" }, explained, CancellationToken.None));
         var plan = JsonNode.Parse(explained.ToString())!;
         Assert.Equal(10, plan["taps"]!["coarse_dropped"]!["rows"]!["max_rows"]!.GetValue<int>());
         Assert.Equal("ctx.request.session_id", plan["taps"]!["served"]!["context"]!["session"]!.GetValue<string>());
@@ -214,12 +214,12 @@ public sealed class DiffCommandTests
     {
         var errors = new StringWriter();
 
-        Assert.Equal(2, await DiffCommand.RunAsync(HomeFeedTestHost.SampleRoot(), HomeFeedTestHost.SampleRoot(), null, "local", null, new[] { "exp_nope/a" }, "json",
+        Assert.Equal(2, await DiffCommand.RunAsync(Tool.Environment, HomeFeedTestHost.SampleRoot(), HomeFeedTestHost.SampleRoot(), null, "local", null, new[] { "exp_nope/a" }, "json",
             TextWriter.Null, CancellationToken.None, errors));
         Assert.Contains("arm 'exp_nope/a' does not exist in the from configuration", errors.ToString());
 
         errors = new StringWriter();
-        Assert.Equal(2, await DiffCommand.RunAsync(HomeFeedTestHost.SampleRoot(), HomeFeedTestHost.SampleRoot(), null, "local", null, new[] { Mmr, "exp_mmr_diversity/control" },
+        Assert.Equal(2, await DiffCommand.RunAsync(Tool.Environment, HomeFeedTestHost.SampleRoot(), HomeFeedTestHost.SampleRoot(), null, "local", null, new[] { Mmr, "exp_mmr_diversity/control" },
             "json", TextWriter.Null, CancellationToken.None, errors));
         Assert.Contains("are both in layer 'rerank'", errors.ToString());
     }
@@ -231,14 +231,14 @@ public sealed class DiffCommandTests
         var missing = Path.Combine(store, "no-such-workspace");
         var errors = new StringWriter();
 
-        Assert.Equal(2, await DiffCommand.RunAsync(missing, HomeFeedTestHost.SampleRoot(), null, "local", null, Array.Empty<string>(), "json", TextWriter.Null,
+        Assert.Equal(2, await DiffCommand.RunAsync(Tool.Environment, missing, HomeFeedTestHost.SampleRoot(), null, "local", null, Array.Empty<string>(), "json", TextWriter.Null,
             CancellationToken.None, errors));
         var error = Assert.Single(ManifestStores.Errors(errors.ToString()));
         Assert.Equal(("CONFIG_REF_UNKNOWN", "--from"), (error.Code, error.Artifact));
         Assert.Contains("a workspace directory, a manifest content id (sha256:<64 hex digits>) or a manifest file", error.Hint);
 
         errors = new StringWriter();
-        Assert.Equal(2, await DiffCommand.RunAsync(HomeFeedTestHost.SampleRoot(), "sha256:" + new string('a', 64), null, "local", null, Array.Empty<string>(), "json",
+        Assert.Equal(2, await DiffCommand.RunAsync(Tool.Environment, HomeFeedTestHost.SampleRoot(), "sha256:" + new string('a', 64), null, "local", null, Array.Empty<string>(), "json",
             TextWriter.Null, CancellationToken.None, errors));
         error = Assert.Single(ManifestStores.Errors(errors.ToString()));
         Assert.Equal(("STORE_REQUIRED", "--to"), (error.Code, error.Artifact));
@@ -251,7 +251,7 @@ public sealed class DiffCommandTests
         var broken = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"k_param\": \"coarse_k\"", "\"k_param\": \"coarse_kk\"")).Root;
         var errors = new StringWriter();
 
-        Assert.Equal(2, await DiffCommand.RunAsync(HomeFeedTestHost.SampleRoot(), broken, null, "local", null, Array.Empty<string>(), "json", TextWriter.Null,
+        Assert.Equal(2, await DiffCommand.RunAsync(Tool.Environment, HomeFeedTestHost.SampleRoot(), broken, null, "local", null, Array.Empty<string>(), "json", TextWriter.Null,
             CancellationToken.None, errors));
 
         var error = Assert.Single(ManifestStores.Errors(errors.ToString()));
@@ -261,7 +261,7 @@ public sealed class DiffCommandTests
     private static async Task ExpectError(string to, string? store, string code, string pointer, string hint)
     {
         var errors = new StringWriter();
-        Assert.Equal(2, await DiffCommand.RunAsync(null, to, store, "local", null, Array.Empty<string>(), "json", TextWriter.Null, CancellationToken.None, errors));
+        Assert.Equal(2, await DiffCommand.RunAsync(Tool.Environment, null, to, store, "local", null, Array.Empty<string>(), "json", TextWriter.Null, CancellationToken.None, errors));
         var error = Assert.Single(ManifestStores.Errors(errors.ToString()));
         Assert.Equal((code, pointer), (error.Code, error.Pointer));
         Assert.Contains(hint, error.Hint);
@@ -286,7 +286,7 @@ public sealed class DiffCommandTests
 
         var output = new StringWriter();
         var errors = new StringWriter();
-        var exit = await DiffCommand.RunAsync(from, to, store, "local", null, arms, "json", output, CancellationToken.None, errors);
+        var exit = await DiffCommand.RunAsync(Tool.Environment, from, to, store, "local", null, arms, "json", output, CancellationToken.None, errors);
         Assert.True(exit is 0 or 1, errors.ToString());
         return (exit, JsonNode.Parse(output.ToString())!);
     }
@@ -294,7 +294,7 @@ public sealed class DiffCommandTests
     private static async Task<string> DiffText(string from, string to)
     {
         var output = new StringWriter();
-        Assert.Equal(1, await DiffCommand.RunAsync(from, to, null, "local", null, Array.Empty<string>(), "text", output, CancellationToken.None));
+        Assert.Equal(1, await DiffCommand.RunAsync(Tool.Environment, from, to, null, "local", null, Array.Empty<string>(), "text", output, CancellationToken.None));
         return output.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
     }
 
