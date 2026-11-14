@@ -11,15 +11,14 @@ namespace StrataRec.Samples.Host;
 /// <c>"client": "trending@1"</c>), so a binary without them rejects the workspace at load.
 /// </summary>
 /// <remarks>
-/// The serving host and the validation command build the environment here, in one place, so what <c>validate</c>
-/// accepts is exactly what the service runs.
+/// The service (<c>AddStrataRec</c>) and the configuration commands (<c>dotnet run -- stratarec …</c>) both start from
+/// here, so what <c>validate</c> accepts is exactly what the service runs. Neither needs a directory from it: each places
+/// the environment in the workspace it reads, where relative file settings of bindings (<c>data_file</c>) resolve.
 /// </remarks>
 public static class SampleEnvironment
 {
-    /// <param name="configRoot">The workspace directory; relative file settings of bindings (<c>data_file</c>) resolve against it.</param>
-    public static PlanEnvironment Create(string configRoot) => new()
+    public static PlanEnvironment Create() => new()
     {
-        BaseDirectory = Path.GetFullPath(configRoot),
         Operators = OperatorRegistry.CreateDefault().Add(new CategoryBoostFactory()),
         Connectors = FeatureConnectorRegistry.CreateDefault().Add(new KeyValueFeatureConnectorFactory()),
         Models = ModelClientRegistry.CreateDefault().Add(new LogisticModelClientFactory()),

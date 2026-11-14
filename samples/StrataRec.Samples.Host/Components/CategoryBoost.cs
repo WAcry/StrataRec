@@ -9,7 +9,7 @@ namespace StrataRec.Samples.Host.Components;
 /// <summary>
 /// Config of <c>CategoryBoost@1</c>. The class is the operator's whole configuration contract: the engine binds a node's
 /// <c>config</c> to it strictly (snake_case members, unknown members rejected), and its JSON Schema, with the
-/// <see cref="DescriptionAttribute"/> texts, is generated from it (<c>dotnet run -- schema CategoryBoost@1</c>).
+/// <see cref="DescriptionAttribute"/> texts, is generated from it (<c>dotnet run -- stratarec schema operator CategoryBoost@1</c>).
 /// </summary>
 public sealed class CategoryBoostConfig
 {

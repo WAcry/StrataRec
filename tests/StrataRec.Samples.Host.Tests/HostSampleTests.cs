@@ -4,8 +4,12 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
 using StrataRec.Artifacts.Model;
+using StrataRec.CommandLine;
+using StrataRec.Experiments.Assignment;
 using StrataRec.Hosting;
 using StrataRec.Samples.Host;
 using StrataRec.Testing;
@@ -14,8 +18,9 @@ namespace StrataRec.Samples.Host.Tests;
 
 /// <summary>
 /// The host sample (samples/StrataRec.Samples.Host) started in-process: its workspace loads clean with its own components,
-/// <c>POST /recommend</c> serves items that its custom source recalled, its custom connector fed, its custom model scored
-/// and its custom operator boosted, and errors map to 404, 400 and 500.
+/// the stratarec commands run with them, <c>POST /recommend</c> serves items that its custom source recalled, its custom
+/// connector fed, its custom model scored and its custom operator boosted, and the engine's error kinds map to 404, 400,
+/// 504 and 500.
 /// </summary>
 public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>, IDisposable
 {
@@ -41,27 +46,33 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
     [Fact]
     public async Task TheWorkspace_Validates_AndLoads_WithNoErrorsOrWarnings()
     {
-        var plans = SampleEnvironment.Create(ConfigRoot);
-        var validated = SampleTools.Validate(ConfigRoot, "local", plans);
-        Assert.True(Clean(validated), string.Join("\n", validated));
+        // What `dotnet run -- stratarec validate -c config` runs: the stock commands with this binary's components.
+        var (code, validated, _) = await Stratarec("validate", "-c", ConfigRoot, "--format", "json");
+        Assert.True(code == 0, validated.ToJsonString());
+        Assert.Equal((0, 0), (validated["errors"]!.GetValue<int>(), validated["warnings"]!.GetValue<int>()));
 
         // What the service does at startup: compile, load every binding (kv_store@1 reads its files), check the model's signature.
-        await using var engine = new RecEngine(plans);
-        var loaded = ServiceCollectionExtensions.LoadWorkspace(engine, ConfigRoot, "local");
+        await using var engine = new RecEngine(SampleEnvironment.Create() with { BaseDirectory = ConfigRoot });
+        var loaded = await ServiceCollectionExtensions.LoadWorkspaceAsync(engine, ConfigRoot, "local");
         Assert.True(Clean(loaded.Items), string.Join("\n", loaded.Items));
         Assert.Equal(new[] { Pipeline }, engine.PipelineIds());
     }
 
     [Fact]
-    public void Validate_ReportsMistakesInTheCustomComponentsSettings_AtTheirPointers()
+    public async Task Validate_ReportsMistakesInTheCustomComponentsSettings_AtTheirPointers()
     {
         var root = CopyOfTheWorkspace();
         Edit(Path.Combine(root, "pipelines", "trending_feed.jsonc"), "\"local_news\": 1.5", "\"local_news\": 0");
         Edit(Path.Combine(root, "bindings", "local.jsonc"), "\"data_file\": \"data/users.jsonl\"", "\"data_fle\": \"data/users.jsonl\"");
         Edit(Path.Combine(root, "bindings", "local.jsonc"), "\"version\": \"v3\"", "\"version\": \"v4\"");
 
-        var errors = SampleTools.Validate(root, "local", SampleEnvironment.Create(root)).Where(d => d.IsError).Select(d => (d.Code, d.Artifact + d.Pointer)).ToList();
+        var (code, report, _) = await Stratarec("validate", "-c", root, "--format", "json");
 
+        Assert.Equal(1, code);
+        var errors = report["diagnostics"]!.AsArray()
+            .Where(d => d!["severity"]!.GetValue<string>() == "error")
+            .Select(d => (d!["code"]!.GetValue<string>(), d["artifact"]!.GetValue<string>() + d["pointer"]!.GetValue<string>()))
+            .ToList();
         Assert.Contains(("BOOST_INVALID", "pipeline:trending_feed/nodes/editorial_boost/config/boosts/local_news"), errors);
         Assert.Contains(("CONNECTOR_CONFIG", "bindings:local/sources/user_store/data_fle"), errors);
         Assert.Contains(("MODEL_SIGNATURE", "pipeline:trending_feed/nodes/engagement/config/model"), errors); // the node calls v3; the binding serves v4
@@ -69,14 +80,55 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
     }
 
     [Fact]
-    public void TheCustomOperator_HasTheJsonSchemaOfItsConfigClass()
+    public async Task TheCustomOperator_HasTheJsonSchemaOfItsConfigClass()
     {
-        var schema = SampleTools.OperatorSchema(SampleEnvironment.Create(ConfigRoot), "CategoryBoost@1")!.AsObject();
+        var (code, schema, _) = await Stratarec("schema", "operator", "CategoryBoost@1");
 
+        Assert.Equal(0, code);
+        Assert.Equal("CategoryBoost@1 config", schema["title"]!.GetValue<string>());
         Assert.Equal(new[] { "score_col", "category_col", "output_col", "boosts" }, schema["required"]!.AsArray().Select(n => n!.GetValue<string>()));
         Assert.False(schema["additionalProperties"]!.GetValue<bool>());
         Assert.Contains("keeps its score", schema["properties"]!["category_col"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
-        Assert.Null(SampleTools.OperatorSchema(SampleEnvironment.Create(ConfigRoot), "CategoryBoost@2"));
+
+        var unknown = await StratarecText("schema", "operator", "CategoryBoost@2");
+        Assert.Equal(2, unknown.Code);
+        Assert.Contains("Unknown operator 'CategoryBoost@2'", unknown.Error, StringComparison.Ordinal);
+        Assert.Contains("CategoryBoost@1", unknown.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Operators_ListTheCustomComponents_NextToTheBuiltIns()
+    {
+        var (code, listed, _) = await Stratarec("operators", "--format", "json");
+
+        Assert.Equal(0, code);
+        var operators = listed["operators"]!.AsArray().Select(o => o!["id"]!.GetValue<string>()).ToList();
+        Assert.Contains("CategoryBoost@1", operators);
+        Assert.Contains("TopK@1", operators);
+        var capabilities = listed["capabilities"]!.AsArray().Select(c => c!.GetValue<string>()).ToList();
+        Assert.Contains("kv_store@1", capabilities);
+        Assert.Contains("logistic@1", capabilities);
+        Assert.Contains("trending@1", capabilities);
+    }
+
+    [Fact]
+    public async Task Run_ServesTheRequestFile_WithTheCustomComponents_AsTheServiceAnswersIt()
+    {
+        // The HTTP body names the pipeline in the route; a request file for `stratarec run` names it in pipeline_id.
+        var body = await File.ReadAllTextAsync(Path.Combine(ConfigRoot, "requests", "user_1001.json"));
+        var file = JsonNode.Parse(body)!.AsObject();
+        file["pipeline_id"] = Pipeline;
+        var request = Path.Combine(CopyOfTheWorkspace(), "requests", "user_1001.cli.json");
+        await File.WriteAllTextAsync(request, file.ToJsonString());
+        var (code, local, error) = await Stratarec("run", "-c", ConfigRoot, "-r", request, "--deadline-ms", SampleBudgets.UntimedMs.ToString(CultureInfo.InvariantCulture));
+        Assert.True(code == 0, error);
+
+        var served = await Post(_host.CreateClient(), Pipeline, body);
+
+        // One document (RecResultJson): the same items, ranks, ids and columns, and the same record of experiments.
+        Assert.Equal(Items(served.Json), Items(local));
+        Assert.Equal(served.Json["experiments"]!.ToJsonString(), local["experiments"]!.ToJsonString());
+        Assert.Equal("req-1001", local["request_id"]!.GetValue<string>());
     }
 
     [Fact]
@@ -88,6 +140,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Equal(HttpStatusCode.OK, response.Status);
         var result = response.Json;
         Assert.Equal("req-1001", result["request_id"]!.GetValue<string>());
+        Assert.True(result["succeeded"]!.GetValue<bool>());
         Assert.Equal(new[] { "exp_local_boost/strong" }, Strings(result["experiments"]!["assigned"]));
         Assert.Equal(new[] { "exp_local_boost" }, Strings(result["experiments"]!["triggered"]));
         var items = Items(result);
@@ -153,11 +206,21 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
 
     [Theory]
     [InlineData("""{ "inputs": { "user_id": "u-1001" } }""", "/inputs/user_id", "Input 'user_id' must be an integer (int64), got the string \"u-1001\".")]
-    [InlineData("""{ "inputs": { "country": "us" } }""", "/inputs/country", "not declared in the request_schema")]
+    [InlineData("""{ "inputs": { "country": "us" } }""", "/inputs/country", "Input 'country' is not declared in the request_schema of pipeline 'trending_feed'.")]
+    [InlineData("""{ "inputs": { "user_id": 1001.5 } }""", "/inputs/user_id", "got the number 1001.5")]
+    [InlineData("""{ "inputs": [] }""", "/inputs", "'inputs' must be an object")]
     [InlineData("""{ "input": {} }""", "/input", "Unknown member 'input'")]
     [InlineData("""{ "assignment": "exp_local_boost/strong" }""", "/assignment", "must be an array")]
+    [InlineData("""{ "assignment": [7] }""", "/assignment/0", "An arm id is a string")]
+    [InlineData("""{ "request_id": "" }""", "/request_id", "request_id must be a non-empty string")]
     [InlineData("""{ "inputs": """, "", "not JSON")]
     [InlineData("""[]""", "", "must be a JSON object")]
+    // Review 32: a JsonObject throws on a duplicate name only when its members are enumerated, which gave an empty 500.
+    [InlineData("""{ "inputs": {}, "inputs": {} }""", "/inputs", "Member 'inputs' is given more than once.")]
+    [InlineData("""{ "inputs": { "user_id": 1001, "user_id": 1002 } }""", "/inputs/user_id", "Member 'user_id' is given more than once.")]
+    [InlineData("""{ "assignment": [], "inputs": { "region": { "a": 1, "a": 2 } } }""", "/inputs/region/a", "Member 'a' is given more than once.")]
+    [InlineData("""{ "request_id": "\uD800" }""", "/request_id", "not valid Unicode")]
+    [InlineData("""{ "inputs": { "\uD800": 1 } }""", "/inputs", "not valid Unicode")]
     public async Task ABadRequest_Is400_WithThePointerOfTheProblem(string body, string pointer, string message)
     {
         var response = await Post(_host.CreateClient(), Pipeline, body);
@@ -165,6 +228,18 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Equal(HttpStatusCode.BadRequest, response.Status);
         Assert.Equal(pointer, response.Json["pointer"]!.GetValue<string>());
         Assert.Contains(message, response.Json["detail"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal(pointer, response.Json["errors"]![0]!["pointer"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task ABadRequest_ListsEveryInputAtFault()
+    {
+        var response = await Post(_host.CreateClient(), Pipeline, """{ "inputs": { "regoin": "us", "user_id": true } }""");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.Status);
+        var errors = response.Json["errors"]!.AsArray();
+        Assert.Equal(new[] { "/inputs/regoin", "/inputs/user_id" }, errors.Select(e => e!["pointer"]!.GetValue<string>()));
+        Assert.Equal("did you mean 'region'?", errors[0]!["hint"]!.GetValue<string>());
     }
 
     [Fact]
@@ -180,6 +255,58 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
 
         Assert.Equal(HttpStatusCode.InternalServerError, response.Status);
         Assert.Contains("kv_store@1 field 'ctr_7d' holds string values", response.Json["detail"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The engine's answer decides the status, also when it differs from what the host read: a plan loaded between reading
+    /// the inputs and running them (review 32) is the engine's InvalidRequest, a 400 at the input's pointer, not a 500.
+    /// </summary>
+    [Theory]
+    [InlineData(RecErrorKind.InvalidRequest, HttpStatusCode.BadRequest, "/inputs/tenant_id")]
+    [InlineData(RecErrorKind.UnknownPipeline, HttpStatusCode.NotFound, null)]
+    [InlineData(RecErrorKind.DeadlineExceeded, HttpStatusCode.GatewayTimeout, null)]
+    [InlineData(RecErrorKind.Failed, HttpStatusCode.InternalServerError, null)]
+    public async Task TheEnginesErrorKind_DecidesTheStatus(RecErrorKind kind, HttpStatusCode status, string? pointer)
+    {
+        var result = new RecResult
+        {
+            RequestId = "r",
+            Succeeded = false,
+            ErrorKind = kind,
+            Error = "what the engine said",
+            ErrorPointer = pointer,
+            Items = Array.Empty<Pipeline.Execution.RankedItem>(),
+            Experiments = new ExperimentRecord(Array.Empty<string>(), Array.Empty<string>(), Array.Empty<IgnoredArm>()),
+            ManifestId = string.Empty,
+            ServedBy = Pipeline,
+        };
+        _ = _host.CreateClient(); // starts the host
+
+        var http = new DefaultHttpContext { RequestServices = _host.Services };
+        http.Response.Body = new MemoryStream();
+        await RecommendEndpoint.Answer(result, _host.Services.GetRequiredService<IRecEngine>()).ExecuteAsync(http);
+
+        Assert.Equal((int)status, http.Response.StatusCode);
+        var problem = JsonNode.Parse(Encoding.UTF8.GetString(((MemoryStream)http.Response.Body).ToArray()))!;
+        if (pointer is not null)
+        {
+            Assert.Equal(pointer, problem["pointer"]!.GetValue<string>());
+        }
+
+        Assert.Equal(kind == RecErrorKind.UnknownPipeline ? $"Unknown pipeline '{Pipeline}'." : "what the engine said", problem["detail"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void AWorkspaceWithErrors_StopsTheServiceAtStartup()
+    {
+        var root = CopyOfTheWorkspace();
+        Edit(Path.Combine(root, "pipelines", "trending_feed.jsonc"), "\"local_news\": 1.5", "\"local_news\": 0");
+        using var broken = _host.WithWebHostBuilder(builder => builder.UseSetting("StrataRec:ConfigRoot", root));
+
+        var thrown = Record.Exception(() => broken.CreateClient());
+
+        var config = Assert.IsType<ConfigException>(thrown is AggregateException { InnerExceptions: [var inner] } ? inner : thrown);
+        Assert.Contains(config.Diagnostics, d => d.Code == "BOOST_INVALID");
     }
 
     [Fact]
@@ -219,6 +346,21 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
 
     private static bool Clean(IEnumerable<ConfigDiagnostic> diagnostics) =>
         !diagnostics.Any(d => d.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning);
+
+    /// <summary>A stratarec command with the sample's components (what <c>dotnet run -- stratarec …</c> runs); its output as JSON.</summary>
+    private static async Task<(int Code, JsonNode Output, string Error)> Stratarec(params string[] args)
+    {
+        var (code, output, error) = await StratarecText(args);
+        return (code, JsonNode.Parse(output) ?? throw new InvalidOperationException(error), error);
+    }
+
+    private static async Task<(int Code, string Output, string Error)> StratarecText(params string[] args)
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var code = await StrataRecCommandLine.InvokeAsync(args, SampleEnvironment.Create(), output, error);
+        return (code, output.ToString(), error.ToString());
+    }
 
     private static async Task<(HttpStatusCode Status, JsonNode Json)> Post(HttpClient client, string pipeline, string body)
     {
