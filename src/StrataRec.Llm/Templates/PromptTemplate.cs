@@ -10,17 +10,36 @@ using StrataRec.Pipeline.Operators;
 
 namespace StrataRec.Llm.Templates;
 
+/// <summary>What a prompt is rendered for, which decides the names its template may use (<see cref="PromptTemplate"/>).</summary>
+public enum PromptScope : byte
+{
+    /// <summary>
+    /// Once per call, over a window of rows (<c>LlmReranker@1</c>): <c>{{#rows}}</c> iterates them, with <c>col.*</c> and
+    /// <c>{{rank}}</c> inside it.
+    /// </summary>
+    Window = 0,
+
+    /// <summary>Once per row (<c>LlmAnnotator@1</c>): <c>col.*</c> is that row's value, anywhere; there is no <c>rows</c> or <c>rank</c>.</summary>
+    Row,
+
+    /// <summary>Once per request (<c>GenerativeRetriever@1</c>): <c>ctx.*</c> and <c>param.*</c> only, since no row is shown.</summary>
+    Request,
+}
+
 /// <summary>
 /// A prompt template of one node (design 5.9 rule 1): a <see cref="MustacheTemplate"/> whose names are StrataRec
 /// references, resolved and type-checked once, when the node is compiled, and rendered per request.
 /// </summary>
 /// <remarks>
-/// <para><b>Names.</b> <c>ctx.*</c> and <c>param.*</c> anywhere; <c>rows</c>, the section over the window's rows (in rank
-/// order), and inside it <c>col.*</c> (the current row's value) and <c>rank</c> (its 1-based position in the window, what
-/// an answer of window ranks refers to). Every name is resolved in the node's compile scope, so an unknown one is a load
-/// error with a did-you-mean, and recorded as a read of the node, so the fetch planner fetches its features before the
-/// node runs. Mustache has no logic: a value the prompt needs computed is a derived feature, one definition for training
-/// and serving, not a second expression language.</para>
+/// <para><b>Names.</b> <c>ctx.*</c> and <c>param.*</c> anywhere. The rest depends on the <see cref="PromptScope"/>: over a
+/// window, <c>rows</c> is the section over the window's rows (in rank order), and inside it <c>col.*</c> is the current
+/// row's value and <c>rank</c> its 1-based position in the window, what an answer of window ranks refers to; for one row,
+/// <c>col.*</c> is that row's value anywhere; for the request, there are no columns. A name only another scope has is an
+/// error that says so (<c>MUSTACHE_SCOPE</c>), so a template copied from another operator fails at load, not in the
+/// model's answers. Every name is resolved in the node's compile scope, so an unknown one is a load error with a
+/// did-you-mean, and recorded as a read of the node, so the fetch planner fetches its features before the node runs.
+/// Mustache has no logic: a value the prompt needs computed is a derived feature, one definition for training and
+/// serving, not a second expression language.</para>
 /// <para><b>Values.</b> Strings and text verbatim; integers in invariant culture; floats in their shortest round-trip
 /// form (a <c>float32</c> as float32, so 0.1 renders as <c>0.1</c>); bools as <c>true</c> / <c>false</c>. A list renders
 /// only as a section, one item at a time (<c>{{#ctx.tags}}{{.}}, {{/ctx.tags}}</c>). A vector cannot be rendered.</para>
@@ -54,29 +73,38 @@ public sealed class PromptTemplate
     private readonly Binding[] _bindings;
     private readonly int _frames;
 
-    private PromptTemplate(MustacheTemplate template, Binding[] bindings, int frames)
+    private PromptTemplate(MustacheTemplate template, Binding[] bindings, int frames, PromptScope scope)
     {
         _template = template;
         _bindings = bindings;
         _frames = frames;
+        Scope = scope;
     }
 
     /// <summary>The template as configured.</summary>
     public string Source => _template.Source;
+
+    /// <summary>What the template is rendered for, which decides the <c>Render</c> overload it takes.</summary>
+    public PromptScope Scope { get; }
 
     /// <summary>
     /// Parses and binds <paramref name="source"/> in the node's scope, recording its references as the node's reads.
     /// Null after reporting every error at <paramref name="configKey"/> (a pointer below the node's <c>config</c>, e.g.
     /// <c>/prompts/user</c>).
     /// </summary>
-    public static PromptTemplate? Compile(OperatorCompileContext context, string? source, string configKey)
+    /// <param name="scope">What the prompt is rendered for, which decides the names it may use.</param>
+    public static PromptTemplate? Compile(OperatorCompileContext context, string? source, string configKey, PromptScope scope = PromptScope.Window)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(configKey);
         if (string.IsNullOrWhiteSpace(source))
         {
-            context.Error(configKey, "MUSTACHE_EMPTY", "The template is empty.",
-                "write the prompt as a Mustache template, e.g. \"Rank these items:\\n{{#rows}}{{rank}}. {{col.item.title}}\\n{{/rows}}\"");
+            context.Error(configKey, "MUSTACHE_EMPTY", "The template is empty.", "write the prompt as a Mustache template, e.g. " + scope switch
+            {
+                PromptScope.Row => "\"In one sentence, why would this user like {{col.item.title}}?\"",
+                PromptScope.Request => "\"Suggest items for the query '{{ctx.request.query}}' as a JSON array of ids.\"",
+                _ => "\"Rank these items:\\n{{#rows}}{{rank}}. {{col.item.title}}\\n{{/rows}}\"",
+            });
             return null;
         }
 
@@ -86,24 +114,37 @@ public sealed class PromptTemplate
             return null;
         }
 
-        var binder = new Binder(context, template, configKey);
+        var binder = new Binder(context, template, configKey, scope);
         binder.Bind(template.Nodes);
-        return binder.Failed ? null : new PromptTemplate(template, binder.Bindings, binder.Frames);
+        return binder.Failed ? null : new PromptTemplate(template, binder.Bindings, binder.Frames, scope);
     }
 
     /// <summary>
-    /// Renders the prompt for this request: <paramref name="window"/> are the physical rows the <c>rows</c> section
-    /// iterates, in rank order. Synchronous, so the pooled builder never crosses an await.
+    /// Renders a <see cref="PromptScope.Window"/> prompt for this request: <paramref name="window"/> are the physical rows
+    /// the <c>rows</c> section iterates, in rank order. Synchronous, so the pooled builder never crosses an await.
     /// </summary>
-    public string Render(OperatorContext context, ReadOnlySpan<int> window)
+    public string Render(OperatorContext context, ReadOnlySpan<int> window) => Render(context, PromptScope.Window, window, -1);
+
+    /// <summary>Renders a <see cref="PromptScope.Row"/> prompt for physical row <paramref name="row"/>.</summary>
+    public string Render(OperatorContext context, int row) => Render(context, PromptScope.Row, default, row);
+
+    /// <summary>Renders a <see cref="PromptScope.Request"/> prompt.</summary>
+    public string Render(OperatorContext context) => Render(context, PromptScope.Request, default, -1);
+
+    private string Render(OperatorContext context, PromptScope scope, ReadOnlySpan<int> window, int row)
     {
         ArgumentNullException.ThrowIfNull(context);
+        if (scope != Scope)
+        {
+            throw new InvalidOperationException($"The template was compiled for the {Scope} scope, so it cannot be rendered for the {scope} scope.");
+        }
+
         int[]? rented = null;
         Span<int> frames = _frames <= StackFrames ? stackalloc int[StackFrames] : (rented = ArrayPool<int>.Shared.Rent(_frames));
         var builder = PromptBuilder.Acquire(_template.Source.Length);
         try
         {
-            var data = new PromptData(_bindings, context, window, frames);
+            var data = new PromptData(_bindings, context, window, frames, row);
             _template.Render(ref data, builder);
             return builder.ToString();
         }
@@ -162,7 +203,7 @@ public sealed class PromptTemplate
     private readonly record struct Binding(BindingKind Kind, Reference Reference = default, int Frame = -1);
 
     /// <summary>Resolves and checks every tag once, at compile time.</summary>
-    private sealed class Binder(OperatorCompileContext context, MustacheTemplate template, string configKey)
+    private sealed class Binder(OperatorCompileContext context, MustacheTemplate template, string configKey, PromptScope scope)
     {
         private readonly List<(MustacheTag Tag, Binding Binding)> _open = new();
 
@@ -200,6 +241,9 @@ public sealed class PromptTemplate
             {
                 case ".":
                     BindImplicit(tag);
+                    return;
+                case RowsName or RankName when scope != PromptScope.Window:
+                    ScopeError(tag);
                     return;
                 case RowsName:
                     Error(tag, "MUSTACHE_ROWS", $"{Text(tag)}: 'rows' is the section over the window's rows, not a value.",
@@ -288,6 +332,9 @@ public sealed class PromptTemplate
                     Error(tag, "MUSTACHE_SECTION_TYPE", $"{Text(tag)} would iterate the current item, but no StrataRec value is a list of lists.",
                         "iterate a list by its name, e.g. {{#ctx.tags}}{{.}}, {{/ctx.tags}}");
                     return;
+                case RowsName or RankName when scope != PromptScope.Window:
+                    ScopeError(tag);
+                    return;
                 case RowsName when inverted:
                     Error(tag, "MUSTACHE_SECTION_TYPE", $"{Text(tag)} would render only for an empty window, but the node calls no model then.",
                         "remove the inverted section");
@@ -339,18 +386,42 @@ public sealed class PromptTemplate
         {
             reference = default;
             var name = tag.Name;
-            var scope = context.Scope;
-            if (!(name.StartsWith("col.", StringComparison.Ordinal) || name.StartsWith("ctx.", StringComparison.Ordinal)
-                  || name.StartsWith("param.", StringComparison.Ordinal)) || !scope.TryResolve(name, out var symbol))
+            var column = name.StartsWith("col.", StringComparison.Ordinal);
+            if (column && scope == PromptScope.Request)
             {
-                var known = new List<string>(scope.KnownNames) { RowsName, RankName };
-                Error(tag, "MUSTACHE_UNKNOWN_NAME", $"{Text(tag)}: unknown name '{name}'.",
-                    NameSuggestions.DidYouMean(name, known)
-                    ?? "a template names col.* (inside {{#rows}}), ctx.* and param.* references, rows and rank");
+                ScopeError(tag);
                 return false;
             }
 
-            if (symbol.Kind == SymbolKind.Column && !InRows())
+            var names = context.Scope;
+            if (!(column || name.StartsWith("ctx.", StringComparison.Ordinal) || name.StartsWith("param.", StringComparison.Ordinal))
+                || !names.TryResolve(name, out var symbol))
+            {
+                var known = new List<string>();
+                foreach (var candidate in names.KnownNames)
+                {
+                    if (scope != PromptScope.Request || !candidate.StartsWith("col.", StringComparison.Ordinal))
+                    {
+                        known.Add(candidate);
+                    }
+                }
+
+                if (scope == PromptScope.Window)
+                {
+                    known.Add(RowsName);
+                    known.Add(RankName);
+                }
+
+                Error(tag, "MUSTACHE_UNKNOWN_NAME", $"{Text(tag)}: unknown name '{name}'.", NameSuggestions.DidYouMean(name, known) ?? scope switch
+                {
+                    PromptScope.Row => "a per-row template names col.* (the row's values), ctx.* and param.* references",
+                    PromptScope.Request => "a per-request template names ctx.* and param.* references",
+                    _ => "a template names col.* (inside {{#rows}}), ctx.* and param.* references, rows and rank",
+                });
+                return false;
+            }
+
+            if (symbol.Kind == SymbolKind.Column && scope == PromptScope.Window && !InRows())
             {
                 Error(tag, "MUSTACHE_ROW_OUTSIDE_ROWS", $"{Text(tag)}: '{name}' is a column, which has a value per row, so it renders only inside {{{{#rows}}}}.",
                     "move it inside {{#rows}}…{{/rows}}, or render a ctx.* value");
@@ -392,6 +463,33 @@ public sealed class PromptTemplate
             return false;
         }
 
+        /// <summary>A name only another scope has: <c>rows</c> and <c>rank</c> outside a window, <c>col.*</c> in a per-request prompt.</summary>
+        private void ScopeError(MustacheTag tag)
+        {
+            var op = context.Descriptor.Id;
+            var name = tag.Name;
+            if (scope == PromptScope.Row)
+            {
+                if (name == RowsName)
+                {
+                    Error(tag, "MUSTACHE_SCOPE", $"{Text(tag)}: {op} renders this prompt once per row, so there is no 'rows' section.",
+                        "name the row's values directly, e.g. {{col.item.title}}");
+                }
+                else
+                {
+                    Error(tag, "MUSTACHE_SCOPE", $"{Text(tag)}: 'rank' is a row's position in a window, but {op} renders this prompt for one row, with no window.",
+                        "leave it out: the prompt shows one row");
+                }
+
+                return;
+            }
+
+            Error(tag, "MUSTACHE_SCOPE", name.StartsWith("col.", StringComparison.Ordinal)
+                    ? $"{Text(tag)}: '{name}' is a column, which has a value per row, but {op} renders this prompt once per request, for no row."
+                    : $"{Text(tag)}: {op} renders this prompt once per request, for no rows, so there is no '{name}'.",
+                "render request values only: ctx.* and param.*");
+        }
+
         private string Text(MustacheTag tag) => template.Source.Substring(tag.Offset, tag.Length);
 
         private void Error(MustacheTag tag, string code, string message, string hint)
@@ -402,12 +500,13 @@ public sealed class PromptTemplate
     }
 
     /// <summary>The values a request renders: the window, the current row, and the current item of each list section.</summary>
-    private ref struct PromptData(Binding[] bindings, OperatorContext context, ReadOnlySpan<int> window, Span<int> frames) : IMustacheData
+    /// <param name="row">The row a per-row prompt shows; otherwise -1, until a <c>rows</c> section enters one.</param>
+    private ref struct PromptData(Binding[] bindings, OperatorContext context, ReadOnlySpan<int> window, Span<int> frames, int row) : IMustacheData
     {
         private readonly ReadOnlySpan<int> _window = window;
         private readonly Span<int> _frames = frames;
         private int _position = -1;
-        private int _row = -1;
+        private int _row = row;
 
         public readonly void Write(MustacheTag variable, StringBuilder output)
         {
