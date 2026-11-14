@@ -333,7 +333,8 @@ internal sealed class Binder
                 if (!TryUnify(l.Type, r.Type, out var kind, out var dim))
                 {
                     // The left side is the value read; the right one, its default, is what disagrees.
-                    return FailAt(b.Right, ExpressionErrorCodes.TypeMismatch, $"'??' needs both sides of the same type, got {l.Type} and {r.Type}", b);
+                    return FailAt(b.Right, ExpressionErrorCodes.TypeMismatch, $"'??' needs both sides of the same type, got {l.Type} and {r.Type}", b,
+                        DefaultHint(l.Type));
                 }
 
                 return IrNode.Make(IrOp.Coalesce, new ExprType(kind, r.Type.Nullable, dim), new[] { Coerce(l, kind), Coerce(r, kind) }, b.Start, b.Length);
@@ -1117,6 +1118,21 @@ internal sealed class Binder
     {
         Report(code, message, at.Start, at.Length, hint);
         return Poison(at);
+    }
+
+    /// <summary>What to write after <c>??</c> for a value of <paramref name="type"/>: its type, with a literal where one exists.</summary>
+    private static string DefaultHint(ExprType type)
+    {
+        var plain = type.WithNullable(false);
+        var example = type.Kind switch
+        {
+            TypeKind.Int => " such as 0",
+            TypeKind.Float => " such as 0.0",
+            TypeKind.String => " such as ''",
+            TypeKind.Bool => " such as false",
+            _ => string.Empty,
+        };
+        return $"the default after '??' is used where the value before it is missing: give a {plain}{example}";
     }
 
     /// <summary>Reports at <paramref name="culprit"/>, the part at fault (an operand, an argument, an operator), and poisons <paramref name="at"/>, the whole operation.</summary>

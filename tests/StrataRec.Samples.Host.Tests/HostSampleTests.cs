@@ -257,6 +257,26 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Equal(pointer, response.Json["errors"]![0]!["pointer"]!.GetValue<string>());
     }
 
+    /// <summary>
+    /// Review 33: bytes that are not UTF-8 parse, and threw when the name or string was read, which gave a 500. <c>#</c>
+    /// stands for a raw <c>0xFF</c>.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "inputs": { "#": 1 } }""", "/inputs", "The name of member 1 of this object is not valid UTF-8 text.")]
+    [InlineData("""{ "request_id": "r-#" }""", "/request_id", "The string is not valid UTF-8 text.")]
+    public async Task BytesThatAreNotUtf8_Are400_WithThePointerOfTheProblem(string body, string pointer, string message)
+    {
+        var bytes = Encoding.UTF8.GetBytes(body);
+        bytes[Array.IndexOf(bytes, (byte)'#')] = 0xFF;
+
+        var response = await Post(_host.CreateClient(), Pipeline, bytes);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.Status);
+        Assert.Equal(pointer, response.Json["pointer"]!.GetValue<string>());
+        Assert.Equal(message, response.Json["detail"]!.GetValue<string>());
+        Assert.Equal("send the body as UTF-8 (Content-Type: application/json; charset=utf-8)", response.Json["errors"]![0]!["hint"]!.GetValue<string>());
+    }
+
     [Fact]
     public async Task ABadRequest_ListsEveryInputAtFault()
     {
@@ -391,6 +411,14 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
     private static async Task<(HttpStatusCode Status, JsonNode Json)> Post(HttpClient client, string pipeline, string body)
     {
         using var content = new StringContent(body, Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("/recommend/" + pipeline, content);
+        return (response.StatusCode, JsonNode.Parse(await response.Content.ReadAsStringAsync())!);
+    }
+
+    private static async Task<(HttpStatusCode Status, JsonNode Json)> Post(HttpClient client, string pipeline, byte[] body)
+    {
+        using var content = new ByteArrayContent(body);
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
         using var response = await client.PostAsync("/recommend/" + pipeline, content);
         return (response.StatusCode, JsonNode.Parse(await response.Content.ReadAsStringAsync())!);
     }

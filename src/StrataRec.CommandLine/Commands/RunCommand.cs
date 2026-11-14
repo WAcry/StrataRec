@@ -52,7 +52,9 @@ internal static class RunCommand
                 result.AddError("--deadline-ms must be positive.");
             }
         });
-        var command = new Command("run", "Execute a request locally and print the result as JSON.") { config, environment, request, arms, trace, logs, record, deadline };
+        var command = new Command("run",
+            "Execute a request locally and print the result as JSON. Exits with 0 when the request succeeds, 1 when it fails (the result says why) or the " +
+            "configuration does not load, 2 when the request file is invalid.") { config, environment, request, arms, trace, logs, record, deadline };
         command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(config)!, parse.GetValue(environment)!, parse.GetValue(request)!,
             parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(trace), parse.InvocationConfiguration.Output, cancellationToken, parse.GetValue(logs),
             parse.GetValue(record), parse.GetValue(deadline), parse.InvocationConfiguration.Error));

@@ -54,10 +54,11 @@ public static class ServiceCollectionExtensions
     /// logs nothing. Metrics and spans need no registration: subscribe to the <c>StrataRec</c> meter and activity source.
     /// </summary>
     /// <remarks>
-    /// <para>Hosted services start in the order they were registered and before the web server of an ASP.NET Core app
-    /// listens, so a service that calls this before it builds the app takes no request until every plan has loaded: once
-    /// it listens, it is ready. A host that is not a generic host (a bare service provider) loads the workspace itself with
-    /// <see cref="LoadWorkspaceAsync"/>.</para>
+    /// <para>The load runs in the hosted services' starting phase (<see cref="IHostedLifecycleService.StartingAsync"/>),
+    /// which the generic host completes for every service before it starts any, the web server of an ASP.NET Core app
+    /// included, also when services start concurrently (<c>HostOptions.ServicesStartConcurrently</c>, review 33): a
+    /// service takes no request until every plan has loaded, so once it listens, it is ready. A host that is not a generic
+    /// host (a bare service provider) loads the workspace itself with <see cref="LoadWorkspaceAsync"/>.</para>
     /// <para>The engine serves the workspace as it was at startup; a service that takes new releases without a restart
     /// loads them into the same engine in the background (<see cref="RecEngine.LoadAsync"/>), which swaps plans atomically.</para>
     /// </remarks>
@@ -165,10 +166,24 @@ public static class ServiceCollectionExtensions
 /// host starts, so the host fails to start on a configuration with errors instead of failing requests, and logs what
 /// loads with warnings.
 /// </summary>
+/// <remarks>
+/// The load is in <see cref="StartingAsync"/>, not <see cref="StartAsync"/>: with
+/// <c>HostOptions.ServicesStartConcurrently</c> the host does not wait for one service's StartAsync before the next
+/// one's, so a web server registered later could listen with no plan loaded (review 33). Every StartingAsync completes
+/// before any StartAsync runs, in either mode.
+/// </remarks>
 internal sealed partial class StrataRecStartup(
-    RecEngine engine, string configRoot, string environment, IReadOnlyCollection<string> pipelines, ILogger<StrataRecStartup> logger) : IHostedService
+    RecEngine engine, string configRoot, string environment, IReadOnlyCollection<string> pipelines, ILogger<StrataRecStartup> logger) : IHostedLifecycleService
 {
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task StartedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task StoppingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task StoppedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public async Task StartingAsync(CancellationToken cancellationToken)
     {
         var diagnostics = await ServiceCollectionExtensions.LoadWorkspaceAsync(engine, configRoot, environment, pipelines, cancellationToken).ConfigureAwait(false);
         foreach (var diagnostic in diagnostics.Items)

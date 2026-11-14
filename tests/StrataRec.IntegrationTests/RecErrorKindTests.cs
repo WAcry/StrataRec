@@ -2,6 +2,7 @@ using System.Text.Json;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Assignment;
 using StrataRec.Hosting;
+using StrataRec.Hosting.Replay;
 using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
@@ -161,6 +162,55 @@ public sealed class RecErrorKindTests : IDisposable
         Assert.Equal("Input 'tenant_id' is not declared in the request_schema of pipeline 'feed'. Declared inputs: 'user_id'.", result.Error);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AReplay_OnASchemaThatNowRejectsTheRecordedInputs_IsAnInvalidRequest_AsTheRequestWouldBe(bool withFallback)
+    {
+        // Review 33: the replay ran the inputs it decoded without the check, so a release that requires a new input turned
+        // the recorded request into a failure, or a success of the fallback, where the engine answers it as invalid.
+        await using var engine = Load(_root);
+        var recorded = await engine.ExecuteAsync(Request("feed", Inputs(1001), debug: new DebugOptions { Record = true }));
+        Assert.True(recorded.Succeeded, recorded.Error);
+        var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!));
+
+        var feed = Path.Combine(_root, "pipelines", "feed.jsonc");
+        Edit(feed, "\"tenant_id\": { \"type\": \"int64?\" }", "\"tenant_id\": { \"type\": \"int64\" }");
+        if (withFallback)
+        {
+            Edit(feed, "\"pipeline_id\": \"feed\",", "\"pipeline_id\": \"feed\", \"fallback_pipeline\": \"backup\",");
+        }
+
+        var reload = await ServiceCollectionExtensions.LoadWorkspaceAsync(engine, _root, "local", new[] { "feed", "backup" });
+        Assert.False(reload.HasErrors, string.Join("\n", reload.Items));
+        Assert.Empty(reload.Items);
+        var live = await engine.ExecuteAsync(Request("feed", Inputs(1001)));
+
+        var outcome = await engine.ReplayAsync(bundle);
+
+        var replayed = outcome.Result;
+        Assert.Equal((false, RecErrorKind.InvalidRequest, "/inputs/tenant_id"), (replayed.Succeeded, replayed.ErrorKind, replayed.ErrorPointer));
+        Assert.Equal((live.Succeeded, live.ErrorKind, live.ErrorPointer, live.Error), (replayed.Succeeded, replayed.ErrorKind, replayed.ErrorPointer, replayed.Error));
+        Assert.StartsWith("Input 'tenant_id' is required by the request_schema of pipeline 'feed'.", replayed.Error, StringComparison.Ordinal);
+        Assert.Equal(("feed", "feed"), (live.ServedBy, replayed.ServedBy)); // not the fallback
+        Assert.False(outcome.Report.Diff.Identical);
+    }
+
+    [Fact]
+    public async Task AReplay_WhoseFallbackRejectsTheInputs_IsFailed_AsTheRequestIs()
+    {
+        // The caller's inputs suit the pipeline asked for; its fallback's do not: the configuration's fault, not the caller's.
+        await using var engine = Load(_root);
+        var recorded = await engine.ExecuteAsync(Request("strict_broken", Inputs(1001), debug: new DebugOptions { Record = true }));
+        Assert.Equal((false, RecErrorKind.Failed), (recorded.Succeeded, recorded.ErrorKind));
+
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!)));
+
+        var replayed = outcome.Result;
+        Assert.Equal((false, RecErrorKind.Failed, null), (replayed.Succeeded, replayed.ErrorKind, replayed.ErrorPointer));
+        Assert.Equal(recorded.Error, replayed.Error);
+    }
+
     [Fact]
     public void Loading_WarnsAboutAFallbackThatRequiresAnInputThePrimaryDoesNotDeclare()
     {
@@ -217,9 +267,9 @@ public sealed class RecErrorKindTests : IDisposable
         return engine;
     }
 
-    private static RecRequest Request(string pipeline, RequestInputs inputs, TimeSpan? deadline = null) => new()
+    private static RecRequest Request(string pipeline, RequestInputs inputs, TimeSpan? deadline = null, DebugOptions? debug = null) => new()
     {
-        PipelineId = pipeline, RequestId = "req", Inputs = inputs, Deadline = deadline ?? Deadline,
+        PipelineId = pipeline, RequestId = "req", Inputs = inputs, Deadline = deadline ?? Deadline, Debug = debug,
     };
 
     private static RequestInputs Inputs(long userId, string? region = null)

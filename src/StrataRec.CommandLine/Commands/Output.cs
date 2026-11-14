@@ -58,11 +58,15 @@ internal static class Output
                 writer.WriteLine();
             }
 
-            writer.WriteLine($"{errors} error(s), {warnings} warning(s)");
+            writer.WriteLine($"{Count(errors, "error")}, {Count(warnings, "warning")}");
         }
 
         return errors > 0 || (warningsAsErrors && warnings > 0) ? 1 : 0;
     }
+
+    /// <summary><paramref name="count"/> with its noun, singular for one: "1 experiment", "2 experiments", "0 errors".</summary>
+    public static string Count(int count, string noun, string? plural = null) =>
+        count.ToString(CultureInfo.InvariantCulture) + " " + (count == 1 ? noun : plural ?? noun + "s");
 
     /// <summary>
     /// One diagnostic as text. Located, it starts with <c>file:line:column:</c>, which terminals and editors open at the
@@ -77,9 +81,84 @@ internal static class Output
         }
 
         var where = at.Exact ? d.Pointer : d.Artifact + d.Pointer;
+        var source = at.Source is { } line ? "\n" + Snippet(line, at.Column) : string.Empty;
         var hint = d.Hint is null ? string.Empty : $"\n    hint: {d.Hint}";
-        return $"{at.File}:{at.Line}:{at.Column}: {d.SeverityName} {d.Code}{(where.Length > 0 ? " " + where : string.Empty)}: {d.Message}{hint}";
+        return $"{at.File}:{at.Line}:{at.Column}: {d.SeverityName} {d.Code}{(where.Length > 0 ? " " + where : string.Empty)}: {d.Message}{source}{hint}";
     }
+
+    /// <summary>Lines longer than this are cut to this many characters around the column.</summary>
+    private const int SnippetWidth = 100;
+
+    /// <summary>
+    /// The source line of a located diagnostic and a caret under its column, so a reader in a terminal sees the place
+    /// without counting columns (an expression's culprit is often far into a long string). The indentation is dropped and a
+    /// long line is cut to a window around the column, marked with "...". The caret line copies tabs, puts nothing under a
+    /// zero-width character and a full-width space under a wide one (CJK, an emoji), so the caret stays under the column
+    /// where a terminal draws those in two cells.
+    /// </summary>
+    internal static string Snippet(string line, int column)
+    {
+        var at = Math.Clamp(column - 1, 0, line.Length);
+        var start = 0;
+        while (start < at && line[start] is ' ' or '\t')
+        {
+            start++;
+        }
+
+        var end = line.Length;
+        while (end > at && char.IsWhiteSpace(line[end - 1]))
+        {
+            end--;
+        }
+
+        var before = string.Empty;
+        var after = string.Empty;
+        if (end - start > SnippetWidth)
+        {
+            var to = Math.Min(end, Math.Max(start, at - SnippetWidth / 2) + SnippetWidth);
+            var from = Math.Max(start, to - SnippetWidth); // near the end, still a full window
+            before = from > start ? "..." : string.Empty;
+            after = to < end ? "..." : string.Empty;
+            (start, end) = (from, to);
+            if (start < at && char.IsLowSurrogate(line[start]))
+            {
+                start++; // never half a pair at the edges
+            }
+
+            if (end > at + 1 && char.IsHighSurrogate(line[end - 1]))
+            {
+                end--;
+            }
+        }
+
+        var caret = new System.Text.StringBuilder(before.Length + at - start + 1);
+        caret.Append(' ', before.Length);
+        for (var i = start; i < at; i++)
+        {
+            var c = line[i];
+            if (c == '\t')
+            {
+                caret.Append('\t');
+            }
+            else if (char.IsHighSurrogate(c) || IsWide(c))
+            {
+                caret.Append('\u3000'); // a pair is one character: its low surrogate adds nothing
+            }
+            else if (!char.IsLowSurrogate(c) && CharUnicodeInfo.GetUnicodeCategory(c) is not
+                     (UnicodeCategory.NonSpacingMark or UnicodeCategory.EnclosingMark or UnicodeCategory.Format))
+            {
+                caret.Append(' ');
+            }
+        }
+
+        caret.Append('^');
+        return $"    {before}{line[start..end]}{after}\n    {caret}";
+    }
+
+    /// <summary>East Asian wide and full-width characters of the BMP, which terminals draw in two cells.</summary>
+    private static bool IsWide(char c) => c is (>= '\u1100' and <= '\u115F') or (>= '\u2E80' and <= '\u303E') or (>= '\u3041' and <= '\u33FF')
+        or (>= '\u3400' and <= '\u4DBF') or (>= '\u4E00' and <= '\u9FFF') or (>= '\uA000' and <= '\uA4CF') or (>= '\uAC00' and <= '\uD7A3')
+        or (>= '\uF900' and <= '\uFAFF') or (>= '\uFE30' and <= '\uFE4F') or (>= '\uFF00' and <= '\uFF60') or (>= '\uFFE0' and <= '\uFFE6');
 
     public static void WriteDiagnostic(Utf8JsonWriter json, ConfigDiagnostic d, SourceLocation? location = null)
     {

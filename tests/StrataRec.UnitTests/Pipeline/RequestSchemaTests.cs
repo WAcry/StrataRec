@@ -3,6 +3,7 @@ using StrataRec.Artifacts.Json;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Pipeline.Planning;
+using StrataRec.UnitTests.Artifacts;
 
 namespace StrataRec.UnitTests.Pipeline;
 
@@ -96,6 +97,20 @@ public sealed class RequestSchemaTests
 
         Assert.Equal((pointer, message, hint), (error.Pointer, error.Message, error.Hint));
         AssertNoDotNetNames(error);
+    }
+
+    [Theory]
+    [InlineData("""{ "user_id": 1, "region": "#" }""", "/inputs/region", "The string is not valid UTF-8 text.")]
+    [InlineData("""{ "user_id": 1, "#": 1 }""", "/inputs", "The name of member 2 of this object is not valid UTF-8 text.")]
+    public void TryRead_BytesThatAreNotUtf8_AreAnError_NotAnException(string json, string pointer, string message)
+    {
+        using var document = JsonDocument.Parse(StrictJsonTests.WithBytes(json, [0xFF]));
+
+        Assert.False(Schema.TryRead(document.RootElement, out var inputs, out var errors));
+
+        Assert.Null(inputs);
+        var error = Assert.Single(errors);
+        Assert.Equal((pointer, message), (error.Pointer, error.Message));
     }
 
     [Fact]

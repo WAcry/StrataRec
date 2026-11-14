@@ -80,6 +80,15 @@ public sealed partial class RecEngine
                 Debug = request.Debug,
             };
 
+            // The caller's mistakes first, as ExecuteAsync checks them (review 33): inputs the replayed plan rejects are an
+            // invalid request at their pointer, and no fallback pipeline serves them, so a replay on a changed schema
+            // answers what the engine would answer the request now.
+            if (plan.RequestSchema.Check(inputs) is { } invalid)
+            {
+                var rejected = Rejected(request, RecErrorKind.InvalidRequest, RequestSchema.Describe(invalid), pointer: invalid.Pointer);
+                return Outcome(bundle, rejected, null, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null, notes, 0, plan.ManifestId);
+            }
+
             var known = new List<string>();
             foreach (var arm in options?.Arms ?? recordedArms)
             {

@@ -1662,9 +1662,11 @@ flowchart LR
 ```text
 $ stratarec validate -c config -p home_feed
 config/experiments/exp_mmr_diversity.jsonc:15:9: warning INTERACTION_READ /arms/mmr/nodes/mmr_diversifier: Node 'mmr_diversifier' added by 'exp_mmr_diversity/mmr' reads 'score.final', which 'exp_freshness_calibration/calibrated' changes through 'freshness_calibration'; the two arms can be assigned together.
+    "mmr_diversifier": {
+    ^
     hint: confirm in review that the added node should see the other experiment's values; otherwise put the experiments in the same layer
 
-0 error(s), 1 warning(s)
+0 errors, 1 warning
 home_feed: ok — 11 nodes, 11 compiled variants, 3 experiments, 6 arms, 4 arm combinations checked
 ```
 

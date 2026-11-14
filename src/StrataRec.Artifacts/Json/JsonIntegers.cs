@@ -105,6 +105,11 @@ public static class JsonIntegers
         }
 
         var integer = number[integerStart..i];
+        if (integer.Length > 1 && integer[0] == '0')
+        {
+            return false; // RFC 8259: no leading zeros ("01", review 33)
+        }
+
         var fraction = ReadOnlySpan<char>.Empty;
         if (i < number.Length && number[i] == '.')
         {
@@ -115,6 +120,10 @@ public static class JsonIntegers
             }
 
             fraction = number[fractionStart..i];
+            if (fraction.Length == 0)
+            {
+                return false; // a digit after the point ("1.", review 33)
+            }
         }
 
         long exponent = 0;
@@ -132,10 +141,14 @@ public static class JsonIntegers
                 return false;
             }
 
+            // Saturates past what the text's own digits can offset: the scale below is the exponent less at most the
+            // text's length (fraction digits) plus at most its length (trailing zeros), so beyond length + 19 the number
+            // is out of a long's range, or not an integer, whatever the cap. A fixed cap could be offset by a long run of
+            // zeros (review 33).
+            var cap = number.Length + 19L;
             while (i < number.Length && char.IsAsciiDigit(number[i]))
             {
-                // Saturates far beyond any long's digits: such a number is out of range or zero either way.
-                exponent = Math.Min(exponent * 10 + (number[i] - '0'), 1_000_000_000);
+                exponent = Math.Min(exponent * 10 + (number[i] - '0'), cap);
                 i++;
             }
 
