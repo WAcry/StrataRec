@@ -17,11 +17,13 @@ internal static class ResultText
 
     public static void Write(TextWriter output, RecResult result)
     {
-        var elapsed = result.ElapsedMs.ToString("0.###", CultureInfo.InvariantCulture);
+        // run executes one request in a new process: its times include compiling the code it runs for the first time,
+        // which a service pays once. Said where the times are, so they are not read as what a request costs.
+        var elapsed = result.ElapsedMs.ToString("0.###", CultureInfo.InvariantCulture) + " ms (the process's first request: times include JIT)";
         output.WriteLine(result.Succeeded
-            ? $"request {result.RequestId}: succeeded, served by {result.ServedBy}, {elapsed} ms"
+            ? $"request {result.RequestId}: succeeded, served by {result.ServedBy}, {elapsed}"
             : $"request {result.RequestId}: failed ({RecResultJson.Name(result.ErrorKind)}" +
-              (result.ErrorPointer is { } pointer ? $" at {pointer}" : string.Empty) + $"), {elapsed} ms");
+              (result.ErrorPointer is { } pointer ? $" at {pointer}" : string.Empty) + $"), {elapsed}");
         if (result.Error is { } error)
         {
             // A request served by its fallback pipeline succeeded, and the error says why the primary one did not serve.
