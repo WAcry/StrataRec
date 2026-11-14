@@ -36,6 +36,8 @@ dotnet run --project src/StrataRec.Cli -- --help
 
 依赖关系按表格自上而下，不允许引入循环引用。
 
+`samples/` 下有两个示例：`home_feed` 是演示全部功能的工作区（CLI 和集成测试都用它）；`StrataRec.Samples.Host` 是在 ASP.NET Core 服务里嵌入引擎、四个扩展点各一个自定义组件的宿主示例，属于解决方案，改动引擎公开 API 时要一起改。
+
 ## 约定
 
 - C# 14、文件级命名空间、启用 nullable、`TreatWarningsAsErrors`。私有字段用 `_camelCase`。

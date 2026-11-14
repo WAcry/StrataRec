@@ -25,6 +25,8 @@ dotnet run --project src/StrataRec.Cli -- schema pipeline          # 各类产�
 dotnet run --project src/StrataRec.Cli -- operators                # 算子及其声明的效果
 ```
 
+`validate` 对示例会报一个预期内的警告：MMR 实验读取的分数会被另一层的校准实验修改，而这两个臂可能同时分配。
+
 从零开始写一条流水线时，先生成一份最小的工作区，再在上面改：
 
 ```sh
@@ -35,7 +37,23 @@ dotnet run --project src/StrataRec.Cli -- run      -c my-feed -r my-feed/request
 
 `init` 写出目录、本地绑定、一条从召回到 top-k 的流水线、一个实验、发布文件、夹具和示例请求，每个文件开头的注释说明先改哪里，最后打印接下来可以照抄的命令。`home_feed` 是演示全部功能的完整示例。
 
-`validate` 对示例会报一个预期内的警告：MMR 实验读取的分数会被另一层的校准实验修改，而这两个臂可能同时分配。
+## 在服务里嵌入引擎
+
+引擎是一个库，传输层、认证和线程模型由宿主决定。[`samples/StrataRec.Samples.Host`](samples/StrataRec.Samples.Host) 是一个 ASP.NET Core 服务：用 `AddStrataRec` 加载工作区，`POST /recommend/{pipeline}` 返回排好序的结果；并且演示四个扩展点怎么写、怎么注册：
+
+| 扩展点 | 契约 | 示例 |
+| --- | --- | --- |
+| 特征连接器 | `IFeatureSourceConnector` | `kv_store@1` |
+| 召回源 | `ICandidateSource` | `trending@1` |
+| 模型客户端 | `IModelClient` | `logistic@1` |
+| 算子 | `IOperatorFactory` | `CategoryBoost@1` |
+
+```sh
+dotnet run --project samples/StrataRec.Samples.Host                   # http://localhost:5000
+curl -s -X POST localhost:5000/recommend/trending_feed -H 'content-type: application/json' \
+     -d @samples/StrataRec.Samples.Host/config/requests/user_1001.json
+dotnet run --project samples/StrataRec.Samples.Host -- validate       # 带自定义组件的工作区由宿主自己的二进制校验
+```
 
 ## 示例工作区
 

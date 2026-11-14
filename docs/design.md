@@ -2261,7 +2261,7 @@ stratarec/
 │   └── StrataRec.Metrics.VictoriaMetrics/ # VictoriaMetrics 对数分桶（vmrange）指标导出（第 13.1 节）
 ├── control-plane/               # 发布控制器、manifest 校验、草稿服务的参考实现
 ├── schemas/                     # 各类产物的 JSON Schema，由 StrataRec.Artifacts 生成并提交
-├── samples/                     # 基于公开数据集（如 MovieLens）的端到端示例
+├── samples/                     # home_feed：演示全部功能的工作区；StrataRec.Samples.Host：在 ASP.NET Core 服务里嵌入引擎、四个扩展点各一个自定义组件
 └── tests/
     ├── UnitTests/
     ├── DifferentialTests/       # 联合计划 vs 逐组合朴素执行；向量化后端 vs 融合后端
