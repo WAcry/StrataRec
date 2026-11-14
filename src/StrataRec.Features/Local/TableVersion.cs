@@ -558,6 +558,25 @@ public sealed class TableVersion
         return record.Page is { } page && IsValid(page, record.Offset, field);
     }
 
+    /// <summary>
+    /// How many of <paramref name="records"/> exist and have a value for the field: what a read of their keys got from the
+    /// table (a source's missing ratio, design 13.1). Reads the validity bits only.
+    /// </summary>
+    internal int CountValues(int field, ReadOnlySpan<LocalRecordRef> records)
+    {
+        CheckField(field);
+        var count = 0;
+        foreach (ref readonly var record in records)
+        {
+            if (record.Page is { } page && IsValid(page, record.Offset, field))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
     /// <summary>The record's version: the event version (<c>local</c>) or the write time (<c>cache</c>).</summary>
     public long VersionOf(in LocalRecordRef record) => record.Page is { } page
         ? BinaryPrimitives.ReadInt64LittleEndian(page.AsSpan(record.Offset + RecordLayout.VersionOffset))

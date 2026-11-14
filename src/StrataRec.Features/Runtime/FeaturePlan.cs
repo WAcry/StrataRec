@@ -63,7 +63,32 @@ public sealed class FeatureRuntimeInfo
     internal KeyValuePair<string, object?>[] NonFiniteTags =>
         _nonFiniteTags ?? Interlocked.CompareExchange(ref _nonFiniteTags, [new(StrataRecTags.Column, Definition.Name)], null) ?? _nonFiniteTags!;
 
+    /// <summary>
+    /// Tags of <see cref="StrataRecMetrics.SourceValues"/> for this physical feature: its source, its name, and the
+    /// outcome. Built once per plan on first use, when a listener is enabled: a feature belongs to one fetch group, so
+    /// these are the tags of that group's field.
+    /// </summary>
+    internal SourceValueTags ValueTags =>
+        _valueTags ?? Interlocked.CompareExchange(ref _valueTags, new SourceValueTags(Definition.Source!, Definition.Name), null) ?? _valueTags!;
+
     private KeyValuePair<string, object?>[]? _nonFiniteTags;
+    private SourceValueTags? _valueTags;
+}
+
+/// <summary>The two tag sets of <see cref="StrataRecMetrics.SourceValues"/> for one feature of a source.</summary>
+internal sealed class SourceValueTags(string source, string feature)
+{
+    public KeyValuePair<string, object?>[] Present { get; } = Tags(source, feature, "present");
+
+    public KeyValuePair<string, object?>[] Missing { get; } = Tags(source, feature, "missing");
+
+    private static KeyValuePair<string, object?>[] Tags(string source, string feature, string outcome) =>
+    [
+        new(StrataRecTags.Source, source),
+        new(StrataRecTags.SourceKind, "feature"),
+        new(StrataRecTags.Feature, feature),
+        new(StrataRecTags.Outcome, outcome),
+    ];
 }
 
 /// <summary>

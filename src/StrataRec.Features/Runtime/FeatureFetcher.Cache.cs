@@ -97,6 +97,11 @@ public sealed partial class FeatureFetcher
             // Every key fresh (or no row has a key): a local read.
             Fill(group, features, version, batch.Rows, batch.RowRecords);
             cache.CountKeys(CacheTier.Local, CacheKeyOutcome.Hit, keyCount);
+            if (keyCount > 0 && CountsValues)
+            {
+                CountTableValues(group, features, version, batch.KeyRecords);
+            }
+
             if (keyCount > 0 && _hook is { Replays: false } recorder)
             {
                 RecordRead(recorder, group, features, version, batch, started);
@@ -162,6 +167,11 @@ public sealed partial class FeatureFetcher
         if (Freshness(cache, version, record, key, nowMs) == CacheFreshness.Fresh)
         {
             cache.CountKeys(CacheTier.Local, CacheKeyOutcome.Hit, 1);
+            if (CountsValues)
+            {
+                CountTableValues(group, features, version, new ReadOnlySpan<LocalRecordRef>(in record));
+            }
+
             StoreLocalContext(group, features, version, key, record, started);
             return null;
         }
@@ -731,6 +741,11 @@ public sealed partial class FeatureFetcher
         await read.Resolution.ConfigureAwait(false);
         var status = read.Status();
         RecordCacheRead(read, status);
+        if (CountsValues)
+        {
+            CountResolvedValues(read);
+        }
+
         var degraded = status.Outcome != FetchOutcome.Ok;
         var error = status.Error;
         if (!SettleKey(read.Group, read.Features, status.Outcome == FetchOutcome.Failed, ref degraded, ref error))
@@ -754,6 +769,11 @@ public sealed partial class FeatureFetcher
         await read.Resolution.ConfigureAwait(false);
         var status = read.Status();
         RecordCacheRead(read, status);
+        if (CountsValues)
+        {
+            CountResolvedValues(read);
+        }
+
         var partial = status.Outcome == FetchOutcome.Partial;
         foreach (var f in read.Features)
         {
@@ -768,6 +788,39 @@ public sealed partial class FeatureFetcher
             _state[f] = partial ? FeatureState.Degraded : FeatureState.Ok;
             _errors[f] = partial ? status.Error : null;
             StoreContext(info, read.ValueOf(read.Group.Supply.Table!.TableFields[info.FieldIndex], 0));
+        }
+    }
+
+    /// <summary>
+    /// Counts what the source had of the values a read with misses asked for (<see cref="StrataRecMetrics.SourceValues"/>),
+    /// once it has resolved: each key the read resolved, once per read feature — fresh in the table, or answered by the
+    /// distributed tier or the connector — present where its record has the field. A key served stale, or not at all,
+    /// was not resolved: the connector failed for it, which <see cref="StrataRecMetrics.SourceErrors"/> counts.
+    /// </summary>
+    private void CountResolvedValues(CacheRead read)
+    {
+        var tableFields = read.Group.Supply.Table!.TableFields;
+        foreach (var f in read.Features)
+        {
+            var info = _plan.Features[f];
+            var field = tableFields[info.FieldIndex];
+            int present = 0, resolved = 0;
+            for (var k = 0; k < read.KeyCount; k++)
+            {
+                var m = read.MissOf[k];
+                if (m < 0)
+                {
+                    resolved++;
+                    present += read.Version.HasValue(field, read.Records[k]) ? 1 : 0;
+                }
+                else if (read.Sources[m] is CacheSource.Distributed or CacheSource.Origin or CacheSource.OriginPartial)
+                {
+                    resolved++;
+                    present += CacheRecord.HasValue(read.Bytes[m].Span, field) ? 1 : 0;
+                }
+            }
+
+            CountValues(info, present, resolved - present);
         }
     }
 

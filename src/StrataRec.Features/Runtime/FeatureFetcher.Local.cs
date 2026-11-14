@@ -121,6 +121,11 @@ public sealed partial class FeatureFetcher
             if (batch.KeyRecords.Length > 0)
             {
                 CountKeys(local.Table, batch.Found, batch.KeyRecords.Length - batch.Found);
+                if (CountsValues)
+                {
+                    CountTableValues(group, features, version, batch.KeyRecords);
+                }
+
                 if (_hook is { Replays: false } recorder)
                 {
                     RecordRead(recorder, group, features, version, batch, started);
@@ -384,6 +389,11 @@ public sealed partial class FeatureFetcher
         }
 
         CountKeys(local.Table, record.Found ? 1 : 0, record.Found ? 0 : 1);
+        if (CountsValues)
+        {
+            CountTableValues(group, features, version, new ReadOnlySpan<LocalRecordRef>(in record));
+        }
+
         StoreLocalContext(group, features, version, key, record, started);
         return null;
     }
@@ -431,6 +441,22 @@ public sealed partial class FeatureFetcher
         if (misses > 0)
         {
             StrataRecMetrics.LocalKeys.Add(misses, table.MissTags);
+        }
+    }
+
+    /// <summary>
+    /// Counts what a table had of the values a read asked for (<see cref="StrataRecMetrics.SourceValues"/>): each distinct
+    /// key once per read feature, from the records of the read's single lookup (a key the table does not hold has none),
+    /// present where the record has the field.
+    /// </summary>
+    private void CountTableValues(FetchGroup group, ReadOnlySpan<int> features, TableVersion version, ReadOnlySpan<LocalRecordRef> keyRecords)
+    {
+        var tableFields = group.Supply.Table!.TableFields;
+        foreach (var f in features)
+        {
+            var info = _plan.Features[f];
+            var present = version.CountValues(tableFields[info.FieldIndex], keyRecords);
+            CountValues(info, present, keyRecords.Length - present);
         }
     }
 

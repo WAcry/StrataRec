@@ -97,6 +97,12 @@ internal static class CacheRecord
         return CacheRecordHeader.Ok;
     }
 
+    /// <summary>
+    /// Whether field <paramref name="field"/> of a record whose header was found <see cref="CacheRecordHeader.Ok"/> has a
+    /// value: its validity bit, which is what <see cref="Read"/> walks (an absent record has none set).
+    /// </summary>
+    public static bool HasValue(ReadOnlySpan<byte> record, int field) => (record[ValidityOffset + (field >> 3)] & (1 << (field & 7))) != 0;
+
     /// <summary>The write time of a record whose header was found <see cref="CacheRecordHeader.Ok"/>.</summary>
     public static long WrittenMs(ReadOnlySpan<byte> record) => BinaryPrimitives.ReadInt64LittleEndian(record[4..]);
 

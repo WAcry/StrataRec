@@ -45,6 +45,12 @@ public static class StrataRecTags
     /// distributed cache of a feature source bound with mode <c>cache</c>.</summary>
     public const string SourceKind = "stratarec.source.kind";
 
+    /// <summary>
+    /// Catalog name of a feature (with <see cref="Source"/>: what a source supplies, field by field). Bounded by the
+    /// catalog, as node ids are by the pipelines.
+    /// </summary>
+    public const string Feature = "stratarec.feature";
+
     /// <summary>Entity of a local feature table (with <see cref="Source"/>: one table per source and entity).</summary>
     public const string Entity = "stratarec.entity";
 
