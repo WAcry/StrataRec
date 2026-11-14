@@ -207,32 +207,51 @@ sequenceDiagram
 
 ### 3.4 宿主集成与引擎 API
 
-StrataRec 是一个库，传输层（HTTP、gRPC）、认证和线程模型由宿主服务决定。宿主调用一个方法：
+StrataRec 是一个库，传输层（HTTP、gRPC）、认证和线程模型由宿主服务决定。宿主调用一个方法执行请求，另外两个只读查询让传输层在构造请求之前不必依赖具体的引擎类：
 
 ```csharp
 public interface IRecEngine
 {
-    ValueTask<RecResult> ExecuteAsync(RecRequest request, CancellationToken cancellationToken);
+    ValueTask<RecResult> ExecuteAsync(RecRequest request, CancellationToken cancellationToken = default);
+    IReadOnlyList<string> PipelineIds();                                   // 当前服务的流水线
+    bool TryGetRequestSchema(string pipelineId, out RequestSchema? schema); // 读请求输入用
 }
 
 public sealed class RecRequest
 {
     public required string PipelineId { get; init; }
     public required string RequestId { get; init; }
-    public required RequestInputs Inputs { get; init; }   // 按 request_schema 校验的强类型输入
+    public required RequestInputs Inputs { get; init; }   // 按 request_schema 的强类型输入
     public IReadOnlyList<string>? Assignment { get; init; } // 实验平台分配的桶（experiment/arm）；null 时问 IAssignmentProvider，没有它就只跑基线；空列表表示平台没有分配桶
     public required TimeSpan Deadline { get; init; }
-    public DebugOptions? Debug { get; init; }             // trace、explain、回放捕获、草稿；由宿主授权
+    public DebugOptions? Debug { get; init; }             // trace、回放录制、强制桶；由宿主授权
 }
 
 public sealed class RecResult
 {
+    public required string RequestId { get; init; }
+    public required bool Succeeded { get; init; }
+    public RecErrorKind ErrorKind { get; init; }   // 失败是谁的：UnknownPipeline、InvalidRequest、DeadlineExceeded、Failed
+    public string? Error { get; init; }            // 给人看的原因
+    public string? ErrorPointer { get; init; }     // InvalidRequest 时出错输入的 JSON 指针，例如 /inputs/user_id
     public required IReadOnlyList<RankedItem> Items { get; init; }   // entity_id、名次和 output 声明的列
-    public required ExperimentRecord Experiments { get; init; }      // 分配的桶与触发的实验
-    public required string ManifestSha256 { get; init; }
-    public RequestTrace? Trace { get; init; }
+    public required ExperimentRecord Experiments { get; init; }      // 分配、触发和被忽略的桶
+    public required string ManifestId { get; init; }
+    public required string ServedBy { get; init; } // 请求的流水线，或者它的 fallback_pipeline
+    public IReadOnlyList<NodeOutcome>? Trace { get; init; }
 }
 ```
+
+失败都是结果，不是异常（只有调用方取消、引擎已释放和缺陷才抛出）。`ErrorKind` 让宿主不解析错误文本就能回答调用方，HTTP 宿主按它返回 404、400、504、500：
+
+| `ErrorKind` | 含义 | HTTP |
+| --- | --- | --- |
+| `UnknownPipeline` | 引擎不服务这个流水线，什么都没执行 | 404 |
+| `InvalidRequest` | 调用方的错：输入不符合 `request_schema`（`ErrorPointer` 指出是哪个），或强制的桶未知、冲突。在分配实验之前检查，不问实验平台，也不由后备流水线接手 | 400 |
+| `DeadlineExceeded` | 流水线开始之前截止时间就用完了（分配实验用掉了） | 504 |
+| `Failed` | 流水线执行失败，后备流水线也失败或没有：服务这一侧的错 | 500 |
+
+宿主从 JSON 读请求输入用 `RequestSchema.TryRead`：规则和措辞与引擎检查输入时一致，错误带 JSON 指针，重复的成员和不成对的代理转义也报出来。引擎执行时按它实际运行的计划再检查一次，以它的回答为准：宿主读输入之后换了发布，结果仍然是带指针的 `InvalidRequest`。结果用 `RecResultJson` 写成 JSON，CLI 的 `run` 输出同一个文档。`AddStrataRec` 在宿主开始监听之前加载工作区，配置有错误时服务启动不了，警告写进宿主的日志。带自定义组件的宿主用 `StrataRecCommandLine.InvokeAsync` 提供全部 `stratarec` 命令，校验和运行用的就是服务里的那些组件。
 
 流水线声明主键类型、它接受的请求输入和返回的列：
 
@@ -2244,6 +2263,7 @@ stratarec/
 │   ├── StrataRec.Logging/       # 漏斗组、探针编译、协调采样、异步管道、编码器、ILogSink
 │   ├── StrataRec.Artifacts/     # RFC 8785 规范化、JSON Schema 生成、产物存储与加载、manifest、能力匹配
 │   ├── StrataRec.Hosting/       # IRecEngine、调试选项、ASP.NET Core 集成（可选包）
+│   ├── StrataRec.CommandLine/   # stratarec 各命令做成的库，宿主二进制用自己的组件调用
 │   ├── StrataRec.Llm/           # 可选包：生成式与大模型类算子、Mustache 提示词渲染，核心包不依赖它
 │   ├── StrataRec.Redis/         # 可选包：redis@1，cache 供给方式的分布式层（基于 StackExchange.Redis），核心包不依赖它
 │   └── StrataRec.Cli/           # init、validate、build、run、diff、explain-plan、draft、replay、lint；引用两个可选包

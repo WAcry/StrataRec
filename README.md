@@ -52,7 +52,7 @@ dotnet run --project src/StrataRec.Cli -- run      -c my-feed -r my-feed/request
 dotnet run --project samples/StrataRec.Samples.Host                   # http://localhost:5000
 curl -s -X POST localhost:5000/recommend/trending_feed -H 'content-type: application/json' \
      -d @samples/StrataRec.Samples.Host/config/requests/user_1001.json
-dotnet run --project samples/StrataRec.Samples.Host -- validate       # 带自定义组件的工作区由宿主自己的二进制校验
+dotnet run --project samples/StrataRec.Samples.Host -- stratarec validate -c config   # 宿主自己的二进制带着自定义组件跑全部 stratarec 命令（-c 相对项目目录）
 ```
 
 ## 示例工作区
