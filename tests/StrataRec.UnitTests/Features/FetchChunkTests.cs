@@ -250,6 +250,36 @@ public class FetchChunkTests
         await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience, TestContext.Current.CancellationToken);
     }
 
+    [Fact]
+    public async Task AContextFetchNotSentBeforeTheCallerCancelled_IsNotSent_AndFailsAsCancelled()
+    {
+        // Review 49: the context fetches of a request are sent one after another; once one connector's synchronous part
+        // has seen the caller cancel, the next was still sent with a cancelled token.
+        using var caller = new CancellationTokenSource();
+        var first = new ScriptedConnector((keys, fields, writer, _) =>
+        {
+            caller.Cancel();
+            ScriptedConnector.WriteAll(keys, fields, writer, (_, _) => 1.0);
+            return ValueTask.FromResult(FetchStatus.Ok);
+        });
+        var second = ScriptedConnector.Values((_, _) => 2.0);
+        var rig = new FeatureTestRig().Source("a_user_store", first).Source("b_user_store", second);
+        var ctr = rig.Physical("user.ctr", FeatureTestRig.User, ColumnType.Float64, "a_user_store");
+        var tenure = rig.Physical("user.tenure", FeatureTestRig.User, ColumnType.Float64, "b_user_store");
+        rig.Build();
+        var hook = new FeatureCallHookTests.ListHook();
+        var request = rig.NewRequest([1], userId: 7, hook: hook);
+
+        request.Fetcher.StartContextFetch([ctr, tenure], caller.Token);
+        await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Single(first.Calls);
+        Assert.Empty(second.Calls);
+        var calls = hook.Recorded.OrderBy(c => c.Source).ToArray();
+        Assert.Equal(new[] { ("a_user_store", true), ("b_user_store", false) }, calls.Select(c => (c.Source, c.Sent)));
+        Assert.Equal(IoOutcome.Cancelled, calls[1].Outcome);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

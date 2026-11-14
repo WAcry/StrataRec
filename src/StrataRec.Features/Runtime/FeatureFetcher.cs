@@ -1200,8 +1200,20 @@ public sealed partial class FeatureFetcher
                     continue;
                 }
 
-                var staging = new StagingBuffer(fields, 1, _memory);
                 var cancellation = _hook is { Replays: true } ? null : new FetchCancellation(cancellationToken, budget, _events, _requestId);
+
+                // As a candidate chunk (FetchCandidates): a context fetch is not sent once the caller has cancelled, or its
+                // time is up (an earlier group's connector ran its synchronous part; review 49).
+                if (cancellation is not null && CutOff(cancellation, cancellationToken) is { } cut)
+                {
+                    cancellation.Release();
+                    var unsent = cut == IoOutcome.Cancelled ? Cancelled(group) : TimedOut(group, budget);
+                    fetches[fetchCount++] = new ContextFetch(features, null, new ValueTask<FetchStatus>(unsent));
+                    RecordUnsent(group, batch, fields, unsent, cut);
+                    continue;
+                }
+
+                var staging = new StagingBuffer(fields, 1, _memory);
                 ValueTask<FetchStatus> call;
                 try
                 {
