@@ -167,6 +167,21 @@ public sealed class GroupAggregateTests
         Assert.All(rows.Values, row => Assert.Equal((value, 0.0), (row["all_mean"].AsFloat64(), row["author_std"].AsFloat64())));
     }
 
+    [Theory]
+    [InlineData(1e308, -1e308)] // review 45: x − mean overflowed, where the mean is 0
+    [InlineData(-1e308, 1e308)]
+    public async Task TheMeanOfLargeValuesOfOppositeSigns_IsFinite(double first, double second)
+    {
+        (long, long?, string, double?, double)[] items = [(1, 1, "a", first, 0), (2, 1, "a", second, 0)];
+        var plan = TryCompileOver(items, ("agg", """
+            { "op": "GroupAggregate@1", "order": 200, "config": { "outputs": { "all.mean": { "fn": "mean", "value_col": "item.score" } } } }
+            """)).Plan!;
+
+        var rows = ById(await Run(plan));
+
+        Assert.All(rows.Values, row => Assert.Equal(0.0, row["all_mean"].AsFloat64()));
+    }
+
     [Fact]
     public async Task Std_OfValuesAtLargeAndSmallScales_IsThePopulationStd()
     {

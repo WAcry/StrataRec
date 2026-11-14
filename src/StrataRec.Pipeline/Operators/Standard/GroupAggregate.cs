@@ -315,14 +315,16 @@ public sealed class GroupAggregateFactory : IOperatorFactory
                     default:
                         // Welford's update, in row order: equal values leave the mean exactly the value and the squares 0
                         // (a mean from the sum is off by its rounding, and the deviations from it made a std of equal
-                        // values > 0, a z-score of ±1); a mean of large values does not overflow through their sum.
-                        var delta = x - totals[g];
-                        totals[g] += delta / k;
+                        // values > 0, a z-score of ±1). The step is x/k − mean/k, not (x − mean)/k: neither a sum nor the
+                        // difference of two large values of opposite signs overflows (review 45).
+                        var mean = totals[g];
+                        var next = mean + ((x / k) - (mean / k));
                         if (squares is not null)
                         {
-                            squares[g] += delta * (x - totals[g]);
+                            squares[g] += (x - mean) * (x - next);
                         }
 
+                        totals[g] = next;
                         break;
                 }
             }
@@ -337,7 +339,7 @@ public sealed class GroupAggregateFactory : IOperatorFactory
                     values[i] = output.Function switch
                     {
                         Function.Count => counts[g],
-                        Function.Std => Math.Sqrt(squares![g] / counts[g]),
+                        Function.Std => Math.Sqrt(Math.Max(0, squares![g] / counts[g])), // a rounding below 0 is 0
                         _ => totals[g],
                     };
                 }
