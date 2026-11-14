@@ -167,14 +167,15 @@ internal static class TimerFaultChild
         entered.Wait();
 
         var source = new ObservedCancellationSource(CancellationSite.Call);
+        var token = source.Token; // taken while the source is alive: its getter throws once the source is disposed
         var ran = 0;
-        source.Token.Register(() => Interlocked.Increment(ref ran));
+        token.Register(() => Interlocked.Increment(ref ran));
         var callbacks = source.CancelObservedAsync();
         var queued = !callbacks.IsCompleted;
         source.Dispose();
         release.Set();
         var done = callbacks.Wait(Patience);
-        var disposed = DisposedTokens.WaitUntilDisposed(source.Token, Patience);
+        var disposed = DisposedTokens.WaitUntilDisposed(token, Patience);
 
         Console.WriteLine($"single_worker={single}");
         Console.WriteLine($"queued={queued}");
