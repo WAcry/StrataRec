@@ -146,6 +146,93 @@ public sealed class PromptTemplateTests
             },
             compilation.Diagnostics.Where(d => d.IsError).Select(d => (d.Pointer, d.Code)));
     }
+
+    /// <summary>A per-row prompt (<c>LlmAnnotator@1</c>) names the row's values anywhere: no rows section, guards and lists as usual.</summary>
+    [Fact]
+    public async Task APerRowPrompt_RendersItsRowsValues_AtTheTopLevel()
+    {
+        var models = new TextModels("ok");
+        const string Template = "{{col.entity_id}}. {{col.item.title}} | {{col.item.price}} | {{col.item.score}} | {{col.item.stock}} | {{col.item.fresh}} | "
+            + "{{#col.item.blurb}}{{col.item.blurb}}{{/col.item.blurb}}{{^col.item.blurb}}no blurb{{/col.item.blurb}} | {{#col.item.tags}}#{{.}}{{/col.item.tags}} | "
+            + "{{#col.item.rating}}{{.}}★{{/col.item.rating}} | {{param.tone}}, {{ctx.request.query}}";
+
+        await Run(Compile(models, Annotate(Template, window: 4), op: "LlmAnnotator@1"));
+
+        Assert.Equal(
+            new[]
+            {
+                "10. Red \"shoes\" | 19.99 | 0.1 | 3 | true | Bright & bold | #red#shoe |  | friendly, gifts for \"dad\"",
+                "20. Blue hat | 5 | 0.25 | 0 | false | no blurb |  | 4.5★ | friendly, gifts for \"dad\"",
+                "30. Green\nscarf | 1E-07 | 3.4028235E+38 | -12 | true | Warm | #green | 0.1★ | friendly, gifts for \"dad\"",
+                "50. Mug | 0.30000000000000004 | -0.5 | 1 | true |  |  | -1.25★ | friendly, gifts for \"dad\"",
+            },
+            models.Calls.Select(c => c.Prompts["user"]).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>A per-request prompt (<c>GenerativeRetriever@1</c>) names request values only.</summary>
+    [Fact]
+    public async Task APerRequestPrompt_RendersTheRequestsValues()
+    {
+        var models = new TextModels("[]");
+        const string Template = "Query: {{ctx.request.query}} (budget {{ctx.request.budget}}, vip {{ctx.request.vip}}, tier {{ctx.user.tier}}, tone {{param.tone}})"
+            + "{{#ctx.user.name}} Hello {{ctx.user.name}}!{{/ctx.user.name}}{{^ctx.request.nickname}} No nickname.{{/ctx.request.nickname}} "
+            + "Interests:{{#ctx.request.interests}} {{.}}{{/ctx.request.interests}}";
+
+        await Run(Compile(models, Retrieve(Template), op: "GenerativeRetriever@1", columns: NullableRecallColumns));
+
+        Assert.Equal("Query: gifts for \"dad\" (budget 0.1, vip true, tier 2, tone friendly) Hello Ada! No nickname. Interests: tea lamps",
+            Assert.Single(models.Calls).Prompts["user"]);
+    }
+
+    /// <summary>A name only another scope has is a load error that says why; the usual rules hold in every scope.</summary>
+    [Theory]
+    [InlineData("LlmAnnotator@1", "{{#rows}}{{col.item.title}}{{/rows}}", 0, "MUSTACHE_SCOPE", "name the row's values directly")]
+    [InlineData("LlmAnnotator@1", "{{rows}}", 0, "MUSTACHE_SCOPE", "name the row's values directly")]
+    [InlineData("LlmAnnotator@1", "#{{rank}}", 1, "MUSTACHE_SCOPE", "leave it out: the prompt shows one row")]
+    [InlineData("LlmAnnotator@1", "{{#rank}}x{{/rank}}", 0, "MUSTACHE_SCOPE", "leave it out: the prompt shows one row")]
+    [InlineData("LlmAnnotator@1", "Rated {{col.item.rating}}", 6, "MUSTACHE_NULLABLE", "guard it")]
+    [InlineData("LlmAnnotator@1", "{{col.item.titel}}", 0, "MUSTACHE_UNKNOWN_NAME", "did you mean 'col.item.title'?")]
+    [InlineData("LlmAnnotator@1", "{{title}}", 0, "MUSTACHE_UNKNOWN_NAME", "a per-row template names col.* (the row's values), ctx.* and param.* references")]
+    [InlineData("LlmAnnotator@1", "{{col.item.emb}}", 0, "MUSTACHE_UNRENDERABLE", "render a derived feature")]
+    [InlineData("LlmAnnotator@1", " ", 0, "MUSTACHE_EMPTY", "why would this user like {{col.item.title}}")]
+    [InlineData("GenerativeRetriever@1", "For {{col.item.title}}", 4, "MUSTACHE_SCOPE", "render request values only: ctx.* and param.*")]
+    [InlineData("GenerativeRetriever@1", "{{col.item.titel}}", 0, "MUSTACHE_SCOPE", "render request values only: ctx.* and param.*")]
+    [InlineData("GenerativeRetriever@1", "{{#col.item.tags}}x{{/col.item.tags}}", 0, "MUSTACHE_SCOPE", "render request values only")]
+    [InlineData("GenerativeRetriever@1", "{{#rows}}x{{/rows}}", 0, "MUSTACHE_SCOPE", "render request values only")]
+    [InlineData("GenerativeRetriever@1", "{{rank}}", 0, "MUSTACHE_SCOPE", "render request values only")]
+    [InlineData("GenerativeRetriever@1", "{{ctx.user.name}}", 0, "MUSTACHE_NULLABLE", "guard it")]
+    [InlineData("GenerativeRetriever@1", "{{ctx.request.qeury}}", 0, "MUSTACHE_UNKNOWN_NAME", "did you mean 'ctx.request.query'?")]
+    [InlineData("GenerativeRetriever@1", "{{title}}", 0, "MUSTACHE_UNKNOWN_NAME", "a per-request template names ctx.* and param.* references")]
+    [InlineData("GenerativeRetriever@1", " ", 0, "MUSTACHE_EMPTY", "as a JSON array of ids")]
+    public void ANameTheScopeDoesNotHave_IsALoadError_AtItsPointer_WithTheOffset_AndAHint(string op, string template, int offset, string code, string hint)
+    {
+        var config = op == "LlmAnnotator@1" ? Annotate(template) : Retrieve(template);
+
+        var error = Error(TryCompile(new TextModels("[]"), config, op, columns: NullableRecallColumns));
+
+        Assert.Equal((Pointer, code), (error.Pointer, error.Code));
+        if (code != "MUSTACHE_EMPTY")
+        {
+            Assert.EndsWith($"(at offset {offset} of the template)", error.Message);
+        }
+
+        Assert.Contains(hint, error.Hint);
+    }
+
+    [Theory]
+    [InlineData("LlmAnnotator@1", "{{#rows}}x{{/rows}}", "{{#rows}}: LlmAnnotator@1 renders this prompt once per row, so there is no 'rows' section.")]
+    [InlineData("LlmAnnotator@1", "{{rank}}", "{{rank}}: 'rank' is a row's position in a window, but LlmAnnotator@1 renders this prompt for one row, with no window.")]
+    [InlineData("GenerativeRetriever@1", "{{col.item.title}}",
+        "{{col.item.title}}: 'col.item.title' is a column, which has a value per row, but GenerativeRetriever@1 renders this prompt once per request, for no row.")]
+    [InlineData("GenerativeRetriever@1", "{{#rows}}x{{/rows}}", "{{#rows}}: GenerativeRetriever@1 renders this prompt once per request, for no rows, so there is no 'rows'.")]
+    public void AScopeError_SaysWhyTheNameIsNotThere(string op, string template, string message)
+    {
+        var config = op == "LlmAnnotator@1" ? Annotate(template) : Retrieve(template);
+
+        var error = Error(TryCompile(new TextModels("[]"), config, op, columns: NullableRecallColumns));
+
+        Assert.Equal(message + " (at offset 0 of the template)", error.Message);
+    }
 }
 
 /// <summary>

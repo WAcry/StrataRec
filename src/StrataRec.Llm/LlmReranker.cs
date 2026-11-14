@@ -97,13 +97,8 @@ public sealed class LlmRerankerFactory : IOperatorFactory
             ok = false;
         }
 
-        if (config.MaxOutputTokens < 1)
-        {
-            context.Error("/max_output_tokens", "LLM_MAX_OUTPUT_TOKENS", $"max_output_tokens is {config.MaxOutputTokens}, but it must be at least 1.",
-                "the answer lists up to 'window' ranks or ids, so allow a few tokens per row (the default is 256)");
-            ok = false;
-        }
-
+        ok &= LlmNode.CheckMaxOutputTokens(context, config.MaxOutputTokens,
+            "the answer lists up to 'window' ranks or ids, so allow a few tokens per row (the default is 256)");
         AnswerKind answer = default;
         switch (config.Answer)
         {
@@ -135,20 +130,10 @@ public sealed class LlmRerankerFactory : IOperatorFactory
                 break;
         }
 
-        if (string.IsNullOrEmpty(config.Output))
-        {
-            context.Error("/output", "MODEL_OUTPUT", $"{Descriptor.Id} needs 'output': the name of the model's text output holding the answer.",
-                "set \"output\" to a text output name of the model's signature");
-            ok = false;
-        }
-
-        var prompts = CompilePrompts(context, config.Prompts, ref ok);
-        if (!ok)
-        {
-            return null;
-        }
-
-        if (!CheckSignatures(context, model, prompts, config.Output))
+        ok &= LlmNode.CheckOutput(context, config.Output);
+        var prompts = LlmNode.CompilePrompts(context, config.Prompts, PromptScope.Window,
+            "{ \"user\": \"Rank:\\n{{#rows}}{{rank}}. {{col.item.title}}\\n{{/rows}}\" }", ref ok);
+        if (!ok || !LlmNode.CheckSignatures(context, model, prompts, config.Output))
         {
             return null;
         }
@@ -156,72 +141,13 @@ public sealed class LlmRerankerFactory : IOperatorFactory
         return new LlmReranker(model, prompts, config.Output, config.Window, answer, drop, config.MaxOutputTokens);
     }
 
-    /// <summary>Every prompt, in ordinal order of the input names (the order the call sends them).</summary>
-    private static (string Name, PromptTemplate Template)[] CompilePrompts(OperatorCompileContext context, Dictionary<string, string>? prompts, ref bool ok)
-    {
-        if (prompts is null || prompts.Count == 0)
-        {
-            context.Error("/prompts", "LLM_PROMPTS", "'prompts' is empty: the model needs at least one prompt.",
-                "map each text input of the model to a Mustache template, e.g. \"prompts\": { \"user\": \"Rank:\\n{{#rows}}{{rank}}. {{col.item.title}}\\n{{/rows}}\" }");
-            ok = false;
-            return [];
-        }
-
-        var names = new List<string>(prompts.Keys);
-        names.Sort(StringComparer.Ordinal);
-        var compiled = new (string Name, PromptTemplate Template)[names.Count];
-        for (var i = 0; i < names.Count; i++)
-        {
-            var template = PromptTemplate.Compile(context, prompts[names[i]], TextSignature.PromptKey(names[i]));
-            if (template is null)
-            {
-                ok = false;
-                continue;
-            }
-
-            compiled[i] = (names[i], template);
-        }
-
-        return compiled;
-    }
-
-    /// <summary>Checks every version a request may call; false after reporting a mismatch.</summary>
-    private bool CheckSignatures(OperatorCompileContext context, BoundModel model, (string Name, PromptTemplate Template)[] prompts, string output)
-    {
-        var inputs = new (string Name, string ConfigKey)[prompts.Length];
-        for (var i = 0; i < prompts.Length; i++)
-        {
-            inputs[i] = (prompts[i].Name, TextSignature.PromptKey(prompts[i].Name));
-        }
-
-        (string Name, string ConfigKey)[] outputs = [(output, "/output")];
-        var ok = true;
-        foreach (var version in model.Versions)
-        {
-            // Null when it cannot be checked now: an error (reported), or the engine checks it at load.
-            if (model.Signature(context, version) is not { } signature)
-            {
-                ok &= !context.HasErrors;
-                continue;
-            }
-
-            foreach (var problem in TextSignature.Check(model.Describe(version), Descriptor.Id, inputs, outputs, signature))
-            {
-                context.Error(problem.ConfigKey, problem.Code, problem.Message, problem.Hint);
-                ok = false;
-            }
-        }
-
-        return ok;
-    }
-
     private sealed class LlmReranker(
         BoundModel model, (string Name, PromptTemplate Template)[] prompts, string output, int window, AnswerKind answer, bool drop, int maxOutputTokens)
         : Operator
     {
-        private readonly KeyValuePair<string, object?>[] _used = Tags(model, "used");
-        private readonly KeyValuePair<string, object?>[] _unknown = Tags(model, "unknown");
-        private readonly KeyValuePair<string, object?>[] _repeated = Tags(model, "repeated");
+        private readonly KeyValuePair<string, object?>[] _used = LlmNode.Tags(model, "used");
+        private readonly KeyValuePair<string, object?>[] _unknown = LlmNode.Tags(model, "unknown");
+        private readonly KeyValuePair<string, object?>[] _repeated = LlmNode.Tags(model, "repeated");
 
         public override IoTarget ModelTarget => model.Target;
 
@@ -314,40 +240,14 @@ public sealed class LlmRerankerFactory : IOperatorFactory
             : "entity ids of the window's rows";
 
         /// <summary>The hint for an answer the client says it cut at the limit; empty otherwise.</summary>
-        private string Cut(in ModelStatus status) => status.Truncated
-            ? $"; the answer was cut at max_output_tokens ({maxOutputTokens.ToString(CultureInfo.InvariantCulture)}): raise max_output_tokens or shorten the window"
-            : string.Empty;
+        private string Cut(in ModelStatus status) => LlmNode.Cut(status, maxOutputTokens, "shorten the window");
 
         private void Count(OperatorContext context, in AnswerCounts counts)
         {
             var ids = StrataRecMetrics.ModelAnswerIds;
-            if (!ids.Enabled || context.Replays)
-            {
-                return;
-            }
-
-            if (counts.Used > 0)
-            {
-                ids.Add(counts.Used, _used);
-            }
-
-            if (counts.Unknown > 0)
-            {
-                ids.Add(counts.Unknown, _unknown);
-            }
-
-            if (counts.Repeated > 0)
-            {
-                ids.Add(counts.Repeated, _repeated);
-            }
-        }
-
-        private static KeyValuePair<string, object?>[] Tags(BoundModel model, string outcome)
-        {
-            var tags = new KeyValuePair<string, object?>[model.Target.Tags.Length + 1];
-            model.Target.Tags.CopyTo(tags, 0);
-            tags[^1] = new(StrataRecTags.Outcome, outcome);
-            return tags;
+            LlmNode.Count(ids, context, counts.Used, _used);
+            LlmNode.Count(ids, context, counts.Unknown, _unknown);
+            LlmNode.Count(ids, context, counts.Repeated, _repeated);
         }
     }
 }
@@ -356,12 +256,13 @@ public sealed class LlmRerankerFactory : IOperatorFactory
 public static class LlmRegistration
 {
     /// <summary>
-    /// Adds the generative operators (<c>LlmReranker@1</c>) to the operators a host's plans may use; their stand-in model
-    /// client <c>fixed_text@1</c> is in the default model client registry already.
+    /// Adds the generative operators (<c>LlmReranker@1</c>, <c>LlmAnnotator@1</c>, <c>GenerativeRetriever@1</c>) to the
+    /// operators a host's plans may use; their stand-in model client <c>fixed_text@1</c> is in the default model client
+    /// registry already.
     /// </summary>
     public static OperatorRegistry AddLlm(this OperatorRegistry registry)
     {
         ArgumentNullException.ThrowIfNull(registry);
-        return registry.Add(new LlmRerankerFactory());
+        return registry.Add(new LlmRerankerFactory()).Add(new LlmAnnotatorFactory()).Add(new GenerativeRetrieverFactory());
     }
 }

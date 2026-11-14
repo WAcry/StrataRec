@@ -69,7 +69,8 @@ public sealed class BoundModel
         {
             if (version is not null)
             {
-                context.Error("/version", "MODEL_VERSION", "Set at most one of 'version' and 'version_param'.");
+                context.Error("/version", "MODEL_VERSION", "Set at most one of 'version' and 'version_param'.",
+                    "keep 'version' to call one version, or 'version_param' to let a parameter choose it per request");
                 return null;
             }
 
