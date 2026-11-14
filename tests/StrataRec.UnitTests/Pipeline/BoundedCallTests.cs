@@ -5,6 +5,7 @@ using StrataRec.Core.Memory;
 using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Sources;
 using StrataRec.UnitTests.Features;
+using StrataRec.UnitTests.Core;
 
 namespace StrataRec.UnitTests.Pipeline;
 
@@ -54,7 +55,7 @@ public sealed class BoundedCallTests
 
         gate.Set();
         Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
-        Assert.Throws<ObjectDisposedException>(() => client.WaitHandle); // disposed once the client completed
+        DisposedTokens.AssertEventuallyDisposed(client); // disposed once the client completed
         Assert.Single(site.Recorded); // nothing is recorded when the abandoned client answers
     }
 
@@ -83,7 +84,7 @@ public sealed class BoundedCallTests
         Assert.Equal(1, memory.Release());
         gate.Set();
         Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
-        Assert.Throws<ObjectDisposedException>(() => client.WaitHandle);
+        DisposedTokens.AssertEventuallyDisposed(client);
     }
 
     [Fact]
@@ -354,8 +355,8 @@ public sealed class BoundedCallTests
         Assert.Equal((CallEnd.Answered, value, outcome, error, false), (result.End, result.Value, result.Outcome, result.Error, result.Abandoned));
         Assert.True(Assert.Single(site.Recorded).MemoryLive);
         budget.Release();
-        Assert.Throws<ObjectDisposedException>(() => client.WaitHandle); // the call's own token source is gone already
-        Assert.Throws<ObjectDisposedException>(() => budget.Token.WaitHandle);
+        DisposedTokens.AssertEventuallyDisposed(client); // the call's own token source is gone already
+        DisposedTokens.AssertEventuallyDisposed(budget.Token);
         Assert.Equal(0, memory.Release()); // nothing holds the memory but the request
     }
 

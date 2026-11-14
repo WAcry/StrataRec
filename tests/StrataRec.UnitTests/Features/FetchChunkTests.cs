@@ -5,6 +5,7 @@ using StrataRec.Core.Memory;
 using StrataRec.Core.Types;
 using StrataRec.Features.Connectors;
 using StrataRec.Features.Runtime;
+using StrataRec.UnitTests.Core;
 
 namespace StrataRec.UnitTests.Features;
 
@@ -65,7 +66,7 @@ public class FetchChunkTests
         late.SetResult();
         await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience);
 
-        Assert.Throws<ObjectDisposedException>(() => token.WaitHandle);
+        DisposedTokens.AssertEventuallyDisposed(token);
     }
 
     [Theory]
