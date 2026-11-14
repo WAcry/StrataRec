@@ -11,7 +11,7 @@ namespace StrataRec.Features.Runtime;
 /// <param name="Batch">The keys; valid only during <see cref="IFeatureCallHook.Record"/> (they live in pooled buffers).</param>
 /// <param name="Fields">Requested fields; staging field i is <c>Fields[i]</c>.</param>
 /// <param name="Sequence">Start order within the request, from <see cref="IFeatureCallHook.Begin"/>.</param>
-/// <param name="Sent">False when the request had no time left to send the call at all.</param>
+/// <param name="Sent">False when the call was not sent: the fetch had no time left, or the caller had cancelled, before it.</param>
 /// <param name="Status">What the request did with the call (a timeout is a failed status).</param>
 /// <param name="Outcome">How the call ended, as metrics see it.</param>
 /// <param name="Duration">Time from start until the request stopped waiting.</param>

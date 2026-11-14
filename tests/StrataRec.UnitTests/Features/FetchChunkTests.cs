@@ -178,20 +178,18 @@ public class FetchChunkTests
         Assert.True(SpinWait.SpinUntil(() => request.Memory.IsReturned, Patience));
     }
 
-    [Fact]
-    public async Task AChunkSentAfterTheBudgetRanOut_GetsNoFreshBudget()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ChunksNotSentBeforeTheBudgetRanOut_AreNotSent_AndFailAsTimeouts(bool cached)
     {
-        // The first chunk answers synchronously, but only once the fetch's budget has run out; the second never answers.
-        // The budget is the fetch's, counted from its start, so the second chunk's wait times out at once. The first is a
-        // timeout too: its answer is observed after the deadline (FetchObservationTests).
-        var never = new TaskCompletionSource<FetchStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // The first chunk answers synchronously, but only once the fetch's budget has run out. The fetch has control back
+        // then: the other chunks are not sent (external review: each was sent with no time left, its synchronous part
+        // run in turn), and fail as timeouts. Recorded as not sent, a replay fails them alike without a connector.
+        var sent = new ConcurrentQueue<long>();
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
-            if (keys.CandidateKeys.Span[0].Int64Value == 2)
-            {
-                return new ValueTask<FetchStatus>(never.Task);
-            }
-
+            sent.Enqueue(keys.CandidateKeys.Span[0].Int64Value);
             var clock = Stopwatch.StartNew();
             while (clock.ElapsedMilliseconds < 150)
             {
@@ -201,21 +199,54 @@ public class FetchChunkTests
             ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 2.0);
             return ValueTask.FromResult(FetchStatus.Ok);
         });
-        var rig = new FeatureTestRig().Source("item_store", connector, timeoutMs: 100, maxBatch: 1);
+        var rig = cached
+            ? new FeatureTestRig().CacheSource("item_store", connector, timeoutMs: 100, maxBatch: 1)
+            : new FeatureTestRig().Source("item_store", connector, timeoutMs: 100, maxBatch: 1);
         var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
         rig.Build();
         var hook = new FeatureCallHookTests.ListHook();
-        var request = rig.NewRequest(new long[] { 1, 2 }, deadlineMs: 600_000, hook: hook);
+        var request = rig.NewRequest(new long[] { 1, 2, 3, 4, 5 }, deadlineMs: 600_000, hook: hook);
 
-        var ensure = request.EnsureAsync(score);
+        var result = await request.EnsureAsync(score).AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
 
-        Assert.True(ensure.IsCompleted); // no wait at all, rather than another 100 ms
-        var result = await ensure;
-        Assert.Equal(FeatureState.Failed, result.State); // neither chunk answered within the budget
+        Assert.Equal(FeatureState.Failed, result.State);
+        Assert.Single(sent);
+        if (!cached) // a cache's origin fetch records the read, not each call
+        {
+            var calls = hook.Recorded.OrderBy(c => c.Keys[0]).ToArray();
+            Assert.Equal(new[] { true, false, false, false, false }, calls.Select(c => c.Sent));
+            Assert.All(calls, c => Assert.Equal(IoOutcome.Timeout, c.Outcome));
+            Assert.All(calls, c => Assert.Contains("timed out after 100 ms", c.Status.Error));
+        }
+
+        await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task ChunksNotSentBeforeTheCallerCancelled_AreNotSent_AndFailAsCancelled()
+    {
+        using var caller = new CancellationTokenSource();
+        var sent = 0;
+        var connector = new ScriptedConnector((keys, fields, writer, _) =>
+        {
+            Interlocked.Increment(ref sent);
+            caller.Cancel(); // while the first chunk's synchronous part runs
+            ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 2.0);
+            return ValueTask.FromResult(FetchStatus.Ok);
+        });
+        var rig = new FeatureTestRig().Source("item_store", connector, timeoutMs: 600_000, maxBatch: 1);
+        var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+        var hook = new FeatureCallHookTests.ListHook();
+        var request = rig.NewRequest(new long[] { 1, 2, 3 }, deadlineMs: 600_000, hook: hook);
+
+        var result = await request.Fetcher.EnsureAsync(new[] { score }, caller.Token).AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.True(result.Failed);
+        Assert.Equal(1, sent);
         var calls = hook.Recorded.OrderBy(c => c.Keys[0]).ToArray();
-        Assert.Equal(new[] { IoOutcome.Timeout, IoOutcome.Timeout }, calls.Select(c => c.Outcome));
-        Assert.All(calls, c => Assert.Contains("timed out after 100 ms", c.Status.Error));
-        never.SetResult(FetchStatus.Ok);
+        Assert.Equal(new[] { true, false, false }, calls.Select(c => c.Sent));
+        Assert.All(calls, c => Assert.Equal(IoOutcome.Cancelled, c.Outcome));
         await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience, TestContext.Current.CancellationToken);
     }
 

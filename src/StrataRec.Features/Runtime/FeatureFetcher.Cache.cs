@@ -534,6 +534,14 @@ public sealed partial class FeatureFetcher
         StagingBuffer? writer = null;
         for (var c = 0; c < chunks; c++)
         {
+            // As a plain fetch's (FetchCandidates): once the time is up or the caller has cancelled, the chunks not sent
+            // yet are not sent; their keys stay unanswered.
+            if (CutOff(cancellation, cancellationToken) is { } cut)
+            {
+                calls[c] = new ValueTask<FetchStatus>(cut == IoOutcome.Cancelled ? Cancelled(group) : TimedOut(group, read.BudgetMs));
+                continue;
+            }
+
             var offset = c * chunkSize;
             var batch = read.IsContext
                 ? new EntityKeyBatch { Shape = group.Shape, ContextKey = keys[0] }

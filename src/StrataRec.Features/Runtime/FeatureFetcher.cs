@@ -495,7 +495,8 @@ public sealed partial class FeatureFetcher
             for (var c = 0; c < chunkCount; c++)
             {
                 calls[c] = new ValueTask<FetchStatus>(NoTimeLeft);
-                RecordUnsent(group, new EntityKeyBatch { Shape = group.Shape, ContextKey = contextKey, CandidateKeys = ChunkKeys(all, keyCount, chunkSize, c) }, fields);
+                RecordUnsent(group, new EntityKeyBatch { Shape = group.Shape, ContextKey = contextKey, CandidateKeys = ChunkKeys(all, keyCount, chunkSize, c) }, fields,
+                    NoTimeLeft, IoOutcome.Timeout);
             }
 
             return new PendingFetch(group, features, index, chunkSize, chunkCount, null, calls, chunkFailed, noContextKey);
@@ -509,6 +510,19 @@ public sealed partial class FeatureFetcher
             for (var c = 0; c < chunkCount; c++)
             {
                 var batch = new EntityKeyBatch { Shape = group.Shape, ContextKey = contextKey, CandidateKeys = ChunkKeys(all, keyCount, chunkSize, c) };
+
+                // A connector's synchronous part runs here, unbounded (see IFeatureSourceConnector.FetchAsync): once the
+                // fetch's time is up or the caller has cancelled, the chunks not sent yet are not sent (external review:
+                // each was sent with no time left, its synchronous part run in turn). They fail as a late answer would,
+                // recorded as not sent, so a replay fails them alike without a connector or a clock.
+                if (cancellation is not null && CutOff(cancellation, cancellationToken) is { } cut)
+                {
+                    var unsent = cut == IoOutcome.Cancelled ? Cancelled(group) : TimedOut(group, budget);
+                    calls[c] = new ValueTask<FetchStatus>(unsent);
+                    RecordUnsent(group, batch, fields, unsent, cut);
+                    continue;
+                }
+
                 writer ??= new StagingBuffer(staging);
                 writer.Bind(c);
                 calls[c] = CallAsync(group, batch, fields, writer, budget, cancellation, cancellationToken, out var writerHeld);
@@ -568,14 +582,24 @@ public sealed partial class FeatureFetcher
         return ConnectorCall(group, batch, fields, writer, budgetMs, _hook.Begin(group, batch, fields), cancellation!, cancellationToken, out writerHeld);
     }
 
-    /// <summary>Records a chunk the request had no time left to send, so a replay fails it the same way.</summary>
-    private void RecordUnsent(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields)
+    /// <summary>Records a chunk the request had no time left to send (or was cancelled before), so a replay fails it the same way.</summary>
+    private void RecordUnsent(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, FetchStatus status, IoOutcome outcome)
     {
         if (_hook is { Replays: false } recorder)
         {
-            recorder.Record(new FeatureCallInfo(group, batch, fields, recorder.Begin(group, batch, fields), false, NoTimeLeft, IoOutcome.Timeout, TimeSpan.Zero), null);
+            recorder.Record(new FeatureCallInfo(group, batch, fields, recorder.Begin(group, batch, fields), false, status, outcome, TimeSpan.Zero), null);
         }
     }
+
+    /// <summary>
+    /// How a call that can no longer count ends, or null while it can: cancelled once the caller has cancelled; timed out
+    /// once the fetch's deadline has passed or its timer has cancelled the connectors' token (a timer may fire slightly
+    /// before the clock reaches the deadline). The one rule for an answer observed and for a chunk not sent yet.
+    /// </summary>
+    private static IoOutcome? CutOff(FetchCancellation cancellation, CancellationToken cancellationToken) =>
+        cancellationToken.IsCancellationRequested ? IoOutcome.Cancelled
+        : Stopwatch.GetTimestamp() >= cancellation.DeadlineTimestamp || cancellation.Token.IsCancellationRequested ? IoOutcome.Timeout
+        : null;
 
     /// <summary>
     /// Sends one call. A connector that answers synchronously is recorded and released here, with nothing allocated;
@@ -692,9 +716,7 @@ public sealed partial class FeatureFetcher
         in IoCall io, FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, StagingBuffer writer, int budgetMs, int sequence,
         ValueTask<FetchStatus> completed, FetchCancellation cancellation, CancellationToken cancellationToken)
     {
-        IoOutcome? cutOff = cancellationToken.IsCancellationRequested ? IoOutcome.Cancelled
-            : Stopwatch.GetTimestamp() >= cancellation.DeadlineTimestamp || cancellation.Token.IsCancellationRequested ? IoOutcome.Timeout
-            : null;
+        var cutOff = CutOff(cancellation, cancellationToken);
         FetchStatus status;
         IoOutcome? outcome = null;
         try
@@ -1174,7 +1196,7 @@ public sealed partial class FeatureFetcher
                 if (budget <= 0)
                 {
                     fetches[fetchCount++] = new ContextFetch(features, null, new ValueTask<FetchStatus>(NoTimeLeft));
-                    RecordUnsent(group, batch, fields);
+                    RecordUnsent(group, batch, fields, NoTimeLeft, IoOutcome.Timeout);
                     continue;
                 }
 
