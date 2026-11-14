@@ -38,6 +38,47 @@ public sealed class FileSystemManifestSource : IManifestSource
     public string GetPointerPath(string pipelineId, string environment) =>
         Path.Combine(Root, "pointers", Segment(environment, nameof(environment)), Segment(pipelineId, nameof(pipelineId)) + ".json");
 
+    /// <summary>
+    /// The (pipeline, environment) of every pointer file under the root, sorted by environment, then pipeline (ordinal).
+    /// What is listed is a file name a pointer can have; whether its content is a valid pointer is
+    /// <see cref="GetManifestIdAsync"/>'s to say. Lock and temporary files, and anything else whose name starts with a dot,
+    /// are skipped.
+    /// </summary>
+    public IReadOnlyList<(string PipelineId, string Environment)> ListPointers()
+    {
+        var pointers = new List<(string PipelineId, string Environment)>();
+        var directory = Path.Combine(Root, "pointers");
+        if (!Directory.Exists(directory))
+        {
+            return pointers;
+        }
+
+        foreach (var environmentDirectory in Directory.EnumerateDirectories(directory))
+        {
+            var environment = Path.GetFileName(environmentDirectory);
+            if (environment.StartsWith('.'))
+            {
+                continue;
+            }
+
+            foreach (var file in Directory.EnumerateFiles(environmentDirectory, "*.json"))
+            {
+                var name = Path.GetFileName(file);
+                if (!name.StartsWith('.'))
+                {
+                    pointers.Add((name[..^".json".Length], environment));
+                }
+            }
+        }
+
+        pointers.Sort(static (a, b) =>
+        {
+            var byEnvironment = string.CompareOrdinal(a.Environment, b.Environment);
+            return byEnvironment != 0 ? byEnvironment : string.CompareOrdinal(a.PipelineId, b.PipelineId);
+        });
+        return pointers;
+    }
+
     /// <inheritdoc/>
     /// <exception cref="InvalidDataException">The pointer file is not a valid pointer; the message names the file.</exception>
     public async ValueTask<string?> GetManifestIdAsync(string pipelineId, string environment, CancellationToken cancellationToken)

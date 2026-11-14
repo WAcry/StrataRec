@@ -24,6 +24,7 @@ dotnet run --project src/StrataRec.Cli -- diff         --from <旧工作区或 m
 dotnet run --project src/StrataRec.Cli -- build        -c samples/home_feed -s store   # 产物按哈希写进 store；加载这份 manifest 的节点录制的包，replay -s store 就在录制时的 manifest 上回放（在工作区上录制的包仍用 -c）
 dotnet run --project src/StrataRec.Cli -- publish      -s store <manifest id 或文件>   # 让 store 里的指针指向它（seq 必须更大）；设置了 Releases 的服务节点会加载它
 dotnet run --project src/StrataRec.Cli -- revoke       -s store -p home_feed exp_mmr_diversity   # 紧急停止：立即发布去掉这个实验的 manifest，并撤销之前所有的 manifest
+dotnet run --project src/StrataRec.Cli -- status       -s store   # store 发布的内容：每条流水线、每个环境的 manifest、实验和正在生效的停止
 dotnet run --project src/StrataRec.Cli -- schema pipeline          # 各类产物的 JSON Schema；schema --out <工作区>/schemas 写进工作区，供编辑器使用
 dotnet run --project src/StrataRec.Cli -- operators                # 算子及其声明的效果
 ```

@@ -9,8 +9,8 @@ namespace StrataRec.IntegrationTests;
 
 /// <summary>
 /// <c>stratarec revoke</c>, the emergency stop of design 10.6, on builds of the home_feed sample: what is published, at
-/// once, without the experiment, as a revocation nodes serve and that refuses every earlier manifest; and <c>build</c>
-/// keeping the stopped experiment out of the releases that follow.
+/// once, without the experiment, as a revocation nodes serve and that refuses every earlier manifest; <c>build</c>
+/// keeping the stopped experiment out of the releases that follow; and <c>status</c> showing the stops in force.
 /// </summary>
 public sealed class RevokeCommandTests
 {
@@ -160,6 +160,62 @@ public sealed class RevokeCommandTests
         File.WriteAllText(releaseFile, withIt);
         (code, errors) = await Build(root, store);
         Assert.True(code == 0, errors);
+    }
+
+    /// <summary>
+    /// <c>status</c> shows what nodes will load from the store, and the stops in force; a pointer that cannot be read is
+    /// reported, and the other pointers are still listed.
+    /// </summary>
+    [Fact]
+    public async Task Status_ShowsWhatTheStorePublishes_AndTheStopsInForce()
+    {
+        var root = ManifestStores.Workspace();
+        var store = ManifestStores.NewStore();
+        var (code, output, errors) = await Status(store);
+        Assert.True(code == 0, errors);
+        Assert.Equal($"nothing is published in {store}\n", output.ReplaceLineEndings("\n"));
+
+        var first = await BuildAndPublishAsync(root, store);
+        Assert.Equal(0, (await Revoke(store, "exp_mmr_diversity")).Code);
+        var revocation = await Pointer(store);
+        var pointers = new FileSystemManifestSource(store);
+        await pointers.WritePointerAsync("home_feed", "prod", first); // another environment, and one pointer that cannot be read
+        await pointers.WritePointerAsync("other_feed", "prod", first);
+
+        (code, output, errors) = await Status(store);
+        Assert.Equal(1, code);
+        Assert.Contains("error MANIFEST_OTHER_PIPELINE", errors);
+        Assert.Contains($"error POINTER_MANIFEST_FOREIGN {pointers.GetPointerPath("other_feed", "prod")}", errors);
+        Assert.Contains("error MANIFEST_OTHER_ENVIRONMENT", errors); // home_feed's prod pointer names the local manifest
+        Assert.Equal(
+            $"home_feed (local): {revocation}\n" +
+            "  seq          2, min_accepted_seq 2: a revocation, nodes refuse every earlier manifest\n" +
+            $"  previous     {first}\n" +
+            "  experiments  exp_freshness_calibration (layer fusion), exp_quality_weight (layer params)\n" +
+            "  revoked      exp_mmr_diversity (by seq 2): 'stratarec build' keeps them out until they change\n" +
+            $"  pointer      {pointers.GetPointerPath("home_feed", "local")}\n",
+            output.ReplaceLineEndings("\n"));
+
+        (code, output, errors) = await Status(store, "-e", "local", "-f", "json");
+        Assert.True(code == 0, errors);
+        using var document = System.Text.Json.JsonDocument.Parse(output);
+        var published = Assert.Single(document.RootElement.GetProperty("published").EnumerateArray());
+        Assert.True(published.GetProperty("revocation").GetBoolean());
+        var revoked = Assert.Single(published.GetProperty("revoked").EnumerateArray());
+        Assert.Equal(("exp_mmr_diversity", revocation), (revoked.GetProperty("experiment").GetString(), revoked.GetProperty("manifest").GetString()));
+        Assert.Equal("rerank", (await ReadAsync(new FileSystemArtifactStore(store), first)).Experiments["exp_mmr_diversity"].Layer);
+
+        (code, _, errors) = await Status(Path.Combine(store, "missing"));
+        Assert.Equal(2, code);
+        Assert.Contains("error STORE_NOT_FOUND --store", errors);
+    }
+
+    private static async Task<(int Code, string Output, string Errors)> Status(string store, params string[] options)
+    {
+        var output = new StringWriter();
+        var errors = new StringWriter();
+        var code = await StrataRecCommandLine.InvokeAsync(["status", "-s", store, .. options], Tool.Environment, output, errors);
+        return (code, output.ToString(), errors.ToString());
     }
 
     private static async Task<string> BuildAndPublishAsync(string root, string store)
