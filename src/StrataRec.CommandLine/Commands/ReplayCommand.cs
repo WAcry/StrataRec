@@ -27,7 +27,6 @@ internal static class ReplayCommand
         store.Description += " With neither -c nor --manifest, each bundle replays on the manifest it recorded, read from this store.";
         var environment = CommonOptions.Environment();
         var format = CommonOptions.Format();
-        var bundle = new Option<string>("--bundle", "-b") { Description = "A replay bundle (from 'stratarec run --record'), or a directory of them.", Required = true };
         var arms = new Option<string[]>("--arms", "-a")
         {
             Description = "Replay with these arms (experiment/arm, comma or space separated) instead of the recorded assignment.",
@@ -43,9 +42,10 @@ internal static class ReplayCommand
         var command = new Command("replay", "Replay recorded requests on a workspace, a release manifest, or (with only --store) the manifest each bundle " +
             "recorded, and diff against the recorded results. Exits with 2 unless every bundle was replayed; the report is printed either way.")
         {
-            config, manifest, store, environment, format, bundle, arms, expectIdentical, explain,
+            config, manifest, store, environment, format, arms, expectIdentical, explain,
         };
-        command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(config), parse.GetValue(environment)!, parse.GetValue(bundle)!,
+        var bundles = CommonOptions.Bundles(command, "Replay bundles (from 'stratarec run --record'), or directories of them.");
+        command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(config), parse.GetValue(environment)!, CommonOptions.BundlePaths(parse, bundles),
             parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(format)!, parse.GetValue(expectIdentical), parse.InvocationConfiguration.Output,
             cancellationToken, parse.GetValue(manifest), parse.GetValue(store), parse.InvocationConfiguration.Error, parse.GetValue(explain)));
         return command;
@@ -57,7 +57,7 @@ internal static class ReplayCommand
     /// <param name="errors">Where diagnostics and per-bundle errors go; standard error by default.</param>
     /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
     internal static async Task<int> RunAsync(
-        PlanEnvironment provided, string? config, string environment, string bundlePath, string[] armArgs, string format, bool expectIdentical, TextWriter output, CancellationToken cancellationToken,
+        PlanEnvironment provided, string? config, string environment, IReadOnlyList<string> bundlePaths, string[] armArgs, string format, bool expectIdentical, TextWriter output, CancellationToken cancellationToken,
         string? manifest = null, string? store = null, TextWriter? errors = null, string[]? explain = null)
     {
         errors ??= Console.Error;
@@ -77,7 +77,7 @@ internal static class ReplayCommand
 
         var arms = ExplainPlanCommand.SplitArms(armArgs);
         var options = new ReplayOptions { Arms = arms.Count > 0 ? arms : null };
-        var files = ReplayBundleFile.Find(bundlePath);
+        var files = ReplayBundleFile.Find(bundlePaths);
         var results = new List<BundleReplay>();
         foreach (var file in files)
         {
@@ -86,10 +86,11 @@ internal static class ReplayCommand
 
         if (files.Count == 0)
         {
-            errors.WriteLine($"{bundlePath}: no replay bundles found.");
+            errors.WriteLine($"{string.Join(", ", bundlePaths)}: no replay bundles found.");
         }
 
-        var singleFile = files.Count == 1 && !Directory.Exists(bundlePath);
+        // One bundle file given: its report alone, without the summary of a set.
+        var singleFile = files.Count == 1 && bundlePaths.Count == 1 && !Directory.Exists(bundlePaths[0]);
         if (format == "json")
         {
             output.WriteLine(Output.ToJson(json =>
@@ -122,7 +123,7 @@ internal static class ReplayCommand
             if (!singleFile)
             {
                 var (replayed, unreadable, unresolved, identical) = Counts(results);
-                output.WriteLine($"{results.Count} bundle(s), {replayed} replayed, {unreadable} unreadable, " +
+                output.WriteLine($"{Output.Count(results.Count, "bundle")}, {replayed} replayed, {unreadable} unreadable, " +
                     (unresolved > 0 ? $"{unresolved} without a configuration to replay on, " : string.Empty) +
                     $"{identical} reproduced the recorded result exactly; status {Status(results)}");
             }
@@ -331,6 +332,7 @@ internal static class ReplayCommand
         json.WriteBoolean("replayed_aborted", diff.RightAborted);
         json.WriteNumber("recorded_items", diff.LeftCount);
         json.WriteNumber("replayed_items", diff.RightCount);
+        json.WriteNumber("in_both", diff.InBoth);
         json.WriteNumber("overlap", Math.Round(diff.Overlap, 6));
         if (diff.KendallTau is { } tau)
         {
@@ -347,9 +349,9 @@ internal static class ReplayCommand
         foreach (var change in diff.Changes)
         {
             json.WriteStartObject();
-            json.WriteNumber("rank", change.Rank);
-            WriteKey(json, "recorded_id", change.RecordedId);
-            WriteKey(json, "replayed_id", change.ReplayedId);
+            WriteKey(json, "id", change.Id);
+            WriteRank(json, "recorded_rank", change.RecordedRank);
+            WriteRank(json, "replayed_rank", change.ReplayedRank);
             if (change.Columns.Count > 0)
             {
                 json.WriteStartObject("columns");
@@ -442,7 +444,8 @@ internal static class ReplayCommand
             { Identical: true } => "  diff      identical to the recorded result",
             { LeftAborted: true } => "  diff      differs: the recorded request was aborted, the replay returned a result",
             { RightAborted: true } => "  diff      differs: the replay was aborted, the recorded request returned a result",
-            _ => $"  diff      differs: {diff.LeftCount} recorded vs {diff.RightCount} replayed item(s), overlap {diff.Overlap.ToString("0.###", CultureInfo.InvariantCulture)}, " +
+            _ => $"  diff      differs: {diff.LeftCount} recorded vs {Output.Count(diff.RightCount, "replayed item")}, {diff.InBoth} in both " +
+                 $"(overlap {diff.Overlap.ToString("0.###", CultureInfo.InvariantCulture)}), " +
                  $"kendall tau {(diff.KendallTau is { } tau ? tau.ToString("0.###", CultureInfo.InvariantCulture) : "n/a")}",
         });
         if (diff.AddedColumns.Count > 0 || diff.RemovedColumns.Count > 0)
@@ -458,7 +461,14 @@ internal static class ReplayCommand
                 columns.Add($"{column.Column} {column.Recorded} -> {column.Replayed}");
             }
 
-            output.WriteLine($"    rank {change.Rank}: {Id(change.RecordedId)} -> {Id(change.ReplayedId)}" + (columns.Count > 0 ? "; " + string.Join("; ", columns) : string.Empty));
+            var ranks = (change.RecordedRank, change.ReplayedRank) switch
+            {
+                ({ } before, null) => $"rank {before} -> absent",
+                (null, { } after) => $"absent -> rank {after}",
+                ({ } before, { } after) when before != after => $"rank {before} -> {after}",
+                _ => $"rank {change.RecordedRank}",
+            };
+            output.WriteLine($"    item {change.Id}: {ranks}" + (columns.Count > 0 ? "; " + string.Join("; ", columns) : string.Empty));
         }
 
         foreach (var node in report.Nodes)
@@ -491,7 +501,6 @@ internal static class ReplayCommand
 
         output.WriteLine();
 
-        static string Id(EntityKey? key) => key?.ToString() ?? "-";
         static string Join(IReadOnlyList<string> values) => values.Count == 0 ? "(none)" : string.Join(", ", values);
     }
 
@@ -504,6 +513,18 @@ internal static class ReplayCommand
         }
 
         json.WriteEndArray();
+    }
+
+    private static void WriteRank(Utf8JsonWriter json, string name, int? rank)
+    {
+        if (rank is { } value)
+        {
+            json.WriteNumber(name, value);
+        }
+        else
+        {
+            json.WriteNull(name);
+        }
     }
 
     private static void WriteKey(Utf8JsonWriter json, string name, EntityKey? key)

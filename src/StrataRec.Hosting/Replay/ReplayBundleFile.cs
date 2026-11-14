@@ -169,6 +169,18 @@ public static class ReplayBundleFile
         }
     }
 
+    /// <summary>Bundle files of several paths (<see cref="Find(string)"/> of each, in the order given).</summary>
+    public static List<string> Find(IReadOnlyList<string> paths)
+    {
+        var files = new List<string>();
+        foreach (var path in paths)
+        {
+            files.AddRange(Find(path));
+        }
+
+        return files;
+    }
+
     /// <summary>Bundle files of a path: the file itself, or every <c>*.json</c> file of a directory in ordinal order.</summary>
     public static List<string> Find(string path)
     {

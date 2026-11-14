@@ -183,7 +183,7 @@ public sealed class ArtifactSchemasTests
         Assert.False(ArtifactSchemas.TryRemoveSchemaMember(document, "../schemas/table.schema.json", out var error));
         Assert.Equal("/$schema", error.Pointer);
         Assert.Equal($"'$schema' must be a string, the path or URL of the file's JSON Schema; got {got}.", error.Message);
-        Assert.Equal("write \"$schema\": \"../schemas/table.schema.json\" ('stratarec schema --out schemas' writes the schemas there), or remove it", error.Hint);
+        Assert.Equal("write \"$schema\": \"../schemas/table.schema.json\" ('stratarec schema --out <workspace>/schemas' writes the schemas), or remove it", error.Hint);
     }
 
     [Theory]

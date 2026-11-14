@@ -126,7 +126,7 @@ public sealed class ManifestRefCliTests
         foreach (var manifest in new[] { null, manifests[0].Id })
         {
             var output = new StringWriter();
-            Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, null, "local", bundles, Array.Empty<string>(), "json", expectIdentical: true, output, CancellationToken.None,
+            Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, null, "local", [bundles], Array.Empty<string>(), "json", expectIdentical: true, output, CancellationToken.None,
                 manifest: manifest, store: store));
             using var report = JsonDocument.Parse(output.ToString());
             var bundle = report.RootElement.GetProperty("bundles")[0];
@@ -135,7 +135,7 @@ public sealed class ManifestRefCliTests
         }
 
         // compare resolves each side the same way: the primary's manifest on both sides fails over as recorded.
-        Assert.Equal(0, await CompareCommand.RunAsync(Tool.Environment, manifests[0].Id, null, "local", bundles, Array.Empty<string>(), 5, "source", "json", TextWriter.Null,
+        Assert.Equal(0, await CompareCommand.RunAsync(Tool.Environment, manifests[0].Id, null, "local", [bundles], Array.Empty<string>(), 5, "source", "json", TextWriter.Null,
             CancellationToken.None, candidateManifest: manifests[0].Id, store: store));
 
         // A bundle cut down to its fallback run still replays its primary pipeline, on the named manifest, every one of its
@@ -147,7 +147,7 @@ public sealed class ManifestRefCliTests
         foreach (var manifest in new[] { null, manifests[0].Id })
         {
             var output = new StringWriter();
-            Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, null, "local", cut, Array.Empty<string>(), "json", expectIdentical: false, output, CancellationToken.None,
+            Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, null, "local", [cut], Array.Empty<string>(), "json", expectIdentical: false, output, CancellationToken.None,
                 manifest: manifest, store: store));
             using var report = JsonDocument.Parse(output.ToString());
             var bundle = report.RootElement.GetProperty("bundles")[0];
@@ -158,7 +158,7 @@ public sealed class ManifestRefCliTests
         // A store without the fallback's manifest: not replayed, naming the pipeline, its manifest and why.
         File.Delete(new FileSystemArtifactStore(store).GetBlobPath(manifests[1].Id));
         var errors = new StringWriter();
-        Assert.Equal(2, await ReplayCommand.RunAsync(Tool.Environment, null, "local", bundles, Array.Empty<string>(), "text", expectIdentical: false, TextWriter.Null, CancellationToken.None,
+        Assert.Equal(2, await ReplayCommand.RunAsync(Tool.Environment, null, "local", [bundles], Array.Empty<string>(), "text", expectIdentical: false, TextWriter.Null, CancellationToken.None,
             store: store, errors: errors));
         Assert.Contains($"pipeline 'backup' ran on manifest {manifests[1].Id}, which does not load: MANIFEST_UNKNOWN", errors.ToString());
 
@@ -195,7 +195,7 @@ public sealed class ManifestRefCliTests
         }
 
         var output = new StringWriter();
-        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, null, "local", manifestBundles, Array.Empty<string>(), "json", expectIdentical: true, output, CancellationToken.None,
+        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, null, "local", [manifestBundles], Array.Empty<string>(), "json", expectIdentical: true, output, CancellationToken.None,
             store: store));
         using (var report = JsonDocument.Parse(output.ToString()))
         {
@@ -218,7 +218,7 @@ public sealed class ManifestRefCliTests
             CancellationToken.None, recordPath: Path.Combine(mixed, "c-workspace.json")));
         output = new StringWriter();
         var errors = new StringWriter();
-        Assert.Equal(2, await ReplayCommand.RunAsync(Tool.Environment, null, "local", mixed, Array.Empty<string>(), "json", expectIdentical: true, output, CancellationToken.None,
+        Assert.Equal(2, await ReplayCommand.RunAsync(Tool.Environment, null, "local", [mixed], Array.Empty<string>(), "json", expectIdentical: true, output, CancellationToken.None,
             store: store, errors: errors));
         using (var report = JsonDocument.Parse(output.ToString()))
         {
@@ -234,10 +234,10 @@ public sealed class ManifestRefCliTests
         }
 
         // -c and --manifest replace the recorded configuration, as -c always did.
-        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, root, "local", mixed, Array.Empty<string>(), "text", expectIdentical: true, TextWriter.Null, CancellationToken.None,
+        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, root, "local", [mixed], Array.Empty<string>(), "text", expectIdentical: true, TextWriter.Null, CancellationToken.None,
             store: store));
         output = new StringWriter();
-        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, null, "local", mixed, Array.Empty<string>(), "json", expectIdentical: true, output, CancellationToken.None,
+        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, null, "local", [mixed], Array.Empty<string>(), "json", expectIdentical: true, output, CancellationToken.None,
             manifest: id, store: store));
         using (var report = JsonDocument.Parse(output.ToString()))
         {
@@ -273,7 +273,7 @@ public sealed class ManifestRefCliTests
             CancellationToken.None, recordPath: Path.Combine(bundles, "user_1001.json")));
 
         var output = new StringWriter();
-        Assert.Equal(0, await CompareCommand.RunAsync(Tool.Environment, id, null, "local", bundles, Array.Empty<string>(), 10, "score", "json", output, CancellationToken.None,
+        Assert.Equal(0, await CompareCommand.RunAsync(Tool.Environment, id, null, "local", [bundles], Array.Empty<string>(), 10, "score", "json", output, CancellationToken.None,
             candidateManifest: file, store: store));
 
         using var report = JsonDocument.Parse(output.ToString());
@@ -300,12 +300,12 @@ public sealed class ManifestRefCliTests
 
         // compare's baseline is a ref of any kind: one that names nothing is a usage error too.
         var errors = new StringWriter();
-        Assert.Equal(2, await CompareCommand.RunAsync(Tool.Environment, missing, root, "local", store, Array.Empty<string>(), 10, "score", "json", TextWriter.Null, CancellationToken.None,
+        Assert.Equal(2, await CompareCommand.RunAsync(Tool.Environment, missing, root, "local", [store], Array.Empty<string>(), 10, "score", "json", TextWriter.Null, CancellationToken.None,
             errors: errors));
         Assert.Contains(ManifestStores.Errors(errors.ToString()),
             e => e is ("CONFIG_REF_UNKNOWN", "--baseline", "", { } hint) && hint.Contains("a workspace directory, a manifest content id"));
         errors = new StringWriter();
-        Assert.Equal(2, await ReplayCommand.RunAsync(Tool.Environment, root, "local", store, Array.Empty<string>(), "json", false, TextWriter.Null, CancellationToken.None, manifest: id,
+        Assert.Equal(2, await ReplayCommand.RunAsync(Tool.Environment, root, "local", [store], Array.Empty<string>(), "json", false, TextWriter.Null, CancellationToken.None, manifest: id,
             store: store, errors: errors));
         Assert.Contains(ManifestStores.Errors(errors.ToString()), e => e.Code == "CONFIG_CONFLICT");
     }

@@ -86,7 +86,7 @@ public sealed class ExplainEndToEndTests
             TextWriter.Null, CancellationToken.None, recordPath: bundle));
 
         var text = new StringWriter();
-        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, sample, "local", bundle, Array.Empty<string>(), "text", expectIdentical: true, text,
+        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, sample, "local", [bundle], Array.Empty<string>(), "text", expectIdentical: true, text,
             CancellationToken.None, explain: new[] { "17" }));
         var lines = text.ToString();
         Assert.Contains("  explain   pipeline home_feed", lines);
@@ -94,7 +94,7 @@ public sealed class ExplainEndToEndTests
         Assert.Contains("safety_filter: dropped (was rank 17); item.is_policy_safe true, item.report_rate 0.07999999821186066; dropped: ", lines);
 
         var json = new StringWriter();
-        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, sample, "local", bundle, Array.Empty<string>(), "json", expectIdentical: true, json,
+        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, sample, "local", [bundle], Array.Empty<string>(), "json", expectIdentical: true, json,
             CancellationToken.None, explain: new[] { "17" }));
         using var document = JsonDocument.Parse(json.ToString());
         var candidate = document.RootElement.GetProperty("explanation").GetProperty("candidates")[0];

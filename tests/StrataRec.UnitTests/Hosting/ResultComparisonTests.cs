@@ -91,7 +91,7 @@ public sealed class ResultComparisonTests
     }
 
     [Fact]
-    public void Diff_ListsEveryRankWhoseItemOrValuesDiffer()
+    public void Diff_ListsEveryItemThatMovedChangedOrIsInOneResultOnly()
     {
         var recorded = Result(true, (1, 0.9, "a"), (2, 0.8, "b"), (3, 0.7, "c"));
         var replayed = Result(true, (1, 0.9, "a"), (3, 0.8, "c"), (2, 0.7, "b"), (4, 0.1, "d"));
@@ -99,9 +99,12 @@ public sealed class ResultComparisonTests
         var diff = ResultComparison.Diff(recorded, replayed);
 
         Assert.False(diff.Identical);
-        Assert.Equal(new[] { 2, 3, 4 }, diff.Changes.Select(c => c.Rank));
-        Assert.Equal((EntityKey.FromInt64(2), EntityKey.FromInt64(3)), (diff.Changes[0].RecordedId, diff.Changes[0].ReplayedId));
-        Assert.Null(diff.Changes[2].RecordedId);
+        // Per item: 2 and 3 swapped (2 with its own new score), 4 only replayed.
+        Assert.Equal(new[] { EntityKey.FromInt64(2), EntityKey.FromInt64(3), EntityKey.FromInt64(4) }, diff.Changes.Select(c => c.Id));
+        Assert.Equal(new int?[] { 2, 3, null }, diff.Changes.Select(c => c.RecordedRank));
+        Assert.Equal(new int?[] { 3, 2, 4 }, diff.Changes.Select(c => c.ReplayedRank));
+        Assert.Equal(("score", 0.8, 0.7), (diff.Changes[0].Columns[0].Column, diff.Changes[0].Columns[0].Recorded.AsFloat64(), diff.Changes[0].Columns[0].Replayed.AsFloat64()));
+        Assert.Equal(3, diff.InBoth);
         Assert.Equal(0.75, diff.Overlap);
         Assert.Equal(1.0 / 3.0, diff.KendallTau!.Value, 12);
         Assert.True(ResultComparison.Diff(recorded, recorded).Identical);

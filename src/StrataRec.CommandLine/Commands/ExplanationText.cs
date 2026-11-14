@@ -4,8 +4,9 @@ using StrataRec.Pipeline.Execution;
 namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
-/// Explained candidates (design 13.3) as lines for people: where each ended, then one line per node with what the node did
-/// to it, the values it read and wrote, and the operator's reason. The text formats print this; JSON has
+/// Explained candidates (design 13.3) as lines for people: where each ended, then one line per node that did something to
+/// it (or was skipped, or rolled back) with the values it read and wrote and the operator's reason; the nodes that ran while
+/// it was not live are counted in one line. The text formats print this; JSON has
 /// <see cref="Hosting.RecResultJson.WriteExplanation"/>.
 /// </summary>
 internal static class ExplanationText
@@ -18,9 +19,24 @@ internal static class ExplanationText
         foreach (var candidate in explanation.Candidates)
         {
             output.WriteLine($"{prefix}{candidate.Id}: {Verdict(candidate)}");
+
+            // A node that ran while the candidate was not live did nothing to it: one line says how many, not one each
+            // (the JSON has every step). A skipped or rolled-back node is still listed: it may be why the candidate is absent.
+            var quiet = 0;
             foreach (var step in candidate.Steps)
             {
+                if (step.Kind == ExplainStepKind.Ran && step.Change == ExplainChange.Absent)
+                {
+                    quiet++;
+                    continue;
+                }
+
                 output.WriteLine(indent + Step(step));
+            }
+
+            if (quiet > 0 && candidate.Verdict != ExplainVerdict.NotRecalled)
+            {
+                output.WriteLine($"{indent}not live in {Output.Count(quiet, "other node")}");
             }
         }
     }

@@ -27,6 +27,30 @@ internal static class CommonOptions
         Description = "Pipeline id; defaults to every pipeline (or the only one).",
     };
 
+    /// <summary>
+    /// The bundles a command replays: paths given as arguments (<c>stratarec replay -c feed b.json</c>, a shell glob, a
+    /// directory) or with <c>-b</c>, at least one in all.
+    /// </summary>
+    public static (Argument<string[]> Arguments, Option<string[]> Option) Bundles(Command command, string description)
+    {
+        var arguments = new Argument<string[]>("bundles") { Description = description, Arity = ArgumentArity.ZeroOrMore };
+        var option = new Option<string[]>("--bundle", "-b") { Description = description + " The same as giving them as arguments." };
+        command.Arguments.Add(arguments);
+        command.Options.Add(option);
+        command.Validators.Add(result =>
+        {
+            if ((result.GetValue(arguments)?.Length ?? 0) + (result.GetValue(option)?.Length ?? 0) == 0)
+            {
+                result.AddError($"Give the bundles to replay: 'stratarec {command.Name} -c <workspace> <bundle.json or directory>...'.");
+            }
+        });
+        return (arguments, option);
+    }
+
+    /// <summary>The bundle paths of <see cref="Bundles"/>: the arguments, then those of <c>-b</c>.</summary>
+    public static string[] BundlePaths(ParseResult parse, (Argument<string[]> Arguments, Option<string[]> Option) bundles) =>
+        [.. parse.GetValue(bundles.Arguments) ?? [], .. parse.GetValue(bundles.Option) ?? []];
+
     public static Option<string> Format() => new Option<string>("--format", "-f")
     {
         Description = "Output format.",

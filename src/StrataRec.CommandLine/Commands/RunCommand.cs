@@ -16,7 +16,8 @@ namespace StrataRec.CommandLine.Commands;
 /// <c>stratarec run</c>: executes a request against a workspace locally (fixtures via <c>memory@1</c> and friends) and
 /// prints the result as JSON (<see cref="RecResultJson"/>, the document a service answers with): items, assignment and
 /// trigger record, with <c>--trace</c> every node's outcome and the node that produced each output column, and with
-/// <c>--explain</c> the explained candidates (design 13.3).
+/// <c>--explain</c> the explained candidates (design 13.3). <c>--format text</c> prints the same for reading
+/// (<see cref="ResultText"/>).
 /// </summary>
 internal static class RunCommand
 {
@@ -40,7 +41,7 @@ internal static class RunCommand
         var logs = new Option<bool>("--logs", "-l") { Description = "Include the log batches the request's taps captured (nothing is written)." };
         var record = new Option<string?>("--record")
         {
-            Description = "Also write a replay bundle of the request to this file (design 13.4); replay it with 'stratarec replay'.",
+            Description = "Also write a replay bundle of the request to this file (design 13.4); replay it with 'stratarec replay -c <workspace> <file>'.",
         };
         var deadline = new Option<int?>("--deadline-ms")
         {
@@ -61,15 +62,19 @@ internal static class RunCommand
                           "the result's 'explanation' says where each ended and its state after every node (design 13.3).",
             AllowMultipleArgumentsPerToken = true,
         };
+        var format = CommonOptions.Format();
+        format.Description = "Output format: json, the document a service answers with (the default), or text, for reading: the items one per line, " +
+                             "and the trace and explained candidates when asked for.";
+        format.DefaultValueFactory = _ => "json";
         var command = new Command("run",
-            "Execute a request locally and print the result as JSON. Exits with 0 when the request succeeds, 1 when it fails (the result says why) or the " +
+            "Execute a request locally and print the result (JSON, or text with --format text). Exits with 0 when the request succeeds, 1 when it fails (the result says why) or the " +
             "configuration does not load, 2 when the request file or an --explain id is invalid.")
         {
-            config, environment, request, arms, trace, logs, record, deadline, explain,
+            config, environment, request, arms, trace, logs, record, deadline, explain, format,
         };
         command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(config)!, parse.GetValue(environment)!, parse.GetValue(request)!,
             parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(trace), parse.InvocationConfiguration.Output, cancellationToken, parse.GetValue(logs),
-            parse.GetValue(record), parse.GetValue(deadline), parse.InvocationConfiguration.Error, parse.GetValue(explain)));
+            parse.GetValue(record), parse.GetValue(deadline), parse.InvocationConfiguration.Error, parse.GetValue(explain), parse.GetValue(format)!));
         return command;
     }
 
@@ -103,7 +108,7 @@ internal static class RunCommand
     internal static async Task<int> RunAsync(
         PlanEnvironment provided, string config, string environment, string requestPath, string[] arms, bool trace, TextWriter output,
         CancellationToken cancellationToken, bool logs = false, string? recordPath = null, int? deadlineMs = null, TextWriter? errors = null,
-        string[]? explain = null)
+        string[]? explain = null, string format = "json")
     {
         errors ??= Console.Error;
 
@@ -188,7 +193,8 @@ internal static class RunCommand
             if (result.Recording is { } bundle)
             {
                 ReplayBundleFile.Save(bundle, recordPath);
-                errors.WriteLine($"recorded {request.RequestId} to {recordPath}");
+                errors.WriteLine($"recorded {request.RequestId} to {recordPath}; replay it with: " +
+                                 $"stratarec replay -c {InitCommand.Quote(config)} {InitCommand.Quote(recordPath)}");
             }
             else
             {
@@ -196,9 +202,16 @@ internal static class RunCommand
             }
         }
 
-        // The document a service answers with (RecResultJson), plus the lineage --trace asks for.
-        var options = new RecResultJsonOptions { IncludeColumnProducers = trace };
-        output.WriteLine(Output.ToJson(json => RecResultJson.Write(json, result, options)));
+        if (format == "text")
+        {
+            ResultText.Write(output, result);
+        }
+        else
+        {
+            // The document a service answers with (RecResultJson), plus the lineage --trace asks for.
+            var options = new RecResultJsonOptions { IncludeColumnProducers = trace };
+            output.WriteLine(Output.ToJson(json => RecResultJson.Write(json, result, options)));
+        }
         return result.Succeeded ? 0 : 1;
     }
 

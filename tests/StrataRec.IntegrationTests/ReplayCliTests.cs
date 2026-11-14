@@ -1,5 +1,6 @@
 using System.Text.Json;
 using StrataRec.Artifacts.Model;
+using StrataRec.CommandLine;
 using StrataRec.CommandLine.Commands;
 
 namespace StrataRec.IntegrationTests;
@@ -7,6 +8,35 @@ namespace StrataRec.IntegrationTests;
 /// <summary><c>stratarec run --record</c>, <c>replay</c>, <c>compare</c> and <c>schema replay_bundle</c> on the home_feed sample.</summary>
 public sealed class ReplayCliTests
 {
+    [Fact]
+    public async Task Bundles_AreArguments_OrGivenWithB_AndAtLeastOneIsRequired()
+    {
+        var sample = HomeFeedTestHost.SampleRoot();
+        var bundles = Directory.CreateTempSubdirectory("stratarec-bundle-args-").FullName;
+        var paths = new List<string>();
+        foreach (var name in new[] { "user_1001", "anonymous" })
+        {
+            paths.Add(Path.Combine(bundles, name + ".json"));
+            var recorded = new StringWriter();
+            Assert.Equal(0, await RunCommand.RunAsync(Tool.Environment, sample, "local", Path.Combine(sample, "requests", name + ".json"), Array.Empty<string>(), false,
+                TextWriter.Null, CancellationToken.None, recordPath: paths[^1], errors: recorded));
+            Assert.Contains($"; replay it with: stratarec replay -c {sample} {paths[^1]}", recorded.ToString()); // ready to copy
+        }
+
+        // Two files as arguments (what a shell glob gives), one as an argument and one with -b: the same two replays.
+        foreach (var args in new[] { new[] { "replay", "-c", sample, paths[0], paths[1] }, new[] { "replay", "-c", sample, paths[0], "-b", paths[1] } })
+        {
+            var output = new StringWriter();
+            Assert.Equal(0, await StrataRecCommandLine.InvokeAsync(args, Tool.Environment, output, TextWriter.Null));
+            Assert.Contains("2 bundles, 2 replayed, 0 unreadable, 2 reproduced the recorded result exactly; status ok", output.ToString());
+        }
+
+        var error = new StringWriter();
+        Assert.NotEqual(0, await StrataRecCommandLine.InvokeAsync(new[] { "replay", "-c", sample }, Tool.Environment, TextWriter.Null, error));
+        Assert.Contains("Give the bundles to replay: 'stratarec replay -c <workspace> <bundle.json or directory>...'.", error.ToString());
+        Directory.Delete(bundles, recursive: true);
+    }
+
     [Fact]
     public async Task RecordReplayAndCompare_FromTheCommandLine()
     {
@@ -21,13 +51,13 @@ public sealed class ReplayCliTests
 
         // One bundle, text: the result and the diff against the recording.
         var text = new StringWriter();
-        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, sample, "local", Path.Combine(bundles, "user_1001.json"), Array.Empty<string>(), "text",
+        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, sample, "local", [Path.Combine(bundles, "user_1001.json")], Array.Empty<string>(), "text",
             expectIdentical: true, text, CancellationToken.None));
         Assert.Contains("identical to the recorded result", text.ToString());
 
         // A directory, JSON: every bundle with its report.
         var json = new StringWriter();
-        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, sample, "local", bundles, Array.Empty<string>(), "json", expectIdentical: true, json,
+        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, sample, "local", [bundles], Array.Empty<string>(), "json", expectIdentical: true, json,
             CancellationToken.None));
         using (var replay = JsonDocument.Parse(json.ToString()))
         {
@@ -42,11 +72,11 @@ public sealed class ReplayCliTests
             ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "col.item.report_rate * 10.0", "col.item.report_rate * 20.0");
             ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"coarse_k\": 30,", "\"coarse_k\": 35,");
         }).Root;
-        Assert.Equal(1, await ReplayCommand.RunAsync(Tool.Environment, candidate, "local", bundles, Array.Empty<string>(), "text", expectIdentical: true, TextWriter.Null,
+        Assert.Equal(1, await ReplayCommand.RunAsync(Tool.Environment, candidate, "local", [bundles], Array.Empty<string>(), "text", expectIdentical: true, TextWriter.Null,
             CancellationToken.None));
 
         var compare = new StringWriter();
-        Assert.Equal(0, await CompareCommand.RunAsync(Tool.Environment, sample, candidate, "local", bundles, Array.Empty<string>(), 10, "score", "json", compare,
+        Assert.Equal(0, await CompareCommand.RunAsync(Tool.Environment, sample, candidate, "local", [bundles], Array.Empty<string>(), 10, "score", "json", compare,
             CancellationToken.None));
         using (var report = JsonDocument.Parse(compare.ToString()))
         {
@@ -60,9 +90,9 @@ public sealed class ReplayCliTests
         }
 
         var table = new StringWriter();
-        Assert.Equal(0, await CompareCommand.RunAsync(Tool.Environment, sample, candidate, "local", bundles, Array.Empty<string>(), 10, "score", "text", table,
+        Assert.Equal(0, await CompareCommand.RunAsync(Tool.Environment, sample, candidate, "local", [bundles], Array.Empty<string>(), 10, "score", "text", table,
             CancellationToken.None));
-        Assert.Contains("Recorded-mode comparison of 2 bundle(s)", table.ToString());
+        Assert.Contains("Recorded-mode comparison of 2 bundles", table.ToString());
         Assert.Contains("candidate gap", table.ToString());
     }
 
@@ -73,7 +103,7 @@ public sealed class ReplayCliTests
         File.WriteAllText(bundle, $$"""{ "format": "{{ReplayBundle.CurrentFormat}}", "request": {} }""");
 
         var output = new StringWriter();
-        var exit = await ReplayCommand.RunAsync(Tool.Environment, HomeFeedTestHost.SampleRoot(), "local", bundle, Array.Empty<string>(), "json", false, output, CancellationToken.None);
+        var exit = await ReplayCommand.RunAsync(Tool.Environment, HomeFeedTestHost.SampleRoot(), "local", [bundle], Array.Empty<string>(), "json", false, output, CancellationToken.None);
 
         Assert.Equal(2, exit);
         using var report = JsonDocument.Parse(output.ToString());
@@ -88,7 +118,7 @@ public sealed class ReplayCliTests
         File.WriteAllText(Path.Combine(directory, "b-valid.json"), MinimalBundle("[]"));
 
         var output = new StringWriter();
-        var exit = await ReplayCommand.RunAsync(Tool.Environment, HomeFeedTestHost.SampleRoot(), "local", directory, Array.Empty<string>(), "json", false, output, CancellationToken.None);
+        var exit = await ReplayCommand.RunAsync(Tool.Environment, HomeFeedTestHost.SampleRoot(), "local", [directory], Array.Empty<string>(), "json", false, output, CancellationToken.None);
 
         Assert.Equal(2, exit);
         using var report = JsonDocument.Parse(output.ToString());
@@ -106,7 +136,7 @@ public sealed class ReplayCliTests
         var empty = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
         var output = new StringWriter();
 
-        var exit = await ReplayCommand.RunAsync(Tool.Environment, HomeFeedTestHost.SampleRoot(), "local", empty, Array.Empty<string>(), "json", false, output, CancellationToken.None);
+        var exit = await ReplayCommand.RunAsync(Tool.Environment, HomeFeedTestHost.SampleRoot(), "local", [empty], Array.Empty<string>(), "json", false, output, CancellationToken.None);
 
         Assert.Equal(2, exit);
         using var report = JsonDocument.Parse(output.ToString());
@@ -132,7 +162,7 @@ public sealed class ReplayCliTests
         }
 
         var output = new StringWriter();
-        var exit = await CompareCommand.RunAsync(Tool.Environment, HomeFeedTestHost.SampleRoot(), HomeFeedTestHost.SampleRoot(), "local", directory, Array.Empty<string>(), 10, "score", "json", output,
+        var exit = await CompareCommand.RunAsync(Tool.Environment, HomeFeedTestHost.SampleRoot(), HomeFeedTestHost.SampleRoot(), "local", [directory], Array.Empty<string>(), 10, "score", "json", output,
             CancellationToken.None);
 
         Assert.Equal(exitCode, exit);

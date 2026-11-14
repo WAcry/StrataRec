@@ -89,11 +89,18 @@ public sealed record NodeComparison(string Node, string? Recorded, string? Repla
     public bool Changed => Recorded != Replayed;
 }
 
-/// <summary>A column value that differs at one rank.</summary>
+/// <summary>A column value of one item that differs between the two results.</summary>
 public sealed record ColumnChange(string Column, ScalarValue Recorded, ScalarValue Replayed);
 
-/// <summary>A rank whose item or values differ; a null id means that side has no item at the rank.</summary>
-public sealed record ItemChange(int Rank, EntityKey? RecordedId, EntityKey? ReplayedId, IReadOnlyList<ColumnChange> Columns);
+/// <summary>
+/// An item whose rank or values differ: its rank in each result (null in the one that does not have it), and the values of
+/// its own columns that differ, compared when both results have the item.
+/// </summary>
+/// <remarks>
+/// Per item, not per rank: comparing what two different items hold at one rank says nothing about either, while an item's
+/// move and its own score change are what a reader asks about.
+/// </remarks>
+public sealed record ItemChange(EntityKey Id, int? RecordedRank, int? ReplayedRank, IReadOnlyList<ColumnChange> Columns);
 
 /// <summary>Difference of two results: the recorded one and the replayed one (or a baseline and a candidate).</summary>
 public sealed class ResultDiff
@@ -127,7 +134,13 @@ public sealed class ResultDiff
     /// <summary>Output columns only the left (recorded) result has.</summary>
     public required IReadOnlyList<string> RemovedColumns { get; init; }
 
-    /// <summary>Ranks whose item differs, or whose values differ in a column both results have.</summary>
+    /// <summary>Items both results have, whatever their ranks.</summary>
+    public int InBoth { get; init; }
+
+    /// <summary>
+    /// Items at another rank, with other values in a column both results have, or in one result only: those of the recorded
+    /// result in its order, then those only the replayed one has, in its order.
+    /// </summary>
     public required IReadOnlyList<ItemChange> Changes { get; init; }
 }
 
@@ -209,31 +222,53 @@ public static class ResultComparison
         var removed = new List<string>(leftNames);
         removed.RemoveAll(shared.Contains);
 
-        var changes = new List<ItemChange>();
-        var count = Math.Max(left.Ids.Count, right.Ids.Count);
-        for (var i = 0; i < count; i++)
+        // Each item against itself: where it is in the other result, and its own values there.
+        var rightIndex = new Dictionary<EntityKey, int>(right.Ids.Count);
+        for (var j = 0; j < right.Ids.Count; j++)
         {
-            EntityKey? leftId = i < left.Ids.Count ? left.Ids[i] : null;
-            EntityKey? rightId = i < right.Ids.Count ? right.Ids[i] : null;
-            var columns = new List<ColumnChange>();
-            if (leftId is not null && rightId is not null)
+            rightIndex.TryAdd(right.Ids[j], j);
+        }
+
+        var changes = new List<ItemChange>();
+        var leftIds = new HashSet<EntityKey>();
+        var inBoth = 0;
+        for (var i = 0; i < left.Ids.Count; i++)
+        {
+            var id = left.Ids[i];
+            leftIds.Add(id);
+            if (!rightIndex.TryGetValue(id, out var j))
             {
-                foreach (var name in shared)
+                changes.Add(new ItemChange(id, i + 1, null, Array.Empty<ColumnChange>()));
+                continue;
+            }
+
+            inBoth++;
+            var columns = new List<ColumnChange>();
+            foreach (var name in shared)
+            {
+                left.Columns[i].TryGetValue(name, out var a);
+                right.Columns[j].TryGetValue(name, out var b);
+                if (!a.Equals(b))
                 {
-                    left.Columns[i].TryGetValue(name, out var a);
-                    right.Columns[i].TryGetValue(name, out var b);
-                    if (!a.Equals(b))
-                    {
-                        columns.Add(new ColumnChange(name, a, b));
-                    }
+                    columns.Add(new ColumnChange(name, a, b));
                 }
             }
 
-            if (leftId != rightId || columns.Count > 0)
+            if (i != j || columns.Count > 0)
             {
-                changes.Add(new ItemChange(i + 1, leftId, rightId, columns));
+                changes.Add(new ItemChange(id, i + 1, j + 1, columns));
             }
         }
+
+        for (var j = 0; j < right.Ids.Count; j++)
+        {
+            if (!leftIds.Contains(right.Ids[j]))
+            {
+                changes.Add(new ItemChange(right.Ids[j], null, j + 1, Array.Empty<ColumnChange>()));
+            }
+        }
+
+        var count = Math.Max(left.Ids.Count, right.Ids.Count);
 
         return new ResultDiff
         {
@@ -244,6 +279,7 @@ public static class ResultComparison
             RightAborted = right.Aborted,
             LeftCount = left.Ids.Count,
             RightCount = right.Ids.Count,
+            InBoth = inBoth,
             Overlap = Overlap(left.Ids, right.Ids, count),
             KendallTau = KendallTau(left.Ids, right.Ids),
             AddedColumns = added,

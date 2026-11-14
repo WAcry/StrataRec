@@ -29,7 +29,6 @@ internal static class CompareCommand
             Description = "Baseline configuration: a workspace directory (e.g. the main branch), a manifest content id (sha256:<hex>) in --store, or a manifest file.",
             Required = true,
         };
-        var bundles = new Option<string>("--bundle", "-b") { Description = "A directory of replay bundles (or one bundle).", Required = true };
         var arms = new Option<string[]>("--arms", "-a")
         {
             Description = "Replay both sides with these arms (experiment/arm) instead of each bundle's recorded assignment.",
@@ -40,10 +39,11 @@ internal static class CompareCommand
         var command = new Command("compare", "Replay recorded requests on a baseline and a candidate configuration and compare the results (design 10.8). " +
             "Exits with 2 unless every bundle was compared; the report is printed either way.")
         {
-            candidate, manifest, store, environment, format, baseline, bundles, arms, topK, score,
+            candidate, manifest, store, environment, format, baseline, arms, topK, score,
         };
+        var bundles = CommonOptions.Bundles(command, "Replay bundles (from 'stratarec run --record'), or directories of them.");
         command.SetAction((parse, cancellationToken) => RunAsync(provided, parse.GetValue(baseline)!, parse.GetValue(candidate), parse.GetValue(environment)!,
-            parse.GetValue(bundles)!, parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(topK), parse.GetValue(score)!, parse.GetValue(format)!,
+            CommonOptions.BundlePaths(parse, bundles), parse.GetValue(arms) ?? Array.Empty<string>(), parse.GetValue(topK), parse.GetValue(score)!, parse.GetValue(format)!,
             parse.InvocationConfiguration.Output, cancellationToken, parse.GetValue(manifest), parse.GetValue(store), parse.InvocationConfiguration.Error));
         return command;
     }
@@ -53,7 +53,7 @@ internal static class CompareCommand
     /// <param name="errors">Where diagnostics go; standard error by default.</param>
     /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
     internal static async Task<int> RunAsync(
-        PlanEnvironment provided, string baselineRef, string? candidateConfig, string environment, string bundlePath, string[] armArgs, int topK, string scoreColumn, string format,
+        PlanEnvironment provided, string baselineRef, string? candidateConfig, string environment, IReadOnlyList<string> bundlePaths, string[] armArgs, int topK, string scoreColumn, string format,
         TextWriter output, CancellationToken cancellationToken, string? candidateManifest = null, string? store = null, TextWriter? errors = null)
     {
         errors ??= Console.Error;
@@ -84,7 +84,7 @@ internal static class CompareCommand
         var arms = ExplainPlanCommand.SplitArms(armArgs);
         var options = new ReplayOptions { Arms = arms.Count > 0 ? arms : null };
         var pairs = new List<ReplayPair>();
-        var files = ReplayBundleFile.Find(bundlePath);
+        var files = ReplayBundleFile.Find(bundlePaths);
         if (files.Count > 0)
         {
             // The first replay in the process pays for JIT compilation; unwarmed, that lands in whichever side replays
@@ -108,7 +108,7 @@ internal static class CompareCommand
 
         if (pairs.Count == 0)
         {
-            errors.WriteLine($"{bundlePath}: no replay bundles found.");
+            errors.WriteLine($"{string.Join(", ", bundlePaths)}: no replay bundles found.");
         }
 
         var report = ReplayComparison.Compare(pairs, topK, scoreColumn, Manifest(pairs, static p => p.Baseline), Manifest(pairs, static p => p.Candidate));
@@ -260,7 +260,7 @@ internal static class CompareCommand
 
     private static void WriteText(TextWriter output, ComparisonReport report, string baseline, string candidate)
     {
-        output.WriteLine($"Recorded-mode comparison of {report.Bundles} bundle(s) (design 10.8); I/O is answered from the recordings.");
+        output.WriteLine($"Recorded-mode comparison of {Output.Count(report.Bundles, "bundle")} (design 10.8); I/O is answered from the recordings.");
         output.WriteLine(report.Status switch
         {
             "ok" => $"status: ok, {report.Compared} compared",

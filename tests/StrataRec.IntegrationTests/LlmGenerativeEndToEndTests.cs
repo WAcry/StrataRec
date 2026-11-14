@@ -157,7 +157,7 @@ public sealed class LlmGenerativeEndToEndTests
         }
 
         var replay = new StringWriter();
-        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, root, "local", bundle, Array.Empty<string>(), "text", expectIdentical: true, replay, CancellationToken.None));
+        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, root, "local", [bundle], Array.Empty<string>(), "text", expectIdentical: true, replay, CancellationToken.None));
         Assert.Contains("identical to the recorded result", replay.ToString());
     }
 

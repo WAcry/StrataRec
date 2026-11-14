@@ -168,7 +168,7 @@ public static class ArtifactSchemas
         var example = reference ?? "../" + DirectoryName + "/" + FileName("pipeline");
         error = new JsonBindingError("/" + SchemaMember,
             $"'{SchemaMember}' must be a string, the path or URL of the file's JSON Schema; got {JsonWords.Value(value)}.",
-            $"write \"{SchemaMember}\": \"{example}\" ('stratarec schema --out {DirectoryName}' writes the schemas there), or remove it");
+            $"write \"{SchemaMember}\": \"{example}\" ('stratarec schema --out <workspace>/{DirectoryName}' writes the schemas), or remove it");
         return false;
     }
 

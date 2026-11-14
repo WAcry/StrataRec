@@ -410,7 +410,7 @@ public sealed class ReplayTests
     }
 
     internal static string Describe(ReplayReport report) =>
-        string.Join("\n", report.Diff.Changes.Select(c => $"rank {c.Rank}: {c.RecordedId} -> {c.ReplayedId} " +
+        string.Join("\n", report.Diff.Changes.Select(c => $"item {c.Id}: rank {c.RecordedRank} -> {c.ReplayedRank} " +
             string.Join(", ", c.Columns.Select(col => $"{col.Column} {col.Recorded} -> {col.Replayed}"))))
         + "\n" + string.Join("\n", report.Gaps.Select(g => g.Description))
         + "\n" + string.Join("\n", report.Nodes.Where(n => n.Changed).Select(n => $"{n.Node}: {n.Recorded} -> {n.Replayed} ({n.ReplayedDetail})"));
