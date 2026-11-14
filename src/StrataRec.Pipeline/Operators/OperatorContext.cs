@@ -90,6 +90,9 @@ public sealed class OperatorContext
     /// </summary>
     internal CancellationToken CallerCancellation => _state.CallerCancellation;
 
+    /// <summary>True while the request replays a recording: it is not traffic, so traffic metrics are not counted (design 13.4).</summary>
+    internal bool Replays => _state.Replay is not null;
+
     internal string? FailureReason { get; private set; }
 
     internal string? DegradedReason { get; private set; }
