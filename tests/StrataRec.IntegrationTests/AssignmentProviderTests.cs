@@ -146,7 +146,7 @@ public sealed class AssignmentProviderTests
             PipelineId = "home_feed",
             RequestId = "req-late",
             Inputs = HomeFeedTestHost.Inputs(1001, "home"),
-            Deadline = TimeSpan.FromMilliseconds(50),
+            Deadline = TimeSpan.FromMilliseconds(500), // room to reach the provider on a loaded machine: 50 ms ran out before it
         });
 
         Assert.False(result.Succeeded);

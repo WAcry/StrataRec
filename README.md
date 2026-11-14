@@ -62,7 +62,7 @@ curl -s -X POST localhost:5000/recommend/trending_feed -H 'content-type: applica
 dotnet run --project samples/StrataRec.Samples.Host -- stratarec validate -c config   # 宿主自己的二进制带着自定义组件跑全部 stratarec 命令（-c 相对项目目录）
 ```
 
-生产环境的节点服务 manifest 而不是工作区：CI 用 `stratarec build --store` 写产物和 manifest（序号默认接着已发布的那个，`stratarec diff --to <id> -s <store>` 看这次改了什么）、`stratarec run -m <id> -s <store>` 像节点一样加载它并跑一个请求、`stratarec publish` 改指针，出了问题用 `stratarec revoke` 立即停掉一个实验（之后的 `build` 不会把它原样带回来）；宿主在 `AddStrataRec` 里设置 `Releases`、列出 `Pipelines`，并注册 `IManifestSource` 和 `IArtifactStore`（本地目录各有现成的实现，其他存储实现这两个接口）。节点启动时加载每条流水线的 manifest，任何一条没有应用成功就不启动；之后按间隔轮询，新的 manifest 在后台编译、原子替换。缺少 manifest 所需能力的节点报 `incompatible`，继续服务当前计划。
+生产环境的节点服务 manifest 而不是工作区：CI 用 `stratarec build --store` 写产物和 manifest（序号默认接着已发布的那个，`stratarec diff --to <id> -s <store>` 看这次改了什么）、`stratarec run -m <id> -s <store>` 像节点一样加载它并跑一个请求、`stratarec publish` 改指针，出了问题用 `stratarec revoke` 立即停掉一个实验（之后的 `build` 不会把它原样带回来），`stratarec status -s <store>` 看 store 现在发布的是什么、有哪些停止正在生效；宿主在 `AddStrataRec` 里设置 `Releases`、列出 `Pipelines`，并注册 `IManifestSource` 和 `IArtifactStore`（本地目录各有现成的实现，其他存储实现这两个接口）。节点启动时加载每条流水线的 manifest，任何一条没有应用成功就不启动；之后按间隔轮询，新的 manifest 在后台编译、原子替换。缺少 manifest 所需能力的节点报 `incompatible`，继续服务当前计划。
 
 ## 示例工作区
 

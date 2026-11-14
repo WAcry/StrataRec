@@ -394,6 +394,58 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         !diagnostics.Any(d => d.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning);
 
     /// <summary>A stratarec command with the sample's components (what <c>dotnet run -- stratarec …</c> runs); its output as JSON.</summary>
+    /// <summary>
+    /// The release loop Program.cs describes: built and published with this binary's commands, served from the store with
+    /// StrataRec:Store set, and stopped with 'stratarec revoke' while the service runs: within a poll it serves the
+    /// revocation, and ignores the stopped experiment's arm.
+    /// </summary>
+    [Fact]
+    public async Task WithAStore_TheServiceServesWhatIsPublished_AndAStopTakesEffectWhileItRuns()
+    {
+        var store = Directory.CreateTempSubdirectory("stratarec-sample-store-").FullName;
+        _copies.Add(store);
+        var manifest = Path.Combine(store, "manifest.json");
+        var (code, _, error) = await StratarecText("build", "-c", ConfigRoot, "-s", store, "-m", manifest);
+        Assert.True(code == 0, error);
+        (code, _, error) = await StratarecText("publish", "-s", store, manifest);
+        Assert.True(code == 0, error);
+        var published = await Pointer(store);
+
+        using var node = _host.WithWebHostBuilder(builder => builder
+            .UseSetting("StrataRec:Store", store)
+            .UseSetting("StrataRec:ConfigRoot", ConfigRoot)
+            .UseSetting("StrataRec:ReleasePollMs", "50"));
+        var client = node.CreateClient();
+        const string Request = """{ "inputs": { "user_id": 1001, "region": "us" }, "assignment": ["exp_local_boost/strong"] }""";
+        var (status, result) = await Post(client, Pipeline, Request);
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal(published, result["manifest"]!.GetValue<string>());
+        Assert.Equal(new[] { "exp_local_boost/strong" }, Strings(result["experiments"]!["assigned"]));
+
+        (code, _, error) = await StratarecText("revoke", "-s", store, "-p", Pipeline, "exp_local_boost");
+        Assert.True(code == 0, error);
+        var revocation = await Pointer(store);
+        Assert.NotEqual(published, revocation);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        do
+        {
+            (status, result) = await Post(client, Pipeline, Request);
+            Assert.Equal(HttpStatusCode.OK, status);
+        }
+        while (result["manifest"]!.GetValue<string>() != revocation && DateTime.UtcNow < deadline && await Task.Delay(20).ContinueWith(_ => true));
+
+        Assert.Equal(revocation, result["manifest"]!.GetValue<string>());
+        Assert.Empty(Strings(result["experiments"]!["assigned"]));
+        Assert.Equal("exp_local_boost/strong", result["experiments"]!["ignored"]![0]!["id"]!.GetValue<string>());
+
+        (code, var shown, error) = await StratarecText("status", "-s", store);
+        Assert.True(code == 0, error);
+        Assert.Contains("revoked      exp_local_boost (by seq 2)", shown, StringComparison.Ordinal);
+    }
+
+    private static async Task<string> Pointer(string store) =>
+        (await new StrataRec.Hosting.Manifests.FileSystemManifestSource(store).GetManifestIdAsync(Pipeline, "local", CancellationToken.None))!;
+
     private static async Task<(int Code, JsonNode Output, string Error)> Stratarec(params string[] args)
     {
         var (code, output, error) = await StratarecText(args);

@@ -12,7 +12,15 @@ namespace StrataRec.Samples.Host;
 /// objective and warms the process up before it reports ready: the first request of a cold process includes compiling the
 /// code it runs (JIT), which is why the sample's default is generous.
 /// </param>
-public sealed record SampleSettings(string ConfigRoot, string Environment, TimeSpan Deadline)
+/// <param name="Store">
+/// The directory of an artifact store to serve release manifests from (<c>stratarec build --store</c>, then
+/// <c>stratarec publish</c>), absolute; null serves the workspace in <paramref name="ConfigRoot"/> as it is at startup.
+/// </param>
+/// <param name="Pipelines">The pipelines a node serving releases loads: a store has no workspace to list them.</param>
+/// <param name="ReleasePoll">How often a node serving releases reads the pointers; the sample polls often, to show a release
+/// or a stop take effect while you watch, where production keeps the engine's default (10 seconds).</param>
+public sealed record SampleSettings(
+    string ConfigRoot, string Environment, TimeSpan Deadline, string? Store, IReadOnlyList<string> Pipelines, TimeSpan ReleasePoll)
 {
     public static SampleSettings Read(IConfiguration configuration, string contentRoot)
     {
@@ -23,9 +31,19 @@ public sealed record SampleSettings(string ConfigRoot, string Environment, TimeS
             throw new InvalidOperationException($"StrataRec:DeadlineMs must be positive, not {deadlineMs}.");
         }
 
+        var pollMs = section.GetValue("ReleasePollMs", 2000);
+        if (pollMs <= 0)
+        {
+            throw new InvalidOperationException($"StrataRec:ReleasePollMs must be positive, not {pollMs}.");
+        }
+
+        var pipelines = section.GetSection("Pipelines").Get<string[]>() is { Length: > 0 } listed ? listed : ["trending_feed"];
         return new SampleSettings(
             Path.GetFullPath(section["ConfigRoot"] ?? "config", contentRoot),
             section["Environment"] ?? "local",
-            TimeSpan.FromMilliseconds(deadlineMs));
+            TimeSpan.FromMilliseconds(deadlineMs),
+            section["Store"] is { Length: > 0 } store ? Path.GetFullPath(store, contentRoot) : null,
+            pipelines,
+            TimeSpan.FromMilliseconds(pollMs));
     }
 }

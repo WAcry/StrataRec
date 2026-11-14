@@ -44,6 +44,22 @@ curl -s -X POST localhost:5000/recommend/trending_feed \
 
 截止时间由服务决定（`StrataRec:DeadlineMs`，默认 1000 ms），不由调用方传入。冷进程的第一个请求包含 JIT 编译，所以默认值放得宽；生产服务按延迟目标设置，并在报告就绪之前预热。
 
+## 服务发布（manifest）
+
+上面的服务在启动时读一次工作区。生产节点服务的是发布出来的 manifest（设计 10.1、10.3）：设置 `StrataRec:Store` 为一个 artifact store 目录，服务就从那里读每条流水线（`StrataRec:Pipelines`，默认 `trending_feed`）的指针，启动前加载好，之后按 `StrataRec:ReleasePollMs`（示例默认 2 秒，生产用引擎默认的 10 秒）轮询新的发布。`config/` 这时只是绑定里相对路径的基准目录。在本目录里走一遍完整流程：
+
+```sh
+dotnet run -- stratarec build -c config -s store          # 校验、上传产物，打印 publish 命令
+dotnet run -- stratarec publish -s store <manifest id>
+dotnet run --StrataRec:Store=store                        # 服务它；响应里的 manifest 是它的 id
+
+# 另一个终端：紧急停止一个实验。一次轮询之内服务换成撤销后的 manifest，这个实验的臂此后被忽略（experiments.ignored）
+dotnet run -- stratarec revoke -s store -p trending_feed exp_local_boost
+dotnet run -- stratarec status -s store                   # 发布了什么、哪些停止正在生效
+```
+
+之后 `stratarec build` 不会把被停止的实验原样带回来：先从 `config/releases/` 里去掉它，或者修改它（owner 的修复）再发布。
+
 ## 校验工作区
 
 官方 CLI `stratarec` 不认识这里的组件，对这个工作区运行 `stratarec validate` 会报未知类型。所以这个二进制带上了全部 `stratarec` 命令（`StrataRec.CommandLine` 库的 `StrataRecCommandLine.InvokeAsync`），用和服务相同的 `SampleEnvironment`：

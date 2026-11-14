@@ -16,3 +16,7 @@ artifacts/
 
 # Local agent tooling (worktrees, settings)
 .claude/
+
+# Artifact stores the READMEs build into (stratarec build -s store)
+/store/
+/samples/StrataRec.Samples.Host/store/
