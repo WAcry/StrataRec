@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.Extensions.Logging;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
+using StrataRec.Core.Threading;
 using StrataRec.Features.Bindings;
 
 namespace StrataRec.Hosting.Bindings;
@@ -106,7 +107,7 @@ public sealed partial class BindingHost
     internal sealed class ClientEntry
     {
         private readonly BindingHost _host;
-        private readonly CancellationTokenSource _stop = new(); // cancels the load; never disposed (see TableEntry)
+        private readonly ObservedCancellationSource _stop = new(CancellationSite.BindingLoad); // cancels the load; never disposed (see TableEntry)
         private readonly object _gate = new();
         private readonly TaskCompletionSource _disposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private Task? _run;
@@ -198,7 +199,7 @@ public sealed partial class BindingHost
 
             // Outside the lock: the callbacks run on the pool, none of their code here, and a callback's failure is logged
             // without holding the entry.
-            _ = ObserveCallbacksAsync(_stop.CancelAsync(), first);
+            _ = ObserveCallbacksAsync(_stop.CancelObservedAsync(), first);
             return first.Task;
         }
 

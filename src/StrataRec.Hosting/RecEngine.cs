@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Diagnostics;
+using StrataRec.Core.Threading;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Assignment;
 using StrataRec.Experiments.Compilation;
@@ -331,7 +332,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                 throw Disposed(null);
             }
 
-            var load = new PendingLoad(Bindings.OpenLease(), CancellationTokenSource.CreateLinkedTokenSource(cancellationToken));
+            var load = new PendingLoad(Bindings.OpenLease(), new ObservedCancellationSource(CancellationSite.PlanLoad, cancellationToken));
             _loads.Add(load);
             return load;
         }
@@ -487,7 +488,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             {
                 // The load's waits complete on the thread pool, never on this thread under the lock; it ends with
                 // ObjectDisposedException (see LoadAsync) and its EndLoad waits for this lock.
-                _ = load.Cancellation.CancelAsync();
+                _ = load.Cancellation.CancelObservedAsync();
                 leases.Add(load.Lease);
             }
 
@@ -512,12 +513,12 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     }
 
     /// <summary>A load between its start and its end (see the lifecycle remarks): its lease, and the cancellation a disposal uses.</summary>
-    private sealed class PendingLoad(BindingLease lease, CancellationTokenSource cancellation)
+    private sealed class PendingLoad(BindingLease lease, ObservedCancellationSource cancellation)
     {
         public BindingLease Lease { get; } = lease;
 
         /// <summary>Linked to the caller's token; cancelled on its own only by a disposal.</summary>
-        public CancellationTokenSource Cancellation { get; } = cancellation;
+        public ObservedCancellationSource Cancellation { get; } = cancellation;
 
         /// <summary>Set under the lifecycle lock when the plan is published: the served plan owns the lease from then on.</summary>
         public bool Published { get; set; }
@@ -649,7 +650,9 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
 
         // The provider shares the end-to-end deadline. It is called inline on the request's thread, as connectors and
         // models are (BoundedCall): what it does before it returns is not bounded. Its asynchronous part is: its token is
-        // cancelled at the deadline, and the wait ends there even if it ignores the token (review 18 #2).
+        // cancelled at the deadline, and the wait ends there even if it ignores the token (review 18 #2). The deadline
+        // cancels it through ObservedCancellationSource, so the provider's callbacks never run on the timer's thread, where
+        // one that throws would end the process (review 20 #1).
         var budget = request.Deadline - Stopwatch.GetElapsedTime(started);
         if (budget <= TimeSpan.Zero)
         {
@@ -657,11 +660,11 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         }
 
         const string Late = "deadline exceeded during assignment";
-        var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var deadline = new ProviderDeadline(_logger, cancellationToken, request.PipelineId, request.RequestId);
         Task<IReadOnlyList<string>>? pending = null; // the provider, once it did not answer synchronously
         try
         {
-            deadline.CancelAfter(budget);
+            deadline.CancelAfterObserved(budget);
             var context = new AssignmentContext
             {
                 PipelineId = request.PipelineId,
@@ -727,7 +730,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             // A provider that has ended no longer needs its token; one still running keeps it until it ends.
             if (pending is { IsCompleted: false })
             {
-                _ = AbandonProviderAsync(deadline, pending, request.PipelineId, request.RequestId);
+                _ = AbandonProviderAsync(deadline, pending);
             }
             else
             {
@@ -768,29 +771,15 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// invariant 3). Disposing the source at once could leave the token never cancelled: the wait may end before the
     /// source's timer fires, and a caller's cancellation may end the request, inline in Cancel, before the registration
     /// that cancels the linked token has run, and disposing removes it. The callbacks run on the pool, so one that blocks
-    /// does not hold the request; one that throws is logged. A provider that never ends keeps its source. Whatever the
-    /// cancellation or its log does, the source is disposed once the provider has ended, and not before (review 20 #3).
+    /// does not hold the request; one that throws is counted and logged by the source (<see cref="ProviderDeadline"/>),
+    /// which no logger can make throw. A provider that never ends keeps its source. Whatever the cancellation does, the
+    /// source is disposed once the provider has ended, and not before (review 20 #3).
     /// </summary>
-    private async Task AbandonProviderAsync(CancellationTokenSource deadline, Task provider, string pipelineId, string requestId)
+    private static async Task AbandonProviderAsync(ProviderDeadline deadline, Task provider)
     {
         try
         {
-            var callbacks = deadline.CancelAsync();
-            try
-            {
-                await callbacks.ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                try
-                {
-                    LogProviderCancellationCallbacksFailed(_logger, callbacks.Exception ?? ex, pipelineId, requestId);
-                }
-                catch (Exception)
-                {
-                    // A failing logger cannot report itself.
-                }
-            }
+            await deadline.CancelObservedAsync().ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         }
         finally
         {
@@ -798,6 +787,17 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             _ = provider.Exception; // a late failure nobody awaits any more
             deadline.Dispose();
         }
+    }
+
+    /// <summary>
+    /// The assignment provider's token: cancelled at the request's deadline, with the caller's token, or when the engine
+    /// stops waiting. In every case the provider's callbacks run on the pool, and what they throw is logged (1102).
+    /// </summary>
+    private sealed class ProviderDeadline(ILogger logger, CancellationToken caller, string pipelineId, string requestId)
+        : ObservedCancellationSource(CancellationSite.Assignment, caller)
+    {
+        protected override void CallbacksFailed(AggregateException errors) =>
+            LogProviderCancellationCallbacksFailed(logger, errors, pipelineId, requestId);
     }
 
     [LoggerMessage(EventId = 1102, Level = LogLevel.Warning,

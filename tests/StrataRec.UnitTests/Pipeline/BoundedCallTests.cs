@@ -597,8 +597,8 @@ public sealed class BoundedCallAllocationTests
     public void ASynchronousAnswer_WithAShorterOwnTimeout_CostsOneTokenSourceAndTimer()
     {
         // The token source is created before the call is sent, so that the client's token carries the timeout. About
-        // 160 B on .NET 8: the linked source, its registration on the node token and the timer. Bounded, so that anything
-        // more per call shows up here.
+        // 210 B on .NET 8: the source, its registration on the node token and the timer (160 B with CancelAfter, whose
+        // timer cancels on the timer's thread; review 20 #1). Bounded, so that anything more per call shows up here.
         var bytes = BytesPerCall(timeoutMs: 300_000, calls: 2_000);
 
         Assert.InRange(bytes, 1, 256);

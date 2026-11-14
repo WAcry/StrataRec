@@ -3,6 +3,8 @@
   <PropertyGroup>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!-- Program.cs has the entry point: TimerFaultTests run the assembly as a child process. -->
+    <GenerateProgramFile>false</GenerateProgramFile>
     <RootNamespace>StrataRec.IntegrationTests</RootNamespace>
   </PropertyGroup>
 

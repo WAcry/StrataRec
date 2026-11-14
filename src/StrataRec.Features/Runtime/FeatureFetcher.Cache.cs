@@ -229,7 +229,7 @@ public sealed partial class FeatureFetcher
         read.BudgetMs = BudgetMs(read.Group);
         if (read.BudgetMs > 0)
         {
-            read.Cancellation = new FetchCancellation(cancellationToken, read.BudgetMs);
+            read.Cancellation = new FetchCancellation(cancellationToken, read.BudgetMs, _events, _requestId);
             read.StoreBudgetMs = Math.Min(read.BudgetMs, read.Supply.DistributedTimeoutMs ?? Math.Max(1, read.BudgetMs / 2));
             read.StoreDeadline = Stopwatch.GetTimestamp() + (read.StoreBudgetMs * Stopwatch.Frequency / 1000);
         }

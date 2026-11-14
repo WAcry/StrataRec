@@ -66,6 +66,9 @@ public static class StrataRecTags
     /// <summary><c>durable</c> or <c>best_effort</c>.</summary>
     public const string LogDelivery = "stratarec.log.delivery";
 
+    /// <summary>A token the framework cancels for code it does not own (<see cref="Threading.CancellationSite"/>).</summary>
+    public const string Token = "stratarec.token";
+
     // Span-only keys.
 
     public const string RequestId = "stratarec.request.id";

@@ -658,7 +658,7 @@ public sealed class PipelineExecutor
         var deadline = state.Replay is null
             ? Stopwatch.GetTimestamp() + (long)(Math.Min(budgetMs, AttemptBudget.MaxWaitMs) * Stopwatch.Frequency / 1000)
             : long.MaxValue;
-        var budget = new AttemptBudget(cancellationToken, deadline);
+        var budget = new AttemptBudget(cancellationToken, deadline, state.Events, state.RequestId);
         var context = new OperatorContext(state, node.NodeId, node.Effects, budget);
         string? failure;
         var timedOut = false;

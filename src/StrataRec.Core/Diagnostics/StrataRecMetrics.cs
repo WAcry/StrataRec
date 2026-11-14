@@ -35,6 +35,7 @@ public static class StrataRecMetrics
         public const string RequestArmsIgnored = "stratarec.request.arms.ignored";
         public const string RequestMemoryRented = "stratarec.request.memory.rented";
         public const string AbandonedIo = "stratarec.io.abandoned";
+        public const string CancellationCallbackErrors = "stratarec.cancellation.callback_errors";
         public const string NodeDuration = "stratarec.node.duration";
         public const string NodeRowsIn = "stratarec.node.rows.in";
         public const string NodeRowsOut = "stratarec.node.rows.out";
@@ -133,6 +134,16 @@ public static class StrataRecMetrics
     /// <c>stratarec.pipeline</c>.
     /// </summary>
     public static readonly Counter<long> AbandonedIo = Meter.CreateCounter<long>(Names.AbandonedIo, "{operation}", "External I/O still running after its request returned.");
+
+    /// <summary>
+    /// Cancellations of a token the framework handed to code it does not own (at a deadline or a timeout, of an abandoned
+    /// wait, at a shutdown, or passed on from the caller's token) whose callbacks threw; one per cancellation. The
+    /// callbacks ran on the thread pool and the request was not affected (<see cref="Threading.ObservedCancellationSource"/>).
+    /// Tags: <c>stratarec.token</c> = <c>assignment</c> | <c>node</c> | <c>call</c> | <c>fetch</c> | <c>log_drain</c> |
+    /// <c>binding_load</c> | <c>local_table</c> | <c>signature_lookup</c> | <c>plan_load</c> | <c>cache_writer</c>.
+    /// </summary>
+    public static readonly Counter<long> CancellationCallbackErrors = Meter.CreateCounter<long>(Names.CancellationCallbackErrors, "{cancellation}",
+        "Cancellations of tokens held by external code whose callbacks threw.");
 
     // Nodes: recorded once per timeline position that has a node, under the primary node id.
 

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
+using StrataRec.Core.Threading;
 using StrataRec.Features.Bindings;
 using StrataRec.Features.Local;
 
@@ -287,7 +288,7 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
     {
         private readonly BindingHost _host;
         private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly CancellationTokenSource _stop = new();
+        private readonly ObservedCancellationSource _stop = new(CancellationSite.LocalTable);
         private readonly object _gate = new();
         private readonly TaskCompletionSource _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private Task? _run;
@@ -354,7 +355,7 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
             }
 
             // The token observes the cancellation now; the callbacks registered on it run on the thread pool.
-            var callbacks = _stop.CancelAsync();
+            var callbacks = _stop.CancelObservedAsync();
             _ready.TrySetCanceled();
             _ = StoppedAsync(run ?? Task.CompletedTask, callbacks);
             return run is not null;
