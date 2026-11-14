@@ -92,7 +92,7 @@ public sealed class ExplainEndToEndTests
         Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, sample, "local", [bundle], Array.Empty<string>(), "text", expectIdentical: true, text,
             CancellationToken.None, explain: new[] { "17" }));
         var lines = text.ToString();
-        Assert.Contains("  explain   pipeline home_feed", lines);
+        Assert.DoesNotContain("  explain   pipeline home_feed", lines); // the result line says it served
         Assert.Contains("  explain   17: dropped by safety_filter", lines);
         Assert.Contains("safety_filter: dropped (was rank 17); item.is_policy_safe true, item.report_rate 0.08; dropped: ", lines);
 

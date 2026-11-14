@@ -12,10 +12,10 @@ namespace StrataRec.CommandLine.Commands;
 internal static class ExplanationText
 {
     /// <param name="prefix">Starts each candidate's line (e.g. the report's label column); its steps are indented past it.</param>
+    /// <remarks>The pipeline explained is the one that served the result, which the text formats name already ("served by").</remarks>
     public static void Write(TextWriter output, RunExplanation explanation, string prefix)
     {
         var indent = new string(' ', prefix.Length + 2);
-        output.WriteLine($"{prefix}pipeline {explanation.PipelineId}");
         foreach (var candidate in explanation.Candidates)
         {
             output.WriteLine($"{prefix}{candidate.Id}: {Verdict(candidate)}");

@@ -2198,7 +2198,6 @@ span 回答“这个请求的时间花在哪里”。候选级的问题，例如
 ```text
 $ stratarec run -c samples/home_feed -r samples/home_feed/requests/user_1001.json --format text --explain 17,13
 ...
-  explain   pipeline home_feed
   explain   17: dropped by safety_filter
               recall: entered at rank 17; recall.sources_mask 3, recall.best_rank 5, recall.best_score 1.66, recall.primary_source 'two_tower'
               safety_filter: dropped (was rank 17); item.is_policy_safe true, item.report_rate 0.08; dropped: (col.item.is_policy_safe ?? true) && col.item.report_rate < 0.05 is false
