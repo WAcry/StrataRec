@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.CommandLine.Invocation;
 using StrataRec.CommandLine.Commands;
 using StrataRec.Pipeline.Planning;
 
@@ -62,8 +63,27 @@ public static class StrataRecCommandLine
 
     private static async Task<int> Invoke(ParseResult parse, InvocationConfiguration configuration, CancellationToken cancellationToken)
     {
+        // A command's errors and their typo suggestions, then one line on where its usage is: the whole help (25 lines for
+        // run) printed after them buried the error. Without a command, the help is the list of commands, which is the answer.
+        var command = parse.CommandResult.Command;
+        var errors = command is RootCommand ? null : parse.Action as ParseErrorAction;
+        if (errors is not null)
+        {
+            errors.ShowHelp = false;
+        }
+
         var code = await parse.InvokeAsync(configuration, cancellationToken).ConfigureAwait(false);
-        return parse.Errors.Count > 0 ? 2 : code;
+        if (parse.Errors.Count == 0)
+        {
+            return code;
+        }
+
+        if (errors is not null)
+        {
+            configuration.Error.WriteLine($"See 'stratarec {command.Name} --help' for the usage.");
+        }
+
+        return 2;
     }
 
     /// <summary>

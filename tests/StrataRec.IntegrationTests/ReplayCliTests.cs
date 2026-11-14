@@ -70,6 +70,21 @@ public sealed class ReplayCliTests
 
         Assert.Equal(2, code);
         Assert.Contains(message, error.ToString());
+        // The error and where the usage is, not the whole help after it.
+        Assert.EndsWith($"See 'stratarec {args[0]} --help' for the usage.", error.ToString().TrimEnd());
+        Assert.DoesNotContain("Usage:", error.ToString());
+    }
+
+    [Fact]
+    public async Task NoCommand_PrintsTheCommands()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(Array.Empty<string>(), Tool.Environment, output, error));
+
+        Assert.Contains("Commands:", output.ToString() + error.ToString());
+        Assert.DoesNotContain("for the usage", error.ToString());
     }
 
     [Fact]
