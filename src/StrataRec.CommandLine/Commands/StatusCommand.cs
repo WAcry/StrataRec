@@ -71,7 +71,7 @@ internal static class StatusCommand
                 if (unread is not null)
                 {
                     diagnostics.Warning("REVOCATIONS_UNKNOWN", "manifest:" + published.Id, "/previous",
-                        $"The manifest revokes earlier ones, and manifest '{unread}' before it cannot be read: what the revocations removed is not known.",
+                        $"The manifest revokes earlier ones, and manifest '{unread}' in its history cannot be read: what the revocations before it removed is not known.",
                         "restore that manifest to the store");
                 }
 

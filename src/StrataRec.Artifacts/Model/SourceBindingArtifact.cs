@@ -23,7 +23,15 @@ public sealed class SourceBindingArtifact
     /// The client, connector and update-source types the bindings name (design 10.4): a binary that lacks one cannot
     /// serve them. The one place that knows which binding settings name a type, so a new kind of setting is added here.
     /// </summary>
-    public List<string> RequiredTypes()
+    public List<string> RequiredTypes() => RequiredTypes(null);
+
+    /// <summary>
+    /// <see cref="RequiredTypes()"/>, counting a model or candidate source only when <paramref name="named"/> holds its
+    /// name: a client nothing names is never created (instances are made for the nodes that use them), so a binary that
+    /// lacks its type serves the configuration. Feature sources count always: the catalog names them, and cache stores and
+    /// update sources serve them. Null counts every binding.
+    /// </summary>
+    public List<string> RequiredTypes(IReadOnlySet<string>? named)
     {
         var types = new List<string>();
         foreach (var (_, source) in Sources)
@@ -44,14 +52,20 @@ public sealed class SourceBindingArtifact
             }
         }
 
-        foreach (var (_, model) in Models)
+        foreach (var (name, model) in Models)
         {
-            types.Add(model.Client);
+            if (named is null || named.Contains(name))
+            {
+                types.Add(model.Client);
+            }
         }
 
-        foreach (var (_, source) in CandidateSources)
+        foreach (var (name, source) in CandidateSources)
         {
-            types.Add(source.Client);
+            if (named is null || named.Contains(name))
+            {
+                types.Add(source.Client);
+            }
         }
 
         return types;

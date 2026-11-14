@@ -120,7 +120,7 @@ public sealed class RevokeCommandTests
         var (code, errors) = await Build(root, store);
         Assert.Equal(1, code);
         Assert.Contains("releases/home_feed.local.jsonc:11:5: error EXPERIMENT_REVOKED /experiments/exp_mmr_diversity: Experiment 'exp_mmr_diversity' was " +
-                        $"revoked by manifest '{revocation}' (seq 2), which is published, and this build releases it again as it was.", errors);
+                        $"revoked by manifest '{revocation}' (seq 2), and no release since brought it back; this build releases it again as it was.", errors);
         Assert.Contains("hint: remove it here until it is fixed (a changed experiment is released), or pass --restore exp_mmr_diversity to release it as it is",
             errors);
 
@@ -216,6 +216,147 @@ public sealed class RevokeCommandTests
         var errors = new StringWriter();
         var code = await StrataRecCommandLine.InvokeAsync(["status", "-s", store, .. options], Tool.Environment, output, errors);
         return (code, output.ToString(), errors.ToString());
+    }
+
+    /// <summary>
+    /// A model or candidate source binding is required of the binary only while the pipeline or a released experiment names
+    /// it: the revocation of the one experiment that used a new client type is a manifest a binary without the type takes
+    /// (design 10.4; review 39: every type the bindings listed stayed required, and the rolled-back binary refused it).
+    /// </summary>
+    [Fact]
+    public async Task Revoke_RequiresOnlyTheClientsWhatIsLeftNames()
+    {
+        var root = ManifestStores.Workspace();
+        var store = ManifestStores.NewStore();
+        var blobs = new FileSystemArtifactStore(store);
+        var first = await ReadAsync(blobs, await BuildAndPublishAsync(root, store));
+
+        // The bindings gain a model of a new client type, and one arm of exp_quality_weight names it.
+        var bindings = (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(blobs.GetBlobPath(first.Artifacts.Bindings)))!;
+        ((System.Text.Json.Nodes.JsonObject)bindings["models"]!)["future_model"] = new System.Text.Json.Nodes.JsonObject { ["client"] = "future_client@1" };
+        var experiment = (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(
+            await File.ReadAllTextAsync(blobs.GetBlobPath(first.Experiments["exp_quality_weight"].Artifact)))!;
+        var arm = (System.Text.Json.Nodes.JsonObject)((System.Text.Json.Nodes.JsonObject)experiment["arms"]!)["strong"]!;
+        arm["params"] ??= new System.Text.Json.Nodes.JsonObject();
+        ((System.Text.Json.Nodes.JsonObject)arm["params"]!)["ranker_model"] = "future_model";
+        var experiments = new Dictionary<string, ManifestExperiment>(first.Experiments)
+        {
+            ["exp_quality_weight"] = new() { Artifact = await blobs.PutAsync(experiment), Layer = first.Experiments["exp_quality_weight"].Layer },
+        };
+        var manifest = new ReleaseManifest
+        {
+            PipelineId = first.PipelineId, Environment = first.Environment, Seq = 2, MinAcceptedSeq = 0, Previous = await Pointer(store),
+            Requires = [.. first.Requires, "future_client@1"],
+            Artifacts = new ManifestArtifacts
+            {
+                Pipeline = first.Artifacts.Pipeline, Catalog = first.Artifacts.Catalog, Bindings = await blobs.PutAsync(bindings), Tables = first.Artifacts.Tables,
+                Policy = first.Artifacts.Policy,
+            },
+            Experiments = experiments,
+        };
+        var id = await ManifestStores.PutAsync(store, manifest);
+
+        var diagnostics = new DiagnosticBag();
+        var withoutQuality = await ManifestBuilder.RevokeAsync(manifest, id, ["exp_quality_weight"], blobs, diagnostics);
+        var withoutMmr = await ManifestBuilder.RevokeAsync(manifest, id, ["exp_mmr_diversity"], blobs, diagnostics);
+        Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
+        Assert.DoesNotContain("future_client@1", withoutQuality!.Requires);
+        Assert.Contains("linear@1", withoutQuality.Requires); // the baseline's model still is
+        Assert.Contains("future_client@1", withoutMmr!.Requires);
+
+        // A binary without the type takes the revocation.
+        await using var engine = new RecEngine(CommonOptions.ForRoot(Tool.Environment, root));
+        var revocationId = await ManifestStores.PutAsync(store, withoutQuality);
+        var loaded = await engine.LoadManifestAsync(withoutQuality, revocationId, blobs);
+        Assert.True(loaded.Applied, loaded.Reason);
+    }
+
+    /// <summary>
+    /// What the published manifest releases is not revoked, whatever revocation before it removed it: a controller brought it
+    /// back (review 39: build refused the configuration that was published). A part of the history that cannot be read
+    /// keeps out what the part that was read revoked, and says the rest is not known.
+    /// </summary>
+    [Fact]
+    public async Task Build_TakesWhatThePublishedManifestBroughtBack_AndKeepsOutWhatItKnowsRevoked()
+    {
+        var root = ManifestStores.Workspace();
+        var store = ManifestStores.NewStore();
+        var blobs = new FileSystemArtifactStore(store);
+        var first = await BuildAndPublishAsync(root, store);
+        var firstManifest = await ReadAsync(blobs, first);
+        Assert.Equal(0, (await Revoke(store, "exp_mmr_diversity")).Code);
+        var revocation = await Pointer(store);
+
+        // Another controller publishes the first release's configuration again, as a revocation of its own.
+        var back = Path.Combine(store, "back.json");
+        File.WriteAllText(back, ArtifactSerializer.ToNode(new ReleaseManifest
+        {
+            PipelineId = firstManifest.PipelineId, Environment = firstManifest.Environment, Seq = 3, MinAcceptedSeq = 3, Previous = revocation,
+            Requires = firstManifest.Requires, Artifacts = firstManifest.Artifacts, Experiments = firstManifest.Experiments,
+        }).ToJsonString());
+        Assert.Equal(0, await StrataRecCommandLine.InvokeAsync(["publish", "-s", store, back], Tool.Environment, TextWriter.Null, TextWriter.Null));
+        var (code, errors) = await Build(root, store);
+        Assert.True(code == 0, errors);
+        Assert.Contains(": unchanged, the release the pointer names has this configuration", errors);
+
+        // Two stops, and the manifest before both cannot be read: the second's experiment is still kept out.
+        Assert.Equal(0, (await Revoke(store, "exp_mmr_diversity")).Code);
+        Assert.Equal(0, (await Revoke(store, "exp_quality_weight")).Code);
+        var before = await Pointer(store);
+        var beforeBoth = (await ReadAsync(blobs, (await ReadAsync(blobs, before)).Previous!)).Previous!;
+        File.Delete(blobs.GetBlobPath(beforeBoth));
+        (code, errors) = await Build(root, store);
+        Assert.Equal(1, code);
+        Assert.Contains($"warning REVOCATIONS_UNKNOWN manifest:{before}/previous: The published manifest revokes earlier ones, and manifest '{beforeBoth}' " +
+                        "in its history cannot be read", errors);
+        Assert.Contains("error EXPERIMENT_REVOKED /experiments/exp_quality_weight", errors);
+        Assert.DoesNotContain("error EXPERIMENT_REVOKED /experiments/exp_mmr_diversity", errors); // its stop is in the part not read
+    }
+
+    /// <summary>
+    /// A stop takes the pointer's lock as publish does, and names an experiment once however often it is given; a blob the
+    /// process may not read is a diagnostic at the manifest's pointer (review 39: an unhandled exception).
+    /// </summary>
+    [Fact]
+    public async Task Revoke_TakesThePointersTurn_NamesEachExperimentOnce_AndSaysWhatItCannotRead()
+    {
+        var root = ManifestStores.Workspace();
+        var store = ManifestStores.NewStore();
+        var first = await BuildAndPublishAsync(root, store);
+        var pointers = new FileSystemManifestSource(store);
+        var lockPath = Path.Combine(store, "pointers", "local", ".home_feed.json.lock");
+        using (new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            var (busy, _, busyErrors) = await Revoke(store, "exp_mmr_diversity");
+            Assert.Equal(1, busy);
+            Assert.Contains("error PUBLISH_BUSY", busyErrors);
+            Assert.Equal(first, await Pointer(store));
+        }
+
+        var (code, output, errors) = await Revoke(store, "exp_mmr_diversity", "exp_mmr_diversity");
+        Assert.True(code == 0, errors);
+        Assert.StartsWith("home_feed (local): revoked exp_mmr_diversity\n", output.ReplaceLineEndings("\n"));
+
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+        {
+            return; // permissions do not bind the test's process
+        }
+
+        var blobs = new FileSystemArtifactStore(store);
+        var pipelineBlob = blobs.GetBlobPath((await ReadAsync(blobs, await Pointer(store))).Artifacts.Pipeline);
+        File.SetUnixFileMode(pipelineBlob, UnixFileMode.None);
+        try
+        {
+            (code, _, errors) = await Revoke(store, "exp_quality_weight");
+            Assert.Equal(1, code);
+            Assert.Contains("error ARTIFACT_UNAVAILABLE", errors);
+            Assert.Contains("hint: this process may not read the store's blob: check its permissions", errors);
+            Assert.DoesNotContain("Unhandled", errors);
+        }
+        finally
+        {
+            File.SetUnixFileMode(pipelineBlob, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
     }
 
     private static async Task<string> BuildAndPublishAsync(string root, string store)

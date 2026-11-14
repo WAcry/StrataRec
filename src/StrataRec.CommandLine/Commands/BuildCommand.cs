@@ -207,7 +207,8 @@ internal static class BuildCommand
     /// <summary>
     /// Whether this build keeps out the experiments the published revocations removed (see remarks): false, after
     /// reporting at the release file's entry, when it releases one of them as it was and <paramref name="restore"/> does
-    /// not name it. A revocation whose history cannot be read is warned about, and keeps nothing out.
+    /// not name it. A part of the revocations' history that cannot be read is warned about: what it revoked is not known,
+    /// and what the part that was read revoked is still kept out.
     /// </summary>
     private static async Task<bool> KeepsRevokedOutAsync(
         ConfigWorkspace workspace, PlanCompileRequest request, string environment, IArtifactStore store, (string Id, ReleaseManifest Manifest) published,
@@ -217,8 +218,8 @@ internal static class BuildCommand
         if (unread is not null)
         {
             diagnostics.Warning("REVOCATIONS_UNKNOWN", "manifest:" + published.Id, "/previous",
-                $"The published manifest revokes earlier ones, and manifest '{unread}' before it cannot be read: what the revocations removed is not known, " +
-                "and this build does not keep it out.",
+                $"The published manifest revokes earlier ones, and manifest '{unread}' in its history cannot be read: what the revocations before it removed " +
+                "is not known, and this build does not keep that out (what the later ones removed, it does).",
                 "restore that manifest to the store");
         }
 
@@ -234,8 +235,8 @@ internal static class BuildCommand
                 && ContentHash.Compute(workspace.Experiments[name].Document) == revocation.Artifact)
             {
                 diagnostics.Error("EXPERIMENT_REVOKED", releaseFile, "/experiments/" + JsonPointer.Escape(name),
-                    $"Experiment '{name}' was revoked by manifest '{revocation.ManifestId}' (seq {revocation.Seq}), which is published, and this build " +
-                    "releases it again as it was.",
+                    $"Experiment '{name}' was revoked by manifest '{revocation.ManifestId}' (seq {revocation.Seq}), and no release since brought it back; " +
+                    "this build releases it again as it was.",
                     $"remove it here until it is fixed (a changed experiment is released), or pass --restore {name} to release it as it is");
                 kept = false;
             }

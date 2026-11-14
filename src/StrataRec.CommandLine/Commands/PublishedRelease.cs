@@ -71,13 +71,15 @@ internal static class PublishedRelease
     /// <summary>
     /// The experiments removed by the revocations that end at the published manifest (<paramref name="id"/>): from it back
     /// along <c>previous</c> while each is a revocation, every experiment the one before had and it lacks, with the artifact
-    /// it had and the revocation that removed it. An ordinary release ends the walk: what it left out was left out on
-    /// purpose, and what it released was released again. <c>Unread</c> names a manifest the walk needed and
-    /// could not read, so the experiments it revoked are not known.
+    /// it had and the revocation that removed it, unless the published manifest releases it again (a controller brought it
+    /// back: review 39). An ordinary release ends the walk: what it left out was left out on purpose, and what it released
+    /// was released again. <c>Unread</c> names a manifest the walk needed and could not read: the revocations before it are
+    /// not known, the ones after it are.
     /// </summary>
     internal static async Task<(Dictionary<string, Revocation> Revoked, string? Unread)> RevokedAsync(
         IArtifactStore store, string id, ReleaseManifest manifest, CancellationToken cancellationToken)
     {
+        var published = manifest;
         var revoked = new Dictionary<string, Revocation>(StringComparer.Ordinal);
         while (IsRevocation(manifest) && manifest.Previous is { } previous)
         {
@@ -94,7 +96,7 @@ internal static class PublishedRelease
 
             foreach (var (name, entry) in before.Experiments)
             {
-                if (!manifest.Experiments.ContainsKey(name))
+                if (!manifest.Experiments.ContainsKey(name) && !published.Experiments.ContainsKey(name))
                 {
                     revoked.TryAdd(name, new Revocation(id, manifest.Seq, entry.Artifact));
                 }

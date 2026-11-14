@@ -417,13 +417,53 @@ public static class ManifestBuilder
             }
         }
 
-        foreach (var type in bindings.RequiredTypes())
+        // A model or candidate source binding counts when the pipeline or a released experiment names it (a node's model,
+        // a recall quota's key, a parameter's value): one only a revoked experiment named is not required of the binary
+        // that serves the revocation, as design 10.4 needs after a binary rollback (review 39). Scanning every name
+        // over-counts a coincidence, which only makes a binary that lacks the type report the manifest incompatible.
+        var named = new HashSet<string>(StringComparer.Ordinal);
+        Names(ArtifactSerializer.ToNode(pipeline), named);
+        foreach (var placement in experiments)
+        {
+            foreach (var (_, patch) in placement.Experiment.Arms)
+            {
+                Names(patch, named);
+            }
+        }
+
+        foreach (var type in bindings.RequiredTypes(named))
         {
             required.Add(type);
         }
 
         required.Add(Expressions.ExpressionCompiler.FunctionSetCapability);
         return new List<string>(required);
+    }
+
+    /// <summary>Every string value and member name in <paramref name="node"/>.</summary>
+    private static void Names(JsonNode? node, HashSet<string> names)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                foreach (var (name, value) in obj)
+                {
+                    names.Add(name);
+                    Names(value, names);
+                }
+
+                break;
+            case JsonArray array:
+                foreach (var item in array)
+                {
+                    Names(item, names);
+                }
+
+                break;
+            case JsonValue value when value.TryGetValue<string>(out var text):
+                names.Add(text);
+                break;
+        }
     }
 
     private static async ValueTask<T?> FetchAsync<T>(IArtifactStore store, string id, string label, string pointer, DiagnosticBag diagnostics, CancellationToken cancellationToken)
@@ -434,12 +474,16 @@ public static class ManifestBuilder
         {
             bytes = await store.TryGetAsync(id, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is ArgumentException or ArtifactIntegrityException or IOException)
+        catch (Exception ex) when (ex is ArgumentException or ArtifactIntegrityException or IOException or UnauthorizedAccessException)
         {
             diagnostics.Error("ARTIFACT_UNAVAILABLE", label, pointer, $"Artifact '{id}' could not be read: {ex.Message}",
-                ex is ArtifactIntegrityException
-                    ? "the stored blob is damaged: upload the artifact again ('stratarec build --store' rewrites it), or read it from a copy of the store"
-                    : null);
+                ex switch
+                {
+                    ArtifactIntegrityException =>
+                        "the stored blob is damaged: upload the artifact again ('stratarec build --store' rewrites it), or read it from a copy of the store",
+                    UnauthorizedAccessException => "this process may not read the store's blob: check its permissions",
+                    _ => null,
+                });
             return null;
         }
 
