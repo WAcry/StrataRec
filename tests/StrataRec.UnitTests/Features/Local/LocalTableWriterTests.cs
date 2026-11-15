@@ -323,6 +323,50 @@ public class LocalTableWriterTests
         Assert.Equal(18, table.Pin().RecordCount);
     }
 
+    /// <summary>
+    /// The writer keeps nothing of a version it wrote once that version is replaced (Gemini review 2026-11-14, finding 5):
+    /// the probe of its last write held the version, with its pages, index and dictionary, until the next write, which a
+    /// source with nothing more to write never makes.
+    /// </summary>
+    [Theory]
+    [InlineData("empty reload")]
+    [InlineData("compaction")]
+    public void AReplacedVersion_IsNotKeptAliveByTheWriter_WhenNothingIsWrittenAfter(string replacement)
+    {
+        var table = Table();
+        var old = WriteThenReplace(table, replacement);
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        Assert.False(old.IsAlive, $"the writer keeps the version replaced by the {replacement} alive");
+    }
+
+    /// <summary>Writes records, replaces the version; a weak reference to the old one. Not inlined, so no local here keeps it alive.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference WriteThenReplace(LocalFeatureTable table, string replacement)
+    {
+        for (var id = 1; id <= 200; id++)
+        {
+            Write(table.Writer, EntityKey.FromInt64(id), 1, Values(id));
+        }
+
+        Write(table.Writer, EntityKey.FromInt64(1), 2, Values(1)); // superseded bytes, for the compaction to drop
+        var old = new WeakReference(table.Pin());
+        if (replacement == "compaction")
+        {
+            table.Writer.Compact();
+        }
+        else
+        {
+            table.Writer.BeginReload();
+            table.Writer.CompleteReload(UpdatePosition.Single(1));
+        }
+
+        Assert.NotSame(old.Target, table.Pin());
+        return old;
+    }
+
     [Fact]
     public void RejectedWrite_DoesNotKeepTheDiscardedCompactedCopyAlive()
     {

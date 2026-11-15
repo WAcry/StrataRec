@@ -63,5 +63,8 @@ public readonly struct CandidateTableView
     /// <inheritdoc cref="CandidateTable.FindRow"/>
     public int FindRow(in EntityKey key) => _table.FindRow(key);
 
+    /// <inheritdoc cref="CandidateTable.ContainsKey"/>
+    public bool ContainsKey(in EntityKey key) => _table.ContainsKey(key);
+
     public override string ToString() => $"{LiveCount} live of {PhysicalRowCount} rows ({KeyType} keys, {FreeRows} free)";
 }

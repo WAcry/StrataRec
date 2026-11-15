@@ -33,7 +33,7 @@ namespace StrataRec.Features.Local;
 /// field's type; floats and vector components also accept <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c>, which
 /// are stored as such and replaced on read like any non-finite value. A line with <c>"deleted": true</c> is a tombstone.</para>
 /// <para><b>Settings.</b> <c>uri</c>: the snapshot directory (holding <c>snapshot.json</c>) or the manifest itself, as a
-/// path (relative to the config root) or a <c>file://</c> URI. <c>reload</c>: an ISO 8601 duration such as <c>PT1H</c>.</para>
+/// path (relative to the config root) or a <c>file://</c> URI. <c>reload</c>: an ISO 8601 duration such as <c>PT1H</c>, at most <c>P49D</c>.</para>
 /// <para>Each load is a reload of the table (<see cref="IFeatureTableWriter.BeginReload"/>): readers keep the previous
 /// version until the new one is complete; a load that fails leaves it in place and the error is thrown. A manifest that
 /// has not changed since the last load is not loaded again.</para>
@@ -181,6 +181,8 @@ public sealed class SnapshotFilesUpdateSourceFactory : IFeatureUpdateSourceFacto
         return new SnapshotFilesUpdateSource(ResolveManifest(uri, baseDirectory, location), reload);
     }
 
+    private static readonly TimeSpan MaxReload = TimeSpan.FromDays(49);
+
     /// <summary>ISO 8601 duration (the JSON Schema <c>duration</c> format), e.g. <c>PT1H</c> or <c>PT30M</c>.</summary>
     private static TimeSpan ParseDuration(JsonElement value, string location)
     {
@@ -203,6 +205,13 @@ public sealed class SnapshotFilesUpdateSourceFactory : IFeatureUpdateSourceFacto
         if (period <= TimeSpan.Zero)
         {
             throw new FeatureUpdateException(location, "/reload", $"reload must be positive, got '{value.GetString()}'.", Hint);
+        }
+
+        if (period > MaxReload)
+        {
+            // Task.Delay waits at most uint.MaxValue - 1 ms (49.7 days); a longer period would fail after the first load.
+            throw new FeatureUpdateException(location, "/reload", $"reload must be at most P49D, the longest wait a timer takes, got '{value.GetString()}'.",
+                "write \"P49D\" or less: a reload that finds the same manifest loads nothing, so checking more often costs little");
         }
 
         return period;

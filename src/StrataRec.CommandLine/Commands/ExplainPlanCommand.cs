@@ -139,7 +139,7 @@ internal static class ExplainPlanCommand
         o.WriteLine("timeline:");
         foreach (var slot in plan.Timeline)
         {
-            o.WriteLine($"  {slot.Order,5}  {slot.NodeId,-24} {Operators(slot.Variants),-28} {Variants(plan, slot)}{Sites(plan, slot)}");
+            o.WriteLine($"  {slot.Order,5}  {slot.NodeId,-24} {Operators(slot.Variants),-28} {Variants(plan, slot)}{Sites(plan, slot, fallback: false)}");
         }
 
         if (plan.Fallbacks.Count > 0)
@@ -147,7 +147,7 @@ internal static class ExplainPlanCommand
             o.WriteLine("fallbacks:");
             foreach (var (id, slot) in plan.Fallbacks)
             {
-                o.WriteLine($"         {id,-24} {Operators(slot.Variants),-28} {Variants(plan, slot)}{Sites(plan, slot)}");
+                o.WriteLine($"         {id,-24} {Operators(slot.Variants),-28} {Variants(plan, slot)}{Sites(plan, slot, fallback: true)}");
             }
         }
 
@@ -198,7 +198,7 @@ internal static class ExplainPlanCommand
             }
 
             var order = node.Node.Order is { } at ? at.ToString(CultureInfo.InvariantCulture) : string.Empty;
-            o.WriteLine($"  {order,5}  {node.Id,-24} {node.Node.Descriptor.Id,-28}{When(node.Node)}{Sites(plan, node.Slot)}".TrimEnd());
+            o.WriteLine($"  {order,5}  {node.Id,-24} {node.Node.Descriptor.Id,-28}{When(node.Node)}{Sites(plan, node.Slot, node.IsFallback, selected.Arms)}".TrimEnd());
             foreach (var (name, value) in definitions[node.Id]!.AsObject())
             {
                 if (name is not ("order" or "op" or "when"))
@@ -351,7 +351,12 @@ internal static class ExplainPlanCommand
         return absent > 0 ? text + $", absent in {absent}" : text;
     }
 
-    private static string Sites(ExecutionPlan plan, TimelineSlot slot)
+    /// <summary>
+    /// The experiments reaching a position triggers, and when (design 12.6): the OR of the <c>when</c> of each arm's node
+    /// there, together with <paramref name="arms"/> in the other layers (the selected combination; none for the overview,
+    /// where another layer's arm may still change it). A fallback triggers whenever it is invoked.
+    /// </summary>
+    private static string Sites(ExecutionPlan plan, TimelineSlot slot, bool fallback, RequestArms arms = default)
     {
         if (slot.SiteExperiments.Length == 0)
         {
@@ -359,10 +364,32 @@ internal static class ExplainPlanCommand
         }
 
         var sites = new List<string>();
-        for (var i = 0; i < slot.SiteExperiments.Length; i++)
+        foreach (var e in slot.SiteExperiments)
         {
-            var id = plan.Experiments[slot.SiteExperiments[i]].Id;
-            sites.Add(slot.SiteConditions[i] is { } c ? $"{id} if {c.Describe()}" : id);
+            var experiment = plan.Experiments[e];
+            var conditions = new List<string>();
+            var always = false;
+            foreach (var arm in experiment.ArmIndices)
+            {
+                if (slot.SelectWith(arms, experiment.LayerIndex, arm) is not { } node)
+                {
+                    continue;
+                }
+
+                if (fallback || node.When is null)
+                {
+                    always = true;
+                    break;
+                }
+
+                var text = node.When.Describe();
+                if (!conditions.Contains(text))
+                {
+                    conditions.Add(text);
+                }
+            }
+
+            sites.Add(always ? experiment.Id : conditions.Count == 0 ? $"{experiment.Id} never" : $"{experiment.Id} if {string.Join(" || ", conditions)}");
         }
 
         return "  site: " + string.Join("; ", sites);

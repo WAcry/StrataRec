@@ -538,7 +538,7 @@ public sealed class PipelineExecutor
             throw new ReplayAbortedException(recordedAbort);
         }
 
-        await RecordSiteTriggersAsync(state, slot, cancellationToken).ConfigureAwait(false);
+        await RecordSiteTriggersAsync(state, slot, fallback: false, cancellationToken).ConfigureAwait(false);
         if (node is null)
         {
             return null;
@@ -616,7 +616,7 @@ public sealed class PipelineExecutor
                 state.PositionFallback = fallback;
                 if (state.Plan.Fallbacks.TryGetValue(fallback.NodeId, out var fallbackSlot))
                 {
-                    await RecordSiteTriggersAsync(state, fallbackSlot, cancellationToken).ConfigureAwait(false);
+                    await RecordSiteTriggersAsync(state, fallbackSlot, fallback: true, cancellationToken).ConfigureAwait(false);
                 }
 
                 var fb = await RunNodeAsync(state, fallback, 0, cancellationToken).ConfigureAwait(false);
@@ -943,10 +943,13 @@ public sealed class PipelineExecutor
     }
 
     /// <summary>
-    /// Records experiments triggered by reaching this position (design 12.6): the site condition is the OR of every
-    /// arm's effective `when` here, so the decision is identical across an experiment's arms, control included.
+    /// Records the experiments reaching this position triggers (design 12.6): an assigned experiment is triggered when one
+    /// of its arms, together with the request's arms in the other layers, has a node here whose <c>when</c> holds (or that
+    /// has none, or is the fallback being invoked). Every arm is looked at, whichever the request has, so the decision is
+    /// the same for all of them, control included; the other layers' arms are the request's own, since another layer may
+    /// change the node's <c>when</c> or remove it.
     /// </summary>
-    private static async ValueTask RecordSiteTriggersAsync(RequestState state, TimelineSlot slot, CancellationToken cancellationToken)
+    private static async ValueTask RecordSiteTriggersAsync(RequestState state, TimelineSlot slot, bool fallback, CancellationToken cancellationToken)
     {
         for (var i = 0; i < slot.SiteExperiments.Length; i++)
         {
@@ -956,16 +959,36 @@ public sealed class PipelineExecutor
                 continue;
             }
 
-            var condition = slot.SiteConditions[i];
-            if (condition is null)
+            var info = state.Plan.Experiments[experiment];
+            string? untrue = null; // a `when` found false: another arm's node with the same one is not evaluated again
+            for (var a = 0; a < info.ArmIndices.Length; a++)
             {
-                state.Triggered[experiment] = true;
-                continue;
-            }
+                if (slot.SelectWith(state.Arms, info.LayerIndex, info.ArmIndices[a]) is not { } node)
+                {
+                    continue; // this arm has no node here
+                }
 
-            await EnsureContextAsync(state, condition, cancellationToken).ConfigureAwait(false);
-            var value = condition.EvaluateScalar(state.Eval);
-            state.Triggered[experiment] = !value.IsMissing && value.AsBool();
+                if (fallback || node.When is not { } when)
+                {
+                    state.Triggered[experiment] = true;
+                    break;
+                }
+
+                if (string.Equals(when.Source, untrue, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                await EnsureContextAsync(state, when, cancellationToken).ConfigureAwait(false);
+                var value = when.EvaluateScalar(state.Eval);
+                if (!value.IsMissing && value.AsBool())
+                {
+                    state.Triggered[experiment] = true;
+                    break;
+                }
+
+                untrue = when.Source;
+            }
         }
     }
 

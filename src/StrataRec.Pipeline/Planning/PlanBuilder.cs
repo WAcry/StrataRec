@@ -758,21 +758,6 @@ public sealed class PlanBuilder
         return null;
     }
 
-    /// <summary>
-    /// Compiles a request-level condition over <c>ctx.*</c> (design 5.5), e.g. a trigger site's OR of arms'
-    /// <c>when</c> (design 12.6). Returns null after reporting errors at <paramref name="pointer"/>.
-    /// </summary>
-    public CompiledExpression? CompileRequestCondition(string source, string artifact, string pointer)
-    {
-        if (ExpressionCompiler.TryCompile(source, _scope!, CompileOptions.RequestCondition, out var expression, out var errors))
-        {
-            return expression;
-        }
-
-        ExpressionErrors.Report(_diagnostics, errors, artifact, pointer, source);
-        return null;
-    }
-
     /// <summary>Compiles the output section (design 3.4).</summary>
     public OutputPlan? CompileOutput()
     {
@@ -1684,21 +1669,13 @@ public sealed class PlanBuilder
 
         log ??= LogPlan.Empty;
 
-        // Context features the serving path reads: nodes of every variant (including fallbacks and `when`), trigger
-        // sites and the output, with everything they are derived from. Only these are prefetched; taps are passive
-        // observers (design 8.5) and must not add a context fetch to every request, sampled or not.
+        // Context features the serving path reads: nodes of every variant (including fallbacks and `when`, which is all
+        // a trigger site evaluates) and the output, with everything they are derived from. Only these are prefetched;
+        // taps are passive observers (design 8.5) and must not add a context fetch to every request, sampled or not.
         var serving = new HashSet<int>();
         foreach (var node in _nodes)
         {
             MarkFetched(serving, node.ReadFeatures);
-        }
-
-        foreach (var slot in timeline)
-        {
-            foreach (var condition in slot.SiteConditions)
-            {
-                MarkSymbols(serving, condition);
-            }
         }
 
         foreach (var (_, expression) in output.Columns)

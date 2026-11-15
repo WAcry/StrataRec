@@ -369,6 +369,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             // that fails for max_bytes it points into the compacted copy built and discarded for it, a whole second table.
             _lookedUpField = -1;
             _lookedUpIn = null;
+            ForgetProbe();
         }
     }
 
@@ -488,6 +489,18 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
     private bool DeleteCore(long indexKey, long version)
     {
+        try
+        {
+            return DeleteProbed(indexKey, version);
+        }
+        finally
+        {
+            ForgetProbe();
+        }
+    }
+
+    private bool DeleteProbed(long indexKey, long version)
+    {
         Discard();
         _indexKey = indexKey;
         Probe();
@@ -526,6 +539,16 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         _oldPosition = _version.ProbeForWrite(_indexKey, _key.AsSpan(0, _keyLength), out _slot);
         _probedVersion = _version;
         _probedIndex = _version.Index;
+    }
+
+    /// <summary>
+    /// The probe is for one write: once it is committed, discarded or done, the writer must not keep the version it
+    /// probed, which a reload or compaction may have replaced since, alive with its pages, index and dictionary.
+    /// </summary>
+    private void ForgetProbe()
+    {
+        _probedVersion = null;
+        _probedIndex = null;
     }
 
     /// <summary>
@@ -965,6 +988,8 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             _open = false;
             _token++;
         }
+
+        ForgetProbe();
     }
 
     private void CheckOpen(int token)

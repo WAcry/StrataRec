@@ -286,7 +286,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 for (var r = 0; r < sinkKeys.Length; r++)
                 {
                     var key = sinkKeys[r];
-                    if (key.IsString != stringKeys || table.FindRow(key) >= 0)
+                    if (key.IsString != stringKeys || table.ContainsKey(key))
                     {
                         continue; // wrong key type, or already in the table from an earlier row source
                     }

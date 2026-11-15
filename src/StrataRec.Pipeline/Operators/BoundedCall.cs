@@ -167,7 +167,9 @@ internal interface IBoundedCall<T>
 /// nothing at all; a call with an own timeout shorter than the budget costs one linked token source and its timer (about
 /// 210 B), created before it is sent so that the client's token carries the timeout; (7) the timeout cancels the
 /// client's token through <see cref="ObservedCancellationSource"/>: the client's callbacks run on the pool, and what they
-/// throw is counted and reported, never thrown on the timer's thread.</para>
+/// throw is counted and reported, never thrown on the timer's thread; (8) a call whose bound has passed before it is sent
+/// is not sent (an earlier call that cancelled the request, say, starts no more): it ends cancelled or timed out, and is
+/// completed and recorded like any other, as feature fetches do with the chunks they have not sent.</para>
 /// <para>Feature fetches have their own implementation of the same rules (FeatureFetcher), with one token source and
 /// one deadline per fetch for all its chunks.</para>
 /// </remarks>
@@ -191,26 +193,37 @@ internal static class BoundedCall
         budget.AddReference();
         var (own, token, deadline) = Bound(budget, timeoutMs, requestId, events);
         var io = target.Start();
-        ValueTask<T> pending;
-        try
-        {
-            pending = call.Send(token);
-        }
-        catch (Exception ex)
-        {
-            pending = ValueTask.FromException<T>(ex);
-        }
 
-        if (!pending.IsCompleted)
+        // Rule 8: a call whose bound has passed before it is sent (the caller cancelled, as an earlier call may have done,
+        // or the time is up) is not sent: it ends as a call the bound or the caller won at once would, and is recorded.
+        var unsent = budget.Caller.IsCancellationRequested ? Winner.Caller
+            : token.IsCancellationRequested || Stopwatch.GetTimestamp() >= deadline ? Winner.Bound
+            : Winner.Client;
+        ValueTask<T> pending = default;
+        if (unsent == Winner.Client)
         {
-            return AwaitAsync(call, pending.AsTask(), io, budget, memory, own, token, deadline, timeoutMs, requestId, events);
+            try
+            {
+                pending = call.Send(token);
+            }
+            catch (Exception ex)
+            {
+                pending = ValueTask.FromException<T>(ex);
+            }
+
+            if (!pending.IsCompleted)
+            {
+                return AwaitAsync(call, pending.AsTask(), io, budget, memory, own, token, deadline, timeoutMs, requestId, events);
+            }
         }
 
         var result = Defect<T>();
         try
         {
             // Rule 1: the client completed before Send returned; the framework observes it now.
-            result = Observed(call, pending, budget, own, token, deadline, timeoutMs);
+            result = unsent == Winner.Client
+                ? Observed(call, pending, budget, own, token, deadline, timeoutMs)
+                : CutOff<T>(unsent, null, own, budget, timeoutMs, abandoned: false);
         }
         finally
         {

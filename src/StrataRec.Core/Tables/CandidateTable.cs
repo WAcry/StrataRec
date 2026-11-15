@@ -107,6 +107,11 @@ public sealed class CandidateTable
     private EntityKeyIndex? _keyIndex; // key → first physical row, for rows [0, _indexedRows); built on first FindRow
     private int _indexedRows;
     private int _compactions;
+    private long[]? _releasedInt64; // keys of the rows Compact released, in release order (int64 keys); rented on the first release
+    private string[]? _releasedStrings; // the same for string keys
+    private int _released;
+    private EntityKeyIndex? _releasedIndex; // the first _releasedIndexed released keys; built on the first ContainsKey that needs it
+    private int _releasedIndexed;
 
     public CandidateTable(TableSchema schema, int capacity, RequestMemory memory)
     {
@@ -266,7 +271,10 @@ public sealed class CandidateTable
         return first;
     }
 
-    /// <summary>Finds the physical row of a key (live or dropped) or returns -1. The first row wins for a repeated key.</summary>
+    /// <summary>
+    /// Finds the physical row of a key (live or dropped) or returns -1. The first row wins for a repeated key. A key whose
+    /// row a <see cref="Compact"/> released has no row any more; <see cref="ContainsKey"/> still knows it.
+    /// </summary>
     /// <remarks>
     /// The index is built on the first call and rented from the request memory, sized to <see cref="StorageCapacity"/>
     /// so it never grows; rows appended later are indexed on the next call, so appends cost nothing when nobody looks
@@ -285,6 +293,85 @@ public sealed class CandidateTable
         }
 
         return _keyIndex!.TryGetValue(key, out var row) ? row : -1;
+    }
+
+    /// <summary>
+    /// Whether the key was appended in this request: a live or a dropped row, or a row a <see cref="Compact"/> released
+    /// (rows a <see cref="Rollback"/> released were never appended). A row source tests this, not <see cref="FindRow"/>, so
+    /// that a key a filter dropped is never appended again whether or not the table was compacted since (design 4.5,
+    /// invariant 2): compaction changes where rows are, never which entities the request has seen.
+    /// </summary>
+    /// <remarks>
+    /// Compact copies the released keys aside; they are indexed on the first call that does not find the key in a row, so
+    /// a request whose row sources all run before its compactions never hashes them.
+    /// </remarks>
+    public bool ContainsKey(in EntityKey key)
+    {
+        if (FindRow(key) >= 0)
+        {
+            return true;
+        }
+
+        if (_released == 0)
+        {
+            return false;
+        }
+
+        if (_releasedIndexed < _released)
+        {
+            IndexReleasedKeys();
+        }
+
+        return _releasedIndex!.TryGetValue(key, out _);
+    }
+
+    private void IndexReleasedKeys()
+    {
+        var index = _releasedIndex ??= new EntityKeyIndex(KeyType, _released, Memory);
+        for (var i = _releasedIndexed; i < _released; i++)
+        {
+            if (KeyType == EntityKeyType.Int64)
+            {
+                index.TryAdd(_releasedInt64![i], 0);
+            }
+            else
+            {
+                index.TryAdd(_releasedStrings![i], 0);
+            }
+        }
+
+        _releasedIndexed = _released;
+    }
+
+    /// <summary>Copies aside the keys of the rows the coming Compact releases (every physical row not alive).</summary>
+    private void RecordReleasedKeys()
+    {
+        // Every released key was appended once and never rolled back, so all of them together fit in Capacity.
+        var rows = Rows;
+        if (KeyType == EntityKeyType.Int64)
+        {
+            var released = _releasedInt64 ??= Memory.Rent<long>(Capacity);
+            var ids = Int64Ids;
+            for (var r = 0; r < PhysicalRowCount; r++)
+            {
+                if (!rows.IsAlive(r))
+                {
+                    released[_released++] = ids[r];
+                }
+            }
+        }
+        else
+        {
+            var released = _releasedStrings ??= Memory.Rent<string>(Capacity);
+            var ids = StringIds;
+            for (var r = 0; r < PhysicalRowCount; r++)
+            {
+                if (!rows.IsAlive(r))
+                {
+                    released[_released++] = ids.Get(r);
+                }
+            }
+        }
     }
 
     private void IndexAppendedRows()
@@ -312,11 +399,17 @@ public sealed class CandidateTable
 
     /// <summary>
     /// Rewrites every slot so that live rows occupy physical rows 0..n-1 in rank order and dropped rows are released
-    /// (design 4.5). Fill state moves with the values. Old arrays are returned when the request ends.
+    /// (design 4.5). Fill state moves with the values. Old arrays are returned when the request ends. The released keys
+    /// are kept: <see cref="ContainsKey"/> still finds them, so no row source appends them again.
     /// </summary>
     public void Compact()
     {
         var count = Rows.Count;
+        if (count < PhysicalRowCount)
+        {
+            RecordReleasedKeys();
+        }
+
         var order = Memory.Rent<int>(Math.Max(1, count));
         Rows.Order.CopyTo(order);
         var rows = order.AsSpan(0, count);

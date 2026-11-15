@@ -95,6 +95,50 @@ public sealed class ReviewRegressionTests
         }
     }
 
+    /// <summary>
+    /// A trigger follows the node each arm has together with the request's arms in the other layers (design 12.6; Gemini
+    /// review 2026-11-14, finding 2): exp_cap_limit changes author_cap's predicate, exp_cap_search (another layer) moves it
+    /// from the home surface to search. With search's treatment, exp_cap_limit's node runs on search, not home, and its
+    /// trigger says so in both of its arms; it was taken with the other layers unassigned (home), so it was recorded
+    /// where the node was skipped and missed where it ran.
+    /// </summary>
+    [Fact]
+    public async Task ATriggerFollowsTheNodeEachArmHas_WithTheRequestsArmsInTheOtherLayers()
+    {
+        var host = HomeFeedTestHost.Load();
+        var request = With(host.Request, new[]
+        {
+            new ExperimentPlacement(Experiment("""
+                { "experiment_id": "exp_cap_limit", "pipeline_id": "home_feed", "owner": "t", "description": "d", "expires_at": "2099-01-01",
+                  "arms": { "control": {}, "t": { "nodes": { "author_cap": { "config": { "predicate": "(col.group.author_rank ?? 1) <= 3" } } } } } }
+                """), "cap_limit"),
+            new ExperimentPlacement(Experiment("""
+                { "experiment_id": "exp_cap_search", "pipeline_id": "home_feed", "owner": "t", "description": "d", "expires_at": "2099-01-01",
+                  "arms": { "control": {}, "t": { "nodes": { "author_cap": { "when": "ctx.request.surface == 'search'" } } } } }
+                """), "cap_search"),
+        });
+        var plan = PlanCompiler.Compile(request, host.Environment).GetPlanOrThrow();
+
+        foreach (var search in new[] { "control", "t" })
+        {
+            foreach (var limit in new[] { "control", "t" })
+            {
+                foreach (var surface in new[] { "home", "search", "other" })
+                {
+                    var arms = plan.ArmsFromIds(new[] { "exp_cap_limit/" + limit, "exp_cap_search/" + search });
+                    var result = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(surface: surface, arms: arms), TestContext.Current.CancellationToken);
+                    var ran = result.Outcomes.Single(o => o.NodeId == "author_cap").Kind != NodeOutcomeKind.Skipped;
+                    var label = $"cap_search {search}, cap_limit {limit}, {surface}";
+
+                    Assert.True(result.Succeeded, result.Error);
+                    Assert.Equal(surface == (search == "t" ? "search" : "home"), ran);
+                    Assert.True(ran == result.TriggeredExperiments.Contains("exp_cap_limit"), label);
+                    Assert.True((surface != "other") == result.TriggeredExperiments.Contains("exp_cap_search"), label); // its arms: home or search
+                }
+            }
+        }
+    }
+
     [Fact]
     public void OlderLoadNeverReplacesANewerPlan()
     {

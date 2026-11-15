@@ -432,6 +432,41 @@ public sealed class BoundedCallTests
         untimed.Release();
     }
 
+    /// <summary>
+    /// Rule 8 (Gemini review 2026-11-14, finding 4): a call whose caller has already cancelled (an earlier source of the
+    /// same recall did, say) or whose time is up is not sent; it ends cancelled or out of budget, recorded once, and gives
+    /// back the memory and the budget.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ACallWhoseBoundHasPassed_IsNotSent_AndEndsAsCutOff(bool callerCancelled)
+    {
+        using var caller = new CancellationTokenSource();
+        if (callerCancelled)
+        {
+            caller.Cancel();
+        }
+
+        var memory = new RequestMemory();
+        var budget = new AttemptBudget(caller.Token, callerCancelled ? Deadline(600_000) : Deadline(-1));
+        var site = new Site(memory);
+        var sent = 0;
+
+        var result = await Run(site.With(_ =>
+        {
+            sent++;
+            return ValueTask.FromResult(1);
+        }), budget, memory, timeoutMs: null);
+
+        Assert.Equal(0, sent);
+        Assert.Equal(callerCancelled ? (CallEnd.Cancelled, IoOutcome.Cancelled, false) : (CallEnd.BudgetRanOut, IoOutcome.Timeout, false),
+            (result.End, result.Outcome, result.Abandoned));
+        Assert.True(Assert.Single(site.Recorded).MemoryLive);
+        budget.Release();
+        Assert.Equal(0, memory.Release()); // nothing holds it any more
+    }
+
     private static long Deadline(int milliseconds) => Stopwatch.GetTimestamp() + ((long)milliseconds * Stopwatch.Frequency / 1000);
 
     private static ValueTask<CallResult<int>> Run(Site site, AttemptBudget budget, RequestMemory memory, int? timeoutMs) =>

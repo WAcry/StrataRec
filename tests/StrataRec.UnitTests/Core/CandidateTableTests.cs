@@ -266,6 +266,55 @@ public class CandidateTableTests
         memory.Release();
     }
 
+    /// <summary>
+    /// A key whose row a compaction released is still a key the request has seen (design 4.5, invariant 2), across
+    /// several compactions and both key types; keys a rollback released were never appended (Gemini review 2026-11-14, finding 1).
+    /// </summary>
+    [Theory]
+    [InlineData(EntityKeyType.Int64)]
+    [InlineData(EntityKeyType.String)]
+    public void ContainsKey_KnowsTheKeysACompactReleased_AcrossCompactions_ButNotWhatARollbackReleased(EntityKeyType keyType)
+    {
+        var memory = new RequestMemory();
+        var table = new CandidateTable(new TableSchema(keyType, new[] { keyType == EntityKeyType.Int64 ? ColumnType.Int64 : ColumnType.String }), 8, memory);
+        EntityKey K(long n) => keyType == EntityKeyType.Int64 ? EntityKey.FromInt64(n) : EntityKey.FromString("k" + n);
+        void Append(params long[] keys)
+        {
+            if (keyType == EntityKeyType.Int64)
+            {
+                table.AppendRows(keys);
+            }
+            else
+            {
+                table.AppendRows(keys.Select(k => "k" + k).ToArray());
+            }
+        }
+
+        Append(1, 2, 3, 4);
+        table.Rows.Retain(new[] { false, true, false, false }); // only 2 stays
+        Assert.True(table.ContainsKey(K(1))); // dropped, not yet released
+        table.Compact();
+
+        Assert.Equal(-1, table.FindRow(K(1))); // no row any more
+        Assert.True(table.ContainsKey(K(1)) && table.ContainsKey(K(3)) && table.ContainsKey(K(4)) && table.ContainsKey(K(2)));
+        Assert.False(table.ContainsKey(K(5)));
+        Assert.False(table.ContainsKey(keyType == EntityKeyType.Int64 ? EntityKey.FromString("k1") : EntityKey.FromInt64(1))); // other key type
+
+        var checkpoint = table.Checkpoint();
+        Append(6);
+        Assert.True(table.ContainsKey(K(6)));
+        table.Rollback(checkpoint);
+        Assert.False(table.ContainsKey(K(6))); // a failed attempt's key was never appended
+
+        Append(5, 6);
+        table.Rows.Retain(new[] { true, false, true }); // 2 and 6 stay; 5 is dropped
+        table.Compact();
+        Assert.Equal(-1, table.FindRow(K(5)));
+        Assert.True(table.ContainsKey(K(5)) && table.ContainsKey(K(1)) && table.ContainsKey(K(6)));
+        Assert.Equal((0, 1), (table.FindRow(K(2)), table.FindRow(K(6))));
+        memory.Release();
+    }
+
     [Fact]
     public void FindRow_StringKeys()
     {

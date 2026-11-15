@@ -193,7 +193,7 @@ internal sealed class CandidateExplainer
 
     /// <summary>
     /// The table was compacted (design 4.5): live rows moved to their rank's position, dropped rows were released. A
-    /// released target stays present and dropped; a later row source may append its key again.
+    /// released target stays present and dropped: the table still knows its key, so no later row source appends it again.
     /// </summary>
     public void Compacted()
     {

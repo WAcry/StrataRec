@@ -88,7 +88,7 @@ public static class LlmAnswer
     /// the answer; otherwise returns why the answer is not a JSON array.
     /// </summary>
     /// <remarks>
-    /// An id named before is repeated; an id the table already has (live or dropped) is present and skipped, since a row
+    /// An id named before is repeated; an id the table already has (live, dropped, or released by a compaction: <see cref="CandidateTableView.ContainsKey"/>) is present and skipped, since a row
     /// source appends rows and writes only those; once <paramref name="limit"/> ids are used, every later element is over
     /// the limit and not read, though the rest must still be valid JSON.
     /// </remarks>
@@ -542,7 +542,7 @@ public static class LlmAnswer
                     return ElementOutcome.Repeated;
                 }
 
-                if (table.FindRow(EntityKey.FromInt64(id)) >= 0)
+                if (table.ContainsKey(EntityKey.FromInt64(id)))
                 {
                     return ElementOutcome.Present;
                 }
@@ -571,7 +571,7 @@ public static class LlmAnswer
                     return ElementOutcome.Repeated;
                 }
 
-                if (table.FindRow(EntityKey.FromString(id)) >= 0)
+                if (table.ContainsKey(EntityKey.FromString(id)))
                 {
                     return ElementOutcome.Present;
                 }

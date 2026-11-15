@@ -66,21 +66,27 @@ public sealed class TimelineSlot
     /// <summary>Experiments whose site includes this position (design 12.6); assigned by the experiment compiler.</summary>
     public ImmutableArray<int> SiteExperiments { get; internal set; } = [];
 
-    /// <summary>Per site experiment: OR of its arms' <c>when</c> at this position; null means always.</summary>
-    public ImmutableArray<CompiledExpression?> SiteConditions { get; internal set; } = [];
-
     /// <summary>Selects this request's variant: one mixed-radix index computation (design 12.3).</summary>
-    public CompiledNode? Select(in RequestArms arms)
+    public CompiledNode? Select(in RequestArms arms) => Variants[IndexWith(arms, -1, -1)];
+
+    /// <summary>
+    /// The variant <paramref name="arm"/> (of <paramref name="layer"/>) has here together with the request's arms in the
+    /// other layers: the node it would run in this request's place, which decides whether reaching this position triggers
+    /// its experiment (design 12.6). Another layer may change the node's <c>when</c> or remove it.
+    /// </summary>
+    public CompiledNode? SelectWith(in RequestArms arms, int layer, int arm) => Variants[IndexWith(arms, layer, arm)];
+
+    private int IndexWith(in RequestArms arms, int layer, int arm)
     {
         var index = 0;
         for (var i = 0; i < TouchingLayers.Length; i++)
         {
-            var arm = arms.ArmIn(TouchingLayers[i]);
-            var local = arm >= 0 && LocalIndex[i].TryGetValue(arm, out var l) ? l : 0;
+            var assigned = TouchingLayers[i] == layer ? arm : arms.ArmIn(TouchingLayers[i]);
+            var local = assigned >= 0 && LocalIndex[i].TryGetValue(assigned, out var l) ? l : 0;
             index = (index * Radix[i]) + local;
         }
 
-        return Variants[index];
+        return index;
     }
 }
 

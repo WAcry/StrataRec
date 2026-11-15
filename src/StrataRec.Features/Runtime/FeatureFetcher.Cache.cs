@@ -584,12 +584,35 @@ public sealed partial class FeatureFetcher
         }
 
         var bytes = records.Bytes; // complete now: the array is replaced while it grows
+
+        // The records written back hold their array for as long as they are queued, and the queues count record bytes.
+        // When they are less than half of it (chunks that failed or answered in part, room the misses did not use), they
+        // get an array of their own, so a queue's byte limit bounds the memory it holds.
+        var kept = 0;
         for (var k = 0; k < count; k++)
         {
-            if (read.Sources[missOf[k]] is CacheSource.Origin or CacheSource.OriginPartial)
+            kept += read.Sources[missOf[k]] == CacheSource.Origin ? spans[k].Length : 0;
+        }
+
+        var own = kept > 0 && kept < bytes.Length / 2 ? new byte[kept] : null;
+        var at = 0;
+        for (var k = 0; k < count; k++)
+        {
+            var source = read.Sources[missOf[k]];
+            if (source is not (CacheSource.Origin or CacheSource.OriginPartial))
             {
-                read.Bytes[missOf[k]] = bytes.AsMemory(spans[k].Offset, spans[k].Length);
+                continue;
             }
+
+            var record = bytes.AsMemory(spans[k].Offset, spans[k].Length);
+            if (own is not null && source == CacheSource.Origin)
+            {
+                record.CopyTo(own.AsMemory(at));
+                record = own.AsMemory(at, record.Length);
+                at += record.Length;
+            }
+
+            read.Bytes[missOf[k]] = record;
         }
     }
 

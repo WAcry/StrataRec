@@ -1046,12 +1046,12 @@ internal sealed partial class UnifiedCompilation
     {
         foreach (var slot in timeline)
         {
-            AssignSite(slot, isFallback: false);
+            AssignSite(slot);
         }
 
         foreach (var (_, slot) in fallbacks)
         {
-            AssignSite(slot, isFallback: true);
+            AssignSite(slot);
         }
 
         // Parameter sites: a node variant (or the output) that reads a leaf some arm of E overrides.
@@ -1092,11 +1092,15 @@ internal sealed partial class UnifiedCompilation
         return result is null ? [] : ImmutableCollectionsMarshal.AsImmutableArray(ToArray(result));
     }
 
-    private void AssignSite(TimelineSlot slot, bool isFallback)
+    /// <summary>
+    /// The experiments whose site includes a position (design 12.6): those with an arm that modifies, adds, removes or
+    /// moves the node here. Whether reaching it triggers one is decided per request from its arms' nodes
+    /// (<see cref="TimelineSlot.SelectWith"/>), since the other layers' arms of the request decide which node each arm has.
+    /// </summary>
+    private void AssignSite(TimelineSlot slot)
     {
         var experiments = new SortedSet<int>();
-        var variants = _variants[slot.NodeId];
-        foreach (var arms in variants.LocalArms)
+        foreach (var arms in _variants[slot.NodeId].LocalArms)
         {
             foreach (var arm in arms)
             {
@@ -1104,77 +1108,7 @@ internal sealed partial class UnifiedCompilation
             }
         }
 
-        var sites = new List<int>();
-        var conditions = new List<CompiledExpression?>();
-        foreach (var experiment in experiments)
-        {
-            // The site condition is the OR of each arm's effective node here: absent → false, no `when` → true.
-            var any = false;
-            var always = false;
-            var sources = new List<string>();
-            CompiledExpression? single = null;
-            foreach (var armIndex in _experiments[experiment].Arms)
-            {
-                var node = slot.Select(OnlyArm(armIndex));
-                if (node is null)
-                {
-                    continue;
-                }
-
-                any = true;
-                if (node.When is null || isFallback)
-                {
-                    always = true;
-                    break;
-                }
-
-                var source = node.Definition.GetProperty("when").GetString()!;
-                if (!sources.Contains(source))
-                {
-                    sources.Add(source);
-                    single = node.When;
-                }
-            }
-
-            if (!any)
-            {
-                continue;
-            }
-
-            CompiledExpression? condition = null;
-            if (!always)
-            {
-                condition = sources.Count == 1
-                    ? single
-                    : _builder.CompileRequestCondition(JoinOr(sources), "experiment:" + _experiments[experiment].Id, "/nodes/" + JsonPointer.Escape(slot.NodeId) + "/when");
-                if (condition is null)
-                {
-                    continue;
-                }
-            }
-
-            sites.Add(experiment);
-            conditions.Add(condition);
-        }
-
-        slot.SiteExperiments = [.. sites];
-        slot.SiteConditions = [.. conditions];
-    }
-
-    private static string JoinOr(List<string> sources)
-    {
-        var builder = new StringBuilder();
-        foreach (var source in sources)
-        {
-            if (builder.Length > 0)
-            {
-                builder.Append(" || ");
-            }
-
-            builder.Append('(').Append(source).Append(')');
-        }
-
-        return builder.ToString();
+        slot.SiteExperiments = [.. experiments];
     }
 
     // ------------------------------------------------------------------ helpers

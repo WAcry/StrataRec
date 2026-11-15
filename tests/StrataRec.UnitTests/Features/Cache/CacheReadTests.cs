@@ -488,6 +488,66 @@ public class CacheReadTests
         Assert.True(double.IsNaN(version.Read(version.Layout.Schema.FieldIndex("score"), version.Find(1L)).AsFloat64()));
     }
 
+    /// <summary>
+    /// What is written back holds only what it needs (Gemini review 2026-11-14, finding 3): when all chunks of a read but
+    /// one fail, the record written back does not keep the array encoded for all 512 misses alive in the queues, whose
+    /// byte limits count record bytes.
+    /// </summary>
+    [Fact]
+    public async Task ARecordWrittenBack_DoesNotHoldTheArrayOfTheWholeRead_WhenMostOfItsChunksFailed()
+    {
+        var store = new CapturingStore();
+        var connector = new ScriptedConnector((keys, fields, writer, _) =>
+        {
+            if (keys.CandidateKeys.Span[0].Int64Value != 1)
+            {
+                return ValueTask.FromResult(FetchStatus.Failed("item_store is down"));
+            }
+
+            ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 1.0);
+            return ValueTask.FromResult(FetchStatus.Ok);
+        });
+        var rig = new FeatureTestRig().CacheSource("item_store", connector, distributed: store, maxBatch: 1);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+
+        await rig.NewRequest(Enumerable.Range(1, 512).Select(i => (long)i).ToArray()).EnsureAsync(clicks);
+        var (records, held) = await store.Written.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.True(records > 0);
+        Assert.True(held <= 2 * records, $"{records} record bytes hold arrays of {held} bytes");
+        Assert.Equal(1, rig.WriteBack("item_store"));
+    }
+
+    /// <summary>A distributed tier with nothing in it, which says what its first write held: record bytes, and the bytes of the arrays under them.</summary>
+    private sealed class CapturingStore : IFeatureCacheStore
+    {
+        public string StoreType => TestCacheStoreFactory.Type;
+
+        public TaskCompletionSource<(long Records, long Held)> Written { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<EntityKey> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask SetAsync(CacheKeyspace keyspace, ReadOnlyMemory<CacheStoreEntry> entries, CancellationToken cancellationToken)
+        {
+            long records = 0, held = 0;
+            var arrays = new HashSet<byte[]>(ReferenceEqualityComparer.Instance);
+            foreach (var entry in entries.Span)
+            {
+                records += entry.Record.Length;
+                Assert.True(System.Runtime.InteropServices.MemoryMarshal.TryGetArray(entry.Record, out var segment));
+                if (arrays.Add(segment.Array!))
+                {
+                    held += segment.Array!.Length;
+                }
+            }
+
+            Written.TrySetResult((records, held));
+            return ValueTask.CompletedTask;
+        }
+    }
+
     private static ScriptedConnector Clicks() => ScriptedConnector.Values((key, _) => key * 1.0);
 
     private static double[] Values(TestRequest request, int feature, int rows) =>

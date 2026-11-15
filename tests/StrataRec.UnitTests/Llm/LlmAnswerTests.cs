@@ -161,6 +161,26 @@ public sealed class LlmAnswerTests
         Assert.Equal(new AnswerCounts(1, 2, 0), counts);
     }
 
+    /// <summary>An id a filter dropped is present, also once a compaction released its row (Gemini review 2026-11-14, finding 1).</summary>
+    [Fact]
+    public void AnIdWhoseRowACompactionReleased_IsPresent_NotNew()
+    {
+        var memory = new RequestMemory();
+        var table = new CandidateTable(new TableSchema(EntityKeyType.Int64, new[] { ColumnType.Int64 }), 8, memory);
+        table.AppendRows(new long[] { 1, 2, 3, 4 });
+        table.Rows.Retain(new[] { false, true, false, false });
+        table.Compact();
+        var ids = new long[4];
+        var positions = new int[4];
+
+        var error = LlmAnswer.ParseIds("[1, 5, 2]", table, 4, memory, ids, default, positions, out var counts);
+
+        Assert.Null(error);
+        Assert.Equal(new long[] { 5 }, ids[..counts.Used]);
+        Assert.Equal(new AnswerCounts(1, 0, 0, Present: 2), counts); // 1 (released) and 2 (live) are present
+        memory.Release();
+    }
+
     [Fact]
     public void TheQuote_IsOneLine_EscapedAndCut()
     {
