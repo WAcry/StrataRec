@@ -1260,7 +1260,7 @@ public sealed class PlanBuilder
     /// <para>The rules and what decides them: a reader's non-nullable column, and the declaration of every column a node
     /// binds (the reader and the column's producers; for the output, the producers); the declaration of a parameter or
     /// feature a node binds (the node; an arm declaring it elsewhere is not one it may rely on);
-    /// one producer per path, row sources' shadowing, and a write declaring a column as an arm declares it (the producers); row sources keeping a non-nullable column
+    /// one producer per path and a write declaring a column as an arm declares it (the producers); row sources keeping a non-nullable column
     /// covered (a row source and the producers); independence of nodes that may share an order (the two nodes); a
     /// fallback's existence and outputs (the node); a pinned version read by a node or the output (the reader and the
     /// pinned node); a tap's columns, features and pinned versions (the tap, the nodes it attaches after, and the
