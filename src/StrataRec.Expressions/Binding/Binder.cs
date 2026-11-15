@@ -28,6 +28,9 @@ internal sealed class Binder
     /// </summary>
     public bool ReadsUnusable { get; private set; }
 
+    /// <summary>Every name resolved, in the order first seen: what the scope must declare (<see cref="CompiledExpression.Names"/>).</summary>
+    public List<Symbol> Names { get; } = new();
+
     public Binder(IExpressionScope scope, CompileOptions options, List<ExpressionDiagnostic> diagnostics)
     {
         _scope = scope;
@@ -198,6 +201,11 @@ internal sealed class Binder
             }
 
             return Fail(ExpressionErrorCodes.UnknownName, $"Unknown name '{name}'", n, NameHint(name, false));
+        }
+
+        if (!Names.Contains(symbol))
+        {
+            Names.Add(symbol);
         }
 
         var type = ExprType.FromColumnType(symbol.Type);

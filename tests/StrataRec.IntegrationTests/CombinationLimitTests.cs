@@ -143,7 +143,8 @@ public sealed class CombinationLimitTests
         return (With(host.Request, placements, maxCombinationsChecked), JointEnvironment(host));
     }
 
-    private static PlanEnvironment JointEnvironment(HomeFeedTestHost host) =>
+    /// <summary>The sample's environment with <c>Joint@1</c>.</summary>
+    internal static PlanEnvironment JointEnvironment(HomeFeedTestHost host) =>
         new() { BaseDirectory = host.Root, Operators = OperatorRegistry.CreateDefault().Add(new JointFactory()) };
 
     /// <summary>Layers whose one arm adds a filter that keeps every row, each at its own order.</summary>
@@ -222,8 +223,9 @@ public sealed class CombinationLimitTests
         ["arms"] = arms,
     }.ToJsonString());
 
-    /// <summary>The sample's request with <paramref name="placements"/> instead of its experiments.</summary>
-    internal static PlanCompileRequest With(PlanCompileRequest r, IReadOnlyList<ExperimentPlacement> placements, int? maxCombinationsChecked = null) => new()
+    /// <summary>The sample's request with <paramref name="placements"/> instead of its experiments, by default without each arm's own compile.</summary>
+    internal static PlanCompileRequest With(
+        PlanCompileRequest r, IReadOnlyList<ExperimentPlacement> placements, int? maxCombinationsChecked = null, bool validateArmsIndependently = false) => new()
     {
         Pipeline = r.Pipeline,
         Catalog = r.Catalog,
@@ -232,7 +234,7 @@ public sealed class CombinationLimitTests
         Policy = r.Policy,
         Experiments = placements,
         ManifestId = r.ManifestId,
-        ValidateArmsIndependently = false, // a thousand arms: the bound under test is the node's, not each arm's compile
+        ValidateArmsIndependently = validateArmsIndependently, // off by default: with a thousand arms the bound under test is the node's, not each arm's compile
         MaxCombinationsChecked = maxCombinationsChecked ?? r.MaxCombinationsChecked,
     };
 }

@@ -107,7 +107,7 @@ internal sealed partial class UnifiedCompilation
 
         var enumerated = new HashSet<string>(StringComparer.Ordinal);
         var reported = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var scope in _builder.DataFlowScopes(nodes, taps, output))
+        foreach (var scope in _builder.DataFlowScopes(nodes, taps, output, Conditional))
         {
             var layers = new SortedSet<int>();
             foreach (var id in scope.Nodes)
@@ -208,24 +208,20 @@ internal sealed partial class UnifiedCompilation
             return;
         }
 
+        // A combination with a variant that failed to compile was reported there; only how its columns are declared is
+        // still checked, since a compile error at a reader may come from a column this combination declares otherwise.
         var arms = new RequestArms(combination);
+        var failed = false;
         foreach (var (_, v) in _variants)
         {
-            if (v.Failed[v.IndexOf(arms)])
-            {
-                return; // already reported as a compile error
-            }
+            failed |= v.Failed[v.IndexOf(arms)];
         }
 
         var taps = new List<CompiledTap>();
         foreach (var (_, t) in _taps)
         {
             var index = t.IndexOf(arms);
-            if (t.Failed[index])
-            {
-                return;
-            }
-
+            failed |= t.Failed[index];
             if (t.Variants[index] is { } tap)
             {
                 taps.Add(tap);
@@ -259,11 +255,20 @@ internal sealed partial class UnifiedCompilation
             }
         }
 
-        // The nodes compiled once on the unified schema, which declares for every combination what a writer of any arm
-        // declares: whether each combination's readers have their writers is checked here. Without an arm it is the bare
-        // baseline, compiled alone (ValidateBaselineAlone).
         var start = _diagnostics.Count;
-        _builder.ValidateDataFlow(nodes, selectedFallbacks, output, _pipelineLabel, taps, declarations: assigned.Count > 0);
+        ValidateImplicitDeclarations(nodes, selectedFallbacks, assigned);
+        if (failed)
+        {
+            Settle(start, assigned);
+            return;
+        }
+
+        _builder.ValidateDataFlow(nodes, selectedFallbacks, output, _pipelineLabel, taps);
+        if (assigned.Count > 0)
+        {
+            ValidateNames(nodes, selectedFallbacks, taps, output, assigned); // without an arm: ValidateBaselineAlone
+        }
+
         Settle(start, assigned);
         report.Checked++;
     }

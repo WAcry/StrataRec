@@ -70,6 +70,9 @@ public sealed class CompiledTap
     /// <summary>Output columns (logical ids) the tap reads through bindings; must be produced before the attach point.</summary>
     public required int[] ReadOutputs { get; init; }
 
+    /// <summary>Every name the tap's expressions bind (<see cref="CompiledNode.Requires"/>): a tap compiles after every node.</summary>
+    public NameRef[] Requires { get; init; } = Array.Empty<NameRef>();
+
     /// <summary>Candidate feature indices the tap reads; must have been fetched before the attach point.</summary>
     public required int[] ReadFeatures { get; init; }
 

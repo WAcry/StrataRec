@@ -25,7 +25,8 @@ public sealed class OperatorCompileContext
     private readonly HashSet<int> _requiredOutputs = new();
     private readonly HashSet<int> _readParams = new();
     private readonly HashSet<VersionRead> _versionReads = new();
-    private readonly HashSet<int> _implicitReads = new();
+    private readonly HashSet<NameRef> _requires = new();
+    private readonly List<ColumnDeclaration> _declares = new();
     private readonly List<OutputColumn> _outputs = new();
 
     internal OperatorCompileContext(
@@ -84,8 +85,11 @@ public sealed class OperatorCompileContext
 
     internal IReadOnlyList<OutputColumn> Outputs => _outputs;
 
-    /// <summary>Columns without a declaration read before the node wrote them itself (<see cref="CompiledNode.ImplicitReads"/>).</summary>
-    internal IReadOnlyCollection<int> ImplicitReads => _implicitReads;
+    /// <summary>The names bound before the node declared them itself (<see cref="CompiledNode.Requires"/>).</summary>
+    internal IReadOnlyCollection<NameRef> Requires => _requires;
+
+    /// <summary>The columns written with a type of the node's own, in the order written (<see cref="CompiledNode.Declares"/>).</summary>
+    internal List<ColumnDeclaration> Declares => _declares;
 
     /// <summary>
     /// Deserializes <see cref="Config"/> strictly (unknown keys rejected). Returns null after reporting the error at the
@@ -139,7 +143,14 @@ public sealed class OperatorCompileContext
         return true;
     }
 
-    /// <summary>Resolves an output column the node writes. Undeclared columns take <paramref name="implicitType"/> if given.</summary>
+    /// <summary>
+    /// Resolves an output column the node writes. With <paramref name="implicitType"/>, a column nothing has declared is
+    /// declared with that type, so the write declares it (<see cref="Planning.CompiledNode.Declares"/>), and a declared
+    /// one keeps its declared type, which the caller checks it can write; without, the column must be declared. A node
+    /// that writes a declared column as declared and declares an undeclared one passes its type either way, rather than
+    /// asking the schema first: whether a column is declared can differ between arm combinations, which compile the node
+    /// once (review 51).
+    /// </summary>
     public bool TryWriteColumn(string name, string configKey, ColumnType? implicitType, out OutputColumn column)
     {
         column = default;
@@ -168,12 +179,6 @@ public sealed class OperatorCompileContext
             return false;
         }
 
-        if (implicitType is { } expected && !logical.Implicit && expected.Kind != logical.Type.Kind)
-        {
-            Error(configKey, "COLUMN_TYPE_MISMATCH", $"{Descriptor.Id} writes '{name}' as {expected}, but it is declared as {logical.Type}.");
-            return false;
-        }
-
         if (implicitType is { } type && logical.Implicit && type != logical.Type)
         {
             // An undeclared column takes its type from the first variant or node that writes it, and every combination
@@ -193,6 +198,16 @@ public sealed class OperatorCompileContext
                 Error(configKey, "COLUMN_WRITTEN_TWICE", $"Node writes column '{name}' more than once.");
                 return false;
             }
+        }
+
+        // A write with a type of its own declares the column where nothing has; one without needs a declaration.
+        if (implicitType is not null)
+        {
+            _declares.Add(new ColumnDeclaration(logical.Id, implicitType.Value));
+        }
+        else
+        {
+            Require(new NameRef(SymbolKind.Column, logical.Id));
         }
 
         var slot = (Descriptor.Effects & Effects.RowSource) != 0 ? _schema.GetRowSourceSlot(logical) : _schema.GetNodeSlot(NodeId, logical);
@@ -216,6 +231,11 @@ public sealed class OperatorCompileContext
             HasErrors = true;
             ExpressionErrors.Report(_diagnostics, diagnostics, Artifact, Pointer + "/config" + configKey, source);
             return null;
+        }
+
+        foreach (var symbol in expression.Names)
+        {
+            Require(symbol);
         }
 
         foreach (var symbol in expression.Reads)
@@ -266,6 +286,7 @@ public sealed class OperatorCompileContext
         }
 
         _readParams.Add(leaf.Id);
+        Require(new NameRef(SymbolKind.Param, leaf.Id));
         parameter = new ParamRef(leaf.Id, leaf.Name, leaf.Type);
         return true;
     }
@@ -414,31 +435,40 @@ public sealed class OperatorCompileContext
         return true;
     }
 
-    private bool Wrote(int logical)
+    /// <summary>Records a name the node binds (<see cref="CompiledNode.Requires"/>), unless it declared that column itself.</summary>
+    internal void Require(in Symbol symbol)
     {
-        foreach (var output in _outputs)
+        if (symbol.Kind is SymbolKind.Column or SymbolKind.Param or SymbolKind.Context)
         {
-            if (output.LogicalId == logical)
+            Require(new NameRef(symbol.Kind, symbol.Id));
+        }
+    }
+
+    private void Require(NameRef name)
+    {
+        if (name.Kind == SymbolKind.Column)
+        {
+            foreach (var declared in _declares)
             {
-                return true;
+                if (declared.Logical == name.Id)
+                {
+                    return; // written by the node before, with a type of its own
+                }
             }
         }
 
-        return false;
+        _requires.Add(name);
     }
 
-    /// <summary>Records a resolved name as a read of the node (<see cref="TryResolveRead"/>).</summary>
+    /// <summary>Records a resolved name as a read of the node (<see cref="TryResolveRead"/>), and as a name it binds.</summary>
     internal void RecordSymbol(in Symbol symbol)
     {
+        Require(symbol);
         switch (symbol.Kind)
         {
             case SymbolKind.Column:
                 _readColumns.Add(symbol.Id);
                 var column = _schema.Columns[symbol.Id];
-                if (column.Implicit && !Wrote(symbol.Id))
-                {
-                    _implicitReads.Add(symbol.Id);
-                }
 
                 if (column.Kind == ColumnKind.Feature)
                 {

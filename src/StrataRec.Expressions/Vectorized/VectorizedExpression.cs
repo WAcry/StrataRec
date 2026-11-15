@@ -16,14 +16,16 @@ internal sealed class VectorizedExpression : CompiledExpression
     private readonly int _scalarRoot;
     private readonly VectorProgram? _vector;
     private readonly Symbol[] _reads;
+    private readonly Symbol[] _names;
 
     /// <summary>Arrays of list literals a request-level result can pass through unchanged (e.g. <c>c ? [1] : [2]</c>);
     /// null when there are none. They belong to this shared instance, so <see cref="EvaluateScalar"/> hands out copies.</summary>
     private readonly object[]? _constantArrays;
 
-    public VectorizedExpression(string source, IrNode bound, IrNode optimized)
+    public VectorizedExpression(string source, IrNode bound, IrNode optimized, Symbol[] names)
     {
         Source = source;
+        _names = names;
         Bound = bound;
         Optimized = optimized;
         _type = bound.Type;
@@ -50,6 +52,8 @@ internal sealed class VectorizedExpression : CompiledExpression
     public override bool IsRowDependent { get; }
 
     public override IReadOnlyList<Symbol> Reads => _reads;
+
+    public override IReadOnlyList<Symbol> Names => _names;
 
     public override Symbol? ColumnReference => Optimized.Op == IrOp.Column ? Optimized.Symbol : null;
 

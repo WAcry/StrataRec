@@ -182,30 +182,27 @@ public sealed class GroupAggregateFactory : IOperatorFactory
         var mayBeMissing = group is { Type.Nullable: true } || (!integer && value is { Type.Nullable: true });
         var produced = integer ? ColumnType.Int64 : ColumnType.Float64;
         produced = mayBeMissing ? produced.AsNullable() : produced;
-        var declared = context.Schema.TryGetColumn(name, out var logical) && !logical.Implicit;
-        if (!context.TryWriteColumn(name, at, declared ? null : produced, out var output))
+        if (!context.TryWriteColumn(name, at, produced, out var output))
         {
             return null;
         }
 
-        if (declared)
+        // A declared column keeps its type, which must be one it can write; an undeclared one is what it produces.
+        var kinds = integer ? "int64 or int32" : "float64 or float32";
+        if (integer ? !output.Type.IsInteger : !output.Type.IsFloat)
         {
-            var kinds = integer ? "int64 or int32" : "float64 or float32";
-            if (integer ? !output.Type.IsInteger : !output.Type.IsFloat)
-            {
-                context.Error(at, "COLUMN_TYPE_MISMATCH", $"{spec.Fn} writes {kinds}, and '{name}' is declared as {output.Type}.",
-                    $"declare it as {produced}");
-                return null;
-            }
+            context.Error(at, "COLUMN_TYPE_MISMATCH", $"{spec.Fn} writes {kinds}, and '{name}' is declared as {output.Type}.",
+                $"declare it as {produced}");
+            return null;
+        }
 
-            if (mayBeMissing && !output.Type.Nullable)
-            {
-                context.Error(at, "COLUMN_TYPE_MISMATCH",
-                    $"'{name}' is declared {output.Type}, but {spec.Fn} leaves it missing for a row "
-                    + (group is { Type.Nullable: true } ? $"whose {group.Value.Name} is missing" : $"of a group with no {value!.Value.Name}") + ".",
-                    $"declare it as {output.Type.AsNullable()}, and read it with '??' or has()");
-                return null;
-            }
+        if (mayBeMissing && !output.Type.Nullable)
+        {
+            context.Error(at, "COLUMN_TYPE_MISMATCH",
+                $"'{name}' is declared {output.Type}, but {spec.Fn} leaves it missing for a row "
+                + (group is { Type.Nullable: true } ? $"whose {group.Value.Name} is missing" : $"of a group with no {value!.Value.Name}") + ".",
+                $"declare it as {output.Type.AsNullable()}, and read it with '??' or has()");
+            return null;
         }
 
         return new Output(function, value, spec.Ascending, output);

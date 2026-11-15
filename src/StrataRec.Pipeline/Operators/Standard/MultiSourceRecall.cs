@@ -34,10 +34,10 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
     {
         // The recall columns are the same whatever the config says: declared first, the nodes that read them compile on
         // when something below is wrong (a misspelled source, an unbound one), instead of reporting them unknown.
-        var declared = context.TryWriteColumn("recall.sources_mask", string.Empty, ColumnType.Int64, out var mask)
-            & context.TryWriteColumn("recall.best_rank", string.Empty, ColumnType.Int64, out var bestRank)
-            & context.TryWriteColumn("recall.best_score", string.Empty, ColumnType.Float64, out var bestScore)
-            & context.TryWriteColumn("recall.primary_source", string.Empty, ColumnType.String, out var primary);
+        var declared = TryWrite(context, "recall.sources_mask", ColumnType.Int64, out var mask)
+            & TryWrite(context, "recall.best_rank", ColumnType.Int64, out var bestRank)
+            & TryWrite(context, "recall.best_score", ColumnType.Float64, out var bestScore)
+            & TryWrite(context, "recall.primary_source", ColumnType.String, out var primary);
         var config = context.BindConfig<MultiSourceRecallConfig>();
         if (config is null)
         {
@@ -116,6 +116,24 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         }
 
         return new MultiSourceRecall(sources, mask, bestRank, bestScore, primary);
+    }
+
+    /// <summary>A recall column: undeclared, it is declared as <paramref name="type"/>; declared, it must be of that kind.</summary>
+    private static bool TryWrite(OperatorCompileContext context, string name, ColumnType type, out OutputColumn column)
+    {
+        if (!context.TryWriteColumn(name, string.Empty, type, out column))
+        {
+            return false;
+        }
+
+        if (column.Type.Kind == type.Kind)
+        {
+            return true;
+        }
+
+        context.Error(string.Empty, "COLUMN_TYPE_MISMATCH", $"{context.Descriptor.Id} writes '{name}' as {type}, but it is declared as {column.Type}.",
+            $"declare it as {type} or {type.AsNullable()}, or leave it undeclared");
+        return false;
     }
 
     private sealed record SourceEntry(string Name, ICandidateSource Source, int? TimeoutMs, ParamRef Quota, IoTarget Io);

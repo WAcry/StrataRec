@@ -77,7 +77,7 @@ public static partial class ExpressionCompiler
         }
 
         var optimized = Optimizer.Optimize(bound);
-        expression = new VectorizedExpression(source, bound, optimized);
+        expression = new VectorizedExpression(source, bound, optimized, binder.Names.ToArray());
         return true;
     }
 }

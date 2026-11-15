@@ -97,6 +97,8 @@ public sealed class SchemaSources
 /// </summary>
 public sealed class PlanBuilder
 {
+    private readonly HashSet<NameRef> _tapNames = new(); // the names of the tap being compiled
+
     private readonly PlanEnvironment _environment;
     private readonly IPlanBindings _bindings;
     private readonly DiagnosticBag _diagnostics;
@@ -318,6 +320,11 @@ public sealed class PlanBuilder
 
         if (when is not null)
         {
+            foreach (var symbol in when.Names)
+            {
+                context.Require(symbol);
+            }
+
             foreach (var symbol in when.Reads)
             {
                 context.RecordSymbol(symbol);
@@ -350,7 +357,8 @@ public sealed class PlanBuilder
             ReadParams = ToSortedArray(context.ReadParams),
             VersionReads = ToSortedArray(context.VersionReads),
             Outputs = ToArray(context.Outputs),
-            ImplicitReads = ToSortedArray(context.ImplicitReads),
+            Requires = ToSortedArray(context.Requires),
+            Declares = context.Declares.ToArray(),
         };
         _nodes.Add(node);
         return node;
@@ -458,6 +466,7 @@ public sealed class PlanBuilder
         }
 
         var reads = new List<Symbol>();
+        _tapNames.Clear();
         CompiledExpression? filter = null;
         if (spec.Rows?.Filter is { } filterSource)
         {
@@ -622,6 +631,7 @@ public sealed class PlanBuilder
             PinnedProducers = pinned.ToArray(),
             PinnedNodes = new List<string>(pinnedNodes).ToArray(),
             VersionReads = ToSortedArray(versionReads),
+            Requires = ToSortedArray(_tapNames),
         };
     }
 
@@ -632,6 +642,14 @@ public sealed class PlanBuilder
             foreach (var symbol in expression.Reads)
             {
                 reads.Add(symbol);
+            }
+
+            foreach (var symbol in expression.Names)
+            {
+                if (symbol.Kind is SymbolKind.Column or SymbolKind.Param or SymbolKind.Context)
+                {
+                    _tapNames.Add(new NameRef(symbol.Kind, symbol.Id));
+                }
             }
 
             return expression;
@@ -837,9 +855,7 @@ public sealed class PlanBuilder
 
     /// <summary>
     /// Static data-flow check of one fully merged node set (design 4.6, 5.3, 11.5): every non-nullable column a node
-    /// reads has a producer that cannot be skipped before it; with <paramref name="declarations"/>, every column without a
-    /// declaration that a node, fallback or the output reads is declared by a writer compiled before it
-    /// (<see cref="ValidateDeclared"/>); fixed columns have one producer per path; row sources keep
+    /// reads has a producer that cannot be skipped before it; fixed columns have one producer per path; row sources keep
     /// every non-nullable column covered (<see cref="ValidateRowSource"/>); nodes sharing an order are independent; every
     /// pinned version names a node of this set that writes it (<see cref="ValidateVersionRead"/>); taps attach after a node
     /// of this set and log only context features it reads (<see cref="ValidateTapDependencies"/>).
@@ -849,15 +865,12 @@ public sealed class PlanBuilder
     /// check every arm combination. A new rule needs its scope there, or past that limit it is not checked for the
     /// combinations of three layers and more.
     /// </remarks>
-    /// <param name="declarations">For a combination of arms checked on the unified plan's schema. A compile of the nodes
-    /// alone resolves each name on the columns declared before it, so there it always holds.</param>
     public void ValidateDataFlow(
         IReadOnlyList<CompiledNode> timeline,
         IReadOnlyDictionary<string, CompiledNode> fallbacks,
         OutputPlan? output,
         string artifact,
-        IReadOnlyList<CompiledTap>? taps = null,
-        bool declarations = false)
+        IReadOnlyList<CompiledTap>? taps = null)
     {
         var schema = Schema;
         var guaranteed = new HashSet<int>();
@@ -889,11 +902,6 @@ public sealed class PlanBuilder
                         $"Nodes '{node.NodeId}' and '{ordered[j].NodeId}' share order {node.Order} but depend on each other.",
                         "give them different orders");
                 }
-            }
-
-            if (declarations)
-            {
-                ValidateDeclared(node.ImplicitReads, node, "Node", node.NodeId, node.Pointer, ordered, i, fallbacks, artifact);
             }
 
             foreach (var logical in node.RequiredOutputs)
@@ -1001,31 +1009,6 @@ public sealed class PlanBuilder
             }
         }
 
-        if (declarations)
-        {
-            foreach (var (_, fallback) in fallbacks)
-            {
-                ValidateDeclared(fallback.ImplicitReads, fallback, "Fallback", fallback.NodeId, fallback.Pointer, ordered, ordered.Count, fallbacks, artifact);
-            }
-        }
-
-        if (declarations && output is not null)
-        {
-            foreach (var (name, expression) in output.Columns)
-            {
-                var reads = new List<int>();
-                foreach (var symbol in expression.Reads)
-                {
-                    if (symbol.Kind == SymbolKind.Column)
-                    {
-                        reads.Add(symbol.Id);
-                    }
-                }
-
-                ValidateDeclared(reads, null, "Output column", name, "/output/columns/" + JsonPointer.Escape(name), ordered, ordered.Count, fallbacks, artifact);
-            }
-        }
-
         if (taps is not null && output is not null)
         {
             foreach (var (_, expression) in output.Columns)
@@ -1102,73 +1085,6 @@ public sealed class PlanBuilder
         if (taps is not null)
         {
             ValidateTapDependencies(taps, ordered, fallbacks, output, artifact);
-        }
-    }
-
-    /// <summary>
-    /// A column written without a declaration (an implicit output, e.g. GroupAggregate@1's) exists in a compile once a node
-    /// writing it has compiled: the nodes compile by order, then id, the fallbacks after them by id, the output last. So a
-    /// reader needs a writer compiled before it among the nodes of one combination, as a compile of that combination alone
-    /// requires (there the name is unknown). The unified plan compiles every node once on one schema, which an arm's or
-    /// the baseline's writer declares for every combination: one arm deleting or moving the writer and another adding a
-    /// reader of a nullable column ran unchecked, since a nullable read needs no producer (generated differential test).
-    /// A tap's reads need a producer before it (<see cref="ValidateTap"/>), which this implies. The caller checks the
-    /// combinations with an arm: the bare baseline is compiled alone, which says where in an expression the name is.
-    /// </summary>
-    /// <param name="reads">What the reader reads: a node's <see cref="CompiledNode.ImplicitReads"/>, which leave out a
-    /// column it reads only after writing it (its own declaration); the output's every read.</param>
-    /// <param name="reader">The node or fallback that reads; null for an output column.</param>
-    /// <param name="before">How many nodes of <paramref name="ordered"/> compile before the reader: its index, or all of them.</param>
-    private void ValidateDeclared(
-        IReadOnlyList<int> reads, CompiledNode? reader, string kind, string name, string pointer, List<CompiledNode> ordered, int before,
-        IReadOnlyDictionary<string, CompiledNode> fallbacks, string artifact)
-    {
-        foreach (var logical in reads)
-        {
-            var column = Schema.Columns[logical];
-            if (!column.Implicit)
-            {
-                continue;
-            }
-
-            var declared = false;
-            for (var j = 0; j < before && !declared; j++)
-            {
-                declared = Writes(ordered[j], logical);
-            }
-
-            if (!declared && before == ordered.Count)
-            {
-                foreach (var (id, fallback) in fallbacks)
-                {
-                    // A fallback reader knows what the fallbacks named before it declared; the output knows them all.
-                    if ((reader is null || string.CompareOrdinal(id, reader.NodeId) < 0) && Writes(fallback, logical))
-                    {
-                        declared = true;
-                        break;
-                    }
-                }
-            }
-
-            if (declared)
-            {
-                continue;
-            }
-
-            string? later = null;
-            for (var j = before; j < ordered.Count && later is null; j++)
-            {
-                if (Writes(ordered[j], logical))
-                {
-                    later = $"'{ordered[j].NodeId}' (order {ordered[j].Order}) writes it after";
-                }
-            }
-
-            _diagnostics.Error("COLUMN_NOT_DECLARED", artifact, pointer,
-                $"{kind} '{name}' reads '{column.Name}', which has no declaration: the node writing it declares it, and here " +
-                $"{later ?? "no node writes it"}.",
-                $"declare it under /columns (e.g. \"{column.Name}\": {{ \"type\": \"{column.Type.AsNullable()}\" }}), so it exists wherever '{name}' does, " +
-                $"or keep a node that writes it before '{name}' in every arm combination");
         }
     }
 
@@ -1341,9 +1257,10 @@ public sealed class PlanBuilder
     /// <para>Nullability exempts a column only from the producer a reader needs; every other rule applies to it. A
     /// position runs its node or that node's fallback, so a scope holds both: the fallbacks of its nodes, and the nodes
     /// that fall back to a fallback in it.</para>
-    /// <para>The rules and what decides them: a reader's non-nullable column, or column without a declaration (the reader
-    /// and the column's producers; for the output, the producers);
-    /// one producer per path and row sources' shadowing (the producers); row sources keeping a non-nullable column
+    /// <para>The rules and what decides them: a reader's non-nullable column, and the declaration of every column a node
+    /// binds (the reader and the column's producers; for the output, the producers); the declaration of a parameter or
+    /// feature a node binds (the node; an arm declaring it elsewhere is not one it may rely on);
+    /// one producer per path, row sources' shadowing, and a write declaring a column as an arm declares it (the producers); row sources keeping a non-nullable column
     /// covered (a row source and the producers); independence of nodes that may share an order (the two nodes); a
     /// fallback's existence and outputs (the node); a pinned version read by a node or the output (the reader and the
     /// pinned node); a tap's columns, features and pinned versions (the tap, the nodes it attaches after, and the
@@ -1353,8 +1270,11 @@ public sealed class PlanBuilder
     /// <param name="nodes">Node id → the variants it takes in some combination (timeline nodes and fallbacks).</param>
     /// <param name="taps">Tap id → the variants it takes in some combination.</param>
     /// <param name="output">The output, the same in every combination.</param>
+    /// <param name="conditional">Whether a name's declaration may differ between combinations (a column without one, a name
+    /// an arm adds); the declaration of another is the baseline's, the same everywhere.</param>
     public List<DataFlowScope> DataFlowScopes(
-        IReadOnlyDictionary<string, List<CompiledNode>> nodes, IReadOnlyDictionary<string, List<CompiledTap>> taps, OutputPlan output)
+        IReadOnlyDictionary<string, List<CompiledNode>> nodes, IReadOnlyDictionary<string, List<CompiledTap>> taps, OutputPlan output,
+        Func<NameRef, bool> conditional)
     {
         var schema = Schema;
         var producers = new SortedDictionary<int, SortedSet<string>>();
@@ -1364,6 +1284,7 @@ public sealed class PlanBuilder
         var fallbacksOf = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
         var referrers = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
         var orders = new SortedDictionary<string, (HashSet<int> Orders, string Pointer)>(StringComparer.Ordinal);
+        var bindsOther = new SortedSet<string>(StringComparer.Ordinal); // nodes binding a parameter or context field
         foreach (var (id, variants) in nodes)
         {
             foreach (var node in variants)
@@ -1378,9 +1299,21 @@ public sealed class PlanBuilder
                     Add(readers, logical, id);
                 }
 
-                foreach (var logical in node.ImplicitReads)
+                foreach (var name in node.Requires)
                 {
-                    Add(readers, logical, id);
+                    if (!conditional(name))
+                    {
+                        continue;
+                    }
+
+                    if (name.Kind == SymbolKind.Column)
+                    {
+                        Add(readers, name.Id, id);
+                    }
+                    else
+                    {
+                        bindsOther.Add(id);
+                    }
                 }
 
                 var fetched = new HashSet<int>();
@@ -1492,6 +1425,12 @@ public sealed class PlanBuilder
             Scope($"node '{id}' and its fallback", nodes[id][0].Pointer + "/on_failure", new SortedSet<string>(StringComparer.Ordinal) { id });
         }
 
+        foreach (var id in bindsOther)
+        {
+            // Whether a parameter or feature it binds is declared: by the baseline, or an arm among the node's own.
+            Scope($"the names node '{id}' binds", nodes[id][0].Pointer, new SortedSet<string>(StringComparer.Ordinal) { id });
+        }
+
         // A pinned version read by a node or the output: the reader's variants say whether it is read, the pinned node's
         // whether it is written there and by a row source. A tap's is decided within the tap's scope for that node, below.
         var pins = new HashSet<(string Reader, string Node)>();
@@ -1532,6 +1471,14 @@ public sealed class PlanBuilder
 
                 pinned.UnionWith(tap.PinnedNodes);
                 reads.UnionWith(tap.ReadOutputs);
+                foreach (var name in tap.Requires)
+                {
+                    if (name.Kind == SymbolKind.Column && schema.Columns[name.Id].Kind == ColumnKind.Output && conditional(name))
+                    {
+                        reads.Add(name.Id);
+                    }
+                }
+
                 features.UnionWith(tap.ReadFeatures);
                 contextFeatures.UnionWith(tap.ReadContextFeatures);
             }
@@ -2219,6 +2166,24 @@ public sealed class PlanBuilder
         }
 
         Array.Sort(array, static (a, b) => string.CompareOrdinal(a.Node, b.Node) is var c && c != 0 ? c : a.Logical.CompareTo(b.Logical));
+        return array;
+    }
+
+    private static NameRef[] ToSortedArray(IReadOnlyCollection<NameRef> values)
+    {
+        if (values.Count == 0)
+        {
+            return Array.Empty<NameRef>();
+        }
+
+        var array = new NameRef[values.Count];
+        var i = 0;
+        foreach (var v in values)
+        {
+            array[i++] = v;
+        }
+
+        Array.Sort(array, static (a, b) => a.Kind != b.Kind ? a.Kind.CompareTo(b.Kind) : a.Id.CompareTo(b.Id));
         return array;
     }
 

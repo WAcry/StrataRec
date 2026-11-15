@@ -122,8 +122,7 @@ public sealed class GenerativeRetrieverFactory : IOperatorFactory
     /// <summary><c>rank_col</c>: a nullable integer column, since the rows other sources append have no position in this answer.</summary>
     private OutputColumn? CompileRank(OperatorCompileContext context, string name, ref bool ok)
     {
-        var declared = context.Schema.TryGetColumn(name, out _);
-        if (!context.TryWriteColumn(name, "/rank_col", declared ? null : ColumnType.Int64.AsNullable(), out var written))
+        if (!context.TryWriteColumn(name, "/rank_col", ColumnType.Int64.AsNullable(), out var written))
         {
             ok = false;
             return null;

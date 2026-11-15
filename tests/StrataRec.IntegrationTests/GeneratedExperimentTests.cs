@@ -23,7 +23,7 @@ public sealed class GeneratedExperimentTests
         "COMBINATION_CHECK_LIMIT", // a rule over more combinations than may be checked is refused, not left unchecked
     };
 
-    /// <summary>300 configs (about 15 s); set <c>STRATAREC_GENERATED_SEEDS</c> to run more, e.g. 3000 after changing the compiler.</summary>
+    /// <summary>300 configs (about 25 s); set <c>STRATAREC_GENERATED_SEEDS</c> to run more, e.g. 3000 after changing the compiler.</summary>
     public static TheoryData<int> Seeds =>
         new(Enumerable.Range(0, int.TryParse(Environment.GetEnvironmentVariable("STRATAREC_GENERATED_SEEDS"), out var seeds) ? seeds : 300));
 
@@ -124,16 +124,39 @@ public sealed class GeneratedExperimentTests
             described.Add($"baseline node base_reader: {reader}");
         }
 
+        // With four or five layers of mostly one treatment, the space is past a limit of 8 to 16 that a scope of three
+        // layers fits, so a scope is checked by its combinations, not refused (review 51: no generated space checked one).
+        // Half of those plant a rule only three layers break together: a baseline writer of stat.a before author_cap,
+        // one arm making author_cap read it, one moving author_cap to 513 and one moving the writer to 514. Any one or two
+        // of them are legal (review 51: a scope check left out went unnoticed, nothing random was refused by three layers).
+        var many = random.Next(4) == 0;
+        var triple = many && random.Next(2) == 0;
+        var baseWriter = triple || random.Next(3) == 0;
+        if (baseWriter)
+        {
+            var writer = Producer(random, "stat.a");
+            if (triple)
+            {
+                writer["order"] = Orders[random.Next(4)]; // before 513
+            }
+
+            pipeline.Nodes["base_writer"] = new NodeSpec
+            {
+                Order = (int)writer["order"]!, Op = "GroupAggregate@1", Config = writer["config"]!.DeepClone().AsObject(),
+            };
+            described.Add($"baseline node base_writer: {writer.ToJsonString()}");
+        }
+
         // Sometimes without each arm's own compile (a host with a thousand arms turns it off), so the combinations' checks
         // alone must refuse what a combination refuses, and then with more arms invalid on their own; sometimes past the
         // combinations checked in full, so the checks by scope must (review 50: the generated space never left the
         // exhaustive path).
         var alone = random.Next(3) != 0;
-        var limit = random.Next(3) == 0 ? random.Next(1, 8) : sample.MaxCombinationsChecked;
-        described.Add($"arms validated alone: {alone}; combinations checked in full: up to {limit}");
+        var limit = many ? 8 + (4 * random.Next(3)) : random.Next(3) == 0 ? random.Next(1, 8) : sample.MaxCombinationsChecked;
+        described.Add($"arms validated alone: {alone}; combinations checked in full: up to {limit}; three layers planted: {triple}");
         var placements = new List<ExperimentPlacement>();
         var layers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        var experiments = random.Next(1, 4);
+        var experiments = many ? random.Next(4, 6) : random.Next(1, 4);
         for (var e = 0; e < experiments; e++)
         {
             var id = "g" + e;
@@ -147,23 +170,35 @@ public sealed class GeneratedExperimentTests
                 armIds.Add(id + "/control");
             }
 
-            var treatments = random.Next(1, 3);
+            var treatments = many && random.Next(4) != 0 ? 1 : random.Next(1, 3);
             for (var t = 0; t < treatments; t++)
             {
                 // Mostly an arm valid on its own: one invalid arm refuses the unified plan, and few would be accepted.
                 var keepInvalid = random.Next(alone ? 4 : 2) == 0;
                 JsonObject patch;
                 var tries = 0;
-                do
+                if (triple && e < 3 && t == 0)
                 {
-                    patch = new JsonObject();
-                    var atoms = random.Next(1, 3);
-                    for (var a = 0; a < atoms; a++)
+                    patch = e switch
                     {
-                        Merge(patch, Atom(random, $"{id}_{t}_{a}"));
-                    }
+                        0 => Patch("nodes", "author_cap", new JsonObject { ["config"] = new JsonObject { ["predicate"] = "(col.stat.a ?? 1) > 0" } }),
+                        1 => Patch("nodes", "author_cap", new JsonObject { ["order"] = 513 }),
+                        _ => Patch("nodes", "base_writer", new JsonObject { ["order"] = 514 }),
+                    };
                 }
-                while (!keepInvalid && ++tries < 10 && !ValidAlone(sample, pipeline, patch, environment));
+                else
+                {
+                    do
+                    {
+                        patch = new JsonObject();
+                        var atoms = random.Next(1, 3);
+                        for (var a = 0; a < atoms; a++)
+                        {
+                            Merge(patch, Atom(random, $"{id}_{t}_{a}", baseWriter));
+                        }
+                    }
+                    while (!keepInvalid && ++tries < 10 && !ValidAlone(sample, pipeline, patch, environment));
+                }
 
                 arms["t" + t] = patch;
                 armIds.Add($"{id}/t{t}");
@@ -171,7 +206,7 @@ public sealed class GeneratedExperimentTests
             }
 
             // Mostly a layer of its own; sometimes the previous experiment's (mutually exclusive with it).
-            var layer = e > 0 && random.Next(4) == 0 ? placements[^1].Layer : "layer_" + id;
+            var layer = e > (triple ? 2 : 0) && random.Next(many ? 8 : 4) == 0 ? placements[^1].Layer : "layer_" + id;
             placements.Add(new ExperimentPlacement(Experiment(id, arms), layer));
             if (!layers.TryGetValue(layer, out var layerArms))
             {
@@ -209,10 +244,10 @@ public sealed class GeneratedExperimentTests
         ExperimentId = id, PipelineId = "home_feed", Owner = "t", Description = "d", ExpiresAt = "2099-01-01", Arms = arms,
     };
 
-    /// <summary>One change an arm makes.</summary>
-    private static JsonObject Atom(Random random, string suffix)
+    /// <summary>One change an arm makes; <paramref name="baseWriter"/> when the baseline has a writer of stat.a.</summary>
+    private static JsonObject Atom(Random random, string suffix, bool baseWriter)
     {
-        switch (random.Next(15))
+        switch (random.Next(16))
         {
             case 0 or 1:
                 return random.Next(2) == 0
@@ -251,9 +286,13 @@ public sealed class GeneratedExperimentTests
             case 7:
                 return Patch("nodes", "read_" + suffix, Filter(ReaderOrder(random), Reader(random)));
             case 8:
-                return Patch("nodes", "author_cap", new JsonObject { ["config"] = new JsonObject { ["predicate"] = Reader(random) } });
+                return Patch("nodes", "author_cap", new JsonObject
+                {
+                    ["config"] = new JsonObject { ["predicate"] = Reader(random, baseWriter && random.Next(2) == 0 ? "col.stat.a" : null) },
+                });
             case 9:
-                return Patch("nodes", random.Next(2) == 0 ? "author_cap" : "diversity_cap", new JsonObject { ["order"] = Order(random) });
+                return Patch("nodes", (baseWriter ? random.Next(3) : random.Next(2)) switch { 0 => "author_cap", 1 => "diversity_cap", _ => "base_writer" },
+                    new JsonObject { ["order"] = Order(random) });
             case 10:
                 return random.Next(3) == 0 ? Patch("nodes", "author_rank", null) : Patch("nodes", random.Next(2) == 0 ? "author_cap" : "diversity_cap", null);
             case 11 or 12:
@@ -289,6 +328,10 @@ public sealed class GeneratedExperimentTests
                     },
                 });
             }
+            case 15:
+                // A declaration of a column nodes may also write without one: it exists only where the arm is assigned,
+                // so a reader in another arm cannot rely on it there (review 51 P1).
+                return Patch("columns", random.Next(3) == 0 ? "group.author_rank" : Stat(random), new JsonObject { ["type"] = "int64?" });
             default:
                 return Patch("log_taps", "tap_" + suffix, new JsonObject
                 {
@@ -319,12 +362,19 @@ public sealed class GeneratedExperimentTests
 
     /// <summary>
     /// A predicate reading <paramref name="column"/>, or mostly the sample's author rank (a stat column only an arm
-    /// writes), mostly with a default.
+    /// writes), mostly with a default; sometimes in a branch the optimizer drops, where the name must still be declared
+    /// (review 51).
     /// </summary>
     private static string Reader(Random random, string? column = null)
     {
         column ??= random.Next(4) == 0 ? "col." + Stat(random) : "col.group.author_rank";
-        return random.Next(6) == 0 ? column + " > 0" : $"({column} ?? 1) > 0";
+        var read = random.Next(6) == 0 ? column + " > 0" : $"({column} ?? 1) > 0";
+        return random.Next(8) switch
+        {
+            0 => $"true || ({read})",
+            1 => $"false ? ({read}) : true",
+            _ => read,
+        };
     }
 
     /// <summary>Around the sample's fusion, sort, author rank, author cap and diversity cap (450, 500, 512, 515, 520).</summary>

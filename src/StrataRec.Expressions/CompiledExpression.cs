@@ -22,6 +22,13 @@ public abstract class CompiledExpression
     public abstract IReadOnlyList<Symbol> Reads { get; }
 
     /// <summary>
+    /// Every name the expression binds, whether it reads it or not: a branch the optimizer drops (<c>true || col.x</c>)
+    /// or an unused <c>let</c> still names something the scope must declare, so a configuration without it does not
+    /// compile (review 51). <see cref="Reads"/> is what evaluation reads, and what is fetched.
+    /// </summary>
+    public virtual IReadOnlyList<Symbol> Names => Reads;
+
+    /// <summary>
     /// The candidate column the expression is, when it is nothing but a reference to one (<c>col.score.final</c>); null
     /// otherwise. <see cref="ResultType"/> is the expression type system's (every float is float64); a reader that wants
     /// the column's own storage type, such as an output whose float32 values should print as floats, takes it from here.

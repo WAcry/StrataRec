@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using StrataRec.Core.Types;
 using StrataRec.Expressions;
 using StrataRec.Pipeline.Operators;
 
@@ -28,6 +29,21 @@ public enum CompactMode : byte
 /// <param name="Node">The pinned node's id.</param>
 /// <param name="Logical">The column's logical id.</param>
 public readonly record struct VersionRead(string Node, int Logical);
+
+/// <summary>
+/// A name a node, tap or the output binds (<see cref="CompiledNode.Requires"/>): a column, a parameter leaf or a context
+/// field, by its id in the plan schema.
+/// </summary>
+public readonly record struct NameRef(SymbolKind Kind, int Id);
+
+/// <summary>
+/// A column a node's write declares where nothing else has (<see cref="CompiledNode.Declares"/>), with the type it
+/// declares it as: the unified plan's schema may hold an arm's declaration instead, which a combination without that arm
+/// does not have.
+/// </summary>
+/// <param name="Logical">The column's logical id.</param>
+/// <param name="Type">The type the write declares it as.</param>
+public readonly record struct ColumnDeclaration(int Logical, ColumnType Type);
 
 /// <summary>
 /// One compiled variant of a node: the operator instance plus everything the scheduler needs, all resolved to integer
@@ -95,12 +111,17 @@ public sealed class CompiledNode
     public required OutputColumn[] Outputs { get; init; }
 
     /// <summary>
-    /// The columns without a declaration (implicit outputs) the node reads before it has written them itself, or without
-    /// writing them: a node knows such a column while it compiles only if one compiled before it declared it, or it did
-    /// itself before reading it (GroupAggregate@1 reads its value columns, then writes its outputs). The order of the two
-    /// inside one compile is not in <see cref="ReadColumns"/> and <see cref="Outputs"/> (review 50).
+    /// The names the node binds that it has not declared itself before binding them: every column, parameter and context
+    /// field it resolves (in a branch the optimizer drops too, and a column it writes but cannot declare), but not a
+    /// column it reads after a write of its own that could declare it (GroupAggregate@1 writes <c>a</c>, then reads it for
+    /// <c>b</c>). A compile of one arm combination alone knows a name only once it is declared there: by the baseline, by an
+    /// arm in it, or (a column without a declaration) by a node compiled before. The order of reads and writes inside one
+    /// compile is not in <see cref="ReadColumns"/> and <see cref="Outputs"/>, so it is recorded (reviews 50, 51).
     /// </summary>
-    public int[] ImplicitReads { get; init; } = Array.Empty<int>();
+    public NameRef[] Requires { get; init; } = Array.Empty<NameRef>();
+
+    /// <summary>The columns the node writes with a type of its own (an implicit output), so its write declares an undeclared one.</summary>
+    public ColumnDeclaration[] Declares { get; init; } = Array.Empty<ColumnDeclaration>();
 
     /// <summary>Experiments whose arms override a parameter this node reads (trigger sites, design 12.6).</summary>
     public int[] ParamExperiments { get; set; } = Array.Empty<int>();

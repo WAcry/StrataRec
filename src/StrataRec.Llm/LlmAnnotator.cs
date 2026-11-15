@@ -169,9 +169,8 @@ public sealed class LlmAnnotatorFactory : IOperatorFactory
             return null;
         }
 
-        var declared = context.Schema.TryGetColumn(name, out _);
         var implicitType = categories ? ColumnType.String.AsNullable() : ColumnType.Text.AsNullable();
-        if (!context.TryWriteColumn(name, "/column", declared ? null : implicitType, out var written))
+        if (!context.TryWriteColumn(name, "/column", implicitType, out var written))
         {
             ok = false;
             return null;

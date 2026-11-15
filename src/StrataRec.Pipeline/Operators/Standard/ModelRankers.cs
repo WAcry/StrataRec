@@ -414,8 +414,7 @@ internal static class RankerColumns
             return ok;
         }
 
-        var declared = context.Schema.TryGetColumn(name, out _);
-        if (!context.TryWriteColumn(name, "/score_col", declared ? null : ColumnType.Float32.AsNullable(), out var written))
+        if (!context.TryWriteColumn(name, "/score_col", ColumnType.Float32.AsNullable(), out var written))
         {
             return false;
         }
