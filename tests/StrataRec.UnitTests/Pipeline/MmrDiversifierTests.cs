@@ -35,6 +35,19 @@ public sealed class MmrDiversifierTests
         Assert.Equal(new[] { 0, 1, 2 }, Order(scores, vectors, 0.5));
     }
 
+    [Theory]
+    [InlineData(0.0)]
+    [InlineData(0.5)]
+    public void RowsWithoutAScore_ComeLast_EvenWhenSimilaritiesAreNaN(double lambda)
+    {
+        // Review 50: finite vectors whose norm overflows float give NaN similarities, and NaN compares below the −∞ that
+        // stood for a missing score, so the first row left (here without a score) won.
+        double[] scores = [1.0, double.NegativeInfinity, 0.9];
+        float[]?[] vectors = [[2e38f, 2e38f], [2e38f, 2e38f], [2e38f, 2e38f]];
+
+        Assert.Equal(new[] { 0, 2, 1 }, Order(scores, vectors, lambda));
+    }
+
     [Fact]
     public void TheFirstPick_IsTheBestScore_EvenWithoutWeightOnTheScore()
     {

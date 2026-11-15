@@ -41,6 +41,44 @@ public sealed class UndeclaredColumnTests
     }
 
     [Fact]
+    public void ANodeReadingItsOwnOutputBeforeWritingIt_IsRejected_ThoughAnotherVariantDeclaredIt()
+    {
+        // Review 50: GroupAggregate@1 reads its value columns before it writes its outputs, so a value column naming its own
+        // output is unknown when the arm's config is compiled alone; the baseline's variant had declared it in the unified
+        // schema, and a read of a column the node writes was let through. Each arm alone is not compiled here (With).
+        var host = HomeFeedTestHost.Load();
+        host.Request.Pipeline.Nodes["selfagg"] = new NodeSpec
+        {
+            Order = 600, Op = "GroupAggregate@1",
+            Config = JsonNode.Parse("""{ "group_col": "item.author_id", "outputs": { "x": { "fn": "sum", "value_col": "score.final" } } }""")!.AsObject(),
+        };
+        var request = CombinationLimitTests.With(host.Request,
+            [CombinationLimitTests.Treatment("a", """{ "nodes": { "selfagg": { "config": { "outputs": { "x": { "value_col": "x" } } } } } }""")]);
+        Assert.Contains(PlanCompiler.CompileMerged(request, ["a/t"], host.Environment).Diagnostics, d => d.IsError && d.Code == "COLUMN_UNKNOWN");
+
+        var unified = PlanCompiler.Compile(request, host.Environment);
+
+        var error = Assert.Single(unified.Diagnostics, d => d.IsError);
+        Assert.Equal(("COLUMN_NOT_DECLARED", "experiment:a", "/arms/t/nodes/selfagg"), (error.Code, error.Artifact, error.Pointer));
+    }
+
+    [Fact]
+    public void ANodeReadingWhatItWroteEarlierInItsCompile_IsAccepted()
+    {
+        // Its outputs compile in order: 'a_self' is declared by the node itself when 'b_self' reads it.
+        var host = HomeFeedTestHost.Load();
+        var request = CombinationLimitTests.With(host.Request, [CombinationLimitTests.Treatment("a", """
+            { "nodes": { "selfagg": { "order": 600, "op": "GroupAggregate@1", "config": { "group_col": "item.author_id",
+              "outputs": { "a_self": { "fn": "count" }, "b_self": { "fn": "sum", "value_col": "a_self" } } } } } }
+            """)]);
+        Assert.True(PlanCompiler.CompileMerged(request, ["a/t"], host.Environment).Succeeded);
+
+        var unified = PlanCompiler.Compile(request, host.Environment);
+
+        Assert.True(unified.Succeeded, string.Join("\n", unified.Diagnostics));
+    }
+
+    [Fact]
     public void ADeclaredColumn_ExistsInEveryCombination()
     {
         // The hint's fix: declared under /columns, the column exists wherever the reader does, missing where nothing writes it.

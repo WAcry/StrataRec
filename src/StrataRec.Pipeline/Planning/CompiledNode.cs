@@ -94,6 +94,14 @@ public sealed class CompiledNode
 
     public required OutputColumn[] Outputs { get; init; }
 
+    /// <summary>
+    /// The columns without a declaration (implicit outputs) the node reads before it has written them itself, or without
+    /// writing them: a node knows such a column while it compiles only if one compiled before it declared it, or it did
+    /// itself before reading it (GroupAggregate@1 reads its value columns, then writes its outputs). The order of the two
+    /// inside one compile is not in <see cref="ReadColumns"/> and <see cref="Outputs"/> (review 50).
+    /// </summary>
+    public int[] ImplicitReads { get; init; } = Array.Empty<int>();
+
     /// <summary>Experiments whose arms override a parameter this node reads (trigger sites, design 12.6).</summary>
     public int[] ParamExperiments { get; set; } = Array.Empty<int>();
 

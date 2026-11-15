@@ -25,6 +25,7 @@ public sealed class OperatorCompileContext
     private readonly HashSet<int> _requiredOutputs = new();
     private readonly HashSet<int> _readParams = new();
     private readonly HashSet<VersionRead> _versionReads = new();
+    private readonly HashSet<int> _implicitReads = new();
     private readonly List<OutputColumn> _outputs = new();
 
     internal OperatorCompileContext(
@@ -82,6 +83,9 @@ public sealed class OperatorCompileContext
     internal IReadOnlyCollection<VersionRead> VersionReads => _versionReads;
 
     internal IReadOnlyList<OutputColumn> Outputs => _outputs;
+
+    /// <summary>Columns without a declaration read before the node wrote them itself (<see cref="CompiledNode.ImplicitReads"/>).</summary>
+    internal IReadOnlyCollection<int> ImplicitReads => _implicitReads;
 
     /// <summary>
     /// Deserializes <see cref="Config"/> strictly (unknown keys rejected). Returns null after reporting the error at the
@@ -410,6 +414,19 @@ public sealed class OperatorCompileContext
         return true;
     }
 
+    private bool Wrote(int logical)
+    {
+        foreach (var output in _outputs)
+        {
+            if (output.LogicalId == logical)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>Records a resolved name as a read of the node (<see cref="TryResolveRead"/>).</summary>
     internal void RecordSymbol(in Symbol symbol)
     {
@@ -418,6 +435,11 @@ public sealed class OperatorCompileContext
             case SymbolKind.Column:
                 _readColumns.Add(symbol.Id);
                 var column = _schema.Columns[symbol.Id];
+                if (column.Implicit && !Wrote(symbol.Id))
+                {
+                    _implicitReads.Add(symbol.Id);
+                }
+
                 if (column.Kind == ColumnKind.Feature)
                 {
                     _readFeatures.Add(column.FeatureIndex);

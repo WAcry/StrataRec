@@ -20,6 +20,7 @@ public sealed class GeneratedExperimentTests
     private static readonly HashSet<string> AcrossCombinations = new(StringComparer.Ordinal)
     {
         "COLUMN_TYPE_MISMATCH", "PATCH_CONFLICT", "ADD_CONFLICT", "ORDER_COLLISION", "NODE_ROLE_CHANGED",
+        "COMBINATION_CHECK_LIMIT", // a rule over more combinations than may be checked is refused, not left unchecked
     };
 
     /// <summary>300 configs (about 15 s); set <c>STRATAREC_GENERATED_SEEDS</c> to run more, e.g. 3000 after changing the compiler.</summary>
@@ -123,6 +124,13 @@ public sealed class GeneratedExperimentTests
             described.Add($"baseline node base_reader: {reader}");
         }
 
+        // Sometimes without each arm's own compile (a host with a thousand arms turns it off), so the combinations' checks
+        // alone must refuse what a combination refuses, and then with more arms invalid on their own; sometimes past the
+        // combinations checked in full, so the checks by scope must (review 50: the generated space never left the
+        // exhaustive path).
+        var alone = random.Next(3) != 0;
+        var limit = random.Next(3) == 0 ? random.Next(1, 8) : sample.MaxCombinationsChecked;
+        described.Add($"arms validated alone: {alone}; combinations checked in full: up to {limit}");
         var placements = new List<ExperimentPlacement>();
         var layers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         var experiments = random.Next(1, 4);
@@ -143,7 +151,7 @@ public sealed class GeneratedExperimentTests
             for (var t = 0; t < treatments; t++)
             {
                 // Mostly an arm valid on its own: one invalid arm refuses the unified plan, and few would be accepted.
-                var keepInvalid = random.Next(4) == 0;
+                var keepInvalid = random.Next(alone ? 4 : 2) == 0;
                 JsonObject patch;
                 var tries = 0;
                 do
@@ -176,7 +184,7 @@ public sealed class GeneratedExperimentTests
         var request = new PlanCompileRequest
         {
             Pipeline = pipeline, Catalog = sample.Catalog, Bindings = sample.Bindings, Tables = sample.Tables, Policy = sample.Policy,
-            Experiments = placements, ManifestId = sample.ManifestId,
+            Experiments = placements, ManifestId = sample.ManifestId, ValidateArmsIndependently = alone, MaxCombinationsChecked = limit,
         };
         return (request, layers.Values.ToList(), $"seed {seed}:\n  " + string.Join("\n  ", described));
     }
@@ -204,7 +212,7 @@ public sealed class GeneratedExperimentTests
     /// <summary>One change an arm makes.</summary>
     private static JsonObject Atom(Random random, string suffix)
     {
-        switch (random.Next(14))
+        switch (random.Next(15))
         {
             case 0 or 1:
                 return random.Next(2) == 0
@@ -254,6 +262,33 @@ public sealed class GeneratedExperimentTests
                     ["order"] = ReaderOrder(random), ["op"] = "ExpressionScorer@1",
                     ["config"] = new JsonObject { ["output_col"] = "score.final", ["expr"] = $"({Reader(random)}) ? col.score.final * 1.5 : col.score.final" },
                 });
+            case 14 when random.Next(2) == 0:
+                // The sample's author rank ranking by itself: it reads its value column before writing its output, so in
+                // a compile of this arm alone the name is unknown, though the baseline's variant declares it (review 50).
+                return Patch("nodes", "author_rank", new JsonObject
+                {
+                    ["config"] = new JsonObject { ["outputs"] = new JsonObject { ["group.author_rank"] = new JsonObject { ["value_col"] = "group.author_rank" } } },
+                });
+            case 14:
+            {
+                // One node writing a count and ranking rows by it: GroupAggregate@1 compiles its outputs by name, so self.b
+                // may read the self.a it has just written, but self.a reads self.b before writing it, which only a node
+                // compiled earlier can have declared (review 50). Columns of their own, int64 either way, so a type
+                // mismatch with other writers does not refuse the plan before the declarations are checked.
+                var (first, second) = random.Next(2) == 0 ? ("self.a", "self.b") : ("self.b", "self.a");
+                return Patch("nodes", "self_" + suffix, new JsonObject
+                {
+                    ["order"] = Order(random), ["op"] = "GroupAggregate@1",
+                    ["config"] = new JsonObject
+                    {
+                        ["outputs"] = new JsonObject
+                        {
+                            [first] = new JsonObject { ["fn"] = "count" },
+                            [second] = new JsonObject { ["fn"] = "rank", ["value_col"] = first },
+                        },
+                    },
+                });
+            }
             default:
                 return Patch("log_taps", "tap_" + suffix, new JsonObject
                 {

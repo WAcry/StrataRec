@@ -350,6 +350,7 @@ public sealed class PlanBuilder
             ReadParams = ToSortedArray(context.ReadParams),
             VersionReads = ToSortedArray(context.VersionReads),
             Outputs = ToArray(context.Outputs),
+            ImplicitReads = ToSortedArray(context.ImplicitReads),
         };
         _nodes.Add(node);
         return node;
@@ -892,7 +893,7 @@ public sealed class PlanBuilder
 
             if (declarations)
             {
-                ValidateDeclared(node.ReadColumns, node, "Node", node.NodeId, node.Pointer, ordered, i, fallbacks, artifact);
+                ValidateDeclared(node.ImplicitReads, node, "Node", node.NodeId, node.Pointer, ordered, i, fallbacks, artifact);
             }
 
             foreach (var logical in node.RequiredOutputs)
@@ -1004,7 +1005,7 @@ public sealed class PlanBuilder
         {
             foreach (var (_, fallback) in fallbacks)
             {
-                ValidateDeclared(fallback.ReadColumns, fallback, "Fallback", fallback.NodeId, fallback.Pointer, ordered, ordered.Count, fallbacks, artifact);
+                ValidateDeclared(fallback.ImplicitReads, fallback, "Fallback", fallback.NodeId, fallback.Pointer, ordered, ordered.Count, fallbacks, artifact);
             }
         }
 
@@ -1114,6 +1115,8 @@ public sealed class PlanBuilder
     /// A tap's reads need a producer before it (<see cref="ValidateTap"/>), which this implies. The caller checks the
     /// combinations with an arm: the bare baseline is compiled alone, which says where in an expression the name is.
     /// </summary>
+    /// <param name="reads">What the reader reads: a node's <see cref="CompiledNode.ImplicitReads"/>, which leave out a
+    /// column it reads only after writing it (its own declaration); the output's every read.</param>
     /// <param name="reader">The node or fallback that reads; null for an output column.</param>
     /// <param name="before">How many nodes of <paramref name="ordered"/> compile before the reader: its index, or all of them.</param>
     private void ValidateDeclared(
@@ -1123,7 +1126,7 @@ public sealed class PlanBuilder
         foreach (var logical in reads)
         {
             var column = Schema.Columns[logical];
-            if (!column.Implicit || (reader is not null && Writes(reader, logical)))
+            if (!column.Implicit)
             {
                 continue;
             }
@@ -1375,12 +1378,9 @@ public sealed class PlanBuilder
                     Add(readers, logical, id);
                 }
 
-                foreach (var logical in node.ReadColumns)
+                foreach (var logical in node.ImplicitReads)
                 {
-                    if (schema.Columns[logical].Implicit)
-                    {
-                        Add(readers, logical, id);
-                    }
+                    Add(readers, logical, id);
                 }
 
                 var fetched = new HashSet<int>();
