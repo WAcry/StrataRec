@@ -210,6 +210,8 @@ internal sealed class VectorProgram
                     return new FloatUnaryInstr(node.Op, t, Visit(a[0]));
                 case IrOp.ToFloat:
                     return new ToFloatInstr(t, Visit(a[0]));
+                case IrOp.ToInt:
+                    return new ToIntInstr(t, Visit(a[0]));
                 case IrOp.Not:
                     return new NotInstr(t, Visit(a[0]));
                 case IrOp.Add or IrOp.Sub or IrOp.Mul or IrOp.Min or IrOp.Max or IrOp.Mod when t.Kind == TypeKind.Int:

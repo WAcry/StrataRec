@@ -567,6 +567,22 @@ internal sealed class Binder
             case "abs":
                 return AllNumeric(args, call, name, out var absKind) ? Lift(IrOp.Abs, absKind, call, args[0]) : Poison(call);
 
+            case "int":
+                // Truncates toward zero. A float64 that is not finite or whose truncation leaves the int64 range has no
+                // int64 value: the result is missing, never a saturated or wrapped number (design 7.5). So int() of a
+                // float64 is nullable even when its argument is not; int() of an int64 is that value.
+                if (!AllNumeric(args, call, name, out _))
+                {
+                    return Poison(call);
+                }
+
+                return args[0].Type.Kind == TypeKind.Int
+                    ? args[0]
+                    : IrNode.Make(IrOp.ToInt, new ExprType(TypeKind.Int, true), args, call.Start, call.Length);
+
+            case "double":
+                return AllNumeric(args, call, name, out _) ? ToFloat(args[0]) : Poison(call);
+
             case "sqrt":
             case "exp":
             case "log":

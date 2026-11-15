@@ -422,7 +422,7 @@ public class DifferentialTests(ITestOutputHelper output)
             switch (kind)
             {
                 case K.Float:
-                    return random.Next(30) switch
+                    return random.Next(31) switch
                     {
                         0 => $"({Num(d)} + {Gen(K.Float, d)})",
                         1 => $"({Gen(K.Float, d)} - {Num(d)})",
@@ -453,11 +453,14 @@ public class DifferentialTests(ITestOutputHelper output)
                         26 => $"({Gen(K.Float, d)} ?? {Num(d)})",
                         27 => $"lookup('tbl', {Gen(K.Int, d)}, ({Num(d)} ?? 0.5))",
                         28 => Let(K.Float, d),
+                        29 => $"double({Num(d)})",
                         _ => $"({Gen(K.Float, d)} * 1.0 + {Gen(K.Int, d)} / 2)",
                     };
                 case K.Int:
-                    return random.Next(14) switch
+                    return random.Next(16) switch
                     {
+                        13 => $"int({Num(d)})",
+                        14 => $"(int({Gen(K.Float, d)}) ?? {Gen(K.Int, d)})",
                         0 => $"({Gen(K.Int, d)} + {Gen(K.Int, d)})",
                         1 => $"({Gen(K.Int, d)} - {Gen(K.Int, d)})",
                         2 => $"({Gen(K.Int, d)} * {Gen(K.Int, d)})",

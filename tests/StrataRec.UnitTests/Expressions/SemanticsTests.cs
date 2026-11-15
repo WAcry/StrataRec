@@ -121,6 +121,54 @@ public class SemanticsTests
     }
 
     [Fact]
+    public void IntConversion_TruncatesTowardZero_AndIsMissingWithoutAnInt64Value()
+    {
+        // 2^63 and -2^63 are exact doubles: the first is out of range, the second is int64's minimum. The double
+        // below 2^63 is 2^63 - 1024.
+        var f = new ExprFixture().Col("col.x", "float64").Col("col.y", "float64?").Col("col.i", "int64?").Build(10);
+        f.Fill<double>("col.x", 2.9, -2.9, -0.5, double.NaN, double.PositiveInfinity, double.NegativeInfinity,
+            9223372036854775808.0, -9223372036854775808.0, 9223372036854774784.0, 1e300);
+        f.Fill<double>("col.y", 7.5, null, 1e19, -1e19, 3.0, null, 0.0, -0.0, 41.99, 2.0);
+        f.Fill<long>("col.i", 5, null, long.MaxValue, long.MinValue, 0, 1, 2, 3, 4, 9007199254740993);
+
+        ExprAssert.Rows(f, "int(col.x)", 2L, -2L, 0L, null, null, null, null, long.MinValue, 9223372036854774784L, null);
+        ExprAssert.Rows(f, "int(col.y)", 7L, null, null, null, 3L, null, 0L, 0L, 41L, 2L);
+        ExprAssert.Rows(f, "int(col.i)", 5L, null, long.MaxValue, long.MinValue, 0L, 1L, 2L, 3L, 4L, 9007199254740993L);
+        ExprAssert.Rows(f, "int(col.x) ?? -1", 2L, -2L, 0L, -1L, -1L, -1L, -1L, long.MinValue, 9223372036854774784L, -1L);
+        ExprAssert.Rows(f, "has(int(col.x * 0.5))", true, true, true, false, false, false, true, true, true, false);
+        ExprAssert.Rows(f, "int(col.x) % 2", 0L, 0L, 0L, null, null, null, null, 0L, 0L, null);
+
+        // double() of an int64 rounds to the nearest double, like every int64 operand of float64 arithmetic.
+        ExprAssert.Rows(f, "double(col.i)", 5.0, null, 9223372036854775807.0, -9223372036854775808.0, 0.0, 1.0, 2.0, 3.0, 4.0, 9007199254740992.0);
+        ExprAssert.Rows(f, "double(col.x)", 2.9, -2.9, -0.5, double.NaN, double.PositiveInfinity, double.NegativeInfinity,
+            9223372036854775808.0, -9223372036854775808.0, 9223372036854774784.0, 1e300);
+        ExprAssert.Rows(f, "int(double(col.i))", 5L, null, null, long.MinValue, 0L, 1L, 2L, 3L, 4L, 9007199254740992L);
+
+        ExprAssert.Scalar(f, "int(-7.9)", -7L);
+        ExprAssert.Scalar(f, "int(1e19)", null);
+        ExprAssert.Scalar(f, "int(1.0 / 0.0)", null);
+        ExprAssert.Scalar(f, "int(42)", 42L);
+        ExprAssert.Scalar(f, "double(3) / 2.0", 1.5);
+    }
+
+    [Fact]
+    public void IntConversion_Types()
+    {
+        var f = new ExprFixture().Col("col.x", "float64").Col("col.i", "int64").Col("col.b", "bool").Build(3);
+
+        // int() of a float64 may be missing even when its argument is not; int() of an int64 is that int64.
+        Assert.Equal(ColumnType.Parse("int64?"), f.Compile("int(col.x)").ResultType);
+        Assert.Equal(ColumnType.Parse("int64"), f.Compile("int(col.i)").ResultType);
+        Assert.Equal(ColumnType.Parse("float64"), f.Compile("double(col.i)").ResultType);
+        Assert.Equal(ColumnType.Parse("int64"), f.Compile("int(col.x) ?? 0").ResultType);
+
+        var bad = Assert.Single(f.Errors("int(col.b)"));
+        Assert.Equal(ExpressionErrorCodes.TypeMismatch, bad.Code);
+        Assert.Equal(4, bad.Offset);
+        Assert.Equal(ExpressionErrorCodes.ArgCount, Assert.Single(f.Errors("double(col.x, 1)")).Code);
+    }
+
+    [Fact]
     public void TotalSemantics_Modulo_CountsZeroDivisorsOfLiveRowsOnly()
     {
         var f = new ExprFixture().Col("col.i", "int64").Col("col.d", "int64").Build(6);

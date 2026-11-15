@@ -1127,6 +1127,7 @@ utility * (1.0 + param.w_fresh * freshness) * cold_boost
 | `int64` 的 `+`、`-`、`*` 溢出 | 按二进制补码回绕 |
 | `x % y` | 只接受 `int64`；`y` 为 0 时返回 0，并计入 `expr_int_mod_zero_total{node}`；`int64` 最小值对 -1 取模返回 0 |
 | `log(0)`、`log(-1)`、`sqrt(-1)` | −∞、NaN、NaN |
+| `int(x)`：`x` 是 NaN、±∞，或向零截断后超出 `int64` 的范围 | 缺失，所以 `float64` 的 `int()` 结果总是可空 |
 | 写入列时出现 NaN 或 ±∞ | 列声明了 `default` 时替换为默认值，否则标记为缺失；两种情况都计数（第 4.3 节） |
 
 最后一条是数值输出列声明为 `T` 时必须带 `default` 的原因：没有默认值，非有限值只能记为缺失（第 4.6 节）。打分和模型输出列通常声明 `"default": 0.0`，下游表达式就可以直接读取。
@@ -1144,6 +1145,7 @@ utility * (1.0 + param.w_fresh * freshness) * cold_boost
 5. 文本：`size`、`contains`
 6. 确定性随机：`hash01(ctx.request.seed, col.entity_id)` 返回 `[0, 1)` 内的均匀值
 7. 查表：`lookup(table_name, key, default)` 读取 `DataTableArtifact` 中的静态表，例如分位数校准表
+8. 数值转换：`int(x)` 向零截断，`double(x)` 把 `int64` 转成最近的 `float64`
 
 函数集合整体带版本（例如 `expr_functions@3`）。新增函数需要发布二进制，并通过能力匹配防止新配置下发到旧二进制（第 10.4 节）。提示词这类文本拼接不属于表达式语言，由算子使用 Mustache 模板完成（第 5.9 节）。
 

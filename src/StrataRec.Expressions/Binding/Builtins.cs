@@ -12,6 +12,8 @@ internal static class Builtins
         ["max"] = (1, -1, "max(a, b, ...)"),
         ["clamp"] = (3, 3, "clamp(x, lo, hi)"),
         ["abs"] = (1, 1, "abs(x)"),
+        ["int"] = (1, 1, "int(x)"),
+        ["double"] = (1, 1, "double(x)"),
         ["sqrt"] = (1, 1, "sqrt(x)"),
         ["pow"] = (2, 2, "pow(x, y)"),
         ["exp"] = (1, 1, "exp(x)"),

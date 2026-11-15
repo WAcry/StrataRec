@@ -120,6 +120,7 @@ internal static class IrPrinter
             case IrOp.InSet:
                 return (Operand(a[0], names, depth, PrecRelation + 1) + " in " + ((ConstSet)node.Data!).Display, PrecRelation);
             case IrOp.ToFloat: return Call("double", node, names, depth);
+            case IrOp.ToInt: return Call("int", node, names, depth);
             case IrOp.Abs: return Call("abs", node, names, depth);
             case IrOp.Sqrt: return Call("sqrt", node, names, depth);
             case IrOp.Exp: return Call("exp", node, names, depth);

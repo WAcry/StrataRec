@@ -1,4 +1,5 @@
 using System.Numerics.Tensors;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Hashing;
@@ -58,6 +59,8 @@ internal static class ScalarOps
                 return ScalarValue.FromBool(!args[0].AsBool());
             case IrOp.ToFloat:
                 return ScalarValue.FromFloat64(args[0].AsFloat64());
+            case IrOp.ToInt:
+                return TryTruncate(args[0].AsFloat64(), out var truncated) ? ScalarValue.FromInt64(truncated) : ScalarValue.Missing;
             case IrOp.Abs:
                 return isInt ? ScalarValue.FromInt64(AbsInt(args[0].AsInt64())) : ScalarValue.FromFloat64(Math.Abs(args[0].AsFloat64()));
             case IrOp.Sqrt:
@@ -132,6 +135,21 @@ internal static class ScalarOps
             default:
                 throw new InvalidOperationException($"No scalar semantics for {node.Op}.");
         }
+    }
+
+    /// <summary>The int64 that truncating <paramref name="x"/> toward zero gives; false when <paramref name="x"/> is
+    /// NaN, ±∞ or truncates outside <c>[-2^63, 2^63)</c> (both bounds are exact doubles, so the test is exact).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryTruncate(double x, out long value)
+    {
+        if (x >= -9223372036854775808.0 && x < 9223372036854775808.0)
+        {
+            value = (long)x;
+            return true;
+        }
+
+        value = 0;
+        return false;
     }
 
     public static ScalarValue And(in ScalarValue a, in ScalarValue b)

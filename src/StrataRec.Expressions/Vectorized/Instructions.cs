@@ -701,6 +701,41 @@ internal sealed class ToFloatInstr(ExprType type, Opnd operand) : Instr(type, op
     }
 }
 
+/// <summary><c>int(x)</c> of a float64 column: lanes that truncate to an int64 keep the operand's validity, the
+/// others become missing (<see cref="ScalarOps.TryTruncate"/>). The result type is always nullable.</summary>
+internal sealed class ToIntInstr(ExprType type, Opnd operand) : Instr(type, operand)
+{
+    public override void Execute(ref Frame f)
+    {
+        var dst = OutI(ref f);
+        if (!LiftValidity(ref f, Operands))
+        {
+            return;
+        }
+
+        var lifted = f.Locs[Out].Valid is not null;
+        var valid = OutValid(ref f);
+        var src = f.GetF(Operands[0].Index);
+        var n = f.N;
+        for (var i = 0; i < n; i += 64)
+        {
+            ulong word = 0;
+            var count = Math.Min(64, n - i);
+            for (var j = 0; j < count; j++)
+            {
+                if (ScalarOps.TryTruncate(src[i + j], out var value))
+                {
+                    word |= 1UL << j;
+                }
+
+                dst[i + j] = value;
+            }
+
+            valid[i >> 6] = lifted ? valid[i >> 6] & word : word;
+        }
+    }
+}
+
 internal sealed class CompareInstr(IrOp op, TypeKind operandKind, ExprType type, Opnd left, Opnd right) : Instr(type, left, right)
 {
     public override void Execute(ref Frame f)

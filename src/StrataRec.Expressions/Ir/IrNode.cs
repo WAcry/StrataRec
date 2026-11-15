@@ -17,6 +17,10 @@ internal enum IrOp : byte
     Neg,
     Not,
     ToFloat,
+
+    /// <summary><c>int(x)</c> of a float64: truncation toward zero, missing when not finite or out of the int64
+    /// range. The only lifted operation that can make a present value missing.</summary>
+    ToInt,
     Abs,
     Sqrt,
     Exp,
