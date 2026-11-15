@@ -62,7 +62,7 @@ public sealed class OperatorContext
     /// <summary>The attempt's budget; the executor releases its reference when the attempt ends.</summary>
     internal AttemptBudget Budget { get; }
 
-    public CandidateTable Table => _state.Table;
+    public CandidateTableView Table => new(_state.Table);
 
     /// <summary>Live physical rows in rank order.</summary>
     public ReadOnlySpan<int> LiveRows => _state.Table.Rows.Order;

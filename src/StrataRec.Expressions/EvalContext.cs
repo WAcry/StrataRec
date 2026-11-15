@@ -5,6 +5,9 @@ namespace StrataRec.Expressions;
 
 /// <summary>Runtime inputs of an expression evaluation within one request.</summary>
 /// <remarks>
+/// <para>Opaque outside the expression engine: an operator takes it from its context and passes it to
+/// <see cref="CompiledExpression"/>, and cannot reach the table or the request's arrays through it (it changes the table
+/// only through the context; see <see cref="CandidateTableView"/>).</para>
 /// <para><see cref="Table"/> and <see cref="Bindings"/> are required for row-level expressions and may be null for
 /// request-level ones (<c>when</c>, context-only derived features, funnel keys).</para>
 /// <para>A column symbol is read from <c>FixedSlot</c> when it is ≥ 0, otherwise from
@@ -21,18 +24,18 @@ public readonly struct EvalContext
         Counters = counters;
     }
 
-    public CandidateTable? Table { get; }
+    internal CandidateTable? Table { get; }
 
-    public OutputBindings? Bindings { get; }
+    internal OutputBindings? Bindings { get; }
 
     /// <summary>Request-level values indexed by <see cref="SymbolKind.Context"/> symbol id.</summary>
-    public ScalarValue[] Context { get; }
+    internal ScalarValue[] Context { get; }
 
     /// <summary>Parameter snapshot indexed by <see cref="SymbolKind.Param"/> symbol id.</summary>
-    public ScalarValue[] Params { get; }
+    internal ScalarValue[] Params { get; }
 
     /// <summary>Optional counters for total-semantics events (e.g. integer modulo by zero, design 7.5).</summary>
-    public ExpressionCounters? Counters { get; }
+    internal ExpressionCounters? Counters { get; }
 }
 
 /// <summary>Counters of total-semantics events observed during evaluation.</summary>

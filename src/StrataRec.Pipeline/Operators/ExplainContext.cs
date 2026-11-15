@@ -48,7 +48,8 @@ public sealed class ExplainContext
     /// <summary>Number of targets.</summary>
     public int Count => _explainer.Count;
 
-    public CandidateTable Table => _state.Table;
+    /// <summary>The table as the operator left it (read only).</summary>
+    public CandidateTableView Table => new(_state.Table);
 
     /// <summary>Live physical rows in rank order, after the node.</summary>
     public ReadOnlySpan<int> LiveRows => _state.Table.Rows.Order;

@@ -86,7 +86,7 @@ internal static class RowRanking
     /// Orders <paramref name="rows"/> in place so that its first <paramref name="k"/> entries are the best k rows in
     /// rank order. Entries after k are in unspecified order. Runs in O(n + k log k) expected time.
     /// </summary>
-    public static void SelectTop(Span<int> rows, ColumnBuffer? score, CandidateTable table, int k, bool ascending, Core.Memory.RequestMemory memory)
+    public static void SelectTop(Span<int> rows, ColumnBuffer? score, CandidateTableView table, int k, bool ascending, Core.Memory.RequestMemory memory)
     {
         var n = rows.Length;
         k = Math.Clamp(k, 0, n);
@@ -96,7 +96,7 @@ internal static class RowRanking
         }
 
         var entries = memory.Rent<Entry>(n);
-        var intIds = table.KeyType == EntityKeyType.Int64 ? table.Int64Ids : null;
+        var intIds = table.Int64Ids;
         for (var i = 0; i < n; i++)
         {
             var row = rows[i];
@@ -104,10 +104,10 @@ internal static class RowRanking
             var present = score is not null && TryGetSortKey(score, row, out key);
 
             // Best first: descending order is ascending order of the complemented key.
-            entries[i] = new Entry(present ? (ascending ? key : ~key) : 0, intIds is null ? 0 : intIds[row], row, present ? (byte)0 : (byte)1);
+            entries[i] = new Entry(present ? (ascending ? key : ~key) : 0, intIds.IsEmpty ? 0 : intIds[row], row, present ? (byte)0 : (byte)1);
         }
 
-        var comparer = new EntryComparer(intIds is null ? table.StringIds : null);
+        var comparer = new EntryComparer(table);
         var span = entries.AsSpan(0, n);
         if (k < n)
         {
@@ -130,7 +130,7 @@ internal static class RowRanking
     /// the score of <paramref name="rows"/>[i]) as <see cref="SelectTop"/> ranks a column: higher first, NaN last, ties
     /// by <c>entity_id</c> ascending, never by the incoming order.
     /// </summary>
-    public static void Sort(Span<int> rows, ReadOnlySpan<double> scores, CandidateTable table, Core.Memory.RequestMemory memory)
+    public static void Sort(Span<int> rows, ReadOnlySpan<double> scores, CandidateTableView table, Core.Memory.RequestMemory memory)
     {
         var n = rows.Length;
         if (n <= 1)
@@ -139,16 +139,16 @@ internal static class RowRanking
         }
 
         var entries = memory.Rent<Entry>(n);
-        var intIds = table.KeyType == EntityKeyType.Int64 ? table.Int64Ids : null;
+        var intIds = table.Int64Ids;
         for (var i = 0; i < n; i++)
         {
             var row = rows[i];
             var present = TryFloat64Key(scores[i], out var key);
-            entries[i] = new Entry(present ? ~key : 0, intIds is null ? 0 : intIds[row], row, present ? (byte)0 : (byte)1);
+            entries[i] = new Entry(present ? ~key : 0, intIds.IsEmpty ? 0 : intIds[row], row, present ? (byte)0 : (byte)1);
         }
 
         var span = entries.AsSpan(0, n);
-        span.Sort(new EntryComparer(intIds is null ? table.StringIds : null));
+        span.Sort(new EntryComparer(table));
         for (var i = 0; i < n; i++)
         {
             rows[i] = span[i].Row;
@@ -161,11 +161,11 @@ internal static class RowRanking
     /// <paramref name="rows"/>[i], negative for none: its rank is left as it is. O(n log n), nothing allocated per row.
     /// </summary>
     public static void RankWithinGroups(
-        ReadOnlySpan<int> rows, ReadOnlySpan<int> groups, ColumnBuffer? score, CandidateTable table, bool ascending, Span<long> ranks,
+        ReadOnlySpan<int> rows, ReadOnlySpan<int> groups, ColumnBuffer? score, CandidateTableView table, bool ascending, Span<long> ranks,
         Core.Memory.RequestMemory memory)
     {
         var entries = memory.Rent<GroupedEntry>(Math.Max(1, rows.Length));
-        var intIds = table.KeyType == EntityKeyType.Int64 ? table.Int64Ids : null;
+        var intIds = table.Int64Ids;
         var count = 0;
         for (var i = 0; i < rows.Length; i++)
         {
@@ -178,11 +178,11 @@ internal static class RowRanking
             ulong key = 0;
             var present = score is not null && TryGetSortKey(score, row, out key);
             entries[count++] = new GroupedEntry(groups[i], i,
-                new Entry(present ? (ascending ? key : ~key) : 0, intIds is null ? 0 : intIds[row], row, present ? (byte)0 : (byte)1));
+                new Entry(present ? (ascending ? key : ~key) : 0, intIds.IsEmpty ? 0 : intIds[row], row, present ? (byte)0 : (byte)1));
         }
 
         var span = entries.AsSpan(0, count);
-        span.Sort(new GroupedEntryComparer(new EntryComparer(intIds is null ? table.StringIds : null)));
+        span.Sort(new GroupedEntryComparer(new EntryComparer(table)));
         long rank = 0;
         for (var j = 0; j < count; j++)
         {
@@ -263,8 +263,11 @@ internal static class RowRanking
         public int Compare(GroupedEntry x, GroupedEntry y) => x.Group != y.Group ? x.Group.CompareTo(y.Group) : within.Compare(x.Entry, y.Entry);
     }
 
-    private readonly struct EntryComparer(DictStringColumn? stringIds) : IComparer<Entry>
+    /// <summary>Rank order: present before missing, then the key, then <c>entity_id</c> ascending (ordinal for strings).</summary>
+    private readonly struct EntryComparer(CandidateTableView table) : IComparer<Entry>
     {
+        private readonly bool _strings = table.KeyType == EntityKeyType.String;
+
         public int Compare(Entry x, Entry y)
         {
             if (x.Missing != y.Missing)
@@ -281,9 +284,9 @@ internal static class RowRanking
                 }
             }
 
-            return stringIds is null
-                ? x.Id.CompareTo(y.Id)
-                : string.CompareOrdinal(stringIds.Get(x.Row), stringIds.Get(y.Row));
+            return _strings
+                ? string.CompareOrdinal(table.GetKey(x.Row).StringValue, table.GetKey(y.Row).StringValue)
+                : x.Id.CompareTo(y.Id);
         }
     }
 }

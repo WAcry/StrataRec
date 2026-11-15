@@ -72,11 +72,10 @@ public static class LlmAnswer
     /// <param name="positions">At least <paramref name="window"/>'s length.</param>
     /// <param name="listed">At least <paramref name="window"/>'s length, all false.</param>
     public static string? Parse(
-        string answer, AnswerKind kind, CandidateTable table, ReadOnlySpan<int> window, RequestMemory memory, Span<int> positions, Span<bool> listed,
+        string answer, AnswerKind kind, CandidateTableView table, ReadOnlySpan<int> window, RequestMemory memory, Span<int> positions, Span<bool> listed,
         out AnswerCounts counts)
     {
         ArgumentNullException.ThrowIfNull(answer);
-        ArgumentNullException.ThrowIfNull(table);
         ArgumentNullException.ThrowIfNull(memory);
         var elements = new WindowElements(kind, table, window, positions, listed);
         return ParseArray(answer, memory, ref elements, out counts);
@@ -97,11 +96,10 @@ public static class LlmAnswer
     /// <param name="stringIds">At least <paramref name="limit"/> long for string keys; empty for int64 keys.</param>
     /// <param name="positions">At least <paramref name="limit"/> long.</param>
     internal static string? ParseIds(
-        string answer, CandidateTable table, int limit, RequestMemory memory, Span<long> int64Ids, Span<string> stringIds, Span<int> positions,
+        string answer, CandidateTableView table, int limit, RequestMemory memory, Span<long> int64Ids, Span<string> stringIds, Span<int> positions,
         out AnswerCounts counts)
     {
         ArgumentNullException.ThrowIfNull(answer);
-        ArgumentNullException.ThrowIfNull(table);
         ArgumentNullException.ThrowIfNull(memory);
         var elements = new IdElements(table, new EntityKeyIndex(table.KeyType, Math.Max(1, limit), memory), limit, int64Ids, stringIds, positions);
         return ParseArray(answer, memory, ref elements, out counts);
@@ -438,7 +436,7 @@ public static class LlmAnswer
     }
 
     /// <summary>Window rows, by 1-based rank or by entity id; each named once.</summary>
-    private ref struct WindowElements(AnswerKind kind, CandidateTable table, ReadOnlySpan<int> window, Span<int> positions, Span<bool> listed)
+    private ref struct WindowElements(AnswerKind kind, CandidateTableView table, ReadOnlySpan<int> window, Span<int> positions, Span<bool> listed)
         : IAnswerElements
     {
         private readonly ReadOnlySpan<int> _window = window;
@@ -465,7 +463,7 @@ public static class LlmAnswer
         }
 
         /// <summary>The window position an element names, or -1.</summary>
-        private static int Position(ref Utf8JsonReader reader, AnswerKind kind, CandidateTable table, ReadOnlySpan<int> window)
+        private static int Position(ref Utf8JsonReader reader, AnswerKind kind, CandidateTableView table, ReadOnlySpan<int> window)
         {
             if (kind == AnswerKind.Rank)
             {
@@ -496,12 +494,11 @@ public static class LlmAnswer
                 return -1;
             }
 
-            var keys = table.StringIds;
             try
             {
                 for (var p = 0; p < window.Length; p++)
                 {
-                    if (reader.ValueTextEquals(keys.Get(window[p])))
+                    if (reader.ValueTextEquals(table.GetKey(window[p]).StringValue))
                     {
                         return p;
                     }
@@ -518,7 +515,7 @@ public static class LlmAnswer
     }
 
     /// <summary>New ids of the table's key type, each named once, not in the table, up to a limit.</summary>
-    private ref struct IdElements(CandidateTable table, EntityKeyIndex seen, int limit, Span<long> int64Ids, Span<string> stringIds, Span<int> positions)
+    private ref struct IdElements(CandidateTableView table, EntityKeyIndex seen, int limit, Span<long> int64Ids, Span<string> stringIds, Span<int> positions)
         : IAnswerElements
     {
         private readonly Span<long> _int64Ids = int64Ids;
