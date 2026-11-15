@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Features.Bindings;
@@ -32,6 +33,10 @@ public enum SignatureStatus : byte
 public readonly record struct SignatureLookup(SignatureStatus Status, ModelSignature? Signature = null, string? Error = null, string? Hint = null)
 {
     public static SignatureLookup Unchecked => new(SignatureStatus.Unchecked);
+
+    /// <summary>True when the client answered: check the node against <see cref="Signature"/>.</summary>
+    [MemberNotNullWhen(true, nameof(Signature))]
+    public bool IsKnown => Status == SignatureStatus.Known && Signature is not null;
 
     public static SignatureLookup Pending => new(SignatureStatus.Pending);
 

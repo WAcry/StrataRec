@@ -348,26 +348,21 @@ public sealed class OperatorCompileContext
 
     /// <summary>
     /// The signature of one version of a model the node calls (from <see cref="Model"/>), for checking the node's config
-    /// against it at load time (design 6.9). Null when the node cannot be checked against it now: an error at
-    /// <paramref name="configKey"/> when the client has no such version (then <see cref="HasErrors"/> is set), nothing
-    /// when the engine is still loading the client (it compiles the plan again with the answer) or when the plan is
-    /// compiled without loading its clients (<c>validate</c>: the engine checks it when it loads the plan).
+    /// against it at load time (design 6.9). Check the node only when it is <see cref="SignatureStatus.Known"/>.
+    /// <see cref="SignatureStatus.Failed"/> (the client has no such version) is already reported at
+    /// <paramref name="configKey"/>: the node fails. <see cref="SignatureStatus.Pending"/> (the engine is still loading
+    /// the client; it compiles the plan again with the answer) and <see cref="SignatureStatus.Unchecked"/> (the plan is
+    /// compiled without loading its clients, as by <c>validate</c>) are no error: compile without the check.
     /// </summary>
-    public ModelSignature? ModelSignature(IModelClient client, string model, string? version, string configKey)
+    public SignatureLookup ModelSignature(IModelClient client, string model, string? version, string configKey)
     {
         var lookup = _clients.Signature(client, model, version);
-        return lookup.Status switch
+        if (lookup.Status == SignatureStatus.Failed)
         {
-            SignatureStatus.Known => lookup.Signature,
-            SignatureStatus.Failed => SignatureFailed(configKey, lookup.Error!, lookup.Hint),
-            SignatureStatus.Pending or SignatureStatus.Unchecked => null,
-        };
-    }
+            Error(configKey, "MODEL_SIGNATURE", lookup.Error!, lookup.Hint);
+        }
 
-    private ModelSignature? SignatureFailed(string configKey, string message, string? hint)
-    {
-        Error(configKey, "MODEL_SIGNATURE", message, hint);
-        return null;
+        return lookup;
     }
 
     /// <summary>The source bound to candidate source <paramref name="name"/>, shared like <see cref="Model"/>.</summary>

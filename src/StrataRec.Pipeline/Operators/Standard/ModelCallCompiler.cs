@@ -3,6 +3,7 @@ using StrataRec.Artifacts.Json;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Expressions;
 using StrataRec.Models;
+using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Pipeline.Operators.Standard;
 
@@ -126,14 +127,15 @@ internal sealed class ModelCallCompiler
         var ok = true;
         foreach (var version in _model.Versions)
         {
-            // Null when it cannot be checked now: an error (reported), or the engine checks it at load (see ModelSignature).
-            if (_model.Signature(_context, version) is not { } signature)
+            var lookup = _model.Signature(_context, version);
+            if (!lookup.IsKnown)
             {
-                ok &= !_context.HasErrors;
+                // A failure is reported at /model; a pending or unchecked signature is checked when the engine loads it.
+                ok &= lookup.Status != SignatureStatus.Failed;
                 continue;
             }
 
-            foreach (var problem in ModelTensorRule.Check(_model.Describe(version), _layout, _mapped, outputs, signature))
+            foreach (var problem in ModelTensorRule.Check(_model.Describe(version), _layout, _mapped, outputs, lookup.Signature))
             {
                 _context.Error(problem.ConfigKey, problem.Code, problem.Message, problem.Hint);
                 ok = false;

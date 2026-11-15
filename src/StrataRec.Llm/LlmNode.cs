@@ -4,6 +4,7 @@ using StrataRec.Core.Diagnostics;
 using StrataRec.Llm.Templates;
 using StrataRec.Models;
 using StrataRec.Pipeline.Operators;
+using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Llm;
 
@@ -85,14 +86,15 @@ internal static class LlmNode
         var ok = true;
         foreach (var version in model.Versions)
         {
-            // Null when it cannot be checked now: an error (reported), or the engine checks it at load.
-            if (model.Signature(context, version) is not { } signature)
+            var lookup = model.Signature(context, version);
+            if (!lookup.IsKnown)
             {
-                ok &= !context.HasErrors;
+                // A failure is reported at /model; a pending or unchecked signature is checked when the engine loads it.
+                ok &= lookup.Status != SignatureStatus.Failed;
                 continue;
             }
 
-            foreach (var problem in TextSignature.Check(model.Describe(version), context.Descriptor.Id, inputs, outputs, signature))
+            foreach (var problem in TextSignature.Check(model.Describe(version), context.Descriptor.Id, inputs, outputs, lookup.Signature))
             {
                 context.Error(problem.ConfigKey, problem.Code, problem.Message, problem.Hint);
                 ok = false;

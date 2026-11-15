@@ -2,6 +2,7 @@ using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Types;
 using StrataRec.Models;
+using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Pipeline.Operators;
 
@@ -106,10 +107,10 @@ public sealed class BoundModel
 
     /// <summary>
     /// The signature of <paramref name="version"/> (one of <see cref="Versions"/>), for checking the node's config against
-    /// it; null when it cannot be checked now (see <see cref="OperatorCompileContext.ModelSignature"/>: an error reported at
-    /// <c>/model</c>, or the engine checks it when it loads the client).
+    /// it when it is known; a failed lookup is reported at <c>/model</c> (see
+    /// <see cref="OperatorCompileContext.ModelSignature"/>).
     /// </summary>
-    public ModelSignature? Signature(OperatorCompileContext context, string? version)
+    public SignatureLookup Signature(OperatorCompileContext context, string? version)
     {
         ArgumentNullException.ThrowIfNull(context);
         return context.ModelSignature(_client, Model, version, "/model");
