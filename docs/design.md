@@ -1088,7 +1088,7 @@ public sealed class ModelCall
 | 类型 | `float32`/`int32` 存储、`string` 与 `text`、定长向量 | `int`、`uint`、`double`、`bytes`、map、时间类型等 | 列式存储和 SIMD |
 | 不支持 | map 字面量、下标、宏（`all`、`exists`、`exists_one`、`map`、`filter`）、正则 `matches`、`string()` 等转换、字符串扩展函数 | | 宏是一行之内的循环，不能按列计算；逐行匹配正则太贵 |
 
-只有整数除法会不报错、结果却与 CEL 不同；其余差异都在编译期报错。照 CEL 写的 `cel.bind`、宏、`math.greatest`、`orValue()`、`matches()` 等得到的诊断会给出 ColumnExpr 的写法，或者说明为什么没有。领域函数（`soft_floor`、`hash01`、`l2_norm` 等）是宿主注册的自定义函数，这本来就是 CEL 的嵌入方式。
+按 CEL 写、在 CEL 里能正常求值的表达式，只有整数除法得到不同的结果；CEL 在运行期报错的情况（整数溢出、对 0 取模、越界的 `int()`）在这里按上表得到值或缺失，编译不会提醒；CEL 拒绝的混合运算在这里可以写；其余差异在编译期报错。领域函数（`soft_floor`、`hash01`、`l2_norm` 等）是框架内置的函数；由嵌入方提供自己的函数，本来就是 CEL 的用法。
 
 语义上，`ColumnExpr` 表达式是纯的、全定义的、必然终止的，并且有静态类型。一个表达式的结果是一列值（或请求级的一个标量），它不能修改任何状态。
 

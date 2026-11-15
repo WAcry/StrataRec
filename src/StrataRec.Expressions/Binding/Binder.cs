@@ -245,8 +245,6 @@ internal sealed class Binder
         return NameSuggester.Hint(name, candidates);
     }
 
-    private bool IsLet(string name) => TryGetLet(name, out _);
-
     private bool TryGetLet(string name, out IrNode node)
     {
         for (var i = _lets.Count - 1; i >= 0; i--)
@@ -493,12 +491,6 @@ internal sealed class Binder
     private IrNode BindCall(CallAst call)
     {
         var name = call.Name;
-        if (CelIdioms.TryDescribe(call, IsLet, out var idiom, out var idiomHint, out var idiomStart))
-        {
-            Report(ExpressionErrorCodes.UnknownFunction, idiom, idiomStart, call.NameStart + name.Length - idiomStart, idiomHint);
-            return Poison(call);
-        }
-
         if (!Builtins.TryGetArity(name, out var min, out var max, out var usage))
         {
             // Bind arguments for their own errors, but not a dotted receiver: 'col.item.foo(1)' would only cascade.
