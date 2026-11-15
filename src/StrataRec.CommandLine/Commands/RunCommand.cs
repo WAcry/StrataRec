@@ -38,7 +38,8 @@ internal static class RunCommand
         var request = new Option<string>("--request", "-r")
         {
             Description = "Request JSON: pipeline_id, request_id, inputs, assignment (the arms the experiment platform answered, experiment/arm), " +
-                          "deadline_ms, time_ms, seed, force_arms (forced arms over the assignment; [] forces the baseline); " +
+                          "deadline_ms, time_ms, seed, force_arms (forced arms over the assignment; [] forces the baseline), config_override (a merge patch of the " +
+                          "pipeline to try on this request, applied after the arms); " +
                           "'stratarec schema request' prints its JSON Schema, which \"$schema\" may name for an editor.",
             Required = true,
         };
@@ -222,6 +223,7 @@ internal static class RunCommand
             Debug = new DebugOptions
             {
                 ForceArms = forced,
+                ConfigOverride = file.ConfigOverride,
                 Trace = trace,
                 CaptureLogs = logs,
                 Record = recordPath is not null,
@@ -421,6 +423,13 @@ internal static class RunCommand
 
         /// <summary>Arms to force over the assignment, as "experiment/arm"; [] forces the baseline.</summary>
         public List<string>? ForceArms { get; init; }
+
+        /// <summary>
+        /// A configuration to try on this request alone: an RFC 7396 merge patch of the pipeline as an experiment arm writes
+        /// one (params, nodes, log_taps, columns, param_schema, funnel_groups, features, derived_features), applied after the
+        /// arms, so it wins over them. The plan is compiled for the request; its taps are captured, never written.
+        /// </summary>
+        public JsonObject? ConfigOverride { get; init; }
 
         /// <summary>End-to-end deadline in milliseconds; defaults to 1000.</summary>
         public double? DeadlineMs { get; init; }

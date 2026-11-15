@@ -26,6 +26,12 @@ namespace StrataRec.Experiments.Compilation;
 /// </remarks>
 public static class PlanCompiler
 {
+    /// <summary>Where diagnostics of a configuration override itself point: the request (<see cref="CompileMerged"/>).</summary>
+    public const string OverrideArtifact = "request";
+
+    /// <summary>The override's place in a request file (<c>stratarec run</c>); the paths below it are those of the patch.</summary>
+    public const string OverridePointer = "/config_override";
+
     /// <param name="bindings">
     /// Where the plan's local feature tables, clients and connectors come from (design 6.4, 6.6): the engine passes the
     /// plan's binding lease, which shares and loads them. Null gives ones that are never loaded, for compiling without
@@ -47,8 +53,14 @@ public static class PlanCompiler
     /// Compiles the baseline with the patches of <paramref name="armIds"/> (<c>experiment/arm</c>) applied in layer
     /// order, as a plain pipeline without experiments. Running it equals running the unified plan with those arms.
     /// </summary>
+    /// <param name="configOverride">
+    /// A request's configuration override (design 13.3), applied after the arms, so it wins over them: an RFC 7396 merge
+    /// patch of the patchable view (<see cref="PatchableView.Sections"/>), checked as the baseline is, not by the
+    /// experiment policy. Its own mistakes are reported at <see cref="OverrideArtifact"/>, <see cref="OverridePointer"/>.
+    /// </param>
     public static PlanCompilation CompileMerged(
-        PlanCompileRequest request, IReadOnlyList<string> armIds, PlanEnvironment? environment = null, IPlanBindings? bindings = null)
+        PlanCompileRequest request, IReadOnlyList<string> armIds, PlanEnvironment? environment = null, IPlanBindings? bindings = null,
+        JsonObject? configOverride = null)
     {
         var diagnostics = new DiagnosticBag();
         var view = PatchableView.Create(request.Pipeline, request.Catalog);
@@ -84,6 +96,28 @@ public static class PlanCompiler
             }
 
             view = merged;
+        }
+
+        if (configOverride is not null)
+        {
+            var known = true;
+            foreach (var (section, _) in configOverride)
+            {
+                if (Array.IndexOf(PatchableView.Sections, section) < 0)
+                {
+                    diagnostics.Error("CONFIG_OVERRIDE_UNKNOWN_SECTION", OverrideArtifact, OverridePointer + "/" + JsonPointer.Escape(section),
+                        $"'{section}' is not a section a configuration override can patch.",
+                        $"patch one of {string.Join(", ", PatchableView.Sections)}, as an experiment arm does");
+                    known = false;
+                }
+            }
+
+            if (!known || view.Apply(configOverride, diagnostics, OverrideArtifact, OverridePointer) is not { } overridden)
+            {
+                return new PlanCompilation { Diagnostics = diagnostics.Items, Report = UnifiedCompilation.EmptyReport };
+            }
+
+            view = overridden;
         }
 
         var plain = UnifiedCompilation.WithoutExperiments(request);

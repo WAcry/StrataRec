@@ -51,7 +51,8 @@ public sealed partial class RecEngine
             TimeMs = recordedRequest.TimeMs,
             Debug = new DebugOptions { Trace = true, CaptureLogs = true, ExplainIds = options?.ExplainIds },
         };
-        var recordedArms = primaryRecord?.Arms ?? recordedRequest.Assignment.Arms;
+        // A run with a configuration override records no arms (its plan merged them in); the request's assignment has them.
+        var recordedArms = recordedRequest.ConfigOverride is null ? primaryRecord?.Arms ?? recordedRequest.Assignment.Arms : recordedRequest.Assignment.Arms;
         if (Enter(recordedRequest.PipelineId, out var disposed) is not { } pipeline)
         {
             if (disposed)
@@ -65,6 +66,7 @@ public sealed partial class RecEngine
 
         // Entered like a request, though a replay calls no client (the bundle answers them): one rule for every run of a plan.
         LoadedPipeline? fallback = null;
+        LoadedPipeline? overridden = null;
         try
         {
             var plan = pipeline.Plan;
@@ -122,13 +124,33 @@ public sealed partial class RecEngine
             // The platform's arms the recorded request ignored are part of its assignment record; arms passed to the replay
             // replace that assignment, so it then has none.
             var ignored = options?.Arms is null ? IgnoredArms(recordedRequest.Assignment) : Array.Empty<IgnoredArm>();
+
+            // The recorded configuration override, applied again over the replayed plan with the replayed arms, as the
+            // request applied it (DebugOptions.ConfigOverride); its run has the arms merged in.
+            var running = pipeline;
+            IReadOnlyList<string>? merged = null;
+            if (recordedRequest.ConfigOverride is { } configOverride)
+            {
+                merged = plan.ArmIds(arms);
+                var compiled = await CompileOverrideAsync(pipeline, configOverride, merged, RunReplay.Deadline, cancellationToken).ConfigureAwait(false);
+                if (compiled.Pipeline is null)
+                {
+                    var rejected = Rejected(request, compiled.ErrorKind, compiled.Error!, new ExperimentRecord(merged, Array.Empty<string>(), ignored), plan.ManifestId,
+                        compiled.Pointer);
+                    return Outcome(bundle, rejected, null, recordedResult, recordedArms, pipeline, primaryRecord, null, primaryReplay, null, notes, 0, plan.ManifestId);
+                }
+
+                running = overridden = compiled.Pipeline;
+                arms = RequestArms.None;
+            }
+
             var started = Stopwatch.GetTimestamp();
             var replayed = new RunCapture(); // the replayed runs' recordings, also of a run that stops where its recording was aborted
             RecResult result;
             string? aborted = null;
             try
             {
-                var executed = await _executor.ExecuteAsync(plan, ReplayRequest(request, request.Inputs, arms, primaryReplay, replayed, pipeline), cancellationToken)
+                var executed = await _executor.ExecuteAsync(running.Plan, ReplayRequest(request, request.Inputs, arms, primaryReplay, replayed, running), cancellationToken)
                     .ConfigureAwait(false);
                 if (executed.Succeeded || pipeline.FallbackPipeline is not { } fallbackId || fallbackId == request.PipelineId
                     || (fallback = Enter(fallbackId, out _)) is null)
@@ -141,7 +163,7 @@ public sealed partial class RecEngine
                             : $"the recording ran fallback pipeline '{fallbackRecord.PipelineId}', and the replayed configuration has none");
                     }
 
-                    result = ToResult(request, pipeline, executed, ignored, request.PipelineId);
+                    result = ToResult(request, pipeline, executed, ignored, request.PipelineId, merged);
                 }
                 else if (fallbackRecord is null && primaryRecord is { Result.Succeeded: false } failed)
                 {
@@ -149,7 +171,7 @@ public sealed partial class RecEngine
                     // it was aborted first.
                     notes.Add($"the recording did not run fallback pipeline '{fallbackId}' ({(failed.Result.Aborted ? "it was aborted" : "no time was left")}); " +
                         "neither does the replay");
-                    result = ToResult(request, pipeline, executed, ignored, request.PipelineId);
+                    result = ToResult(request, pipeline, executed, ignored, request.PipelineId, merged);
                 }
                 else
                 {
@@ -162,14 +184,14 @@ public sealed partial class RecEngine
                     var fallbackInputs = FallbackInputs(request.Inputs, fallback.Plan.RequestSchema); // as the request did (ExecuteAsync)
                     var served = await _executor.ExecuteAsync(fallback.Plan, ReplayRequest(request, fallbackInputs, RequestArms.None, fallbackReplay, replayed, fallback), cancellationToken)
                         .ConfigureAwait(false);
-                    result = Combine(request, executed, ToResult(request, fallback, served, ignored, fallbackId), served, ignored, fallbackId);
+                    result = Combine(request, executed, ToResult(request, fallback, served, ignored, fallbackId), served, ignored, fallbackId, merged);
                 }
             }
             catch (ReplayAbortedException ex)
             {
                 // The recorded request was aborted: the replay stops where the recording does and reports that, not a result.
                 aborted = ex.Message;
-                result = AbortedResult(request, replayed.Runs, ignored, ex.Message);
+                result = AbortedResult(request, replayed.Runs, ignored, ex.Message, merged);
             }
 
             var elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
@@ -182,6 +204,7 @@ public sealed partial class RecEngine
         {
             pipeline.Bindings.RequestEnded();
             fallback?.Bindings.RequestEnded();
+            EndOverride(overridden);
         }
     }
 
@@ -204,7 +227,7 @@ public sealed partial class RecEngine
     };
 
     /// <summary>The result of a replay that stopped where its recording was aborted: a failure with the recorded reason and no items.</summary>
-    private static RecResult AbortedResult(RecRequest request, List<ReplayRunRecord> replayed, IReadOnlyList<IgnoredArm> ignored, string reason)
+    private static RecResult AbortedResult(RecRequest request, List<ReplayRunRecord> replayed, IReadOnlyList<IgnoredArm> ignored, string reason, IReadOnlyList<string>? merged)
     {
         var primary = replayed.Count > 0 ? replayed[0] : null;
         var last = replayed.Count > 0 ? replayed[^1] : null;
@@ -215,7 +238,7 @@ public sealed partial class RecEngine
             ErrorKind = RecErrorKind.Failed,
             Error = reason,
             Columns = ResultColumns.Empty,
-            Experiments = new ExperimentRecord(primary?.Arms ?? new List<string>(), primary?.Result.TriggeredExperiments ?? new List<string>(), ignored),
+            Experiments = new ExperimentRecord(merged ?? primary?.Arms ?? new List<string>(), primary?.Result.TriggeredExperiments ?? new List<string>(), ignored),
             ManifestId = last?.ManifestId ?? string.Empty,
             ServedBy = last?.PipelineId ?? request.PipelineId,
         };
@@ -460,8 +483,10 @@ public sealed partial class RecEngine
     /// The bundle of a request aborted while or after a pipeline ran: every run recorded so far (the last one aborted, as a
     /// snapshot taken at the abort) and an aborted result.
     /// </summary>
+    /// <param name="merged">The arms a configuration override's plan merged in; its run records none (see <see cref="ToResult"/>).</param>
     private ReplayBundle AbortedBundle(
-        RecRequest request, LoadedPipeline pipeline, long seed, long timeMs, List<ReplayRunRecord> runs, IReadOnlyList<IgnoredArm> ignored)
+        RecRequest request, LoadedPipeline pipeline, long seed, long timeMs, List<ReplayRunRecord> runs, IReadOnlyList<IgnoredArm> ignored,
+        IReadOnlyList<string>? merged)
     {
         var primary = runs[0];
         var last = runs[^1];
@@ -475,7 +500,7 @@ public sealed partial class RecEngine
         return new ReplayBundle
         {
             Format = ReplayBundle.CurrentFormat,
-            Request = RequestRecord(request, pipeline, seed, timeMs, primary.Arms, ignored),
+            Request = RequestRecord(request, pipeline, seed, timeMs, merged ?? primary.Arms, ignored),
             Manifest = ManifestRecord(pipeline),
             Runs = new List<ReplayRunRecord>(runs),
             Result = new ReplayResultRecord
@@ -524,6 +549,7 @@ public sealed partial class RecEngine
                 Arms = new List<string>(arms),
                 Ignored = IgnoredRecords(ignored),
             },
+            ConfigOverride = request.Debug?.ConfigOverride?.DeepClone().AsObject(), // the caller's own may change after
         };
     }
 

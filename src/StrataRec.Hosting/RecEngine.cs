@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using StrataRec.Artifacts.Model;
@@ -114,6 +115,23 @@ public sealed class DebugOptions
     /// </summary>
     public IReadOnlyList<string>? ForceArms { get; init; }
 
+    /// <summary>
+    /// A configuration to try on this request alone (design 13.3): an RFC 7396 merge patch of the pipeline, in the shape an
+    /// experiment arm patches (<c>params</c>, <c>nodes</c>, <c>log_taps</c>, <c>columns</c>, <c>param_schema</c>,
+    /// <c>funnel_groups</c>, <c>features</c>, <c>derived_features</c>), applied after the request's arms, so it wins over
+    /// them. The plan is compiled for the request, which costs milliseconds and allocations a served plan never makes, and
+    /// counts against the deadline; one that does not compile, or whose new bindings fail to load, rejects the request
+    /// as invalid, naming the first error. Nothing of it outlives the request.
+    /// </summary>
+    /// <remarks>
+    /// The request writes no logs (its taps are captured as with <see cref="CaptureLogs"/>, and returned only when that is
+    /// set): what a configuration nobody released produced must not reach training data under the served manifest's id.
+    /// Its record lists the arms applied and no triggered experiment, since the plan it ran has none. A recording carries
+    /// the override, and replaying it applies the override again. The fallback pipeline, when it serves, runs as
+    /// configured.
+    /// </remarks>
+    public JsonObject? ConfigOverride { get; init; }
+
     /// <summary>Include per-node outcomes in <see cref="RecResult.Trace"/>.</summary>
     public bool Trace { get; init; }
 
@@ -190,7 +208,9 @@ public sealed class RecResult
 
     /// <summary>
     /// For <see cref="RecErrorKind.InvalidRequest"/> caused by an input, the input's JSON pointer relative to a request body
-    /// of the shape <c>{ "inputs": { … } }</c>, e.g. <c>/inputs/user_id</c>; null otherwise.
+    /// of the shape <c>{ "inputs": { … } }</c>, e.g. <c>/inputs/user_id</c>; for a mistake in the request's configuration
+    /// override itself, its pointer in a request file, e.g. <c>/config_override/params/k</c> (one in the configuration the
+    /// override produced is in <see cref="Error"/>, at the pipeline's pointer); null otherwise.
     /// </summary>
     public string? ErrorPointer { get; init; }
 
@@ -260,6 +280,9 @@ public sealed class LoadedPipeline
 
     /// <summary>The plan's experiment metadata as read-only views, built with the plan: every provider call passes these.</summary>
     internal PlanLayout Layout { get; init; } = null!;
+
+    /// <summary>What the plan was compiled from: a request's configuration override compiles it again (<see cref="DebugOptions.ConfigOverride"/>).</summary>
+    internal PlanCompileRequest Source { get; init; } = null!;
 
     /// <summary>Request-level metric tags of the plan (design 13.1), built once per loaded plan.</summary>
     internal RequestTelemetry Telemetry =>
@@ -535,6 +558,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             ArtifactIds = request.ArtifactIds,
             Bindings = lease,
             Layout = new PlanLayout(plan),
+            Source = request,
         };
         _ = loaded.Telemetry; // request metric tags are built with the plan, not on its first request
         Publishing?.Invoke();
@@ -687,6 +711,8 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         var runs = record ? new RunCapture() : null;
         IReadOnlyList<IgnoredArm> ignored = Array.Empty<IgnoredArm>();
         LoadedPipeline? fallback = null;
+        LoadedPipeline? overridden = null; // the plan compiled for a configuration override, entered until the finally below
+        IReadOnlyList<string>? merged = null; // the arms such a plan has merged in: it runs with none of its own
         try
         {
             // Entered (see Enter) until the finally below; each run joins the lease for as long as its calls run.
@@ -730,15 +756,38 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                     new ExperimentRecord(pipeline.Plan.ArmIds(arms), Array.Empty<string>(), ignored), pipeline.Plan.ManifestId);
             }
 
-            var executed = await Run(pipeline, request, request.Inputs, arms, remaining, seed, timeMs, runs, cancellationToken).ConfigureAwait(false);
+            // A configuration override runs a plan compiled for this request, the arms merged in (DebugOptions.ConfigOverride).
+            var running = pipeline;
+            var runArms = arms;
+            if (request.Debug?.ConfigOverride is { } configOverride)
+            {
+                merged = pipeline.Plan.ArmIds(arms);
+                var compiled = await CompileOverrideAsync(pipeline, configOverride, merged, remaining, cancellationToken).ConfigureAwait(false);
+                if (compiled.Pipeline is null)
+                {
+                    return result = Rejected(request, compiled.ErrorKind, compiled.Error!, new ExperimentRecord(merged, Array.Empty<string>(), ignored),
+                        pipeline.Plan.ManifestId, compiled.Pointer);
+                }
+
+                running = overridden = compiled.Pipeline;
+                runArms = RequestArms.None;
+                remaining = request.Deadline - Stopwatch.GetElapsedTime(started);
+                if (remaining <= TimeSpan.Zero)
+                {
+                    return result = Rejected(request, RecErrorKind.DeadlineExceeded, "deadline exceeded before execution (compiling the configuration override took the whole budget)",
+                        new ExperimentRecord(merged, Array.Empty<string>(), ignored), pipeline.Plan.ManifestId);
+                }
+            }
+
+            var executed = await Run(running, request, request.Inputs, runArms, remaining, seed, timeMs, runs, cancellationToken).ConfigureAwait(false);
             remaining = request.Deadline - Stopwatch.GetElapsedTime(started);
 
             // A disposal since the primary ran leaves the request with the primary's result, as when no fallback is served.
-            if (executed.Succeeded || pipeline.FallbackPipeline is not { } fallbackId || fallbackId == request.PipelineId
+            if (executed.Succeeded || running.FallbackPipeline is not { } fallbackId || fallbackId == request.PipelineId
                 || remaining <= TimeSpan.Zero || (fallback = Enter(fallbackId, out _)) is null)
             {
                 degraded = executed.Degraded;
-                result = ToResult(request, pipeline, executed, ignored, request.PipelineId);
+                result = ToResult(request, running, executed, ignored, request.PipelineId, merged);
                 return result = record ? Recorded(request, pipeline, seed!.Value, timeMs!.Value, result, executed, null) : result;
             }
 
@@ -748,20 +797,21 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             var served = await Run(fallback, request, FallbackInputs(request.Inputs, fallback.Plan.RequestSchema), RequestArms.None, remaining, seed, timeMs, runs,
                 cancellationToken).ConfigureAwait(false);
             var converted = ToResult(request, fallback, served, ignored, fallbackId);
-            result = Combine(request, executed, converted, served, ignored, fallbackId);
+            result = Combine(request, executed, converted, served, ignored, fallbackId, merged);
             return result = record ? Recorded(request, pipeline, seed!.Value, timeMs!.Value, result, executed, served) : result;
         }
         catch (Exception) when (runs is { Runs.Count: > 0 } && pipeline is not null)
         {
             // Aborted while (or after) a pipeline ran: the caller gets the exception, the recording callback the bundle of
             // what ran up to the abort. Nothing here waits for calls still in flight.
-            Deliver(request, AbortedBundle(request, pipeline, seed!.Value, timeMs!.Value, runs.Runs, ignored));
+            Deliver(request, AbortedBundle(request, pipeline, seed!.Value, timeMs!.Value, runs.Runs, ignored, merged));
             throw;
         }
         finally
         {
             pipeline?.Bindings.RequestEnded();
             fallback?.Bindings.RequestEnded();
+            EndOverride(overridden);
 
             // What the caller saw (design 13.1 "实验桶"): an aborted request counts as an error, so arms whose requests
             // are slow enough to be cancelled do not look healthier.
@@ -1003,7 +1053,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             Deadline = deadline,
             Seed = seed,
             TimeMs = timeMs,
-            CaptureLogs = request.Debug?.CaptureLogs == true,
+            CaptureLogs = request.Debug is { } debug && (debug.CaptureLogs || debug.ConfigOverride is not null), // an override writes no logs
             ExplainIds = request.Debug?.ExplainIds,
             OnRecording = runs is null ? null : runs.Add,
             OnEnd = pipeline.Bindings.Join(), // last: the executor, called next, ends it on every outcome
@@ -1043,15 +1093,17 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     }
 
     /// <summary>The result of a request its fallback pipeline served: the primary's assignment and error, the fallback's items.</summary>
+    /// <param name="merged">The arms a configuration override's plan merged in (see <see cref="ToResult"/>).</param>
     private static RecResult Combine(
-        RecRequest request, PipelineResult executed, RecResult converted, PipelineResult served, IReadOnlyList<IgnoredArm> ignored, string fallbackId) => new()
+        RecRequest request, PipelineResult executed, RecResult converted, PipelineResult served, IReadOnlyList<IgnoredArm> ignored, string fallbackId,
+        IReadOnlyList<string>? merged = null) => new()
     {
         RequestId = request.RequestId,
         Succeeded = converted.Succeeded,
         ErrorKind = converted.Succeeded ? RecErrorKind.None : RecErrorKind.Failed,
         Error = $"pipeline '{request.PipelineId}' failed: {executed.Error}" + (served.Succeeded ? string.Empty : $"; fallback '{fallbackId}' failed: {served.Error}"),
         Columns = converted.Columns,
-        Experiments = new ExperimentRecord(executed.AssignedArms, executed.TriggeredExperiments, ignored),
+        Experiments = new ExperimentRecord(merged ?? executed.AssignedArms, executed.TriggeredExperiments, ignored),
         ManifestId = converted.ManifestId,
         ServedBy = fallbackId,
         ColumnProducers = converted.ColumnProducers,
@@ -1061,14 +1113,17 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         ElapsedMs = executed.ElapsedMs + served.ElapsedMs,
     };
 
-    private static RecResult ToResult(RecRequest request, LoadedPipeline pipeline, PipelineResult result, IReadOnlyList<IgnoredArm> ignored, string servedBy) => new()
+    /// <param name="merged">The arms a configuration override's plan merged in: the run had none of its own, and they are
+    /// the request's assignment; null for every other run.</param>
+    private static RecResult ToResult(
+        RecRequest request, LoadedPipeline pipeline, PipelineResult result, IReadOnlyList<IgnoredArm> ignored, string servedBy, IReadOnlyList<string>? merged = null) => new()
     {
         RequestId = request.RequestId,
         Succeeded = result.Succeeded,
         ErrorKind = result.Succeeded ? RecErrorKind.None : RecErrorKind.Failed,
         Error = result.Error,
         Columns = result.Columns,
-        Experiments = new ExperimentRecord(result.AssignedArms, result.TriggeredExperiments, ignored),
+        Experiments = new ExperimentRecord(merged ?? result.AssignedArms, result.TriggeredExperiments, ignored),
         ManifestId = pipeline.Plan.ManifestId,
         ServedBy = servedBy,
         ColumnProducers = result.ColumnProducers,
