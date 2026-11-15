@@ -389,6 +389,14 @@ internal static class ExplainPlanCommand
                 }
             }
 
+            if (conditions.Count > 1)
+            {
+                for (var c = 0; c < conditions.Count; c++)
+                {
+                    conditions[c] = "(" + conditions[c] + ")"; // each a whole condition: `a ? b : c || d` would read as `a ? b : (c || d)`
+                }
+            }
+
             sites.Add(always ? experiment.Id : conditions.Count == 0 ? $"{experiment.Id} never" : $"{experiment.Id} if {string.Join(" || ", conditions)}");
         }
 

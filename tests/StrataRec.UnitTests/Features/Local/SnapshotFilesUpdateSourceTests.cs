@@ -272,6 +272,7 @@ public class SnapshotFilesUpdateSourceTests
     [InlineData("""{"uri": "x", "reload": "-PT1H"}""", "/reload", "PT1H")]
     [InlineData("""{"uri": "x", "reload": 3600}""", "/reload", "PT1H")]
     [InlineData("""{"uri": "x", "reload": "P60D"}""", "/reload", "P49D")] // longer than a timer waits (Gemini review 2026-11-14, finding 7)
+    [InlineData("""{"uri": "x", "reload": "P1000000000D"}""", "/reload", "P49D")] // longer than a TimeSpan holds (review 59)
     [InlineData("""{"uri": "x", "reloads": "PT1H"}""", "/reloads", "'reload'")]
     [InlineData("""{"uri": "x", "a/b~c": 1}""", "/a~1b~0c", "'reload'")] // review 54: the setting's name escaped
     public void Factory_SettingErrors_NameTheSetting(string settings, string pointer, string hint)

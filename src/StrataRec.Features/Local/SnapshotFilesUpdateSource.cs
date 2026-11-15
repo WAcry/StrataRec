@@ -201,6 +201,10 @@ public sealed class SnapshotFilesUpdateSourceFactory : IFeatureUpdateSourceFacto
         {
             throw new FeatureUpdateException(location, "/reload", $"'{value.GetString()}' is not an ISO 8601 duration.", Hint);
         }
+        catch (OverflowException)
+        {
+            period = TimeSpan.MaxValue; // longer than a TimeSpan holds: refused below as too long
+        }
 
         if (period <= TimeSpan.Zero)
         {

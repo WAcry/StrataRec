@@ -261,7 +261,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
         }
         catch (TimeoutException)
         {
-            LogSinkStuck(_logger, _options.DrainTimeout.TotalSeconds);
+            LogSinkStuck(_logger, _options.DrainTimeout.TotalSeconds, Interlocked.Read(ref _pending));
             _events?.Dispose();
             return; // the loops still use _stop; leave it to the finalizer
         }
@@ -447,8 +447,8 @@ public sealed partial class LogPipeline : IAsyncDisposable
     private static partial void LogDrainTimedOut(ILogger logger, double drainTimeoutSeconds, long pending);
 
     [LoggerMessage(EventId = 3004, Level = LogLevel.Warning,
-        Message = "Log sink did not stop within the {DrainTimeoutSeconds} s drain timeout; abandoning in-flight writes")]
-    private static partial void LogSinkStuck(ILogger logger, double drainTimeoutSeconds);
+        Message = "Log sink did not stop within the {DrainTimeoutSeconds} s drain timeout; abandoning in-flight writes, with {Pending} batches not yet settled")]
+    private static partial void LogSinkStuck(ILogger logger, double drainTimeoutSeconds, long pending);
 
     /// <summary>Delivery counters of one tap and its metric tags, built once per tap.</summary>
     private sealed class TapCounters(string tap)

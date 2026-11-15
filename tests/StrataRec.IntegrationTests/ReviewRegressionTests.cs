@@ -1,3 +1,4 @@
+using StrataRec.CommandLine.Commands;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
@@ -137,6 +138,42 @@ public sealed class ReviewRegressionTests
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// explain-plan prints a site's condition as the OR of whole conditions (review 59): joined bare, a baseline `when`
+    /// with `?:` read as `a ? b : (c || d)`, the opposite of what the executor decides for the home surface.
+    /// </summary>
+    [Fact]
+    public async Task ExplainPlan_PrintsASitesConditionAsTheOrOfWholeConditions()
+    {
+        const string Ternary = "ctx.request.surface == 'home' ? ctx.request.surface == 'search' : ctx.request.surface == 'other'";
+        var host = HomeFeedTestHost.LoadModified(root =>
+        {
+            var pipeline = Path.Combine(root, "pipelines", "home_feed.jsonc");
+            File.WriteAllText(pipeline, File.ReadAllText(pipeline).Replace(
+                "\"order\": 515, \"op\": \"ExpressionFilter@1\", \"when\": \"ctx.request.surface == 'home'\"",
+                $"\"order\": 515, \"op\": \"ExpressionFilter@1\", \"when\": \"{Ternary}\"", StringComparison.Ordinal));
+            File.WriteAllText(Path.Combine(root, "experiments", "exp_cap_when.jsonc"), """
+                { "experiment_id": "exp_cap_when", "pipeline_id": "home_feed", "owner": "t", "description": "d", "expires_at": "2099-01-01",
+                  "arms": { "control": {}, "t": { "nodes": { "author_cap": { "when": "ctx.request.surface == 'home'" } } } } }
+                """);
+            var release = Path.Combine(root, "releases", "home_feed.local.jsonc");
+            File.WriteAllText(release, File.ReadAllText(release).Replace(
+                "\"exp_quality_weight\":        { \"layer\": \"params\" }",
+                "\"exp_quality_weight\":        { \"layer\": \"params\" }, \"exp_cap_when\": { \"layer\": \"cap\" }", StringComparison.Ordinal));
+        });
+        var output = new StringWriter();
+        var errors = new StringWriter();
+
+        var exit = await ExplainPlanCommand.RunAsync(Tool.Environment, host.Root, "local", "home_feed", "text", new[] { "exp_cap_when/control" }, output,
+            TestContext.Current.CancellationToken, errors: errors);
+
+        Assert.True(exit == 0, errors.ToString() + output);
+
+        var site = output.ToString().Split('\n').Single(l => l.Contains("author_cap", StringComparison.Ordinal) && l.Contains("site:", StringComparison.Ordinal));
+        Assert.Contains("exp_cap_when if (", site, StringComparison.Ordinal);
+        Assert.Contains(") || (", site, StringComparison.Ordinal);
     }
 
     [Fact]
