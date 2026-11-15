@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using StrataRec.Artifacts.Json;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
@@ -187,7 +188,7 @@ public sealed class CompositeMultiplierScorerFactory : IOperatorFactory
         var ok = true;
         for (var i = 0; i < names.Count; i++)
         {
-            var compiled = context.CompileExpression(terms[names[i]], pointer + names[i], options);
+            var compiled = context.CompileExpression(terms[names[i]], pointer + JsonPointer.Escape(names[i]), options);
             ok &= compiled is not null;
             result[i] = (names[i], compiled!);
         }

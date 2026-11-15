@@ -169,6 +169,24 @@ public sealed class DeclarationTests
     }
 
     [Fact]
+    public void AnErrorInAColumnOrAFusionTerm_IsAtItsEscapedPointer()
+    {
+        // Review 54: a declared column's name and a multiplier's or addend's name went into the pointer as they are.
+        var host = HomeFeedTestHost.Load();
+        host.Request.Pipeline.Columns["col/of~x"] = new ColumnSpec { Type = "int46" };
+        var request = With(host.Request, [Treatment("a", """
+            { "nodes": { "fusion": { "config": { "multipliers": { "term/of~x": "col.wrong_column" }, "addends": { "add/of~x": "col.wrong_column" } } } } }
+            """)]);
+
+        var unified = PlanCompiler.Compile(request, host.Environment);
+
+        var errors = unified.Diagnostics.Where(d => d.IsError).ToList();
+        Assert.Contains(errors, d => (d.Code, d.Pointer) == ("COLUMN_BAD_TYPE", "/columns/col~1of~0x/type"));
+        Assert.Contains(errors, d => (d.Artifact, d.Pointer) == ("experiment:a", "/arms/t/nodes/fusion/config/multipliers/term~1of~0x"));
+        Assert.Contains(errors, d => (d.Artifact, d.Pointer) == ("experiment:a", "/arms/t/nodes/fusion/config/addends/add~1of~0x"));
+    }
+
+    [Fact]
     public void AColumnDeclaredOnlyByAnArmNotAssignedWithItsReader_IsNotDeclaredThere()
     {
         // Review 51 P1: a declares the column the baseline's writer declares too, b reads it, c deletes the writer; each arm

@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Xml;
+using StrataRec.Artifacts.Json;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
@@ -166,7 +167,7 @@ public sealed class SnapshotFilesUpdateSourceFactory : IFeatureUpdateSourceFacto
                     reload = ParseDuration(value, location);
                     break;
                 default:
-                    throw new FeatureUpdateException(location, "/" + name, $"Unknown setting '{name}'.",
+                    throw new FeatureUpdateException(location, "/" + JsonPointer.Escape(name), $"Unknown setting '{name}'.",
                         $"{SnapshotFilesUpdateSource.Type} takes 'uri' and optionally 'reload'");
             }
         }
@@ -308,7 +309,7 @@ internal sealed class SnapshotManifest
                         files = ReadFiles(member.Value, path, directory);
                         break;
                     default:
-                        throw new FeatureUpdateException(path, "/" + member.Name, $"Unknown manifest member '{member.Name}'.",
+                        throw new FeatureUpdateException(path, "/" + JsonPointer.Escape(member.Name), $"Unknown manifest member '{member.Name}'.",
                             "a snapshot manifest has 'files', and optionally 'position' and 'format'");
                 }
             }

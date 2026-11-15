@@ -29,6 +29,7 @@ public sealed class BuiltInClientSettingsTests
         { "memory@1", """{ "data_file": "missing.json" }""", "/data_file", "missing.json' cannot be read", "a relative path resolves against" },
         { "memory@1", """{ "data": [1, 2] }""", "/data", "The records must be a JSON object, by entity key.", null },
         { "memory_list@1", """{ "itmes": [1, 2] }""", "/itmes", "Unknown setting 'itmes'.", "did you mean 'items'?" },
+        { "memory_list@1", """{ "it/em~s": [1, 2] }""", "/it~1em~0s", "Unknown setting 'it/em~s'.", null }, // review 54
         { "memory_list@1", """{ "items": [1, { "id": 2, "scroe": 0.5 }] }""", "/items/1/scroe", "An item has 'id' and 'score', not 'scroe'.", "did you mean 'score'?" },
         { "memory_list@1", """{ "items": [1.5] }""", "/items/0", "An id must be a string or an int64; got 1.5.", null },
         { "memory_list@1", """{ "items": [{ "id": 1, "s/co~re": 1 }] }""", "/items/0/s~1co~0re", "An item has 'id' and 'score', not 's/co~re'.", null }, // review 41

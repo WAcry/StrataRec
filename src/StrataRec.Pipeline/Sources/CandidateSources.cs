@@ -265,7 +265,7 @@ public sealed class MemoryListCandidateSourceFactory : ICandidateSourceFactory
                         guess is null ? Takes : guess + " " + Takes);
                 }
 
-                members[member.Name] = (member.Value, new Where(path, "/" + member.Name));
+                members[member.Name] = (member.Value, new Where(path, "/" + BindingContext.EscapePointerToken(member.Name)));
             }
         }
 
@@ -273,7 +273,7 @@ public sealed class MemoryListCandidateSourceFactory : ICandidateSourceFactory
         {
             if (name != "data_file")
             {
-                members[name] = (value, new Where(null, "/" + name)); // the binding's own settings override the file's
+                members[name] = (value, new Where(null, "/" + BindingContext.EscapePointerToken(name))); // the binding's own settings override the file's
             }
         }
 

@@ -1919,7 +1919,7 @@ public sealed class PlanBuilder
         foreach (var name in Sorted(columns.Keys))
         {
             var spec = columns[name];
-            var pointer = pointerPrefix + name;
+            var pointer = pointerPrefix + JsonPointer.Escape(name);
             if (schema.TryGetColumn(name, out _))
             {
                 _diagnostics.Error("COLUMN_DUPLICATE", artifact, pointer, $"Column '{name}' is already declared (or is a feature).");
