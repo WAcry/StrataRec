@@ -348,8 +348,11 @@ public sealed class PlanSchema
         return slot;
     }
 
-    /// <summary>Creates an expression scope over this schema.</summary>
-    public IExpressionScope CreateScope() => new Scope(this);
+    /// <summary>
+    /// Creates an expression scope over this schema, for the plan builder: resolving a node's version of a column
+    /// (<c>col.x@node</c>) allocates its slot, which changes the schema (so not for a plan that serves).
+    /// </summary>
+    internal IExpressionScope CreateScope() => new Scope(this);
 
     private LogicalColumn AddColumn(LogicalColumn column)
     {

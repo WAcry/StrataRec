@@ -61,12 +61,18 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
     public static ScalarValue FromText(string? value) =>
         value is null ? Missing : new(StorageKind.Text, 0, value);
 
+    /// <summary>A vector value over <paramref name="value"/>, which it keeps without copying: do not change the array afterwards.</summary>
+    /// <remarks>A value is immutable, and one value may be shared by every request (a plan's default or parameter, an
+    /// expression's constant), so the list and vector accessors are read-only spans: no reader can change what another
+    /// reads. Copy one (<c>ToArray()</c>) to sort or edit it.</remarks>
     public static ScalarValue FromVector(float[]? value) =>
         value is null ? Missing : new(StorageKind.Vector, value.Length, value);
 
+    /// <inheritdoc cref="FromVector"/>
     public static ScalarValue FromInt64List(long[]? value) =>
         value is null ? Missing : new(StorageKind.ListInt64, 0, value);
 
+    /// <inheritdoc cref="FromVector"/>
     public static ScalarValue FromStringList(string[]? value) =>
         value is null ? Missing : new(StorageKind.ListString, 0, value);
 
@@ -84,11 +90,14 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
 
     public string AsString() => Kind is StorageKind.String or StorageKind.Text ? (string)_ref! : throw WrongKind(StorageKind.String);
 
-    public float[] AsVector() => Kind == StorageKind.Vector ? (float[])_ref! : throw WrongKind(StorageKind.Vector);
+    /// <summary>The vector's components, read-only (see <see cref="FromVector"/>).</summary>
+    public ReadOnlySpan<float> AsVector() => Kind == StorageKind.Vector ? (float[])_ref! : throw WrongKind(StorageKind.Vector);
 
-    public long[] AsInt64List() => Kind == StorageKind.ListInt64 ? (long[])_ref! : throw WrongKind(StorageKind.ListInt64);
+    /// <summary>The list's elements, read-only (see <see cref="FromVector"/>).</summary>
+    public ReadOnlySpan<long> AsInt64List() => Kind == StorageKind.ListInt64 ? (long[])_ref! : throw WrongKind(StorageKind.ListInt64);
 
-    public string[] AsStringList() => Kind == StorageKind.ListString ? (string[])_ref! : throw WrongKind(StorageKind.ListString);
+    /// <inheritdoc cref="AsInt64List"/>
+    public ReadOnlySpan<string> AsStringList() => Kind == StorageKind.ListString ? (string[])_ref! : throw WrongKind(StorageKind.ListString);
 
     /// <summary>Converts to the given type's promoted form; returns false when the value cannot represent it, including an
     /// integer (or list element) outside the int32 range for <c>int32</c> and <c>list&lt;int32&gt;</c> targets.</summary>
@@ -154,9 +163,9 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
             StorageKind.Bool or StorageKind.Int64 => _bits == other._bits,
             StorageKind.Float64 => AsFloat64().Equals(other.AsFloat64()),
             StorageKind.String or StorageKind.Text => string.Equals((string)_ref!, (string)other._ref!, StringComparison.Ordinal),
-            StorageKind.Vector => AsVector().AsSpan().SequenceEqual(other.AsVector()),
-            StorageKind.ListInt64 => AsInt64List().AsSpan().SequenceEqual(other.AsInt64List()),
-            StorageKind.ListString => AsStringList().AsSpan().SequenceEqual(other.AsStringList()),
+            StorageKind.Vector => AsVector().SequenceEqual(other.AsVector()),
+            StorageKind.ListInt64 => AsInt64List().SequenceEqual(other.AsInt64List()),
+            StorageKind.ListString => AsStringList().SequenceEqual(other.AsStringList()),
             _ => false,
         };
     }
@@ -216,8 +225,8 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
         StorageKind.Float64 => AsFloat64().ToString("R", CultureInfo.InvariantCulture),
         StorageKind.String or StorageKind.Text => "'" + AsString() + "'",
         StorageKind.Vector => "vec[" + AsVector().Length.ToString(CultureInfo.InvariantCulture) + "]",
-        StorageKind.ListInt64 => "[" + string.Join(", ", AsInt64List()) + "]",
-        StorageKind.ListString => "['" + string.Join("', '", AsStringList()) + "']",
+        StorageKind.ListInt64 => "[" + string.Join(", ", (long[])_ref!) + "]",
+        StorageKind.ListString => "['" + string.Join("', '", (string[])_ref!) + "']",
         _ => "?",
     };
 

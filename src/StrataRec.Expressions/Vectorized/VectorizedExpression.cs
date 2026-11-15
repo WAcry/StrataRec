@@ -18,10 +18,6 @@ internal sealed class VectorizedExpression : CompiledExpression
     private readonly Symbol[] _reads;
     private readonly Symbol[] _names;
 
-    /// <summary>Arrays of list literals a request-level result can pass through unchanged (e.g. <c>c ? [1] : [2]</c>);
-    /// null when there are none. They belong to this shared instance, so <see cref="EvaluateScalar"/> hands out copies.</summary>
-    private readonly object[]? _constantArrays;
-
     public VectorizedExpression(string source, IrNode bound, IrNode optimized, Symbol[] names)
     {
         Source = source;
@@ -41,7 +37,6 @@ internal sealed class VectorizedExpression : CompiledExpression
             var builder = new ScalarProgram.Builder();
             _scalarRoot = builder.Add(optimized);
             _scalar = builder.Build();
-            _constantArrays = CollectConstantArrays(optimized);
         }
     }
 
@@ -68,14 +63,11 @@ internal sealed class VectorizedExpression : CompiledExpression
 
     public override string Describe() => IrPrinter.Print(Optimized);
 
-    public override ScalarValue EvaluateScalar(in EvalContext context)
-    {
-        var value = Run(context);
-        return _constantArrays is null ? value : Detach(value, _constantArrays);
-    }
+    /// <remarks>The result may be one of the expression's list constants (e.g. <c>c ? [1] : [2]</c>), shared by every
+    /// request: a value's lists are read-only, so it is handed out as it is.</remarks>
+    public override ScalarValue EvaluateScalar(in EvalContext context) => Run(context);
 
-    /// <summary>Evaluates the request-level program. The result may share a constant's array; callers that hand it
-    /// out must <see cref="Detach"/> it (column writers copy, so broadcasting need not).</summary>
+    /// <summary>Evaluates the request-level program.</summary>
     private ScalarValue Run(in EvalContext context)
     {
         if (_scalar is null)
@@ -111,58 +103,6 @@ internal sealed class VectorizedExpression : CompiledExpression
         }
 
         _vector.Evaluate(context, rows, destination, outOfRange);
-    }
-
-    /// <summary>Copies <paramref name="value"/> when its array is one of the expression's own constants.</summary>
-    private static ScalarValue Detach(in ScalarValue value, object[] constants)
-    {
-        object array;
-        switch (value.Kind)
-        {
-            case StorageKind.ListInt64: array = value.AsInt64List(); break;
-            case StorageKind.ListString: array = value.AsStringList(); break;
-            default: return value;
-        }
-
-        foreach (var constant in constants)
-        {
-            if (ReferenceEquals(constant, array))
-            {
-                return value.Kind == StorageKind.ListInt64
-                    ? ScalarValue.FromInt64List((long[])value.AsInt64List().Clone())
-                    : ScalarValue.FromStringList((string[])value.AsStringList().Clone());
-            }
-        }
-
-        return value;
-    }
-
-    /// <summary>The arrays of int and string list literals in the DAG (float lists are never results; the language has
-    /// no vector literals).</summary>
-    private static object[]? CollectConstantArrays(IrNode root)
-    {
-        var seen = new HashSet<IrNode>(ReferenceEqualityComparer.Instance);
-        var arrays = new List<object>();
-        Visit(root);
-        return arrays.Count == 0 ? null : arrays.ToArray();
-
-        void Visit(IrNode node)
-        {
-            if (!seen.Add(node))
-            {
-                return;
-            }
-
-            if (node.IsConst && node.Value.Kind is StorageKind.ListInt64 or StorageKind.ListString)
-            {
-                arrays.Add(node.Value.Kind == StorageKind.ListInt64 ? node.Value.AsInt64List() : node.Value.AsStringList());
-            }
-
-            foreach (var a in node.Args)
-            {
-                Visit(a);
-            }
-        }
     }
 
     private static Symbol[] CollectReads(IrNode root)

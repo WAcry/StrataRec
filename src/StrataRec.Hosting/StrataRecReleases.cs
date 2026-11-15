@@ -47,7 +47,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     private readonly ILogger _logger;
     private readonly ObservedCancellationSource _stopping = new(CancellationSite.Release);
     private readonly Channel<ManifestLoadResult>? _reports; // background outcomes waiting for the reporter
-    private readonly List<ObservedCancellationSource> _calls = new(); // the calls in flight (see BeginCall); its own lock
+    private readonly List<ObservedCancellationSource> _calls = new(); // calls in flight, or whose callbacks still run (see BeginCall); its own lock
     private Task? _polling;
     private bool _stopRequested;
     private bool _cancelled; // under _calls: no call starts any more
@@ -98,18 +98,27 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         foreach (var state in _pipelines)
         {
             var pipelineId = state.PipelineId;
+            // Within PointerTimeout, as in the background: a read that hangs fails the start instead of holding it.
+            var call = BeginCall(_options.PointerTimeout, cancellationToken) ?? throw new OperationCanceledException(cancellationToken);
             string? manifestId;
             try
             {
-                manifestId = await _source!.GetManifestIdAsync(pipelineId, _environment, cancellationToken).ConfigureAwait(false);
+                manifestId = await _source!.GetManifestIdAsync(pipelineId, _environment, call.Token).ConfigureAwait(false);
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
+                var why = call.IsCancellationRequested
+                    ? $"it did not answer within {_options.PointerTimeout.TotalMilliseconds:0} ms (ReleaseOptions.PointerTimeout)"
+                    : ExceptionText.Of(ex);
                 errors.Error("RELEASE_POINTER_UNREADABLE", PipelineLabel(pipelineId), string.Empty,
-                    $"The manifest pointer of pipeline '{pipelineId}' in environment '{_environment}' could not be read: {ExceptionText.Of(ex)}",
+                    $"The manifest pointer of pipeline '{pipelineId}' in environment '{_environment}' could not be read: {why}",
                     "check the manifest source the host registered (IManifestSource) and that it can be reached");
                 statuses.Add($"{pipelineId}: pointer unreadable");
                 continue;
+            }
+            finally
+            {
+                EndCall(call);
             }
 
             if (manifestId is null)
@@ -260,7 +269,8 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     /// <summary>
     /// The token of one call into an extension (a pointer read, a report): cancelled after <paramref name="timeout"/>, with
     /// <paramref name="linkedTo"/>, or by a stop (<see cref="CancelAll"/>). Null once the stop has begun: the call is not
-    /// made. End it with <see cref="EndCall"/> once the call has returned.
+    /// made. End it with <see cref="EndCall"/> once the call has returned. A stop waits for the callbacks of every call
+    /// that is not over, including one that has returned while its timeout's callbacks still run (<see cref="EndCall"/>).
     /// </summary>
     private ObservedCancellationSource? BeginCall(TimeSpan timeout, CancellationToken linkedTo)
     {
@@ -278,14 +288,34 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         }
     }
 
+    /// <summary>
+    /// Ends a call that has returned. A call cancelled before (its timeout, mostly) may have returned while the callbacks
+    /// of that cancellation still run, a source's cleanup on its token, say: it stays listed until they have run, so a
+    /// stop still waits for them before the container disposes the source (review 56: the call was dropped on return,
+    /// and the stop finished first). Not waited for here, which would hold the polling.
+    /// </summary>
     private void EndCall(ObservedCancellationSource call)
+    {
+        call.Dispose(); // stops its timer, so no cancellation starts after this; the base disposal waits for callbacks
+        var callbacks = call.WhenCallbacksRunAsync();
+        if (callbacks.IsCompleted)
+        {
+            Forget(call);
+        }
+        else
+        {
+            _ = callbacks.ContinueWith(
+                static (_, state) => { var (releases, call) = ((StrataRecReleases, ObservedCancellationSource))state!; releases.Forget(call); },
+                (this, call), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+    }
+
+    private void Forget(ObservedCancellationSource call)
     {
         lock (_calls)
         {
             _calls.Remove(call);
         }
-
-        call.Dispose(); // after its callbacks, if they still run (see ObservedCancellationSource)
     }
 
     /// <summary>

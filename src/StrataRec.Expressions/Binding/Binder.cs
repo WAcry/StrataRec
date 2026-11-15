@@ -1096,7 +1096,7 @@ internal sealed class Binder
         return false;
     }
 
-    private static double[] ToDoubles(long[] values)
+    private static double[] ToDoubles(ReadOnlySpan<long> values)
     {
         var result = new double[values.Length];
         for (var i = 0; i < values.Length; i++)

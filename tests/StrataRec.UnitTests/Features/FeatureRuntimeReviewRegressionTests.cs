@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using StrataRec.Artifacts.Model;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Types;
@@ -13,6 +14,30 @@ namespace StrataRec.UnitTests.Features;
 /// <summary>Regression tests for the feature-runtime findings of the artifacts/feature-runtime review (eb7e005).</summary>
 public class FeatureRuntimeReviewRegressionTests
 {
+    /// <summary>
+    /// Review 56 #4: <see cref="FeaturePlan.Create"/> fills in the infos it is given, so a plan built from another plan's
+    /// (its public <see cref="FeaturePlan.Features"/>, here with bindings that fail) rewrote that plan's groups under its
+    /// requests, which then failed. Such infos are refused before anything changes.
+    /// </summary>
+    [Fact]
+    public async Task FeaturePlanCreate_RefusesAnotherPlansInfos_AndThatPlanServesAsBefore()
+    {
+        var rig = new FeatureTestRig().Source("item_store", ScriptedConnector.Values((key, _) => key * 1.5));
+        var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        var plan = rig.Build();
+        string Layout() => string.Join("; ", plan.Features.Select(f => $"{f.GroupIndex}/{f.FieldIndex}/{f.Wave}/[{string.Join(",", f.Dependencies)}]"));
+        var before = Layout();
+
+        var thrown = Assert.Throws<ArgumentException>(() => FeaturePlan.Create(
+            plan.Features, new SourceBindingArtifact { Environment = "test" }, FeatureConnectorRegistry.CreateDefault(), _ => -1, new DiagnosticBag(), null));
+
+        Assert.Contains("'item.score' belongs to a feature plan already", thrown.Message);
+        Assert.Equal(before, Layout());
+        var request = rig.NewRequest(new long[] { 2 });
+        await request.EnsureAsync(score);
+        Assert.Equal(3.0, request.Value(score, 0).AsFloat64());
+    }
+
     private static readonly long[] TwoItems = { 1, 2 };
 
     // ---- Finding 1: the context prefetch must hold the request memory through its last staging read ----------------

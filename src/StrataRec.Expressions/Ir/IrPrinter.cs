@@ -233,7 +233,7 @@ internal static class IrPrinter
         return text.Contains('.', StringComparison.Ordinal) || text.Contains('E', StringComparison.Ordinal) ? text : text + ".0";
     }
 
-    public static string FormatList(long[] values)
+    public static string FormatList(ReadOnlySpan<long> values)
     {
         var sb = new StringBuilder("[");
         for (var i = 0; i < values.Length; i++)
@@ -244,7 +244,7 @@ internal static class IrPrinter
         return sb.Append(']').ToString();
     }
 
-    public static string FormatList(double[] values)
+    public static string FormatList(ReadOnlySpan<double> values)
     {
         var sb = new StringBuilder("[");
         for (var i = 0; i < values.Length; i++)
@@ -255,7 +255,7 @@ internal static class IrPrinter
         return sb.Append(']').ToString();
     }
 
-    public static string FormatList(string[] values)
+    public static string FormatList(ReadOnlySpan<string> values)
     {
         var sb = new StringBuilder("[");
         for (var i = 0; i < values.Length; i++)

@@ -56,7 +56,7 @@ public class ListInt32Tests
         var first = ColumnValues.Get(column, 0);
         Assert.Equal(StorageKind.ListInt64, first.Kind); // ScalarValue holds int lists promoted, like int32 values
         Assert.Equal(new long[] { 1, -2, int.MaxValue, int.MinValue }, first.AsInt64List());
-        Assert.Empty(ColumnValues.Get(column, 1).AsInt64List());
+        Assert.True(ColumnValues.Get(column, 1).AsInt64List().IsEmpty);
         Assert.True(ColumnValues.Get(column, 2).IsMissing);
         Assert.Equal(new long[] { 7, 7 }, ColumnValues.Get(column, 3).AsInt64List());
         Assert.Equal(2, lists.LengthOf(3));

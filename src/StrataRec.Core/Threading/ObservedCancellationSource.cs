@@ -109,6 +109,7 @@ public class ObservedCancellationSource : CancellationTokenSource
     private readonly CancellationSite _site;
     private ITimer? _timer;
     private Task? _callbacks; // the winning cancellation's callbacks, once Published
+    private TaskCompletionSource? _publication; // for whoever asks while the winning cancellation is still starting
     private int _state;
 
     /// <param name="site">The token's site, for the metric and the request event.</param>
@@ -155,24 +156,25 @@ public class ObservedCancellationSource : CancellationTokenSource
     }
 
     /// <summary>
-    /// Cancels the token now, and its callbacks run on the thread pool. The cancellation that wins (see remarks) returns
-    /// the task that runs them, after the token has observed the cancellation; the task faults with what they threw,
-    /// which is counted and reported whether or not anyone awaits it, so a caller that does not need to know when they
-    /// are done can drop it.
+    /// Cancels the token now, and its callbacks run on the thread pool. Returns a task that completes when they have run,
+    /// after the token has observed the cancellation; the winning cancellation's (see remarks) faults with what they
+    /// threw, which is counted and reported whether or not anyone awaits it, so a caller that does not need to know when
+    /// they are done can drop it.
     /// </summary>
     /// <remarks>
     /// Of concurrent cancellations (the timer, the linked token, the framework), one wins and cancels. The others add no
-    /// callbacks and return its task once it has published it; before that, while the winner is still starting, they
-    /// return a completed task, and the token observes the cancellation a moment later. So only the winner's return says
-    /// that the callbacks have run when it completes. A source whose disposal was requested is not cancelled (a completed
-    /// task): whoever held the token has ended.
+    /// callbacks and wait for its: they return its task once it has published it, and before that, while the winner is
+    /// still starting, a task that completes with its callbacks (and does not fault). So whoever cancels, the returned task
+    /// says when the callbacks have run: a stop that finds a call's timer cancelling it still waits for the call's cleanup
+    /// (review 56). A source whose disposal was requested is not cancelled (a completed task): whoever held the token
+    /// has ended.
     /// </remarks>
     public Task CancelObservedAsync()
     {
         var state = Interlocked.Or(ref _state, Cancelling);
         if ((state & Cancelling) != 0)
         {
-            return Volatile.Read(ref _callbacks) ?? Task.CompletedTask;
+            return WinnersCallbacks();
         }
 
         Task callbacks;
@@ -200,6 +202,11 @@ public class ObservedCancellationSource : CancellationTokenSource
             DisposeAfter(callbacks);
         }
 
+        if (Volatile.Read(ref _publication) is { } waiting)
+        {
+            CompleteWith(waiting, callbacks); // someone asked while this started (see WinnersCallbacks)
+        }
+
         if (!callbacks.IsCompleted)
         {
             _ = callbacks.ContinueWith(Observe, this, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
@@ -210,6 +217,51 @@ public class ObservedCancellationSource : CancellationTokenSource
         }
 
         return callbacks;
+    }
+
+    /// <summary>
+    /// A task that completes when the callbacks of this token's cancellation have run, whoever cancelled it (the timer,
+    /// the link, a caller); a completed task when no cancellation has started. Cancels nothing.
+    /// </summary>
+    /// <remarks>For whoever ends a call it handed the token to: the call may have returned while the callbacks of its
+    /// timeout still run, and what they clean up must not be disposed first.</remarks>
+    public Task WhenCallbacksRunAsync() => (Volatile.Read(ref _state) & Cancelling) == 0 ? Task.CompletedTask : WinnersCallbacks();
+
+    /// <summary>
+    /// The winning cancellation's callbacks (<c>Cancelling</c> is set): its task once published; before that, a task
+    /// completed with them. The winner publishes, then reads <see cref="_publication"/>; this sets it, then reads
+    /// <see cref="_callbacks"/>: each after a full fence, so at least one of the two sees the other and completes it.
+    /// </summary>
+    private Task WinnersCallbacks()
+    {
+        if (Volatile.Read(ref _callbacks) is { } published)
+        {
+            return published;
+        }
+
+        var waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var publication = Interlocked.CompareExchange(ref _publication, waiter, null) ?? waiter;
+        if (Volatile.Read(ref _callbacks) is { } now)
+        {
+            CompleteWith(publication, now);
+        }
+
+        return publication.Task;
+    }
+
+    /// <summary>Completes <paramref name="publication"/> when <paramref name="callbacks"/> have run, whatever they threw (the winner observes that).</summary>
+    private static void CompleteWith(TaskCompletionSource publication, Task callbacks)
+    {
+        if (callbacks.IsCompleted)
+        {
+            publication.TrySetResult();
+        }
+        else
+        {
+            _ = callbacks.ContinueWith(
+                static (_, state) => ((TaskCompletionSource)state!).TrySetResult(), publication, CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
     }
 
     /// <summary>

@@ -251,7 +251,7 @@ public class DifferentialTests(ITestOutputHelper output)
 
         if (expected.Kind == StorageKind.Vector)
         {
-            return expected.AsVector().AsSpan().SequenceEqual(actual.AsVector());
+            return expected.AsVector().SequenceEqual(actual.AsVector());
         }
 
         return expected.Equals(actual);

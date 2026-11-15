@@ -96,7 +96,7 @@ public class ListInt32FeatureTests
         Assert.Equal(FeatureState.Ok, result.State);
         Assert.IsType<ListColumn<int>>(request.Table.TryGetSlot(rig.SlotOf(tags)));
         Assert.Equal(new long[] { 1, 2, int.MinValue }, request.Value(tags, 0).AsInt64List());
-        Assert.Empty(request.Value(tags, 1).AsInt64List());
+        Assert.True(request.Value(tags, 1).AsInt64List().IsEmpty);
         Assert.Equal(new long[] { 0 }, request.Value(tags, 2).AsInt64List());
         Assert.Equal(new long[] { 5 }, request.Value(ids, 0).AsInt64List());
         Assert.True(request.Value(ids, 1).IsMissing);

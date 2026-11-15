@@ -264,21 +264,21 @@ internal sealed class ConstSet
     /// <summary>Elements in source order for printing.</summary>
     public string Display { get; private init; } = string.Empty;
 
-    public static ConstSet OfInts(long[] values)
+    public static ConstSet OfInts(ReadOnlySpan<long> values)
     {
-        var sorted = (long[])values.Clone();
+        var sorted = values.ToArray();
         Array.Sort(sorted);
         return new ConstSet(TypeKind.Int, sorted, Array.Empty<double>(), Array.Empty<string>()) { Display = IrPrinter.FormatList(values) };
     }
 
-    public static ConstSet OfFloats(double[] values)
+    public static ConstSet OfFloats(ReadOnlySpan<double> values)
     {
-        var sorted = (double[])values.Clone();
+        var sorted = values.ToArray();
         Array.Sort(sorted);
         return new ConstSet(TypeKind.Float, Array.Empty<long>(), sorted, Array.Empty<string>()) { Display = IrPrinter.FormatList(values) };
     }
 
-    public static ConstSet OfStrings(string[] values)
+    public static ConstSet OfStrings(ReadOnlySpan<string> values)
     {
         var distinct = new List<string>(values.Length);
         var seen = new HashSet<string>(StringComparer.Ordinal);

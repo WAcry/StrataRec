@@ -1,6 +1,9 @@
 using System.Buffers.Binary;
 using System.Globalization;
 using System.IO.Hashing;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Hashing;
 using StrataRec.Core.Types;
@@ -516,9 +519,9 @@ public class ExpressionReviewRegressionTests
             values[i] = value.Kind switch
             {
                 0 => null,
-                StorageKind.ListInt64 => value.AsInt64List(),
-                StorageKind.ListString => value.AsStringList(),
-                StorageKind.Vector => value.AsVector(),
+                StorageKind.ListInt64 => value.AsInt64List().ToArray(),
+                StorageKind.ListString => value.AsStringList().ToArray(),
+                StorageKind.Vector => value.AsVector().ToArray(),
                 _ => value.AsFloat64(),
             };
         }
@@ -527,40 +530,49 @@ public class ExpressionReviewRegressionTests
     }
 
     // ------------------------------------------------------------------------------------------------------------
-    // #16: request-level results never hand out the compiled expression's own constant arrays.
+    // #16: request-level results never hand out the compiled expression's own constant arrays writable. They were copied;
+    // since review 56 a value's lists are read-only spans, so the constant itself is returned.
 
     [Theory]
     [InlineData("[1, 2]")]
     [InlineData("ctx.c ? [1, 2] : [3]")]
     [InlineData("ctx.l ?? [1, 2]")]
     [InlineData("let l = [1, 2]; l")]
-    public void EvaluateScalar_IntListConstant_IsACopy(string source)
+    public void EvaluateScalar_IntListConstant_IsTheConstant(string source)
     {
         var f = new ExprFixture().Ctx("ctx.c", "bool", ScalarValue.FromBool(true)).Ctx("ctx.l", "list<int64>?").Build(3);
         var compiled = f.Compile(source);
         var first = compiled.EvaluateScalar(f.Context);
         Assert.Equal(new long[] { 1, 2 }, first.AsInt64List());
-        first.AsInt64List()[0] = 99;
-        Assert.Equal(new long[] { 1, 2 }, compiled.EvaluateScalar(f.Context).AsInt64List());
+        Assert.True(Unsafe.AreSame(
+            ref MemoryMarshal.GetReference(first.AsInt64List()), ref MemoryMarshal.GetReference(compiled.EvaluateScalar(f.Context).AsInt64List())));
 
-        // The row-level broadcast writes the original constant, too.
+        // The row-level broadcast writes the constant, too.
         var destination = ColumnBuffer.Create(ColumnType.ListInt64, f.Capacity, f.Memory);
         compiled.Evaluate(f.Context, f.Table.Rows.Order, destination);
         ExprAssert.Same(new long[] { 1, 2 }, ExprFixture.Read(destination, 0), "broadcast");
     }
 
     [Fact]
-    public void EvaluateScalar_StringListConstant_IsACopy_AndCallerValuesPassThrough()
+    public void EvaluateScalar_CallerValuesPassThrough()
     {
         var f = new ExprFixture().Ctx("ctx.l", "list<string>?").Build(3);
         var compiled = f.Compile("ctx.l ?? ['a', 'b']");
-        var first = compiled.EvaluateScalar(f.Context);
-        first.AsStringList()[1] = "mutated";
         Assert.Equal(new[] { "a", "b" }, compiled.EvaluateScalar(f.Context).AsStringList());
 
         // A value the caller supplied is the caller's own array: returned as is, without a copy.
         var supplied = new[] { "x" };
         f.SetCtx("ctx.l", ScalarValue.FromStringList(supplied));
-        Assert.Same(supplied, compiled.EvaluateScalar(f.Context).AsStringList());
+        Assert.True(Unsafe.AreSame(ref MemoryMarshal.GetReference(compiled.EvaluateScalar(f.Context).AsStringList()), ref supplied[0]));
+    }
+
+    /// <summary>Review 56: a value hands out no array of its own (a plan's default or parameter, a constant, is shared).</summary>
+    [Fact]
+    public void ScalarValue_HandsOutNoWritableArray()
+    {
+        foreach (var method in typeof(ScalarValue).GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static))
+        {
+            Assert.False(method.ReturnType.IsArray, $"ScalarValue.{method.Name} returns {method.ReturnType}");
+        }
     }
 }

@@ -101,7 +101,7 @@ internal static class ScalarOps
             case IrOp.Contains:
                 return ScalarValue.FromBool(node.Args[0].Type.Kind switch
                 {
-                    TypeKind.ListInt => args[0].AsInt64List().AsSpan().Contains(args[1].AsInt64()),
+                    TypeKind.ListInt => args[0].AsInt64List().Contains(args[1].AsInt64()),
                     TypeKind.ListString => ListOps.Contains(args[0].AsStringList(), args[1].AsString()),
                     _ => args[0].AsString().Contains(args[1].AsString(), StringComparison.Ordinal),
                 });

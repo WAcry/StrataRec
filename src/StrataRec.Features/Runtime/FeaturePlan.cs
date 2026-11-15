@@ -86,6 +86,9 @@ public sealed class FeatureRuntimeInfo
     private KeyValuePair<string, object?>[]? _nonFiniteTags;
     private SourceValueTags? _valueTags;
 
+    /// <summary>Set once <see cref="FeaturePlan.Create"/> has taken the info for a plan.</summary>
+    internal bool Planned { get; set; }
+
     /// <summary>A physical feature of an entity keyed by a feature depends on that key feature alone.</summary>
     internal void DependOnKey(int keyFeature) => _dependencies = [keyFeature];
 }
@@ -199,6 +202,10 @@ public sealed class FeaturePlan
     /// <param name="instances">Where connectors and distributed cache stores come from; null creates them for this plan alone.</param>
     /// <param name="cacheStores">Distributed cache store factories for cache bindings; null has none.</param>
     /// <param name="clock">The clock of the cache tables the plan creates; null is the system clock.</param>
+    /// <exception cref="ArgumentException">An info of <paramref name="features"/> belongs to a plan already.</exception>
+    /// <remarks>The plan takes <paramref name="features"/> as they are and fills in their groups, fields, key dependencies
+    /// and waves. So an info belongs to one plan: one that a plan has taken (another plan's <see cref="Features"/>, which
+    /// requests are using) is refused before anything changes (review 56).</remarks>
     public static FeaturePlan Create(
         IReadOnlyList<FeatureRuntimeInfo> features,
         SourceBindingArtifact bindings,
@@ -213,6 +220,21 @@ public sealed class FeaturePlan
         TimeProvider? clock = null,
         string catalogArtifact = "catalog")
     {
+        foreach (var f in features)
+        {
+            if (f.Planned)
+            {
+                throw new ArgumentException(
+                    $"Feature '{f.Definition.Name}' belongs to a feature plan already: a plan fills in its infos, so a new plan needs infos of its own.",
+                    nameof(features));
+            }
+        }
+
+        foreach (var f in features)
+        {
+            f.Planned = true;
+        }
+
         var byName = new Dictionary<string, FeatureRuntimeInfo>(StringComparer.Ordinal);
         var grouped = new SortedDictionary<(string Source, string Entity), List<FeatureRuntimeInfo>>(GroupKeyComparer.Instance);
         foreach (var f in features)

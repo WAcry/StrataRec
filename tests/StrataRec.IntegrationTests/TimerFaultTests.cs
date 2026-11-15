@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Microsoft.Extensions.Logging;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
@@ -84,6 +85,8 @@ public sealed class TimerFaultTests
         Assert.Equal("True", Value(output, "single_worker"));
         Assert.Equal(Value(output, "rounds"), Value(output, "two_cancellations_ran"));
         Assert.Equal(Value(output, "rounds"), Value(output, "two_cancellations_disposed"));
+        Assert.Equal("0", Value(output, "two_cancellations_early")); // each returned task waited for the callbacks
+        Assert.Equal((2 * int.Parse(Value(output, "rounds"), CultureInfo.InvariantCulture)).ToString(CultureInfo.InvariantCulture), Value(output, "two_cancellations_completed"));
         Assert.Equal(Value(output, "rounds"), Value(output, "double_disposal_ran"));
         Assert.Equal(Value(output, "rounds"), Value(output, "double_disposal_disposed"));
     }
@@ -199,9 +202,14 @@ internal static class TimerFaultChild
         ThreadPool.UnsafeQueueUserWorkItem(_ => { entered.Set(); release.Wait(); }, null);
         entered.Wait();
 
-        // Two cancellations at once, then the disposal once both have returned.
+        // Two cancellations at once, then the disposal once both have returned. No callback can run before the pool's
+        // worker is released, so a returned task already complete said "done" too early (review 56: the one that lost
+        // while the winner was still starting got a completed task).
         var twoRan = 0;
         var two = new ObservedCancellationSource[Rounds];
+        var returned = new Task[2 * Rounds];
+        var returnedCount = 0;
+        var early = 0;
         using (var start = new Barrier(3))
         {
             var current = default(ObservedCancellationSource);
@@ -210,7 +218,13 @@ internal static class TimerFaultChild
                 for (var i = 0; i < Rounds; i++)
                 {
                     start.SignalAndWait();
-                    _ = current!.CancelObservedAsync();
+                    var callbacks = current!.CancelObservedAsync();
+                    if (callbacks.IsCompleted)
+                    {
+                        Interlocked.Increment(ref early);
+                    }
+
+                    returned[Interlocked.Increment(ref returnedCount) - 1] = callbacks;
                     start.SignalAndWait();
                 }
             }
@@ -270,6 +284,8 @@ internal static class TimerFaultChild
         Console.WriteLine($"rounds={Rounds}");
         Console.WriteLine($"two_cancellations_ran={Volatile.Read(ref twoRan)}");
         Console.WriteLine($"two_cancellations_disposed={DisposedCount(two)}");
+        Console.WriteLine($"two_cancellations_early={Volatile.Read(ref early)}");
+        Console.WriteLine($"two_cancellations_completed={(Task.WaitAll(returned, Patience) ? returned.Length : -1)}");
         Console.WriteLine($"double_disposal_ran={Volatile.Read(ref doubleRan)}");
         Console.WriteLine($"double_disposal_disposed={DisposedCount(twice)}");
         return 0;

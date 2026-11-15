@@ -902,7 +902,7 @@ public class LocalFeatureTableTests
                     value.AsVector().CopyTo(writer.GetValues<float>(i).Span.Slice(k * field.Type.Dimension, field.Type.Dimension));
                     writer.SetValid(i, k);
                     break;
-                case StorageKind.ListInt32: writer.SetInt32List(i, k, value.AsInt64List().Select(x => (int)x).ToArray()); break;
+                case StorageKind.ListInt32: writer.SetInt32List(i, k, value.AsInt64List().ToArray().Select(x => (int)x).ToArray()); break;
                 case StorageKind.ListInt64: writer.SetInt64List(i, k, value.AsInt64List()); break;
                 case StorageKind.ListString: writer.SetStringList(i, k, value.AsStringList()); break;
             }

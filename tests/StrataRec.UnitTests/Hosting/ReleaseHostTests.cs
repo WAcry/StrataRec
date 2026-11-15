@@ -393,7 +393,56 @@ public sealed class ReleaseHostTests : IDisposable
     }
 
     /// <summary>
-    /// Review 36 #2: an attempt that threw before it set its outcome (here describing the store's exception threw) left the
+    /// Review 56 #1: the same for a read that timed out. Its timeout cancelled the token, the read returned while the
+    /// source's cleanup on the token still ran, and the call was dropped, so a stop finished at once (3.5 ms) and the
+    /// container disposed the source under the cleanup. A call is kept until its callbacks have run.
+    /// </summary>
+    [Fact]
+    public async Task AStop_WaitsForTheCleanupOfAReadThatTimedOut()
+    {
+        var (_, id) = await _fixture.Pipeline("p").BuildAsync("p", seq: 1);
+        await _fixture.PublishAsync("p", id);
+        using var blocked = new ManualResetEventSlim();
+        var log = new ReleaseLog();
+        var source = new HeldSource(_fixture.Pointers) { BlockOnCancel = blocked };
+        var host = Build(["p"], _clock, log: log, source: source, pointerTimeout: TimeSpan.FromMilliseconds(100));
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        source.Hold = true;
+        await _clock.AdvanceAsync(Poll); // returns once the read has timed out and the polling waits again
+        Assert.Single(log.Entries, e => e.EventId.Id == 1009);
+
+        var stopping = host.StopAsync(TestContext.Current.CancellationToken); // the default stop timeout: 30 s
+        _ = Task.Delay(200, TestContext.Current.CancellationToken).ContinueWith(_ => blocked.Set(), TaskScheduler.Default);
+        await stopping.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await Task.Run(host.Dispose, TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.True(source.CallbackEndedAtDisposal);
+    }
+
+    /// <summary>
+    /// Review 56 #2: the startup read had no <see cref="ReleaseOptions.PointerTimeout"/>, so a source that never answered
+    /// held the start for as long as the host's token allowed (by default, forever). It fails the start, saying so.
+    /// </summary>
+    [Fact]
+    public async Task AStartupReadThatHangs_FailsTheStart_AtThePointerTimeout()
+    {
+        var (_, id) = await _fixture.Pipeline("p").BuildAsync("p", seq: 1);
+        await _fixture.PublishAsync("p", id);
+        using var source = new HeldSource(_fixture.Pointers) { Hold = true };
+        using var host = Build(["p"], _clock, source: source, pointerTimeout: TimeSpan.FromMilliseconds(100));
+
+        var thrown = await Assert.ThrowsAsync<ConfigException>(() => host.StartAsync(TestContext.Current.CancellationToken))
+            .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        var error = Assert.Single(thrown.Diagnostics);
+        Assert.Equal(("RELEASE_POINTER_UNREADABLE", "pipeline:p"), (error.Code, error.Artifact));
+        Assert.Contains("did not answer within 100 ms (ReleaseOptions.PointerTimeout)", error.Message);
+        Assert.True(source.HeldStarted.Task.IsCompleted);
+    }
+
+    /// <summary>
+    /// Review 36 #2:an attempt that threw before it set its outcome (here describing the store's exception threw) left the
     /// new manifest with the last one's final outcome, so the polling, alive, never loaded it. The store fails once: the
     /// manifest is applied when it is tried again.
     /// </summary>
