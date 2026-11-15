@@ -120,6 +120,33 @@ public sealed class ConfigOverrideTests
     }
 
     /// <summary>
+    /// An override builds on the configuration as it was loaded, not on the host's objects (review 58): the host edits them
+    /// after the load (a parameter, an arm removed), and an empty override still runs what is served, takes the arm the
+    /// served plan has, and replays identically on a fresh engine loaded from the files.
+    /// </summary>
+    [Fact]
+    public async Task AnOverride_BuildsOnTheConfigurationAsLoaded_NotOnTheHostsObjectsEditedSince()
+    {
+        var host = HomeFeedTestHost.Load();
+        var (engine, _) = MetricsTests.LoadEngine(host);
+        host.Request.Pipeline.Params["final_top_k"] = 2;
+        Assert.True(host.Request.Experiments.Single(e => e.Experiment.ExperimentId == "exp_quality_weight").Experiment.Arms.Remove("strong"));
+
+        var served = await engine.ExecuteAsync(Request("plain", null, null), TestContext.Current.CancellationToken);
+        var empty = await engine.ExecuteAsync(Request("empty", null, Override("{}")), TestContext.Current.CancellationToken);
+        var strong = await engine.ExecuteAsync(Request("strong", TreatmentArms, Override("{}")), TestContext.Current.CancellationToken);
+
+        Assert.True(served.Succeeded && empty.Succeeded, served.Error ?? empty.Error);
+        Assert.Equal(served.Items.Select(i => i.Id), empty.Items.Select(i => i.Id));
+        Assert.True(strong.Succeeded, strong.Error);
+        Assert.Equal(8, strong.Items.Count); // the served strong arm's final_top_k
+
+        var (fresh, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
+        var outcome = await fresh.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(empty.Recording!)), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(outcome.Report.Diff.Identical, ReplayTests.Describe(outcome.Report));
+    }
+
+    /// <summary>
     /// The override's plan takes over what the served plan has loaded and holds nothing after its request: once the engine
     /// is disposed, nothing of the binding host is left (a plan the request kept would keep its tables and instances).
     /// </summary>

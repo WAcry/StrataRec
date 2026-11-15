@@ -27,7 +27,7 @@ public sealed partial class RecEngine
         using var deadline = new ObservedCancellationSource(CancellationSite.PlanLoad, cancellationToken);
         deadline.CancelAfterObserved(budget);
         var environment = Environment;
-        var source = served.Source;
+        var source = served.Source.Read(); // the configuration as it was loaded, whatever the host did with its objects since
         try
         {
             var compilation = await lease.CompileAsync(bindings => PlanCompiler.CompileMerged(source, arms, environment, bindings, configOverride), deadline.Token)
@@ -61,7 +61,7 @@ public sealed partial class RecEngine
                 ArtifactIds = served.ArtifactIds,
                 Bindings = lease,
                 Layout = new PlanLayout(plan),
-                Source = source,
+                Source = served.Source,
             };
             handedOut = lease.TryEnter(); // a lease nothing has retired: always entered
             return (pipeline, null, RecErrorKind.None, null);

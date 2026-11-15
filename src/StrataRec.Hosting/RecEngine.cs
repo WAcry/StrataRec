@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
@@ -12,6 +13,7 @@ using StrataRec.Core.Values;
 using StrataRec.Experiments.Assignment;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting.Bindings;
+using StrataRec.Hosting.Plans;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
 
@@ -281,8 +283,8 @@ public sealed class LoadedPipeline
     /// <summary>The plan's experiment metadata as read-only views, built with the plan: every provider call passes these.</summary>
     internal PlanLayout Layout { get; init; } = null!;
 
-    /// <summary>What the plan was compiled from: a request's configuration override compiles it again (<see cref="DebugOptions.ConfigOverride"/>).</summary>
-    internal PlanCompileRequest Source { get; init; } = null!;
+    /// <summary>What the plan was compiled from, copied at the load: a request's configuration override compiles it again (<see cref="DebugOptions.ConfigOverride"/>).</summary>
+    internal PlanSource Source { get; init; } = null!;
 
     /// <summary>Request-level metric tags of the plan (design 13.1), built once per loaded plan.</summary>
     internal RequestTelemetry Telemetry =>
@@ -555,10 +557,10 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             FallbackPipeline = request.Pipeline.FallbackPipeline,
             Report = compilation.Report,
             Sequence = order,
-            ArtifactIds = request.ArtifactIds,
+            ArtifactIds = request.ArtifactIds.ToFrozenDictionary(StringComparer.Ordinal), // the host's dictionary stays the host's
             Bindings = lease,
             Layout = new PlanLayout(plan),
-            Source = request,
+            Source = PlanSource.Capture(request),
         };
         _ = loaded.Telemetry; // request metric tags are built with the plan, not on its first request
         Publishing?.Invoke();
