@@ -107,7 +107,9 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
 
         if (names.Count > 64)
         {
-            context.Error("/quotas_param", "RECALL_TOO_MANY_SOURCES", "At most 64 sources are supported (recall.sources_mask is an int64 bitmask).");
+            context.Error("/quotas_param", "RECALL_TOO_MANY_SOURCES",
+                $"'{config.QuotasParam}' has {names.Count} sources with the ones experiments add, and at most 64 are supported (recall.sources_mask is an int64 bitmask).",
+                "every source an arm gives a quota counts, even when those arms are never assigned together: give fewer sources a quota");
             return null;
         }
 
@@ -162,7 +164,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
             foreach (var s in sources)
             {
                 var quota = parameters[s.Quota.Id];
-                total += quota.IsMissing ? 0 : Math.Max(0, quota.AsInt64());
+                total += quota.IsMissing ? 0 : Math.Clamp(quota.AsInt64(), 0, int.MaxValue); // 64 terms of at most 2^31: no overflow
             }
 
             return (int)Math.Min(total, int.MaxValue);

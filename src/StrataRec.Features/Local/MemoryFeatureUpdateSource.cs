@@ -1,3 +1,4 @@
+using StrataRec.Artifacts.Json;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Values;
 
@@ -127,7 +128,7 @@ public sealed class MemoryFeatureUpdateSource : IFeatureUpdateSource
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
             {
-                throw new FeatureUpdateException($"{Type} update {offset}", "/fields/" + name, ex.Message,
+                throw new FeatureUpdateException($"{Type} update {offset}", "/fields/" + JsonPointer.Escape(name), ex.Message,
                     $"give the value the field's type ({writer.Schema.Fields[field].Type})", ex);
             }
         }

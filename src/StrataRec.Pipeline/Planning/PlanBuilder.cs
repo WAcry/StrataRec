@@ -478,7 +478,7 @@ public sealed class PlanBuilder
         {
             foreach (var name in Sorted(spec.Context.Keys))
             {
-                var e = CompileTapExpression(spec.Context[name], new CompileOptions { RequestLevelOnly = true, AllowNullableResult = true }, artifact, pointer + "/context/" + name, reads, ref ok);
+                var e = CompileTapExpression(spec.Context[name], new CompileOptions { RequestLevelOnly = true, AllowNullableResult = true }, artifact, pointer + "/context/" + JsonPointer.Escape(name), reads, ref ok);
                 if (e is not null)
                 {
                     context.Add((name, e));
@@ -1975,7 +1975,7 @@ public sealed class PlanBuilder
         foreach (var name in Sorted(specs.Keys))
         {
             var (spec, artifact) = specs[name];
-            var pointer = "/param_schema/" + name;
+            var pointer = "/param_schema/" + JsonPointer.Escape(name);
             if (!ConfigTypes.TryParse(spec.Type, TypeSite.Parameter, out var leafType, out var isMap, out var error, out var hint))
             {
                 _diagnostics.Error("PARAM_BAD_TYPE", artifact, pointer + "/type", error, hint);
@@ -2014,7 +2014,7 @@ public sealed class PlanBuilder
                 }
                 else if (value is not null)
                 {
-                    _diagnostics.Error("PARAM_BAD_VALUE", PipelineLabel, "/params/" + name, $"Map parameter '{name}' needs an object value.");
+                    _diagnostics.Error("PARAM_BAD_VALUE", PipelineLabel, "/params/" + JsonPointer.Escape(name), $"Map parameter '{name}' needs an object value.");
                     continue;
                 }
 
@@ -2031,7 +2031,7 @@ public sealed class PlanBuilder
                     var leafName = name + "." + key;
                     var leaf = schema.AddParamLeaf(leafName, leafType, spec.Min, spec.Max, enumValues, ScalarValue.Missing, pointer, name);
                     var leafValue = value is JsonObject m ? m[key] : null;
-                    if (leafValue is not null && TryParamValue(leaf, leafValue, PipelineLabel, "/params/" + name + "/" + key, out var parsed))
+                    if (leafValue is not null && TryParamValue(leaf, leafValue, PipelineLabel, "/params/" + JsonPointer.Escape(name) + "/" + JsonPointer.Escape(key), out var parsed))
                     {
                         leaf.Baseline = parsed;
                     }
@@ -2044,10 +2044,10 @@ public sealed class PlanBuilder
                 {
                     if (artifact == PipelineLabel)
                     {
-                        _diagnostics.Error("PARAM_NO_VALUE", PipelineLabel, "/params/" + name, $"Parameter '{name}' is declared but has no baseline value.");
+                        _diagnostics.Error("PARAM_NO_VALUE", PipelineLabel, "/params/" + JsonPointer.Escape(name), $"Parameter '{name}' is declared but has no baseline value.");
                     }
                 }
-                else if (TryParamValue(leaf, value, PipelineLabel, "/params/" + name, out var parsed))
+                else if (TryParamValue(leaf, value, PipelineLabel, "/params/" + JsonPointer.Escape(name), out var parsed))
                 {
                     leaf.Baseline = parsed;
                 }
@@ -2058,7 +2058,7 @@ public sealed class PlanBuilder
         {
             if (!specs.ContainsKey(name))
             {
-                _diagnostics.Error("PARAM_UNDECLARED", PipelineLabel, "/params/" + name, $"Parameter '{name}' has a value but no param_schema entry.",
+                _diagnostics.Error("PARAM_UNDECLARED", PipelineLabel, "/params/" + JsonPointer.Escape(name), $"Parameter '{name}' has a value but no param_schema entry.",
                     NameSuggestions.DidYouMean(name, specs.Keys) ?? $"declare it under /param_schema/{name}");
             }
         }

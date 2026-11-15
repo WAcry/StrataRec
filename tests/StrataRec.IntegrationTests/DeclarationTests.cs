@@ -151,6 +151,24 @@ public sealed class DeclarationTests
     }
 
     [Fact]
+    public void AnErrorInATapsContextOrAMapKey_IsAtItsEscapedPointer()
+    {
+        // Review 53: a context name went into the pointer as it is, so the error an arm's tap made was placed in the
+        // baseline's file; a map parameter's keys and names likewise.
+        var host = HomeFeedTestHost.Load();
+        host.Request.Pipeline.Params["recall_quotas"]!["a/b~c"] = "many";
+        var request = With(host.Request, [Treatment("a", """
+            { "log_taps": { "tap/of~x": { "group": "all", "attach": { "output": true }, "context": { "slash/name~x": "ctx.request.wrong_input" } } } }
+            """)]);
+
+        var unified = PlanCompiler.Compile(request, host.Environment);
+
+        var errors = unified.Diagnostics.Where(d => d.IsError).ToList();
+        Assert.Contains(errors, d => (d.Code, d.Artifact, d.Pointer) == ("EXPR_UNKNOWN_NAME", "experiment:a", "/arms/t/log_taps/tap~1of~0x/context/slash~1name~0x"));
+        Assert.Contains(errors, d => d.Pointer == "/params/recall_quotas/a~1b~0c");
+    }
+
+    [Fact]
     public void AColumnDeclaredOnlyByAnArmNotAssignedWithItsReader_IsNotDeclaredThere()
     {
         // Review 51 P1: a declares the column the baseline's writer declares too, b reads it, c deletes the writer; each arm
