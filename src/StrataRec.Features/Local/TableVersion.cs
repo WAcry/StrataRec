@@ -18,9 +18,11 @@ internal delegate ulong StringKeyHasher(ReadOnlySpan<char> key);
 /// A found record of a pinned <see cref="TableVersion"/>, or none (<see cref="Found"/> false). It points straight at
 /// the record's bytes, so reading its features after the one index lookup touches nothing else.
 /// </summary>
-/// <remarks>Only meaningful for the version whose lookup produced it; keep it no longer than the request that pinned the
-/// version (it holds the page alive).</remarks>
-public readonly struct LocalRecordRef
+/// <remarks>Only meaningful for the version whose lookup produced it: another version of the same table reads its string
+/// codes through a dictionary a compaction renumbered. It does not record its version (that would cost a compare per row
+/// and a wider struct); the reader API is internal instead, and its one caller, the feature fetcher, reads every record
+/// from the version it pinned for the request. Keep it no longer than that request (it holds the page alive).</remarks>
+internal readonly struct LocalRecordRef
 {
     internal readonly byte[]? Page;
     internal readonly int Offset;
@@ -36,7 +38,7 @@ public readonly struct LocalRecordRef
 
 /// <summary>One field to read in a multi-field <see cref="TableVersion.Fill(ReadOnlySpan{LocalRecordRef}, ReadOnlySpan{int}, ReadOnlySpan{LocalFieldRead}, Span{int})"/>:
 /// the table field, the column of its storage type to write, and what absent rows get (the feature's default, or missing).</summary>
-public readonly struct LocalFieldRead
+internal readonly struct LocalFieldRead
 {
     public LocalFieldRead(int field, ColumnBuffer target, in ScalarValue absent)
     {
@@ -65,6 +67,8 @@ public readonly struct LocalFieldRead
 /// growth, so the directory is loaded again. The string dictionary is loaded after the lookups, with the same rule.</para>
 /// <para>The writer side lives here too (internal members, used only by <see cref="LocalTableWriter"/> on the table's
 /// single writer thread): page allocation, the index, the dictionary and the size accounting.</para>
+/// <para>Public members are the statistics. The reader API is internal (see <see cref="LocalRecordRef"/>): features of a
+/// local table are read through the feature catalog.</para>
 /// </remarks>
 public sealed class TableVersion
 {
@@ -140,7 +144,7 @@ public sealed class TableVersion
     // ---------------------------------------------------------------------------------------------------------------
 
     /// <summary>The record of an int64 key, or none. A string-keyed table never finds an int64 key.</summary>
-    public LocalRecordRef Find(long key)
+    internal LocalRecordRef Find(long key)
     {
         if (_layout.StringKeys)
         {
@@ -153,7 +157,7 @@ public sealed class TableVersion
     }
 
     /// <summary>The record of a string key, or none. An int64-keyed table never finds a string key.</summary>
-    public LocalRecordRef Find(ReadOnlySpan<char> key)
+    internal LocalRecordRef Find(ReadOnlySpan<char> key)
     {
         if (!_layout.StringKeys)
         {
@@ -165,7 +169,7 @@ public sealed class TableVersion
         return position == 0 ? default : Resolve(position, ref pages);
     }
 
-    public LocalRecordRef Find(in EntityKey key) => key.StringValue is { } s ? Find(s.AsSpan()) : Find(key.Int64Value);
+    internal LocalRecordRef Find(in EntityKey key) => key.StringValue is { } s ? Find(s.AsSpan()) : Find(key.Int64Value);
 
     /// <summary>
     /// Looks every key up once: <c>records[i]</c> becomes the record of <c>keys[i]</c> or none. All features of the
@@ -177,7 +181,7 @@ public sealed class TableVersion
     /// each probe (the slots are in the cache now; a probe that goes past the home slot mispredicts a branch but no
     /// longer stalls on memory) and resolves the record, whose header miss again overlaps with the other keys'.
     /// </remarks>
-    public int Lookup(ReadOnlySpan<long> keys, Span<LocalRecordRef> records)
+    internal int Lookup(ReadOnlySpan<long> keys, Span<LocalRecordRef> records)
     {
         records = records[..keys.Length];
         if (_layout.StringKeys)
@@ -234,7 +238,7 @@ public sealed class TableVersion
 
     /// <summary>String-key form of <see cref="Lookup(ReadOnlySpan{long}, Span{LocalRecordRef})"/>; a null key (a row with
     /// no key) is not found.</summary>
-    public int Lookup(ReadOnlySpan<string?> keys, Span<LocalRecordRef> records)
+    internal int Lookup(ReadOnlySpan<string?> keys, Span<LocalRecordRef> records)
     {
         records = records[..keys.Length];
         if (!_layout.StringKeys)
@@ -258,7 +262,7 @@ public sealed class TableVersion
     }
 
     /// <summary>Mixed-key form, for keys already held as <see cref="EntityKey"/>s; a key of the other type is not found.</summary>
-    public int Lookup(ReadOnlySpan<EntityKey> keys, Span<LocalRecordRef> records)
+    internal int Lookup(ReadOnlySpan<EntityKey> keys, Span<LocalRecordRef> records)
     {
         records = records[..keys.Length];
         var index = Volatile.Read(ref _index);
@@ -306,7 +310,7 @@ public sealed class TableVersion
     /// <para>The per-row loops are unchecked; see <see cref="FillCore"/> for what makes that safe whatever the caller's
     /// spans point at.</para>
     /// </remarks>
-    public int Fill(
+    internal int Fill(
         int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ColumnBuffer target, in ScalarValue absent, Span<ulong> filled = default)
     {
         var read = new LocalFieldRead(field, target, absent);
@@ -325,7 +329,7 @@ public sealed class TableVersion
     /// were replaced by its absent value.</param>
     /// <remarks>Fill bits are left to the caller: every row in <paramref name="rows"/> is filled for every field, so one
     /// bitmap of the rows can be OR-ed into each slot's fill bitmap.</remarks>
-    public void Fill(ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ReadOnlySpan<LocalFieldRead> reads, Span<int> nonFinite = default)
+    internal void Fill(ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ReadOnlySpan<LocalFieldRead> reads, Span<int> nonFinite = default)
     {
         if (!nonFinite.IsEmpty && nonFinite.Length < reads.Length)
         {
@@ -431,7 +435,7 @@ public sealed class TableVersion
     /// Rows per block of the multi-field <see cref="Fill(ReadOnlySpan{LocalRecordRef}, ReadOnlySpan{int}, ReadOnlySpan{LocalFieldRead}, Span{int})"/>:
     /// the headers and scalar values of 128 records (two or three cache lines each) fit the L1 data cache.
     /// </summary>
-    public const int FillBlock = 128;
+    internal const int FillBlock = 128;
 
     private const int StringMemoSize = 256;
     private const int StringMemoLength = 2 * StringMemoSize;
@@ -552,7 +556,7 @@ public sealed class TableVersion
     }
 
     /// <summary>True when the record exists and has a value for the field.</summary>
-    public bool HasValue(int field, in LocalRecordRef record)
+    internal bool HasValue(int field, in LocalRecordRef record)
     {
         CheckField(field);
         return record.Page is { } page && IsValid(page, record.Offset, field);
@@ -578,7 +582,7 @@ public sealed class TableVersion
     }
 
     /// <summary>The record's version: the event version (<c>local</c>) or the write time (<c>cache</c>).</summary>
-    public long VersionOf(in LocalRecordRef record) => record.Page is { } page
+    internal long VersionOf(in LocalRecordRef record) => record.Page is { } page
         ? BinaryPrimitives.ReadInt64LittleEndian(page.AsSpan(record.Offset + RecordLayout.VersionOffset))
         : throw new ArgumentException("The record was not found.", nameof(record));
 
@@ -587,7 +591,7 @@ public sealed class TableVersion
     /// or missing. For cold paths (context features, replay recording, tests): vectors, lists and text are copied. Values
     /// are as stored: NaN and ±∞ are not replaced.
     /// </summary>
-    public ScalarValue Read(int field, in LocalRecordRef record)
+    internal ScalarValue Read(int field, in LocalRecordRef record)
     {
         if (!HasValue(field, record))
         {
