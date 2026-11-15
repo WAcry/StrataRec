@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
@@ -141,7 +143,7 @@ public sealed partial class FeatureFetcher
     /// <summary>
     /// Starts fetching context features (and computes context-derived ones) concurrently with recall (design 6.8).
     /// </summary>
-    public void StartContextFetch(IEnumerable<int> features, CancellationToken cancellationToken)
+    public void StartContextFetch(ReadOnlySpan<int> features, CancellationToken cancellationToken)
     {
         var closure = Closure(features, out var member);
         if (!AnyContext(closure))
@@ -162,7 +164,7 @@ public sealed partial class FeatureFetcher
     /// Starts wave-0 fetches for features the next segment needs (called after each fetch barrier, design 5.4). Only
     /// the listed features (and their dependencies) are fetched, not every member of their groups (design 6.8).
     /// </summary>
-    public void Prefetch(IEnumerable<int> features, CancellationToken cancellationToken)
+    public void Prefetch(ReadOnlySpan<int> features, CancellationToken cancellationToken)
     {
         var closure = Closure(features, out var member);
         var groups = GroupsOf(closure, wave: 0);
@@ -194,14 +196,21 @@ public sealed partial class FeatureFetcher
     /// fetches, fetches for whatever is still missing, and the derived features whose inputs are now complete — so a
     /// derived foreign key exists before the groups keyed by it are fetched.
     /// </summary>
-    public async ValueTask<FeatureFillResult> EnsureAsync(IReadOnlyCollection<int> features, CancellationToken cancellationToken)
+    /// <remarks>The features are read before this returns (a span: a node's read features, a list of the request's), so
+    /// the caller may reuse their storage while the fill is awaited.</remarks>
+    public ValueTask<FeatureFillResult> EnsureAsync(ReadOnlySpan<int> features, CancellationToken cancellationToken)
     {
-        if (features.Count == 0)
+        if (features.IsEmpty)
         {
-            return new FeatureFillResult(FeatureState.Ok);
+            return new ValueTask<FeatureFillResult>(new FeatureFillResult(FeatureState.Ok));
         }
 
         var closure = Closure(features, out var member);
+        return EnsureClosureAsync(closure, member, cancellationToken);
+    }
+
+    private async ValueTask<FeatureFillResult> EnsureClosureAsync(IndexList closure, bool[] member, CancellationToken cancellationToken)
+    {
         if (_contextTask is not null && AnyContext(closure))
         {
             await _contextTask.ConfigureAwait(false);
@@ -281,7 +290,7 @@ public sealed partial class FeatureFetcher
     /// in arrays rented from the request memory: an ensure runs for every node, and its closure was a set, a list and a
     /// boxed enumerator each time. <paramref name="member"/> marks the closure by feature index.
     /// </summary>
-    private IndexList Closure(IEnumerable<int> features, out bool[] member)
+    private IndexList Closure(ReadOnlySpan<int> features, out bool[] member)
     {
         var length = Math.Max(1, _plan.Features.Count);
         var order = _memory.Rent<int>(length);
@@ -344,7 +353,7 @@ public sealed partial class FeatureFetcher
     /// </summary>
     private int[]? FeaturesToFetch(FetchGroup group, bool[] member, bool skipInFlight)
     {
-        var members = group.FeatureIndices;
+        var members = group.FeatureIndexArray;
         Span<int> selected = members.Length <= 128 ? stackalloc int[members.Length] : _memory.Rent<int>(members.Length);
         var count = SelectNeeded(group, member, skipInFlight, selected);
         if (count == 0)
@@ -391,9 +400,9 @@ public sealed partial class FeatureFetcher
     /// <summary>Connector field bindings for a subset of a group's members; field index i is <c>features[i]</c>.</summary>
     private CompiledFieldBinding[] FieldBindings(FetchGroup group, int[] features)
     {
-        if (features == group.FeatureIndices)
+        if (features == group.FeatureIndexArray)
         {
-            return group.Fields;
+            return group.FieldArray;
         }
 
         var fields = new CompiledFieldBinding[features.Length];
@@ -576,10 +585,11 @@ public sealed partial class FeatureFetcher
         {
             // A replayed call answers at once from the recording: no connector, no wait, no metrics or health (design 13.4).
             writerHeld = false;
-            return new ValueTask<FetchStatus>(_hook.Replay(group, batch, fields, writer));
+            return new ValueTask<FetchStatus>(_hook.Replay(group, batch, ImmutableCollectionsMarshal.AsImmutableArray(fields), writer));
         }
 
-        return ConnectorCall(group, batch, fields, writer, budgetMs, _hook.Begin(group, batch, fields), cancellation!, cancellationToken, out writerHeld);
+        var sequence = _hook.Begin(group, batch, ImmutableCollectionsMarshal.AsImmutableArray(fields));
+        return ConnectorCall(group, batch, fields, writer, budgetMs, sequence, cancellation!, cancellationToken, out writerHeld);
     }
 
     /// <summary>Records a chunk the request had no time left to send (or was cancelled before), so a replay fails it the same way.</summary>
@@ -587,7 +597,8 @@ public sealed partial class FeatureFetcher
     {
         if (_hook is { Replays: false } recorder)
         {
-            recorder.Record(new FeatureCallInfo(group, batch, fields, recorder.Begin(group, batch, fields), false, status, outcome, TimeSpan.Zero), null);
+            var shared = ImmutableCollectionsMarshal.AsImmutableArray(fields);
+            recorder.Record(new FeatureCallInfo(group, batch, shared, recorder.Begin(group, batch, shared), false, status, outcome, TimeSpan.Zero), null);
         }
     }
 
@@ -757,7 +768,7 @@ public sealed partial class FeatureFetcher
         if (sequence != NotRecorded)
         {
             _hook?.Record(
-                new FeatureCallInfo(group, batch, fields, sequence, true, status, result, duration),
+                new FeatureCallInfo(group, batch, ImmutableCollectionsMarshal.AsImmutableArray(fields), sequence, true, status, result, duration),
                 result is IoOutcome.Ok or IoOutcome.Partial ? writer : null);
         }
 
@@ -1319,7 +1330,7 @@ public sealed partial class FeatureFetcher
 
         if (count == group.FeatureIndices.Length)
         {
-            return group.FeatureIndices;
+            return group.FeatureIndexArray;
         }
 
         var selected = new int[count];

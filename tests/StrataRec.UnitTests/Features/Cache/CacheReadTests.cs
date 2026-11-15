@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
@@ -550,7 +551,7 @@ public class CacheReadTests
 
         public bool Replays => false;
 
-        public int Begin(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields) => Interlocked.Increment(ref _sequence) - 1;
+        public int Begin(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields) => Interlocked.Increment(ref _sequence) - 1;
 
         public void Record(in FeatureCallInfo call, IStagedFeatureValues? values)
         {
@@ -569,7 +570,7 @@ public class CacheReadTests
             Calls.Enqueue(new RecordedRead(keys, call.Status, call.Outcome, recorded));
         }
 
-        public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer) =>
+        public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields, IFeatureBatchWriter writer) =>
             throw new InvalidOperationException("A recorder does not replay.");
 
         public IFeatureCallHook Replayer() => new ReplayHook(this);
@@ -578,13 +579,13 @@ public class CacheReadTests
         {
             public bool Replays => true;
 
-            public int Begin(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields) => 0;
+            public int Begin(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields) => 0;
 
             public void Record(in FeatureCallInfo call, IStagedFeatureValues? values)
             {
             }
 
-            public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer)
+            public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields, IFeatureBatchWriter writer)
             {
                 var keys = batch.CandidateKeys.ToArray().Select(k => k.Int64Value).ToArray();
                 var call = recording.Calls.Single(c => c.Keys.SequenceEqual(keys));

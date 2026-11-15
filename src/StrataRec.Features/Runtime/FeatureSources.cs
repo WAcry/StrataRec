@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
@@ -122,7 +124,7 @@ public sealed class LocalGroupTable
     {
         Spec = spec;
         Table = table;
-        TableFields = tableFields;
+        TableFields = ImmutableCollectionsMarshal.AsImmutableArray(tableFields);
     }
 
     public LocalTableSpec Spec { get; }
@@ -131,7 +133,7 @@ public sealed class LocalGroupTable
     public LocalFeatureTable Table { get; }
 
     /// <summary>Table field of each group member: <c>TableFields[i]</c> holds <see cref="FetchGroup.Fields"/>[i].</summary>
-    public int[] TableFields { get; }
+    public ImmutableArray<int> TableFields { get; }
 }
 
 /// <summary>

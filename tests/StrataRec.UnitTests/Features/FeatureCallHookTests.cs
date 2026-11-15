@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Types;
 using StrataRec.Features.Connectors;
@@ -192,7 +193,7 @@ public class FeatureCallHookTests
 
         public ConcurrentQueue<FeatureCallInfo> Recorded { get; } = new();
 
-        public int Begin(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields) => 0;
+        public int Begin(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields) => 0;
 
         public void Record(in FeatureCallInfo call, IStagedFeatureValues? values)
         {
@@ -200,7 +201,7 @@ public class FeatureCallHookTests
             throw new InvalidOperationException("recorder failed");
         }
 
-        public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer) =>
+        public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields, IFeatureBatchWriter writer) =>
             throw new NotSupportedException();
     }
 
@@ -215,7 +216,7 @@ public class FeatureCallHookTests
 
         public TaskCompletionSource<Call> FirstRecorded { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public int Begin(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields) => Interlocked.Increment(ref _sequence) - 1;
+        public int Begin(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields) => Interlocked.Increment(ref _sequence) - 1;
 
         public void Record(in FeatureCallInfo call, IStagedFeatureValues? values)
         {
@@ -236,9 +237,9 @@ public class FeatureCallHookTests
             FirstRecorded.TrySetResult(recordedCall);
         }
 
-        public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer)
+        public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields, IFeatureBatchWriter writer)
         {
-            ScriptedConnector.WriteAll(batch, fields, writer, (key, _) => key * 10.0);
+            ScriptedConnector.WriteAll(batch, fields.ToArray(), writer, (key, _) => key * 10.0);
             return FetchStatus.Ok;
         }
     }

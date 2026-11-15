@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using System.Runtime.InteropServices;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Diagnostics;
@@ -31,8 +33,17 @@ public sealed class FeatureRuntimeInfo
     /// <summary>Compiled expression of a derived feature.</summary>
     public CompiledExpression? Expression { get; init; }
 
-    /// <summary>Features that must be available first: derived inputs, or the foreign key of the entity.</summary>
-    public int[] Dependencies { get; set; } = Array.Empty<int>();
+    /// <summary>
+    /// Features that must be available first: derived inputs (given when the feature is registered), or the foreign key of
+    /// the entity (set by <see cref="FeaturePlan.Create"/> when it groups the physical features).
+    /// </summary>
+    public ImmutableArray<int> Dependencies
+    {
+        get => _dependencies;
+        init => _dependencies = value;
+    }
+
+    private ImmutableArray<int> _dependencies = [];
 
     /// <summary>Fetch group of a physical feature (-1 for derived).</summary>
     public int GroupIndex { get; internal set; } = -1;
@@ -74,6 +85,9 @@ public sealed class FeatureRuntimeInfo
 
     private KeyValuePair<string, object?>[]? _nonFiniteTags;
     private SourceValueTags? _valueTags;
+
+    /// <summary>A physical feature of an entity keyed by a feature depends on that key feature alone.</summary>
+    internal void DependOnKey(int keyFeature) => _dependencies = [keyFeature];
 }
 
 /// <summary>The two tag sets of <see cref="StrataRecMetrics.SourceValues"/> for one feature of a source.</summary>
@@ -119,9 +133,20 @@ public sealed class FetchGroup
     /// <summary>Context value providing the context key (context and cross entities), or -1.</summary>
     public int ContextKeyId { get; init; } = -1;
 
-    public required int[] FeatureIndices { get; init; }
+    /// <summary>Feature indices of the group's members, in field order (by feature name).</summary>
+    public required ImmutableArray<int> FeatureIndices { get; init; }
 
-    public required CompiledFieldBinding[] Fields { get; init; }
+    /// <summary>Connector field bindings of the members: <c>Fields[i]</c> is the field of <c>FeatureIndices[i]</c>.</summary>
+    public required ImmutableArray<CompiledFieldBinding> Fields { get; init; }
+
+    /// <summary>
+    /// The arrays behind <see cref="FeatureIndices"/> and <see cref="Fields"/>, for the fetcher, which passes a whole group's
+    /// members around as arrays (and recognizes them by reference); it never writes them.
+    /// </summary>
+    internal int[] FeatureIndexArray => ImmutableCollectionsMarshal.AsArray(FeatureIndices)!;
+
+    /// <inheritdoc cref="FeatureIndexArray"/>
+    internal CompiledFieldBinding[] FieldArray => ImmutableCollectionsMarshal.AsArray(Fields)!;
 
     public int Wave { get; internal set; }
 
@@ -265,8 +290,8 @@ public sealed class FeaturePlan
                 Shape = shape,
                 KeyFeatureIndex = keyFeature,
                 ContextKeyId = entity.ContextKeyInput is null ? -1 : contextIdOfRequestInput(entity.ContextKeyInput),
-                FeatureIndices = featureIndices,
-                Fields = fields,
+                FeatureIndices = ImmutableCollectionsMarshal.AsImmutableArray(featureIndices),
+                Fields = ImmutableCollectionsMarshal.AsImmutableArray(fields),
             };
             for (var i = 0; i < members.Length; i++)
             {
@@ -274,7 +299,7 @@ public sealed class FeaturePlan
                 members[i].FieldIndex = i;
                 if (keyFeature >= 0)
                 {
-                    members[i].Dependencies = new[] { keyFeature };
+                    members[i].DependOnKey(keyFeature);
                 }
             }
 
@@ -297,7 +322,13 @@ public sealed class FeaturePlan
     public List<int> Closure(IEnumerable<int> roots)
     {
         var order = new int[Features.Count];
-        var count = Closure(roots, order, new bool[Features.Count]);
+        var seen = new bool[Features.Count];
+        var count = 0;
+        foreach (var r in roots)
+        {
+            Visit(r, order, seen, ref count);
+        }
+
         var result = new List<int>(count);
         for (var i = 0; i < count; i++)
         {
@@ -310,35 +341,15 @@ public sealed class FeaturePlan
     /// <summary>
     /// <see cref="Closure(IEnumerable{int})"/> into caller-provided buffers (the request's rented arrays), so a request
     /// computes its fetch closures without allocating: <paramref name="order"/> receives the closure, of the returned
-    /// length; <paramref name="seen"/> must be all false and is left marking the closure.
+    /// length; <paramref name="seen"/> must be all false and is left marking the closure. The roots are a span, so a
+    /// node's read features (an immutable array) and a request's lists are read without boxing an enumerator.
     /// </summary>
-    internal int Closure(IEnumerable<int> roots, int[] order, bool[] seen)
+    internal int Closure(ReadOnlySpan<int> roots, int[] order, bool[] seen)
     {
         var count = 0;
-        switch (roots)
+        foreach (var r in roots)
         {
-            // Typed loops: an interface foreach over an array or list boxes its enumerator.
-            case int[] array:
-                foreach (var r in array)
-                {
-                    Visit(r, order, seen, ref count);
-                }
-
-                break;
-            case List<int> list:
-                foreach (var r in list)
-                {
-                    Visit(r, order, seen, ref count);
-                }
-
-                break;
-            default:
-                foreach (var r in roots)
-                {
-                    Visit(r, order, seen, ref count);
-                }
-
-                break;
+            Visit(r, order, seen, ref count);
         }
 
         return count;

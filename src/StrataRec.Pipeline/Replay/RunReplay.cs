@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Columns;
@@ -158,13 +159,13 @@ public sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    public int Begin(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields) => 0;
+    public int Begin(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields) => 0;
 
     public void Record(in FeatureCallInfo call, IStagedFeatureValues? values)
     {
     }
 
-    public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer)
+    public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields, IFeatureBatchWriter writer)
     {
         lock (_gate)
         {
@@ -355,7 +356,7 @@ public sealed class RunReplay : IFeatureCallHook
     internal ReplayAttemptRecord? NextAttempt(string node) =>
         _attempts.TryGetValue(node, out var attempts) && attempts.Count > 0 ? attempts.Dequeue() : null;
 
-    private FetchStatus ReplayExact(FeatureEntry entry, in EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer)
+    private FetchStatus ReplayExact(FeatureEntry entry, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields, IFeatureBatchWriter writer)
     {
         var source = entry.Source;
         var rows = batch.KeyCount;
@@ -411,7 +412,7 @@ public sealed class RunReplay : IFeatureCallHook
     /// field. A call carrying only some is not this call: its other fields may well be in other successful calls (the
     /// configuration regrouped the fetch), so the call is synthesized value by value instead, and nothing is consumed.
     /// </summary>
-    private FeatureEntry? TakeFeatureCall(string source, string entity, KeyShape shape, in EntityKey context, ReadOnlySpan<EntityKey> keys, CompiledFieldBinding[] fields)
+    private FeatureEntry? TakeFeatureCall(string source, string entity, KeyShape shape, in EntityKey context, ReadOnlySpan<EntityKey> keys, ImmutableArray<CompiledFieldBinding> fields)
     {
         if (!_featureCalls.TryGetValue(Signature(source, entity, shape, context, keys), out var candidates))
         {
@@ -432,7 +433,7 @@ public sealed class RunReplay : IFeatureCallHook
 
         return null;
 
-        static bool HasFields(FeatureEntry entry, CompiledFieldBinding[] fields)
+        static bool HasFields(FeatureEntry entry, ImmutableArray<CompiledFieldBinding> fields)
         {
             foreach (var field in fields)
             {

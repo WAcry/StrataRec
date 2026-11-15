@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Values;
 using StrataRec.Features.Connectors;
@@ -9,7 +10,7 @@ namespace StrataRec.Features.Runtime;
 /// </summary>
 /// <param name="Group">Source and entity the call fetched from.</param>
 /// <param name="Batch">The keys; valid only during <see cref="IFeatureCallHook.Record"/> (they live in pooled buffers).</param>
-/// <param name="Fields">Requested fields; staging field i is <c>Fields[i]</c>.</param>
+/// <param name="Fields">Requested fields; staging field i is <c>Fields[i]</c>. Read-only: they may be the plan's own.</param>
 /// <param name="Sequence">Start order within the request, from <see cref="IFeatureCallHook.Begin"/>.</param>
 /// <param name="Sent">False when the call was not sent: the fetch had no time left, or the caller had cancelled, before it.</param>
 /// <param name="Status">What the request did with the call (a timeout is a failed status).</param>
@@ -18,7 +19,7 @@ namespace StrataRec.Features.Runtime;
 public readonly record struct FeatureCallInfo(
     FetchGroup Group,
     EntityKeyBatch Batch,
-    CompiledFieldBinding[] Fields,
+    ImmutableArray<CompiledFieldBinding> Fields,
     int Sequence,
     bool Sent,
     FetchStatus Status,
@@ -54,7 +55,7 @@ public interface IFeatureCallHook
     /// holds it as in flight, so a recording taken when the request is aborted lists it as outstanding.
     /// </summary>
     /// <param name="batch">The keys; valid only during the call (they live in pooled buffers).</param>
-    int Begin(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields);
+    int Begin(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields);
 
     /// <summary>
     /// Records a finished call. <paramref name="values"/> is non-null only when the call answered within its budget
@@ -64,5 +65,5 @@ public interface IFeatureCallHook
     void Record(in FeatureCallInfo call, IStagedFeatureValues? values);
 
     /// <summary>Answers a call from the recording: writes recorded values into <paramref name="writer"/> and returns the recorded status.</summary>
-    FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer);
+    FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields, IFeatureBatchWriter writer);
 }

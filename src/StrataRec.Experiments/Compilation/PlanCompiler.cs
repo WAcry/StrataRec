@@ -1,5 +1,8 @@
+using System.Collections.Frozen;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -104,7 +107,7 @@ internal sealed partial class UnifiedCompilation
     private readonly string _pipelineLabel;
 
     private readonly List<string> _layers = new();
-    private readonly List<(string Id, int Layer, int[] Arms)> _experiments = new();
+    private readonly List<(string Id, int Layer, ImmutableArray<int> Arms)> _experiments = new();
     private readonly List<ArmPatch> _arms = new();
     private readonly SortedDictionary<string, NodeVariants> _variants = new(StringComparer.Ordinal);
     private readonly SortedDictionary<string, TapVariants> _taps = new(StringComparer.Ordinal);
@@ -298,7 +301,7 @@ internal sealed partial class UnifiedCompilation
                 _arms.Add(arm);
             }
 
-            _experiments.Add((e.ExperimentId, layer, armIndices));
+            _experiments.Add((e.ExperimentId, layer, ImmutableCollectionsMarshal.AsImmutableArray(armIndices)));
         }
     }
 
@@ -424,7 +427,7 @@ internal sealed partial class UnifiedCompilation
         }
 
         leafExperiments = new Dictionary<int, SortedSet<int>>();
-        var overrides = new (int, ScalarValue)[_arms.Count][];
+        var overrides = new ImmutableArray<(int, ScalarValue)>[_arms.Count];
         foreach (var arm in _arms)
         {
             var list = new List<(int, ScalarValue)>();
@@ -462,10 +465,10 @@ internal sealed partial class UnifiedCompilation
                 }
             }
 
-            overrides[arm.Index] = list.ToArray();
+            overrides[arm.Index] = [.. list];
         }
 
-        return new ParamTable(baseline, overrides);
+        return new ParamTable(ImmutableCollectionsMarshal.AsImmutableArray(baseline), ImmutableCollectionsMarshal.AsImmutableArray(overrides));
     }
 
     // ------------------------------------------------------------------ node variants (design 12.3)
@@ -477,14 +480,15 @@ internal sealed partial class UnifiedCompilation
     internal class VariantSpace
     {
         /// <summary>Touching layers L(n), ascending (patches apply in this order).</summary>
-        public required int[] Layers { get; init; }
+        public required ImmutableArray<int> Layers { get; init; }
 
         /// <summary>Per touching layer: the arms modifying the item; local index = position + 1.</summary>
         public required int[][] LocalArms { get; init; }
 
-        public required Dictionary<int, int>[] LocalIndex { get; init; }
+        /// <summary>Per touching layer: global arm index → local index. Shared with the item's slots in the plan.</summary>
+        public required ImmutableArray<FrozenDictionary<int, int>> LocalIndex { get; init; }
 
-        public required int[] Radix { get; init; }
+        public required ImmutableArray<int> Radix { get; init; }
 
         public int IndexOf(in RequestArms arms)
         {
@@ -567,7 +571,8 @@ internal sealed partial class UnifiedCompilation
         public required bool[] Failed { get; init; }
     }
 
-    private readonly record struct Space(int[] Layers, int[][] LocalArms, Dictionary<int, int>[] LocalIndex, int[] Radix, int Count);
+    private readonly record struct Space(
+        ImmutableArray<int> Layers, int[][] LocalArms, ImmutableArray<FrozenDictionary<int, int>> LocalIndex, ImmutableArray<int> Radix, int Count);
 
     /// <summary>L(x) and its arms for the arms that touch an item; null (after an error) when C(x) exceeds the limit.</summary>
     private Space? BuildSpace(Func<ArmPatch, bool> touches, string what, string pointer)
@@ -589,7 +594,7 @@ internal sealed partial class UnifiedCompilation
 
         var layers = new int[byLayer.Count];
         var localArms = new int[byLayer.Count][];
-        var localIndex = new Dictionary<int, int>[byLayer.Count];
+        var localIndex = new FrozenDictionary<int, int>[byLayer.Count];
         var radix = new int[byLayer.Count];
         long combinations = 1;
         var li = 0;
@@ -597,11 +602,13 @@ internal sealed partial class UnifiedCompilation
         {
             layers[li] = layer;
             localArms[li] = arms.ToArray();
-            localIndex[li] = new Dictionary<int, int>();
+            var local = new Dictionary<int, int>();
             for (var i = 0; i < arms.Count; i++)
             {
-                localIndex[li][arms[i]] = i + 1;
+                local[arms[i]] = i + 1;
             }
+
+            localIndex[li] = local.ToFrozenDictionary();
 
             radix[li] = arms.Count + 1;
 
@@ -625,7 +632,9 @@ internal sealed partial class UnifiedCompilation
             return null;
         }
 
-        return new Space(layers, localArms, localIndex, radix, (int)combinations);
+        return new Space(
+            ImmutableCollectionsMarshal.AsImmutableArray(layers), localArms, ImmutableCollectionsMarshal.AsImmutableArray(localIndex),
+            ImmutableCollectionsMarshal.AsImmutableArray(radix), (int)combinations);
     }
 
     /// <summary>Baseline definition with each assigned arm's <c>/section/id</c> patch applied in layer order.</summary>
@@ -935,7 +944,7 @@ internal sealed partial class UnifiedCompilation
                 TouchingLayers = v.Layers,
                 LocalIndex = v.LocalIndex,
                 Radix = v.Radix,
-                Variants = v.Variants,
+                Variants = ImmutableArray.Create(v.Variants),
             });
         }
 
@@ -945,10 +954,10 @@ internal sealed partial class UnifiedCompilation
             groups[i] = _builder.FunnelGroups[i];
         }
 
-        return new LogPlan { Groups = groups, Taps = slots.ToArray() };
+        return new LogPlan { Groups = ImmutableCollectionsMarshal.AsImmutableArray(groups), Taps = [.. slots] };
     }
 
-    private (TimelineSlot[] Timeline, Dictionary<string, TimelineSlot> Fallbacks) BuildSlots()
+    private (ImmutableArray<TimelineSlot> Timeline, Dictionary<string, TimelineSlot> Fallbacks) BuildSlots()
     {
         var timeline = new List<TimelineSlot>();
         var fallbacks = new Dictionary<string, TimelineSlot>(StringComparer.Ordinal);
@@ -956,7 +965,7 @@ internal sealed partial class UnifiedCompilation
         {
             if (v.IsFallback)
             {
-                fallbacks[nodeId] = NewSlot(v, 0, (CompiledNode?[])v.Variants.Clone());
+                fallbacks[nodeId] = NewSlot(v, 0, ImmutableArray.Create(v.Variants));
                 continue;
             }
 
@@ -978,15 +987,15 @@ internal sealed partial class UnifiedCompilation
                     selected[i] = v.Variants[i]?.Order == order ? v.Variants[i] : null;
                 }
 
-                timeline.Add(NewSlot(v, order, selected));
+                timeline.Add(NewSlot(v, order, ImmutableCollectionsMarshal.AsImmutableArray(selected)));
             }
         }
 
         timeline.Sort(static (a, b) => a.Order != b.Order ? a.Order.CompareTo(b.Order) : string.CompareOrdinal(a.NodeId, b.NodeId));
-        return (timeline.ToArray(), fallbacks);
+        return ([.. timeline], fallbacks);
     }
 
-    private static TimelineSlot NewSlot(NodeVariants v, int order, CompiledNode?[] variants) => new()
+    private static TimelineSlot NewSlot(NodeVariants v, int order, ImmutableArray<CompiledNode?> variants) => new()
     {
         Order = order,
         NodeId = v.NodeId,
@@ -998,7 +1007,8 @@ internal sealed partial class UnifiedCompilation
 
     // ------------------------------------------------------------------ trigger sites (design 12.6)
 
-    private void AssignTriggerSites(TimelineSlot[] timeline, Dictionary<string, TimelineSlot> fallbacks, OutputPlan? output, Dictionary<int, SortedSet<int>> leafExperiments)
+    private void AssignTriggerSites(
+        ImmutableArray<TimelineSlot> timeline, Dictionary<string, TimelineSlot> fallbacks, OutputPlan? output, Dictionary<int, SortedSet<int>> leafExperiments)
     {
         foreach (var slot in timeline)
         {
@@ -1034,7 +1044,7 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    private static int[] ExperimentsReading(IReadOnlyList<int> leaves, Dictionary<int, SortedSet<int>> leafExperiments)
+    private static ImmutableArray<int> ExperimentsReading(IReadOnlyList<int> leaves, Dictionary<int, SortedSet<int>> leafExperiments)
     {
         SortedSet<int>? result = null;
         foreach (var leaf in leaves)
@@ -1045,7 +1055,7 @@ internal sealed partial class UnifiedCompilation
             }
         }
 
-        return result is null ? Array.Empty<int>() : ToArray(result);
+        return result is null ? [] : ImmutableCollectionsMarshal.AsImmutableArray(ToArray(result));
     }
 
     private void AssignSite(TimelineSlot slot, bool isFallback)
@@ -1084,7 +1094,7 @@ internal sealed partial class UnifiedCompilation
                     break;
                 }
 
-                var source = node.Definition["when"]!.GetValue<string>();
+                var source = node.Definition.GetProperty("when").GetString()!;
                 if (!sources.Contains(source))
                 {
                     sources.Add(source);
@@ -1113,8 +1123,8 @@ internal sealed partial class UnifiedCompilation
             conditions.Add(condition);
         }
 
-        slot.SiteExperiments = sites.ToArray();
-        slot.SiteConditions = conditions.ToArray();
+        slot.SiteExperiments = [.. sites];
+        slot.SiteConditions = [.. conditions];
     }
 
     private static string JoinOr(List<string> sources)
@@ -1259,7 +1269,7 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    private LayerInfo[] LayerInfos()
+    private ImmutableArray<LayerInfo> LayerInfos()
     {
         var layers = new LayerInfo[_layers.Count];
         for (var i = 0; i < layers.Length; i++)
@@ -1267,10 +1277,10 @@ internal sealed partial class UnifiedCompilation
             layers[i] = new LayerInfo(i, _layers[i]);
         }
 
-        return layers;
+        return ImmutableCollectionsMarshal.AsImmutableArray(layers);
     }
 
-    private ExperimentInfo[] ExperimentInfos()
+    private ImmutableArray<ExperimentInfo> ExperimentInfos()
     {
         var experiments = new ExperimentInfo[_experiments.Count];
         for (var i = 0; i < experiments.Length; i++)
@@ -1279,10 +1289,10 @@ internal sealed partial class UnifiedCompilation
             experiments[i] = new ExperimentInfo(i, id, layer, arms);
         }
 
-        return experiments;
+        return ImmutableCollectionsMarshal.AsImmutableArray(experiments);
     }
 
-    private ArmInfo[] ArmInfos()
+    private ImmutableArray<ArmInfo> ArmInfos()
     {
         var arms = new ArmInfo[_arms.Count];
         foreach (var arm in _arms)
@@ -1290,7 +1300,7 @@ internal sealed partial class UnifiedCompilation
             arms[arm.Index] = new ArmInfo(arm.Index, arm.Id, arm.ArmName, arm.ExperimentIndex, arm.LayerIndex);
         }
 
-        return arms;
+        return ImmutableCollectionsMarshal.AsImmutableArray(arms);
     }
 
     private List<NodeVariantReport> NodeReports()

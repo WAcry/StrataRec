@@ -101,7 +101,7 @@ public sealed class ParamLeaf
     public IReadOnlyList<ScalarValue>? Enum { get; init; }
 
     /// <summary>Baseline value; missing for leaves introduced by an experiment arm.</summary>
-    public ScalarValue Baseline { get; set; }
+    public ScalarValue Baseline { get; internal set; }
 
     /// <summary>For leaves of a map parameter: the map's name (e.g. <c>recall_quotas</c>).</summary>
     public string? MapName { get; init; }
@@ -161,6 +161,8 @@ public sealed class ParamLeaf
 /// The name → id/slot layout of a compiled plan (design 4.2): logical columns, physical slots, context fields and
 /// parameter leaves. Built once per plan; all requests share it.
 /// </summary>
+/// <remarks>It is filled while the plan compiles, by the plan builder and the operators' compile context (so its mutators
+/// are internal); afterwards it is read-only like the rest of the plan.</remarks>
 public sealed class PlanSchema
 {
     private readonly Dictionary<string, LogicalColumn> _columns = new(StringComparer.Ordinal);
@@ -223,7 +225,7 @@ public sealed class PlanSchema
     /// </summary>
     /// <param name="qualifiedName">The name as expressions write it: <c>col.score.x</c>, <c>ctx.request.user_id</c>,
     /// <c>param.coarse_k</c> (for a map parameter, every leaf <c>param.quotas.*</c> too).</param>
-    public void MarkUnusable(string qualifiedName) => _unusable.Add(qualifiedName);
+    internal void MarkUnusable(string qualifiedName) => _unusable.Add(qualifiedName);
 
     /// <summary>True for a name recorded with <see cref="MarkUnusable"/>, a version of such a column (<c>col.x@node</c>),
     /// or a leaf of such a map parameter.</summary>
@@ -260,13 +262,13 @@ public sealed class PlanSchema
     }
 
     /// <param name="declared">The type as declared; expressions see its promoted form.</param>
-    public ContextField AddRequestInput(string name, ColumnType declared) =>
+    internal ContextField AddRequestInput(string name, ColumnType declared) =>
         AddContext("request." + name, declared.Promoted(), ContextFieldKind.RequestInput, inputType: declared);
 
-    public ContextField AddContextFeature(string featureName, ColumnType type, int featureIndex) =>
+    internal ContextField AddContextFeature(string featureName, ColumnType type, int featureIndex) =>
         AddContext(featureName, type, ContextFieldKind.Feature, featureIndex);
 
-    public LogicalColumn AddFeatureColumn(string featureName, ColumnType type, int featureIndex, string pointer)
+    internal LogicalColumn AddFeatureColumn(string featureName, ColumnType type, int featureIndex, string pointer)
     {
         var slot = _slotTypes.Count;
         _slotTypes.Add(type);
@@ -282,7 +284,7 @@ public sealed class PlanSchema
         });
     }
 
-    public LogicalColumn DeclareOutputColumn(string name, ColumnType type, bool flow, bool hasDefault, ScalarValue defaultValue, string pointer, bool isImplicit = false) =>
+    internal LogicalColumn DeclareOutputColumn(string name, ColumnType type, bool flow, bool hasDefault, ScalarValue defaultValue, string pointer, bool isImplicit = false) =>
         AddColumn(new LogicalColumn
         {
             Id = _columnList.Count,
@@ -296,7 +298,7 @@ public sealed class PlanSchema
             Implicit = isImplicit,
         });
 
-    public ParamLeaf AddParamLeaf(string name, ColumnType type, double? min, double? max, IReadOnlyList<ScalarValue>? enumValues, ScalarValue baseline, string pointer, string? mapName = null)
+    internal ParamLeaf AddParamLeaf(string name, ColumnType type, double? min, double? max, IReadOnlyList<ScalarValue>? enumValues, ScalarValue baseline, string pointer, string? mapName = null)
     {
         var leaf = new ParamLeaf
         {
@@ -315,10 +317,10 @@ public sealed class PlanSchema
         return leaf;
     }
 
-    public void AddLookupTable(ILookupTable table) => _tables[table.Name] = table;
+    internal void AddLookupTable(ILookupTable table) => _tables[table.Name] = table;
 
     /// <summary>The slot holding <paramref name="node"/>'s version of an output column (allocated on first use).</summary>
-    public int GetNodeSlot(string node, LogicalColumn column)
+    internal int GetNodeSlot(string node, LogicalColumn column)
     {
         if (!_nodeSlots.TryGetValue((node, column.Id), out var slot))
         {
@@ -334,7 +336,7 @@ public sealed class PlanSchema
     /// The shared slot written by row sources: each row source writes the rows it appends (design 4.6), so all of them
     /// share one slot per column.
     /// </summary>
-    public int GetRowSourceSlot(LogicalColumn column)
+    internal int GetRowSourceSlot(LogicalColumn column)
     {
         if (!_rowSourceSlots.TryGetValue(column.Id, out var slot))
         {

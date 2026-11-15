@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
@@ -337,7 +339,7 @@ public sealed class PlanBuilder
             NodeId = nodeId,
             Index = _nodes.Count,
             Pointer = pointer,
-            Definition = definition,
+            Definition = JsonSerializer.SerializeToElement(definition),
             DefinitionHash = CanonicalJson.Hash(definition),
             Descriptor = factory.Descriptor,
             Operator = op,
@@ -358,7 +360,7 @@ public sealed class PlanBuilder
             VersionReads = ToSortedArray(context.VersionReads),
             Outputs = ToArray(context.Outputs),
             Requires = ToSortedArray(context.Requires),
-            Declares = context.Declares.ToArray(),
+            Declares = [.. context.Declares],
         };
         _nodes.Add(node);
         return node;
@@ -613,7 +615,7 @@ public sealed class PlanBuilder
         return new CompiledTap
         {
             TapId = tapId,
-            Definition = definition,
+            Definition = JsonSerializer.SerializeToElement(definition),
             Group = group,
             Delivery = delivery,
             AttachAfter = spec.Attach.After,
@@ -621,15 +623,15 @@ public sealed class PlanBuilder
             Filter = filter,
             Rate = spec.Rows?.Rate ?? 1.0,
             MaxRows = spec.Rows?.MaxRows,
-            Context = context.ToArray(),
-            Columns = columns.ToArray(),
+            Context = [.. context],
+            Columns = [.. columns],
             SchemaId = CanonicalJson.Hash(new JsonObject { ["tap"] = definition.DeepClone(), ["types"] = types }),
             ReadOutputs = ToSortedArray(readOutputs),
             ReadFeatures = ToSortedArray(readFeatures),
             ReadContextFeatures = ToSortedArray(readContext),
-            ColumnSources = columnSources.ToArray(),
-            PinnedProducers = pinned.ToArray(),
-            PinnedNodes = new List<string>(pinnedNodes).ToArray(),
+            ColumnSources = [.. columnSources],
+            PinnedProducers = [.. pinned],
+            PinnedNodes = [.. pinnedNodes],
             VersionReads = ToSortedArray(versionReads),
             Requires = ToSortedArray(_tapNames),
         };
@@ -737,7 +739,7 @@ public sealed class PlanBuilder
                     Name = name,
                     Seed = Logging.CoordinatedSampling.GroupSeed(_sources!.Pipeline.PipelineId, name),
                     Rate = spec.Rate,
-                    Keys = keys.ToArray(),
+                    Keys = [.. keys],
                 });
             }
         }
@@ -825,7 +827,7 @@ public sealed class PlanBuilder
             }
         }
 
-        return new OutputPlan { Limit = limit, Columns = columns.ToArray(), VersionReads = versionReads.ToArray() };
+        return new OutputPlan { Limit = limit, Columns = [.. columns], VersionReads = [.. versionReads] };
     }
 
     private void ReportOutputLimit(string name, ParamLeaf? leaf)
@@ -1017,7 +1019,7 @@ public sealed class PlanBuilder
                 {
                     if (symbol.Kind == SymbolKind.Column && schema.Columns[symbol.Id].FeatureIndex is >= 0 and var f)
                     {
-                        MarkFetched(fetched, new[] { f });
+                        MarkFetched(fetched, [f]);
                     }
                 }
             }
@@ -1629,13 +1631,13 @@ public sealed class PlanBuilder
             var f = FeatureIndexOf(symbol);
             if (f >= 0)
             {
-                MarkFetched(fetched, new[] { f });
+                MarkFetched(fetched, [f]);
             }
         }
     }
 
     /// <summary>Marks features (and the features derived ones are computed from) as fetched.</summary>
-    private void MarkFetched(HashSet<int> fetched, int[] features)
+    private void MarkFetched(HashSet<int> fetched, ImmutableArray<int> features)
     {
         foreach (var f in features)
         {
@@ -1669,13 +1671,13 @@ public sealed class PlanBuilder
     public ExecutionPlan Build(
         string manifestId,
         FeaturePlan features,
-        TimelineSlot[] timeline,
+        ImmutableArray<TimelineSlot> timeline,
         IReadOnlyDictionary<string, TimelineSlot> fallbacks,
         OutputPlan output,
         ParamTable parameters,
-        LayerInfo[] layers,
-        ExperimentInfo[] experiments,
-        ArmInfo[] arms,
+        ImmutableArray<LayerInfo> layers,
+        ImmutableArray<ExperimentInfo> experiments,
+        ImmutableArray<ArmInfo> arms,
         LogPlan? log = null)
     {
         var schema = Schema;
@@ -1722,7 +1724,7 @@ public sealed class PlanBuilder
             Features = features,
             Timeline = timeline,
             Fallbacks = fallbacks,
-            Nodes = _nodes.ToArray(),
+            Nodes = [.. _nodes],
             Output = output,
             Log = log,
             Params = parameters,
@@ -1792,7 +1794,7 @@ public sealed class PlanBuilder
                 continue;
             }
 
-            RegisterFeature(feature, feature.Type, null, Array.Empty<int>());
+            RegisterFeature(feature, feature.Type, null, []);
         }
 
         // Derived features may reference each other: compile in dependency order by retrying until no progress.
@@ -1826,7 +1828,7 @@ public sealed class PlanBuilder
                     }
                 }
 
-                RegisterFeature(feature, type, expression, dependencies.ToArray());
+                RegisterFeature(feature, type, expression, [.. dependencies]);
                 pendingDerived.RemoveAt(i);
                 i--;
                 progress = true;
@@ -1870,7 +1872,7 @@ public sealed class PlanBuilder
         };
     }
 
-    private void RegisterFeature(FeatureDefinition feature, ColumnType type, CompiledExpression? expression, int[] dependencies)
+    private void RegisterFeature(FeatureDefinition feature, ColumnType type, CompiledExpression? expression, ImmutableArray<int> dependencies)
     {
         var index = _features.Count;
         int slot = -1, contextId = -1;
@@ -2083,7 +2085,7 @@ public sealed class PlanBuilder
 
         foreach (var output in writer.Outputs)
         {
-            if (Array.IndexOf(reader.ReadColumns, output.LogicalId) >= 0 || Writes(reader, output.LogicalId))
+            if (reader.ReadColumns.IndexOf(output.LogicalId) >= 0 || Writes(reader, output.LogicalId))
             {
                 return true;
             }
@@ -2130,7 +2132,7 @@ public sealed class PlanBuilder
         return list;
     }
 
-    private static int[] ToSortedArray(IReadOnlyCollection<int> values)
+    private static ImmutableArray<int> ToSortedArray(IReadOnlyCollection<int> values)
     {
         var array = new int[values.Count];
         var i = 0;
@@ -2140,14 +2142,14 @@ public sealed class PlanBuilder
         }
 
         Array.Sort(array);
-        return array;
+        return ImmutableCollectionsMarshal.AsImmutableArray(array);
     }
 
-    private static VersionRead[] ToSortedArray(IReadOnlyCollection<VersionRead> values)
+    private static ImmutableArray<VersionRead> ToSortedArray(IReadOnlyCollection<VersionRead> values)
     {
         if (values.Count == 0)
         {
-            return Array.Empty<VersionRead>();
+            return [];
         }
 
         var array = new VersionRead[values.Count];
@@ -2158,14 +2160,14 @@ public sealed class PlanBuilder
         }
 
         Array.Sort(array, static (a, b) => string.CompareOrdinal(a.Node, b.Node) is var c && c != 0 ? c : a.Logical.CompareTo(b.Logical));
-        return array;
+        return ImmutableCollectionsMarshal.AsImmutableArray(array);
     }
 
-    private static NameRef[] ToSortedArray(IReadOnlyCollection<NameRef> values)
+    private static ImmutableArray<NameRef> ToSortedArray(IReadOnlyCollection<NameRef> values)
     {
         if (values.Count == 0)
         {
-            return Array.Empty<NameRef>();
+            return [];
         }
 
         var array = new NameRef[values.Count];
@@ -2176,10 +2178,10 @@ public sealed class PlanBuilder
         }
 
         Array.Sort(array, static (a, b) => a.Kind != b.Kind ? a.Kind.CompareTo(b.Kind) : a.Id.CompareTo(b.Id));
-        return array;
+        return ImmutableCollectionsMarshal.AsImmutableArray(array);
     }
 
-    private static T[] ToArray<T>(IReadOnlyList<T> values)
+    private static ImmutableArray<T> ToArray<T>(IReadOnlyList<T> values)
     {
         var array = new T[values.Count];
         for (var i = 0; i < array.Length; i++)
@@ -2187,7 +2189,7 @@ public sealed class PlanBuilder
             array[i] = values[i];
         }
 
-        return array;
+        return ImmutableCollectionsMarshal.AsImmutableArray(array);
     }
 }
 

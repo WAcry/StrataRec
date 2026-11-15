@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.CommandLine;
 using System.Globalization;
 using System.Text.Json;
@@ -265,7 +266,7 @@ internal static class ExplainPlanCommand
             o.WriteLine(Output.Text(warning, locator?.Locate(warning)));
         }
 
-        static string Expressions((string Name, Expressions.CompiledExpression Expression)[] expressions)
+        static string Expressions(ImmutableArray<(string Name, Expressions.CompiledExpression Expression)> expressions)
         {
             var parts = new List<string>(expressions.Length);
             foreach (var (name, expression) in expressions)
@@ -303,9 +304,9 @@ internal static class ExplainPlanCommand
     }
 
     private static string When(CompiledNode node) =>
-        node.Definition["when"] is { } when ? $" when {when.GetValue<string>()}" : string.Empty;
+        node.Definition.TryGetProperty("when", out var when) && when.ValueKind != JsonValueKind.Null ? $" when {when.GetString()}" : string.Empty;
 
-    private static string Operators(CompiledNode?[] variants)
+    private static string Operators(ImmutableArray<CompiledNode?> variants)
     {
         var ids = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var v in variants)

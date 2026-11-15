@@ -355,7 +355,7 @@ internal sealed class CandidateExplainer
 
         foreach (var output in node.Outputs)
         {
-            if (Array.IndexOf(node.ReadColumns, output.LogicalId) < 0)
+            if (node.ReadColumns.IndexOf(output.LogicalId) < 0)
             {
                 values.Add(new ExplainValue(output.Name, ValueOf(state, columns[output.LogicalId], row)));
             }

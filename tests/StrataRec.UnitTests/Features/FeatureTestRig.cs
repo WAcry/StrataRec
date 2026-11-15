@@ -293,7 +293,7 @@ internal sealed class FeatureTestRig
             Slot = slot,
             ContextId = contextId,
             Expression = expression,
-            Dependencies = dependencies,
+            Dependencies = [.. dependencies],
         });
         return index;
     }

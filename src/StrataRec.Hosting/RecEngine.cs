@@ -269,16 +269,16 @@ public sealed class LoadedPipeline
 }
 
 /// <summary>
-/// Read-only views of a plan's layers, experiments and arms (<see cref="AssignmentContext"/>), built once per plan so
-/// that asking the assignment provider allocates no views.
+/// A plan's layers, experiments and arms as the read-only lists of <see cref="AssignmentContext"/>, boxed once per plan
+/// so that asking the assignment provider allocates nothing.
 /// </summary>
 internal sealed class PlanLayout(ExecutionPlan plan)
 {
-    public IReadOnlyList<LayerInfo> Layers { get; } = Array.AsReadOnly(plan.Layers);
+    public IReadOnlyList<LayerInfo> Layers { get; } = plan.Layers;
 
-    public IReadOnlyList<ExperimentInfo> Experiments { get; } = Array.AsReadOnly(plan.Experiments);
+    public IReadOnlyList<ExperimentInfo> Experiments { get; } = plan.Experiments;
 
-    public IReadOnlyList<ArmInfo> Arms { get; } = Array.AsReadOnly(plan.Arms);
+    public IReadOnlyList<ArmInfo> Arms { get; } = plan.Arms;
 }
 
 /// <summary>Outcome of a plan load (design 10.3 step 5: applied or rejected).</summary>
@@ -797,7 +797,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
 
         if (request.Assignment is { } external)
         {
-            var arms = ExternalArms.Resolve(pipeline.Plan.Layers, pipeline.Plan.Arms, external, out var ignored);
+            var arms = ExternalArms.Resolve(pipeline.Plan.Layers.AsSpan(), pipeline.Plan.Arms.AsSpan(), external, out var ignored);
             return (arms, ignored, null, RecErrorKind.None);
         }
 
@@ -898,7 +898,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
 
         static (RequestArms, IgnoredArm[], string?, RecErrorKind) Resolve(ExecutionPlan plan, IReadOnlyList<string> answered)
         {
-            var assigned = ExternalArms.Resolve(plan.Layers, plan.Arms, answered, out var ignoredIds);
+            var assigned = ExternalArms.Resolve(plan.Layers.AsSpan(), plan.Arms.AsSpan(), answered, out var ignoredIds);
             return (assigned, ignoredIds, null, RecErrorKind.None);
         }
 

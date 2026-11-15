@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
@@ -482,9 +484,10 @@ public sealed partial class FeatureFetcher
     private static void Record(
         IFeatureCallHook recorder, FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, LocalReadValues values, long started)
     {
-        var sequence = recorder.Begin(group, batch, fields);
+        var shared = ImmutableCollectionsMarshal.AsImmutableArray(fields);
+        var sequence = recorder.Begin(group, batch, shared);
         recorder.Record(
-            new FeatureCallInfo(group, batch, fields, sequence, true, FetchStatus.Ok, IoOutcome.Ok, Stopwatch.GetElapsedTime(started)), values);
+            new FeatureCallInfo(group, batch, shared, sequence, true, FetchStatus.Ok, IoOutcome.Ok, Stopwatch.GetElapsedTime(started)), values);
     }
 
     /// <summary>The table field of each of <paramref name="features"/>, in order.</summary>

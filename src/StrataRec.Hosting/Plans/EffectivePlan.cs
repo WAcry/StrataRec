@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
@@ -149,7 +150,7 @@ public sealed class EffectivePlan
         var nodes = new JsonObject();
         foreach (var node in Nodes)
         {
-            nodes[node.Id] = node.Node.Definition.DeepClone();
+            nodes[node.Id] = JsonObject.Create(node.Node.Definition); // a tree of its own: the definition is the plan's
         }
 
         return Sorted(nodes);
@@ -279,7 +280,7 @@ public sealed class EffectivePlan
         }
     }
 
-    private static JsonObject Expressions((string Name, Expressions.CompiledExpression Expression)[] expressions)
+    private static JsonObject Expressions(ImmutableArray<(string Name, Expressions.CompiledExpression Expression)> expressions)
     {
         var document = new JsonObject();
         foreach (var (name, expression) in expressions)

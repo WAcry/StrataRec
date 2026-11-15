@@ -506,12 +506,12 @@ public sealed class RunReplayTests
             Entity = FeatureTestRig.Item,
             Supply = GroupSupply.Fetch(ScriptedConnector.Values((_, _) => throw new InvalidOperationException("a replay never calls the connector")), 50, 1000),
             Shape = KeyShape.Many,
-            FeatureIndices = new int[fields.Length],
-            Fields = bindings,
+            FeatureIndices = [.. new int[fields.Length]],
+            Fields = [.. bindings],
         };
         var staging = new StagingBuffer(bindings, keys.Length, new RequestMemory());
         var batch = new EntityKeyBatch { Shape = KeyShape.Many, CandidateKeys = keys.Select(EntityKey.FromInt64).ToArray() };
-        return (replay.Replay(group, batch, bindings, staging), staging);
+        return (replay.Replay(group, batch, [.. bindings], staging), staging);
     }
 
     internal static double?[] Values(StagingBuffer staging, int field, int keys) =>

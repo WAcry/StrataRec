@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
@@ -23,7 +24,7 @@ internal sealed partial class UnifiedCompilation
     /// rule of the check every combination of the layers that decide it (<see cref="PlanBuilder.DataFlowScopes"/>);
     /// a rule whose layers have more combinations than the limit is an error, never left unchecked.
     /// </summary>
-    private void ValidateCombinations(TimelineSlot[] timeline, Dictionary<string, TimelineSlot> fallbacks, OutputPlan output, CombinationReport report)
+    private void ValidateCombinations(ImmutableArray<TimelineSlot> timeline, Dictionary<string, TimelineSlot> fallbacks, OutputPlan output, CombinationReport report)
     {
         // Layers that touch nodes, and per layer the arms that touch nodes (others behave like "not assigned" here).
         var choices = new SortedDictionary<int, List<int>>();
@@ -167,7 +168,7 @@ internal sealed partial class UnifiedCompilation
         var changed = new List<string>();
         foreach (var id in scope.Nodes)
         {
-            if (_variants.TryGetValue(id, out var v) && Array.IndexOf(v.Layers, layer) >= 0)
+            if (_variants.TryGetValue(id, out var v) && v.Layers.IndexOf(layer) >= 0)
             {
                 changed.Add($"node '{id}'");
             }
@@ -175,7 +176,7 @@ internal sealed partial class UnifiedCompilation
 
         foreach (var id in scope.Taps)
         {
-            if (Array.IndexOf(_taps[id].Layers, layer) >= 0)
+            if (_taps[id].Layers.IndexOf(layer) >= 0)
             {
                 changed.Add($"tap '{id}'");
             }
@@ -201,7 +202,7 @@ internal sealed partial class UnifiedCompilation
         return compiled;
     }
 
-    private void Check(int[] combination, TimelineSlot[] timeline, Dictionary<string, TimelineSlot> fallbacks, OutputPlan output, HashSet<string> seen, CombinationReport report)
+    private void Check(int[] combination, ImmutableArray<TimelineSlot> timeline, Dictionary<string, TimelineSlot> fallbacks, OutputPlan output, HashSet<string> seen, CombinationReport report)
     {
         if (!seen.Add(string.Join(",", combination)))
         {

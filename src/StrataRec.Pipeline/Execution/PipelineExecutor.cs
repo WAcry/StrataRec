@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
@@ -391,7 +393,7 @@ public sealed class PipelineExecutor
                 Explainer = request.ExplainIds is { } explain ? new CandidateExplainer(explain) : null,
             };
 
-            fetcher.StartContextFetch(plan.ContextFeatures, cancellationToken);
+            fetcher.StartContextFetch(plan.ContextFeatures.AsSpan(), cancellationToken);
             if (_logs is not null || request.CaptureLogs || replay is not null)
             {
                 // Without a consumer every captured batch would be discarded: skip sampling and capture entirely.
@@ -683,7 +685,7 @@ public sealed class PipelineExecutor
             }
         }
 
-        var fill = await state.Features.EnsureAsync(node.ReadFeatures, cancellationToken).ConfigureAwait(false);
+        var fill = await state.Features.EnsureAsync(node.ReadFeatures.AsSpan(), cancellationToken).ConfigureAwait(false);
         if (fill.Failed)
         {
             return new Attempt(NodeOutcomeKind.Failed, "feature fetch failed: " + fill.Error);
@@ -883,10 +885,10 @@ public sealed class PipelineExecutor
                 continue;
             }
 
-            features.AddRange(next.ReadFeatures);
+            features.AddRange(next.ReadFeatures.AsSpan()); // a span: an immutable array as IEnumerable would be boxed
             if (state.Plan.SelectFallback(next, state.Arms) is { } fallback)
             {
-                features.AddRange(fallback.ReadFeatures);
+                features.AddRange(fallback.ReadFeatures.AsSpan());
             }
 
             if (next.IsRowSetNode && next.FetchBarrier)
@@ -897,7 +899,7 @@ public sealed class PipelineExecutor
 
         if (features.Count > 0)
         {
-            state.Features.Prefetch(features, cancellationToken);
+            state.Features.Prefetch(CollectionsMarshal.AsSpan(features), cancellationToken);
         }
     }
 
@@ -937,7 +939,7 @@ public sealed class PipelineExecutor
         return contextFeatures is null ? ValueTask.CompletedTask : AwaitEnsure(state, contextFeatures, cancellationToken);
 
         static async ValueTask AwaitEnsure(RequestState state, List<int> features, CancellationToken cancellationToken) =>
-            await state.Features.EnsureAsync(features, cancellationToken).ConfigureAwait(false);
+            await state.Features.EnsureAsync(CollectionsMarshal.AsSpan(features), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1134,7 +1136,7 @@ public sealed class PipelineExecutor
 
         span.Dispose();
 
-        static void AddTriggered(RequestState state, int[] experiments, ref List<string>? triggered)
+        static void AddTriggered(RequestState state, ImmutableArray<int> experiments, ref List<string>? triggered)
         {
             foreach (var experiment in experiments)
             {
@@ -1182,7 +1184,7 @@ public sealed class PipelineExecutor
 
         if (outputFeatures.Count > 0)
         {
-            var fill = await state.Features.EnsureAsync(outputFeatures, cancellationToken).ConfigureAwait(false);
+            var fill = await state.Features.EnsureAsync(CollectionsMarshal.AsSpan(outputFeatures), cancellationToken).ConfigureAwait(false);
             if (fill.Failed)
             {
                 return Failed(plan, request, "output reads a feature that failed: " + fill.Error, start, state.Outcomes, state.Triggered,

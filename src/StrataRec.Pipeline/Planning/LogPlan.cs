@@ -1,4 +1,6 @@
-using System.Text.Json.Nodes;
+using System.Collections.Frozen;
+using System.Collections.Immutable;
+using System.Text.Json;
 using StrataRec.Expressions;
 using StrataRec.Logging;
 
@@ -17,7 +19,7 @@ public sealed class CompiledFunnelGroup
     public required double Rate { get; init; }
 
     /// <summary>Key expressions; the first non-missing value is the sampling key.</summary>
-    public required CompiledExpression[] Keys { get; init; }
+    public required ImmutableArray<CompiledExpression> Keys { get; init; }
 }
 
 /// <summary>Which rows a tap records (design 8.3).</summary>
@@ -41,7 +43,8 @@ public sealed class CompiledTap
 {
     public required string TapId { get; init; }
 
-    public required JsonObject Definition { get; init; }
+    /// <summary>The fully merged definition this variant was compiled from, read-only like <see cref="CompiledNode.Definition"/>.</summary>
+    public required JsonElement Definition { get; init; }
 
     public required int Group { get; init; }
 
@@ -60,36 +63,36 @@ public sealed class CompiledTap
 
     public int? MaxRows { get; init; }
 
-    public required (string Name, CompiledExpression Expression)[] Context { get; init; }
+    public required ImmutableArray<(string Name, CompiledExpression Expression)> Context { get; init; }
 
-    public required (string Name, CompiledExpression Expression)[] Columns { get; init; }
+    public required ImmutableArray<(string Name, CompiledExpression Expression)> Columns { get; init; }
 
     /// <summary>Content id of the tap's schema: definition plus resolved column types (lineage, design 8.7).</summary>
     public required string SchemaId { get; init; }
 
     /// <summary>Output columns (logical ids) the tap reads through bindings; must be produced before the attach point.</summary>
-    public required int[] ReadOutputs { get; init; }
+    public required ImmutableArray<int> ReadOutputs { get; init; }
 
     /// <summary>Every name the tap's expressions bind (<see cref="CompiledNode.Requires"/>): a tap compiles after every node.</summary>
-    public NameRef[] Requires { get; init; } = Array.Empty<NameRef>();
+    public ImmutableArray<NameRef> Requires { get; init; } = [];
 
     /// <summary>Candidate feature indices the tap reads; must have been fetched before the attach point.</summary>
-    public required int[] ReadFeatures { get; init; }
+    public required ImmutableArray<int> ReadFeatures { get; init; }
 
     /// <summary>Context feature indices read by context fields, keys and filters (prefetched with the request).</summary>
-    public required int[] ReadContextFeatures { get; init; }
+    public required ImmutableArray<int> ReadContextFeatures { get; init; }
 
     /// <summary>Log column → logical column it reads directly (for <c>column_producers</c>), or -1.</summary>
-    public required int[] ColumnSources { get; init; }
+    public required ImmutableArray<int> ColumnSources { get; init; }
 
     /// <summary>Log column → node of a pinned version it reads (<c>col.x@node</c>), else null.</summary>
-    public required string?[] PinnedProducers { get; init; }
+    public required ImmutableArray<string?> PinnedProducers { get; init; }
 
     /// <summary>Nodes whose pinned versions any expression of the tap reads; they must not run after the attach point.</summary>
-    public string[] PinnedNodes { get; init; } = Array.Empty<string>();
+    public ImmutableArray<string> PinnedNodes { get; init; } = [];
 
     /// <summary>The pinned versions any expression of the tap reads (<c>col.x@node</c>), by node and column.</summary>
-    public VersionRead[] VersionReads { get; init; } = Array.Empty<VersionRead>();
+    public ImmutableArray<VersionRead> VersionReads { get; init; } = [];
 }
 
 /// <summary>Variants of one tap per arm combination of the layers that patch it (design 12.3: taps vary on their own).</summary>
@@ -97,13 +100,13 @@ public sealed class TapSlot
 {
     public required string TapId { get; init; }
 
-    public required int[] TouchingLayers { get; init; }
+    public required ImmutableArray<int> TouchingLayers { get; init; }
 
-    public required Dictionary<int, int>[] LocalIndex { get; init; }
+    public required ImmutableArray<FrozenDictionary<int, int>> LocalIndex { get; init; }
 
-    public required int[] Radix { get; init; }
+    public required ImmutableArray<int> Radix { get; init; }
 
-    public required CompiledTap?[] Variants { get; init; }
+    public required ImmutableArray<CompiledTap?> Variants { get; init; }
 
     public CompiledTap? Select(in RequestArms arms)
     {
@@ -122,9 +125,9 @@ public sealed class TapSlot
 /// <summary>The logging part of a plan.</summary>
 public sealed class LogPlan
 {
-    public static LogPlan Empty { get; } = new() { Groups = Array.Empty<CompiledFunnelGroup>(), Taps = Array.Empty<TapSlot>() };
+    public static LogPlan Empty { get; } = new() { Groups = [], Taps = [] };
 
-    public required CompiledFunnelGroup[] Groups { get; init; }
+    public required ImmutableArray<CompiledFunnelGroup> Groups { get; init; }
 
-    public required TapSlot[] Taps { get; init; }
+    public required ImmutableArray<TapSlot> Taps { get; init; }
 }

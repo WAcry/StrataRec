@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Memory;
@@ -609,7 +610,7 @@ public class FetchChunkTests
                 (Outcomes.TryGetValue(key, out var decided) ? $"{decided.Outcome} at {Ms(decided.At)} ms" : "undecided")));
         }
 
-        public int Begin(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields) => 0;
+        public int Begin(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields) => 0;
 
         public void Record(in FeatureCallInfo call, IStagedFeatureValues? values)
         {
@@ -627,7 +628,7 @@ public class FetchChunkTests
             }
         }
 
-        public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, IFeatureBatchWriter writer) =>
+        public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields, IFeatureBatchWriter writer) =>
             throw new NotSupportedException();
 
         private string Ms(long timestamp) => Stopwatch.GetElapsedTime(_created, timestamp).TotalMilliseconds.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);

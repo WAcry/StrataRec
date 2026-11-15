@@ -47,7 +47,7 @@ public sealed class GenerativeRetrieverTests
         await Run(plan);
 
         Assert.Equal(256, Assert.Single(models.Calls).MaxOutputTokens);
-        Assert.Equal(7, plan.Nodes.Single(n => n.NodeId == "rank").Operator.GetRowLimit(plan.Params.Baseline));
+        Assert.Equal(7, plan.Nodes.Single(n => n.NodeId == "rank").Operator.GetRowLimit(plan.Params.Baseline.AsSpan()));
     }
 
     /// <summary>

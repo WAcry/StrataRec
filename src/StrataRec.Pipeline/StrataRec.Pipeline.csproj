@@ -18,6 +18,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The experiment compiler assigns a plan's trigger sites (TimelineSlot.SiteExperiments, ParamExperiments) before the
+         plan is built; those setters are internal so a plan cannot be changed once it is shared. -->
+    <InternalsVisibleTo Include="StrataRec.Experiments" />
     <InternalsVisibleTo Include="StrataRec.UnitTests" />
     <InternalsVisibleTo Include="StrataRec.IntegrationTests" />
     <InternalsVisibleTo Include="StrataRec.Benchmarks" />

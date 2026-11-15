@@ -1,5 +1,7 @@
 using System.Buffers;
+using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
@@ -233,7 +235,7 @@ public sealed partial class FeatureFetcher
         if (_hook is { Replays: false } recorder)
         {
             read.Fields = FieldBindings(read.Group, read.Features);
-            read.Sequence = recorder.Begin(read.Group, read.Batch, read.Fields);
+            read.Sequence = recorder.Begin(read.Group, read.Batch, ImmutableCollectionsMarshal.AsImmutableArray(read.Fields));
         }
 
         read.BudgetMs = BudgetMs(read.Group);
@@ -528,7 +530,7 @@ public sealed partial class FeatureFetcher
 
         var chunkSize = read.IsContext ? 1 : read.Supply.MaxBatch;
         var chunks = Batching.Count(count, chunkSize);
-        var staging = new StagingArea(group.Fields, count, chunkSize, _memory);
+        var staging = new StagingArea(group.Fields.AsSpan(), count, chunkSize, _memory);
         var calls = _memory.Rent<ValueTask<FetchStatus>>(chunks);
         var writtenMs = read.Cache.NowMs(); // the version of what this fetch writes back: when it started
         StagingBuffer? writer = null;
@@ -548,7 +550,7 @@ public sealed partial class FeatureFetcher
                 : new EntityKeyBatch { Shape = group.Shape, CandidateKeys = keys.AsMemory(offset, Math.Min(chunkSize, count - offset)) };
             writer ??= new StagingBuffer(staging);
             writer.Bind(c);
-            calls[c] = ConnectorCall(group, batch, group.Fields, writer, read.BudgetMs, NotRecorded, cancellation, cancellationToken, out var writerHeld);
+            calls[c] = ConnectorCall(group, batch, group.FieldArray, writer, read.BudgetMs, NotRecorded, cancellation, cancellationToken, out var writerHeld);
             if (writerHeld)
             {
                 writer = null; // the call runs on and may write through this view until it really completes
@@ -847,8 +849,9 @@ public sealed partial class FeatureFetcher
             FetchOutcome.Failed => IoOutcome.Error,
         };
         var tableFields = TableFields(read.Group, read.Features);
+        var fields = ImmutableCollectionsMarshal.AsImmutableArray(read.Fields!);
         recorder.Record(
-            new FeatureCallInfo(read.Group, read.Batch, read.Fields!, read.Sequence, true, status, outcome, Stopwatch.GetElapsedTime(read.Started)),
+            new FeatureCallInfo(read.Group, read.Batch, fields, read.Sequence, true, status, outcome, Stopwatch.GetElapsedTime(read.Started)),
             outcome == IoOutcome.Error ? null : new CacheReadValues(read, tableFields));
     }
 

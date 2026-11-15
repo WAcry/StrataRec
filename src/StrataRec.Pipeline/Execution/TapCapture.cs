@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
@@ -381,14 +382,14 @@ internal static class TapCapture
             }
         }
 
-        return features is null ? ValueTask.CompletedTask : EnsureFeaturesAsync(state, features.ToArray(), cancellationToken);
+        return features is null ? ValueTask.CompletedTask : EnsureFeaturesAsync(state, [.. features], cancellationToken);
     }
 
-    private static async ValueTask EnsureFeaturesAsync(RequestState state, int[] features, CancellationToken cancellationToken)
+    private static async ValueTask EnsureFeaturesAsync(RequestState state, ImmutableArray<int> features, CancellationToken cancellationToken)
     {
         if (features.Length > 0)
         {
-            await state.Features.EnsureAsync(features, cancellationToken).ConfigureAwait(false);
+            await state.Features.EnsureAsync(features.AsSpan(), cancellationToken).ConfigureAwait(false);
         }
     }
 }

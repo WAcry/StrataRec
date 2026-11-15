@@ -1,4 +1,5 @@
-using System.Text.Json.Nodes;
+using System.Collections.Immutable;
+using System.Text.Json;
 using StrataRec.Core.Types;
 using StrataRec.Expressions;
 using StrataRec.Pipeline.Operators;
@@ -59,8 +60,11 @@ public sealed class CompiledNode
     /// <summary>Where the node's definition lives, e.g. <c>/nodes/fusion</c>.</summary>
     public required string Pointer { get; init; }
 
-    /// <summary>The fully merged definition this variant was compiled from (for explain-plan and dedup).</summary>
-    public required JsonObject Definition { get; init; }
+    /// <summary>
+    /// The fully merged definition this variant was compiled from (for explain-plan and dedup). A read-only element, since
+    /// every request and host shares it; <c>JsonObject.Create(Definition)</c> gives a tree of one's own to edit.
+    /// </summary>
+    public required JsonElement Definition { get; init; }
 
     /// <summary>RFC 8785 hash of <see cref="Definition"/>; equal hashes share a variant.</summary>
     public required string DefinitionHash { get; init; }
@@ -95,20 +99,20 @@ public sealed class CompiledNode
     public CompactMode Compact { get; init; } = CompactMode.Auto;
 
     /// <summary>Logical columns read (features, outputs, entity id).</summary>
-    public required int[] ReadColumns { get; init; }
+    public required ImmutableArray<int> ReadColumns { get; init; }
 
     /// <summary>Feature indices read directly (expanded to dependencies by the fetcher).</summary>
-    public required int[] ReadFeatures { get; init; }
+    public required ImmutableArray<int> ReadFeatures { get; init; }
 
     /// <summary>Non-nullable output columns read through bindings; must be produced before the node runs (design 11.5 step 4).</summary>
-    public required int[] RequiredOutputs { get; init; }
+    public required ImmutableArray<int> RequiredOutputs { get; init; }
 
-    public required int[] ReadParams { get; init; }
+    public required ImmutableArray<int> ReadParams { get; init; }
 
     /// <summary>Pinned versions the node reads (<c>col.x@node</c>), other than its own.</summary>
-    public VersionRead[] VersionReads { get; init; } = Array.Empty<VersionRead>();
+    public ImmutableArray<VersionRead> VersionReads { get; init; } = [];
 
-    public required OutputColumn[] Outputs { get; init; }
+    public required ImmutableArray<OutputColumn> Outputs { get; init; }
 
     /// <summary>
     /// The names the node binds that it has not declared itself before binding them: every column, parameter and context
@@ -118,13 +122,16 @@ public sealed class CompiledNode
     /// arm in it, or (a column without a declaration) by a node compiled before. The order of reads and writes inside one
     /// compile is not in <see cref="ReadColumns"/> and <see cref="Outputs"/>, so it is recorded (reviews 50, 51).
     /// </summary>
-    public NameRef[] Requires { get; init; } = Array.Empty<NameRef>();
+    public ImmutableArray<NameRef> Requires { get; init; } = [];
 
     /// <summary>The columns the node writes with a type of its own (an implicit output), so its write declares an undeclared one.</summary>
-    public ColumnDeclaration[] Declares { get; init; } = Array.Empty<ColumnDeclaration>();
+    public ImmutableArray<ColumnDeclaration> Declares { get; init; } = [];
 
-    /// <summary>Experiments whose arms override a parameter this node reads (trigger sites, design 12.6).</summary>
-    public int[] ParamExperiments { get; set; } = Array.Empty<int>();
+    /// <summary>
+    /// Experiments whose arms override a parameter this node reads (trigger sites, design 12.6). Assigned by the experiment
+    /// compiler once every variant is compiled, before the plan is built.
+    /// </summary>
+    public ImmutableArray<int> ParamExperiments { get; internal set; } = [];
 
     public bool HasRowEffects => (Effects & (Effects.RowSource | Effects.RowFilter | Effects.RowOrder)) != 0;
 
