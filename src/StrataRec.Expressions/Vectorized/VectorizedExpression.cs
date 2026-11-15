@@ -63,8 +63,6 @@ internal sealed class VectorizedExpression : CompiledExpression
 
     public override string Describe() => IrPrinter.Print(Optimized);
 
-    /// <remarks>The result may be one of the expression's list constants (e.g. <c>c ? [1] : [2]</c>), shared by every
-    /// request: a value's lists are read-only, so it is handed out as it is.</remarks>
     public override ScalarValue EvaluateScalar(in EvalContext context) => Run(context);
 
     /// <summary>Evaluates the request-level program.</summary>

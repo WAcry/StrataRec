@@ -42,10 +42,10 @@ public abstract class CompiledExpression
     /// Evaluates a request-level expression (<see cref="IsRowDependent"/> is false).
     /// Returns <see cref="ScalarValue.Missing"/> when a nullable result is absent.
     /// </summary>
-    /// <remarks>A list result that comes from a literal in the expression (<c>[1, 2]</c>, <c>ctx.l ?? ['a']</c>) is a
-    /// fresh copy, because the compiled expression and its constants are shared by every request and thread. Other
-    /// results are returned as they are, without copying: a list read from <c>ctx.*</c> or <c>param.*</c> is the
-    /// caller's own array.</remarks>
+    /// <remarks>Results are returned as they are, without copying: a list that comes from a literal in the expression
+    /// (<c>[1, 2]</c>, <c>ctx.l ?? ['a']</c>) is the expression's own constant, shared by every request and thread, and a
+    /// list read from <c>ctx.*</c> or <c>param.*</c> is the caller's value. A value's lists are read-only, so neither
+    /// can be changed through the result.</remarks>
     public abstract ScalarValue EvaluateScalar(in EvalContext context);
 
     /// <summary>
