@@ -538,7 +538,12 @@ public sealed class ReleaseHostTests : IDisposable
         var (second, secondId) = await _fixture.Pipeline("p", k: 3).BuildAsync("p", seq: 2);
         File.Delete(_fixture.Store.GetBlobPath(second.Artifacts.Pipeline));
         await _fixture.PublishAsync("p", secondId);
-        for (var t = 0; t < 20; t++)
+
+        // The first outcome must be in the call before the others arrive: the reporter runs on its own task, and one not
+        // yet scheduled leaves the first outcome in the queue, where it is dropped too (CI: 4 drops).
+        await _clock.AdvanceAsync(Poll);
+        await reporter.Blocked.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        for (var t = 1; t < 20; t++)
         {
             await _clock.AdvanceAsync(Poll);
         }
