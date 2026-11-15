@@ -68,6 +68,10 @@ public sealed class StrataRecOptions
 /// applied, stale, revoked, incompatible. A manifest that was rejected or could not be read is tried again after
 /// <see cref="PollInterval"/>, then after twice as long, and so on up to <see cref="MaxRetryInterval"/>; a pointer that could
 /// not be read is read again on the same schedule. A new id starts over.</para>
+/// <para>Each pipeline is polled on its own, so a slow load or an unresponsive pointer of one pipeline never delays
+/// another's release (an emergency revocation included); loads of different pipelines may run at the same time. The
+/// <see cref="IReleaseStatusReporter"/> is told the outcomes after the fact, off the polling: a slow reporter delays only
+/// the reports.</para>
 /// <para>No last-known-good copy is kept on disk in this version (design 10.3 item 6): a host that must start while the
 /// control plane is down composes an <see cref="IManifestSource"/> that falls back to a pointer baked into its image.</para>
 /// </remarks>
@@ -79,7 +83,19 @@ public sealed class ReleaseOptions
     /// <summary>The longest wait before a failed manifest or pointer is tried again; 5 minutes by default.</summary>
     public TimeSpan MaxRetryInterval { get; set; } = TimeSpan.FromMinutes(5);
 
-    /// <summary>The clock of the polls and retries; tests pass one they advance by hand.</summary>
+    /// <summary>
+    /// The longest a pointer read (<see cref="IManifestSource.GetManifestIdAsync"/>) may take: then its token is cancelled
+    /// and the read counts as failed (read again on the retry schedule). 30 seconds by default.
+    /// </summary>
+    public TimeSpan PointerTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// The longest a status report (<see cref="IReleaseStatusReporter.ReportAsync"/>) may take: then its token is cancelled
+    /// and the next report waits only for the call to return. 30 seconds by default.
+    /// </summary>
+    public TimeSpan ReportTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>The clock of the polls and retries; tests pass one they advance by hand. Timeouts use the system clock.</summary>
     public TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 }
 
@@ -181,6 +197,13 @@ public static class ServiceCollectionExtensions
             throw new ArgumentException(
                 $"ReleaseOptions.PollInterval ({releases.PollInterval}) must be positive, and MaxRetryInterval ({releases.MaxRetryInterval}) at least as long.",
                 nameof(options));
+        }
+
+        var longest = TimeSpan.FromMilliseconds(uint.MaxValue - 1.0); // a timer's limit
+        if (releases.PointerTimeout <= TimeSpan.Zero || releases.ReportTimeout <= TimeSpan.Zero || releases.PointerTimeout > longest || releases.ReportTimeout > longest)
+        {
+            throw new ArgumentException(
+                $"ReleaseOptions.PointerTimeout ({releases.PointerTimeout}) and ReportTimeout ({releases.ReportTimeout}) must be positive and at most {longest}.", nameof(options));
         }
 
         if (releases.TimeProvider is null)

@@ -76,6 +76,13 @@ public sealed record ManifestLoadResult(
     /// <summary>The manifest the pipeline serves after the attempt (the design's <c>applied_manifest</c>); null when none.</summary>
     public string? ServedManifestId { get; init; }
 
+    /// <summary>
+    /// When the attempt started, by the polling's clock (<see cref="ReleaseOptions.TimeProvider"/>); null for a load that
+    /// is not a release poll's. A node reports its background outcomes after the fact (<see cref="IReleaseStatusReporter"/>),
+    /// so this, not the time of the report, says when the node tried the manifest.
+    /// </summary>
+    public DateTimeOffset? AttemptedAt { get; init; }
+
     /// <summary>The reason of a rejection: its first error, and how many more there are.</summary>
     internal static string RejectedReason(IReadOnlyList<ConfigDiagnostic> diagnostics)
     {

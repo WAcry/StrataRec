@@ -131,6 +131,7 @@ public sealed class ReleaseHostTests : IDisposable
         await _clock.AdvanceAsync(Poll);
 
         Assert.Equal(second, (await engine.ExecuteAsync(ReleaseFixture.Request("p"), TestContext.Current.CancellationToken)).ManifestId);
+        await _reports.WhenCountAsync(2);
         Assert.Equal(new[] { (0.0, first, ManifestLoadStatus.Applied), (2.0, second, ManifestLoadStatus.Applied) }, _reports.Attempts());
         await host.StopAsync(TestContext.Current.CancellationToken);
     }
@@ -162,6 +163,7 @@ public sealed class ReleaseHostTests : IDisposable
         }
 
         // Tried after 1 s, then 1, 2, 4 and 4 (the cap) seconds later; applied on the fifth try, and not tried since.
+        await _reports.WhenCountAsync(6);
         var attempts = _reports.Attempts().Skip(1).ToList();
         Assert.Equal(new[] { 1.0, 2, 4, 8, 12 }, attempts.Select(a => a.Seconds));
         Assert.All(attempts.Take(4), a => Assert.Equal(ManifestLoadStatus.Rejected, a.Status));
@@ -201,6 +203,7 @@ public sealed class ReleaseHostTests : IDisposable
         await _fixture.PublishAsync("p", thirdId);
         await _clock.AdvanceAsync(Poll);
 
+        await _reports.WhenCountAsync(4);
         Assert.Equal(
             new[] { (0.0, firstId, ManifestLoadStatus.Applied), (1, incompatibleId, ManifestLoadStatus.Incompatible), (6, firstId, ManifestLoadStatus.Stale),
                 (9, thirdId, ManifestLoadStatus.Applied) },
@@ -297,6 +300,7 @@ public sealed class ReleaseHostTests : IDisposable
         await _clock.AdvanceAsync(Poll);
 
         log.Fails = false;
+        await _reports.WhenCountAsync(3);
         Assert.Equal(
             new[] { (0.0, first, ManifestLoadStatus.Applied), (2, secondId, ManifestLoadStatus.Rejected), (3, secondId, ManifestLoadStatus.Applied) },
             _reports.Attempts());
@@ -411,6 +415,7 @@ public sealed class ReleaseHostTests : IDisposable
         await _clock.AdvanceAsync(Poll); // 1 s: the store throws, its message too
         await _clock.AdvanceAsync(Poll); // 2 s: tried again
 
+        await _reports.WhenCountAsync(3);
         Assert.Equal(new[] { (0.0, first, ManifestLoadStatus.Applied), (1, second, ManifestLoadStatus.Rejected), (2, second, ManifestLoadStatus.Applied) },
             _reports.Attempts());
         Assert.Contains("(reading its message threw)", _reports.All[1].Result.Reason);
@@ -439,7 +444,7 @@ public sealed class ReleaseHostTests : IDisposable
 
     private IHost Build(
         string[] pipelines, TimeProvider? clock = null, TimeSpan? maxRetry = null, IArtifactStore? store = null, ReleaseLog? log = null,
-        IManifestSource? source = null)
+        IManifestSource? source = null, IReleaseStatusReporter? reporter = null, TimeSpan? pointerTimeout = null, TimeSpan? reportTimeout = null)
     {
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
         {
@@ -450,7 +455,7 @@ public sealed class ReleaseHostTests : IDisposable
         builder.Logging.ClearProviders().AddProvider(log ?? new ReleaseLog());
         builder.Services.AddSingleton<IManifestSource>(_ => source ?? _fixture.Pointers); // created by the container, so disposed by it
         builder.Services.AddSingleton<IArtifactStore>(store ?? _fixture.Store);
-        builder.Services.AddSingleton<IReleaseStatusReporter>(new Reporter(_reports, clock ?? _clock));
+        builder.Services.AddSingleton(reporter ?? new Reporter(_reports, clock ?? _clock));
         builder.Services.AddStrataRec(options =>
         {
             options.ConfigRoot = _fixture.Root; // where the bindings' relative paths resolve
@@ -460,10 +465,158 @@ public sealed class ReleaseHostTests : IDisposable
             {
                 PollInterval = Poll,
                 MaxRetryInterval = maxRetry ?? TimeSpan.FromMinutes(5),
+                PointerTimeout = pointerTimeout ?? TimeSpan.FromSeconds(30),
+                ReportTimeout = reportTimeout ?? TimeSpan.FromSeconds(30),
                 TimeProvider = clock ?? TimeProvider.System,
             };
         });
         return builder.Build();
+    }
+
+    /// <summary>
+    /// The external review: the polling took pipelines one after another and waited for each report, so a reporter that
+    /// blocked on pipeline A held a newer release of pipeline B for 25 polls. Each pipeline polls on its own now, and the
+    /// reports wait in a queue: while the reporter is stuck on A's outcome, B's and A's next releases are applied.
+    /// </summary>
+    [Fact]
+    public async Task AReporterThatBlocks_DelaysNoRelease()
+    {
+        var (_, p1) = await _fixture.Pipeline("p").BuildAsync("p", seq: 1);
+        var (_, q1) = await _fixture.Pipeline("q").BuildAsync("q", seq: 1);
+        await _fixture.PublishAsync("p", p1);
+        await _fixture.PublishAsync("q", q1);
+        var reporter = new BlockingReporter(new Reporter(_reports, _clock));
+        using var host = Build(["p", "q"], _clock, reporter: reporter);
+        var engine = host.Services.GetRequiredService<IRecEngine>();
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await _clock.WhenScheduledAsync(2).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken); // both wait
+
+        reporter.Block = true;
+        var (_, p2) = await _fixture.Pipeline("p", k: 3).BuildAsync("p", seq: 2);
+        await _fixture.PublishAsync("p", p2);
+        _clock.Advance(Poll);
+        await _clock.WhenScheduledAsync(4).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await reporter.Blocked.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        var (_, q2) = await _fixture.Pipeline("q", k: 3).BuildAsync("q", seq: 2);
+        var (_, p3) = await _fixture.Pipeline("p", k: 4).BuildAsync("p", seq: 3);
+        await _fixture.PublishAsync("q", q2);
+        await _fixture.PublishAsync("p", p3);
+        _clock.Advance(Poll);
+        await _clock.WhenScheduledAsync(6).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(q2, (await engine.ExecuteAsync(ReleaseFixture.Request("q"), TestContext.Current.CancellationToken)).ManifestId);
+        Assert.Equal(p3, (await engine.ExecuteAsync(ReleaseFixture.Request("p"), TestContext.Current.CancellationToken)).ManifestId);
+        Assert.Equal(2, _reports.All.Count); // the startup's: the reporter is still on p2
+
+        reporter.Release();
+        await _reports.WhenCountAsync(5);
+        var reported = _reports.All.Select(r => r.Result.ManifestId).ToList();
+        Assert.Equal(new[] { p1, q1, p2 }, reported.Take(3)); // in the order of the attempts
+        Assert.Equal(new[] { p3, q2 }.Order(), reported.Skip(3).Order());
+        await host.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// A reporter that never finishes is cancelled after <see cref="ReleaseOptions.ReportTimeout"/>, and the next outcome is
+    /// reported; a full queue drops its oldest outcome and keeps the order of the others.
+    /// </summary>
+    [Fact]
+    public async Task AReportThatHangs_IsCancelled_AndAFullQueueDropsTheOldest()
+    {
+        var (_, first) = await _fixture.Pipeline("p").BuildAsync("p", seq: 1);
+        await _fixture.PublishAsync("p", first);
+        var log = new ReleaseLog();
+        var reporter = new BlockingReporter(new Reporter(_reports, _clock));
+        using var host = Build(["p"], _clock, maxRetry: Poll, log: log, reporter: reporter, reportTimeout: TimeSpan.FromMilliseconds(300));
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        // A manifest whose pipeline artifact is missing: rejected at every poll, each outcome reported.
+        reporter.Block = true;
+        reporter.HonorsCancellation = false; // the queue fills behind a call that ignores its token, then returns
+        var (second, secondId) = await _fixture.Pipeline("p", k: 3).BuildAsync("p", seq: 2);
+        File.Delete(_fixture.Store.GetBlobPath(second.Artifacts.Pipeline));
+        await _fixture.PublishAsync("p", secondId);
+        for (var t = 0; t < 20; t++)
+        {
+            await _clock.AdvanceAsync(Poll);
+        }
+
+        // One outcome in the call, 16 waiting, the 3 oldest of the others dropped.
+        Assert.Equal(3, log.Entries.Count(e => e.EventId.Id == 1014));
+        reporter.HonorsCancellation = true;
+        reporter.Release();
+        await _reports.WhenCountAsync(2 + 16); // the startup's, then the one in the call and the 16 waiting
+        var seconds = _reports.Attempts().Skip(1).Select(a => a.Seconds).ToList();
+        Assert.Equal(new[] { 1.0 }.Concat(Enumerable.Range(5, 16).Select(s => (double)s)), seconds);
+
+        // A call that hangs, honoring its token: cancelled at the timeout, and the next outcome is reported.
+        reporter.Block = true;
+        await _clock.AdvanceAsync(Poll);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (!log.Entries.Any(e => e.EventId.Id == 1015))
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the report did not time out");
+            await Task.Delay(5, TestContext.Current.CancellationToken);
+        }
+
+        reporter.Block = false;
+        await _clock.AdvanceAsync(Poll);
+        await _reports.WhenCountAsync(2 + 16 + 1);
+        Assert.Equal(22.0, _reports.Attempts()[^1].Seconds); // 21 s was the call that timed out
+        await host.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>Each pipeline polls on its own: while one pipeline's pointer read hangs, another's release is applied.</summary>
+    [Fact]
+    public async Task APointerReadThatHangs_DelaysNoOtherPipeline()
+    {
+        var (_, p1) = await _fixture.Pipeline("p").BuildAsync("p", seq: 1);
+        var (_, q1) = await _fixture.Pipeline("q").BuildAsync("q", seq: 1);
+        await _fixture.PublishAsync("p", p1);
+        await _fixture.PublishAsync("q", q1);
+        using var source = new HeldSource(_fixture.Pointers) { Only = "p" };
+        using var host = Build(["p", "q"], _clock, source: source); // the default pointer timeout: 30 s
+        var engine = host.Services.GetRequiredService<IRecEngine>();
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await _clock.WhenScheduledAsync(2).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        source.Hold = true;
+        var (_, q2) = await _fixture.Pipeline("q", k: 3).BuildAsync("q", seq: 2);
+        await _fixture.PublishAsync("q", q2);
+        _clock.Advance(Poll);
+        await source.HeldStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await _clock.WhenScheduledAsync(3).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken); // q's polling waits again
+
+        Assert.Equal(q2, (await engine.ExecuteAsync(ReleaseFixture.Request("q"), TestContext.Current.CancellationToken)).ManifestId);
+        await host.StopAsync(TestContext.Current.CancellationToken); // cancels p's read
+    }
+
+    /// <summary>A pointer read that hangs is cancelled after <see cref="ReleaseOptions.PointerTimeout"/> and read again later.</summary>
+    [Fact]
+    public async Task APointerReadThatHangs_IsCancelled_AndReadAgain()
+    {
+        var (_, first) = await _fixture.Pipeline("p").BuildAsync("p", seq: 1);
+        await _fixture.PublishAsync("p", first);
+        var log = new ReleaseLog();
+        using var source = new HeldSource(_fixture.Pointers);
+        using var host = Build(["p"], _clock, log: log, source: source, pointerTimeout: TimeSpan.FromMilliseconds(200));
+        var engine = host.Services.GetRequiredService<IRecEngine>();
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await _clock.WhenScheduledAsync(1).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        source.Hold = true;
+        await _clock.AdvanceAsync(Poll); // returns once the read has timed out and the polling waits again
+        var failure = Assert.Single(log.Entries, e => e.EventId.Id == 1009);
+        Assert.IsAssignableFrom<OperationCanceledException>(failure.Exception);
+
+        source.Hold = false;
+        var (_, second) = await _fixture.Pipeline("p", k: 3).BuildAsync("p", seq: 2);
+        await _fixture.PublishAsync("p", second);
+        await _clock.AdvanceAsync(Poll); // read again after the poll interval
+        Assert.Equal(second, (await engine.ExecuteAsync(ReleaseFixture.Request("p"), TestContext.Current.CancellationToken)).ManifestId);
+        await host.StopAsync(TestContext.Current.CancellationToken);
     }
 
     /// <summary>Every reported outcome, with the clock's time.</summary>
@@ -490,7 +643,21 @@ public sealed class ReleaseHostTests : IDisposable
             }
         }
 
-        /// <summary>Seconds since the manual clock's start, manifest and status of each outcome.</summary>
+        /// <summary>
+        /// Completes once <paramref name="count"/> outcomes are reported: background outcomes are reported after the
+        /// fact, off the polling, so a poll the clock woke may have returned before its outcome is.
+        /// </summary>
+        public async Task WhenCountAsync(int count)
+        {
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+            while (All.Count < count)
+            {
+                Assert.True(DateTime.UtcNow < deadline, $"{All.Count} of {count} outcomes reported");
+                await Task.Delay(5);
+            }
+        }
+
+        /// <summary>Seconds since the manual clock's start (when each attempt started), manifest and status of each outcome.</summary>
         public List<(double Seconds, string ManifestId, ManifestLoadStatus Status)> Attempts() =>
             All.Select(r => ((r.At - ManualTimers.Start).TotalSeconds, r.Result.ManifestId, r.Result.Status)).ToList();
     }
@@ -511,6 +678,9 @@ public sealed class ReleaseHostTests : IDisposable
 
         public bool ThrowOnCancel { get; init; }
 
+        /// <summary>The one pipeline whose pointer is held; null for every pipeline.</summary>
+        public string? Only { get; init; }
+
         public ManualResetEventSlim? BlockOnCancel { get; init; }
 
         public TaskCompletionSource HeldStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -524,7 +694,7 @@ public sealed class ReleaseHostTests : IDisposable
 
         public async ValueTask<string?> GetManifestIdAsync(string pipelineId, string environment, CancellationToken cancellationToken)
         {
-            if (Hold)
+            if (Hold && (Only is null || Only == pipelineId))
             {
                 // Not disposed when the wait ends: the wait's continuation may run inside the cancellation, before this
                 // callback, and would unregister it.
@@ -543,11 +713,62 @@ public sealed class ReleaseHostTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// While <see cref="Block"/> is set, a report waits until <see cref="Release"/> (or, with <see cref="HonorsCancellation"/>,
+    /// until its token is cancelled, then throws); otherwise it goes to the inner reporter.
+    /// </summary>
+    private sealed class BlockingReporter(IReleaseStatusReporter inner) : IReleaseStatusReporter
+    {
+        private TaskCompletionSource _released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private volatile bool _block;
+        private volatile bool _honorsCancellation = true;
+
+        public bool Block
+        {
+            get => _block;
+            set => _block = value;
+        }
+
+        public bool HonorsCancellation
+        {
+            get => _honorsCancellation;
+            set => _honorsCancellation = value;
+        }
+
+        /// <summary>Completes when a report first waits.</summary>
+        public TaskCompletionSource Blocked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Release()
+        {
+            _block = false;
+            Interlocked.Exchange(ref _released, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).TrySetResult();
+        }
+
+        public async ValueTask ReportAsync(ManifestLoadResult result, CancellationToken cancellationToken)
+        {
+            if (_block)
+            {
+                Blocked.TrySetResult();
+                var released = Volatile.Read(ref _released).Task;
+                if (_honorsCancellation)
+                {
+                    await released.WaitAsync(cancellationToken);
+                }
+                else
+                {
+                    await released;
+                }
+            }
+
+            await inner.ReportAsync(result, cancellationToken);
+        }
+    }
+
     private sealed class Reporter(Reports reports, TimeProvider clock) : IReleaseStatusReporter
     {
         public ValueTask ReportAsync(ManifestLoadResult result, CancellationToken cancellationToken)
         {
-            reports.Add(clock.GetUtcNow(), result);
+            reports.Add(result.AttemptedAt ?? clock.GetUtcNow(), result);
             return ValueTask.CompletedTask;
         }
     }

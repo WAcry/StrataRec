@@ -30,9 +30,14 @@ public interface IManifestSource
 /// of <see cref="ServiceCollectionExtensions.AddStrataRec"/>.
 /// </summary>
 /// <remarks>
-/// Called once per attempt, at startup and in the background, from one thread at a time; also for a manifest that could
-/// not be read, as <see cref="ManifestLoadStatus.Rejected"/> with sequence 0. An exception it throws is logged (event 1011)
-/// and changes nothing; a slow reporter delays the next poll.
+/// <para>Called once per attempt, in the order of the attempts and never concurrently; also for a manifest that could not
+/// be read, as <see cref="ManifestLoadStatus.Rejected"/> with sequence 0. At startup each outcome is reported before the
+/// next pipeline loads (so a host that fails to start has reported why). In the background the outcomes wait in a
+/// bounded queue that one task reports from: a slow reporter delays only the reports, never a poll or a load. When the
+/// queue is full the oldest waiting report is dropped (event 1014): the newer ones say more about the node.</para>
+/// <para>The token is cancelled after <see cref="ReleaseOptions.ReportTimeout"/> (event 1015) and when the host stops; the
+/// next report still waits for this call to return. An exception it throws is logged (event 1011) and changes
+/// nothing.</para>
 /// </remarks>
 public interface IReleaseStatusReporter
 {

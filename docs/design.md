@@ -1774,6 +1774,8 @@ manifest 不含流量分配：没有桶范围、比例、盐或分流单元，�
 5. 每个节点发布自己的状态：`{pod, applied_seq, applied_manifest, compile_ms, status, reason}`，其中 `status` 是 `applied`、`rejected` 或 `incompatible`。发布控制器根据这些状态决定是否继续推进。
 6. 最近一次成功应用的 manifest 和产物保存在本地磁盘（last-known-good，LKG）。节点同时在本地记录它见过的最大 `min_accepted_seq`，包括它没能应用的 manifest 上的值。
 
+每条流水线单独轮询和加载：一条流水线的慢加载或卡住的指针读取不推迟另一条的发布，紧急撤销（第 10.6 节）不排在别的流水线后面。第 5 步的状态在尝试之后异步上报，慢的上报方只推迟上报。
+
 节点启动时按顺序尝试三个来源，跳过不兼容（第 10.4 节）或已撤销的候选：
 
 1. 用短超时（例如 2 秒）向控制面查询当前指针，加载指向的 manifest；
