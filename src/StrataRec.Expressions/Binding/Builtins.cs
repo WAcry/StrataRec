@@ -31,6 +31,7 @@ internal static class Builtins
         ["contains"] = (2, 2, "contains(list, x) or contains(text, s)"),
         ["overlap_count"] = (2, 2, "overlap_count(list1, list2)"),
         ["startsWith"] = (2, 2, "startsWith(s, prefix)"),
+        ["endsWith"] = (2, 2, "endsWith(s, suffix)"),
         ["hash01"] = (1, -1, "hash01(a, b, ...)"),
         ["lookup"] = (3, 3, "lookup('table', key, default)"),
         ["has"] = (1, 1, "has(x)"),

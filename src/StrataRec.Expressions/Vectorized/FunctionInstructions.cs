@@ -532,7 +532,8 @@ internal sealed class OverlapInstr(TypeKind listKind, ExprType type, Opnd first,
     }
 }
 
-internal sealed class StartsWithInstr(ExprType type, Opnd text, Opnd prefix) : Instr(type, text, prefix)
+/// <summary><c>startsWith</c> and <c>endsWith</c> per lane (a dictionary column with a constant affix takes <see cref="DictPredicateInstr"/>).</summary>
+internal sealed class AffixInstr(IrOp op, ExprType type, Opnd text, Opnd affix) : Instr(type, text, affix)
 {
     public override void Execute(ref Frame f)
     {
@@ -544,9 +545,12 @@ internal sealed class StartsWithInstr(ExprType type, Opnd text, Opnd prefix) : I
         }
 
         dst.Clear();
+        var prefix = op == IrOp.StartsWith;
         for (var i = 0; i < f.N; i++)
         {
-            BitKernels.SetBit(dst, i, Lanes.String(ref f, s, i).StartsWith(Lanes.String(ref f, p, i), StringComparison.Ordinal));
+            var value = Lanes.String(ref f, s, i);
+            var affix = Lanes.String(ref f, p, i);
+            BitKernels.SetBit(dst, i, prefix ? value.StartsWith(affix, StringComparison.Ordinal) : value.EndsWith(affix, StringComparison.Ordinal));
         }
     }
 }

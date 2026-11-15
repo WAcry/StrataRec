@@ -135,6 +135,7 @@ internal static class IrPrinter
             case IrOp.Contains: return Call("contains", node, names, depth);
             case IrOp.Overlap: return Call("overlap_count", node, names, depth);
             case IrOp.StartsWith: return Call("startsWith", node, names, depth);
+            case IrOp.EndsWith: return Call("endsWith", node, names, depth);
             case IrOp.Dot: return Call("dot", node, names, depth);
             case IrOp.Cosine: return Call("cosine", node, names, depth);
             case IrOp.L2Norm: return Call("l2_norm", node, names, depth);

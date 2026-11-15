@@ -881,7 +881,7 @@ internal sealed class DictEqualsInstr(IrOp op, Symbol column, ExprType columnTyp
 }
 
 /// <summary>Fused per-dictionary-entry predicate on a dictionary-encoded column: <c>col.s in [...]</c>,
-/// <c>col.s in ctx.list</c> and <c>col.s.startsWith(p)</c> evaluate the predicate once per distinct value.</summary>
+/// <c>col.s in ctx.list</c>, <c>col.s.startsWith(p)</c> and <c>col.s.endsWith(p)</c> evaluate the predicate once per distinct value.</summary>
 internal sealed class DictPredicateInstr : Instr
 {
     private readonly Symbol _column;
@@ -890,7 +890,7 @@ internal sealed class DictPredicateInstr : Instr
     private readonly IrOp _op;
 
     /// <summary><paramref name="op"/> is InSet (with <paramref name="set"/>), Contains (scalar list operand) or
-    /// StartsWith (scalar prefix operand).</summary>
+    /// StartsWith or EndsWith (scalar affix operand).</summary>
     public DictPredicateInstr(IrOp op, Symbol column, ExprType columnType, ExprType type, ConstSet? set, Opnd[] operands)
         : base(type, operands)
     {
@@ -945,12 +945,23 @@ internal sealed class DictPredicateInstr : Instr
                     }
 
                     break;
-                default:
+                case IrOp.StartsWith:
                 {
                     var prefix = f.Scalar(Operands[0]).AsString();
                     for (var c = 0; c < count; c++)
                     {
                         flags[c] = dictionary[c].StartsWith(prefix, StringComparison.Ordinal);
+                    }
+
+                    break;
+                }
+
+                default:
+                {
+                    var suffix = f.Scalar(Operands[0]).AsString();
+                    for (var c = 0; c < count; c++)
+                    {
+                        flags[c] = dictionary[c].EndsWith(suffix, StringComparison.Ordinal);
                     }
 
                     break;

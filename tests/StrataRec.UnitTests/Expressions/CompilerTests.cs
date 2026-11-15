@@ -161,6 +161,7 @@ public class CompilerTests
     [InlineData("clamp(5, 0, 1.0)", 1.0)]
     [InlineData("clamp(0.5, 1.0, 0.0)", 0.0)]
     [InlineData("'abc'.startsWith('ab') ? 1.0 : 0.0", 1.0)]
+    [InlineData("'abc'.endsWith('bc') && !endsWith('abc', 'ab') ? 1.0 : 0.0", 1.0)]
     [InlineData("let a = 2.0; let b = a * a; b + a", 6.0)]
     [InlineData("(let a = 1.0; a + 1.0) * 3.0", 6.0)]
     [InlineData("true ? 1 : 2.5", 1.0)]
@@ -214,6 +215,8 @@ public class CompilerTests
         Assert.Equal(new[] { true, false }, f.Rows("col.name.startsWith('al')").Select(v => v.AsBool()));
         Assert.Equal(new[] { true, false }, f.Rows("col.tags.contains('b')").Select(v => v.AsBool()));
         Assert.True(f.Scalar("ctx.request.surface.startsWith('ho')").AsBool());
+        Assert.Equal(new[] { false, true }, f.Rows("col.name.endsWith('ta')").Select(v => v.AsBool()));
+        Assert.Equal("endsWith(col.name, 'ta')", f.Compile("col.name.endsWith('ta')").Describe());
     }
 
     [Fact]

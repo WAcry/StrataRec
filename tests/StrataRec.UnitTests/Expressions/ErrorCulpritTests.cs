@@ -29,6 +29,7 @@ public class ErrorCulpritTests
     [InlineData("overlap_count(ctx.request.recent_item_ids, col.score.final)", 43, 15)]
     [InlineData("overlap_count(1.0, ctx.request.recent_item_ids)", 14, 3)]
     [InlineData("ctx.request.surface.startsWith(1)", 31, 1)]
+    [InlineData("ctx.request.surface.endsWith(1)", 29, 1)]
     [InlineData("[1, 'a']", 4, 3)] // the first element unlike the others
     public void TypeErrors_AreAtThePartAtFault(string source, int offset, int length)
     {

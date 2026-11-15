@@ -22,6 +22,8 @@ internal sealed class Binder
     private readonly List<ExpressionDiagnostic> _diagnostics;
     private readonly List<(string Name, IrNode Node)> _lets = new();
 
+    private const string StringOperations = "strings support ==, !=, 'in', startsWith() and endsWith() only";
+
     /// <summary>
     /// True when the expression reads a name its scope declares with an error (<see cref="IExpressionScope.IsUnusable"/>):
     /// it does not compile, but the error is the declaration's, reported there.
@@ -243,6 +245,8 @@ internal sealed class Binder
         return NameSuggester.Hint(name, candidates);
     }
 
+    private bool IsLet(string name) => TryGetLet(name, out _);
+
     private bool TryGetLet(string name, out IrNode node)
     {
         for (var i = _lets.Count - 1; i >= 0; i--)
@@ -443,7 +447,7 @@ internal sealed class Binder
         string? hint = null;
         if (l.Type.Kind == TypeKind.String && r.Type.Kind == TypeKind.String)
         {
-            hint = "strings support ==, !=, 'in' and startsWith() only";
+            hint = StringOperations;
         }
         else if (l.Type.Kind == TypeKind.Text || r.Type.Kind == TypeKind.Text)
         {
@@ -489,6 +493,12 @@ internal sealed class Binder
     private IrNode BindCall(CallAst call)
     {
         var name = call.Name;
+        if (CelIdioms.TryDescribe(call, IsLet, out var idiom, out var idiomHint, out var idiomStart))
+        {
+            Report(ExpressionErrorCodes.UnknownFunction, idiom, idiomStart, call.NameStart + name.Length - idiomStart, idiomHint);
+            return Poison(call);
+        }
+
         if (!Builtins.TryGetArity(name, out var min, out var max, out var usage))
         {
             // Bind arguments for their own errors, but not a dotted receiver: 'col.item.foo(1)' would only cascade.
@@ -690,7 +700,7 @@ internal sealed class Binder
                 }
 
                 return Fail(ExpressionErrorCodes.TypeMismatch, $"'size' needs a list or text, got {args[0].Type}", call.Args[0],
-                    args[0].Type.Kind == TypeKind.String ? "strings support ==, !=, 'in' and startsWith() only" : null);
+                    args[0].Type.Kind == TypeKind.String ? StringOperations : null);
 
             case "contains":
                 return BindContains(args[0], call.Args[0], args[1], call.Args[1], call, isIn: false);
@@ -705,13 +715,14 @@ internal sealed class Binder
                     $"'overlap_count' needs two lists of the same element type, got {args[0].Type} and {args[1].Type}", call);
 
             case "startsWith":
+            case "endsWith":
                 if (args[0].Type.Kind == TypeKind.String && args[1].Type.Kind == TypeKind.String)
                 {
-                    return Lift(IrOp.StartsWith, TypeKind.Bool, call, args[0], args[1]);
+                    return Lift(name == "startsWith" ? IrOp.StartsWith : IrOp.EndsWith, TypeKind.Bool, call, args[0], args[1]);
                 }
 
                 return FailAt(args[0].Type.Kind != TypeKind.String ? call.Args[0] : call.Args[1], ExpressionErrorCodes.TypeMismatch,
-                    $"'startsWith' needs two strings, got {args[0].Type} and {args[1].Type}", call);
+                    $"'{name}' needs two strings, got {args[0].Type} and {args[1].Type}", call);
 
             case "hash01":
                 for (var i = 0; i < args.Length; i++)

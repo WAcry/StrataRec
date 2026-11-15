@@ -122,6 +122,8 @@ internal static class ScalarOps
                     : ListOps.Overlap(args[0].AsStringList(), args[1].AsStringList()));
             case IrOp.StartsWith:
                 return ScalarValue.FromBool(args[0].AsString().StartsWith(args[1].AsString(), StringComparison.Ordinal));
+            case IrOp.EndsWith:
+                return ScalarValue.FromBool(args[0].AsString().EndsWith(args[1].AsString(), StringComparison.Ordinal));
             case IrOp.Dot:
                 return ScalarValue.FromFloat64(VectorOps.Dot(args[0].AsVector(), args[1].AsVector()));
             case IrOp.Cosine:

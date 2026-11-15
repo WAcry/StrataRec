@@ -247,10 +247,10 @@ internal sealed class VectorProgram
                     return new DictPredicateInstr(IrOp.InSet, a[0].Symbol, a[0].Type, t, (ConstSet)node.Data!, Array.Empty<Opnd>());
                 case IrOp.InSet:
                     return new InSetInstr((ConstSet)node.Data!, t, Visit(a[0]));
-                case IrOp.StartsWith when IsDictColumn(a[0]) && a[1].IsInvariant:
-                    return new DictPredicateInstr(IrOp.StartsWith, a[0].Symbol, a[0].Type, t, null, new[] { Visit(a[1]) });
-                case IrOp.StartsWith:
-                    return new StartsWithInstr(t, Visit(a[0]), Visit(a[1]));
+                case IrOp.StartsWith or IrOp.EndsWith when IsDictColumn(a[0]) && a[1].IsInvariant:
+                    return new DictPredicateInstr(node.Op, a[0].Symbol, a[0].Type, t, null, new[] { Visit(a[1]) });
+                case IrOp.StartsWith or IrOp.EndsWith:
+                    return new AffixInstr(node.Op, t, Visit(a[0]), Visit(a[1]));
                 case IrOp.Overlap:
                     return new OverlapInstr(a[0].Type.Kind, t, Visit(a[0]), Visit(a[1]));
                 case IrOp.Dot or IrOp.Cosine or IrOp.L2Norm:

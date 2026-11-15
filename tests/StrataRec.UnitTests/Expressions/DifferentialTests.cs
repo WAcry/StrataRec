@@ -483,7 +483,7 @@ public class DifferentialTests(ITestOutputHelper output)
                         1 => $"({Gen(K.Int, d)} {Pick("<", "<=", ">", ">=", "==", "!=")} {Gen(K.Int, d)})",
                         2 => $"({Gen(K.Str, d)} {Pick("==", "!=")} {Gen(K.Str, d)})",
                         3 => $"({Gen(K.Str, d)} in ['a', 'zz'])",
-                        4 => $"{Gen(K.Str, d)}.startsWith({Gen(K.Str, d)})",
+                        4 => $"{Gen(K.Str, d)}.{Pick("startsWith", "endsWith")}({Gen(K.Str, d)})",
                         5 => $"({Gen(K.Int, d)} in [1, 2, -1])",
                         6 => $"({Num(d)} in [0.5, 1.0, 0])",
                         7 => $"contains({Gen(K.ListInt, d)}, {Gen(K.Int, d)})",

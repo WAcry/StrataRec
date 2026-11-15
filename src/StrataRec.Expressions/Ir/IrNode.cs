@@ -59,6 +59,7 @@ internal enum IrOp : byte
     InSet,
     Overlap,
     StartsWith,
+    EndsWith,
 
     // Vectors.
     Dot,

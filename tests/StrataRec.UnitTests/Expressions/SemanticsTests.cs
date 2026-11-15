@@ -219,6 +219,9 @@ public class SemanticsTests
         ExprAssert.Rows(f, "col.s in ctx.allowed", true, false, null, false);
         ExprAssert.Rows(f, "col.s.startsWith('two')", true, false, null, true);
         ExprAssert.Rows(f, "startsWith(col.s, ctx.src)", false, true, null, false);
+        ExprAssert.Rows(f, "col.s.endsWith('_v2')", false, false, null, true); // a dictionary column, a constant suffix: once per distinct value
+        ExprAssert.Rows(f, "endsWith(col.s, col.s2)", true, false, null, false); // per row
+        ExprAssert.Rows(f, "col.s.endsWith(ctx.missing)", null, null, null, null);
         ExprAssert.Rows(f, "col.s == col.s2", true, false, null, false);
         ExprAssert.Rows(f, "col.s ?? 'none'", "two_tower", "cf", "none", "two_tower_v2");
         ExprAssert.Rows(f, "col.flag ? col.s2 : 'other'", "two_tower", "other", "y", "other");

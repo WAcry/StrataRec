@@ -299,7 +299,8 @@ internal sealed class Parser
             case TokenKind.LBracket:
                 return ParseList();
             case TokenKind.LBrace:
-                throw Error(token, "Map literals are not supported");
+                throw Error(token, "Map literals are not supported",
+                    "a fixed key → value table is a data table read with lookup('table', key, default); a map parameter is read as param.<name>.<key>");
             case TokenKind.End:
                 throw Error(token, "Unexpected end of expression");
             default:
