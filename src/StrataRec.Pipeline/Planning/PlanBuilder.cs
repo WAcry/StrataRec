@@ -1528,14 +1528,13 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
-    /// Checks a row source against the columns around it on one path (design 4.6). Row sources write one shared version
-    /// of each column, holding the rows each of them appended, and a row has no value in a column until something writes
-    /// it (<c>CandidateTable</c>). So a row source that appends rows after a non-nullable column exists must write it
-    /// (<c>ROW_SOURCE_AFTER_COLUMN</c>); every row source before the first one that writes a non-nullable column must write
-    /// it too (<c>ROW_SOURCE_BEFORE_COLUMN</c>); and no row source may write a column after another node wrote its own
-    /// version (<c>ROW_SOURCE_SHADOWS_VERSION</c>), since readers would switch to the shared version, which holds none of
-    /// that node's values. The first two would fail every request that runs both nodes, at commit; the last would hide
-    /// values without an error.
+    /// Checks a row source against the columns around it on one path (design 4.6). A row source writes the rows it appends
+    /// into the column's current version (the row sources' shared one, or a later node's; see
+    /// <c>RequestState.OutputSlot</c>), and a row has no value in a column until something writes it
+    /// (<c>CandidateTable</c>). So a row source that appends rows after a non-nullable column exists must write it
+    /// (<c>ROW_SOURCE_AFTER_COLUMN</c>), and every row source before the first one that writes a non-nullable column must
+    /// write it too (<c>ROW_SOURCE_BEFORE_COLUMN</c>). Either would otherwise fail every request that runs both nodes, at
+    /// commit.
     /// </summary>
     private void ValidateRowSource(
         CompiledNode node, Dictionary<int, string> possible, Dictionary<int, string> versions, List<CompiledNode> earlier, string artifact)
@@ -1549,7 +1548,7 @@ public sealed class PlanBuilder
                 _diagnostics.Error("ROW_SOURCE_AFTER_COLUMN", artifact, node.Pointer,
                     $"Row source '{node.NodeId}' appends rows after non-nullable column '{column.Name}' is produced but does not write it.",
                     versions.TryGetValue(logical, out var writer)
-                        ? $"move the row source before '{writer}', or declare the column nullable and handle missing values with '??'"
+                        ? $"write '{column.Name}' for the rows it appends (they join the version '{writer}' wrote), move the row source before '{writer}', or declare the column nullable and handle missing values with '??'"
                         : "write the column in the row source, move it earlier, or declare the column nullable and handle missing values with '??'");
             }
         }
@@ -1557,14 +1556,7 @@ public sealed class PlanBuilder
         foreach (var output in node.Outputs)
         {
             var column = schema.Columns[output.LogicalId];
-            if (versions.TryGetValue(output.LogicalId, out var writer))
-            {
-                _diagnostics.Error("ROW_SOURCE_SHADOWS_VERSION", artifact, node.Pointer,
-                    $"Row source '{node.NodeId}' writes '{column.Name}' after '{writer}' wrote its own version of it. Row sources write one " +
-                    $"version shared by the rows they append, which has none of the values '{writer}' wrote, and readers would switch to it.",
-                    $"move the row source before '{writer}', or write its values to another column and combine the two in a later node");
-            }
-            else if (!column.Type.Nullable && !possible.ContainsKey(output.LogicalId))
+            if (!column.Type.Nullable && !possible.ContainsKey(output.LogicalId))
             {
                 // The first row source to write the column: the rows appended before it have no value in it.
                 foreach (var before in earlier)

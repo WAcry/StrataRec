@@ -124,7 +124,7 @@ public sealed class UnwrittenAndUncommittedDataTests
     }
 
     [Fact]
-    public void ARowSourceWritingAColumnAnotherNodeRewrote_IsRejected_AndOneAfterANodesColumnIsToldToMoveBeforeIt()
+    public void ARowSourceAfterANodesNonNullableColumn_IsToldToWriteIt_AndMayWriteAColumnAnotherNodeRewrote()
     {
         var compilation = TryCompile("""
             "score.x": { "type": "float64?", "flow": true }, "score.y": { "type": "float64", "default": 0.0 }
@@ -135,19 +135,70 @@ public sealed class UnwrittenAndUncommittedDataTests
             "more": { "order": 80, "op": "Rows@1", "config": { "ids": [3], "output_col": "score.x" } }
             """, """ "x": "col.score.x ?? -1.0", "y": "col.score.y" """);
 
+        // score.x, which 'rescore' rewrote, is fine: the row's value joins that version. score.y is not written for row 3.
         Assert.False(compilation.Succeeded);
-        var errors = compilation.Diagnostics.Where(d => d.IsError).OrderBy(d => d.Code, StringComparer.Ordinal).ToList();
-        Assert.Equal(new[] { ("ROW_SOURCE_AFTER_COLUMN", "/nodes/more"), ("ROW_SOURCE_SHADOWS_VERSION", "/nodes/more") },
-            errors.Select(d => (d.Code, d.Pointer)));
-        Assert.Contains("after 'rescore' wrote its own version", errors[1].Message, StringComparison.Ordinal);
-        Assert.StartsWith("move the row source before 'score_y'", errors[0].Hint, StringComparison.Ordinal);
+        var error = Assert.Single(compilation.Diagnostics, d => d.IsError);
+        Assert.Equal(("ROW_SOURCE_AFTER_COLUMN", "/nodes/more"), (error.Code, error.Pointer));
+        Assert.Contains("'score.y'", error.Message, StringComparison.Ordinal);
+        Assert.StartsWith("write 'score.y' for the rows it appends (they join the version 'score_y' wrote), move the row source before 'score_y'",
+            error.Hint, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// Injection after scoring (ads, operational slots): a row source after a node wrote its own version of a column writes
+    /// the rows it appends into that version, which stays current, so the output, later nodes and a pinned read of that
+    /// version see them. A row source used to be refused there (ROW_SOURCE_SHADOWS_VERSION): its values went to the row
+    /// sources' shared version, which readers would switch to and which has none of the node's values.
+    /// </summary>
+    [Fact]
+    public async Task ARowSourceAfterANodesVersion_WritesItsRowsIntoIt_ForEveryReader_AsInAReplay()
+    {
+        var plan = Compile("""
+            "score.x": { "type": "float64", "flow": true, "default": 0.0 }, "score.seen": { "type": "float64", "default": 0.0 }
+            """, """
+            "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7, 8], "output_col": "score.x" } },
+            "rescore": { "order": 60, "op": "ExpressionScorer@1", "config": { "output_col": "score.x", "expr": "col.score.x + 1.0" } },
+            "more": { "order": 70, "op": "Rows@1", "config": { "ids": [9], "output_col": "score.x" } },
+            "seen": { "order": 80, "op": "ExpressionScorer@1", "config": { "output_col": "score.seen", "expr": "col.score.x * 10.0" } }
+            """, """ "x": "col.score.x", "seen": "col.score.seen", "rescored": "col.score.x@rescore" """);
+
+        var recorded = await Execute(plan, record: true);
+
+        Assert.True(recorded.Succeeded, recorded.Error);
+        Assert.Equal(new[] { (7L, 1.7, 17.0, 1.7), (8L, 1.8, 18.0, 1.8), (9L, 0.9, 9.0, 0.9) },
+            recorded.Items.Select(i => (i.Id.Int64Value, Round(i.Columns["x"]), Round(i.Columns["seen"]), Round(i.Columns["rescored"]))));
+        await AssertReplayAgrees(plan, recorded);
+    }
+
+    /// <summary>
+    /// A row source that fails after writing its rows into another node's version leaves nothing there: its rows are
+    /// released, in every slot, and the fallback that appends instead reuses them, with its own values.
+    /// </summary>
+    [Fact]
+    public async Task ARowSourceThatFailsAfterWritingIntoAVersion_LeavesNothing_AndItsFallbacksRowsHaveTheirOwnValues()
+    {
+        var plan = Compile("""
+            "score.x": { "type": "float64", "flow": true, "default": 0.0 }
+            """, """
+            "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7], "output_col": "score.x" } },
+            "rescore": { "order": 60, "op": "ExpressionScorer@1", "config": { "output_col": "score.x", "expr": "col.score.x + 1.0" } },
+            "more": { "order": 70, "op": "Rows@1", "on_failure": "fallback:other", "config": { "ids": [8, 9], "output_col": "score.x", "fails": true } },
+            "other": { "role": "fallback", "op": "Rows@1", "config": { "ids": [5], "output_col": "score.x" } }
+            """, """ "x": "col.score.x" """);
+
+        var recorded = await Execute(plan, record: true);
+
+        Assert.True(recorded.Succeeded, recorded.Error);
+        Assert.Equal(new[] { (7L, 1.7), (5L, 0.5) }, recorded.Items.Select(i => (i.Id.Int64Value, Round(i.Columns["x"]))));
+        Assert.Equal("other", recorded.Outcomes.Single(o => o.NodeId == "more").ProducedBy);
+        await AssertReplayAgrees(plan, recorded);
+    }
+
+    private static double Round(ScalarValue value) => Math.Round(value.AsFloat64(), 9);
 
     [Theory]
     [InlineData("row source fallback after a column", "ROW_SOURCE_AFTER_COLUMN /nodes/backup", "before 'base'")]
-    [InlineData("row source fallback over a version", "ROW_SOURCE_SHADOWS_VERSION /nodes/backup", "after 'base' wrote its own version")]
     [InlineData("row source fallback first to write", "ROW_SOURCE_BEFORE_COLUMN /nodes/seed", "later row source 'backup'")]
-    [InlineData("version of the node, later row source", "ROW_SOURCE_SHADOWS_VERSION /nodes/more", "after 'primary' wrote its own version")]
     [InlineData("rows of the fallback, later row source", "ROW_SOURCE_BEFORE_COLUMN /nodes/backup|ROW_SOURCE_BEFORE_COLUMN /nodes/seed", "later row source 'more'")]
     [InlineData("column fallback of a row source", "COLUMN_MULTIPLE_PRODUCERS /nodes/backup", "both 'seed' and 'backup'")]
     [InlineData("row source fallback of a row source", "ROW_SOURCE_BEFORE_COLUMN /nodes/seed|ROW_SOURCE_BEFORE_COLUMN /nodes/seed|ROW_SOURCE_BEFORE_COLUMN /nodes/seed|ROW_SOURCE_BEFORE_COLUMN /nodes/seed", "later row source 'recall'")]
@@ -168,28 +219,12 @@ public sealed class UnwrittenAndUncommittedDataTests
                 "backup": { "role": "fallback", "op": "Rows@1", "config": { "ids": [8], "output_col": "score.y" } },
                 "seen": { "order": 80, "op": "ExpressionScorer@1", "config": { "output_col": "score.seen", "expr": "col.score.x + 1.0" } }
                 """),
-            "row source fallback over a version" => ("""
-                "score.x": { "type": "float64?", "flow": true }
-                """, """
-                "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7] } },
-                "base": { "order": 60, "op": "ExpressionScorer@1", "config": { "output_col": "score.x", "expr": "10.0" } },
-                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.x", "how": "fails" } },
-                "backup": { "role": "fallback", "op": "Rows@1", "config": { "ids": [8], "output_col": "score.x" } }
-                """),
             "row source fallback first to write" => ("""
                 "score.y": { "type": "float64", "default": 0.0 }
                 """, """
                 "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7] } },
                 "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.y", "how": "fails" } },
                 "backup": { "role": "fallback", "op": "Rows@1", "config": { "ids": [8], "output_col": "score.y" } }
-                """),
-            "version of the node, later row source" => ("""
-                "score.y": { "type": "float64?" }
-                """, """
-                "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7] } },
-                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.y", "how": "fails" } },
-                "backup": { "role": "fallback", "op": "Rows@1", "config": { "ids": [8], "output_col": "score.y" } },
-                "more": { "order": 80, "op": "Rows@1", "config": { "ids": [9], "output_col": "score.y" } }
                 """),
             "rows of the fallback, later row source" => ("""
                 "score.y": { "type": "float64?" }, "score.z": { "type": "float64", "default": 0.0 }
@@ -387,9 +422,14 @@ public sealed class UnwrittenAndUncommittedDataTests
         public string? OutputCol { get; init; }
 
         public int? WriteFirst { get; init; }
+
+        public bool Fails { get; init; }
     }
 
-    /// <summary><c>Rows@1</c>: appends its ids; with <c>output_col</c>, writes id / 10 into it for its first <c>write_first</c> rows (all by default).</summary>
+    /// <summary>
+    /// <c>Rows@1</c>: appends its ids; with <c>output_col</c>, writes id / 10 into it for its first <c>write_first</c> rows
+    /// (all by default); with <c>fails</c>, then reports a failure.
+    /// </summary>
     private sealed class RowsFactory : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } = new("Rows", 1, Effects.RowSource, typeof(RowsConfig), "Appends fixed ids.");
@@ -408,10 +448,10 @@ public sealed class UnwrittenAndUncommittedDataTests
                 output = column;
             }
 
-            return new Rows(config.Ids, output, config.WriteFirst ?? config.Ids.Length);
+            return new Rows(config.Ids, output, config.WriteFirst ?? config.Ids.Length, config.Fails);
         }
 
-        private sealed class Rows(long[] ids, OutputColumn? output, int writeFirst) : Operator
+        private sealed class Rows(long[] ids, OutputColumn? output, int writeFirst, bool fails) : Operator
         {
             public override int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => ids.Length;
 
@@ -425,6 +465,11 @@ public sealed class UnwrittenAndUncommittedDataTests
                     {
                         ColumnValues.Set(buffer, first + i, ScalarValue.FromFloat64(ids[i] / 10.0));
                     }
+                }
+
+                if (fails)
+                {
+                    context.Fail("gave up after appending");
                 }
 
                 return ValueTask.CompletedTask;

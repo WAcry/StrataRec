@@ -107,8 +107,12 @@ public sealed class OperatorContext
         return slot < 0 ? null : _state.Table.TryGetSlot(slot);
     }
 
-    /// <summary>This node's buffer for an output column. Written values become visible only if the node succeeds.</summary>
-    public ColumnBuffer Output(in OutputColumn column) => _state.Table.GetOrCreateSlot(column.Slot);
+    /// <summary>
+    /// This node's buffer for an output column. Written values become visible only if the node succeeds. A row source
+    /// writes only the rows it appended; after a node has written its own version of the column, the buffer is that
+    /// version, so the appended rows get their values in the column readers see (a score for injected rows, design 4.6).
+    /// </summary>
+    public ColumnBuffer Output(in OutputColumn column) => _state.Table.GetOrCreateSlot(_state.OutputSlot(_effects, column));
 
     public ScalarValue Param(in ParamRef parameter) => _state.Params[parameter.Id];
 

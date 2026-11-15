@@ -256,6 +256,17 @@ internal sealed class RequestState
     public TimeSpan Remaining => Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), DeadlineTimestamp);
 
     public EvalContext Eval => new(Table, Bindings, Context, Params, Counters);
+
+    /// <summary>
+    /// The slot a node writes an output into now (design 4.6): its own, except that a row source writes the rows it
+    /// appends into the column's current version once a node has committed one. Its rows then join the values readers
+    /// already see, and nothing is committed for the column: a row source after a scorer can give the rows it injects a
+    /// score in the same column. Before any version, and after a row source's, this is the row sources' shared version.
+    /// </summary>
+    /// <remarks>Stable for a node's attempt: nothing commits while it runs. A failed attempt's rows are released by the
+    /// rollback, in every slot, so writing into another node's version leaves nothing behind.</remarks>
+    public int OutputSlot(Operators.Effects effects, in Operators.OutputColumn output) =>
+        (effects & Operators.Effects.RowSource) != 0 && Bindings.Resolve(output.LogicalId) is >= 0 and var current ? current : output.Slot;
 }
 
 /// <summary>
@@ -803,7 +814,8 @@ public sealed class PipelineExecutor
             var column = state.Plan.Schema.Columns[output.LogicalId];
 
             // A node that never asked for its buffer wrote nothing: the new slot has every row missing.
-            var buffer = table.GetOrCreateSlot(output.Slot);
+            var slot = state.OutputSlot(node.Effects, output);
+            var buffer = table.GetOrCreateSlot(slot);
             if (ColumnValues.IsFloat(buffer)
                 && ColumnValues.SanitizeNonFinite(buffer, live, column.HasDefault ? column.Default : ScalarValue.Missing) is > 0 and var replaced)
             {
@@ -814,7 +826,7 @@ public sealed class PipelineExecutor
                 }
             }
 
-            if (!output.Type.Nullable && table.CountMissingLiveRows(output.Slot) is > 0 and var missing)
+            if (!output.Type.Nullable && table.CountMissingLiveRows(slot) is > 0 and var missing)
             {
                 return $"left non-nullable column '{output.Name}' without a value on {missing} of {live.Length} live rows";
             }
@@ -822,7 +834,11 @@ public sealed class PipelineExecutor
 
         foreach (var output in node.Outputs)
         {
-            state.Bindings.Commit(output.LogicalId, output.Slot, node.Index);
+            // A row source that wrote into another node's version leaves that version current (OutputSlot).
+            if (state.OutputSlot(node.Effects, output) == output.Slot)
+            {
+                state.Bindings.Commit(output.LogicalId, output.Slot, node.Index);
+            }
         }
 
         return null;
