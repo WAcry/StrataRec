@@ -266,7 +266,7 @@ internal sealed partial class UnifiedCompilation
         _builder.ValidateDataFlow(nodes, selectedFallbacks, output, _pipelineLabel, taps);
         if (assigned.Count > 0)
         {
-            ValidateNames(nodes, selectedFallbacks, taps, output, assigned); // without an arm: ValidateBaselineAlone
+            ValidateNames(nodes, selectedFallbacks, taps, output, assigned, start); // without an arm: ValidateBaselineAlone
         }
 
         Settle(start, assigned);

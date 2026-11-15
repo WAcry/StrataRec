@@ -678,7 +678,7 @@
                       "type": "string"
                     },
                     "source_order": {
-                      "description": "Merge order of sources; defaults to ordinal order of their names. Earlier sources win the primary source.",
+                      "description": "Merge order of sources: the listed ones first, then the others by name (all by name without it). Earlier sources win the primary source. An experiment adds a source by giving it a quota, and lists it here to move it ahead.",
                       "type": [
                         "array",
                         "null"

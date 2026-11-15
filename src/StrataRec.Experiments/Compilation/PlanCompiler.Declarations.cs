@@ -1,4 +1,5 @@
 using System.Globalization;
+using StrataRec.Artifacts.Json;
 using StrataRec.Expressions;
 using StrataRec.Pipeline.Planning;
 
@@ -8,6 +9,7 @@ namespace StrataRec.Experiments.Compilation;
 internal sealed partial class UnifiedCompilation
 {
     private HashSet<string>? _extraLeaves;
+    private (int Start, int End) _flowErrors; // the current combination's other checks, for ReportedAt
 
     /// <summary>
     /// The unified plan compiles every node once, on one schema holding whatever any arm declares; a compile of one arm
@@ -16,7 +18,8 @@ internal sealed partial class UnifiedCompilation
     /// (<see cref="CompiledNode.Requires"/>) must be declared before it compiles: by the baseline, by an addition of an arm
     /// assigned here, or, for a column, by a node compiled earlier whose write declares it (<see cref="CompiledNode.Declares"/>).
     /// The compile order is the one <see cref="CompileVariants"/> uses: the timeline by order, then id; the fallbacks after
-    /// it by id; the taps and the output last.
+    /// it by id; the taps and the output last. A reader the combination's other checks reported an error at (since
+    /// <paramref name="start"/>; a tap reading a column no node produces before it) is not reported again.
     /// </summary>
     /// <remarks>
     /// Each part of this was a gap where the unified plan accepted what a combination's own compile refuses: a column only
@@ -28,8 +31,10 @@ internal sealed partial class UnifiedCompilation
     /// layer, which a request may not get.
     /// </remarks>
     private void ValidateNames(
-        List<CompiledNode> nodes, Dictionary<string, CompiledNode> fallbacks, List<CompiledTap> taps, OutputPlan output, List<ArmPatch> assigned)
+        List<CompiledNode> nodes, Dictionary<string, CompiledNode> fallbacks, List<CompiledTap> taps, OutputPlan output, List<ArmPatch> assigned,
+        int start)
     {
+        _flowErrors = (start, _diagnostics.Count);
         var ordered = new List<CompiledNode>(nodes);
         ordered.Sort(static (a, b) => a.Order != b.Order ? a.Order!.Value.CompareTo(b.Order!.Value) : string.CompareOrdinal(a.NodeId, b.NodeId));
         var later = new List<CompiledNode>(fallbacks.Count);
@@ -61,7 +66,7 @@ internal sealed partial class UnifiedCompilation
         {
             foreach (var name in tap.Requires)
             {
-                Declared(name, "Tap", tap.TapId, "/log_taps/" + tap.TapId, ordered, ordered.Count, later, later.Count, assigned);
+                Declared(name, "Tap", tap.TapId, "/log_taps/" + JsonPointer.Escape(tap.TapId), ordered, ordered.Count, later, later.Count, assigned);
             }
         }
 
@@ -71,7 +76,7 @@ internal sealed partial class UnifiedCompilation
             {
                 if (symbol.Kind is SymbolKind.Column or SymbolKind.Param or SymbolKind.Context)
                 {
-                    Declared(new NameRef(symbol.Kind, symbol.Id), "Output column", column, "/output/columns/" + column, ordered, ordered.Count, later, later.Count, assigned);
+                    Declared(new NameRef(symbol.Kind, symbol.Id), "Output column", column, "/output/columns/" + JsonPointer.Escape(column), ordered, ordered.Count, later, later.Count, assigned);
                 }
             }
         }
@@ -191,7 +196,26 @@ internal sealed partial class UnifiedCompilation
                 return; // the entity id and request fields are the baseline's
         }
 
-        _diagnostics.Error("NAME_NOT_DECLARED", _pipelineLabel, pointer, $"{kind} '{reader}' reads '{written}', which is not declared here: {why}.", hint);
+        if (!ReportedAt(pointer))
+        {
+            _diagnostics.Error("NAME_NOT_DECLARED", _pipelineLabel, pointer, $"{kind} '{reader}' reads '{written}', which is not declared here: {why}.", hint);
+        }
+    }
+
+    /// <summary>Whether the combination's other checks reported an error at <paramref name="pointer"/> or under it.</summary>
+    private bool ReportedAt(string pointer)
+    {
+        var items = _diagnostics.Items;
+        for (var i = _flowErrors.Start; i < _flowErrors.End; i++)
+        {
+            var at = items[i].Pointer;
+            if (items[i].IsError && at.StartsWith(pointer, StringComparison.Ordinal) && (at.Length == pointer.Length || at[pointer.Length] == '/'))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string Declare(string reader) =>

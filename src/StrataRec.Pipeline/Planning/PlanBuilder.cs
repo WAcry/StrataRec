@@ -532,12 +532,12 @@ public sealed class PlanBuilder
             {
                 if (sources.ContainsKey(name))
                 {
-                    _diagnostics.Error("TAP_DUPLICATE_COLUMN", artifact, pointer + "/columns/" + name, $"Column '{name}' is also produced by columns_from.");
+                    _diagnostics.Error("TAP_DUPLICATE_COLUMN", artifact, pointer + "/columns/" + JsonPointer.Escape(name), $"Column '{name}' is also produced by columns_from.");
                     ok = false;
                     continue;
                 }
 
-                sources[name] = (source, pointer + "/columns/" + name);
+                sources[name] = (source, pointer + "/columns/" + JsonPointer.Escape(name));
             }
         }
 
@@ -665,7 +665,7 @@ public sealed class PlanBuilder
         foreach (var name in Sorted(groups.Keys))
         {
             var spec = groups[name];
-            var pointer = "/funnel_groups/" + name;
+            var pointer = "/funnel_groups/" + JsonPointer.Escape(name);
             var exists = false;
             foreach (var g in _groups)
             {
@@ -1039,7 +1039,7 @@ public sealed class PlanBuilder
                 {
                     if (symbol is { Kind: SymbolKind.Column, FixedSlot: < 0 } && !symbol.Type.Nullable && !guaranteed.Contains(symbol.Id))
                     {
-                        _diagnostics.Error("COLUMN_NO_PRODUCER", artifact, "/output/columns/" + name,
+                        _diagnostics.Error("COLUMN_NO_PRODUCER", artifact, "/output/columns/" + JsonPointer.Escape(name),
                             $"Output reads non-nullable column '{schema.Columns[symbol.Id].Name}', which is not guaranteed to be produced.");
                     }
                 }
@@ -1069,7 +1069,7 @@ public sealed class PlanBuilder
             {
                 foreach (var read in tap.VersionReads)
                 {
-                    ValidateVersionRead(read, "Tap", tap.TapId, "/log_taps/", tap.TapId, ordered, fallbacks, artifact);
+                    ValidateVersionRead(read, "Tap", tap.TapId, "/log_taps/", JsonPointer.Escape(tap.TapId), ordered, fallbacks, artifact);
                 }
             }
         }
@@ -1078,7 +1078,7 @@ public sealed class PlanBuilder
         {
             foreach (var (name, read) in output.VersionReads)
             {
-                ValidateVersionRead(read, "Output column", name, "/output/columns/", name, ordered, fallbacks, artifact);
+                ValidateVersionRead(read, "Output column", name, "/output/columns/", JsonPointer.Escape(name), ordered, fallbacks, artifact);
             }
         }
 
@@ -1144,7 +1144,7 @@ public sealed class PlanBuilder
                 if (!found)
                 {
                     // A fallback runs in its node's place: the taps after that node capture what it produced.
-                    _diagnostics.Error("TAP_UNKNOWN_NODE", artifact, "/log_taps/" + tap.TapId + "/attach/after",
+                    _diagnostics.Error("TAP_UNKNOWN_NODE", artifact, "/log_taps/" + JsonPointer.Escape(tap.TapId) + "/attach/after",
                         fallbacks.ContainsKey(after)
                             ? $"Tap '{tap.TapId}' attaches after fallback '{after}', which only runs in place of another node; taps never fire after it."
                             : $"Tap '{tap.TapId}' attaches after '{after}', which is not a node of the pipeline.",
@@ -1185,7 +1185,7 @@ public sealed class PlanBuilder
             {
                 if (!read.Contains(f))
                 {
-                    _diagnostics.Error("TAP_FEATURE_NOT_FETCHED", artifact, "/log_taps/" + tap.TapId,
+                    _diagnostics.Error("TAP_FEATURE_NOT_FETCHED", artifact, "/log_taps/" + JsonPointer.Escape(tap.TapId),
                         $"Tap '{tap.TapId}' reads context feature '{_features[f].Definition.Name}', which no node or output column reads; taps never trigger fetches.",
                         "log a context feature that a node or the output reads wherever the tap runs (an arm that adds the reader can add the tap's field too)");
                 }
@@ -1451,7 +1451,7 @@ public sealed class PlanBuilder
 
         foreach (var (name, read) in output.VersionReads)
         {
-            Scope($"output column '{name}' reading the version of '{read.Node}'", "/output/columns/" + name,
+            Scope($"output column '{name}' reading the version of '{read.Node}'", "/output/columns/" + JsonPointer.Escape(name),
                 new SortedSet<string>(StringComparer.Ordinal) { read.Node });
         }
 
@@ -1483,7 +1483,7 @@ public sealed class PlanBuilder
                 contextFeatures.UnionWith(tap.ReadContextFeatures);
             }
 
-            var pointer = "/log_taps/" + tapId;
+            var pointer = "/log_taps/" + JsonPointer.Escape(tapId);
             if (attach.Count > 0)
             {
                 Scope($"tap '{tapId}' and where it attaches", pointer + "/attach/after", new SortedSet<string>(attach, StringComparer.Ordinal), tapId);
@@ -1591,7 +1591,7 @@ public sealed class PlanBuilder
     /// </summary>
     private void ValidateTap(CompiledTap tap, Dictionary<int, string> possible, HashSet<int> fetched, HashSet<string> later, string artifact)
     {
-        var pointer = "/log_taps/" + tap.TapId;
+        var pointer = "/log_taps/" + JsonPointer.Escape(tap.TapId);
         var where = tap.AttachOutput ? "the output" : $"'{tap.AttachAfter}'";
         foreach (var pinned in tap.PinnedNodes)
         {

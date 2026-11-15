@@ -291,7 +291,13 @@ public sealed class OperatorCompileContext
         return true;
     }
 
-    /// <summary>All leaves of a map parameter (e.g. every <c>recall_quotas.*</c>), ordered by key.</summary>
+    /// <summary>
+    /// All leaves of a map parameter (e.g. every <c>recall_quotas.*</c>), ordered by key: the baseline's and every key an
+    /// arm adds. A key only an arm adds is missing in a request without that arm, whose own compile does not have it, so
+    /// the node must treat a missing leaf as an absent entry when it runs, and derive nothing from the set of leaves that
+    /// a compile without that key would see otherwise (a position, a count). Binding one leaf by name
+    /// (<see cref="TryParam"/>) needs it declared where the node is.
+    /// </summary>
     public List<ParamRef> MapParam(string mapName, string configKey, StorageKind? expectedKind = null)
     {
         var result = new List<ParamRef>();

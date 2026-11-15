@@ -127,6 +127,30 @@ public sealed class DeclarationTests
     }
 
     [Fact]
+    public void ADiagnosticAtATapOrAnOutputColumn_EscapesItsNameInThePointer()
+    {
+        // Review 52: the names went into the pointer as they are, so '/' and '~' made it point elsewhere, and the tap's
+        // error was not attributed to the arm that adds it.
+        var host = HomeFeedTestHost.Load();
+        host.Request.Pipeline.Output.Columns["rank/of~author"] = "col.group.author_rank";
+        var request = With(host.Request,
+        [
+            Treatment("a", """{ "nodes": { "author_rank": null, "author_cap": null } }"""),
+            Treatment("b", """
+                { "log_taps": { "rank/of~tap": { "group": "all", "attach": { "after": "diversity_cap" }, "columns": { "v": "col.group.author_rank" } } } }
+                """),
+        ]);
+
+        var unified = PlanCompiler.Compile(request, host.Environment);
+
+        // The tap's column has no producer before it either, which the data-flow check says: the name rule does not repeat it.
+        var errors = unified.Diagnostics.Where(d => d.IsError).ToList();
+        Assert.Equal(2, errors.Count);
+        Assert.Contains(errors, d => (d.Code, d.Pointer) == ("NAME_NOT_DECLARED", "/output/columns/rank~1of~0author"));
+        Assert.Contains(errors, d => (d.Code, d.Artifact, d.Pointer) == ("TAP_COLUMN_NOT_PRODUCED", "experiment:b", "/arms/t/log_taps/rank~1of~0tap"));
+    }
+
+    [Fact]
     public void AColumnDeclaredOnlyByAnArmNotAssignedWithItsReader_IsNotDeclaredThere()
     {
         // Review 51 P1: a declares the column the baseline's writer declares too, b reads it, c deletes the writer; each arm

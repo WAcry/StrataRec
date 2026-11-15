@@ -15,7 +15,10 @@ public sealed class MultiSourceRecallConfig
     /// <summary>Map parameter <c>source name → quota</c> (e.g. <c>recall_quotas</c>); a quota of 0 disables a source.</summary>
     public required string QuotasParam { get; init; }
 
-    /// <summary>Merge order of sources; defaults to ordinal order of their names. Earlier sources win the primary source.</summary>
+    /// <summary>
+    /// Merge order of sources: the listed ones first, then the others by name (all by name without it). Earlier sources
+    /// win the primary source. An experiment adds a source by giving it a quota, and lists it here to move it ahead.
+    /// </summary>
     public List<string>? SourceOrder { get; init; }
 }
 
@@ -23,7 +26,9 @@ public sealed class MultiSourceRecallConfig
 /// <c>MultiSourceRecall@1</c> (RowSource): calls every source with a positive quota concurrently, merges results in
 /// the declared source order (independent of arrival order, design 5.7), deduplicates by <c>entity_id</c> and appends
 /// the rows with <c>recall.sources_mask</c>, <c>recall.best_rank</c>, <c>recall.best_score</c> and
-/// <c>recall.primary_source</c>. Fails only if every called source fails; otherwise Degraded.
+/// <c>recall.primary_source</c>. Fails only if every called source fails; otherwise Degraded. Bit <c>i</c> of the mask
+/// is the <c>i</c>-th source in merge order among those the request has a quota for (0 included): a source only an
+/// experiment's arm gives a quota has none without that arm, and takes no bit there, as in a compile without it.
 /// </summary>
 public sealed class MultiSourceRecallFactory : IOperatorFactory
 {
@@ -57,6 +62,9 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
             byName[leaf.Name[prefix..]] = leaf;
         }
 
+        // The listed sources, then the others by name. Every source is one some arm combination has, so a list required
+        // to name them all would refuse the baseline wherever an arm adds a source with its quota alone. A listed source
+        // is bound by name: an arm listing one only another layer's arm adds has none without it.
         var names = new List<string>();
         if (config.SourceOrder is not null)
         {
@@ -70,24 +78,32 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                     return null;
                 }
 
-                names.Add(name);
-            }
-
-            foreach (var name in byName.Keys)
-            {
-                if (!names.Contains(name))
+                if (names.Contains(name))
                 {
-                    context.Error("/source_order", "RECALL_SOURCE_ORDER", $"source_order must list every source; '{name}' is missing.",
-                        $"add '{name}' (an earlier source wins an item's primary source), or omit source_order to merge the sources by name");
+                    context.Error($"/source_order/{i}", "RECALL_SOURCE_ORDER", $"'{name}' is listed twice in source_order.", "list each source once");
                     return null;
                 }
+
+                if (!context.TryParam(byName[name].Name, $"/source_order/{i}", out _))
+                {
+                    return null;
+                }
+
+                names.Add(name);
             }
         }
-        else
+
+        var unlisted = new List<string>();
+        foreach (var name in byName.Keys)
         {
-            names.AddRange(byName.Keys);
-            names.Sort(StringComparer.Ordinal);
+            if (!names.Contains(name))
+            {
+                unlisted.Add(name);
+            }
         }
+
+        unlisted.Sort(StringComparer.Ordinal);
+        names.AddRange(unlisted);
 
         if (names.Count > 64)
         {
@@ -156,9 +172,12 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         {
             var calls = new Task<CandidateSourceStatus>?[sources.Length];
             var buffers = new CandidateBuffer?[sources.Length];
+            var bits = context.Memory.Rent<int>(sources.Length);
+            var bit = 0;
             for (var i = 0; i < sources.Length; i++)
             {
                 var quotaValue = context.Param(sources[i].Quota);
+                bits[i] = quotaValue.IsMissing ? -1 : bit++; // a source without a quota here has no bit (see the type's remarks)
                 var quota = quotaValue.IsMissing ? 0 : (int)Math.Clamp(quotaValue.AsInt64(), 0, int.MaxValue);
                 if (quota == 0)
                 {
@@ -220,7 +239,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 context.ReportDegraded("recall sources failed: " + string.Join("; ", failed));
             }
 
-            Merge(context, buffers);
+            Merge(context, buffers, bits);
         }
 
         /// <summary>
@@ -229,7 +248,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         /// first new key that no longer fits in the table. The index and the merged columns are rented from the request
         /// memory, sized to the most keys that can be added, so nothing here allocates per key.
         /// </summary>
-        private void Merge(OperatorContext context, CandidateBuffer?[] sinks)
+        private void Merge(OperatorContext context, CandidateBuffer?[] sinks, int[] bits)
         {
             var table = context.Table;
             var memory = context.Memory;
@@ -283,7 +302,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                         at = index.GetOrAdd(key, index.Count, out var added);
                         if (added)
                         {
-                            masks[at] = 1L << s;
+                            masks[at] = 1L << bits[s];
                             ranks[at] = r + 1;
                             scores[at] = sinkScores[r];
                             primaries[at] = s;
@@ -291,7 +310,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                         }
                     }
 
-                    masks[at] |= 1L << s;
+                    masks[at] |= 1L << bits[s];
                     ranks[at] = Math.Min(ranks[at], r + 1);
                     scores[at] = Math.Max(scores[at], sinkScores[r]);
                 }
