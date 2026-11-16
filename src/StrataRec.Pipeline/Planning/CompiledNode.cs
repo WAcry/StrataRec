@@ -102,6 +102,12 @@ public sealed class CompiledNode
     /// <summary>Logical columns read (features, outputs, entity id).</summary>
     public required ImmutableArray<int> ReadColumns { get; init; }
 
+    /// <summary>
+    /// The columns of <see cref="ReadColumns"/> read at their current version, not only pinned (<c>col.x@node</c>): what
+    /// a writer added before the node changes for it (design 11.5).
+    /// </summary>
+    public ImmutableArray<int> CurrentReads { get; init; } = [];
+
     /// <summary>Feature indices read directly (expanded to dependencies by the fetcher).</summary>
     public required ImmutableArray<int> ReadFeatures { get; init; }
 

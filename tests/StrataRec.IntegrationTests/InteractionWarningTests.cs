@@ -114,6 +114,32 @@ public sealed class InteractionWarningTests
     }
 
     /// <summary>
+    /// Review 70: changing a read of a pinned version (col.score.final@fusion) to the current one is a new dependency: a
+    /// writer another experiment adds before the node now changes what it reads (the two arms together filtered every
+    /// item), so it warns. A pinned read does not see the writer, so it does not.
+    /// </summary>
+    [Fact]
+    public void AReadChangedFromPinnedToCurrent_Interacts_APinnedReadDoesNot()
+    {
+        StrataRec.Experiments.Compilation.PlanCompilation Compile(string readerArm) => HomeFeedTestHost.LoadModified(root =>
+        {
+            ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"rank_sort\": {",
+                "\"reader\": { \"op\": \"ExpressionFilter@1\", \"order\": 490, \"config\": { \"predicate\": \"(col.score.final@fusion ?? 0.0) > 0.0\" } },\n    \"rank_sort\": {");
+            Experiment(root, "exp_writer", "on",
+                """{ "nodes": { "zero": { "op": "ExpressionScorer@1", "order": 480, "config": { "output_col": "score.final", "expr": "0.0" } } } }""");
+            Experiment(root, "exp_reader", "on", readerArm);
+        }).Compile();
+
+        var current = Compile("""{ "nodes": { "reader": { "config": { "predicate": "col.score.final > 0.0" } } } }""");
+        var pinned = Compile("""{ "nodes": { "reader": { "config": { "predicate": "(col.score.final@fusion ?? 1.0) > 0.5" } } } }""");
+
+        Assert.True(current.Succeeded, string.Join("\n", current.Diagnostics));
+        Assert.Contains(current.Diagnostics, d => d.Code == "INTERACTION_READ" && d.Message.Contains("'reader'", StringComparison.Ordinal));
+        Assert.True(pinned.Succeeded, string.Join("\n", pinned.Diagnostics));
+        Assert.DoesNotContain(pinned.Diagnostics, d => d.Code == "INTERACTION_READ" && d.Message.Contains("'reader'", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// Review 69: while the configuration has errors, interactions are not known, so no review is called unused: a node's
     /// config error made the sample's valid review "unused", with a hint to remove it.
     /// </summary>

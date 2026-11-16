@@ -315,11 +315,30 @@ public sealed class LogColumn
 /// them. Built once per plan and shared by every batch of the variant (<see cref="LogBatch.Schema"/>), so a sink can
 /// publish the record a batch's schema id names, once per id, and the engine publishes nothing of its own.
 /// </summary>
-/// <param name="Id">Content id of the record: the tap's definition and the resolved types.</param>
+/// <param name="Id">Content id of the record (<see cref="Create"/>): one id names one record.</param>
 public sealed record LogSchema(string Id, string TapId, ImmutableArray<LogField> Columns, ImmutableArray<LogField> Context)
 {
     /// <summary>The schema of the batches that record a request's experiments when no tap fired (design 11.3).</summary>
     public static LogSchema Experiments { get; } = new("$experiments", "$experiments", [], []);
+
+    /// <summary>
+    /// The schema with its id: the sha256 of the record's JSON as a sink writes it, less the id. Everything the record says
+    /// is in the id and nothing else is: a context field whose type changed gets a new id (it hashed the tap's definition
+    /// and its columns' types, so a reader holding the record by id read the field with the old type; review 70), and a
+    /// change of rate or filter that leaves the record as it was keeps it.
+    /// </summary>
+    public static LogSchema Create(string tapId, ImmutableArray<LogField> columns, ImmutableArray<LogField> context)
+    {
+        ArgumentNullException.ThrowIfNull(tapId);
+        var buffer = new System.Buffers.ArrayBufferWriter<byte>();
+        using (var json = new System.Text.Json.Utf8JsonWriter(buffer))
+        {
+            LogBatchJson.WriteSchemaBody(json, tapId, columns, context);
+        }
+
+        var hash = System.Security.Cryptography.SHA256.HashData(buffer.WrittenSpan);
+        return new LogSchema("sha256:" + Convert.ToHexStringLower(hash), tapId, columns, context);
+    }
 }
 
 /// <summary>A logged column or context field: its name, type and the expression it is logged from.</summary>

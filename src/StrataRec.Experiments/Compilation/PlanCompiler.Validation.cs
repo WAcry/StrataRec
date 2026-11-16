@@ -431,7 +431,9 @@ internal sealed partial class UnifiedCompilation
             // parameter, changes its values as any parameter does and composes by the structure (design 11.5): counting
             // every column of a touched node warned for every pair of experiments tuning different multipliers of one flow
             // column. A node whose operator or config now writes or reads another column is a change of structure (review
-            // 69: a filter replaced by a writer of score.final, read by another experiment's added node, did not warn).
+            // 69: a filter replaced by a writer of score.final, read by another experiment's added node, did not warn). Only
+            // a read of the current version counts: a pinned one (col.x@node) does not see a writer another arm adds, and a
+            // read changed from pinned to current is a new dependency (review 70).
             var baseline = arm.AddedNodes.Contains(nodeId) ? null : v.Variants[v.IndexOf(RequestArms.None)];
             foreach (var output in node.Outputs)
             {
@@ -441,9 +443,9 @@ internal sealed partial class UnifiedCompilation
                 }
             }
 
-            foreach (var read in node.ReadColumns)
+            foreach (var read in node.CurrentReads)
             {
-                if (baseline is null || baseline.ReadColumns.IndexOf(read) < 0)
+                if (baseline is null || baseline.CurrentReads.IndexOf(read) < 0)
                 {
                     addedReads.TryAdd(read, nodeId);
                 }

@@ -125,96 +125,115 @@ public static class PlanCompiler
     }
 
     /// <summary>
-    /// What a release of <paramref name="request"/> needs of a binary (design 10.4): compiles the baseline alone, then
-    /// the baseline with each experiment (every arm of it, as one layer), and gives each experiment what its compile
-    /// needed beyond the baseline's. No plan is built and nothing is loaded. Null after reporting the errors of a compile
-    /// that failed; its warnings are the full compile's to report.
+    /// What a release of <paramref name="request"/> needs of a binary (design 10.4): the baseline's needs, and for each
+    /// experiment what it adds, so that every set of experiments left after revocations requires at least what it needs. No
+    /// plan is built and nothing is loaded. Null after reporting the errors of a compile that failed; its warnings are the
+    /// full compile's to report.
     /// </summary>
     /// <remarks>
-    /// <para>Recording each experiment's own needs is what lets a revocation, which compiles nothing, require exactly what
-    /// is left: inferring them back from the configuration's names kept what an operator used by default and freed nothing
-    /// a feature source needed (reviews 39, 40, 42, 68).</para>
+    /// <para>Recording each experiment's needs is what lets a revocation, which compiles nothing, require what is left:
+    /// inferring them back from the configuration's names kept what an operator used by default and freed nothing a feature
+    /// source needed (reviews 39, 40, 42, 68).</para>
     /// <para>A combination can need what no experiment needs alone: one arm points recall at a quota map, an arm of another
-    /// layer adds a source of a new client type to that map (review 69). What the release with every experiment needs
-    /// beyond the baseline's and the experiments' own goes to each experiment without which it is not needed (one compile
-    /// without each experiment, only when there is such a need): removing any of them removes it, and a controller rolling
-    /// a binary back removes every experiment that lists the missing capability. A need no single removal ends (two
-    /// combinations giving it) stays with the baseline. Either way the release requires too much, never too little.</para>
+    /// layer adds a source of a new client type to that map (review 69); and what one experiment needs alone, another pair
+    /// can need too (review 70). So each capability the release needs beyond the baseline goes to: the experiments that need
+    /// it alone (O); and, if the release without O still needs it, each remaining experiment without which those remaining
+    /// no longer need it (one compile without each). If none such exists, it stays with the baseline. Compiling more
+    /// experiments never needs less (every arm's variant joins the baseline's), so a set without a holder needs it no more
+    /// than the release without O, or without that holder, does: what is left always requires what it needs. Too much is
+    /// possible (a need no single removal ends goes to the baseline), too little is not.</para>
     /// </remarks>
     public static ReleaseRequirements? Requirements(PlanCompileRequest request, PlanEnvironment? environment, DiagnosticBag diagnostics)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(diagnostics);
-        environment ??= new PlanEnvironment();
-        var view = PatchableView.Create(request.Pipeline, request.Catalog);
-        if (Needs(UnifiedCompilation.WithoutExperiments(request), environment, view, diagnostics) is not { } baseline)
+        var compiles = new RequirementCompiles(request, environment ?? new PlanEnvironment(), diagnostics);
+        var all = new List<ExperimentPlacement>(request.Experiments);
+        if (compiles.Needs([]) is not { } baselineNeeds)
         {
             return null;
         }
 
-        var own = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
-        var alone = new HashSet<string>(baseline, StringComparer.Ordinal);
-        foreach (var placement in request.Experiments)
+        var baseline = new SortedSet<string>(baselineNeeds, StringComparer.Ordinal);
+        var alone = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+        var extra = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var placement in all)
         {
-            if (Needs(UnifiedCompilation.With(request, [placement]), environment, view, diagnostics) is not { } needs)
+            if (compiles.Needs([placement]) is not { } needs)
             {
                 return null;
             }
 
-            needs.ExceptWith(baseline);
-            own[placement.Experiment.ExperimentId] = needs;
-            alone.UnionWith(needs);
+            var own = new SortedSet<string>(needs, StringComparer.Ordinal);
+            own.ExceptWith(baseline);
+            alone[placement.Experiment.ExperimentId] = own;
+            extra.UnionWith(own);
         }
 
-        if (request.Experiments.Count > 1)
+        if (all.Count > 1)
         {
-            if (Needs(UnifiedCompilation.With(request, request.Experiments), environment, view, diagnostics) is not { } joint)
+            if (compiles.Needs(all) is not { } full)
             {
                 return null;
             }
 
-            joint.ExceptWith(alone);
-            if (joint.Count > 0)
-            {
-                var attributed = new HashSet<string>(StringComparer.Ordinal);
-                foreach (var placement in request.Experiments)
-                {
-                    var others = new List<ExperimentPlacement>(request.Experiments.Count - 1);
-                    foreach (var other in request.Experiments)
-                    {
-                        if (!ReferenceEquals(other, placement))
-                        {
-                            others.Add(other);
-                        }
-                    }
+            extra.UnionWith(full);
+            extra.ExceptWith(baseline);
+        }
 
-                    if (Needs(UnifiedCompilation.With(request, others), environment, view, diagnostics) is not { } without)
+        var requires = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+        foreach (var placement in all)
+        {
+            requires[placement.Experiment.ExperimentId] = new SortedSet<string>(StringComparer.Ordinal);
+        }
+
+        foreach (var capability in extra)
+        {
+            var holders = new List<ExperimentPlacement>();
+            var rest = new List<ExperimentPlacement>();
+            foreach (var placement in all)
+            {
+                (alone[placement.Experiment.ExperimentId].Contains(capability) ? holders : rest).Add(placement);
+            }
+
+            if (compiles.Needs(rest) is not { } restNeeds)
+            {
+                return null;
+            }
+
+            if (restNeeds.Contains(capability))
+            {
+                // A combination of the rest needs it too: each of them without which the rest no longer does.
+                var ends = false;
+                foreach (var placement in rest)
+                {
+                    if (compiles.Needs(Without(rest, placement)) is not { } without)
                     {
                         return null;
                     }
 
-                    foreach (var capability in joint)
+                    if (!without.Contains(capability))
                     {
-                        if (!without.Contains(capability))
-                        {
-                            own[placement.Experiment.ExperimentId].Add(capability);
-                            attributed.Add(capability);
-                        }
+                        holders.Add(placement);
+                        ends = true;
                     }
                 }
 
-                foreach (var capability in joint)
+                if (!ends)
                 {
-                    if (!attributed.Contains(capability))
-                    {
-                        baseline.Add(capability);
-                    }
+                    baseline.Add(capability);
+                    continue;
                 }
+            }
+
+            foreach (var holder in holders)
+            {
+                requires[holder.Experiment.ExperimentId].Add(capability);
             }
         }
 
         var experiments = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
-        foreach (var (id, needs) in own)
+        foreach (var (id, needs) in requires)
         {
             experiments[id] = new List<string>(needs);
         }
@@ -222,24 +241,60 @@ public static class PlanCompiler
         return new ReleaseRequirements(new List<string>(baseline), experiments);
     }
 
-    private static SortedSet<string>? Needs(PlanCompileRequest request, PlanEnvironment environment, PatchableView view, DiagnosticBag diagnostics)
+    private static List<ExperimentPlacement> Without(List<ExperimentPlacement> placements, ExperimentPlacement removed)
     {
-        var compile = new DiagnosticBag();
-        var compilation = new UnifiedCompilation(request, environment, view, compile, buildPlan: false, new UnloadedBindings()).Run();
-        if (compile.HasErrors)
+        var rest = new List<ExperimentPlacement>(placements.Count - 1);
+        foreach (var placement in placements)
         {
-            foreach (var d in compile.Items)
+            if (!ReferenceEquals(placement, removed))
             {
-                if (d.IsError)
-                {
-                    diagnostics.Add(d);
-                }
+                rest.Add(placement);
             }
-
-            return null;
         }
 
-        return new SortedSet<string>(compilation.Requires, StringComparer.Ordinal);
+        return rest;
+    }
+
+    /// <summary>The needs of compiles of the baseline with sets of experiments, each set compiled once.</summary>
+    private sealed class RequirementCompiles(PlanCompileRequest request, PlanEnvironment environment, DiagnosticBag diagnostics)
+    {
+        private readonly PatchableView _view = PatchableView.Create(request.Pipeline, request.Catalog);
+        private readonly Dictionary<string, SortedSet<string>> _needs = new(StringComparer.Ordinal);
+
+        /// <summary>What the release with <paramref name="placements"/> needs; null after reporting a compile's errors.</summary>
+        public SortedSet<string>? Needs(List<ExperimentPlacement> placements)
+        {
+            var key = new System.Text.StringBuilder();
+            foreach (var placement in placements)
+            {
+                key.Append(placement.Experiment.ExperimentId).Append('\n');
+            }
+
+            if (_needs.TryGetValue(key.ToString(), out var known))
+            {
+                return known;
+            }
+
+            var compile = new DiagnosticBag();
+            var compiled = placements.Count == 0 ? UnifiedCompilation.WithoutExperiments(request) : UnifiedCompilation.With(request, placements);
+            var compilation = new UnifiedCompilation(compiled, environment, _view, compile, buildPlan: false, new UnloadedBindings()).Run();
+            if (compile.HasErrors)
+            {
+                foreach (var d in compile.Items)
+                {
+                    if (d.IsError)
+                    {
+                        diagnostics.Add(d);
+                    }
+                }
+
+                return null;
+            }
+
+            var needs = new SortedSet<string>(compilation.Requires, StringComparer.Ordinal);
+            _needs[key.ToString()] = needs;
+            return needs;
+        }
     }
 }
 

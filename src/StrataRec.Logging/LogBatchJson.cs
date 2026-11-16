@@ -489,7 +489,7 @@ public static class LogBatchJson
             switch (column.Values)
             {
                 case bool[] b:
-                    json.WriteBooleanValue(b[i]);
+                    json.WriteNumberValue(b[i] ? 1 : 0); // as every other bool of a log: 0/1 in int_cols (decisions)
                     break;
                 case long[] l:
                     json.WriteNumberValue(l[i]);
@@ -521,11 +521,26 @@ public static class LogBatchJson
         json.WriteStartObject();
         json.WriteStartObject("log_schema");
         json.WriteString("id", schema.Id);
-        json.WriteString("tap_id", schema.TapId);
-        WriteFields(json, "columns", schema.Columns);
-        WriteFields(json, "context", schema.Context);
+        WriteSchemaMembers(json, schema.TapId, schema.Columns, schema.Context);
         json.WriteEndObject();
         json.WriteEndObject();
+    }
+
+    /// <summary>The record less its id, as one object: what <see cref="LogSchema.Create"/> hashes.</summary>
+    internal static void WriteSchemaBody(
+        Utf8JsonWriter json, string tapId, System.Collections.Immutable.ImmutableArray<LogField> columns, System.Collections.Immutable.ImmutableArray<LogField> context)
+    {
+        json.WriteStartObject();
+        WriteSchemaMembers(json, tapId, columns, context);
+        json.WriteEndObject();
+    }
+
+    private static void WriteSchemaMembers(
+        Utf8JsonWriter json, string tapId, System.Collections.Immutable.ImmutableArray<LogField> columns, System.Collections.Immutable.ImmutableArray<LogField> context)
+    {
+        json.WriteString("tap_id", tapId);
+        WriteFields(json, "columns", columns);
+        WriteFields(json, "context", context);
     }
 
     /// <summary><see cref="WriteSchema"/> as a string.</summary>

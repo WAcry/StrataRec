@@ -388,6 +388,7 @@ public sealed class PlanBuilder
             FetchBarrier = (effects & (Effects.RowSource | Effects.RowFilter)) != 0 && (spec.FetchBarrier ?? true),
             Compact = compact,
             ReadColumns = ToSortedArray(context.ReadColumns),
+            CurrentReads = ToSortedArray(context.CurrentReads),
             ReadFeatures = ToSortedArray(context.ReadFeatures),
             RequiredOutputs = ToSortedArray(context.RequiredOutputs),
             ReadParams = ToSortedArray(context.ReadParams),
@@ -583,7 +584,6 @@ public sealed class PlanBuilder
         var columnFields = new List<Logging.LogField>();
         var columnSources = new List<int>();
         var pinned = new List<string?>();
-        var types = new JsonObject();
         foreach (var (name, (source, columnPointer)) in sources)
         {
             var before = reads.Count;
@@ -595,7 +595,6 @@ public sealed class PlanBuilder
 
             columns.Add((name, e));
             columnFields.Add(new Logging.LogField(name, e.ResultType, source));
-            types[name] = new JsonObject { ["type"] = e.ResultType.ToString(), ["expr"] = source };
             var direct = -1;
             string? pin = null;
             for (var i = before; i < reads.Count; i++)
@@ -663,8 +662,7 @@ public sealed class PlanBuilder
             MaxRows = spec.Rows?.MaxRows,
             Context = [.. context],
             Columns = [.. columns],
-            Schema = new Logging.LogSchema(
-                CanonicalJson.Hash(new JsonObject { ["tap"] = definition.DeepClone(), ["types"] = types }), tapId, [.. columnFields], [.. contextFields]),
+            Schema = Logging.LogSchema.Create(tapId, [.. columnFields], [.. contextFields]),
             ReadOutputs = ToSortedArray(readOutputs),
             ReadFeatures = ToSortedArray(readFeatures),
             ReadContextFeatures = ToSortedArray(readContext),

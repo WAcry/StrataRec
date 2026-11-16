@@ -21,6 +21,7 @@ public sealed class OperatorCompileContext
     private readonly ClientResolver _clients;
     private readonly DiagnosticBag _diagnostics;
     private readonly HashSet<int> _readColumns = new();
+    private readonly HashSet<int> _currentReads = new();
     private readonly HashSet<int> _readFeatures = new();
     private readonly HashSet<int> _requiredOutputs = new();
     private readonly HashSet<int> _readParams = new();
@@ -74,6 +75,8 @@ public sealed class OperatorCompileContext
     public bool HasErrors { get; private set; }
 
     internal IReadOnlyCollection<int> ReadColumns => _readColumns;
+
+    internal IReadOnlyCollection<int> CurrentReads => _currentReads;
 
     internal IReadOnlyCollection<int> ReadFeatures => _readFeatures;
 
@@ -475,6 +478,10 @@ public sealed class OperatorCompileContext
             case SymbolKind.Column:
                 _readColumns.Add(symbol.Id);
                 var column = _schema.Columns[symbol.Id];
+                if (!(column.Kind == ColumnKind.Output && symbol.FixedSlot >= 0))
+                {
+                    _currentReads.Add(symbol.Id);
+                }
 
                 if (column.Kind == ColumnKind.Feature)
                 {

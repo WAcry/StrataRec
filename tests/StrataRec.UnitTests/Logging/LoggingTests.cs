@@ -389,6 +389,49 @@ public sealed class LogPipelineTests
         Assert.False(root.GetProperty("int_cols").TryGetProperty("tags", out _));
     }
 
+    /// <summary>
+    /// Review 70: a bool is 0/1 wherever a log writes it (decisions: bool columns are int_cols), in a column, a list and the
+    /// context alike. The typed column encoder wrote true/false for columns and lists while the context kept 0/1.
+    /// </summary>
+    [Fact]
+    public void Bools_AreZeroOrOne_InColumnsListsAndContext()
+    {
+        var batch = Batch("served", LogDelivery.Durable);
+        batch = new LogBatch
+        {
+            TapId = batch.TapId, RequestId = batch.RequestId, PipelineId = batch.PipelineId, ManifestId = batch.ManifestId, Schema = batch.Schema,
+            TimeMs = batch.TimeMs, Delivery = batch.Delivery, RequestProbability = 1, Int64EntityIds = batch.Int64EntityIds, Ranks = batch.Ranks,
+            RowProbability = batch.RowProbability, Context = [("fresh", ScalarValue.FromBool(true))],
+            Columns =
+            [
+                LogColumn.FromValues("flag", ColumnType.Bool, [ScalarValue.FromBool(true), ScalarValue.FromBool(false)]),
+                LogColumn.FromValues("flags", ColumnType.List(StorageKind.Bool), [ScalarValue.FromBoolList([true, false]), ScalarValue.FromBoolList([])]),
+            ],
+        };
+
+        using var document = JsonDocument.Parse(LogBatchJson.Encode(batch, indented: false));
+        var root = document.RootElement;
+        Assert.Equal("[1,0]", root.GetProperty("int_cols").GetProperty("flag").GetRawText());
+        Assert.Equal("[[1,0],[]]", root.GetProperty("nested_cols").GetProperty("flags").GetRawText());
+        Assert.Equal("1", root.GetProperty("context").GetProperty("fresh").GetRawText());
+    }
+
+    /// <summary>
+    /// Review 70: a schema id names one record. A context field whose type changed (the request field it reads did) got the
+    /// same id, so a reader holding the record by id read it with the old type; the id now hashes the record itself.
+    /// </summary>
+    [Fact]
+    public void ASchemaId_ChangesWithAnythingTheRecordSays_AndOnlyWithThat()
+    {
+        LogSchema Of(string tap, ColumnType contextType) =>
+            LogSchema.Create(tap, [new LogField("final", ColumnType.Float64, "col.score.final")], [new LogField("x", contextType, "ctx.request.foo")]);
+
+        Assert.Equal(Of("a", ColumnType.String).Id, Of("a", ColumnType.String).Id);
+        Assert.NotEqual(Of("a", ColumnType.String).Id, Of("a", ColumnType.Int64).Id);
+        Assert.NotEqual(Of("a", ColumnType.String).Id, Of("b", ColumnType.String).Id);
+        Assert.StartsWith("sha256:", Of("a", ColumnType.String).Id, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task JsonLinesSinkRejectsOnlyTheUnencodableBatch()
     {
