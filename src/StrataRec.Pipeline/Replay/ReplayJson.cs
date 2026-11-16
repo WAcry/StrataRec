@@ -278,7 +278,7 @@ public static class ReplayJson
         KeyShape.Single => "single",
         KeyShape.Many => "many",
         KeyShape.Cross => "cross",
-        _ => "context_map",
+        _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
     };
 
     public static string Hex(ulong value) => value.ToString("x16", CultureInfo.InvariantCulture);

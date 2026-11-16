@@ -42,8 +42,16 @@ public sealed class PlanCompileRequest
     /// <summary>Upper bound on arm combinations enumerated by the data-flow check (design 11.5 check 3).</summary>
     public int MaxCombinationsChecked { get; init; } = 4096;
 
-    /// <summary>When set, experiments past <c>expires_at</c> are rejected (design 11.7).</summary>
+    /// <summary>
+    /// When set, experiments past <c>expires_at</c> are rejected and those expiring within
+    /// <see cref="ExpiryWarningDays"/> are warned about (design 11.7). Set only where a release is decided
+    /// (<c>validate</c>, <c>build</c>): loading a plan, replaying a recorded request or explaining one must not start
+    /// failing on a calendar date.
+    /// </summary>
     public DateOnly? Today { get; init; }
+
+    /// <summary>How many days before <c>expires_at</c> an experiment is warned about.</summary>
+    public const int ExpiryWarningDays = 14;
 }
 
 /// <summary>An experiment and the layer it runs in (layers come from the manifest, not the artifact, design 11.2).</summary>

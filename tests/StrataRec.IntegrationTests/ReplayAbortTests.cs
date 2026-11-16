@@ -27,7 +27,7 @@ public sealed class ReplayAbortTests
     public async Task ARequestCancelledDuringAModelCall_DeliversItsBundle_AndReplaysItsDecisionsUpToTheAbort()
     {
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
-            "\"on_failure\": \"fallback:ctr_backup\"", "\"on_failure\": \"fail_request\""));
+            "\"on_failure\": \"fallback\", \"fallback\": \"ctr_backup\"", "\"on_failure\": \"fail_request\""));
         var models = new BlockingModels();
         var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Models = new ModelClientRegistry().Add(models) });
         Assert.True(engine.Load(host.Request).Applied);
@@ -110,7 +110,7 @@ public sealed class ReplayAbortTests
             const string pipeline = "pipelines/home_feed.jsonc";
             const string experiment = "experiments/exp_quality_weight.jsonc";
             const string strong = "\"strong\": { \"params\": { \"quality_weight\": 0.8, \"final_top_k\": 8 } }";
-            ReplayTests.Edit(root, pipeline, "\"on_failure\": \"fallback:ctr_backup\"", "\"on_failure\": \"fail_request\"");
+            ReplayTests.Edit(root, pipeline, "\"on_failure\": \"fallback\", \"fallback\": \"ctr_backup\"", "\"on_failure\": \"fail_request\"");
             if (trigger == "param")
             {
                 ReplayTests.Edit(root, pipeline, "\"quality_weight\": { \"type\": \"float64\", \"min\": 0, \"max\": 1 }",

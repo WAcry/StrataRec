@@ -325,6 +325,12 @@ public class CompilerTests
         d = Assert.Single(f.Errors("col.item.is_policy_safe && col.score.coarse > 0.5", CompileOptions.Predicate));
         Assert.Contains("col.item.is_policy_safe ?? false", d.Hint);
 
+        // A vector has no default literal: the hint is '??' on the result, never has(), which does not narrow
+        // ('has(v) ? dot(v, w) : 0.0' is as nullable as 'dot(v, w)', so following such a hint reported this again).
+        d = Assert.Single(f.Errors("dot(col.item.embedding, ctx.user.embedding)", CompileOptions.Score));
+        Assert.Equal("append ' ?? 0.0' to the expression", d.Hint);
+        Assert.NotNull(f.Compile("dot(col.item.embedding, ctx.user.embedding) ?? 0.0", CompileOptions.Score));
+
         // Resolved nullability compiles; nullable sites accept it.
         Assert.NotNull(f.Compile("(col.item.age_hours ?? 0.0) / 24.0", CompileOptions.Score));
         Assert.True(f.Compile("col.item.age_hours / 24.0", new CompileOptions { ExpectedType = ColumnType.Float32, AllowNullableResult = true }).ResultType.Nullable);

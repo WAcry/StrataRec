@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
@@ -93,17 +94,30 @@ public sealed class NodeSpec
 
     public int? MinRemainingMs { get; init; }
 
-    /// <summary><c>fail_request</c> (default), <c>skip</c> or <c>fallback:&lt;node_id&gt;</c>.</summary>
+    /// <summary>
+    /// What a failure of this node does (design 5.6): <c>fail_request</c> (default) fails the request, <c>skip</c> goes on
+    /// without the node's writes, <c>fallback</c> runs the node named by <c>fallback</c> in its place.
+    /// </summary>
+    [AllowedValues("fail_request", "skip", "fallback")]
     public string? OnFailure { get; init; }
 
+    /// <summary>With <c>on_failure</c> <c>fallback</c>: the node, declared with <c>"role": "fallback"</c>, that runs when this one fails.</summary>
+    public string? Fallback { get; init; }
+
+    /// <summary>
+    /// With <c>on_failure</c> <c>fallback</c>: milliseconds of the request's remaining time this node leaves to its fallback.
+    /// Default: the fallback's <c>timeout_ms</c>, or 0 when it has none.
+    /// </summary>
     public int? FallbackReserveMs { get; init; }
 
     /// <summary><c>fallback</c> for nodes that only run as another node's fallback.</summary>
+    [AllowedValues("fallback")]
     public string? Role { get; init; }
 
     public bool? FetchBarrier { get; init; }
 
     /// <summary><c>auto</c> (default), <c>always</c> or <c>never</c>.</summary>
+    [AllowedValues("auto", "always", "never")]
     public string? Compact { get; init; }
 
     public string? Description { get; init; }

@@ -105,10 +105,6 @@ public sealed class FeatureSourceBinding
         "concurrently. For cache, also the keys per read of the distributed cache.")]
     public int? MaxBatch { get; init; }
 
-    /// <summary><c>context</c> for sources organized by context key (design 6.5).</summary>
-    [Description("Mode fetch: 'context' for sources organized by context key (design 6.5).")]
-    public string? Lookup { get; init; }
-
     /// <summary>Modes <c>local</c> and <c>cache</c>: the most memory each of the source's tables may take, e.g. <c>"512MiB"</c>.</summary>
     [Description("Modes local and cache, required: the most memory each table of the source (one per entity) may take, as an " +
         "integer and a unit B, KiB, MiB, GiB or TiB, e.g. \"512MiB\". A local load that would exceed it fails and the plan is " +

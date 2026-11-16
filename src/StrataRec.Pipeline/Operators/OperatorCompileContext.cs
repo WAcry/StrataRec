@@ -151,8 +151,18 @@ public sealed class OperatorCompileContext
     /// asking the schema first: whether a column is declared can differ between arm combinations, which compile the node
     /// once (review 51).
     /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The operator declares neither <see cref="Effects.ColumnWriter"/> nor <see cref="Effects.RowSource"/>: its descriptor
+    /// is wrong, which is the operator author's bug, not the configuration's (the data-flow checks trust the effects).
+    /// </exception>
     public bool TryWriteColumn(string name, string configKey, ColumnType? implicitType, out OutputColumn column)
     {
+        if ((Descriptor.Effects & (Effects.ColumnWriter | Effects.RowSource)) == 0)
+        {
+            throw new InvalidOperationException(
+                $"Operator '{Descriptor.Id}' writes column '{name}' but its descriptor declares neither ColumnWriter nor RowSource.");
+        }
+
         column = default;
         if (!_schema.TryGetColumn(name, out var logical))
         {

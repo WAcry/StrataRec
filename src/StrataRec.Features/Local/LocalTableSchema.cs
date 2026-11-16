@@ -184,5 +184,6 @@ public sealed class LocalTableSchema
     /// <summary>Why a cross entity cannot be held in a local table, and what to do instead.</summary>
     internal static string CrossEntityMessage(string entity) =>
         $"Entity '{entity}' is a cross entity (context key × candidate key); local tables hold one key per record. " +
-        "Bind its source with mode 'fetch' (with \"lookup\": \"context\" for per-user data).";
+        "Bind its source with mode 'fetch', or hold per-user data as a list feature of the context entity " +
+        "(e.g. user.engaged_items: list<int64>, read with 'col.entity_id in ctx.user.engaged_items').";
 }

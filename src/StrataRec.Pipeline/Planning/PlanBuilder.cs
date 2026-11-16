@@ -268,20 +268,42 @@ public sealed class PlanBuilder
         {
             case null or "fail_request": break;
             case "skip": policy = FailurePolicy.Skip; break;
-            case var s when s.StartsWith("fallback:", StringComparison.Ordinal) && s.Length > 9:
+            case "fallback":
                 policy = FailurePolicy.Fallback;
-                fallbackId = s[9..];
+                fallbackId = spec.Fallback;
                 if (isFallback)
                 {
                     _diagnostics.Error("NODE_NESTED_FALLBACK", artifact, pointer + "/on_failure", "Fallbacks have one level: a fallback's on_failure must be fail_request or skip.");
                     ok = false;
                 }
+                else if (fallbackId is null)
+                {
+                    _diagnostics.Error("NODE_FALLBACK_MISSING", artifact, pointer + "/on_failure", "on_failure 'fallback' needs the node to fall back to.",
+                        "add \"fallback\": \"<node_id>\", naming a node declared with \"role\": \"fallback\"");
+                    ok = false;
+                }
 
                 break;
             default:
-                _diagnostics.Error("NODE_BAD_ON_FAILURE", artifact, pointer + "/on_failure", $"Unknown on_failure '{spec.OnFailure}'.", "use fail_request, skip or fallback:<node_id>");
+                _diagnostics.Error("NODE_BAD_ON_FAILURE", artifact, pointer + "/on_failure", $"Unknown on_failure '{spec.OnFailure}'.",
+                    "use fail_request, skip, or fallback with \"fallback\": \"<node_id>\"");
                 ok = false;
                 break;
+        }
+
+        // A setting that only means something when the node falls back is an error elsewhere, not silently ignored.
+        if (spec.OnFailure is null or "fail_request" or "skip")
+        {
+            foreach (var (name, set) in new[] { ("fallback", spec.Fallback is not null), ("fallback_reserve_ms", spec.FallbackReserveMs is not null) })
+            {
+                if (set)
+                {
+                    _diagnostics.Error("NODE_FALLBACK_UNUSED", artifact, pointer + "/" + name,
+                        $"'{name}' applies only with on_failure 'fallback'; this node's on_failure is '{spec.OnFailure ?? "fail_request"}'.",
+                        $"set \"on_failure\": \"fallback\", or remove '{name}'");
+                    ok = false;
+                }
+            }
         }
 
         var compact = spec.Compact switch
@@ -350,7 +372,7 @@ public sealed class PlanBuilder
             MinRemainingMs = spec.MinRemainingMs,
             OnFailure = policy,
             FallbackNodeId = fallbackId,
-            FallbackReserveMs = spec.FallbackReserveMs ?? 0,
+            FallbackReserveMs = spec.FallbackReserveMs,
             FetchBarrier = (effects & (Effects.RowSource | Effects.RowFilter)) != 0 && (spec.FetchBarrier ?? true),
             Compact = compact,
             ReadColumns = ToSortedArray(context.ReadColumns),
@@ -906,7 +928,7 @@ public sealed class PlanBuilder
             {
                 if (fallback is null)
                 {
-                    _diagnostics.Error("FALLBACK_UNKNOWN", artifact, node.Pointer + "/on_failure",
+                    _diagnostics.Error("FALLBACK_UNKNOWN", artifact, node.Pointer + "/fallback",
                         $"Fallback node '{node.FallbackNodeId}' does not exist or is not declared with \"role\": \"fallback\".");
                 }
                 else if (!SameOutputs(node, fallback))

@@ -290,6 +290,13 @@ internal sealed partial class UnifiedCompilation
                 _diagnostics.Error("EXPERIMENT_EXPIRED", artifact, "/expires_at", $"Experiment expired on {e.ExpiresAt}.",
                     "graduate the winning arm into the baseline or remove the experiment (design 11.7)");
             }
+            else if (_request.Today is { } now && expires.DayNumber - now.DayNumber <= PlanCompileRequest.ExpiryWarningDays)
+            {
+                var days = expires.DayNumber - now.DayNumber;
+                _diagnostics.Warning("EXPERIMENT_EXPIRING", artifact, "/expires_at",
+                    $"Experiment expires on {e.ExpiresAt}, {(days == 0 ? "today" : days == 1 ? "in 1 day" : $"in {days} days")}; after that it cannot be built into a release.",
+                    "graduate the winning arm into the baseline, remove the experiment, or move expires_at (design 11.7)");
+            }
 
             if (e.Arms.Count == 0)
             {

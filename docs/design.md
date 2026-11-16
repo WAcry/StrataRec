@@ -461,9 +461,9 @@ internal sealed class RequestMemory
 2. 探针在请求线程上把列切片复制到日志管道自己租借的缓冲区（第 8.6 节）。切片在编码完成后归还，编码后的字节在 sink 确认或丢弃后归还；`fetch_missing` 的后台拉取（第 8.5 节）使用同一份探针缓冲区。
 3. trace 和回放捕获只出现在调试或采样请求中，正常分配。
 
-**初始化与清理。** 从池中租到的数组可能带着上一个请求的数据。引擎只清零它依赖的部分：有效位图、填充位图和输出绑定表在租借时清零，5,000 行的位图只有 625 字节；数值数组不清零，因为每个值在被读取之前都受填充位和有效位保护。测试构建在归还时用固定的字节模式填满数组，让“归还后仍在使用”的缺陷尽早暴露。
+**初始化与清理。** 从池中租到的数组可能带着上一个请求的数据。引擎只清零它依赖的部分：有效位图、填充位图和输出绑定表在租借时清零，5,000 行的位图只有 625 字节；数值数组不清零，因为每个值在被读取之前都受填充位和有效位保护。测试在归还时用固定的字节模式填满数组，让“归还后仍在使用”的缺陷尽早暴露；这由运行期开关 `StrataRec.PoisonReturnedBuffers` 打开，所有测试项目都打开，Debug 和 Release 构建一样（CI 测的是 Release 构建），生产不打开。
 
-**池的实现。** 默认实现基于 `ArrayPool<T>.Shared`：它有线程本地缓存，按 CPU 核心分组，内存紧张时随完整垃圾回收收缩。数组长度按 2 的幂取整；引擎按计划算出的行数上限（各 `RowSource` 行数上限之和）一次租够，很少需要扩容。宿主可以通过 `IBufferPool` 换成自己的实现，例如给 embedding 这类大列单独设置分级池。
+**池的实现。** 默认实现基于 `ArrayPool<T>.Shared`：它有线程本地缓存，按 CPU 核心分组，内存紧张时随完整垃圾回收收缩。数组长度按 2 的幂取整；引擎按计划算出的行数上限（各 `RowSource` 行数上限之和）一次租够，很少需要扩容。一个行源执行完、没有用满上限时，余下的部分不再为之后创建的列预留：召回配额 2,000、只找到 500 行时，之后的列按 500 行加后续行源的上限分配。宿主可以通过 `IBufferPool` 换成自己的实现，例如给 embedding 这类大列单独设置分级池。
 
 **请求状态池。** 计划编译时已经知道槽位数量、每个槽位的列类型和参数数量，所以同一个计划下请求状态的对象结构是固定的。每个计划持有一个请求状态池；计划被替换后，它的池随计划一起由垃圾回收释放。
 
@@ -499,8 +499,9 @@ internal sealed class RequestMemory
 | `when` | 无 | 请求级条件，每个请求求值一次（第 5.5 节） |
 | `timeout_ms` | 无 | 节点超时；实际得到的时间预算见第 5.6 节 |
 | `min_remaining_ms` | 无 | 请求剩余时间低于该值时跳过此节点 |
-| `on_failure` | `fail_request` | `fail_request`、`skip` 或 `fallback:<node_id>` |
-| `fallback_reserve_ms` | `0` | 为后备节点预留的时间，只在 `on_failure` 为 `fallback:<node_id>` 时有意义 |
+| `on_failure` | `fail_request` | `fail_request`、`skip` 或 `fallback`（第 5.6 节） |
+| `fallback` | 无 | `on_failure` 为 `fallback` 时必填：失败时改为执行的后备节点 |
+| `fallback_reserve_ms` | 后备节点的 `timeout_ms`，没有时为 `0` | 为后备节点预留的时间 |
 | `role` | 无 | 设为 `fallback` 时，节点不在时间轴上，只作为其他节点的后备执行 |
 | `fetch_barrier` | 由效果决定 | 设为 `false` 时，后续节点的特征拉取可以在本节点之前发起（第 5.4 节） |
 | `compact` | `auto` | `auto`、`always` 或 `never`（第 4.5 节） |
@@ -539,7 +540,7 @@ internal sealed class RequestMemory
 
 ### 5.4 调度、并发与拉取时机
 
-在运行示例的规模下，一个 CPU 型节点处理几千行通常只需要几十到几百微秒，而把工作交给另一个线程再取回结果本身就需要几微秒。因此默认策略是：CPU 型节点在请求线程上依次执行，并发来自 I/O 重叠。同一位置上多个无依赖的 `ColumnWriter` 节点，只有在算子被标记为计算密集（例如本地模型推理）时才分到线程池并发执行。
+在运行示例的规模下，一个 CPU 型节点处理几千行通常只需要几十到几百微秒，而把工作交给另一个线程再取回结果本身就需要几微秒。因此 CPU 型节点在请求线程上依次执行，并发来自 I/O 重叠。
 
 召回、特征拉取和模型调用都是 I/O。特征拉取遵守两条规则：
 
@@ -562,7 +563,7 @@ internal sealed class RequestMemory
 
 ### 5.6 截止时间、失败与降级
 
-每个请求有截止时间。没有后备节点的节点，时间预算是 `min(timeout_ms, 剩余时间)`；`on_failure` 指定了后备节点时，主节点的预算是 `min(timeout_ms, 剩余时间 − fallback_reserve_ms)`，保证主节点超时后后备节点仍有时间执行。特征拉取和模型调用使用同样的规则。
+每个请求有截止时间。没有后备节点的节点，时间预算是 `min(timeout_ms, 剩余时间)`；节点有后备时，主节点的预算是 `min(timeout_ms, 剩余时间 − fallback_reserve_ms)`，保证主节点超时后后备节点仍有时间执行；`fallback_reserve_ms` 默认是后备节点自己的 `timeout_ms`，后备节点没有超时（通常是进程内的表达式）时为 0。`fallback` 和 `fallback_reserve_ms` 只在 `on_failure` 为 `fallback` 时可以写，写在别处是配置错误。特征拉取和模型调用使用同样的规则。
 
 | 节点结果 | 含义 | 是否提交输出 |
 | :--- | :--- | :--- |
@@ -577,7 +578,7 @@ internal sealed class RequestMemory
 
 1. **`fail_request`**（默认）：整个请求失败，返回错误和部分 trace。
 2. **`skip`**：继续执行。该节点的固定列没有产生，所以 `skip` 节点产出的固定列必须声明为 `T?`，读取方按可空列处理缺失（第 4.6 节）；流动列保持上一个版本。
-3. **`fallback:<node_id>`**：改为执行指定的后备节点。后备节点声明 `"role": "fallback"`，必须产出与主节点相同的列，在自己的槽位写入并在成功后提交。后备只有一层：后备节点的 `on_failure` 只能是 `fail_request` 或 `skip`。后备节点读取的特征和主节点一起拉取（第 5.4 节）；后备模型通常使用主模型特征的一个子集，额外开销很小。
+3. **`fallback`**：改为执行 `fallback` 指定的后备节点，例如 `"on_failure": "fallback", "fallback": "ctr_backup"`。后备节点声明 `"role": "fallback"`，必须产出与主节点相同的列，在自己的槽位写入并在成功后提交。后备只有一层：后备节点的 `on_failure` 只能是 `fail_request` 或 `skip`。后备节点读取的特征和主节点一起拉取（第 5.4 节）；后备模型通常使用主模型特征的一个子集，额外开销很小。
 
 每次请求都记录每个产出列实际来自哪个节点。探针信封带上这份记录（第 8.7 节），训练样本因此能区分主模型和后备模型的输出。
 
@@ -738,7 +739,7 @@ internal sealed class RequestMemory
     "interaction_store": {
       "mode": "fetch",
       "connector": "redis_blob@1", "endpoint": "redis://interactions:6379", "timeout_ms": 20,
-      "lookup": "context", "credentials": "secret://interaction-store-token"
+      "credentials": "secret://interaction-store-token"
     }
   },
   "models": {
@@ -778,12 +779,11 @@ internal sealed class RequestMemory
 | `Single` | 上下文实体 | 一个键，例如用户 ID |
 | `Many` | 候选实体、外键实体 | 一批已去重的键 |
 | `Cross` | 交叉实体 | 一个上下文键 × 一批候选键 |
-| `ContextMap` | 按上下文组织的交叉实体（`"lookup": "context"`） | 一个上下文键；响应自带候选键 |
 
 `Cross` 形态让“一个用户 × 500 个物品”的交叉特征以一次批量请求发出，存储端可以按用户分区一次读取。键支持 `int64` 和 `string`。上下文键为空时（例如匿名用户没有 `user_id`），引擎不发起请求，相关特征全部视为缺失：有默认值的取默认值，没有默认值的由表达式处理。
 
 ```csharp
-public enum KeyShape { Single, Many, Cross, ContextMap }
+public enum KeyShape { Single, Many, Cross }
 
 public readonly record struct EntityKey(long Int64Value, string? StringValue);
 
@@ -811,7 +811,6 @@ public interface IFeatureBatchWriter
     Memory<T> GetValues<T>(int fieldIndex) where T : unmanaged;  // 密集暂存区；长度 = 键数量（定长向量为键数量 × 维度）
     void SetMissing(int fieldIndex, int keyIndex);
     ITextBatchWriter GetText(int fieldIndex);                    // string 与 text 字段
-    void SetResponseKeys(ReadOnlySpan<EntityKey> keys);          // ContextMap：先写入响应自带的候选键，暂存区长度随之确定
 }
 ```
 
@@ -827,14 +826,14 @@ public interface IFeatureBatchWriter
 
 **解码不生成对象。** 连接器直接把响应字节解码进 `IFeatureBatchWriter`：数值按原生类型写入暂存区，字符串和文本写进 `ITextBatchWriter`，中间不生成 Protobuf 消息或 JSON 对象。存储返回按行还是按列组织都可以，行转列在暂存区里完成，代价很小；贵的是为每个值或每条消息分配对象。能控制存储格式时，推荐每个实体一条定长二进制记录（小端序的原生值，带 schema 版本号），解码只是把字节解释成数组。
 
-**按上下文拉取的交叉特征。** 需要存储的交叉特征几乎都是交互类特征，天然稀疏：一个用户只和几十到几百个物品有过交互。绑定中声明 `"lookup": "context"` 的数据源按用户组织：每个用户一个键，值是按候选键排序的稀疏表（候选键数组加定长记录）。连接器只用上下文键发起一次请求，引擎把它当作上下文特征，在请求开始时与召回并发拉取（第 6.8 节）；响应写进以响应中候选键为键的暂存区，候选确定后由回填按键匹配，表中没有的候选按合法缺失处理（第 6.7 节）。存储端应限制每个用户保留的条目数，例如最近 1,000 次交互。稠密的交叉信号（例如向量点积）用衍生特征计算，不需要存储。
+**稀疏的交叉特征。** 需要存储的交叉特征几乎都是交互类特征，天然稀疏：一个用户只和几十到几百个物品有过交互。只关心“有没有交互过”时，把它存成上下文实体的列表特征，例如 `user.engaged_items: list<int64>`，在请求开始时与召回并发拉取（第 6.8 节），用 `col.entity_id in ctx.user.engaged_items` 读取；存储端应限制每个用户保留的条目数，例如最近 1,000 次交互。每个交互带值（次数、时间）时用 `Cross` 形态：一次请求发出上下文键和这批候选键，存储端按用户分区一次读取，没有交互的候选按合法缺失处理（第 6.7 节）。稠密的交叉信号（例如向量点积）用衍生特征计算，不需要存储。
 
 **读 Redis 的连接器。** 特征存在 Redis 里时，读取它的连接器由使用方按自己的存储格式实现（例如 `redis_hash@1`、`redis_blob@1`）；框架内置的 Redis 只用作 `cache` 的分布式层（第 6.6 节）。基于 StackExchange.Redis 实现时：
 
 1. 每个 endpoint 一个 `ConnectionMultiplexer`，进程启动时创建，所有请求共享。它在一条连接上多路复用全部命令，同时发出的命令自动合成流水线。
 2. **一批键用 `MGET`。** 每条命令最多 100 个键，超出时拆成多条并发发出，拆分本身几乎没有额外开销。逐键发送 `GET` 时，客户端要为每个键创建一条命令和一个 `Task`，服务端也要逐条分派。一次本机测量中，每批 500 个键：值为 150 字节时，逐键 `GET` 的客户端 CPU 约为 `MGET` 的 15 倍，Redis 的 CPU 约为 2.8 倍；值为 2 KB 时，客户端 CPU 约为 4 倍。`redis_hash@1` 对每个实体发一条 `HMGET`，同一批实体的命令一起发出。
 3. **Redis Cluster。** 一条 `MGET` 的键必须落在同一个 slot。经过集群代理时可以直接发送任意键，例如 Envoy 的 Redis 代理会把 `MGET` 拆成发往各分片的 `GET`；分片收到的仍是逐键命令，客户端和代理之间仍然只有一条命令。客户端直连集群时，连接器按 slot 分组，每组一条 `MGET`。键随机分布时每组通常只有一个键，写入方可以用 hash tag 让总是一起读取的键落在同一个 slot。
-4. **单个大值用租约读取。** `Single` 和 `ContextMap` 形态（例如按用户组织的交叉特征）只读一个键，值可能有几十 KB，用 `StringGetLeaseAsync` 读取：值放在池化的缓冲区里，解码进暂存区后立即释放，不分配新的 `byte[]`。`MGET` 没有租约接口，批量读取时每个值仍会分配一个 `byte[]`；批量读取的值通常是几百字节的定长记录，这部分开销可以接受。
+4. **单个大值用租约读取。** `Single` 形态（例如用户的交互列表）只读一个键，值可能有几十 KB，用 `StringGetLeaseAsync` 读取：值放在池化的缓冲区里，解码进暂存区后立即释放，不分配新的 `byte[]`。`MGET` 没有租约接口，批量读取时每个值仍会分配一个 `byte[]`；批量读取的值通常是几百字节的定长记录，这部分开销可以接受。
 5. 共享连接上的大值会阻塞排在它后面的命令。单个值应控制在几十 KB 以内，更大的值使用单独的 multiplexer。
 6. 命令发出后不能撤回。超时之后才到达的响应不再写入暂存区，连接器只释放它占用的缓冲区（第 4.8 节）。
 
@@ -1026,7 +1025,7 @@ public sealed class ModelCall
   "op": "ModelScorer@1",
   "timeout_ms": 40,
   "fallback_reserve_ms": 8,
-  "on_failure": "fallback:ctr_backup",
+  "on_failure": "fallback", "fallback": "ctr_backup",
   "config": {
     "model": "ctr_ranker",
     "version_param": "ctr_model_version",
@@ -1558,7 +1557,7 @@ flowchart LR
                                    "expr": "col.recall.best_score * (1.0 + 0.05 * log1p(col.item.clicks_7d))" } },
     "coarse_top_k":  { "order": 350, "op": "TopK@1", "config": { "score_col": "score.coarse", "k_param": "coarse_k" } },
     "ctr_ranker":    { "order": 400, "op": "ModelScorer@1", "timeout_ms": 40, "fallback_reserve_ms": 8,
-                       "on_failure": "fallback:ctr_backup",
+                       "on_failure": "fallback", "fallback": "ctr_backup",
                        "config": { "model": "ctr_ranker", "...": "见第 6.9 节" } },
     "ctr_backup":    { "role": "fallback", "op": "ModelScorer@1",
                        "config": { "model": "ctr_backup", "...": "输出与 ctr_ranker 相同的列" } },
@@ -1976,7 +1975,6 @@ RFC 7396 有三个容易出错的地方，引擎都用明确的规则处理：
 | 情况 | 结果 |
 | :--- | :--- |
 | 路径相同，或一条是另一条的前缀，包括新增同一个节点 ID | 错误。只能新增的集合中定义完全相同的新增除外 |
-| 在同一个 `order` 上放置节点 | 错误 |
 | 写同一个流动列 | 交互警告 |
 | a 写入的列被 b 新增的节点读取 | 交互警告 |
 
@@ -2025,7 +2023,7 @@ stateDiagram-v2
 
 1. **上线**：实验合并到仓库后进入 Validated。发布控制器把它加入 manifest 之前，先运行 manifest 校验（第 10.5 节），通过后进入 Released。Released 期间的流量由实验平台控制：平台从小比例开始分配、逐步扩量，也可以随时停止分配；这些变化不经过引擎（第 11.2 节）。
 2. **毕业**：把胜出桶的补丁按 RFC 7396 应用到基线，形成新的基线，再删除该实验。CI 随后用新基线重新校验所有在线实验（相当于 rebase），有冲突时通知对应的 owner。其他实验中与新基线完全相同的新增条目视为空操作（第 11.4 节）。
-3. **过期**：每个实验必须声明 `expires_at`。CI 在到期前 14 天提醒；过期的实验不能进入新的 manifest，owner 必须决定毕业或结束，被遗忘的实验不会长期留在配置里。
+3. **过期**：每个实验必须声明 `expires_at`。`stratarec validate` 和 `stratarec build` 在到期前 14 天内给出警告 `EXPERIMENT_EXPIRING`（CI 用 `--warnings-as-errors` 时就是错误）；过期的实验在这两个命令中是错误，不能进入新的 manifest，owner 必须决定毕业或结束，被遗忘的实验不会长期留在配置里。日期只在决定发布的这两个命令里检查：宿主加载计划、`run`、`explain-plan`、`replay` 等命令不看日期，服务不会因为日历翻过一天而起不来，上周的请求也照样能回放。
 4. **清理**：`stratarec lint` 报告没有被任何节点引用的参数、特征和探针。
 
 ### 11.8 参数 Schema 与参数扁平化

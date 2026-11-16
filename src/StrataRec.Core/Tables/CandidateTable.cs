@@ -129,10 +129,14 @@ public sealed class CandidateTable
     public TableSchema Schema { get; }
 
     /// <summary>
-    /// Maximum number of rows that may ever be appended in this request (the plan's row-source limits); rows a failed
-    /// attempt appended are given back by <see cref="Rollback"/>.
+    /// Maximum number of rows that may ever be appended in this request: the limits of its row sources, less what
+    /// finished row sources did not use (<see cref="ReleaseRowBudget"/>). Rows a failed attempt appended are given back by
+    /// <see cref="Rollback"/>.
     /// </summary>
-    public int Capacity { get; }
+    public int Capacity { get; private set; }
+
+    /// <summary>Rows appended in this request so far, less those a <see cref="Rollback"/> gave back.</summary>
+    public int AppendedRows => _totalAppended;
 
     /// <summary>Number of physical rows currently stored (appended rows, minus rows released by Compact).</summary>
     public int PhysicalRowCount { get; private set; }
@@ -239,6 +243,19 @@ public sealed class CandidateTable
 
     /// <summary>Rows that may still be appended in this request.</summary>
     public int FreeRows => Capacity - _totalAppended;
+
+    /// <summary>
+    /// Gives back <paramref name="rows"/> of the append budget (at most <see cref="FreeRows"/>): a row source that has
+    /// finished below its limit. Slots created afterwards, and a <see cref="Compact"/>, are sized without them, so the
+    /// columns written after a recall that found a quarter of its quota are a quarter of the size.
+    /// </summary>
+    public void ReleaseRowBudget(int rows)
+    {
+        if (rows > 0)
+        {
+            Capacity -= Math.Min(rows, FreeRows);
+        }
+    }
 
     /// <summary>Appends rows with the given int64 keys at the end of the ranking. Returns the first new physical row.</summary>
     public int AppendRows(ReadOnlySpan<long> keys)

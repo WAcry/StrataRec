@@ -261,7 +261,7 @@ public static class ServiceCollectionExtensions
                 continue;
             }
 
-            var request = workspace.CreateCompileRequest(id, environment, diagnostics, DateOnly.FromDateTime(DateTime.UtcNow));
+            var request = workspace.CreateCompileRequest(id, environment, diagnostics); // no expiry check: a calendar date must not stop a host starting
             if (request is null)
             {
                 continue;

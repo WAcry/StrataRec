@@ -51,13 +51,6 @@
               "null"
             ]
           },
-          "lookup": {
-            "description": "Mode fetch: 'context' for sources organized by context key (design 6.5).",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "max_bytes": {
             "description": "Modes local and cache, required: the most memory each table of the source (one per entity) may take, as an integer and a unit B, KiB, MiB, GiB or TiB, e.g. \"512MiB\". A local load that would exceed it fails and the plan is not served; a cache that reaches it drops its expired records, then its oldest.",
             "type": [

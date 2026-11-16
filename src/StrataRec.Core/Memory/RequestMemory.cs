@@ -54,6 +54,19 @@ public interface IRequestEndObserver
 /// </remarks>
 public sealed class RequestMemory
 {
+    /// <summary>
+    /// Whether <see cref="Release"/> fills returned buffers of unmanaged elements with <see cref="PoisonByte"/>, so code
+    /// that keeps using a buffer after its request reads garbage at once instead of another request's data (design 4.8).
+    /// Set by the <c>StrataRec.PoisonReturnedBuffers</c> runtime switch: every test project turns it on, in Release as in
+    /// Debug, since CI tests the Release build; production leaves it off (it writes every returned byte once more).
+    /// </summary>
+    /// <remarks>Read once into a static readonly field, which the JIT treats as a constant.</remarks>
+    public static readonly bool PoisonReturnedBuffers =
+        AppContext.TryGetSwitch("StrataRec.PoisonReturnedBuffers", out var poison) && poison;
+
+    /// <summary>The byte returned buffers are filled with when <see cref="PoisonReturnedBuffers"/> is on.</summary>
+    public const byte PoisonByte = 0xCD;
+
     private const int InitialLedgerLength = 64;
 
     private readonly IBufferPool _pool;
@@ -235,22 +248,18 @@ public sealed class RequestMemory
         {
             var typed = (T[])array;
             var containsRefs = RuntimeHelpers.IsReferenceOrContainsReferences<T>();
-#if STRATAREC_POISON_BUFFERS
-            if (!containsRefs)
+            if (PoisonReturnedBuffers && !containsRefs)
             {
-                // Debug/test builds fill returned buffers with a fixed pattern so use-after-return surfaces quickly.
                 Poison(typed);
             }
-#endif
+
             pool.Return(typed, containsRefs);
         }
 
-#if STRATAREC_POISON_BUFFERS
         private static void Poison(T[] buffer)
         {
             ref var first = ref Unsafe.As<T, byte>(ref MemoryMarshal.GetArrayDataReference(buffer));
-            MemoryMarshal.CreateSpan(ref first, buffer.Length * Unsafe.SizeOf<T>()).Fill(0xCD);
+            MemoryMarshal.CreateSpan(ref first, buffer.Length * Unsafe.SizeOf<T>()).Fill(PoisonByte);
         }
-#endif
     }
 }

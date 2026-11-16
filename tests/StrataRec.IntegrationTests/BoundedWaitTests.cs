@@ -79,7 +79,7 @@ public sealed class BoundedWaitTests
     {
         // The untimed node timeout is longer than the request: the node's budget is what is left of it (design 5.6).
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
-            "\"on_failure\": \"fallback:ctr_backup\"", "\"on_failure\": \"fail_request\""));
+            "\"on_failure\": \"fallback\", \"fallback\": \"ctr_backup\"", "\"on_failure\": \"fail_request\""));
         using var models = new GatedModels();
         var pool = new CountingPool();
         var engine = Engine(host, pool, models: models);
@@ -102,7 +102,7 @@ public sealed class BoundedWaitTests
     {
         using var capture = new MetricCapture();
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
-            "\"on_failure\": \"fallback:ctr_backup\"", "\"on_failure\": \"fail_request\""));
+            "\"on_failure\": \"fallback\", \"fallback\": \"ctr_backup\"", "\"on_failure\": \"fail_request\""));
         using var models = new GatedModels();
         var pool = new CountingPool();
         var engine = Engine(host, pool, models: models);

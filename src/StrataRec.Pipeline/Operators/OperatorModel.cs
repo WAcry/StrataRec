@@ -26,16 +26,17 @@ public enum Effects : byte
 /// <summary>Static description of an operator type and version (design 5.2, 10.4).</summary>
 /// <param name="Name">Operator name, e.g. <c>TopK</c>.</param>
 /// <param name="Version">Major version; breaking config changes bump it (design 10.4).</param>
-/// <param name="Effects">Effects the operator may exercise; enforced at runtime.</param>
+/// <param name="Effects">
+/// Effects the operator may exercise, enforced: row changes at run time by <see cref="OperatorContext"/>, column writes at
+/// compile time by <see cref="OperatorCompileContext.TryWriteColumn"/> (<see cref="Effects.ColumnWriter"/>, or
+/// <see cref="Effects.RowSource"/> for the columns of the rows it appends).
+/// </param>
 /// <param name="ConfigType">C# type of the node's <c>config</c>; the single source of its JSON Schema (design 9.1).</param>
 /// <param name="Description">One-line description for docs and tooling.</param>
 public sealed record OperatorDescriptor(string Name, int Version, Effects Effects, Type ConfigType, string Description)
 {
     /// <summary><c>Name@Version</c>, as written in <c>"op"</c>.</summary>
     public string Id => $"{Name}@{Version}";
-
-    /// <summary>True when the operator is CPU-heavy enough to run off the request thread (design 5.4).</summary>
-    public bool ComputeIntensive { get; init; }
 }
 
 /// <summary>A candidate column read by an operator.</summary>

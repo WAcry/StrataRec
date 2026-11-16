@@ -160,7 +160,6 @@ internal sealed class FeatureSourceResolver
         ("connector", [SupplyMode.Fetch, SupplyMode.Cache], static b => b.Connector is not null),
         ("timeout_ms", [SupplyMode.Fetch, SupplyMode.Cache], static b => b.TimeoutMs is not null),
         ("max_batch", [SupplyMode.Fetch, SupplyMode.Cache], static b => b.MaxBatch is not null),
-        ("lookup", [SupplyMode.Fetch], static b => b.Lookup is not null),
         ("max_bytes", [SupplyMode.Local, SupplyMode.Cache], static b => b.MaxBytes is not null),
         ("bootstrap", [SupplyMode.Local], static b => b.Bootstrap is not null),
         ("cache", [SupplyMode.Cache], static b => b.Cache is not null),

@@ -27,7 +27,7 @@
       "config": { "quotas_param": "recall_quotas", "source_order": ["trending", "editorial"] }
     },
     "engagement": {
-      "order": 200, "op": "ModelScorer@1", "on_failure": "fallback:engagement_backup",
+      "order": 200, "op": "ModelScorer@1", "on_failure": "fallback", "fallback": "engagement_backup",
       "config": {
         "model": "engagement",
         "version": "v3",

@@ -325,7 +325,7 @@ public sealed class CandidateExplainerTests
             """);
         var recall = recallFails
             ? """
-              "recall": { "order": 100, "op": "AppendThenFail@1", "on_failure": "fallback:recall_backup", "config": { "quotas_param": "quotas" } },
+              "recall": { "order": 100, "op": "AppendThenFail@1", "on_failure": "fallback", "fallback": "recall_backup", "config": { "quotas_param": "quotas" } },
               "recall_backup": { "role": "fallback", "op": "MultiSourceRecall@1", "config": { "quotas_param": "backup_quotas" } },
               """
             : """

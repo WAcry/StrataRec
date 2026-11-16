@@ -408,7 +408,7 @@ public sealed class BindingLifetimeTests
             {
                 var path = Path.Combine(root, "pipelines", "home_feed.jsonc");
                 var text = File.ReadAllText(path);
-                var edited = text.Replace($"\"fallback:ctr_backup\", \"timeout_ms\": {HomeFeedTestHost.UntimedMs}", $"\"fallback:ctr_backup\", \"timeout_ms\": {timeout}",
+                var edited = text.Replace($"\"ctr_backup\", \"timeout_ms\": {HomeFeedTestHost.UntimedMs}", $"\"ctr_backup\", \"timeout_ms\": {timeout}",
                     StringComparison.Ordinal);
                 Assert.NotEqual(text, edited);
                 File.WriteAllText(path, edited);

@@ -84,7 +84,7 @@ public sealed class ReplayExceptionTests
     public async Task ANodeFailedByAThrowingClient_FailsWithTheSameDetailOnReplay(string mode, string detail)
     {
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
-            "\"on_failure\": \"fallback:ctr_backup\"", "\"on_failure\": \"fail_request\""));
+            "\"on_failure\": \"fallback\", \"fallback\": \"ctr_backup\"", "\"on_failure\": \"fail_request\""));
         var engine = new RecEngine(new PlanEnvironment
         {
             BaseDirectory = host.Root,

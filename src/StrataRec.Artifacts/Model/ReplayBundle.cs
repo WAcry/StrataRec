@@ -223,13 +223,13 @@ public sealed class ReplayFeatureCall
 
     public required string Entity { get; init; }
 
-    [Description("single, many, cross or context_map (design 6.5).")]
+    [Description("single, many or cross (design 6.5).")]
     public required string Shape { get; init; }
 
-    [Description("Context key for single, cross and context_map shapes.")]
+    [Description("Context key for single and cross shapes.")]
     public JsonElement? ContextKey { get; init; }
 
-    [Description("Candidate (or foreign) keys in staging order, for many, cross and context_map shapes.")]
+    [Description("Candidate (or foreign) keys in staging order, for many and cross shapes.")]
     public JsonElement? Keys { get; init; }
 
     [Description("False when the request had no time left to send the call.")]

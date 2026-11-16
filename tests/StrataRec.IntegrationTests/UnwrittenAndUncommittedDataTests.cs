@@ -95,7 +95,7 @@ public sealed class UnwrittenAndUncommittedDataTests
         // drops those slots; the fallback creates them again for its own rows. The seed's rows have no values either way.
         var plan = Compile(NullableRecallColumns, """
             "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [1, 2] } },
-            "recall": { "order": 100, "op": "FailingRecall@1", "on_failure": "fallback:recall_backup", "config": { "quotas_param": "quotas_r" } },
+            "recall": { "order": 100, "op": "FailingRecall@1", "on_failure": "fallback", "fallback": "recall_backup", "config": { "quotas_param": "quotas_r" } },
             "recall_backup": { "role": "fallback", "op": "MultiSourceRecall@1", "config": { "quotas_param": "quotas_t" } }
             """, RecallOutput);
 
@@ -182,7 +182,7 @@ public sealed class UnwrittenAndUncommittedDataTests
             """, """
             "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7], "output_col": "score.x" } },
             "rescore": { "order": 60, "op": "ExpressionScorer@1", "config": { "output_col": "score.x", "expr": "col.score.x + 1.0" } },
-            "more": { "order": 70, "op": "Rows@1", "on_failure": "fallback:other", "config": { "ids": [8, 9], "output_col": "score.x", "fails": true } },
+            "more": { "order": 70, "op": "Rows@1", "on_failure": "fallback", "fallback": "other", "config": { "ids": [8, 9], "output_col": "score.x", "fails": true } },
             "other": { "role": "fallback", "op": "Rows@1", "config": { "ids": [5], "output_col": "score.x" } }
             """, """ "x": "col.score.x" """);
 
@@ -215,7 +215,7 @@ public sealed class UnwrittenAndUncommittedDataTests
                 """, """
                 "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7] } },
                 "base": { "order": 60, "op": "ExpressionScorer@1", "config": { "output_col": "score.x", "expr": "10.0" } },
-                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.y", "how": "fails" } },
+                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback", "fallback": "backup", "config": { "output_col": "score.y", "how": "fails" } },
                 "backup": { "role": "fallback", "op": "Rows@1", "config": { "ids": [8], "output_col": "score.y" } },
                 "seen": { "order": 80, "op": "ExpressionScorer@1", "config": { "output_col": "score.seen", "expr": "col.score.x + 1.0" } }
                 """),
@@ -223,14 +223,14 @@ public sealed class UnwrittenAndUncommittedDataTests
                 "score.y": { "type": "float64", "default": 0.0 }
                 """, """
                 "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7] } },
-                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.y", "how": "fails" } },
+                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback", "fallback": "backup", "config": { "output_col": "score.y", "how": "fails" } },
                 "backup": { "role": "fallback", "op": "Rows@1", "config": { "ids": [8], "output_col": "score.y" } }
                 """),
             "rows of the fallback, later row source" => ("""
                 "score.y": { "type": "float64?" }, "score.z": { "type": "float64", "default": 0.0 }
                 """, """
                 "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7] } },
-                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.y", "how": "fails" } },
+                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback", "fallback": "backup", "config": { "output_col": "score.y", "how": "fails" } },
                 "backup": { "role": "fallback", "op": "Rows@1", "config": { "ids": [8], "output_col": "score.y" } },
                 "more": { "order": 80, "op": "Rows@1", "config": { "ids": [9], "output_col": "score.z" } }
                 """),
@@ -238,12 +238,12 @@ public sealed class UnwrittenAndUncommittedDataTests
                 "score.x": { "type": "float64?" }
                 """, """
                 "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7], "output_col": "score.x" } },
-                "primary": { "order": 70, "op": "Rows@1", "on_failure": "fallback:backup", "config": { "ids": [8], "output_col": "score.x" } },
+                "primary": { "order": 70, "op": "Rows@1", "on_failure": "fallback", "fallback": "backup", "config": { "ids": [8], "output_col": "score.x" } },
                 "backup": { "role": "fallback", "op": "ExpressionScorer@1", "config": { "output_col": "score.x", "expr": "1.0" } }
                 """),
             _ => ("", """
                 "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [1, 2] } },
-                "recall": { "order": 100, "op": "FailingRecall@1", "on_failure": "fallback:backup", "config": { "quotas_param": "quotas_r" } },
+                "recall": { "order": 100, "op": "FailingRecall@1", "on_failure": "fallback", "fallback": "backup", "config": { "quotas_param": "quotas_r" } },
                 "backup": { "role": "fallback", "op": "MultiSourceRecall@1", "config": { "quotas_param": "quotas_t" } }
                 """),
         };
@@ -273,15 +273,15 @@ public sealed class UnwrittenAndUncommittedDataTests
                 "primary": { "order": 70, "op": "Rows@1", "config": { "ids": [8], "output_col": "score.y" } }
                 """,
             "row source fallback shares an order" => """
-                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.y", "how": "fails" } },
+                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback", "fallback": "backup", "config": { "output_col": "score.y", "how": "fails" } },
                 "backup": { "role": "fallback", "op": "Rows@1", "config": { "ids": [8], "output_col": "score.y" } }
                 """,
             "fallback reads what the other writes" => """
-                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.y", "how": "fails" } },
+                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback", "fallback": "backup", "config": { "output_col": "score.y", "how": "fails" } },
                 "backup": { "role": "fallback", "op": "ExpressionScorer@1", "config": { "output_col": "score.y", "expr": "(col.score.x ?? 0.0) + 1.0" } }
                 """,
             _ => """
-                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.y", "how": "fails" } },
+                "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback", "fallback": "backup", "config": { "output_col": "score.y", "how": "fails" } },
                 "backup": { "role": "fallback", "op": "ExpressionScorer@1", "config": { "output_col": "score.y", "expr": "1.0" } }
                 """,
         };
@@ -306,7 +306,7 @@ public sealed class UnwrittenAndUncommittedDataTests
         // writes 99 into its own version of score.y and fails; the fallback appends 8 and writes the shared version.
         var plan = Compile(""" "score.y": { "type": "float64?" } """, """
             "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7] } },
-            "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback:backup", "config": { "output_col": "score.y", "how": "fails" } },
+            "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback", "fallback": "backup", "config": { "output_col": "score.y", "how": "fails" } },
             "backup": { "role": "fallback", "op": "Rows@1", "config": { "ids": [8], "output_col": "score.y" } }
             """, """ "y": "col.score.y ?? -1.0" """);
 

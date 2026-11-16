@@ -43,7 +43,7 @@
       "config": { "score_col": "score.coarse", "k_param": "coarse_k" }
     },
     "ctr_ranker": {
-      "order": 400, "op": "ModelScorer@1", "on_failure": "fallback:ctr_backup", "timeout_ms": 50,
+      "order": 400, "op": "ModelScorer@1", "on_failure": "fallback", "fallback": "ctr_backup", "timeout_ms": 50,
       "config": {
         "model": "ctr_model",
         "inputs": { "smoothed_ctr": "col.item.smoothed_ctr", "log_followers": "col.author.log_followers" },

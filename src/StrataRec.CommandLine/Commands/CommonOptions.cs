@@ -113,8 +113,9 @@ internal static class CommonOptions
         provided with { BaseDirectory = configRoot is null ? null : Path.GetFullPath(configRoot) };
 
     /// <summary>Loads a workspace and compiles one pipeline (with its experiments).</summary>
+    /// <param name="today">Checks experiments' <c>expires_at</c> against this date (<c>build</c>); see <see cref="CreateRequest"/>.</param>
     public static (ConfigWorkspace Workspace, PlanCompileRequest? Request, PlanCompilation? Compilation) Compile(
-        PlanEnvironment provided, string config, string environment, string? pipeline, DiagnosticBag diagnostics)
+        PlanEnvironment provided, string config, string environment, string? pipeline, DiagnosticBag diagnostics, DateOnly? today = null)
     {
         var workspace = ConfigWorkspace.Load(config, diagnostics);
         if (diagnostics.HasErrors)
@@ -122,7 +123,7 @@ internal static class CommonOptions
             return (workspace, null, null);
         }
 
-        var request = CreateRequest(workspace, environment, pipeline, diagnostics);
+        var request = CreateRequest(workspace, environment, pipeline, diagnostics, today);
         if (request is null)
         {
             return (workspace, null, null);
@@ -133,11 +134,15 @@ internal static class CommonOptions
         return (workspace, request, compilation);
     }
 
-    /// <summary>The compile request of <paramref name="pipeline"/> (or the workspace's only pipeline); null after reporting errors.</summary>
-    public static PlanCompileRequest? CreateRequest(ConfigWorkspace workspace, string environment, string? pipeline, DiagnosticBag diagnostics)
+    /// <summary>
+    /// The compile request of <paramref name="pipeline"/> (or the workspace's only pipeline); null after reporting errors.
+    /// Without an expiry check (design 11.7): <c>run</c>, <c>explain-plan</c>, <c>diff</c>, <c>replay</c> and <c>compare</c>
+    /// look at configurations as they are, including last week's; only <c>validate</c> and <c>build</c> decide releases.
+    /// </summary>
+    public static PlanCompileRequest? CreateRequest(ConfigWorkspace workspace, string environment, string? pipeline, DiagnosticBag diagnostics, DateOnly? today = null)
     {
         var id = pipeline ?? SinglePipeline(workspace, diagnostics);
-        return id is null ? null : workspace.CreateCompileRequest(id, environment, diagnostics, DateOnly.FromDateTime(DateTime.UtcNow));
+        return id is null ? null : workspace.CreateCompileRequest(id, environment, diagnostics, today);
     }
 
     private static string? SinglePipeline(ConfigWorkspace workspace, DiagnosticBag diagnostics)

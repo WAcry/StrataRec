@@ -32,7 +32,4 @@ public enum KeyShape : byte
 
     /// <summary>One context key × a batch of candidate keys.</summary>
     Cross,
-
-    /// <summary>One context key; the response carries its own candidate keys.</summary>
-    ContextMap,
 }

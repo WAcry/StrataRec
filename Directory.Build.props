@@ -22,11 +22,6 @@
     <VersionSuffix>preview</VersionSuffix>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
-    <!-- Debug/test builds poison returned buffers to surface use-after-return bugs early (design 4.8). -->
-    <DefineConstants>$(DefineConstants);STRATAREC_POISON_BUFFERS</DefineConstants>
-  </PropertyGroup>
-
   <PropertyGroup>
     <IsProductionCode Condition="$(MSBuildProjectDirectory.Contains('/src/')) Or $(MSBuildProjectDirectory.Contains('\src\'))">true</IsProductionCode>
   </PropertyGroup>

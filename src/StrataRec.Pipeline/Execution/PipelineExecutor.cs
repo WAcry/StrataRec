@@ -338,11 +338,13 @@ public sealed class PipelineExecutor
 
             var parameters = plan.Params.Snapshot(request.Arms);
             var variants = new CompiledNode?[plan.Timeline.Length];
+            var rowLimits = memory.Rent<int>(Math.Max(1, variants.Length));
             long capacity = 0;
             for (var i = 0; i < variants.Length; i++)
             {
                 var node = plan.Timeline[i].Select(request.Arms);
                 variants[i] = node;
+                rowLimits[i] = 0;
                 if (node is null)
                 {
                     continue;
@@ -356,6 +358,7 @@ public sealed class PipelineExecutor
                     limit = Math.Max(limit, RowLimit(fallback, parameters));
                 }
 
+                rowLimits[i] = (int)Math.Min(limit, int.MaxValue);
                 capacity += limit;
             }
 
@@ -403,7 +406,15 @@ public sealed class PipelineExecutor
             PipelineResult? result = null;
             for (; position < plan.Timeline.Length && result is null; position++)
             {
+                var appended = table.AppendedRows;
                 var error = await RunPositionAsync(state, position, cancellationToken).ConfigureAwait(false);
+                if (rowLimits[position] > 0)
+                {
+                    // The position can append no more: what it did not use of its limit is not reserved for later columns
+                    // (a recall that found 500 of its 2,000 rows sizes every later column for 500).
+                    table.ReleaseRowBudget(rowLimits[position] - (table.AppendedRows - appended));
+                }
+
                 EndNodeSpan(state, position, null);
                 if (error is not null)
                 {
@@ -584,7 +595,10 @@ public sealed class PipelineExecutor
             state.Table.Rows.Capture(entered);
         }
 
-        var reserve = node.OnFailure == FailurePolicy.Fallback ? node.FallbackReserveMs : 0;
+        // Unless the node says otherwise, it leaves its fallback the time the fallback may take (design 5.7).
+        var reserve = node.OnFailure == FailurePolicy.Fallback
+            ? node.FallbackReserveMs ?? state.Plan.SelectFallback(node, state.Arms)?.TimeoutMs ?? 0
+            : 0;
         var attempt = await RunNodeAsync(state, node, reserve, cancellationToken).ConfigureAwait(false);
         if (attempt.Kind is NodeOutcomeKind.Succeeded or NodeOutcomeKind.Degraded)
         {

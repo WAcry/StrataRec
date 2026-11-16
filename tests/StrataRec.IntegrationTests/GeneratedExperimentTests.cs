@@ -19,7 +19,7 @@ public sealed class GeneratedExperimentTests
     /// <summary>Rules of the unified plan across combinations: they may refuse a config every combination accepts.</summary>
     private static readonly HashSet<string> AcrossCombinations = new(StringComparer.Ordinal)
     {
-        "COLUMN_TYPE_MISMATCH", "PATCH_CONFLICT", "ADD_CONFLICT", "ORDER_COLLISION", "NODE_ROLE_CHANGED",
+        "COLUMN_TYPE_MISMATCH", "PATCH_CONFLICT", "ADD_CONFLICT", "NODE_ROLE_CHANGED",
         "COMBINATION_CHECK_LIMIT", // a rule over more combinations than may be checked is refused, not left unchecked
     };
 

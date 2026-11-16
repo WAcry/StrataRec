@@ -77,7 +77,8 @@ internal static class BuildCommand
     {
         errors ??= Console.Error;
         var diagnostics = new DiagnosticBag();
-        var (workspace, request, compilation) = CommonOptions.Compile(provided, config, environment, pipeline, diagnostics);
+        // An expired experiment cannot enter a new release (design 11.7): build compiles with today's date, as validate does.
+        var (workspace, request, compilation) = CommonOptions.Compile(provided, config, environment, pipeline, diagnostics, DateOnly.FromDateTime(DateTime.UtcNow));
         if (request is null || compilation is not { Succeeded: true } || diagnostics.HasErrors)
         {
             Output.Diagnostics(diagnostics.Items, "text", errors, locator: DiagnosticLocator.ForWorkspace(config));

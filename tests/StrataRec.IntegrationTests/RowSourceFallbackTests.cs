@@ -125,7 +125,7 @@ public sealed class RowSourceFallbackTests
             ReplayTests.Edit(root, pipeline, "\"final_top_k\": 10,", "\"final_top_k\": 100,");
             ReplayTests.Edit(root, pipeline, "\"safety_filter\": {", primaryFails
                 ? """
-                  "extra": { "order": 150, "op": "FailingRecall@1", "on_failure": "fallback:extra_backup", "fetch_barrier": false,
+                  "extra": { "order": 150, "op": "FailingRecall@1", "on_failure": "fallback", "fallback": "extra_backup", "fetch_barrier": false,
                              "config": { "quotas_param": "extra_primary_quotas" } },
                   "extra_backup": { "role": "fallback", "op": "MultiSourceRecall@1", "config": { "quotas_param": "extra_backup_quotas" } },
                   "safety_filter": {
@@ -187,7 +187,7 @@ public sealed class RowSourceFallbackTests
               "params": { "seed_quotas": { "seed": 2 }, "primary_quotas": { "primary": 1 }, "backup_quotas": { "backup": {{backupQuota}} }, "k": 10 },
               "nodes": {
                 {{seedNodes}}
-                "recall": { "order": 100, "op": "{{(how is null ? "MultiSourceRecall@1" : "FailingRecall@1")}}", "on_failure": "fallback:recall_backup"{{timeout}},
+                "recall": { "order": 100, "op": "{{(how is null ? "MultiSourceRecall@1" : "FailingRecall@1")}}", "on_failure": "fallback", "fallback": "recall_backup"{{timeout}},
                             "config": { "quotas_param": "primary_quotas" } },
                 "recall_backup": { "role": "fallback", "op": "MultiSourceRecall@1", "config": { "quotas_param": "backup_quotas" } } },
               "output": { "limit_param": "k", "columns": { "primary": "col.recall.primary_source" } } }

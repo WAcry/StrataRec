@@ -155,9 +155,9 @@ public class CacheBindingTests
     {
         var cache = Errors(Build("""
             { "mode": "cache", "connector": "memory@1", "max_bytes": "1MiB", "cache": { "ttl_ms": 1000 },
-              "lookup": "context", "bootstrap": { "source": "snapshot_files@1", "uri": "x" } }
+              "bootstrap": { "source": "snapshot_files@1", "uri": "x" } }
             """));
-        Assert.Equal(new[] { "/sources/item_store/lookup", "/sources/item_store/bootstrap" }, cache.Select(d => d.Pointer));
+        Assert.Equal(new[] { "/sources/item_store/bootstrap" }, cache.Select(d => d.Pointer));
         Assert.All(cache, d => Assert.Equal("SOURCE_SETTING_WRONG_MODE", d.Code));
 
         var fetch = Assert.Single(Errors(Build("""{ "connector": "memory@1", "cache": { "ttl_ms": 1000 } }""")));

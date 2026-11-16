@@ -864,8 +864,7 @@ public sealed class RunReplay : IFeatureCallHook
                 "single" => KeyShape.Single,
                 "many" => KeyShape.Many,
                 "cross" => KeyShape.Cross,
-                "context_map" => KeyShape.ContextMap,
-                _ => throw new ReplayBundleException(at + "/shape", $"unknown shape '{call.Shape}'", "use single, many, cross or context_map"),
+                _ => throw new ReplayBundleException(at + "/shape", $"unknown shape '{call.Shape}'", "use single, many or cross"),
             };
             var context = shape == KeyShape.Many || call.ContextKey is not { } contextKey ? default : ReplayJson.Key(contextKey, at + "/context_key");
             var keys = shape == KeyShape.Single ? Array.Empty<EntityKey>() : ReplayJson.Keys(call.Keys, at + "/keys");

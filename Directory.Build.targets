@@ -4,6 +4,12 @@
     <Using Remove="System.Linq" />
   </ItemGroup>
 
+  <!-- Test runs poison returned buffers (RequestMemory.PoisonReturnedBuffers, design 4.8), in Debug and Release alike: CI
+       tests the Release build. Benchmarks measure what production runs, so they do not. -->
+  <ItemGroup Condition="'$(IsTestProject)' == 'true'">
+    <RuntimeHostConfigurationOption Include="StrataRec.PoisonReturnedBuffers" Value="true" />
+  </ItemGroup>
+
   <!-- `dotnet test -p:TestReports=true` (CI): each test assembly writes a TRX report named after its project. The default
        name is a time stamp, which assemblies running at the same moment share. -->
   <PropertyGroup Condition="'$(IsTestProject)' == 'true' And '$(TestReports)' == 'true'">

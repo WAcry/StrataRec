@@ -275,20 +275,20 @@ internal sealed partial class UnifiedCompilation
     }
 
     /// <summary>
-    /// Checks every pair of arms that can be assigned together (any two of different layers) for path conflicts,
-    /// same-order placements (errors) and interactions (warnings for review), design 11.5.
+    /// Checks every pair of arms that can be assigned together (any two of different layers) for path conflicts (errors)
+    /// and interactions (warnings for review), design 11.5. Two arms placing nodes at the same order are not a conflict:
+    /// the per-combination data-flow check refuses same-order nodes that depend on each other (ORDER_DEPENDENCY), and
+    /// independent ones run in either order with the same result.
     /// </summary>
     private void ValidatePairs()
     {
-        var placed = new Dictionary<int, Dictionary<int, string>>();
         var writes = new Dictionary<int, Dictionary<int, string>>();
         var addedReads = new Dictionary<int, Dictionary<int, string>>();
         foreach (var arm in _arms)
         {
             if (arm.Valid)
             {
-                DescribeArm(arm, out var p, out var w, out var r);
-                placed[arm.Index] = p;
+                DescribeArm(arm, out var w, out var r);
                 writes[arm.Index] = w;
                 addedReads[arm.Index] = r;
             }
@@ -314,16 +314,6 @@ internal sealed partial class UnifiedCompilation
                         $"Arms '{a.Id}' and '{b.Id}' (layers '{_layers[a.LayerIndex]}' and '{_layers[b.LayerIndex]}') can be assigned to the same request and both change '{conflict.First.Path}'"
                         + (conflict.First.Path.Equals(conflict.Second.Path) ? "." : $" / '{conflict.Second.Path}'."),
                         "put the experiments in the same layer so their arms exclude each other, or combine them into one experiment (design 11.5)");
-                }
-
-                foreach (var (order, node) in placed[a.Index])
-                {
-                    if (placed[b.Index].TryGetValue(order, out var other))
-                    {
-                        _diagnostics.Error("ORDER_COLLISION", a.Artifact, a.PointerPrefix + "/nodes/" + JsonPointer.Escape(node) + "/order",
-                            $"Arms '{a.Id}' and '{b.Id}' can be assigned together and both place a node at order {order} ('{node}' and '{other}').",
-                            "pick distinct orders; orders are spaced by 100 so there is room in between");
-                    }
                 }
 
                 Interactions(a, b, writes, addedReads);
@@ -354,12 +344,11 @@ internal sealed partial class UnifiedCompilation
     }
 
     /// <summary>
-    /// The column footprint of an arm (design 11.5 item 2) from its single-arm variants: orders where it places nodes,
-    /// columns its touched nodes write, and columns its added nodes read.
+    /// The column footprint of an arm (design 11.5 item 2) from its single-arm variants: columns its touched nodes write,
+    /// and columns its added nodes read.
     /// </summary>
-    private void DescribeArm(ArmPatch arm, out Dictionary<int, string> placed, out Dictionary<int, string> writes, out Dictionary<int, string> addedReads)
+    private void DescribeArm(ArmPatch arm, out Dictionary<int, string> writes, out Dictionary<int, string> addedReads)
     {
-        placed = new Dictionary<int, string>();
         writes = new Dictionary<int, string>();
         addedReads = new Dictionary<int, string>();
         var only = OnlyArm(arm.Index);
@@ -375,12 +364,6 @@ internal sealed partial class UnifiedCompilation
             if (node is null)
             {
                 continue;
-            }
-
-            var baseOrder = OrderOf(_view.Nodes[nodeId]);
-            if (node.Order is { } order && (arm.AddedNodes.Contains(nodeId) || order != baseOrder))
-            {
-                placed[order] = nodeId;
             }
 
             foreach (var output in node.Outputs)

@@ -14,7 +14,7 @@ public readonly struct EntityKeyBatch
 {
     public required KeyShape Shape { get; init; }
 
-    /// <summary>Context key for <see cref="KeyShape.Single"/>, <see cref="KeyShape.Cross"/> and <see cref="KeyShape.ContextMap"/>.</summary>
+    /// <summary>Context key for <see cref="KeyShape.Single"/> and <see cref="KeyShape.Cross"/>.</summary>
     public EntityKey ContextKey { get; init; }
 
     /// <summary>Candidate keys for <see cref="KeyShape.Many"/> and <see cref="KeyShape.Cross"/>.</summary>

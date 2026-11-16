@@ -91,7 +91,8 @@ public sealed class CompiledNode
     /// <summary>Fallback node id; its variant is selected per request from <see cref="ExecutionPlan.Fallbacks"/>.</summary>
     public string? FallbackNodeId { get; init; }
 
-    public int FallbackReserveMs { get; init; }
+    /// <summary>Time left to the fallback; null leaves the fallback's own <see cref="TimeoutMs"/> (design 5.7).</summary>
+    public int? FallbackReserveMs { get; init; }
 
     /// <summary>True when the node ends a fetch segment (design 5.4).</summary>
     public bool FetchBarrier { get; init; }

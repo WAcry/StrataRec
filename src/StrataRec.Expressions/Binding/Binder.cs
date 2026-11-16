@@ -1089,7 +1089,8 @@ internal sealed class Binder
             var firstFallback = DefaultLiteral(first.Type);
             message = $"The result has type {root.Type} and is missing whenever {string.Join(" or ", names)} is missing, but this site requires a value";
             hint = firstFallback is null
-                ? $"append ' ?? {fallback ?? "<default>"}' to the expression, or test has({first.Symbol.Name})"
+                // Not "or test has(x)": has() does not narrow, so 'has(x) ? f(x) : 0.0' is still nullable and reports this again.
+                ? $"append ' ?? {fallback ?? "<default>"}' to the expression"
                 : $"write '({first.Symbol.Name} ?? {firstFallback})' at offset {first.Start}, or append ' ?? {fallback ?? "<default>"}' to the expression";
             offset = first.Start;
             length = first.Length;

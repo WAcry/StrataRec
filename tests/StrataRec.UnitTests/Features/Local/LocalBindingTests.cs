@@ -19,7 +19,6 @@ public class LocalBindingTests
         ["connector"] = "\"memory@1\"",
         ["timeout_ms"] = "10",
         ["max_batch"] = "10",
-        ["lookup"] = "\"context\"",
         ["max_bytes"] = "\"1MiB\"",
         ["bootstrap"] = """{ "source": "snapshot_files@1", "uri": "x" }""",
         ["cache"] = """{ "ttl_ms": 1000 }""",
