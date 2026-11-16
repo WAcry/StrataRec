@@ -834,6 +834,7 @@ public sealed partial class FeatureFetcher
             return;
         }
 
+        var scratch = default(BackfillScratch); // shared by the fetch's features: a row's key is looked up once, not per feature
         for (var i = 0; i < pending.Features.Length; i++)
         {
             var f = pending.Features[i];
@@ -842,9 +843,43 @@ public sealed partial class FeatureFetcher
                 continue;
             }
 
-            Backfill(pending, _plan.Features[f], i);
+            Backfill(pending, _plan.Features[f], i, ref scratch);
             SetFetchedState(f, degraded, error);
         }
+    }
+
+    /// <summary>
+    /// What the features of one completed fetch share while they are backfilled: each live row's fetch key, resolved the
+    /// first time a feature needs it (<see cref="UnresolvedKey"/> until then), and the list of rows a feature copied. The
+    /// rows and their order do not change while a fetch's features are backfilled, and neither does the key column.
+    /// </summary>
+    private struct BackfillScratch
+    {
+        public int[]? Keys; // by rank position: a fetch key, NoFetchKey, NotThisFetch or UnresolvedKey
+        public int[]? Copied;
+    }
+
+    private const int UnresolvedKey = int.MinValue;
+
+    /// <summary>The row has no key (an anonymous user, a missing foreign key): the feature is legitimately missing.</summary>
+    private const int NoFetchKey = -1;
+
+    /// <summary>The row is not this fetch's: its key is not ready yet, or the row was appended after the fetch started.</summary>
+    private const int NotThisFetch = -2;
+
+    private int FetchKeyOf(PendingFetch pending, int row)
+    {
+        if (pending.NoContextKey)
+        {
+            return NoFetchKey;
+        }
+
+        return TryCandidateKey(pending.Group, row, out var key) switch
+        {
+            KeyLookup.Found => pending.Index is not null && pending.Index.TryGetValue(key, out var keyIndex) ? keyIndex : NotThisFetch,
+            KeyLookup.NotReady => NotThisFetch, // a later fetch fills it
+            _ => NoFetchKey,
+        };
     }
 
     /// <summary>
@@ -983,33 +1018,39 @@ public sealed partial class FeatureFetcher
     /// to chunk k / max_batch. A value is read only if its chunk succeeded and the connector wrote that field for that
     /// key; anything else takes the default or becomes missing.
     /// </summary>
-    private void Backfill(PendingFetch pending, FeatureRuntimeInfo feature, int fieldIndex)
+    private void Backfill(PendingFetch pending, FeatureRuntimeInfo feature, int fieldIndex, ref BackfillScratch scratch)
     {
         var definition = feature.Definition;
         var column = _table.GetOrCreateSlot(feature.Slot);
         var filled = _table.GetFilled(feature.Slot);
-        var copied = _memory.Rent<int>(Math.Max(1, _table.Rows.Count));
-        var copiedCount = 0;
-        foreach (var row in _table.Rows.Order)
+        var order = _table.Rows.Order;
+        if (scratch.Keys is null)
         {
+            scratch.Keys = _memory.Rent<int>(Math.Max(1, order.Length));
+            scratch.Keys.AsSpan(0, order.Length).Fill(UnresolvedKey);
+            scratch.Copied = _memory.Rent<int>(Math.Max(1, order.Length));
+        }
+
+        var keys = scratch.Keys;
+        var copied = scratch.Copied!;
+        var copiedCount = 0;
+        for (var p = 0; p < order.Length; p++)
+        {
+            var row = order[p];
             if (Bits.Get(filled, row))
             {
                 continue;
             }
 
-            var keyIndex = -1; // no key: legitimately missing (e.g. anonymous user, missing foreign key)
-            if (!pending.NoContextKey)
+            var keyIndex = keys[p];
+            if (keyIndex == UnresolvedKey)
             {
-                var lookup = TryCandidateKey(pending.Group, row, out var key);
-                if (lookup == KeyLookup.NotReady)
-                {
-                    continue; // the key itself is not available for this row yet; a later fetch fills it
-                }
+                keys[p] = keyIndex = FetchKeyOf(pending, row);
+            }
 
-                if (lookup == KeyLookup.Found && (pending.Index is null || !pending.Index.TryGetValue(key, out keyIndex)))
-                {
-                    continue; // row appended after this fetch started; a later fetch fills it
-                }
+            if (keyIndex == NotThisFetch)
+            {
+                continue;
             }
 
             if (keyIndex >= 0 && pending.Staging is { } staging && !pending.ChunkFailed[keyIndex / pending.ChunkSize]
