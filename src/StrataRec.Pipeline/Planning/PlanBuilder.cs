@@ -59,7 +59,6 @@ public sealed record PlanEnvironment
         caps.AddRange(CacheStores.Types);
         caps.AddRange(Models.Types);
         caps.AddRange(CandidateSources.Types);
-        caps.Add(ExpressionCompiler.FunctionSetCapability);
         caps.Sort(StringComparer.Ordinal);
         return caps;
     }
@@ -116,6 +115,9 @@ public sealed class PlanBuilder
     private readonly HashSet<string> _failedGroups = new(StringComparer.Ordinal);
     private IExpressionScope? _scope;
     private ClientResolver? _clients;
+
+    /// <summary>The operators of every node compiled, fallbacks and every arm's variants included.</summary>
+    private readonly SortedSet<string> _operators = new(StringComparer.Ordinal);
     private SchemaSources? _sources;
     private FeatureCatalog? _catalog;
     private Dictionary<string, ContextField>? _requestInputs;
@@ -250,6 +252,8 @@ public sealed class PlanBuilder
                 NameSuggestions.DidYouMean(spec.Op, _environment.Operators.Ids) ?? "run 'stratarec operators' to list operators");
             return null;
         }
+
+        _operators.Add(spec.Op);
 
         var ok = true;
         var isFallback = spec.Role == "fallback";
@@ -1937,6 +1941,33 @@ public sealed class PlanBuilder
         _catalogFeatures = new CatalogFeatures(
             catalog, schema, _scope!, _diagnostics, CatalogLabel, _features, source => FeaturePlan.NeedsWholeTable(bindings, source), whole.Failed);
         schema.AttachFeatures(_catalogFeatures);
+    }
+
+    /// <summary>
+    /// What the configuration compiled so far needs of a binary (design 10.4): the operator of every node compiled, and
+    /// the types of the bindings it bound, the models and candidate sources its nodes resolved and the feature sources of
+    /// the catalog features it registered. Taken from the compile rather than from the names the configuration writes, so
+    /// an operator's default (a model its config does not name) counts, and a binding nothing uses does not.
+    /// </summary>
+    internal SortedSet<string> RequiredCapabilities()
+    {
+        var required = new SortedSet<string>(_operators, StringComparer.Ordinal);
+        if (_clients is null)
+        {
+            return required;
+        }
+
+        var sources = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var feature in _features)
+        {
+            if (!feature.IsDerived && feature.Definition.Source is { } source)
+            {
+                sources.Add(source);
+            }
+        }
+
+        _clients.Bindings.AddTypes(required, sources, _clients.BoundModels, _clients.BoundCandidateSources);
+        return required;
     }
 
     /// <summary>

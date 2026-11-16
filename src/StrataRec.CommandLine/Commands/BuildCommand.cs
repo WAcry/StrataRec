@@ -118,23 +118,17 @@ internal static class BuildCommand
             published = pointed;
         }
 
-        // The sources the plan reads, every arm's included: only their connector types are required of the binary.
-        var featureSources = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var group in compilation.GetPlanOrThrow().Features.Groups)
-        {
-            featureSources.Add(group.SourceName);
-        }
-
+        var compiledWith = CommonOptions.ForRoot(provided, workspace.Root);
         ReleaseManifest? manifest;
         var manifestId = string.Empty;
         var unchanged = false;
         try
         {
             manifest = published is { } current
-                ? await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, store, diagnostics, next, current.Manifest.MinAcceptedSeq,
-                    current.Id, cancellationToken, featureSources).ConfigureAwait(false)
-                : await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, store, diagnostics, seq ?? 1, cancellationToken: cancellationToken,
-                    featureSources: featureSources).ConfigureAwait(false);
+                ? await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, compiledWith, store, diagnostics, next, current.Manifest.MinAcceptedSeq,
+                    current.Id, cancellationToken).ConfigureAwait(false)
+                : await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, compiledWith, store, diagnostics, seq ?? 1, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
             unchanged = manifest is not null && published is { } was && ManifestBuilder.ContentId(Renumbered(manifest, was.Manifest)) == was.Id;
             if (unchanged)
             {
@@ -174,7 +168,7 @@ internal static class BuildCommand
             Output.Diagnostics(diagnostics.Items, "text", errors, locator: DiagnosticLocator.ForWorkspace(config));
         }
 
-        errors.WriteLine($"manifest {manifestId} (seq {manifest.Seq}, {Output.Count(manifest.Requires.Count, "capability", "capabilities")}, " +
+        errors.WriteLine($"manifest {manifestId} (seq {manifest.Seq}, {Output.Count(ManifestBuilder.RequiredCapabilities(manifest).Count, "capability", "capabilities")}, " +
                          $"{Output.Count(manifest.Experiments.Count, "experiment")})" +
                          (unchanged ? ": unchanged, the release the pointer names has this configuration" : string.Empty));
         if (!unchanged)

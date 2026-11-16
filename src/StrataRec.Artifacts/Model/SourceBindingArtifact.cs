@@ -20,28 +20,19 @@ public sealed class SourceBindingArtifact
     public Dictionary<string, ClientBinding> CandidateSources { get; init; } = new();
 
     /// <summary>
-    /// The client, connector and update-source types the bindings name (design 10.4): a binary that lacks one cannot
-    /// serve them. The one place that knows which binding settings name a type, so a new kind of setting is added here.
+    /// Adds to <paramref name="types"/> the client, connector, update-source and cache-store types the named bindings use
+    /// (design 10.4): a binary that lacks one cannot serve them. The one place that knows which binding settings name a
+    /// type, so a new kind of setting is added here. A name without a binding adds nothing (it is an error where it is used).
     /// </summary>
-    public List<string> RequiredTypes() => RequiredTypes(null);
-
-    /// <summary>
-    /// <see cref="RequiredTypes()"/>, without the models and candidate sources <paramref name="excluded"/> names: a client
-    /// no node uses is never created (instances are made for the nodes that use them), so a binary that lacks its type
-    /// serves the configuration. Null excludes nothing.
-    /// </summary>
-    /// <param name="featureSources">
-    /// The feature sources a plan reads: only those are bound (a plan holds the catalog features it reads), so only their
-    /// connector, bootstrap source and distributed store are required (review 67: a source of features nothing read was
-    /// required, so a manifest that built and ran from the workspace was refused by the same binary). Null counts every
-    /// source, for a caller that compiled no plan.
-    /// </param>
-    public List<string> RequiredTypes(IReadOnlySet<string>? excluded, IReadOnlySet<string>? featureSources = null)
+    /// <param name="featureSources">Feature sources a plan reads: their connector, bootstrap source and distributed store.</param>
+    /// <param name="models">Models a plan binds: their client.</param>
+    /// <param name="candidateSources">Candidate sources a plan binds: their client.</param>
+    public void AddTypes(ISet<string> types, IEnumerable<string> featureSources, IEnumerable<string> models, IEnumerable<string> candidateSources)
     {
-        var types = new List<string>();
-        foreach (var (name, source) in Sources)
+        ArgumentNullException.ThrowIfNull(types);
+        foreach (var name in featureSources)
         {
-            if (featureSources is not null && !featureSources.Contains(name))
+            if (!Sources.TryGetValue(name, out var source))
             {
                 continue;
             }
@@ -62,23 +53,21 @@ public sealed class SourceBindingArtifact
             }
         }
 
-        foreach (var (name, model) in Models)
+        foreach (var name in models)
         {
-            if (excluded is null || !excluded.Contains(name))
+            if (Models.TryGetValue(name, out var model))
             {
                 types.Add(model.Client);
             }
         }
 
-        foreach (var (name, source) in CandidateSources)
+        foreach (var name in candidateSources)
         {
-            if (excluded is null || !excluded.Contains(name))
+            if (CandidateSources.TryGetValue(name, out var source))
             {
                 types.Add(source.Client);
             }
         }
-
-        return types;
     }
 }
 

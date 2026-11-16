@@ -16,7 +16,10 @@ public sealed class ReleaseManifest
 
     public string? Previous { get; init; }
 
-    /// <summary>Capabilities required from the binary; computed by the build (design 10.4).</summary>
+    /// <summary>
+    /// Capabilities the baseline requires of the binary, computed by the build (design 10.4); each experiment lists what it
+    /// needs beyond them (<see cref="ManifestExperiment.Requires"/>), and a node needs both.
+    /// </summary>
     public List<string> Requires { get; init; } = new();
 
     public required ManifestArtifacts Artifacts { get; init; }
@@ -51,4 +54,11 @@ public sealed class ManifestExperiment
     /// together and the arms of different layers always are (design 11.5).
     /// </summary>
     public required string Layer { get; init; }
+
+    /// <summary>
+    /// Capabilities the experiment requires of the binary beyond the baseline's, computed by the build from what its
+    /// compile used (design 10.4): removing the experiment removes them, so a revocation lets a binary that lacks them
+    /// serve the rest, and a controller rolling a binary back knows which experiments to remove.
+    /// </summary>
+    public List<string> Requires { get; init; } = new();
 }

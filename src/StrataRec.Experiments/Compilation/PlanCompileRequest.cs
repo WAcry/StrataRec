@@ -54,6 +54,14 @@ public sealed class PlanCompileRequest
     public const int ExpiryWarningDays = 14;
 }
 
+/// <summary>
+/// What a release needs of a binary (design 10.4): the baseline's capabilities, and each experiment's beyond them, so
+/// removing an experiment removes exactly what it needed.
+/// </summary>
+/// <param name="Baseline">What the pipeline without experiments needs, sorted.</param>
+/// <param name="Experiments">Experiment id → what it needs that the baseline does not, sorted (empty for most).</param>
+public sealed record ReleaseRequirements(IReadOnlyList<string> Baseline, IReadOnlyDictionary<string, IReadOnlyList<string>> Experiments);
+
 /// <summary>An experiment and the layer it runs in (layers come from the manifest, not the artifact, design 11.2).</summary>
 public sealed record ExperimentPlacement(ExperimentArtifact Experiment, string Layer);
 
@@ -65,6 +73,14 @@ public sealed class PlanCompilation
     public required IReadOnlyList<ConfigDiagnostic> Diagnostics { get; init; }
 
     public required PlanReport Report { get; init; }
+
+    /// <summary>
+    /// What the compiled configuration needs of a binary (design 10.4), sorted: the operator of every node it compiled
+    /// and the types of the bindings it bound (model and candidate-source clients, the connector, bootstrap source and
+    /// distributed store of every feature source it reads). Every arm's included; <see cref="PlanCompiler.Requirements"/>
+    /// tells the baseline's from each experiment's.
+    /// </summary>
+    public IReadOnlyList<string> Requires { get; init; } = Array.Empty<string>();
 
     public bool Succeeded => Plan is not null;
 

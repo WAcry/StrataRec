@@ -1183,7 +1183,7 @@ utility * (1.0 + param.w_fresh * freshness) * cold_boost
 7. 查表：`lookup(table_name, key, default)` 读取 `DataTableArtifact` 中的静态表，例如分位数校准表
 8. 数值转换：`int(x)` 向零截断，`double(x)` 把 `int64` 转成最近的 `float64`
 
-函数集合整体带版本（例如 `expr_functions@3`）。新增函数需要发布二进制，并通过能力匹配防止新配置下发到旧二进制（第 10.4 节）。提示词这类文本拼接不属于表达式语言，由算子使用 Mustache 模板完成（第 5.9 节）。
+新增函数需要发布二进制。函数集合不作为能力参与匹配（第 10.4 节）：缺少某个函数的二进制在加载时编译失败，错误指出表达式里的位置，节点保留当前计划。提示词这类文本拼接不属于表达式语言，由算子使用 Mustache 模板完成（第 5.9 节）。
 
 ### 7.7 编译流程与执行后端
 
@@ -1767,9 +1767,9 @@ config/
   "previous": "sha256:9a1c...",
   "requires": [
     "MultiSourceRecall@1", "ExpressionFilter@1", "ExpressionScorer@1", "TopK@1",
-    "ModelScorer@1", "CompositeMultiplierScorer@1", "SlidingWindowQuota@1", "MmrDiversifier@1",
+    "ModelScorer@1", "CompositeMultiplierScorer@1", "SlidingWindowQuota@1",
     "redis_hash@1", "redis_blob@1", "snapshot_files@1", "kafka@1",
-    "grpc_ann@1", "grpc_retrieval@1", "redis_list@1", "grpc_tensor@1", "expr_functions@3"
+    "grpc_ann@1", "grpc_retrieval@1", "redis_list@1", "grpc_tensor@1"
   ],
   "artifacts": {
     "catalog": "sha256:5d2e...",
@@ -1780,11 +1780,13 @@ config/
   "experiments": {
     "exp_mmr_diversity": {
       "artifact": "sha256:4b22...",
-      "layer": "rerank"
+      "layer": "rerank",
+      "requires": ["MmrDiversifier@1"]
     },
     "exp_freshness_calibration": {
       "artifact": "sha256:c0de...",
-      "layer": "fusion"
+      "layer": "fusion",
+      "requires": []
     }
   }
 }
@@ -1795,9 +1797,9 @@ config/
 | `seq` | 每个 (流水线, 环境) 单调递增的序号。任何发布，包括回滚，都生成一个 `seq` 更大的新 manifest；节点只接受 `seq` 比当前更大的 manifest |
 | `min_accepted_seq` | 低于这个序号的 manifest 视为已撤销。发布控制器在撤销内容（紧急移除实验、退回基线）时，把它设为新 manifest 自己的 `seq`；普通发布沿用上一版的值 |
 | `previous` | 上一版 manifest 的哈希，只用于审计和 `stratarec diff`，节点不读取它 |
-| `requires` | 所需能力，由构建计算，不需要手写 |
+| `requires` | 基线所需的能力，由构建计算，不需要手写 |
 | `artifacts` | 基线产物的哈希 |
-| `experiments` | 在线实验的产物哈希和所在的层（来自发布文件） |
+| `experiments` | 在线实验的产物哈希、所在的层（来自发布文件），以及它在基线之外所需的能力 `requires` |
 
 manifest 不含流量分配：没有桶范围、比例、盐或分流单元，这些都属于实验平台（第 11.1 节）。层必须存在，校验要靠它判断哪些桶可能同时命中。
 
@@ -1824,10 +1826,10 @@ manifest 不含流量分配：没有桶范围、比例、盐或分流单元，�
 
 ### 10.4 能力匹配与版本演进
 
-1. 二进制导出自己的能力集合：算子类型与版本、连接器与模型客户端类型、表达式函数集合版本、产物 Schema 版本。
+1. 二进制导出自己的能力集合：算子类型与版本，连接器、更新来源、缓存存储、模型客户端和召回源的类型。`build` 从编译结果算出 manifest 需要什么：先单独编译基线，再分别编译基线加每个实验，基线用到的记在 `requires`，每个实验多用到的记在它自己的 `requires`，节点要求两者都具备。按编译结果而不是按配置里写的名字计算：算子按默认值用到的模型也计入，没人用的绑定不计入。
 2. 节点只接受 `requires` 是自己能力子集的 manifest。不兼容时，节点保持当前计划，报告 `incompatible` 和缺少的能力。节点不会自己去找更早的 manifest：时间上更早的版本可能包含已经撤销的实验，选择哪个版本是发布控制器的决定。
 3. 发布控制器在目标分组的所有节点都具备所需能力之前，不推进依赖新能力的 manifest。
-4. 二进制回滚会让依赖新能力的 manifest 变得不兼容。这时由发布控制器生成一个新的兼容 manifest（新的 `seq`）：去掉依赖缺失能力的实验；如果基线本身依赖新能力，就从产物历史中选取最近一个兼容的基线版本，并按第 10.5 节重新校验在线实验。推荐的顺序是先发布兼容 manifest，再回滚二进制。
+4. 二进制回滚会让依赖新能力的 manifest 变得不兼容。这时由发布控制器生成一个新的兼容 manifest（新的 `seq`）：去掉依赖缺失能力的实验（`requires` 含缺失能力的实验，撤销时它们的能力随之去掉）；如果基线本身依赖新能力，就从产物历史中选取最近一个兼容的基线版本，并按第 10.5 节重新校验在线实验。推荐的顺序是先发布兼容 manifest，再回滚二进制。
 5. 算子配置的演进规则：新增可选字段时保持同一版本；删除、改名或改变语义时发布新版本（例如 `MmrDiversifier@2`），过渡期内二进制同时支持两个版本，CI 对使用旧版本的配置给出警告。
 6. 上线一个新算子分两步：先发布注册了新算子的二进制，此时没有配置引用它，这次部署只增加能力，不改变行为；再发布使用它的配置。
 

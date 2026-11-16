@@ -123,6 +123,70 @@ public static class PlanCompiler
         var plain = UnifiedCompilation.WithoutExperiments(request);
         return new UnifiedCompilation(plain, environment ?? new PlanEnvironment(), view, diagnostics, buildPlan: true, bindings ?? new UnloadedBindings()).Run();
     }
+
+    /// <summary>
+    /// What a release of <paramref name="request"/> needs of a binary (design 10.4): compiles the baseline alone, then
+    /// the baseline with each experiment (every arm of it, as one layer), and gives each experiment what its compile
+    /// needed beyond the baseline's. A combination of experiments needs nothing neither needs alone: an arm references
+    /// only the baseline and itself (design 11.6). No plan is built and nothing is loaded. Null after reporting the errors
+    /// of a compile that failed; its warnings are the full compile's to report.
+    /// </summary>
+    /// <remarks>Recording each experiment's own needs is what lets a revocation, which compiles nothing, require exactly
+    /// what is left: inferring them back from the configuration's names kept what an operator used by default and freed
+    /// nothing a feature source needed (reviews 39, 40, 42, 68).</remarks>
+    public static ReleaseRequirements? Requirements(PlanCompileRequest request, PlanEnvironment? environment, DiagnosticBag diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        environment ??= new PlanEnvironment();
+        var view = PatchableView.Create(request.Pipeline, request.Catalog);
+        if (Needs(UnifiedCompilation.WithoutExperiments(request), environment, view, diagnostics) is not { } baseline)
+        {
+            return null;
+        }
+
+        var experiments = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        foreach (var placement in request.Experiments)
+        {
+            if (Needs(UnifiedCompilation.With(request, placement), environment, view, diagnostics) is not { } needs)
+            {
+                return null;
+            }
+
+            var own = new List<string>();
+            foreach (var capability in needs)
+            {
+                if (!baseline.Contains(capability))
+                {
+                    own.Add(capability);
+                }
+            }
+
+            experiments[placement.Experiment.ExperimentId] = own;
+        }
+
+        return new ReleaseRequirements(new List<string>(baseline), experiments);
+    }
+
+    private static SortedSet<string>? Needs(PlanCompileRequest request, PlanEnvironment environment, PatchableView view, DiagnosticBag diagnostics)
+    {
+        var compile = new DiagnosticBag();
+        var compilation = new UnifiedCompilation(request, environment, view, compile, buildPlan: false, new UnloadedBindings()).Run();
+        if (compile.HasErrors)
+        {
+            foreach (var d in compile.Items)
+            {
+                if (d.IsError)
+                {
+                    diagnostics.Add(d);
+                }
+            }
+
+            return null;
+        }
+
+        return new SortedSet<string>(compilation.Requires, StringComparer.Ordinal);
+    }
 }
 
 /// <summary>The state of one compile. Not thread-safe; one instance per compile.</summary>
@@ -170,6 +234,21 @@ internal sealed partial class UnifiedCompilation
         _builder = new PlanBuilder(environment, diagnostics, bindings);
         _pipelineLabel = "pipeline:" + request.Pipeline.PipelineId;
     }
+
+    /// <summary><paramref name="r"/> with one experiment of its, checked as <see cref="WithoutExperiments"/> is.</summary>
+    public static PlanCompileRequest With(PlanCompileRequest r, ExperimentPlacement experiment) => new()
+    {
+        Pipeline = r.Pipeline,
+        Catalog = r.Catalog,
+        Bindings = r.Bindings,
+        Tables = r.Tables,
+        Policy = r.Policy,
+        Experiments = [experiment],
+        ManifestId = r.ManifestId,
+        ValidateArmsIndependently = false,
+        MaxCombinationsPerNode = r.MaxCombinationsPerNode,
+        MaxCombinationsChecked = r.MaxCombinationsChecked,
+    };
 
     public static PlanCompileRequest WithoutExperiments(PlanCompileRequest r) => new()
     {
@@ -246,6 +325,7 @@ internal sealed partial class UnifiedCompilation
         {
             Plan = plan,
             Diagnostics = _diagnostics.Items,
+            Requires = new List<string>(_builder.RequiredCapabilities()),
             Report = new PlanReport
             {
                 Nodes = NodeReports(),

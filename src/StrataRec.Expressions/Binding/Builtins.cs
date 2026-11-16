@@ -2,7 +2,7 @@ using StrataRec.Expressions.Syntax;
 
 namespace StrataRec.Expressions.Binding;
 
-/// <summary>The fixed function whitelist (design 7.6, <see cref="ExpressionCompiler.FunctionSetCapability"/>).</summary>
+/// <summary>The fixed function whitelist (design 7.6).</summary>
 internal static class Builtins
 {
     /// <summary>Function names with their arity (min, max; -1 = variadic) and a usage string for hints.</summary>

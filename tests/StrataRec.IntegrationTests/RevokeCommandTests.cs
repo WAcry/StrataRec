@@ -1,9 +1,13 @@
+using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Model;
 using StrataRec.Artifacts.Storage;
 using StrataRec.CommandLine;
 using StrataRec.CommandLine.Commands;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Manifests;
+using StrataRec.Features.Cache;
+using StrataRec.Models;
+using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
@@ -22,7 +26,8 @@ public sealed class RevokeCommandTests
         var first = await BuildAndPublishAsync(root, store);
         var blobs = new FileSystemArtifactStore(store);
         var firstManifest = await ReadAsync(blobs, first);
-        Assert.Contains("MmrDiversifier@1", firstManifest.Requires); // only the experiment adds the node
+        Assert.Equal(["MmrDiversifier@1"], firstManifest.Experiments["exp_mmr_diversity"].Requires); // only the experiment adds the node
+        Assert.DoesNotContain("MmrDiversifier@1", firstManifest.Requires);
 
         var (code, output, errors) = await Revoke(store, "exp_mmr_diversity");
         Assert.True(code == 0, errors);
@@ -31,7 +36,8 @@ public sealed class RevokeCommandTests
         Assert.Equal((2L, 2L, first), (revocation.Seq, revocation.MinAcceptedSeq, revocation.Previous));
         Assert.Equal(["exp_freshness_calibration", "exp_quality_weight"], revocation.Experiments.Keys.Order(StringComparer.Ordinal));
         Assert.Equal(firstManifest.Artifacts.Pipeline, revocation.Artifacts.Pipeline);
-        Assert.DoesNotContain("MmrDiversifier@1", revocation.Requires); // a binary without it takes the revocation (design 10.4)
+        Assert.Equal(firstManifest.Requires, revocation.Requires);
+        Assert.DoesNotContain("MmrDiversifier@1", ManifestBuilder.RequiredCapabilities(revocation)); // a binary without it takes the revocation (design 10.4)
         Assert.Equal(
             $"home_feed (local): revoked exp_mmr_diversity\n  {first} (seq 1) -> {revocationId} (seq 2, min_accepted_seq 2)\n" +
             $"pointer {Path.Combine(store, "pointers", "local", "home_feed.json")}\n",
@@ -287,70 +293,71 @@ public sealed class RevokeCommandTests
     }
 
     /// <summary>
-    /// A revocation frees the client types of the bindings only the revoked experiment named: a binary without the type
-    /// takes it (design 10.4; review 39: every type the bindings listed stayed required, and the rolled-back binary refused
-    /// it). A binding nothing names stays required, since an operator may use it by its config's default (review 40).
+    /// Each experiment records what its compile needed beyond the baseline, and a revocation drops exactly that, so a binary
+    /// without those types refuses the release and takes the revocation (design 10.4). Inferred from the names the
+    /// configuration wrote, a revocation kept the connector and store types of feature sources only the revoked experiment
+    /// read (review 68), and guessed at models an operator uses by its config's default (reviews 39, 40, 42).
     /// </summary>
     [Fact]
-    public async Task Revoke_FreesTheClientsOnlyTheRevokedExperimentNamed()
+    public async Task EachExperiment_RequiresWhatItsCompileUsed_AndARevocationDropsExactlyThat()
     {
-        var root = ManifestStores.Workspace();
+        var root = ManifestStores.Workspace(root =>
+        {
+            // A model of another client type, and a source behind a distributed cache store: only exp_future uses them.
+            PlanFeatureClosureTests.EditJson(root, "bindings/local.jsonc", bindings =>
+            {
+                bindings["models"]!["random_model"] = JsonNode.Parse("""{ "client": "random@1", "inputs": ["smoothed_ctr", "log_followers"], "outputs": ["p_click"] }""");
+                bindings["sources"]!["extra_store"] = JsonNode.Parse("""
+                    { "connector": "memory@1", "data": { }, "mode": "cache", "max_bytes": "1MiB",
+                      "cache": { "ttl_ms": 1000, "distributed": { "store": "redis@1", "endpoint": "r:6379" } } }
+                    """);
+            });
+            ReplayTests.Edit(root, "catalog/home_feed.jsonc", "\"item.clicks_7d\":",
+                "\"item.extra\": { \"type\": \"float32\", \"source\": \"extra_store\", \"field\": \"extra\", \"default\": 1.0 },\n    \"item.clicks_7d\":");
+            File.WriteAllText(Path.Combine(root, "experiments", "exp_future.jsonc"), """
+                { "experiment_id": "exp_future", "pipeline_id": "home_feed", "owner": "t", "description": "d", "expires_at": "2099-01-01",
+                  "arms": { "control": {}, "on": { "nodes": {
+                    "ctr_ranker": { "config": { "model": "random_model" } },
+                    "fusion": { "config": { "multipliers": { "extra": "col.item.extra" } } } } } } }
+                """);
+            ReplayTests.Edit(root, "releases/home_feed.local.jsonc", "\"exp_quality_weight\":",
+                "\"exp_future\": { \"layer\": \"future\" },\n    \"exp_quality_weight\":");
+        });
         var store = ManifestStores.NewStore();
         var blobs = new FileSystemArtifactStore(store);
-        var first = await ReadAsync(blobs, await BuildAndPublishAsync(root, store));
+        var firstId = await BuildAndPublishAsync(root, store);
+        var first = await ReadAsync(blobs, firstId);
 
-        // The bindings gain a model of a new client type, and one arm of exp_quality_weight names it.
-        var bindings = (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(blobs.GetBlobPath(first.Artifacts.Bindings), TestContext.Current.CancellationToken))!;
-        ((System.Text.Json.Nodes.JsonObject)bindings["models"]!)["future_model"] = new System.Text.Json.Nodes.JsonObject { ["client"] = "future_client@1" };
-        ((System.Text.Json.Nodes.JsonObject)bindings["models"]!)["implicit_model"] = new System.Text.Json.Nodes.JsonObject { ["client"] = "implicit_client@1" };
-        var experiment = (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(
-            await File.ReadAllTextAsync(blobs.GetBlobPath(first.Experiments["exp_quality_weight"].Artifact), TestContext.Current.CancellationToken))!;
-        var arm = (System.Text.Json.Nodes.JsonObject)((System.Text.Json.Nodes.JsonObject)experiment["arms"]!)["strong"]!;
-        arm["params"] ??= new System.Text.Json.Nodes.JsonObject();
-        ((System.Text.Json.Nodes.JsonObject)arm["params"]!)["ranker_model"] = "future_model";
-        var experiments = new Dictionary<string, ManifestExperiment>(first.Experiments)
-        {
-            ["exp_quality_weight"] = new() { Artifact = await blobs.PutAsync(experiment, TestContext.Current.CancellationToken), Layer = first.Experiments["exp_quality_weight"].Layer },
-        };
-        var manifest = new ReleaseManifest
-        {
-            PipelineId = first.PipelineId, Environment = first.Environment, Seq = 2, MinAcceptedSeq = 0, Previous = await Pointer(store),
-            Requires = [.. first.Requires, "future_client@1", "implicit_client@1"],
-            Artifacts = new ManifestArtifacts
-            {
-                Pipeline = first.Artifacts.Pipeline, Catalog = first.Artifacts.Catalog, Bindings = await blobs.PutAsync(bindings, TestContext.Current.CancellationToken), Tables = first.Artifacts.Tables,
-                Policy = first.Artifacts.Policy,
-            },
-            Experiments = experiments,
-        };
-        var id = await ManifestStores.PutAsync(store, manifest);
+        Assert.Equal(["random@1", "redis@1"], first.Experiments["exp_future"].Requires);
+        Assert.Equal(["MmrDiversifier@1"], first.Experiments["exp_mmr_diversity"].Requires);
+        Assert.Empty(first.Experiments["exp_freshness_calibration"].Requires); // its ExpressionScorer@1 is the baseline's too
+        Assert.Empty(first.Experiments["exp_quality_weight"].Requires);
+        Assert.Contains("linear@1", first.Requires); // the baseline's model
+        Assert.Contains("snapshot_files@1", first.Requires); // the baseline's local table
+        Assert.DoesNotContain("random@1", first.Requires);
+        Assert.DoesNotContain("redis@1", first.Requires);
 
-        var diagnostics = new DiagnosticBag();
-        var withoutQuality = await ManifestBuilder.RevokeAsync(manifest, id, ["exp_quality_weight"], blobs, diagnostics, TestContext.Current.CancellationToken);
-        var withoutMmr = await ManifestBuilder.RevokeAsync(manifest, id, ["exp_mmr_diversity"], blobs, diagnostics, TestContext.Current.CancellationToken);
-        Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
-        Assert.DoesNotContain("future_client@1", withoutQuality!.Requires);
-        Assert.Contains("linear@1", withoutQuality.Requires); // the baseline's model still is
-        Assert.Contains("implicit_client@1", withoutQuality.Requires); // nothing names it: what uses it is not known
-        Assert.Contains("future_client@1", withoutMmr!.Requires);
+        // A binary without those types refuses the release, and serves it without the experiment.
+        var older = Tool.Environment with { Models = new ModelClientRegistry().Add(new LinearModelClientFactory()), CacheStores = new FeatureCacheStoreRegistry() };
+        await using var engine = new RecEngine(CommonOptions.ForRoot(older, root));
+        var refused = await engine.LoadManifestAsync(first, firstId, blobs, TestContext.Current.CancellationToken);
+        Assert.Equal(ManifestLoadStatus.Incompatible, refused.Status);
+        Assert.Equal(["random@1", "redis@1"], refused.MissingCapabilities);
 
-        // A binary without the type takes the revocation (given the type no one names).
-        var withoutImplicit = new ReleaseManifest
-        {
-            PipelineId = withoutQuality.PipelineId, Environment = withoutQuality.Environment, Seq = withoutQuality.Seq, MinAcceptedSeq = withoutQuality.MinAcceptedSeq,
-            Previous = withoutQuality.Previous, Requires = withoutQuality.Requires.Where(r => r != "implicit_client@1").ToList(), Artifacts = withoutQuality.Artifacts,
-            Experiments = withoutQuality.Experiments,
-        };
-        await using var engine = new RecEngine(CommonOptions.ForRoot(Tool.Environment, root));
-        var loaded = await engine.LoadManifestAsync(withoutImplicit, await ManifestStores.PutAsync(store, withoutImplicit), blobs, TestContext.Current.CancellationToken);
+        var (code, _, errors) = await Revoke(store, "exp_future");
+        Assert.True(code == 0, errors);
+        var revocationId = await Pointer(store);
+        var revocation = await ReadAsync(blobs, revocationId);
+        Assert.Equal(first.Requires, revocation.Requires);
+        Assert.DoesNotContain("exp_future", revocation.Experiments.Keys);
+        var loaded = await engine.LoadManifestAsync(revocation, revocationId, blobs, TestContext.Current.CancellationToken);
         Assert.True(loaded.Applied, loaded.Reason);
 
-        // A second stop does not require again what the first freed: the bindings artifact still lists it (review 42).
-        var second = await ManifestBuilder.RevokeAsync(withoutQuality, await ManifestStores.PutAsync(store, withoutQuality), ["exp_mmr_diversity"], blobs, diagnostics, TestContext.Current.CancellationToken);
-        Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
-        Assert.DoesNotContain("future_client@1", second!.Requires);
-        Assert.DoesNotContain("MmrDiversifier@1", second.Requires);
-        Assert.Contains("implicit_client@1", second.Requires);
+        // A second stop keeps what the first dropped dropped.
+        (code, _, errors) = await Revoke(store, "exp_mmr_diversity");
+        Assert.True(code == 0, errors);
+        var second = await ReadAsync(blobs, await Pointer(store));
+        Assert.Equal(first.Requires, ManifestBuilder.RequiredCapabilities(second));
     }
 
     /// <summary>

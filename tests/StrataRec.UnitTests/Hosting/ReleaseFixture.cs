@@ -66,7 +66,7 @@ internal sealed class ReleaseFixture : IDisposable
     {
         var diagnostics = new DiagnosticBag();
         var workspace = ConfigWorkspace.Load(Root, diagnostics);
-        var manifest = await ManifestBuilder.BuildAsync(workspace, pipelineId, "local", Store, diagnostics, seq);
+        var manifest = await ManifestBuilder.BuildAsync(workspace, pipelineId, "local", new PlanEnvironment { BaseDirectory = Root }, Store, diagnostics, seq);
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
         return (manifest!, await PutAsync(manifest!));
     }

@@ -19,22 +19,22 @@ public static class ManifestBuilder
     /// Uploads every artifact a pipeline/environment needs to <paramref name="store"/> and returns the manifest
     /// (<c>stratarec build</c>). Returns null after reporting errors.
     /// </summary>
-    /// <param name="featureSources">The feature sources the compiled plan reads (its fetch groups, every arm's included):
-    /// only their types are required. Null requires every feature source's, as when nothing was compiled.</param>
+    /// <param name="provided">The binary's components: the build compiles the baseline and each experiment with them to
+    /// learn what each requires (<see cref="PlanCompiler.Requirements"/>).</param>
     public static async ValueTask<ReleaseManifest?> BuildAsync(
         ConfigWorkspace workspace,
         string pipelineId,
         string environment,
+        PlanEnvironment provided,
         IArtifactStore store,
         DiagnosticBag diagnostics,
         long seq = 1,
         long minAcceptedSeq = 0,
         string? previous = null,
-        CancellationToken cancellationToken = default,
-        IReadOnlySet<string>? featureSources = null)
+        CancellationToken cancellationToken = default)
     {
         var request = workspace.CreateCompileRequest(pipelineId, environment, diagnostics);
-        if (request is null)
+        if (request is null || PlanCompiler.Requirements(request, provided, diagnostics) is not { } requirements)
         {
             return null;
         }
@@ -72,6 +72,7 @@ public static class ManifestBuilder
             {
                 Artifact = await store.PutAsync(workspace.Experiments[id].Document, cancellationToken).ConfigureAwait(false),
                 Layer = placement.Layer,
+                Requires = new List<string>(requirements.Experiments[id]),
             };
         }
 
@@ -83,7 +84,7 @@ public static class ManifestBuilder
             Seq = seq,
             MinAcceptedSeq = minAcceptedSeq,
             Previous = previous,
-            Requires = RequiredCapabilities(request.Pipeline, request.Experiments, request.Bindings, Array.Empty<ExperimentPlacement>(), null, featureSources),
+            Requires = new List<string>(requirements.Baseline),
             Artifacts = new ManifestArtifacts
             {
                 Catalog = await store.PutAsync(catalog!.Document, cancellationToken).ConfigureAwait(false),
@@ -101,9 +102,9 @@ public static class ManifestBuilder
     /// release (its <c>seq</c> one more, <paramref name="manifestId"/> its <c>previous</c>) that revokes every earlier one
     /// (<c>min_accepted_seq</c> its own <c>seq</c>), so a node that restarts does not bring them back from a last-known-good
     /// manifest. Nothing is compiled or validated: removing experiments keeps a valid release valid (design 11.6), which is
-    /// what makes the stop take seconds. The artifacts are read as a node reads them, and the capabilities required are
-    /// computed again: the experiment that needs a capability a rolled-back binary lacks is removed this way (design 10.4).
-    /// Null after reporting errors.
+    /// what makes the stop take seconds. The artifacts are read as a node reads them. What the release requires loses what
+    /// the removed experiments required (<see cref="ManifestExperiment.Requires"/>), so removing the experiment that needs a
+    /// capability a rolled-back binary lacks makes the release one it serves (design 10.4). Null after reporting errors.
     /// </summary>
     /// <param name="experiments">Experiments of the manifest; a name it does not release changes nothing.</param>
     public static async ValueTask<ReleaseManifest?> RevokeAsync(
@@ -114,19 +115,12 @@ public static class ManifestBuilder
         DiagnosticBag diagnostics,
         CancellationToken cancellationToken = default)
     {
-        if (await LoadAsync(manifest, manifestId, store, diagnostics, cancellationToken).ConfigureAwait(false) is not { } request)
+        if (await LoadAsync(manifest, manifestId, store, diagnostics, cancellationToken).ConfigureAwait(false) is null)
         {
             return null;
         }
 
         var revoked = new HashSet<string>(experiments, StringComparer.Ordinal);
-        var kept = new List<ExperimentPlacement>(request.Experiments.Count);
-        var removed = new List<ExperimentPlacement>();
-        foreach (var placement in request.Experiments)
-        {
-            (revoked.Contains(placement.Experiment.ExperimentId) ? removed : kept).Add(placement);
-        }
-
         var entries = new Dictionary<string, ManifestExperiment>(StringComparer.Ordinal);
         foreach (var (name, entry) in manifest.Experiments)
         {
@@ -144,7 +138,7 @@ public static class ManifestBuilder
             Seq = seq,
             MinAcceptedSeq = seq,
             Previous = manifestId,
-            Requires = RequiredCapabilities(request.Pipeline, kept, request.Bindings, removed, manifest.Requires),
+            Requires = manifest.Requires,
             Artifacts = manifest.Artifacts,
             Experiments = entries,
         };
@@ -328,8 +322,8 @@ public static class ManifestBuilder
         ArgumentNullException.ThrowIfNull(manifest);
         ArgumentNullException.ThrowIfNull(environment);
         var provided = new HashSet<string>(environment.Capabilities(), StringComparer.Ordinal);
-        var missing = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (var capability in manifest.Requires)
+        var missing = new List<string>();
+        foreach (var capability in RequiredCapabilities(manifest))
         {
             if (!provided.Contains(capability))
             {
@@ -337,7 +331,21 @@ public static class ManifestBuilder
             }
         }
 
-        return new List<string>(missing);
+        return missing;
+    }
+
+    /// <summary>Every capability a manifest requires, the baseline's and each experiment's, sorted (ordinal) and without
+    /// duplicates (design 10.4).</summary>
+    public static SortedSet<string> RequiredCapabilities(ReleaseManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        var required = new SortedSet<string>(manifest.Requires, StringComparer.Ordinal);
+        foreach (var (_, experiment) in manifest.Experiments)
+        {
+            required.UnionWith(experiment.Requires);
+        }
+
+        return required;
     }
 
     /// <summary>
@@ -391,108 +399,6 @@ public static class ManifestBuilder
 
     /// <summary>The diagnostic artifact of a manifest: <c>manifest:&lt;id&gt;</c>.</summary>
     internal static string Label(string manifestId) => "manifest:" + manifestId;
-
-    /// <summary>Operators, connectors and clients named by the configuration (design 10.4).</summary>
-    /// <param name="removed">Experiments a revocation removes from <paramref name="experiments"/>: see the binding rule inside.</param>
-    /// <param name="revoked">The requires of the manifest a revocation revokes; null for a build.</param>
-    /// <param name="featureSources">The feature sources the plan reads; null for all of them. A revocation compiles nothing
-    /// and passes null: its requires are kept to what the revoked manifest required, so it never requires more.</param>
-    private static List<string> RequiredCapabilities(
-        PipelineArtifact pipeline, IReadOnlyList<ExperimentPlacement> experiments, SourceBindingArtifact bindings, IReadOnlyList<ExperimentPlacement> removed,
-        IReadOnlyList<string>? revoked, IReadOnlySet<string>? featureSources = null)
-    {
-        var required = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (var (_, node) in pipeline.Nodes)
-        {
-            required.Add(node.Op);
-        }
-
-        foreach (var placement in experiments)
-        {
-            foreach (var (_, patch) in placement.Experiment.Arms)
-            {
-                if (patch["nodes"] is JsonObject nodes)
-                {
-                    foreach (var (_, node) in nodes)
-                    {
-                        if (node?["op"] is JsonValue op && op.TryGetValue<string>(out var id))
-                        {
-                            required.Add(id);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Every binding counts, but a model or candidate source binding that a removed experiment names and nothing kept
-        // names (a node's model, a recall quota's key, a parameter's value): the binary that serves a revocation need not
-        // have the client type only the revoked experiment used, as design 10.4 needs after a binary rollback (review 39).
-        // Only a name a removed experiment wrote frees a binding: an operator may name one the configuration does not
-        // write (its config's default), so a binding nothing names stays (review 40).
-        var excluded = new HashSet<string>(StringComparer.Ordinal);
-        if (removed.Count > 0)
-        {
-            foreach (var placement in removed)
-            {
-                foreach (var (_, patch) in placement.Experiment.Arms)
-                {
-                    Names(patch, excluded);
-                }
-            }
-
-            var named = new HashSet<string>(StringComparer.Ordinal);
-            Names(ArtifactSerializer.ToNode(pipeline), named);
-            foreach (var placement in experiments)
-            {
-                foreach (var (_, patch) in placement.Experiment.Arms)
-                {
-                    Names(patch, named);
-                }
-            }
-
-            excluded.ExceptWith(named);
-        }
-
-        // A revocation requires no binding type the manifest it revokes did not: what an earlier stop freed stays free, as
-        // the bindings artifact still lists it (review 42: a second stop required again the client the first one freed).
-        HashSet<string>? before = revoked is null ? null : new HashSet<string>(revoked, StringComparer.Ordinal);
-        foreach (var type in bindings.RequiredTypes(excluded, featureSources))
-        {
-            if (before is null || before.Contains(type))
-            {
-                required.Add(type);
-            }
-        }
-
-        required.Add(Expressions.ExpressionCompiler.FunctionSetCapability);
-        return new List<string>(required);
-    }
-
-    /// <summary>Every string value and member name in <paramref name="node"/>.</summary>
-    private static void Names(JsonNode? node, HashSet<string> names)
-    {
-        switch (node)
-        {
-            case JsonObject obj:
-                foreach (var (name, value) in obj)
-                {
-                    names.Add(name);
-                    Names(value, names);
-                }
-
-                break;
-            case JsonArray array:
-                foreach (var item in array)
-                {
-                    Names(item, names);
-                }
-
-                break;
-            case JsonValue value when value.TryGetValue<string>(out var text):
-                names.Add(text);
-                break;
-        }
-    }
 
     private static async ValueTask<T?> FetchAsync<T>(IArtifactStore store, string id, string label, string pointer, DiagnosticBag diagnostics, CancellationToken cancellationToken)
         where T : class

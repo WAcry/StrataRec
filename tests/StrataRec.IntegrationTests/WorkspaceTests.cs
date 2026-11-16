@@ -41,7 +41,7 @@ public sealed class WorkspaceTests
         var diagnostics = new DiagnosticBag();
         var workspace = ConfigWorkspace.Load(HomeFeedTestHost.SampleRoot(SampleTiming.AsWritten), diagnostics);
         var store = new StrataRec.Artifacts.Storage.InMemoryArtifactStore();
-        var manifest = await StrataRec.Hosting.Manifests.ManifestBuilder.BuildAsync(workspace, "home_feed", "local", store, diagnostics, cancellationToken: TestContext.Current.CancellationToken);
+        var manifest = await StrataRec.Hosting.Manifests.ManifestBuilder.BuildAsync(workspace, "home_feed", "local", Tool.Environment with { BaseDirectory = workspace.Root }, store, diagnostics, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(manifest);
         Assert.Empty(diagnostics.Items);
 

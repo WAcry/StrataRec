@@ -87,6 +87,12 @@ public sealed class ClientResolver
 
     public SourceBindingArtifact Bindings => _bindings;
 
+    /// <summary>The model names bound so far: what the compiled configuration needs (<see cref="SourceBindingArtifact.AddTypes"/>).</summary>
+    public IEnumerable<string> BoundModels => _modelCache.Keys;
+
+    /// <summary>The candidate-source names bound so far.</summary>
+    public IEnumerable<string> BoundCandidateSources => _sourceCache.Keys;
+
     /// <summary>The client bound to model <paramref name="name"/>.</summary>
     /// <returns>False with an error for the caller to report at its own config key, or with a null error when the
     /// binding's settings are wrong, which is reported here, at the setting in the bindings artifact.</returns>

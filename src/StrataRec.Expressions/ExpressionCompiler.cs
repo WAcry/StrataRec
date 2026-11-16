@@ -33,9 +33,6 @@ public sealed record CompileOptions
 /// <summary>Entry point of the ColumnExpr compiler: parse → type/nullability check → IR → optimize → backend.</summary>
 public static partial class ExpressionCompiler
 {
-    /// <summary>Version of the built-in function set; part of the binary's capabilities (design 7.6, 10.4).</summary>
-    public const string FunctionSetCapability = "expr_functions@1";
-
     /// <summary>Compiles an expression or throws <see cref="ExpressionCompileException"/>.</summary>
     public static CompiledExpression Compile(string source, IExpressionScope scope, CompileOptions? options = null)
     {
