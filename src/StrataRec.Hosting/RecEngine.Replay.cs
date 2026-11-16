@@ -31,16 +31,17 @@ public sealed partial class RecEngine
     /// <exception cref="ObjectDisposedException">The engine is disposed (and the bundle is one to replay).</exception>
     public async ValueTask<ReplayOutcome> ReplayAsync(ReplayBundle bundle, ReplayOptions? options = null, CancellationToken cancellationToken = default)
     {
+        if (Aborted(bundle) is { } aborted)
+        {
+            return aborted;
+        }
+
         var recordedRequest = bundle.Request;
         var (primaryRecord, primaryIndex) = FindRun(bundle, "primary");
         var (fallbackRecord, fallbackIndex) = FindRun(bundle, "fallback_pipeline");
 
         // A run with a configuration override records no arms (its plan merged them in); the request's assignment has them.
         var recordedArms = recordedRequest.ConfigOverride is null ? primaryRecord?.Arms ?? recordedRequest.Assignment.Arms : recordedRequest.Assignment.Arms;
-        if (bundle.Result.Aborted)
-        {
-            return NotReplayed(bundle, recordedArms, primaryRecord, fallbackRecord);
-        }
 
         var notes = new List<string>();
         var recordedResult = ComparableResult.From(bundle.Result, "/result");
@@ -223,9 +224,26 @@ public sealed partial class RecEngine
     };
 
     /// <summary>
-    /// The outcome of a bundle that records an aborted request, which is not replayed (<see cref="ReplayOutcome.NotReplayed"/>):
-    /// the recorded reason, the node that was running and the recorded node decisions, and a placeholder failure.
+    /// What <see cref="ReplayAsync"/> gives for a bundle that records an aborted request, which needs no engine (nothing is
+    /// replayed): the recorded reason, the node that was running and the recorded node decisions
+    /// (<see cref="ReplayOutcome.NotReplayed"/>), and a placeholder failure. Null for a bundle with a result. A tool that
+    /// finds a configuration for each bundle asks this first: an aborted request's configuration need not be available.
     /// </summary>
+    /// <exception cref="ReplayBundleException">The bundle is malformed; the pointer says where.</exception>
+    public static ReplayOutcome? Aborted(ReplayBundle bundle)
+    {
+        ArgumentNullException.ThrowIfNull(bundle);
+        if (!bundle.Result.Aborted)
+        {
+            return null;
+        }
+
+        var (primaryRecord, _) = FindRun(bundle, "primary");
+        var (fallbackRecord, _) = FindRun(bundle, "fallback_pipeline");
+        var recordedArms = bundle.Request.ConfigOverride is null ? primaryRecord?.Arms ?? bundle.Request.Assignment.Arms : bundle.Request.Assignment.Arms;
+        return NotReplayed(bundle, recordedArms, primaryRecord, fallbackRecord);
+    }
+
     private static ReplayOutcome NotReplayed(ReplayBundle bundle, IReadOnlyList<string> recordedArms, ReplayRunRecord? primary, ReplayRunRecord? fallback)
     {
         var nodes = CompareNodes(primary?.Nodes, null, null);

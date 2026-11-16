@@ -190,6 +190,11 @@ internal static class ReplayCommand
         try
         {
             var bundle = ReplayBundleFile.Load(file);
+            if (RecEngine.Aborted(bundle) is { } aborted)
+            {
+                return new BundleReplay(file, aborted, null, false); // nothing to replay, so no configuration to find
+            }
+
             var (engine, problem, hint) = await engines.ForAsync(bundle, cancellationToken).ConfigureAwait(false);
             if (engine is not null && explain is { Length: > 0 } && engine.TryGetPipeline(bundle.Request.PipelineId, out var loaded))
             {

@@ -317,6 +317,28 @@ public sealed class ReplayCliTests
         Assert.Contains("identical results           1 of 1", text.ToString());
     }
 
+    /// <summary>
+    /// An aborted bundle needs no configuration: replayed on what it recorded (--store alone), it is reported as not
+    /// replayed, not as a bundle whose manifest the store lacks.
+    /// </summary>
+    [Fact]
+    public async Task Replay_OnTheRecordedManifests_ReportsAnAbortedRecording_ThoughTheStoreLacksItsManifest()
+    {
+        var directory = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
+        var aborted = Path.Combine(directory, "aborted.json");
+        File.WriteAllText(aborted, AbortedBundle);
+        var output = new StringWriter();
+        var errors = new StringWriter();
+
+        var code = await StrataRecCommandLine.InvokeAsync(["replay", "-s", ManifestStores.NewStore(), aborted], Tool.Environment, output, errors,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, code); // nothing was replayed
+        Assert.Contains("not replayed: the recording was aborted (cancelled by the caller) while ctr_ranker ran", output.ToString());
+        Assert.DoesNotContain("aborted.json: ", errors.ToString()); // no error for the bundle
+        Assert.DoesNotContain("without a configuration", output.ToString());
+    }
+
     /// <summary>A bundle of a home_feed request cancelled while ctr_ranker ran.</summary>
     private static string AbortedBundle => $$"""
         {
