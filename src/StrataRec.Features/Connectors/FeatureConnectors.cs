@@ -43,7 +43,7 @@ public readonly record struct CompiledFieldBinding(string Field, int FieldIndex,
 /// actually wrote are ever read. A key absent from the response needs no call. Values written through
 /// <see cref="GetValues{T}"/> count once <see cref="SetValid"/> is called for that field and key; call it after the
 /// value is fully decoded, so a record that fails half-way never exposes an unwritten (pooled) value.
-/// <see cref="SetString"/> and the list setters (<see cref="SetInt64List"/> and its siblings) mark their value present
+/// <see cref="SetString(int, int, string)"/> (and its span and UTF-8 forms) and the list setters (<see cref="SetInt64List"/> and its siblings) mark their value present
 /// themselves. A connector reporting <see cref="FetchOutcome.Partial"/> therefore needs no extra bookkeeping.</para>
 /// <para>A writer belongs to one connector call while that call runs (each <c>max_batch</c> chunk gets its own), so
 /// implementations may write from any one thread at a time without synchronization. The chunks of one fetch share
@@ -71,6 +71,21 @@ public interface IFeatureBatchWriter
 
     /// <summary>Writes a <c>string</c> or <c>text</c> field value.</summary>
     void SetString(int fieldIndex, int keyIndex, string value);
+
+    /// <summary>
+    /// Writes a <c>string</c> or <c>text</c> field value from characters a connector decoded into a buffer of its own.
+    /// A <c>string</c> field is categorical, so its values repeat across keys: the writer keeps one string per distinct
+    /// value instead of one per key (5,000 keys of a few categories make a few strings, not 5,000). A <c>text</c> value
+    /// is a string of its own.
+    /// </summary>
+    void SetString(int fieldIndex, int keyIndex, ReadOnlySpan<char> value);
+
+    /// <summary>
+    /// Writes a <c>string</c> or <c>text</c> field value from its UTF-8 bytes, as most stores return them, without a
+    /// string per key for a repeated value (as <see cref="SetString(int, int, ReadOnlySpan{char})"/>). Invalid UTF-8 is
+    /// replaced by U+FFFD, as <see cref="System.Text.Encoding.UTF8"/> decodes it.
+    /// </summary>
+    void SetStringUtf8(int fieldIndex, int keyIndex, ReadOnlySpan<byte> utf8);
 
     /// <summary>Writes a <c>list&lt;bool&gt;</c> field value.</summary>
     /// <remarks>One setter per element type, named like the field's declared element type: the field's type decides the

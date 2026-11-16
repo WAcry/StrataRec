@@ -222,9 +222,21 @@ internal sealed class StagingArea
 /// </remarks>
 internal sealed class StagingBuffer : IFeatureBatchWriter, IStagedFeatureValues
 {
+    /// <summary>Distinct values a writer keeps for <c>string</c> fields at most; past it each value is a string of its own.</summary>
+    internal const int MaxInterned = 1024;
+
+    /// <summary>Below this many keys a span value is a string of its own: a table would cost more than it saves.</summary>
+    private const int InternFromKeys = 16;
+
     private readonly StagingArea _area;
     private int _chunk;
     private int _offset;
+
+    /// <summary>
+    /// One string per distinct value written as characters to a <c>string</c> field, for every chunk this writer is bound
+    /// to: a writer is written by one call at a time, so it needs no lock.
+    /// </summary>
+    private Dictionary<string, string>? _interned;
 
     public StagingBuffer(StagingArea area)
     {
@@ -300,6 +312,51 @@ internal sealed class StagingBuffer : IFeatureBatchWriter, IStagedFeatureValues
         ArgumentNullException.ThrowIfNull(value);
         text.Set(_offset + keyIndex, value);
         _area.SetBit(bit);
+    }
+
+    public void SetString(int fieldIndex, int keyIndex, ReadOnlySpan<char> value)
+    {
+        CheckKey(keyIndex);
+        if (_area.ColumnOf(fieldIndex) is not TextColumn text)
+        {
+            throw new InvalidOperationException($"Field {fieldIndex} is not a string or text field.");
+        }
+
+        var categorical = _area.TypeOf(fieldIndex).Kind == StorageKind.String && KeyCount >= InternFromKeys;
+        text.Set(_offset + keyIndex, categorical ? Intern(value) : value.ToString());
+        _area.SetBit(_area.FirstBit(fieldIndex, _chunk) + keyIndex);
+    }
+
+    public void SetStringUtf8(int fieldIndex, int keyIndex, ReadOnlySpan<byte> utf8)
+    {
+        const int OnStack = 256;
+        if (utf8.Length <= OnStack)
+        {
+            Span<char> chars = stackalloc char[OnStack]; // UTF-8 never decodes to more chars than bytes
+            SetString(fieldIndex, keyIndex, chars[..System.Text.Encoding.UTF8.GetChars(utf8, chars)]);
+        }
+        else
+        {
+            SetString(fieldIndex, keyIndex, System.Text.Encoding.UTF8.GetString(utf8)); // long: a text, a string of its own
+        }
+    }
+
+    private string Intern(ReadOnlySpan<char> value)
+    {
+        var table = _interned ??= new Dictionary<string, string>(StringComparer.Ordinal);
+        var lookup = table.GetAlternateLookup<ReadOnlySpan<char>>();
+        if (lookup.TryGetValue(value, out var known))
+        {
+            return known;
+        }
+
+        var created = value.ToString();
+        if (table.Count < MaxInterned)
+        {
+            table.Add(created, created);
+        }
+
+        return created;
     }
 
     public void SetBoolList(int fieldIndex, int keyIndex, ReadOnlySpan<bool> value) =>

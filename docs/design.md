@@ -826,12 +826,16 @@ public interface IFeatureSourceConnector
 public interface IFeatureBatchWriter
 {
     Memory<T> GetValues<T>(int fieldIndex) where T : unmanaged;  // 密集暂存区；长度 = 键数量（定长向量为键数量 × 维度）
+    void SetValid(int fieldIndex, int keyIndex);
     void SetMissing(int fieldIndex, int keyIndex);
-    ITextBatchWriter GetText(int fieldIndex);                    // string 与 text 字段
+    void SetString(int fieldIndex, int keyIndex, string value);               // string 与 text 字段
+    void SetString(int fieldIndex, int keyIndex, ReadOnlySpan<char> value);   // 连接器自己的字符缓冲区
+    void SetStringUtf8(int fieldIndex, int keyIndex, ReadOnlySpan<byte> utf8); // 存储返回的 UTF-8 字节
+    void SetInt64List(int fieldIndex, int keyIndex, ReadOnlySpan<long> value); // 以及其他元素类型的列表
 }
 ```
 
-连接器写入的是**暂存区**：一块按 `keys` 顺序排列的密集内存，与候选表的物理行无关。暂存区是 `Memory<T>`，因为连接器是异步方法，跨越 `await` 的代码不能持有 `Span<T>`。布尔字段在暂存区里按字节存放，`string` 和 `text` 字段通过 `ITextBatchWriter` 按键写入。
+连接器写入的是**暂存区**：一块按 `keys` 顺序排列的密集内存，与候选表的物理行无关。暂存区是 `Memory<T>`，因为连接器是异步方法，跨越 `await` 的代码不能持有 `Span<T>`。布尔字段在暂存区里按字节存放，`string` 和 `text` 字段按键写入：`string` 是类别型的，取值在键之间重复，按字符或 UTF-8 写入时每个不同的值只生成一个字符串（5,000 个键、几个类别只有几个字符串）；`text` 每个值一个字符串。
 
 拉取完成后，在第一个读取这些列的节点开始之前，引擎把暂存区回填到候选表（第 4.5 节）：
 
@@ -841,7 +845,7 @@ public interface IFeatureBatchWriter
 
 `FetchStatus` 报告 `Ok`、`Partial(缺失数)` 或 `Failed(原因)`。响应中没有出现的键记为缺失：填充位为 1，有效位为 0。
 
-**解码不生成对象。** 连接器直接把响应字节解码进 `IFeatureBatchWriter`：数值按原生类型写入暂存区，字符串和文本写进 `ITextBatchWriter`，中间不生成 Protobuf 消息或 JSON 对象。存储返回按行还是按列组织都可以，行转列在暂存区里完成，代价很小；贵的是为每个值或每条消息分配对象。能控制存储格式时，推荐每个实体一条定长二进制记录（小端序的原生值，带 schema 版本号），解码只是把字节解释成数组。
+**解码不生成对象。** 连接器直接把响应字节解码进 `IFeatureBatchWriter`：数值按原生类型写入暂存区，字符串和文本按字节或字符写入，中间不生成 Protobuf 消息或 JSON 对象。存储返回按行还是按列组织都可以，行转列在暂存区里完成，代价很小；贵的是为每个值或每条消息分配对象。能控制存储格式时，推荐每个实体一条定长二进制记录（小端序的原生值，带 schema 版本号），解码只是把字节解释成数组。
 
 **稀疏的交叉特征。** 需要存储的交叉特征几乎都是交互类特征，天然稀疏：一个用户只和几十到几百个物品有过交互。只关心“有没有交互过”时，把它存成上下文实体的列表特征，例如 `user.engaged_items: list<int64>`，在请求开始时与召回并发拉取（第 6.8 节），用 `col.entity_id in ctx.user.engaged_items` 读取；存储端应限制每个用户保留的条目数，例如最近 1,000 次交互。每个交互带值（次数、时间）时用 `Cross` 形态：一次请求发出上下文键和这批候选键，存储端按用户分区一次读取，没有交互的候选按合法缺失处理（第 6.7 节）。稠密的交叉信号（例如向量点积）用衍生特征计算，不需要存储。
 

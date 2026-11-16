@@ -47,7 +47,10 @@ public class FetchChunkTests
 
             return FetchStatus.Ok;
         });
-        var rig = new FeatureTestRig().Source("item_store", connector, timeoutMs: 100, maxBatch: 1);
+        // A budget a loaded machine cannot use up while the three chunks are sent one after another: a chunk whose time is
+        // up before it is sent is not sent (FetchCandidates), its connector never sees the cancellation, and the wait for
+        // it below ran into its patience under a parallel test run with 100 ms.
+        var rig = new FeatureTestRig().Source("item_store", connector, timeoutMs: 1000, maxBatch: 1);
         var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
         rig.Build();
         var hook = new FeatureCallHookTests.ListHook();
@@ -57,7 +60,7 @@ public class FetchChunkTests
         await Task.WhenAll(observed.Select(o => o.Task)).WaitAsync(Patience, TestContext.Current.CancellationToken); // both cooperative connectors saw the budget
 
         Assert.True(result.Failed);
-        Assert.Contains("timed out after 100 ms", result.Error);
+        Assert.Contains("timed out after 1000 ms", result.Error);
         Assert.Equal(3, hook.Recorded.Count);
         Assert.All(hook.Recorded, call => Assert.Equal(IoOutcome.Timeout, call.Outcome));
         var token = Assert.Single(tokens.Distinct()); // one source for the fetch, not one per chunk
