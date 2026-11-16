@@ -73,6 +73,51 @@ public class FeatureRuntimeReviewRegressionTests
         Assert.Equal(FeatureState.Ok, request.Fetcher.GetState(doubled));
     }
 
+    /// <summary>
+    /// Audit B6: a reader of context features waits for the sources it reads, not for the slowest one: an ANN recall
+    /// reading the user's embedding did not start before a slower source of other user features answered. A derived
+    /// context feature still waits for the whole fetch, which computes it last.
+    /// </summary>
+    [Fact]
+    public async Task AContextReader_WaitsForTheSourcesItReads_NotForTheSlowest()
+    {
+        var slow = new TaskCompletionSource();
+        var fast = new ScriptedConnector((keys, fields, writer, _) =>
+        {
+            ScriptedConnector.WriteAll(keys, fields, writer, (_, _) => 1.5);
+            return ValueTask.FromResult(FetchStatus.Ok);
+        });
+        var late = new ScriptedConnector(async (keys, fields, writer, _) =>
+        {
+            await slow.Task;
+            ScriptedConnector.WriteAll(keys, fields, writer, (_, _) => 2.5);
+            return FetchStatus.Ok;
+        });
+        var rig = new FeatureTestRig().Source("user_store", fast).Source("session_store", late);
+        var embedding = rig.Physical("user.score", FeatureTestRig.User, ColumnType.Float64, "user_store");
+        var session = rig.Physical("user.session_score", FeatureTestRig.User, ColumnType.Float64, "session_store");
+        var doubled = rig.Derived("user.doubled", FeatureTestRig.User, ColumnType.Float64.AsNullable(),
+            TestExpression.ContextTimes(rig.ContextIdOf(embedding), 2), new[] { embedding });
+        rig.Build();
+        var request = rig.NewRequest(TwoItems, userId: 7);
+
+        request.Fetcher.StartContextFetch(new[] { embedding, session, doubled }, CancellationToken.None);
+        var first = request.Fetcher.EnsureAsync(new[] { embedding }, CancellationToken.None).AsTask();
+        var second = request.Fetcher.EnsureAsync(new[] { session }, CancellationToken.None).AsTask();
+        var derived = request.Fetcher.EnsureAsync(new[] { doubled }, CancellationToken.None).AsTask();
+
+        await first.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        Assert.Equal(1.5, request.ContextValue(embedding).AsFloat64());
+        Assert.False(second.IsCompleted);
+        Assert.False(derived.IsCompleted);
+
+        slow.SetResult();
+        await Task.WhenAll(second, derived).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        Assert.Equal(2.5, request.ContextValue(session).AsFloat64());
+        Assert.Equal(3.0, request.ContextValue(doubled).AsFloat64());
+        await request.Fetcher.WhenIoCompleteAsync();
+    }
+
     [Fact]
     public async Task WhenIoComplete_CoversTheWholeContextOperation()
     {
