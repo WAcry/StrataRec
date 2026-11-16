@@ -1,17 +1,14 @@
 using System.Text.Json;
 using StrataRec.Artifacts.Json;
-using StrataRec.Artifacts.Model;
-using StrataRec.Core.Values;
 using StrataRec.Hosting;
-using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Samples.Host;
 
 /// <summary>
 /// <c>POST /recommend/{pipeline}</c>: the HTTP transport around <see cref="IRecEngine.ExecuteAsync"/>. The engine knows no
 /// transport, so the host turns the body into a <see cref="RecRequest"/>, and the <see cref="RecResult"/> into a response;
-/// the rules for inputs (<see cref="RequestSchema.TryRead"/>) and the result document (<see cref="RecResultJson"/>) are the
-/// engine's, shared with the CLI.
+/// the request document (<see cref="RecRequestJson"/>) and the result document (<see cref="RecResultJson"/>) are the
+/// engine's, so every host speaks the same ones.
 /// </summary>
 /// <remarks>
 /// <para>The body: <c>{ "inputs": { … }, "request_id": "…", "assignment": ["experiment/arm", …] }</c>, all optional.
@@ -49,7 +46,7 @@ public static class RecommendEndpoint
         RecRequest request;
         using (body)
         {
-            if (!Read(body?.RootElement ?? default, schema, out var inputs, out var requestId, out var assignment, out var errors))
+            if (!RecRequestJson.TryRead(body?.RootElement ?? default, schema, out var document, out var errors))
             {
                 return BadRequest(errors);
             }
@@ -57,9 +54,9 @@ public static class RecommendEndpoint
             request = new RecRequest
             {
                 PipelineId = pipeline,
-                RequestId = requestId ?? http.HttpContext.TraceIdentifier, // ties the engine's span and logs to this HTTP request
-                Inputs = inputs,
-                Assignment = assignment,
+                RequestId = document.RequestId ?? http.HttpContext.TraceIdentifier, // ties the engine's span and logs to this HTTP request
+                Inputs = document.Inputs,
+                Assignment = document.Assignment,
                 Deadline = settings.Deadline,
                 // Debug options (trace, forced arms, recording) are the host's to authorize, e.g. for internal callers only.
                 // To let an authorized caller ask "why is item 42 not in my feed", read its ids (as the pipeline's key
@@ -83,84 +80,6 @@ public static class RecommendEndpoint
         RecErrorKind.Failed => Problem(StatusCodes.Status500InternalServerError, "Recommendation failed", result),
     };
 
-    private static readonly string[] Members = { "inputs", "request_id", "assignment" };
-
-    /// <summary>
-    /// The body's members. The inputs are read by the pipeline's request schema, with the engine's rules and words; the
-    /// rest is this transport's. What System.Text.Json parses but a request must not hold (a member given twice, an escape
-    /// that is not Unicode) is rejected first, anywhere in the body (<see cref="StrictJson"/>). An empty body has no members.
-    /// </summary>
-    private static bool Read(
-        in JsonElement body, RequestSchema schema, out RequestInputs inputs, out string? requestId, out List<string>? assignment,
-        out IReadOnlyList<JsonBindingError> errors)
-    {
-        inputs = RequestInputs.Empty;
-        requestId = null;
-        assignment = null;
-        var inputsMember = default(JsonElement);
-        if (body.ValueKind != JsonValueKind.Undefined)
-        {
-            if (body.ValueKind != JsonValueKind.Object)
-            {
-                errors = One(string.Empty, "The body must be a JSON object: { \"inputs\": { … }, \"request_id\": \"…\", \"assignment\": [\"experiment/arm\"] }.");
-                return false;
-            }
-
-            if (StrictJson.Check(body) is { } strict)
-            {
-                errors = new[] { strict };
-                return false;
-            }
-
-            foreach (var member in body.EnumerateObject())
-            {
-                var pointer = "/" + JsonPointer.Escape(member.Name);
-                var value = member.Value;
-                switch (member.Name)
-                {
-                    case "inputs":
-                        inputsMember = value;
-                        break;
-                    case "request_id" when value.ValueKind == JsonValueKind.String && value.GetString() is { Length: > 0 } id:
-                        requestId = id;
-                        break;
-                    case "request_id":
-                        errors = One(pointer, $"request_id must be a non-empty string, got {JsonWords.Value(value)}.");
-                        return false;
-                    case "assignment" when value.ValueKind == JsonValueKind.Array:
-                        assignment = new List<string>(value.GetArrayLength());
-                        foreach (var arm in value.EnumerateArray())
-                        {
-                            if (arm.ValueKind != JsonValueKind.String)
-                            {
-                                errors = One($"{pointer}/{assignment.Count}", $"An arm id is a string 'experiment/arm', got {JsonWords.Value(arm)}.");
-                                return false;
-                            }
-
-                            assignment.Add(arm.GetString()!);
-                        }
-
-                        break;
-                    case "assignment":
-                        errors = One(pointer, $"assignment must be an array of arm ids, e.g. [\"exp_local_boost/strong\"], got {JsonWords.Value(value)}.");
-                        return false;
-                    default:
-                        errors = One(pointer, $"Unknown member '{member.Name}' in the request body.",
-                            NameSuggestions.DidYouMean(member.Name, Members) ?? "the body has inputs, request_id and assignment");
-                        return false;
-                }
-            }
-        }
-
-        if (!schema.TryRead(inputsMember, out var read, out errors))
-        {
-            return false;
-        }
-
-        inputs = read;
-        return true;
-    }
-
     private static IResult UnknownPipeline(string pipeline, IRecEngine engine) =>
         TypedResults.Problem(statusCode: StatusCodes.Status404NotFound, title: "Unknown pipeline", detail: $"Unknown pipeline '{pipeline}'.",
             extensions: new Dictionary<string, object?> { ["pipelines"] = engine.PipelineIds() });
@@ -181,8 +100,6 @@ public static class RecommendEndpoint
         return TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid request", detail: errors[0].Message,
             extensions: new Dictionary<string, object?> { ["pointer"] = errors[0].Pointer, ["errors"] = all });
     }
-
-    private static JsonBindingError[] One(string pointer, string message, string? hint = null) => new[] { new JsonBindingError(pointer, message, hint) };
 
     /// <summary>The result document (<see cref="RecResultJson"/>), written straight to the response.</summary>
     private sealed class Response(RecResult result) : IResult

@@ -259,7 +259,7 @@ public sealed class RecResult
 | `DeadlineExceeded` | 流水线开始之前截止时间就用完了（分配实验用掉了） | 504 |
 | `Failed` | 流水线执行失败，后备流水线也失败或没有：服务这一侧的错 | 500 |
 
-宿主从 JSON 读请求输入用 `RequestSchema.TryRead`：规则和措辞与引擎检查输入时一致，错误带 JSON 指针，重复的成员和不成对的代理转义也报出来。引擎执行时按它实际运行的计划再检查一次，以它的回答为准：宿主读输入之后换了发布，结果仍然是带指针的 `InvalidRequest`。结果用 `RecResultJson` 写成 JSON，CLI 的 `run` 输出同一个文档。`AddStrataRec` 在宿主开始监听之前加载工作区，配置有错误时服务启动不了，警告写进宿主的日志。带自定义组件的宿主用 `StrataRecCommandLine.InvokeAsync` 提供全部 `stratarec` 命令，校验和运行用的就是服务里的那些组件。
+宿主从 JSON 读调用方的请求文档（`inputs`、`request_id`、`assignment`）用 `RecRequestJson.TryRead`，输入按 `RequestSchema.TryRead` 读：规则和措辞与引擎检查输入时一致，错误带 JSON 指针，重复的成员和不成对的代理转义也报出来。引擎执行时按它实际运行的计划再检查一次，以它的回答为准：宿主读输入之后换了发布，结果仍然是带指针的 `InvalidRequest`。结果用 `RecResultJson` 写成 JSON，CLI 的 `run` 输出同一个文档。`AddStrataRec` 在宿主开始监听之前加载工作区，配置有错误时服务启动不了，警告写进宿主的日志。带自定义组件的宿主用 `StrataRecCommandLine.InvokeAsync` 提供全部 `stratarec` 命令，校验和运行用的就是服务里的那些组件。
 
 流水线声明主键类型、它接受的请求输入和返回的列：
 

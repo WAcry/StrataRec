@@ -2,7 +2,7 @@
 
 一个最小的 Web 服务，演示两件事：
 
-1. 怎样把引擎放进服务：`AddStrataRec` 在宿主启动时加载本目录下的工作区 `config/`，`POST /recommend/{pipeline}` 只做传输：请求体按流水线的 `RequestSchema` 读成 `RecRequest`，`RecResult` 用 `RecResultJson` 写回，按 `RecResult.ErrorKind` 映射状态码。输入的规则和结果文档都是引擎的，与 `stratarec run` 一致。
+1. 怎样把引擎放进服务：`AddStrataRec` 在宿主启动时加载本目录下的工作区 `config/`，`POST /recommend/{pipeline}` 只做传输：请求体用 `RecRequestJson` 按流水线的 `RequestSchema` 读出，宿主补上截止时间组成 `RecRequest`，`RecResult` 用 `RecResultJson` 写回，按 `RecResult.ErrorKind` 映射状态码。请求文档和结果文档都是引擎的，换一个宿主也是同样的文档。
 2. 怎样写并注册自己的组件：四个扩展点各有一个小实现，在 `SampleEnvironment.cs` 里和内置组件一起注册，工作区按类型名引用它们。
 
 | 组件 | 类型名 | 契约 | 演示什么 |
