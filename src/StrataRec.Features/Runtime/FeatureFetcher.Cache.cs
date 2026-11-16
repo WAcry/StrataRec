@@ -651,9 +651,7 @@ public sealed partial class FeatureFetcher
                 case StorageKind.Float64: writer.Float64(t, ((ScalarColumn<double>)staging.ColumnOf(m)!)[key]); break;
                 case StorageKind.Vector: writer.Vector(t, ((VectorColumn)staging.ColumnOf(m)!).Row(key)); break;
                 case StorageKind.String or StorageKind.Text: writer.String(t, ((TextColumn)staging.ColumnOf(m)!).Get(key)); break;
-                case StorageKind.ListInt32: writer.Int32List(t, ((ListColumn<int>)staging.ListBuffer(m, chunk)!).Get(inChunk)); break;
-                case StorageKind.ListInt64: writer.Int64List(t, ((ListColumn<long>)staging.ListBuffer(m, chunk)!).Get(inChunk)); break;
-                case StorageKind.ListString: writer.StringList(t, ((ListColumn<string>)staging.ListBuffer(m, chunk)!).Get(inChunk)); break;
+                case StorageKind.List: writer.List(t, (ListColumn)staging.ListBuffer(m, chunk)!, inChunk); break;
                 default: throw new InvalidOperationException($"Unsupported field kind {layout.Kinds[t]}.");
             }
         }
@@ -1255,9 +1253,21 @@ public sealed partial class FeatureFetcher
             }
         }
 
-        public readonly void Int32List(int field, ReadOnlySpan<int> value) => ListValue(field, value);
-
-        public readonly void Int64List(int field, ReadOnlySpan<long> value) => ListValue(field, value);
+        public readonly void List<T>(int field, ReadOnlySpan<T> value)
+            where T : unmanaged
+        {
+            // A float list holding NaN or ±inf is replaced as a whole, as a float is (design 4.3).
+            var finite = typeof(T) == typeof(float) ? ColumnValues.AllFinite(MemoryMarshal.Cast<T, float>(value))
+                : typeof(T) != typeof(double) || ColumnValues.AllFinite(MemoryMarshal.Cast<T, double>(value));
+            if (finite)
+            {
+                ListValue(field, value);
+            }
+            else
+            {
+                NonFinite(field);
+            }
+        }
 
         public void StringListStart(int field, int count)
         {
@@ -1363,25 +1373,12 @@ public sealed partial class FeatureFetcher
             }
         }
 
-        public void Int32List(int f, ReadOnlySpan<int> value)
+        public void List<T>(int f, ReadOnlySpan<T> value)
+            where T : unmanaged
         {
             if (f == field)
             {
-                var promoted = new long[value.Length];
-                for (var i = 0; i < value.Length; i++)
-                {
-                    promoted[i] = value[i];
-                }
-
-                Value = ScalarValue.FromInt64List(promoted);
-            }
-        }
-
-        public void Int64List(int f, ReadOnlySpan<long> value)
-        {
-            if (f == field)
-            {
-                Value = ScalarValue.FromInt64List(value.ToArray());
+                Value = ColumnValues.ListValue(value);
             }
         }
 

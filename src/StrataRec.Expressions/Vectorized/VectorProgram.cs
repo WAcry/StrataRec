@@ -275,10 +275,10 @@ internal sealed class VectorProgram
             }
         }
 
-        /// <summary>Kinds whose results are lazy per-lane sources (<see cref="SourceKind"/>) instead of registers. An int
-        /// list source may point at <c>list&lt;int64&gt;</c> or <c>list&lt;int32&gt;</c> storage, lane by lane
-        /// (see <see cref="Lanes.IntList"/>).</summary>
-        private static bool IsSource(ExprType t) => t.Kind is TypeKind.Vector or TypeKind.ListInt or TypeKind.ListString;
+        /// <summary>Kinds whose results are lazy per-lane sources (<see cref="SourceKind"/>) instead of registers: vectors
+        /// and lists. An int or float list source may point at narrow or wide storage, lane by lane (see
+        /// <see cref="Lanes.IntList"/>).</summary>
+        private static bool IsSource(ExprType t) => t.Kind == TypeKind.Vector || t.IsList;
 
         /// <summary>
         /// Linear-scan allocation in program order. An instruction's output registers are taken before its
@@ -384,7 +384,9 @@ internal static class DestinationWriter
             (TypeKind.String, DictStringColumn) => true,
             (TypeKind.Text, TextColumn) => true,
             (TypeKind.Vector, VectorColumn v) => type.Dim == 0 || type.Dim == v.Dimension,
+            (TypeKind.ListBool, ListColumn<bool>) => true,
             (TypeKind.ListInt, ListColumn<long> or ListColumn<int>) => true,
+            (TypeKind.ListFloat, ListColumn<double> or ListColumn<float>) => true,
             (TypeKind.ListString, ListColumn<string>) => true,
             _ => false,
         };
@@ -626,6 +628,15 @@ internal static class DestinationWriter
                     }
 
                     break;
+                case ListColumn<double> d:
+                    WriteList(d, row, Lanes.FloatList(ref f, node, lane));
+                    break;
+                case ListColumn<float> d:
+                    WriteList(d, row, Lanes.FloatList(ref f, node, lane));
+                    break;
+                case ListColumn<bool> d:
+                    d.Set(row, Lanes.BoolList(ref f, node, lane));
+                    break;
                 case ListColumn<string> d:
                     d.Set(row, Lanes.StringList(ref f, node, lane));
                     break;
@@ -648,6 +659,36 @@ internal static class DestinationWriter
         else
         {
             destination.Set(row, list.Int64);
+        }
+    }
+
+    /// <summary>Writes a float list into float64 storage, widening a float32 source while copying.</summary>
+    private static void WriteList(ListColumn<double> destination, int row, FloatListLane list)
+    {
+        if (!list.IsFloat32)
+        {
+            destination.Set(row, list.Float64);
+            return;
+        }
+
+        var extent = destination.SetUninitialized(row, list.Length);
+        for (var i = 0; i < extent.Length; i++)
+        {
+            extent[i] = list.Float32[i];
+        }
+    }
+
+    /// <summary>Writes a float list into float32 storage, narrowing a float64 source while copying (a value beyond
+    /// float32 becomes an infinity, which the writer's non-finite rule handles, as for a float32 column).</summary>
+    private static void WriteList(ListColumn<float> destination, int row, FloatListLane list)
+    {
+        if (list.IsFloat32)
+        {
+            destination.Set(row, list.Float32);
+        }
+        else
+        {
+            ColumnValues.NarrowFloats(list.Float64, destination.SetUninitialized(row, list.Length));
         }
     }
 
@@ -686,7 +727,7 @@ internal static class DestinationWriter
     private static bool Fits(in ScalarValue value, ColumnBuffer destination) => destination switch
     {
         ScalarColumn<int> => value.Kind == StorageKind.Int64 && Int32Range.Fits(value.AsInt64()),
-        ListColumn<int> => value.Kind == StorageKind.ListInt64 && Int32Range.AllFit(value.AsInt64List()),
+        ListColumn<int> => value.ListElement == StorageKind.Int64 && Int32Range.AllFit(value.AsInt64List()),
         _ => true,
     };
 
@@ -741,6 +782,15 @@ internal static class DestinationWriter
                     break;
                 }
 
+                case ListColumn<double> d: d.Set(row, write.AsFloat64List()); break;
+                case ListColumn<float> d:
+                {
+                    var doubles = write.AsFloat64List();
+                    ColumnValues.NarrowFloats(doubles, d.SetUninitialized(row, doubles.Length));
+                    break;
+                }
+
+                case ListColumn<bool> d: d.Set(row, write.AsBoolList()); break;
                 case ListColumn<string> d: d.Set(row, write.AsStringList()); break;
             }
         }

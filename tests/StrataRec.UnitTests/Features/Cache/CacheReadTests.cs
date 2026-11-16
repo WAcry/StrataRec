@@ -593,9 +593,9 @@ public class CacheReadTests
             rig.Physical("item.s", FeatureTestRig.Item, ColumnType.String, "item_store", ScalarValue.FromString("unknown")),
             rig.Physical("item.t", FeatureTestRig.Item, ColumnType.Text, "item_store"),
             rig.Physical("item.v", FeatureTestRig.Item, ColumnType.Vector(4), "item_store"),
-            rig.Physical("item.li32", FeatureTestRig.Item, ColumnType.ListInt32, "item_store"),
-            rig.Physical("item.li64", FeatureTestRig.Item, ColumnType.ListInt64, "item_store"),
-            rig.Physical("item.ls", FeatureTestRig.Item, ColumnType.ListString, "item_store"),
+            rig.Physical("item.li32", FeatureTestRig.Item, ColumnType.List(StorageKind.Int32), "item_store"),
+            rig.Physical("item.li64", FeatureTestRig.Item, ColumnType.List(StorageKind.Int64), "item_store"),
+            rig.Physical("item.ls", FeatureTestRig.Item, ColumnType.List(StorageKind.String), "item_store"),
             rig.Physical("item.s_again", FeatureTestRig.Item, ColumnType.String, "item_store", field: "s"), // two features, one field
         };
         rig.Build();

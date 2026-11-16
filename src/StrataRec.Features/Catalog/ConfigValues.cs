@@ -131,52 +131,95 @@ public static class ConfigValues
 
                 value = ScalarValue.FromVector(vector);
                 return true;
-            case StorageKind.ListInt64 or StorageKind.ListInt32 when kind == JsonValueKind.Array:
-                // A list<int32> value is held promoted, as int64 elements (like any int32 value); each element must
-                // fit the storage it will be written to.
-                var longs = new long[element.GetArrayLength()];
-                var l = 0;
-                foreach (var item in element.EnumerateArray())
+            case StorageKind.List when kind == JsonValueKind.Array:
+                return TryList(element, type, out value, out error);
+        }
+
+        error = Expected(type, JsonWords.Value(element));
+        return false;
+    }
+
+    /// <summary>A JSON array as a list of <paramref name="type"/>'s elements, each read as a scalar of the element type
+    /// is (an int32 element within int32, a float within float64); held promoted, as every list value is.</summary>
+    private static bool TryList(in JsonElement array, ColumnType type, out ScalarValue value, [NotNullWhen(false)] out string? error)
+    {
+        value = ScalarValue.Missing;
+        error = null;
+        var count = array.GetArrayLength();
+        var index = 0;
+        switch (type.Element)
+        {
+            case StorageKind.Bool:
+                var bools = new bool[count];
+                foreach (var item in array.EnumerateArray())
                 {
-                    if (item.ValueKind != JsonValueKind.Number || !TryInteger(item, out longs[l]))
+                    if (item.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    {
+                        error = Element(type, index, JsonWords.Value(item));
+                        return false;
+                    }
+
+                    bools[index++] = item.ValueKind == JsonValueKind.True;
+                }
+
+                value = ScalarValue.FromBoolList(bools);
+                return true;
+            case StorageKind.Int32 or StorageKind.Int64:
+                var longs = new long[count];
+                foreach (var item in array.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.Number || !TryInteger(item, out longs[index]))
                     {
                         error = item.ValueKind == JsonValueKind.Number && JsonIntegers.IsIntegral(item.GetRawText())
-                            ? OutOfRange(type, JsonWords.Value(item), fitsInt64: false, l)
-                            : Element(type, l, JsonWords.Value(item));
+                            ? OutOfRange(type, JsonWords.Value(item), fitsInt64: false, index)
+                            : Element(type, index, JsonWords.Value(item));
                         return false;
                     }
 
-                    if (type.Kind == StorageKind.ListInt32 && !Int32Range.Fits(longs[l]))
+                    if (type.Element == StorageKind.Int32 && !Int32Range.Fits(longs[index]))
                     {
-                        error = OutOfRange(type, JsonWords.Value(item), fitsInt64: true, l);
+                        error = OutOfRange(type, JsonWords.Value(item), fitsInt64: true, index);
                         return false;
                     }
 
-                    l++;
+                    index++;
                 }
 
                 value = ScalarValue.FromInt64List(longs);
                 return true;
-            case StorageKind.ListString when kind == JsonValueKind.Array:
-                var strings = new string[element.GetArrayLength()];
-                var s = 0;
-                foreach (var item in element.EnumerateArray())
+            case StorageKind.Float32 or StorageKind.Float64:
+                var doubles = new double[count];
+                foreach (var item in array.EnumerateArray())
                 {
-                    if (item.ValueKind != JsonValueKind.String || !JsonWords.TryText(item, out strings[s]))
+                    if (item.ValueKind != JsonValueKind.Number || !item.TryGetDouble(out doubles[index]) || !double.IsFinite(doubles[index]))
                     {
-                        error = Element(type, s, JsonWords.Value(item));
+                        error = item.ValueKind == JsonValueKind.Number
+                            ? $"must be {Describe(type)} within the float64 range; element {index} is {JsonWords.Value(item)}"
+                            : Element(type, index, JsonWords.Value(item));
                         return false;
                     }
 
-                    s++;
+                    index++;
+                }
+
+                value = ScalarValue.FromFloat64List(doubles);
+                return true;
+            default:
+                var strings = new string[count];
+                foreach (var item in array.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.String || !JsonWords.TryText(item, out strings[index]))
+                    {
+                        error = Element(type, index, JsonWords.Value(item));
+                        return false;
+                    }
+
+                    index++;
                 }
 
                 value = ScalarValue.FromStringList(strings);
                 return true;
         }
-
-        error = Expected(type, JsonWords.Value(element));
-        return false;
     }
 
     /// <summary>
@@ -203,7 +246,7 @@ public static class ConfigValues
                 // An integral double ScalarValue.TryConvert refused: outside the type's range (or int64's).
                 error = OutOfRange(type, Words(value), fitsInt64: Math.Abs(value.AsFloat64()) < 9.2e18);
                 return false;
-            case StorageKind.ListInt32 when value.Kind == StorageKind.ListInt64:
+            case StorageKind.List when type.Element == StorageKind.Int32 && value.ListElement == StorageKind.Int64:
                 var list = value.AsInt64List();
                 for (var i = 0; i < list.Length; i++)
                 {
@@ -240,8 +283,13 @@ public static class ConfigValues
             StorageKind.String => "a string",
             StorageKind.Text => "a string",
             StorageKind.Vector => type.Dimension > 0 ? $"an array of {type.Dimension} numbers" : "an array of numbers",
-            StorageKind.ListInt32 or StorageKind.ListInt64 => "an array of integers",
-            StorageKind.ListString => "an array of strings",
+            StorageKind.List => type.Element switch
+            {
+                StorageKind.Bool => "an array of true or false",
+                StorageKind.Int32 or StorageKind.Int64 => "an array of integers",
+                StorageKind.Float32 or StorageKind.Float64 => "an array of numbers",
+                _ => "an array of strings",
+            },
             _ => "a value",
         };
         return type.Kind == StorageKind.String ? shape : $"{shape} ({name})";
@@ -258,7 +306,7 @@ public static class ConfigValues
     /// </summary>
     private static string OutOfRange(ColumnType type, string got, bool fitsInt64, int element = -1)
     {
-        var int32 = type.Kind is StorageKind.Int32 or StorageKind.ListInt32;
+        var int32 = type.IsInt32Storage;
         var range = int32 ? $"the int32 range [{int.MinValue}, {int.MaxValue}]" : $"the int64 range [{long.MinValue}, {long.MaxValue}]";
         var fix = int32 && fitsInt64 ? $"; declare the type as {type.Promoted()} for larger values" : string.Empty;
         return element < 0
@@ -266,8 +314,7 @@ public static class ConfigValues
             : $"must be an array of integers within {range}; element {element} is {got}{fix}";
     }
 
-    private static bool IsArray(ColumnType type) =>
-        type.Kind is StorageKind.Vector or StorageKind.ListInt32 or StorageKind.ListInt64 or StorageKind.ListString;
+    private static bool IsArray(ColumnType type) => type.Kind is StorageKind.Vector or StorageKind.List;
 
     /// <summary>
     /// The index of the first item of <paramref name="array"/> that cannot be read: a string that is not valid Unicode (a

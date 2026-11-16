@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
+using StrataRec.Core.Columns;
 using StrataRec.Core.Hashing;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
@@ -37,8 +39,8 @@ internal enum CacheRecordHeader : byte
 /// 16  uint64  fingerprint     XXH3-64 of the field set (<see cref="Fingerprint"/>)
 /// 24  uint8[V] validity       bit f set = field f has a value (V = ceil(fields / 8))
 /// …   values of the fields that have one, in field order: bool 1 byte; int32, float32 4; int64, float64 8; vector
-///     dimension × float32; string and text int32 byte length + UTF-8; list&lt;int32|int64&gt; int32 count + elements;
-///     list&lt;string&gt; int32 count + (int32 byte length + UTF-8) per item
+///     dimension × float32; string and text int32 byte length + UTF-8; a list int32 count + its elements, each as the
+///     scalar of its element type is (a bool 1 byte, 0 or 1; list&lt;string&gt; items int32 byte length + UTF-8)
 /// </code>
 /// <para>The fingerprint covers the format, the key type and every field's name and storage type in field order (the
 /// table's order, by name), so two instances whose catalogs bind different fields to the source never decode each
@@ -212,50 +214,12 @@ internal static class CacheRecord
                     visitor.String(f, rest.Slice(4, bytes));
                     size = 4 + bytes;
                     break;
-                case StorageKind.ListInt32:
-                    if (!TryLength(rest, 4, out bytes))
+                case StorageKind.List:
+                    if (!TryList(rest, layout.Elements[f], f, ref visitor, out size))
                     {
                         return false;
                     }
 
-                    visitor.Int32List(f, MemoryMarshal.Cast<byte, int>(rest.Slice(4, bytes)));
-                    size = 4 + bytes;
-                    break;
-                case StorageKind.ListInt64:
-                    if (!TryLength(rest, 8, out bytes))
-                    {
-                        return false;
-                    }
-
-                    visitor.Int64List(f, MemoryMarshal.Cast<byte, long>(rest.Slice(4, bytes)));
-                    size = 4 + bytes;
-                    break;
-                case StorageKind.ListString:
-                    if (rest.Length < 4)
-                    {
-                        return false;
-                    }
-
-                    var count = BinaryPrimitives.ReadInt32LittleEndian(rest);
-                    if (count < 0)
-                    {
-                        return false;
-                    }
-
-                    visitor.StringListStart(f, count);
-                    size = 4;
-                    for (var i = 0; i < count; i++)
-                    {
-                        if (!TryLength(rest[size..], 1, out var item))
-                        {
-                            return false;
-                        }
-
-                        visitor.StringListItem(f, rest.Slice(size + 4, item));
-                        size += 4 + item;
-                    }
-
-                    visitor.StringListEnd(f);
                     break;
                 default:
                     return false;
@@ -265,6 +229,87 @@ internal static class CacheRecord
         }
 
         return at == record.Length;
+    }
+
+    /// <summary>Walks a list value at the start of <paramref name="rest"/>; false when it runs past it or is not one.</summary>
+    private static bool TryList<TVisitor>(ReadOnlySpan<byte> rest, StorageKind element, int f, ref TVisitor visitor, out int size)
+        where TVisitor : struct, ICacheRecordVisitor
+    {
+        size = 0;
+        int bytes;
+        switch (element)
+        {
+            case StorageKind.Bool:
+                if (!TryLength(rest, 1, out bytes) || rest.Slice(4, bytes).IndexOfAnyExcept((byte)0, (byte)1) >= 0)
+                {
+                    return false; // a byte other than 0 or 1 is not a bool this codec wrote, and would not compare as one
+                }
+
+                visitor.List(f, MemoryMarshal.Cast<byte, bool>(rest.Slice(4, bytes)));
+                break;
+            case StorageKind.Int32:
+                if (!TryLength(rest, 4, out bytes))
+                {
+                    return false;
+                }
+
+                visitor.List(f, MemoryMarshal.Cast<byte, int>(rest.Slice(4, bytes)));
+                break;
+            case StorageKind.Int64:
+                if (!TryLength(rest, 8, out bytes))
+                {
+                    return false;
+                }
+
+                visitor.List(f, MemoryMarshal.Cast<byte, long>(rest.Slice(4, bytes)));
+                break;
+            case StorageKind.Float32:
+                if (!TryLength(rest, 4, out bytes))
+                {
+                    return false;
+                }
+
+                visitor.List(f, MemoryMarshal.Cast<byte, float>(rest.Slice(4, bytes)));
+                break;
+            case StorageKind.Float64:
+                if (!TryLength(rest, 8, out bytes))
+                {
+                    return false;
+                }
+
+                visitor.List(f, MemoryMarshal.Cast<byte, double>(rest.Slice(4, bytes)));
+                break;
+            default:
+                if (rest.Length < 4)
+                {
+                    return false;
+                }
+
+                var count = BinaryPrimitives.ReadInt32LittleEndian(rest);
+                if (count < 0)
+                {
+                    return false;
+                }
+
+                visitor.StringListStart(f, count);
+                size = 4;
+                for (var i = 0; i < count; i++)
+                {
+                    if (!TryLength(rest[size..], 1, out var item))
+                    {
+                        return false;
+                    }
+
+                    visitor.StringListItem(f, rest.Slice(size + 4, item));
+                    size += 4 + item;
+                }
+
+                visitor.StringListEnd(f);
+                return true;
+        }
+
+        size = 4 + bytes;
+        return true;
     }
 
     /// <summary>True when <see cref="Read"/> would walk the whole record: every length within it, nothing left over.</summary>
@@ -328,11 +373,8 @@ internal static class CacheRecord
         {
         }
 
-        public void Int32List(int field, ReadOnlySpan<int> value)
-        {
-        }
-
-        public void Int64List(int field, ReadOnlySpan<long> value)
+        public void List<T>(int field, ReadOnlySpan<T> value)
+            where T : unmanaged
         {
         }
 
@@ -370,9 +412,10 @@ internal interface ICacheRecordVisitor
     /// <summary>A <c>string</c> or <c>text</c> value.</summary>
     void String(int field, ReadOnlySpan<byte> utf8);
 
-    void Int32List(int field, ReadOnlySpan<int> value);
-
-    void Int64List(int field, ReadOnlySpan<long> value);
+    /// <summary>A list of fixed-size elements: <c>bool</c>, <c>int</c>, <c>long</c>, <c>float</c> or <c>double</c>, as the
+    /// field's element type is stored. The span is the record's own bytes: copy what is kept.</summary>
+    void List<T>(int field, ReadOnlySpan<T> value)
+        where T : unmanaged;
 
     void StringListStart(int field, int count);
 
@@ -388,11 +431,13 @@ internal sealed class CacheRecordLayout
     {
         FieldCount = schema.FieldCount;
         Kinds = new StorageKind[FieldCount];
+        Elements = new StorageKind[FieldCount];
         Dimensions = new int[FieldCount];
         for (var f = 0; f < FieldCount; f++)
         {
             var type = schema.Fields[f].Type;
             Kinds[f] = type.Kind;
+            Elements[f] = type.Element;
             Dimensions[f] = type.Kind == StorageKind.Vector ? type.Dimension : 0;
         }
 
@@ -420,6 +465,9 @@ internal sealed class CacheRecordLayout
     public int FieldCount { get; }
 
     public StorageKind[] Kinds { get; }
+
+    /// <summary>Each list field's element kind; 0 for other fields.</summary>
+    public StorageKind[] Elements { get; }
 
     public int[] Dimensions { get; }
 
@@ -507,27 +555,37 @@ internal sealed class CacheRecordWriter
         WriteString(value);
     }
 
-    public void Int32List(int field, ReadOnlySpan<int> value)
+    /// <summary>A list of fixed-size elements, stored as the field's element type is (see <see cref="ICacheRecordVisitor.List"/>).</summary>
+    public void List<T>(int field, ReadOnlySpan<T> value)
+        where T : unmanaged
     {
-        Present(field, StorageKind.ListInt32);
+        PresentList(field, ColumnValues.ElementKind<T>());
         BinaryPrimitives.WriteInt32LittleEndian(Reserve(4), value.Length);
-        MemoryMarshal.AsBytes(value).CopyTo(Reserve(4 * value.Length));
-    }
-
-    public void Int64List(int field, ReadOnlySpan<long> value)
-    {
-        Present(field, StorageKind.ListInt64);
-        BinaryPrimitives.WriteInt32LittleEndian(Reserve(4), value.Length);
-        MemoryMarshal.AsBytes(value).CopyTo(Reserve(8 * value.Length));
+        MemoryMarshal.AsBytes(value).CopyTo(Reserve(Unsafe.SizeOf<T>() * value.Length));
     }
 
     public void StringList(int field, ReadOnlySpan<string> value)
     {
-        Present(field, StorageKind.ListString);
+        PresentList(field, StorageKind.String);
         BinaryPrimitives.WriteInt32LittleEndian(Reserve(4), value.Length);
         foreach (var item in value)
         {
             WriteString(item);
+        }
+    }
+
+    /// <summary>The row of a list column (of the field's element type) as the field's value.</summary>
+    public void List(int field, ListColumn column, int row)
+    {
+        switch (column)
+        {
+            case ListColumn<bool> c: List(field, c.Get(row)); break;
+            case ListColumn<int> c: List(field, c.Get(row)); break;
+            case ListColumn<long> c: List(field, c.Get(row)); break;
+            case ListColumn<float> c: List(field, c.Get(row)); break;
+            case ListColumn<double> c: List(field, c.Get(row)); break;
+            case ListColumn<string> c: StringList(field, c.Get(row)); break;
+            default: throw new NotSupportedException($"Unsupported column {column.GetType().Name}.");
         }
     }
 
@@ -548,6 +606,15 @@ internal sealed class CacheRecordWriter
 
         _next = field + 1;
         _bytes[_start + CacheRecord.ValidityOffset + (field >> 3)] |= (byte)(1 << (field & 7));
+    }
+
+    private void PresentList(int field, StorageKind element)
+    {
+        Present(field, StorageKind.List);
+        if (_layout.Elements[field] != element)
+        {
+            throw new ArgumentException($"Field {field} is a list of {_layout.Elements[field]}, not of {element}.", nameof(field));
+        }
     }
 
     private void WriteString(string value)

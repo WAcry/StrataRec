@@ -310,12 +310,17 @@ public readonly struct ColumnKey<T>
 | `string` | `string` | 字典编码，适合类目、来源这类低基数值；支持相等、`in` 和前缀判断 |
 | `text` | `text` | 长文本，例如对话上下文、提示词、模型生成的推荐理由；连续字节存储，支持长度、包含判断和模板引用 |
 | `vec<float32,N>` | `vec` | 定长向量，所有行连续存放 |
-| `list<int32>`、`list<int64>` | `list<int64>` | 变长整数列表，CSR 存储；也用于请求输入中的行为序列。`list<int32>` 与 `int32` 一样只是存储类型：表达式按 `int64` 元素计算，读取时不复制；标签、主题、token ID 这类列表用它可省一半内存，写入时逐元素收窄 |
-| `list<string>` | `list<string>` | 变长字符串列表，CSR 存储 |
+| `list<E>`，`E` 是 `bool`、`int32`、`int64`、`float32`、`float64` 或 `string` | `list<E 的表达式类型>` | 变长列表，每行的元素连续存放；也用于请求输入中的行为序列。元素的提升与标量相同：`list<int32>` 读作 `list<int64>`，`list<float32>` 读作 `list<float64>`，读取时不复制，写入时逐元素收窄。标签、主题、token ID 用 `list<int32>`，权重、价格序列用 `list<float32>`，都比宽类型省一半内存 |
+
+列表是类型构造器，不是每种元素各一个类型：元素能是什么，就是标量能是什么，每一层（存储、表达式、连接器、本地表、日志、结果）对列表只处理一次。三个限制：
+
+1. **列表整体可空，元素不可空。** `list<E>?` 表示这一行可能没有列表；列表里的每个元素都是值。有空缺的序列写成一个值列表加一个标志列表，或由产出方填默认元素。`list<int32?>` 报错并提示写 `list<int32>?`。
+2. **没有 `list<text>`。** `text` 是为单个长文本设计的存储（连续字节、只支持长度和包含）；列表的元素用 `string`，它本来就可以是任意长度的字符串。写 `list<text>` 时报错并提示 `list<string>`。
+3. **列表不嵌套**，元素也不能是向量。嵌套列表要两层偏移，没有一个内置函数需要它。
 
 每个列的类型要么是 `T`（每个存活行都有值），要么是 `T?`（某些行可能缺失）。特征声明了默认值时为 `T`，否则为 `T?`；节点产出的列按声明定型，可空列写成 `T?`，编译器验证产出者能兑现这个声明（第 4.6 节）。在表达式里，可空性沿运算传播，表达式的最终结果必须消解为非可空类型，除非它写入一个可空列（第 7.4 节）。这条规则把“缺失值怎么处理”从运行期的隐式行为变成了编写配置时必须做出的决定。
 
-写入数值列时，引擎检查非有限值（NaN、±∞）：列声明了 `default` 时替换为默认值，否则标记为缺失；两种情况都计入指标 `column_nonfinite_total{node,column}`。一个除零错误会在监控上暴露出来，不会悄悄进入排序。排序类算子统一把缺失值排在最后。
+写入数值列时，引擎检查非有限值（NaN、±∞）：列声明了 `default` 时替换为默认值，否则标记为缺失；两种情况都计入指标 `column_nonfinite_total{node,column}`。一个除零错误会在监控上暴露出来，不会悄悄进入排序。排序类算子统一把缺失值排在最后。浮点列表只要有一个元素是非有限值（包括写入 `list<float32>` 时超出 float32 范围变成的 ±∞）就整体替换，理由同下一段。
 
 写入 `int32` 或 `list<int32>` 列时，超出 int32 范围的值不会被截断回绕，而是按同样的规则处理（有 `default` 时替换为默认值，否则标记为缺失），并计入单独的指标 `column_out_of_range_total{node,column}`；列表只要有一个元素越界就整体替换，因为去掉部分元素的列表是错误的数据。
 
@@ -338,7 +343,7 @@ public sealed class CandidateTable : IDisposable
 2. **字典编码字符串列 `DictStringColumn`**：`string[] Dictionary` 加 `int[] Codes`。比较 `col.recall.primary_source == 'two_tower'` 时，常量在循环外换成整数编码，循环内比较整数。
 3. **文本列 `TextColumn`**：UTF-8 字节连续存放，配一个偏移数组。
 4. **定长向量列 `FixedVectorColumn<T>`**：单块数组 `T[] Flat`，长度为容量乘维度；第 `row` 行是 `Flat.AsSpan(row * Dim, Dim)`，适合 SIMD 点积。
-5. **变长列表列 `CsrListColumn<T>`**：`int[] Offsets` 加 `T[] Values`，第 `row` 行是 `Values[Offsets[row]..Offsets[row + 1]]`。
+5. **变长列表列 `ListColumn<T>`**（`T` 是元素的存储类型：`bool`、`int`、`long`、`float`、`double`、`string`）：每行一个起点和长度，元素追加在一个共享数组里。与严格的 CSR 偏移不同，行可以按任意顺序写入（回填按物理行的任意顺序写），没写过的行是空列表。只需要长度的读者（`size()`、模板的段、复制的预算）通过非泛型基类 `ListColumn` 读取，不必知道元素类型。
 
 ### 4.5 行集合、填充状态与 Compact
 
@@ -397,7 +402,7 @@ internal struct OutputBindings
 
 每个节点产出的列都有声明的类型：写在 `columns` 中（可空列写成 `"float64?"` 这样的形式），或者由算子描述符给出（例如 `MultiSourceRecall@1` 的 `recall.*` 列）。读取方只按声明的类型编译，不需要知道上游节点会不会被跳过。
 
-声明为 `T` 的列是一个承诺，编译器在每一种实验组合下验证它：读取它的节点之前必须有一个不会被跳过的产出者（没有 `when` 和 `min_remaining_ms`，并且 `on_failure` 为 `fail_request`，或者指向一个 `on_failure` 为 `fail_request` 的后备节点），产出之后也不能有不写这一列的 `RowSource` 追加新行。数值列声明为 `T` 时还必须带 `default`，写入的 NaN、±∞ 或超出 `int32` 范围的值会被替换成默认值并计数（第 4.3 节）。产出者可能被跳过的列声明为 `T?`，读取方用 `??` 或 `has()` 处理缺失。
+声明为 `T` 的列是一个承诺，编译器在每一种实验组合下验证它：读取它的节点之前必须有一个不会被跳过的产出者（没有 `when` 和 `min_remaining_ms`，并且 `on_failure` 为 `fail_request`，或者指向一个 `on_failure` 为 `fail_request` 的后备节点），产出之后也不能有不写这一列的 `RowSource` 追加新行。浮点列、`int32` 列以及这两种元素的列表声明为 `T` 时还必须带 `default`，写入的 NaN、±∞ 或超出 `int32` 范围的值（列表里有一个这样的元素时是整个列表）会被替换成默认值并计数（第 4.3 节）；`int64`、`bool` 这些不会有值被替换的类型不需要。产出者可能被跳过的列声明为 `T?`，读取方用 `??` 或 `has()` 处理缺失。
 
 验证失败时，错误指向造成问题的那一处修改。例如某个实验桶把 `ctr_ranker` 的 `on_failure` 改成 `skip`，而 `score.p_click` 声明为 `float32`：校验报告指出这个桶让 `score.p_click` 可能没有产出者，建议改用后备节点。实验不能修改已有的列声明（第 11.4 节），所以也不能把这一列改成可空。`default` 只替换非有限值和超出存储范围的值，不会填充一个没有产出者的列，被跳过的模型不会悄悄变成全 0 的分数。
 
@@ -1127,7 +1132,7 @@ utility * (1.0 + param.w_fresh * freshness) * cold_boost
 4. **结果必须非可空，有两个例外。** 打分结果、过滤条件、`when` 条件、排序键、模型输入和写入 `T` 列的值都必须是非可空类型；结果可空时编译报错，并提示在哪里加 `??`。写入可空列和探针记录的列可以是可空的，缺失原样保留。
 5. **布尔不参与算术。** 需要写成 `cond ? 1.0 : 0.0`。
 6. **字符串与文本。** `string` 支持 `==`、`!=`、`in [...]`、`startsWith()` 和 `endsWith()`，常量在编译期转换成字典编码。`text` 只支持 `size()` 和 `contains()`，主要用于模板和日志，不用于打分循环。
-7. **向量与列表。** 向量支持 `dot`、`cosine`、`l2_norm`；列表支持 `size`、`contains`、`overlap_count`。语言中没有向量字面量，可空向量通过函数结果加 `??` 处理，例如 `dot(a, b) ?? 0.0`。
+7. **向量与列表。** 向量支持 `dot`、`cosine`、`l2_norm`；任何元素类型的列表都支持 `size`、`contains`（`in`）、`overlap_count`。`contains` 和 `in` 的值与元素按 `==` 的规则比较，所以整数可以在浮点列表里查找；`overlap_count` 要求两个列表的元素类型相同。列表字面量的元素必须都是数、都是字符串或都是布尔值：全是整数时是 `list<int64>`，有一个浮点数时是 `list<float64>`（`[1, 2.5]`）。整数列表字面量（以及只在这样的字面量之间选择的 `?:`、`??`）在需要浮点列表的地方就是浮点列表，在编译期转换：写入 `list<float32>` 列的 `[1, 2]`、`col.weights ?? [0]`、`overlap_count(col.prices, [10, 20])` 都可以直接写。有类型的整数列表（列、特征、输入）不隐式转换成浮点列表，编译报错。语言中没有向量字面量，可空向量通过函数结果加 `??` 处理，例如 `dot(a, b) ?? 0.0`。
 8. **编译期报错。** 未声明的名字、类型或可空性不匹配和参数个数错误都在编译期报告，并给出位置和相近的候选名字。
 
 可空性规则把“缺失值怎么处理”变成编写配置时必须做出的显式决定。最常见的写法只有两种：特征在目录里声明 `default`，或者在使用处写 `??`。
@@ -1145,7 +1150,7 @@ utility * (1.0 + param.w_fresh * freshness) * cold_boost
 | `int(x)`：`x` 是 NaN、±∞，或向零截断后超出 `int64` 的范围 | 缺失，所以 `float64` 的 `int()` 结果总是可空 |
 | 写入列时出现 NaN 或 ±∞ | 列声明了 `default` 时替换为默认值，否则标记为缺失；两种情况都计数（第 4.3 节） |
 
-最后一条是数值输出列声明为 `T` 时必须带 `default` 的原因：没有默认值，非有限值只能记为缺失（第 4.6 节）。打分和模型输出列通常声明 `"default": 0.0`，下游表达式就可以直接读取。
+最后一条是浮点输出列声明为 `T` 时必须带 `default` 的原因：没有默认值，非有限值只能记为缺失（第 4.6 节）。打分和模型输出列通常声明 `"default": 0.0`，下游表达式就可以直接读取。
 
 因为表达式是纯的、全定义的，`cond ? a : b`、`&&`、`||` 和 `??` 无论先算哪一边、两边是否都算，结果都相同。求值策略因此是后端可以自由选择的实现细节，不属于语义的一部分。
 
@@ -1156,7 +1161,7 @@ utility * (1.0 + param.w_fresh * freshness) * cold_boost
 1. 数学：`min`、`max`、`clamp`、`abs`、`sqrt`、`pow`、`exp`、`log`、`log1p`
 2. 排序常用变换：`sigmoid`、`logit`、`soft_floor`、`linear_decay`、`piecewise_linear`
 3. 向量：`dot`、`cosine`、`l2_norm`（使用 `System.Numerics.Tensors` 的 SIMD 实现）
-4. 列表：`size`、`contains`、`overlap_count`
+4. 列表（任何元素类型）：`size`、`contains`、`overlap_count`
 5. 字符串与文本：`startsWith`、`endsWith`（字符串），`size`、`contains`（文本）
 6. 确定性随机：`hash01(ctx.request.seed, col.entity_id)` 返回 `[0, 1)` 内的均匀值
 7. 查表：`lookup(table_name, key, default)` 读取 `DataTableArtifact` 中的静态表，例如分位数校准表

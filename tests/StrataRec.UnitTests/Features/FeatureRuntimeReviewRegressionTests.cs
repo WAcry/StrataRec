@@ -200,7 +200,7 @@ public class FeatureRuntimeReviewRegressionTests
         var rig = new FeatureTestRig().Source("item_store", connector, maxBatch: 1);
         var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
         var tag = rig.Physical("item.tag", FeatureTestRig.Item, ColumnType.String, "item_store");
-        var history = rig.Physical("item.history", FeatureTestRig.Item, ColumnType.ListInt64, "item_store");
+        var history = rig.Physical("item.history", FeatureTestRig.Item, ColumnType.List(StorageKind.Int64), "item_store");
         rig.Build();
         var request = rig.NewRequest(Enumerable.Range(1, Count).Select(i => (long)i).ToArray());
 

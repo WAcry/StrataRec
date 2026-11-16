@@ -682,28 +682,67 @@ public sealed class RunReplay : IFeatureCallHook
             case StorageKind.Vector when value.Kind == StorageKind.Vector && value.AsVector().Length == type.Dimension:
                 value.AsVector().CopyTo(writer.GetValues<float>(field).Span.Slice(key * type.Dimension, type.Dimension));
                 break;
-            case StorageKind.ListInt64 when value.Kind == StorageKind.ListInt64:
-                writer.SetInt64List(field, key, value.AsInt64List());
-                return true;
-            case StorageKind.ListInt32 when value.Kind == StorageKind.ListInt64 && Int32Range.AllFit(value.AsInt64List()):
-                var longs = value.AsInt64List();
-                var ints = new int[longs.Length];
-                for (var i = 0; i < ints.Length; i++)
-                {
-                    ints[i] = (int)longs[i];
-                }
-
-                writer.SetInt32List(field, key, ints);
-                return true;
-            case StorageKind.ListString when value.Kind == StorageKind.ListString:
-                writer.SetStringList(field, key, value.AsStringList());
-                return true;
+            case StorageKind.List when value.Kind == StorageKind.List:
+                return TryWriteList(writer, field, key, type.Element, value);
             default:
                 return false;
         }
 
         writer.SetValid(field, key);
         return true;
+    }
+
+    /// <summary>A recorded list into a list field, element by element under the scalar rule of <see cref="TryWrite"/>.</summary>
+    private static bool TryWriteList(IFeatureBatchWriter writer, int field, int key, StorageKind element, in ScalarValue value)
+    {
+        var recorded = value.ListElement;
+        switch (element)
+        {
+            case StorageKind.Bool when recorded == StorageKind.Bool:
+                writer.SetBoolList(field, key, value.AsBoolList());
+                return true;
+            case StorageKind.Int32 when recorded == StorageKind.Int64 && Int32Range.AllFit(value.AsInt64List()):
+                var longs = value.AsInt64List();
+                var ints = new int[longs.Length];
+                Int32Range.Narrow(longs, ints);
+                writer.SetInt32List(field, key, ints);
+                return true;
+            case StorageKind.Int64 when recorded == StorageKind.Int64:
+                writer.SetInt64List(field, key, value.AsInt64List());
+                return true;
+            case StorageKind.Float32 when recorded is StorageKind.Float64 or StorageKind.Int64:
+                var floats = new float[value.ListLength];
+                for (var i = 0; i < floats.Length; i++)
+                {
+                    var d = recorded == StorageKind.Int64 ? value.AsInt64List()[i] : value.AsFloat64List()[i];
+                    if (!FitsFloat32(d))
+                    {
+                        return false;
+                    }
+
+                    floats[i] = (float)d;
+                }
+
+                writer.SetFloat32List(field, key, floats);
+                return true;
+            case StorageKind.Float64 when recorded == StorageKind.Float64:
+                writer.SetFloat64List(field, key, value.AsFloat64List());
+                return true;
+            case StorageKind.Float64 when recorded == StorageKind.Int64:
+                var widened = new double[value.ListLength];
+                for (var i = 0; i < widened.Length; i++)
+                {
+                    widened[i] = value.AsInt64List()[i];
+                }
+
+                writer.SetFloat64List(field, key, widened);
+                return true;
+            case StorageKind.String when recorded == StorageKind.String:
+                writer.SetStringList(field, key, value.AsStringList());
+                return true;
+            default:
+                return false;
+        }
     }
 
     /// <summary>NaN and ±∞ stay what they are; a finite value must not overflow to an infinity.</summary>

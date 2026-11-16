@@ -268,15 +268,15 @@ public class CompilerTests
     [InlineData("piecewise_linear(1.0, ctx.knots, [0.0, 1.0])", ExpressionErrorCodes.TypeMismatch, 22)]
     [InlineData("lookup('nope', 1, 0.0)", ExpressionErrorCodes.UnknownTable, 7)]
     [InlineData("lookup(ctx.request.surface, 1, 0.0)", ExpressionErrorCodes.TypeMismatch, 7)]
-    [InlineData("[1.0, 2.0]", ExpressionErrorCodes.TypeMismatch, 0)]
+    [InlineData("[1.0, true]", ExpressionErrorCodes.TypeMismatch, 6)]
     [InlineData("[]", ExpressionErrorCodes.TypeMismatch, 0)]
     [InlineData("[col.score.final]", ExpressionErrorCodes.TypeMismatch, 1)]
     public void ErrorCodes_And_Offsets(string source, string code, int offset)
     {
         var f = HomeFeed();
         f.Scope.Add(new Symbol(SymbolKind.Context, "ctx.small", ColumnType.Parse("vec<float32,8>"), 99));
-        f.Scope.Add(new Symbol(SymbolKind.Context, "ctx.knots", ColumnType.ListInt64, 98));
-        f.Scope.Add(new Symbol(SymbolKind.Column, "col.tags_int", ColumnType.ListInt64, 97));
+        f.Scope.Add(new Symbol(SymbolKind.Context, "ctx.knots", ColumnType.List(StorageKind.Int64), 98));
+        f.Scope.Add(new Symbol(SymbolKind.Column, "col.tags_int", ColumnType.List(StorageKind.Int64), 97));
         var d = f.Errors(source)[0];
         Assert.Equal(code, d.Code);
         Assert.Equal(offset, d.Offset);

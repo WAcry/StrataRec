@@ -64,7 +64,7 @@ public class CoreReviewRegressionTests
     [Fact]
     public void ListSelfCopy_PreservesMissing()
     {
-        var list = new ListColumn<long>(ColumnType.ListInt64.AsNullable(), 4, new RequestMemory());
+        var list = new ListColumn<long>(ColumnType.List(StorageKind.Int64).AsNullable(), 4, new RequestMemory());
         list.Set(0, new long[] { 7 });
         list.SetMissing(0);
         list.CopyFrom(list, 0, 0);

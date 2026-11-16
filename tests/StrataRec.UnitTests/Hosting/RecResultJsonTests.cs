@@ -87,6 +87,9 @@ public sealed class RecResultJsonTests
             ["ints"] = ScalarValue.FromInt64List(new[] { long.MinValue, 2L }),
             ["strings"] = ScalarValue.FromStringList(new[] { "x", string.Empty }),
             ["empty"] = ScalarValue.FromInt64List(Array.Empty<long>()),
+            ["flags"] = ScalarValue.FromBoolList(new[] { true, false }),
+            ["weights"] = ScalarValue.FromFloat64List(new[] { 0.1, double.NaN, 1e-300 }),
+            ["weights32"] = ScalarValue.FromFloat32List(new[] { 0.1f, float.PositiveInfinity }),
         };
 
         var json = Write(Result(new RankedItem(EntityKey.FromString("item-\"1\""), 1, columns)), relaxed: true);
@@ -108,6 +111,9 @@ public sealed class RecResultJsonTests
         Assert.Contains("\"ints\":[-9223372036854775808,2]", json, StringComparison.Ordinal);
         Assert.Contains("\"strings\":[\"x\",\"\"]", json, StringComparison.Ordinal);
         Assert.Contains("\"empty\":[]", json, StringComparison.Ordinal);
+        Assert.Contains("\"flags\":[true,false]", json, StringComparison.Ordinal); // JSON booleans, as a bool column is
+        Assert.Contains("\"weights\":[0.1,null,1E-300]", json, StringComparison.Ordinal); // a non-finite element is null, as in vectors
+        Assert.Contains("\"weights32\":[0.1,null]", json, StringComparison.Ordinal); // float32 elements as the floats they are
     }
 
     [Fact]

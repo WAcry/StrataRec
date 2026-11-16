@@ -24,6 +24,8 @@ public class DifferentialTests(ITestOutputHelper output)
         Vec,
         ListInt,
         ListStr,
+        ListFloat,
+        ListBool,
     }
 
     private static readonly (string Name, string Type, K Kind)[] Columns =
@@ -47,6 +49,9 @@ public class DifferentialTests(ITestOutputHelper output)
         ("col.li32", "list<int32>?", K.ListInt),
         ("col.lj32", "list<int32>", K.ListInt),
         ("col.ls", "list<string>", K.ListStr),
+        ("col.lf", "list<float64>?", K.ListFloat),
+        ("col.lf32", "list<float32>", K.ListFloat),
+        ("col.lb", "list<bool>?", K.ListBool),
     };
 
     private static readonly (string Name, string Type, K Kind)[] RequestValues =
@@ -61,6 +66,8 @@ public class DifferentialTests(ITestOutputHelper output)
         ("ctx.li", "list<int64>", K.ListInt),
         ("ctx.li32", "list<int32>?", K.ListInt),
         ("ctx.ls", "list<string>?", K.ListStr),
+        ("ctx.lf", "list<float32>?", K.ListFloat),
+        ("ctx.lb", "list<bool>", K.ListBool),
         ("ctx.t", "text?", K.Text),
         ("param.w", "float64", K.Float),
         ("param.k", "int64", K.Int),
@@ -99,7 +106,7 @@ public class DifferentialTests(ITestOutputHelper output)
                 < 6 => K.Int,
                 < 8 => K.Bool,
                 8 => K.Str,
-                _ => random.Next(3) switch { 0 => K.Vec, 1 => K.ListInt, _ => K.ListStr },
+                _ => random.Next(5) switch { 0 => K.Vec, 1 => K.ListInt, 2 => K.ListStr, 3 => K.ListFloat, _ => K.ListBool },
             };
             var source = new Generator(random, rowLevel: true).Gen(kind, 5);
             for (var t = 0; t < 2; t++)
@@ -186,10 +193,13 @@ public class DifferentialTests(ITestOutputHelper output)
         }
 
         // Int and int-list results sometimes go to int32 storage: values outside the int32 range (int results reach
-        // ±2^63) must then be missing, never wrapped (design 4.3).
+        // ±2^63) must then be missing, never wrapped (design 4.3). Float lists sometimes go to float32 storage, which
+        // rounds each element as a float32 column does.
         var resultType = expression.ResultType.AsNullable();
-        var narrow = resultType.Kind is StorageKind.Int64 or StorageKind.ListInt64 && random.Next(3) == 0;
-        var destinationType = !narrow ? resultType : resultType.Kind == StorageKind.Int64 ? ColumnType.Int32.AsNullable() : ColumnType.ListInt32.AsNullable();
+        var narrow = (resultType.Kind == StorageKind.Int64 || resultType == ColumnType.List(StorageKind.Int64, nullable: true)) && random.Next(3) == 0;
+        var single = resultType == ColumnType.List(StorageKind.Float64, nullable: true) && random.Next(3) == 0;
+        var destinationType = single ? ColumnType.List(StorageKind.Float32, nullable: true)
+            : !narrow ? resultType : resultType.Kind == StorageKind.Int64 ? ColumnType.Int32.AsNullable() : ColumnType.List(StorageKind.Int32).AsNullable();
         var destination = ColumnBuffer.Create(destinationType, f.Capacity, f.Memory);
         try
         {
@@ -217,6 +227,11 @@ public class DifferentialTests(ITestOutputHelper output)
             if (narrow && !ColumnValues.FitsStorage(expected, destinationType))
             {
                 expected = ScalarValue.Missing;
+            }
+
+            if (single && !expected.IsMissing)
+            {
+                expected = ScalarValue.FromFloat64List(expected.AsFloat64List().ToArray().Select(x => (double)(float)x).ToArray());
             }
 
             var actual = ExprFixture.Read(destination, r);
@@ -342,6 +357,9 @@ public class DifferentialTests(ITestOutputHelper output)
             case ListColumn<long> c: c.Set(row, RandomLongs(random)); break;
             case ListColumn<int> c: c.Set(row, RandomLongs(random).Select(v => (int)v).ToArray()); break;
             case ListColumn<string> c: c.Set(row, RandomStrings(random)); break;
+            case ListColumn<double> c: c.Set(row, RandomDoubles(random)); break;
+            case ListColumn<float> c: c.Set(row, RandomDoubles(random).Select(v => (float)v).ToArray()); break;
+            case ListColumn<bool> c: c.Set(row, RandomBools(random)); break;
         }
 
         _ = kind;
@@ -383,6 +401,29 @@ public class DifferentialTests(ITestOutputHelper output)
         return v;
     }
 
+    /// <summary>Few distinct values, so membership and overlap find matches; integral ones meet int probes.</summary>
+    private static double[] RandomDoubles(Random random)
+    {
+        var v = new double[random.Next(5)];
+        for (var i = 0; i < v.Length; i++)
+        {
+            v[i] = random.Next(-2, 6) * 0.5;
+        }
+
+        return v;
+    }
+
+    private static bool[] RandomBools(Random random)
+    {
+        var v = new bool[random.Next(4)];
+        for (var i = 0; i < v.Length; i++)
+        {
+            v[i] = random.Next(2) == 0;
+        }
+
+        return v;
+    }
+
     private static string[] RandomStrings(Random random)
     {
         var v = new string[random.Next(4)];
@@ -403,6 +444,8 @@ public class DifferentialTests(ITestOutputHelper output)
         K.Text => ScalarValue.FromText(Texts[random.Next(Texts.Length)]),
         K.Vec => ScalarValue.FromVector(RandomVector(random, garbage: false)),
         K.ListInt => ScalarValue.FromInt64List(RandomLongs(random)),
+        K.ListFloat => ScalarValue.FromFloat64List(RandomDoubles(random)),
+        K.ListBool => ScalarValue.FromBoolList(RandomBools(random)),
         _ => ScalarValue.FromStringList(RandomStrings(random)),
     };
 
@@ -469,16 +512,18 @@ public class DifferentialTests(ITestOutputHelper output)
                         5 => $"abs({Gen(K.Int, d)})",
                         6 => $"min({Gen(K.Int, d)}, {Gen(K.Int, d)})",
                         7 => $"max({Gen(K.Int, d)}, {Gen(K.Int, d)}, {Gen(K.Int, d)})",
-                        8 => $"size({Gen(random.Next(2) == 0 ? K.ListInt : K.ListStr, d)})",
+                        8 => $"size({Gen(Pick(K.ListInt, K.ListStr, K.ListFloat, K.ListBool), d)})",
                         9 => $"size({Gen(K.Text, d)})",
-                        10 => random.Next(2) == 0 ? $"overlap_count({Gen(K.ListInt, d)}, {Gen(K.ListInt, d)})" : $"overlap_count({Gen(K.ListStr, d)}, {Gen(K.ListStr, d)})",
+                        10 => Overlap(d),
                         11 => $"({Gen(K.Bool, d)} ? {Gen(K.Int, d)} : {Gen(K.Int, d)})",
                         12 => $"({Gen(K.Int, d)} ?? {Gen(K.Int, d)})",
                         _ => Let(K.Int, d),
                     };
                 case K.Bool:
-                    return random.Next(20) switch
+                    return random.Next(22) switch
                     {
+                        20 => $"({Num(d)} in {Gen(K.ListFloat, d)})",
+                        21 => $"contains({Gen(K.ListBool, d)}, {Gen(K.Bool, d)})",
                         0 => $"({Num(d)} {Pick("<", "<=", ">", ">=", "==", "!=")} {Num(d)})",
                         1 => $"({Gen(K.Int, d)} {Pick("<", "<=", ">", ">=", "==", "!=")} {Gen(K.Int, d)})",
                         2 => $"({Gen(K.Str, d)} {Pick("==", "!=")} {Gen(K.Str, d)})",
@@ -489,7 +534,7 @@ public class DifferentialTests(ITestOutputHelper output)
                         7 => $"contains({Gen(K.ListInt, d)}, {Gen(K.Int, d)})",
                         8 => $"({Gen(K.Str, d)} in {Gen(K.ListStr, d)})",
                         9 => $"contains({Gen(K.Text, d)}, {Gen(K.Str, d)})",
-                        10 => $"has({Gen((K)random.Next(8), d)})",
+                        10 => $"has({Gen((K)random.Next(10), d)})",
                         11 => $"!{Gen(K.Bool, d)}",
                         12 => $"({Gen(K.Bool, d)} && {Gen(K.Bool, d)})",
                         13 => $"({Gen(K.Bool, d)} || {Gen(K.Bool, d)})",
@@ -507,7 +552,7 @@ public class DifferentialTests(ITestOutputHelper output)
                         1 => $"({Gen(K.Str, d)} ?? {Gen(K.Str, d)})",
                         _ => Leaf(K.Str),
                     };
-                case K.Vec or K.ListInt or K.ListStr:
+                case K.Vec or K.ListInt or K.ListStr or K.ListFloat or K.ListBool:
                     return random.Next(3) switch
                     {
                         0 => $"({Gen(K.Bool, d)} ? {Gen(kind, d)} : {Gen(kind, d)})",
@@ -517,6 +562,12 @@ public class DifferentialTests(ITestOutputHelper output)
                 default:
                     return Leaf(kind);
             }
+        }
+
+        private string Overlap(int depth)
+        {
+            var list = Pick(K.ListInt, K.ListStr, K.ListFloat, K.ListBool);
+            return $"overlap_count({Gen(list, depth)}, {Gen(list, depth)})";
         }
 
         private string Num(int depth) => Gen(random.Next(3) == 0 ? K.Int : K.Float, depth);
@@ -534,6 +585,8 @@ public class DifferentialTests(ITestOutputHelper output)
         }
 
         private string Pick(params string[] options) => options[random.Next(options.Length)];
+
+        private K Pick(params K[] options) => options[random.Next(options.Length)];
 
         private string Leaf(K kind)
         {
@@ -556,6 +609,8 @@ public class DifferentialTests(ITestOutputHelper output)
                 K.Str => Pick("'a'", "'b'", "''", "'zz'"),
                 K.ListInt => "[1, 2, 7]",
                 K.ListStr => "['a', 'zz']",
+                K.ListFloat => Pick("[0.5, 1.0, -1.0]", "[2, 0.5]", "[2, 1]"), // an integer literal is a float list where one is expected
+                K.ListBool => "[true]",
                 _ => null,
             };
             if (literal is not null && (candidates.Count == 0 || random.Next(4) == 0))

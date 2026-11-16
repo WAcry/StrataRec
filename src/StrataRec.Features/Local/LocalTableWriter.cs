@@ -307,7 +307,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     {
         CheckOpen(token);
         CheckField(field);
-        if (_layout.Kinds[field] is not (StorageKind.ListInt32 or StorageKind.ListInt64 or StorageKind.ListString))
+        if (_layout.Kinds[field] != StorageKind.List)
         {
             throw KindMismatch(field, "StartList");
         }
@@ -319,24 +319,29 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         MarkWritten(field, valid: true);
     }
 
-    internal void AddInt32Item(int token, int field, int value)
+    /// <summary>An item of the open list of fixed-size elements (bool, int32, int64, float32, float64), stored natively.</summary>
+    internal void AddItem<T>(int token, int field, T value, string method)
+        where T : unmanaged
     {
-        CheckListItem(token, field, StorageKind.ListInt32, "AddInt32Item");
-        MemoryMarshal.Write(_pending.Reserve(4, 4, out _), in value);
+        CheckListItem(token, field, ColumnValues.ElementKind<T>(), method);
+        MemoryMarshal.Write(_pending.Reserve(Unsafe.SizeOf<T>(), Unsafe.SizeOf<T>(), out _), in value);
         _pendingCount[field]++;
     }
 
-    internal void AddInt64Item(int token, int field, long value)
+    /// <summary>A whole list of fixed-size elements: <see cref="StartList"/> and one copy of the items.</summary>
+    internal void SetList<T>(int token, int field, ReadOnlySpan<T> value, string method)
+        where T : unmanaged
     {
-        CheckListItem(token, field, StorageKind.ListInt64, "AddInt64Item");
-        MemoryMarshal.Write(_pending.Reserve(8, 8, out _), in value);
-        _pendingCount[field]++;
+        StartList(token, field);
+        CheckListItem(token, field, ColumnValues.ElementKind<T>(), method);
+        MemoryMarshal.AsBytes(value).CopyTo(_pending.Reserve(Unsafe.SizeOf<T>() * value.Length, Unsafe.SizeOf<T>(), out _));
+        _pendingCount[field] = value.Length;
     }
 
     /// <summary>A <c>list&lt;string&gt;</c> item, kept as <c>[int32 length][UTF-16 chars]</c> until commit encodes it.</summary>
     internal void AddStringItem(int token, int field, ReadOnlySpan<char> item)
     {
-        CheckListItem(token, field, StorageKind.ListString, "AddStringItem");
+        CheckListItem(token, field, StorageKind.String, "AddStringItem");
         var staged = _pending.Reserve(RecordLayout.Align(4 + (2 * item.Length), 4), 4, out _);
         var length = item.Length;
         MemoryMarshal.Write(staged, in length);
@@ -426,13 +431,12 @@ public sealed class LocalTableWriter : IFeatureTableWriter
                 continue;
             }
 
-            var kind = _layout.Kinds[f];
-            var elementSize = RecordLayout.ElementSize(kind);
+            var elementSize = _layout.ElementSizes[f];
             int count;
             if (Bits.Get(_written, f))
             {
                 count = _pendingCount[f];
-                if (kind == StorageKind.ListString)
+                if (_layout.Kinds[f] == StorageKind.List && _layout.IsCoded(f))
                 {
                     EncodeStringItems(f, MemoryMarshal.Cast<byte, int>(page.AsSpan(offset + cursor, 4 * count)));
                 }
@@ -604,7 +608,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
                 count = 0;
             }
 
-            size += RecordLayout.Align(count * RecordLayout.ElementSize(_layout.Kinds[f]), 8);
+            size += RecordLayout.Align(count * _layout.ElementSizes[f], 8);
         }
 
         if (_layout.StringKeys)
@@ -716,8 +720,9 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             {
                 CountNewString(version, set, _pendingStart[f], _pendingCount[f], ref count, ref objectBytes);
             }
-            else if (_layout.Kinds[f] == StorageKind.ListString)
+            else
             {
+                // A list<string>: its staged items.
                 var at = _pendingStart[f];
                 for (var i = 0; i < _pendingCount[f]; i++)
                 {
@@ -873,8 +878,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         for (var f = 0; f < _layout.FieldCount; f++)
         {
             var kind = _layout.Kinds[f];
-            if (kind is not (StorageKind.String or StorageKind.ListString)
-                || (page[offset + RecordLayout.ValidityOffset + (f >> 3)] & (1 << (f & 7))) == 0)
+            if (!_layout.IsCoded(f) || (page[offset + RecordLayout.ValidityOffset + (f >> 3)] & (1 << (f & 7))) == 0)
             {
                 continue;
             }
@@ -1013,11 +1017,11 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         _openList = -1;
     }
 
-    private void CheckListItem(int token, int field, StorageKind kind, string method)
+    private void CheckListItem(int token, int field, StorageKind element, string method)
     {
         CheckOpen(token);
         CheckField(field);
-        if (_layout.Kinds[field] != kind)
+        if (_layout.Kinds[field] != StorageKind.List || _layout.Elements[field] != element)
         {
             throw KindMismatch(field, method);
         }
@@ -1049,9 +1053,15 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             StorageKind.Float64 => "SetFloat64",
             StorageKind.String or StorageKind.Text => "SetString",
             StorageKind.Vector => "SetVector",
-            StorageKind.ListInt32 => "SetInt32List",
-            StorageKind.ListInt64 => "SetInt64List",
-            _ => "SetStringList",
+            _ => type.Element switch
+            {
+                StorageKind.Bool => "SetBoolList or AddBoolItem",
+                StorageKind.Int32 => "SetInt32List or AddInt32Item",
+                StorageKind.Int64 => "SetInt64List or AddInt64Item",
+                StorageKind.Float32 => "SetFloat32List or AddFloat32Item",
+                StorageKind.Float64 => "SetFloat64List or AddFloat64Item",
+                _ => "SetStringList or AddStringItem",
+            },
         };
         return new InvalidOperationException($"Field {field} ('{Schema.Fields[field].Name}') is {type}; {method} does not match it (use {setter}).");
     }
@@ -1162,24 +1172,30 @@ public readonly struct RecordBuilder
     /// so write all N elements.</summary>
     public Span<float> VectorBuffer(int field) => Writer.VectorBuffer(_token, field);
 
-    public void SetInt32List(int field, ReadOnlySpan<int> value)
-    {
-        Writer.StartList(_token, field);
-        foreach (var item in value)
-        {
-            Writer.AddInt32Item(_token, field, item);
-        }
-    }
+    /// <summary>A <c>list&lt;bool&gt;</c> value.</summary>
+    /// <remarks>One setter per element type, as for scalars: the field's declared element type decides, and a setter of
+    /// another element type throws and names the right one.</remarks>
+    public void SetBoolList(int field, ReadOnlySpan<bool> value) => Writer.SetList(_token, field, value, nameof(SetBoolList));
 
-    public void SetInt64List(int field, ReadOnlySpan<long> value)
-    {
-        Writer.StartList(_token, field);
-        foreach (var item in value)
-        {
-            Writer.AddInt64Item(_token, field, item);
-        }
-    }
+    /// <summary>A <c>list&lt;int32&gt;</c> value.</summary>
+    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
+    public void SetInt32List(int field, ReadOnlySpan<int> value) => Writer.SetList(_token, field, value, nameof(SetInt32List));
 
+    /// <summary>A <c>list&lt;int64&gt;</c> value.</summary>
+    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
+    public void SetInt64List(int field, ReadOnlySpan<long> value) => Writer.SetList(_token, field, value, nameof(SetInt64List));
+
+    /// <summary>A <c>list&lt;float32&gt;</c> value, stored as given: a list holding NaN or ±∞ is kept, and the read path
+    /// replaces it like backfill does.</summary>
+    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
+    public void SetFloat32List(int field, ReadOnlySpan<float> value) => Writer.SetList(_token, field, value, nameof(SetFloat32List));
+
+    /// <summary>A <c>list&lt;float64&gt;</c> value, stored as given (see <see cref="SetFloat32List"/>).</summary>
+    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
+    public void SetFloat64List(int field, ReadOnlySpan<double> value) => Writer.SetList(_token, field, value, nameof(SetFloat64List));
+
+    /// <summary>A <c>list&lt;string&gt;</c> value; no element may be null.</summary>
+    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
     public void SetStringList(int field, ReadOnlySpan<string> value)
     {
         Writer.StartList(_token, field);
@@ -1190,12 +1206,23 @@ public readonly struct RecordBuilder
         }
     }
 
-    /// <summary>Starts a list value (empty until items are added); add its items before setting another field.</summary>
+    /// <summary>A list of fixed-size elements of the field's element storage (the cache's records hold them so).</summary>
+    internal void SetList<T>(int field, ReadOnlySpan<T> value)
+        where T : unmanaged => Writer.SetList(_token, field, value, "SetList");
+
+    /// <summary>Starts a list value (empty until items are added), for a source that decodes items one at a time; add
+    /// its items with the adder of the field's element type before setting another field.</summary>
     public void StartList(int field) => Writer.StartList(_token, field);
 
-    public void AddInt32Item(int field, int item) => Writer.AddInt32Item(_token, field, item);
+    public void AddBoolItem(int field, bool item) => Writer.AddItem(_token, field, item, nameof(AddBoolItem));
 
-    public void AddInt64Item(int field, long item) => Writer.AddInt64Item(_token, field, item);
+    public void AddInt32Item(int field, int item) => Writer.AddItem(_token, field, item, nameof(AddInt32Item));
+
+    public void AddInt64Item(int field, long item) => Writer.AddItem(_token, field, item, nameof(AddInt64Item));
+
+    public void AddFloat32Item(int field, float item) => Writer.AddItem(_token, field, item, nameof(AddFloat32Item));
+
+    public void AddFloat64Item(int field, double item) => Writer.AddItem(_token, field, item, nameof(AddFloat64Item));
 
     public void AddStringItem(int field, ReadOnlySpan<char> item) => Writer.AddStringItem(_token, field, item);
 
@@ -1233,8 +1260,17 @@ public readonly struct RecordBuilder
             case StorageKind.Float64: SetFloat64(field, value.AsFloat64()); break;
             case StorageKind.String or StorageKind.Text: SetString(field, value.AsString()); break;
             case StorageKind.Vector: SetVector(field, value.AsVector()); break;
-            case StorageKind.ListInt64: SetInt64List(field, value.AsInt64List()); break;
-            case StorageKind.ListInt32:
+            case StorageKind.List: SetList(field, type, value); break;
+            default: throw new InvalidOperationException($"Unsupported field type {type}.");
+        }
+    }
+
+    private void SetList(int field, ColumnType type, in Core.Values.ScalarValue value)
+    {
+        switch (type.Element)
+        {
+            case StorageKind.Bool: SetBoolList(field, value.AsBoolList()); break;
+            case StorageKind.Int32:
                 var longs = value.AsInt64List();
                 if (!Int32Range.AllFit(longs))
                 {
@@ -1248,8 +1284,17 @@ public readonly struct RecordBuilder
                 }
 
                 break;
-            case StorageKind.ListString: SetStringList(field, value.AsStringList()); break;
-            default: throw new InvalidOperationException($"Unsupported field type {type}.");
+            case StorageKind.Int64: SetInt64List(field, value.AsInt64List()); break;
+            case StorageKind.Float32:
+                StartList(field);
+                foreach (var item in value.AsFloat64List())
+                {
+                    AddFloat32Item(field, (float)item);
+                }
+
+                break;
+            case StorageKind.Float64: SetFloat64List(field, value.AsFloat64List()); break;
+            default: SetStringList(field, value.AsStringList()); break;
         }
     }
 

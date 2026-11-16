@@ -177,7 +177,7 @@ internal sealed class Optimizer
         var values = new ScalarValue[node.Args.Length];
         for (var i = 0; i < values.Length; i++)
         {
-            if (!node.Args[i].IsConst || node.Args[i].Type.Kind == TypeKind.ListFloat)
+            if (!node.Args[i].IsConst)
             {
                 return false;
             }

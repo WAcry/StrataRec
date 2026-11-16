@@ -258,20 +258,19 @@ internal static class Output
 
                 json.WriteEndArray();
                 break;
-            case StorageKind.ListInt64: // also list<int32> values: ScalarValue holds them promoted
+            case StorageKind.List:
+                // Each element as a value of its element type is (list<int32> and list<float32> are held promoted).
                 json.WriteStartArray();
-                foreach (var l in value.AsInt64List())
+                for (var i = 0; i < value.ListLength; i++)
                 {
-                    json.WriteNumberValue(l);
-                }
-
-                json.WriteEndArray();
-                break;
-            case StorageKind.ListString:
-                json.WriteStartArray();
-                foreach (var s in value.AsStringList())
-                {
-                    json.WriteStringValue(s);
+                    WriteValue(json, value.ListElement switch
+                    {
+                        StorageKind.Bool => ScalarValue.FromBool(value.AsBoolList()[i]),
+                        StorageKind.Int64 => ScalarValue.FromInt64(value.AsInt64List()[i]),
+                        StorageKind.Float64 when value.IsFloat32List => ScalarValue.FromFloat32((float)value.AsFloat64List()[i]),
+                        StorageKind.Float64 => ScalarValue.FromFloat64(value.AsFloat64List()[i]),
+                        _ => ScalarValue.FromString(value.AsStringList()[i]),
+                    });
                 }
 
                 json.WriteEndArray();

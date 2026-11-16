@@ -259,22 +259,20 @@ public sealed class EffectivePlan
                 return double.IsFinite(d) ? d : d.ToString(CultureInfo.InvariantCulture);
             case StorageKind.String or StorageKind.Text:
                 return value.AsString();
-            case StorageKind.ListInt64:
-                var longs = new JsonArray();
-                foreach (var l in value.AsInt64List())
+            case StorageKind.List:
+                var list = new JsonArray();
+                for (var i = 0; i < value.ListLength; i++)
                 {
-                    longs.Add(l);
+                    list.Add(value.ListElement switch
+                    {
+                        StorageKind.Bool => JsonValue.Create(value.AsBoolList()[i]),
+                        StorageKind.Int64 => JsonValue.Create(value.AsInt64List()[i]),
+                        StorageKind.Float64 => ToJson(ScalarValue.FromFloat64(value.AsFloat64List()[i])),
+                        _ => JsonValue.Create(value.AsStringList()[i]),
+                    });
                 }
 
-                return longs;
-            case StorageKind.ListString:
-                var strings = new JsonArray();
-                foreach (var s in value.AsStringList())
-                {
-                    strings.Add(s);
-                }
-
-                return strings;
+                return list;
             default:
                 return value.ToString();
         }

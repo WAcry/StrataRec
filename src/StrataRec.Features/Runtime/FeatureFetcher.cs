@@ -1356,7 +1356,7 @@ public sealed partial class FeatureFetcher
     private void StoreContext(FeatureRuntimeInfo info, ScalarValue value)
     {
         var definition = info.Definition;
-        if (value.Kind == StorageKind.Float64 && !double.IsFinite(value.AsFloat64()))
+        if (ColumnValues.IsNonFinite(value))
         {
             AddNonFinite(info, 1);
             value = ScalarValue.Missing;

@@ -70,7 +70,7 @@ public static partial class ExpressionCompiler
             return false;
         }
 
-        binder.CheckResult(bound, ast);
+        bound = binder.CheckResult(bound, ast);
         if (found.Count > 0 || binder.ReadsUnusable)
         {
             return false; // without a diagnostic only for a name declared with an error (IExpressionScope.IsUnusable)

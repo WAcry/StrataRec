@@ -491,9 +491,17 @@ public sealed class TableVersion
             case StorageKind.String: FillString(field, records, rows, maxRow, (DictStringColumn)target, absent, stringMemo); return 0;
             case StorageKind.Text: FillText(field, records, rows, (TextColumn)target, absent); return 0;
             case StorageKind.Vector: FillVector(field, records, rows, maxRow, (VectorColumn)target, absent); return 0;
-            case StorageKind.ListInt32: FillList<int>(field, records, rows, (ListColumn<int>)target, absent); return 0;
-            case StorageKind.ListInt64: FillList<long>(field, records, rows, (ListColumn<long>)target, absent); return 0;
-            case StorageKind.ListString: FillStringList(field, records, rows, (ListColumn<string>)target, absent); return 0;
+            case StorageKind.List:
+                switch (_layout.Elements[field])
+                {
+                    case StorageKind.Bool: return FillList(field, records, rows, (ListColumn<bool>)target, absent);
+                    case StorageKind.Int32: return FillList(field, records, rows, (ListColumn<int>)target, absent);
+                    case StorageKind.Int64: return FillList(field, records, rows, (ListColumn<long>)target, absent);
+                    case StorageKind.Float32: return FillList(field, records, rows, (ListColumn<float>)target, absent);
+                    case StorageKind.Float64: return FillList(field, records, rows, (ListColumn<double>)target, absent);
+                    default: FillStringList(field, records, rows, (ListColumn<string>)target, absent); return 0;
+                }
+
             default: throw new InvalidOperationException($"Unsupported field kind {_layout.Kinds[field]}.");
         }
     }
@@ -532,7 +540,9 @@ public sealed class TableVersion
         CheckField(field);
         ArgumentNullException.ThrowIfNull(target);
         var kind = _layout.Kinds[field];
-        if (target.Type.Kind != kind || (kind == StorageKind.Vector && target.Type.Dimension != _layout.Dimensions[field]))
+        if (target.Type.Kind != kind
+            || (kind == StorageKind.Vector && target.Type.Dimension != _layout.Dimensions[field])
+            || target.Type.Element != _layout.Elements[field])
         {
             throw new ArgumentException(
                 $"Field '{_layout.Schema.Fields[field].Name}' is {_layout.Schema.Fields[field].Type}; the target column is {target.Type}.", nameof(target));
@@ -611,11 +621,17 @@ public sealed class TableVersion
             case StorageKind.Text: return ScalarValue.FromText(new string(MemoryMarshal.Cast<byte, char>(VarBytes(page, record.Offset, field, 2))));
             case StorageKind.Vector:
                 return ScalarValue.FromVector(MemoryMarshal.Cast<byte, float>(page.AsSpan(at, 4 * _layout.Dimensions[field])).ToArray());
-            case StorageKind.ListInt32:
-                return ScalarValue.FromInt64List(Int32Range.ToInt64Array(MemoryMarshal.Cast<byte, int>(VarBytes(page, record.Offset, field, 4))));
-            case StorageKind.ListInt64:
-                return ScalarValue.FromInt64List(MemoryMarshal.Cast<byte, long>(VarBytes(page, record.Offset, field, 8)).ToArray());
-            case StorageKind.ListString:
+            case StorageKind.List when _layout.Elements[field] != StorageKind.String:
+                var elements = VarBytes(page, record.Offset, field, _layout.ElementSizes[field]);
+                return _layout.Elements[field] switch
+                {
+                    StorageKind.Bool => ColumnValues.ListValue(MemoryMarshal.Cast<byte, bool>(elements)),
+                    StorageKind.Int32 => ColumnValues.ListValue(MemoryMarshal.Cast<byte, int>(elements)),
+                    StorageKind.Int64 => ColumnValues.ListValue(MemoryMarshal.Cast<byte, long>(elements)),
+                    StorageKind.Float32 => ColumnValues.ListValue(MemoryMarshal.Cast<byte, float>(elements)),
+                    _ => ColumnValues.ListValue(MemoryMarshal.Cast<byte, double>(elements)),
+                };
+            case StorageKind.List:
                 var codes = MemoryMarshal.Cast<byte, int>(VarBytes(page, record.Offset, field, 4));
                 var strings = new string[codes.Length];
                 for (var i = 0; i < codes.Length; i++)
@@ -1041,23 +1057,39 @@ public sealed class TableVersion
     private static void MarkMissing(ulong[] words, int row) =>
         Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(words), row >> 6) &= ~(1UL << row);
 
-    private void FillList<T>(int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ListColumn<T> column, in ScalarValue absent)
+    /// <summary>A list of fixed-size elements; a float list holding NaN or ±∞ takes the absent value, as a float does,
+    /// and is counted (the return value).</summary>
+    private int FillList<T>(int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ListColumn<T> column, in ScalarValue absent)
         where T : unmanaged
     {
         var size = Unsafe.SizeOf<T>();
+        var nonFinite = 0;
         for (var i = 0; i < rows.Length; i++)
         {
             var row = rows[i];
             if (records[i].Page is { } page && IsValid(page, records[i].Offset, field))
             {
-                column.Set(row, MemoryMarshal.Cast<byte, T>(VarBytes(page, records[i].Offset, field, size)));
+                var values = MemoryMarshal.Cast<byte, T>(VarBytes(page, records[i].Offset, field, size));
+                if (AllFinite(values))
+                {
+                    column.Set(row, values);
+                    continue;
+                }
+
+                nonFinite++;
             }
-            else
-            {
-                WriteAbsent(column, row, absent);
-            }
+
+            WriteAbsent(column, row, absent);
         }
+
+        return nonFinite;
     }
+
+    /// <summary>True unless a float element is NaN or ±∞; always true for other elements (a constant test per T).</summary>
+    private static bool AllFinite<T>(ReadOnlySpan<T> values)
+        where T : unmanaged =>
+        typeof(T) == typeof(float) ? ColumnValues.AllFinite(MemoryMarshal.Cast<T, float>(values))
+        : typeof(T) != typeof(double) || ColumnValues.AllFinite(MemoryMarshal.Cast<T, double>(values));
 
     private void FillStringList(int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ListColumn<string> column, in ScalarValue absent)
     {

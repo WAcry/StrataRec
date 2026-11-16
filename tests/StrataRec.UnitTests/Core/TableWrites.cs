@@ -17,7 +17,14 @@ namespace StrataRec.UnitTests.Core;
 internal static class TableWrites
 {
     /// <summary>One non-nullable column type of each <see cref="StorageKind"/>; a new kind fails here until it has one.</summary>
-    public static readonly string[] EveryStorageType = Enum.GetValues<StorageKind>().Select(kind => kind switch
+    public static readonly string[] EveryStorageType = Enum.GetValues<StorageKind>().SelectMany(kind => kind switch
+    {
+        // Every element type of a list, so each one's write path is covered.
+        StorageKind.List => new[] { "list<bool>", "list<int32>", "list<int64>", "list<float32>", "list<float64>", "list<string>" },
+        _ => new[] { Scalar(kind) },
+    }).ToArray();
+
+    private static string Scalar(StorageKind kind) => kind switch
     {
         StorageKind.Bool => "bool",
         StorageKind.Int32 => "int32",
@@ -27,11 +34,8 @@ internal static class TableWrites
         StorageKind.String => "string",
         StorageKind.Text => "text",
         StorageKind.Vector => "vec<float32,3>",
-        StorageKind.ListInt32 => "list<int32>",
-        StorageKind.ListInt64 => "list<int64>",
-        StorageKind.ListString => "list<string>",
         _ => throw new NotSupportedException($"Add a column type of storage kind {kind} to the write contract tests."),
-    }).ToArray();
+    };
 
     /// <summary>A present value of the type, different for each <paramref name="n"/> (bool alternates), stored exactly.</summary>
     public static ScalarValue Sample(ColumnType type, int n) => type.Kind switch
@@ -42,8 +46,13 @@ internal static class TableWrites
         StorageKind.String => ScalarValue.FromString("s" + n),
         StorageKind.Text => ScalarValue.FromText("t" + n),
         StorageKind.Vector => ScalarValue.FromVector(Enumerable.Range(0, type.Dimension).Select(i => (float)(n + i)).ToArray()),
-        StorageKind.ListInt32 or StorageKind.ListInt64 => ScalarValue.FromInt64List(new long[] { n, -n, 7 }),
-        StorageKind.ListString => ScalarValue.FromStringList(new[] { "a" + n, "b" }),
+        StorageKind.List => type.Element switch
+        {
+            StorageKind.Bool => ScalarValue.FromBoolList(new[] { n % 2 == 0, true, false }),
+            StorageKind.Int32 or StorageKind.Int64 => ScalarValue.FromInt64List(new long[] { n, -n, 7 }),
+            StorageKind.Float32 or StorageKind.Float64 => ScalarValue.FromFloat64List(new[] { n + 0.5, -0.25, 7 }),
+            _ => ScalarValue.FromStringList(new[] { "a" + n, "b" }),
+        },
         _ => throw new ArgumentOutOfRangeException(nameof(type), type, null),
     };
 

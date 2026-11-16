@@ -519,8 +519,8 @@ public class ExpressionReviewRegressionTests
             values[i] = value.Kind switch
             {
                 0 => null,
-                StorageKind.ListInt64 => value.AsInt64List().ToArray(),
-                StorageKind.ListString => value.AsStringList().ToArray(),
+                StorageKind.List when value.ListElement == StorageKind.Int64 => value.AsInt64List().ToArray(),
+                StorageKind.List => value.AsStringList().ToArray(),
                 StorageKind.Vector => value.AsVector().ToArray(),
                 _ => value.AsFloat64(),
             };
@@ -548,7 +548,7 @@ public class ExpressionReviewRegressionTests
             ref MemoryMarshal.GetReference(first.AsInt64List()), ref MemoryMarshal.GetReference(compiled.EvaluateScalar(f.Context).AsInt64List())));
 
         // The row-level broadcast writes the constant, too.
-        var destination = ColumnBuffer.Create(ColumnType.ListInt64, f.Capacity, f.Memory);
+        var destination = ColumnBuffer.Create(ColumnType.List(StorageKind.Int64), f.Capacity, f.Memory);
         compiled.Evaluate(f.Context, f.Table.Rows.Order, destination);
         ExprAssert.Same(new long[] { 1, 2 }, ExprFixture.Read(destination, 0), "broadcast");
     }

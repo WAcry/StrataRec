@@ -467,9 +467,8 @@ public sealed class LocalTableCache
 
         public void String(int field, ReadOnlySpan<byte> utf8) => builder.SetString(field, Decode(utf8));
 
-        public void Int32List(int field, ReadOnlySpan<int> value) => builder.SetInt32List(field, value);
-
-        public void Int64List(int field, ReadOnlySpan<long> value) => builder.SetInt64List(field, value);
+        public void List<T>(int field, ReadOnlySpan<T> value)
+            where T : unmanaged => builder.SetList(field, value);
 
         public void StringListStart(int field, int count) => builder.StartList(field);
 

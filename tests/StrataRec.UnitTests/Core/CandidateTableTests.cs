@@ -221,7 +221,8 @@ public class CandidateTableTests
     [Theory]
     [InlineData("float32?", StorageKind.Float32, true, 0)]
     [InlineData("vec<float32,64>", StorageKind.Vector, false, 64)]
-    [InlineData("list<int64>", StorageKind.ListInt64, false, 0)]
+    [InlineData("list<int64>", StorageKind.List, false, 0)]
+    [InlineData("list<float32>?", StorageKind.List, true, 0)]
     [InlineData("string", StorageKind.String, false, 0)]
     public void ColumnType_ParseRoundTrips(string text, StorageKind kind, bool nullable, int dim)
     {

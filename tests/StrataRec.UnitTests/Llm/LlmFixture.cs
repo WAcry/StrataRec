@@ -28,11 +28,12 @@ internal static class LlmFixture
     /// <summary>
     /// The items: title (string), blurb (text?, missing for 20 and 40), price (float64), score (float32), stock (int64),
     /// fresh (bool), tags (list&lt;string&gt;?, missing for 50), codes (list&lt;int64&gt;), rating (float32?, missing for
-    /// 10), emb (vec&lt;float32,2&gt;), extra (string, named only by some templates).
+    /// 10), emb (vec&lt;float32,2&gt;), extra (string, named only by some templates), weights (list&lt;float32&gt;, only 10)
+    /// and clicks (list&lt;bool&gt;, only 10).
     /// </summary>
     private const string Items = """
         {
-          "10": { "title": "Red \"shoes\"", "blurb": "Bright & bold", "price": 19.99, "score": 0.1, "stock": 3, "fresh": true, "tags": ["red", "shoe"], "codes": [7, -9007199254740993], "emb": [1, 2], "extra": "x10" },
+          "10": { "title": "Red \"shoes\"", "blurb": "Bright & bold", "price": 19.99, "score": 0.1, "stock": 3, "fresh": true, "tags": ["red", "shoe"], "codes": [7, -9007199254740993], "emb": [1, 2], "extra": "x10", "weights": [0.1, -2.5], "clicks": [true, false] },
           "20": { "title": "Blue hat", "price": 5, "score": 0.25, "stock": 0, "fresh": false, "tags": [], "codes": [], "rating": 4.5, "emb": [1, 2], "extra": "x20" },
           "30": { "title": "Green\nscarf", "blurb": "Warm", "price": 1e-7, "score": 3.4028235e38, "stock": -12, "fresh": true, "tags": ["green"], "codes": [1], "rating": 0.1, "emb": [1, 2], "extra": "x30" },
           "40": { "title": "Tea", "price": 2.5, "score": 1, "stock": 9007199254740993, "fresh": false, "tags": ["drink"], "codes": [2, 3], "rating": 3, "emb": [1, 2], "extra": "x40" },
@@ -63,7 +64,9 @@ internal static class LlmFixture
         .Set("budget", ScalarValue.FromFloat64(0.1f))
         .Set("vip", true)
         .Set("interests", ScalarValue.FromStringList(new[] { "tea", "lamps" }))
-        .Set("ids", ScalarValue.FromInt64List(new[] { 3L, -4L }));
+        .Set("ids", ScalarValue.FromInt64List(new[] { 3L, -4L }))
+        .Set("weights", new[] { 0.1, 1e-7 })
+        .Set("flags", new[] { false, true });
 
     /// <summary>
     /// Compiles the workspace with node <c>rank</c> running <paramref name="op"/> with <paramref name="config"/>; returns
@@ -93,6 +96,8 @@ internal static class LlmFixture
                 "item.rating": { "type": "float32",        "source": "items", "field": "rating" },
                 "item.emb":    { "type": "vec<float32,2>", "source": "items", "field": "emb",    "default": [0, 0] },
                 "item.extra":  { "type": "string",         "source": "items", "field": "extra",  "default": "" },
+                "item.weights": { "type": "list<float32>", "source": "items", "field": "weights" },
+                "item.clicks": { "type": "list<bool>",     "source": "items", "field": "clicks" },
                 "user.name":   { "type": "string",         "source": "users", "field": "name" },
                 "user.tier":   { "type": "int64",          "source": "users", "field": "tier",   "default": 0 } } }
             """);
@@ -108,7 +113,8 @@ internal static class LlmFixture
             { "pipeline_id": "p", "entity_key_type": "{{(stringKeys ? "string" : "int64")}}",
               "request_schema": {
                 "user_id": { "type": "int64" }, "query": { "type": "string" }, "budget": { "type": "float32" }, "vip": { "type": "bool" },
-                "interests": { "type": "list<string>" }, "ids": { "type": "list<int64>" }, "nickname": { "type": "string?" } },
+                "interests": { "type": "list<string>" }, "ids": { "type": "list<int64>" }, "nickname": { "type": "string?" },
+                "weights": { "type": "list<float32>?" }, "flags": { "type": "list<bool>?" } },
               "param_schema": {
                 "quotas": { "type": "map<string,int64>" }, "k": { "type": "int64" }, "tone": { "type": "string" }, "boost": { "type": "float64" },
                 {{AllowedVersions}} },

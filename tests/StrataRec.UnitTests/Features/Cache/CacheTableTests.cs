@@ -104,7 +104,7 @@ public class CacheTableTests
         var schema = new LocalTableSchema("s", "e", EntityKeyType.String, LocalTableMode.Cache,
         [
             new("b", ColumnType.Bool), new("f32", ColumnType.Float32), new("f64", ColumnType.Float64), new("i32", ColumnType.Int32),
-            new("i64", ColumnType.Int64), new("li32", ColumnType.ListInt32), new("li64", ColumnType.ListInt64), new("ls", ColumnType.ListString),
+            new("i64", ColumnType.Int64), new("li32", ColumnType.List(StorageKind.Int32)), new("li64", ColumnType.List(StorageKind.Int64)), new("ls", ColumnType.List(StorageKind.String)),
             new("s", ColumnType.String), new("t", ColumnType.Text), new("v", ColumnType.Vector(3)),
         ]);
         var layout = new CacheRecordLayout(schema);
@@ -114,8 +114,8 @@ public class CacheTableTests
         writer.Float32(1, float.NaN);
         writer.Int32(3, int.MinValue);
         writer.Int64(4, long.MaxValue);
-        writer.Int32List(5, [1, -1]);
-        writer.Int64List(6, []);
+        writer.List<int>(5, [1, -1]);
+        writer.List<long>(6, []);
         writer.StringList(7, ["", "zé", "✓"]);
         writer.String(8, "music");
         writer.String(9, "");
@@ -141,6 +141,37 @@ public class CacheTableTests
     }
 
     [Fact]
+    public void TheCodec_RoundTripsListsOfEveryElementType_AndRefusesABoolByteItDidNotWrite()
+    {
+        var schema = new LocalTableSchema("s", "e", EntityKeyType.Int64, LocalTableMode.Cache,
+        [
+            new("lb", ColumnType.List(StorageKind.Bool)), new("lf32", ColumnType.List(StorageKind.Float32)),
+            new("lf64", ColumnType.List(StorageKind.Float64)), new("ls", ColumnType.List(StorageKind.String)),
+        ]);
+        var layout = new CacheRecordLayout(schema);
+        var writer = new CacheRecordWriter(layout, 8);
+        writer.Begin(1, layout.Fingerprint, absent: false);
+        writer.List<bool>(0, [true, false, true]);
+        writer.List<float>(1, [0.5f, float.NaN]);
+        writer.List<double>(2, [0.1, -2]);
+        writer.StringList(3, ["a"]);
+        var (offset, length) = writer.End();
+        var record = writer.Bytes.AsSpan(offset, length).ToArray();
+
+        var visitor = new Describe(["lb", "lf32", "lf64", "ls"]);
+        Assert.True(CacheRecord.Read(record, layout, ref visitor));
+        Assert.Equal("lb=[True,False,True] lf32=[0.5,NaN] lf64=[0.1,-2] ls=[a]", visitor.Text);
+
+        // The first bool is the byte after the record's prefix and the list's count; a 2 there is not a bool this codec wrote.
+        record[CacheRecord.PrefixSize(layout.FieldCount) + 4] = 2;
+        Assert.False(CacheRecord.IsWellFormed(record, layout));
+
+        // A writer refuses a list of another element type than the field's.
+        writer.Begin(1, layout.Fingerprint, absent: false);
+        Assert.Throws<ArgumentException>(() => writer.List<double>(1, [1.0]));
+    }
+
+    [Fact]
     public void TheFingerprint_CoversTheKeyType_TheFieldNames_AndTheirTypes()
     {
         var fingerprints = new[]
@@ -163,7 +194,7 @@ public class CacheTableTests
     public void Decoding_NeverThrows_OnBytesThatAreNotARecord()
     {
         var layout = new CacheRecordLayout(new LocalTableSchema("s", "e", EntityKeyType.Int64, LocalTableMode.Cache,
-            [new("ls", ColumnType.ListString), new("t", ColumnType.Text), new("v", ColumnType.Vector(2)), new("li64", ColumnType.ListInt64)]));
+            [new("ls", ColumnType.List(StorageKind.String)), new("t", ColumnType.Text), new("v", ColumnType.Vector(2)), new("li64", ColumnType.List(StorageKind.Int64))]));
         var random = new Random(7);
         for (var i = 0; i < 20_000; i++)
         {
@@ -255,6 +286,13 @@ public class CacheTableTests
     private struct Describe : ICacheRecordVisitor
     {
         private static readonly string[] Names = ["b", "f32", "f64", "i32", "i64", "li32", "li64", "ls", "s", "t", "v"];
+        private readonly string[]? _names;
+
+        public Describe(string[] names)
+        {
+            _names = names;
+            Text = null!;
+        }
         private List<string>? _items;
 
         public string Text { get; private set; }
@@ -275,9 +313,8 @@ public class CacheTableTests
 
         public void String(int field, ReadOnlySpan<byte> utf8) => Add(field, System.Text.Encoding.UTF8.GetString(utf8));
 
-        public void Int32List(int field, ReadOnlySpan<int> value) => Add(field, "[" + string.Join(",", value.ToArray()) + "]");
-
-        public void Int64List(int field, ReadOnlySpan<long> value) => Add(field, "[" + string.Join(",", value.ToArray()) + "]");
+        public void List<T>(int field, ReadOnlySpan<T> value)
+            where T : unmanaged => Add(field, "[" + string.Join(",", value.ToArray()) + "]");
 
         public void StringListStart(int field, int count) => _items = new List<string>();
 
@@ -285,7 +322,7 @@ public class CacheTableTests
 
         public void StringListEnd(int field) => Add(field, "[" + string.Join(",", _items!) + "]");
 
-        private void Add(int field, string value) => Text = (Text is null ? string.Empty : Text + " ") + Names[field] + "=" + value;
+        private void Add(int field, string value) => Text = (Text is null ? string.Empty : Text + " ") + (_names ?? Names)[field] + "=" + value;
     }
 }
 

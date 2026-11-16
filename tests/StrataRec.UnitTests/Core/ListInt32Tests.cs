@@ -11,15 +11,16 @@ namespace StrataRec.UnitTests.Core;
 public class ListInt32Tests
 {
     [Theory]
-    [InlineData("list<int32>", StorageKind.ListInt32, false)]
-    [InlineData("list<int32>?", StorageKind.ListInt32, true)]
-    [InlineData(" list<int32> ? ", StorageKind.ListInt32, true)]
-    [InlineData("list<int64>", StorageKind.ListInt64, false)]
-    public void Type_ParsesAndPrints(string text, StorageKind kind, bool nullable)
+    [InlineData("list<int32>", StorageKind.Int32, false)]
+    [InlineData("list<int32>?", StorageKind.Int32, true)]
+    [InlineData(" list<int32> ? ", StorageKind.Int32, true)]
+    [InlineData("list<int64>", StorageKind.Int64, false)]
+    public void Type_ParsesAndPrints(string text, StorageKind element, bool nullable)
     {
         var type = ColumnType.Parse(text);
 
-        Assert.Equal(kind, type.Kind);
+        Assert.Equal(StorageKind.List, type.Kind);
+        Assert.Equal(element, type.Element);
         Assert.Equal(nullable, type.Nullable);
         Assert.Equal(text.Replace(" ", string.Empty, StringComparison.Ordinal), type.ToString());
         Assert.Equal(type, ColumnType.Parse(type.ToString()));
@@ -28,23 +29,23 @@ public class ListInt32Tests
     [Fact]
     public void Type_IsAStorageType_PromotedToListInt64_LikeInt32()
     {
-        Assert.Equal(ColumnType.ListInt64, ColumnType.ListInt32.Promoted());
-        Assert.Equal(ColumnType.ListInt64.AsNullable(), ColumnType.ListInt32.AsNullable().Promoted());
+        Assert.Equal(ColumnType.List(StorageKind.Int64), ColumnType.List(StorageKind.Int32).Promoted());
+        Assert.Equal(ColumnType.List(StorageKind.Int64).AsNullable(), ColumnType.List(StorageKind.Int32).AsNullable().Promoted());
         Assert.Equal(ColumnType.Int64, ColumnType.Int32.Promoted());
-        Assert.True(ColumnType.ListInt32.IsInt32Storage);
+        Assert.True(ColumnType.List(StorageKind.Int32).IsInt32Storage);
         Assert.True(ColumnType.Int32.IsInt32Storage);
-        Assert.False(ColumnType.ListInt64.IsInt32Storage);
-        Assert.False(ColumnType.ListInt32.IsNumeric); // a list, not a scalar: no NaN rule, no mandatory default
+        Assert.False(ColumnType.List(StorageKind.Int64).IsInt32Storage);
+        Assert.False(ColumnType.List(StorageKind.Int32).IsNumeric); // a list, not a scalar: no NaN rule, no mandatory default
 
         Assert.False(ColumnType.TryParse("list<int16>", out _, out var error));
-        Assert.Contains("list<int32>", error);
+        Assert.Contains("int32", error);
     }
 
     [Fact]
     public void Column_RoundTripsThroughScalarValues_AsWidenedInt64Lists()
     {
         var memory = new RequestMemory();
-        var column = ColumnBuffer.Create(ColumnType.ListInt32.AsNullable(), 8, memory);
+        var column = ColumnBuffer.Create(ColumnType.List(StorageKind.Int32).AsNullable(), 8, memory);
         var lists = Assert.IsType<ListColumn<int>>(column);
 
         ColumnValues.Set(column, 0, ScalarValue.FromInt64List(new long[] { 1, -2, int.MaxValue, int.MinValue }));
@@ -54,14 +55,14 @@ public class ListInt32Tests
 
         Assert.Equal(new[] { 1, -2, int.MaxValue, int.MinValue }, lists.Get(0).ToArray());
         var first = ColumnValues.Get(column, 0);
-        Assert.Equal(StorageKind.ListInt64, first.Kind); // ScalarValue holds int lists promoted, like int32 values
+        Assert.Equal(StorageKind.Int64, first.ListElement); // ScalarValue holds int lists promoted, like int32 values
         Assert.Equal(new long[] { 1, -2, int.MaxValue, int.MinValue }, first.AsInt64List());
         Assert.True(ColumnValues.Get(column, 1).AsInt64List().IsEmpty);
         Assert.True(ColumnValues.Get(column, 2).IsMissing);
         Assert.Equal(new long[] { 7, 7 }, ColumnValues.Get(column, 3).AsInt64List());
         Assert.Equal(2, lists.LengthOf(3));
 
-        var copy = (ListColumn<int>)ColumnBuffer.Create(ColumnType.ListInt32.AsNullable(), 8, memory);
+        var copy = (ListColumn<int>)ColumnBuffer.Create(ColumnType.List(StorageKind.Int32).AsNullable(), 8, memory);
         copy.CopyFrom(column, 0, 5);
         copy.CopyFrom(column, 2, 6);
         Assert.Equal(new[] { 1, -2, int.MaxValue, int.MinValue }, copy.Get(5).ToArray());
@@ -106,7 +107,7 @@ public class ListInt32Tests
     {
         var memory = new RequestMemory();
         var scalars = (ScalarColumn<int>)ColumnBuffer.Create(ColumnType.Int32, 4, memory);
-        var lists = (ListColumn<int>)ColumnBuffer.Create(ColumnType.ListInt32, 4, memory);
+        var lists = (ListColumn<int>)ColumnBuffer.Create(ColumnType.List(StorageKind.Int32), 4, memory);
         scalars.Set(0, 5);
         lists.Set(0, new[] { 5 });
 
@@ -129,16 +130,16 @@ public class ListInt32Tests
         var wide = ScalarValue.FromInt64List(new long[] { 1, 2147483648 });
         var narrow = ScalarValue.FromInt64List(new long[] { 1, 2147483647 });
 
-        Assert.False(ColumnValues.FitsStorage(wide, ColumnType.ListInt32));
-        Assert.True(ColumnValues.FitsStorage(wide, ColumnType.ListInt64));
-        Assert.True(ColumnValues.FitsStorage(narrow, ColumnType.ListInt32));
+        Assert.False(ColumnValues.FitsStorage(wide, ColumnType.List(StorageKind.Int32)));
+        Assert.True(ColumnValues.FitsStorage(wide, ColumnType.List(StorageKind.Int64)));
+        Assert.True(ColumnValues.FitsStorage(narrow, ColumnType.List(StorageKind.Int32)));
         Assert.False(ColumnValues.FitsStorage(ScalarValue.FromInt64(-2147483649), ColumnType.Int32));
         Assert.True(ColumnValues.FitsStorage(ScalarValue.Missing, ColumnType.Int32));
 
         // Request inputs and parameters are validated with TryConvert: a list<int32> input must fit.
-        Assert.False(wide.TryConvert(ColumnType.ListInt32, out _));
-        Assert.True(narrow.TryConvert(ColumnType.ListInt32, out var converted));
-        Assert.Equal(StorageKind.ListInt64, converted.Kind);
+        Assert.False(wide.TryConvert(ColumnType.List(StorageKind.Int32), out _));
+        Assert.True(narrow.TryConvert(ColumnType.List(StorageKind.Int32), out var converted));
+        Assert.Equal(StorageKind.Int64, converted.ListElement);
         Assert.False(ScalarValue.FromInt64(3_000_000_000).TryConvert(ColumnType.Int32, out _));
         Assert.False(ScalarValue.FromFloat64(3e9).TryConvert(ColumnType.Int32, out _));
         Assert.True(ScalarValue.FromFloat64(-7).TryConvert(ColumnType.Int32, out var seven));

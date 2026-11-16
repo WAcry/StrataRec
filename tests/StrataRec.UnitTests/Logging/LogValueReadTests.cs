@@ -22,6 +22,10 @@ public sealed class LogValueReadTests
         { "list<int64>", ScalarValue.FromInt64List(new long[] { 1, -2, long.MinValue }) },
         { "list<int32>", ScalarValue.FromInt64List(new long[] { int.MaxValue, 0 }) },
         { "list<string>", ScalarValue.FromStringList(new[] { "a", string.Empty }) },
+        { "list<bool>", ScalarValue.FromBoolList(new[] { true, false }) },
+        { "list<float64>", ScalarValue.FromFloat64List(new[] { 0.1, -1e300 }) },
+        { "list<float32>", ScalarValue.FromFloat32List(new[] { 0.1f, 2.5f }) }, // promoted float32 elements survive exactly
+        { "list<float64>", ScalarValue.FromFloat64List(Array.Empty<double>()) },
         { "float64?", ScalarValue.Missing },
     };
 
@@ -45,6 +49,29 @@ public sealed class LogValueReadTests
         Assert.True(LogBatchJson.TryReadValue(document.RootElement, ColumnType.Parse(type), out var value, out _));
         Assert.Equal(double.Parse(json, System.Globalization.CultureInfo.InvariantCulture), value.AsFloat64()); // the value is not narrowed
         Assert.Equal((float32, text), (value.IsFloat32, value.ToString()));
+    }
+
+    [Fact]
+    public void ListElements_AreWrittenAsScalarsOfTheirType()
+    {
+        Assert.Equal("[1,0]", Write(ScalarValue.FromBoolList(new[] { true, false }), nonFiniteAsStrings: false)); // as a bool column is
+        Assert.Equal("[0.10000000149011612]", Write(ScalarValue.FromFloat32List(new[] { 0.1f }), nonFiniteAsStrings: false));
+
+        var read = Read("[0.10000000149011612, 2]", ColumnType.Parse("list<float32>"), nonFiniteAsStrings: false);
+        Assert.True(read.IsFloat32List); // printed as the floats it holds
+        Assert.Equal("[0.1, 2]", read.ToString());
+        Assert.False(Read("[0.1]", ColumnType.Parse("list<float32>"), nonFiniteAsStrings: false).IsFloat32List); // not a float32
+    }
+
+    [Fact]
+    public void AFloatListHoldingNonFiniteElements_IsNullInLogs_AndKeepsTheNamesInBundles()
+    {
+        var list = ScalarValue.FromFloat64List(new[] { 1, double.NaN, double.NegativeInfinity });
+
+        Assert.Equal("null", Write(list, nonFiniteAsStrings: false));
+        var written = Write(list, nonFiniteAsStrings: true);
+        Assert.Equal("[1,\"NaN\",\"-Infinity\"]", written);
+        Assert.Equal(list, Read(written, ColumnType.Parse("list<float64>"), nonFiniteAsStrings: true));
     }
 
     [Fact]
@@ -99,6 +126,9 @@ public sealed class LogValueReadTests
     [InlineData("vec<float32,2>", "[1, 2, 3]")]
     [InlineData("list<int32>", "[1, 4294967296]")]
     [InlineData("list<string>", "[\"a\", 1]")]
+    [InlineData("list<bool>", "[1, 2]")]
+    [InlineData("list<float64>", "[1, \"x\"]")]
+    [InlineData("list<float64>", "[1, \"NaN\"]")]
     public void ValuesThatDoNotFitTheType_AreErrors(string type, string json)
     {
         using var document = JsonDocument.Parse(json);

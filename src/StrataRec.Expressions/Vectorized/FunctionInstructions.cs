@@ -51,6 +51,53 @@ internal readonly ref struct IntListLane
     };
 }
 
+/// <summary>
+/// One lane of a float list operand, viewed in place: float64 elements (<c>list&lt;float64&gt;</c> storage, request-level
+/// values, literals) or float32 elements (<c>list&lt;float32&gt;</c> storage), each meaning the float64 it reads as (design
+/// 4.3), as <see cref="IntListLane"/> does for integers.
+/// </summary>
+internal readonly ref struct FloatListLane
+{
+    public FloatListLane(ReadOnlySpan<double> values)
+    {
+        Float64 = values;
+    }
+
+    public FloatListLane(ReadOnlySpan<float> values)
+    {
+        Float32 = values;
+        IsFloat32 = true;
+    }
+
+    /// <summary>The elements when <see cref="IsFloat32"/> is false.</summary>
+    public ReadOnlySpan<double> Float64 { get; }
+
+    /// <summary>The elements when <see cref="IsFloat32"/> is true.</summary>
+    public ReadOnlySpan<float> Float32 { get; }
+
+    public bool IsFloat32 { get; }
+
+    public int Length => IsFloat32 ? Float32.Length : Float64.Length;
+
+    /// <summary>Membership with <c>==</c>, as the language compares floats.</summary>
+    public bool Contains(double value) => IsFloat32 ? ListOps.Contains(Float32, value) : ListOps.Contains(Float64, value);
+
+    /// <summary><c>overlap_count(this, other)</c>: elements of this list (with multiplicity) that occur in <paramref name="other"/>.</summary>
+    public long OverlapWith(FloatListLane other)
+    {
+        long count = 0;
+        for (var i = 0; i < Length; i++)
+        {
+            if (other.Contains(IsFloat32 ? Float32[i] : Float64[i]))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+}
+
 /// <summary>Per-lane access to vector, list and string operands.</summary>
 internal static class Lanes
 {
@@ -116,6 +163,62 @@ internal static class Lanes
                 return default;
         }
     }
+
+    /// <summary>The list column a list operand reads in place (a plain column reference), or null when its lanes must be
+    /// resolved one by one; as <see cref="DirectIntListColumn"/>, for any element type.</summary>
+    public static ListColumn? DirectListColumn(ref Frame f, Opnd o) => DirectIntListColumn(ref f, o) as ListColumn;
+
+    /// <summary>A float list lane, zero-copy over whichever storage backs it, as <see cref="IntList"/>.</summary>
+    public static FloatListLane FloatList(ref Frame f, Opnd o, int lane)
+    {
+        if (o.IsScalar)
+        {
+            ref var s = ref f.Scalar(o);
+            return s.IsMissing ? default : new FloatListLane(s.AsFloat64List());
+        }
+
+        ref var loc = ref f.Locs[o.Index];
+        switch (loc.Source)
+        {
+            case SourceKind.Column:
+                return loc.SourceRef is ListColumn<float> narrow
+                    ? new FloatListLane(narrow.Get(f.Row(lane)))
+                    : new FloatListLane(((ListColumn<double>)loc.SourceRef!).Get(f.Row(lane)));
+            case SourceKind.Broadcast:
+                return new FloatListLane((double[])loc.SourceRef!);
+            case SourceKind.Select:
+                return FloatList(ref f, Pick(ref loc, lane), lane);
+            default:
+                return default;
+        }
+    }
+
+    public static ReadOnlySpan<bool> BoolList(ref Frame f, Opnd o, int lane)
+    {
+        if (o.IsScalar)
+        {
+            ref var s = ref f.Scalar(o);
+            return s.IsMissing ? default : s.AsBoolList();
+        }
+
+        ref var loc = ref f.Locs[o.Index];
+        return loc.Source switch
+        {
+            SourceKind.Column => ((ListColumn<bool>)loc.SourceRef!).Get(f.Row(lane)),
+            SourceKind.Broadcast => (bool[])loc.SourceRef!,
+            SourceKind.Select => BoolList(ref f, Pick(ref loc, lane), lane),
+            _ => default,
+        };
+    }
+
+    /// <summary>The number of elements of a list lane of <paramref name="kind"/>.</summary>
+    public static int ListLength(ref Frame f, Opnd o, int lane, TypeKind kind) => kind switch
+    {
+        TypeKind.ListBool => BoolList(ref f, o, lane).Length,
+        TypeKind.ListInt => IntList(ref f, o, lane).Length,
+        TypeKind.ListFloat => FloatList(ref f, o, lane).Length,
+        _ => StringList(ref f, o, lane).Length,
+    };
 
     public static ReadOnlySpan<string> StringList(ref Frame f, Opnd o, int lane)
     {
@@ -189,55 +292,33 @@ internal sealed class SizeInstr(TypeKind operandKind, ExprType type, Opnd operan
             return;
         }
 
-        switch (operandKind)
+        if (operandKind == TypeKind.Text)
         {
-            case TypeKind.ListInt:
-                switch (Lanes.DirectIntListColumn(ref f, x))
-                {
-                    case ListColumn<long> c:
-                        Sizes(ref f, c, dst);
-                        break;
-                    case ListColumn<int> c:
-                        Sizes(ref f, c, dst);
-                        break;
-                    default:
-                        for (var i = 0; i < dst.Length; i++)
-                        {
-                            dst[i] = Lanes.IntList(ref f, x, i).Length;
-                        }
-
-                        break;
-                }
-
-                break;
-            case TypeKind.ListString:
-                for (var i = 0; i < dst.Length; i++)
-                {
-                    dst[i] = Lanes.StringList(ref f, x, i).Length;
-                }
-
-                break;
-            default:
-                for (var i = 0; i < dst.Length; i++)
-                {
-                    dst[i] = TextOps.CodePointCount(Lanes.String(ref f, x, i));
-                }
-
-                break;
+            for (var i = 0; i < dst.Length; i++)
+            {
+                dst[i] = TextOps.CodePointCount(Lanes.String(ref f, x, i));
+            }
         }
-    }
-
-    private static void Sizes<T>(ref Frame f, ListColumn<T> column, Span<long> dst)
-    {
-        for (var i = 0; i < dst.Length; i++)
+        else if (Lanes.DirectListColumn(ref f, x) is { } column)
         {
-            dst[i] = column.LengthOf(f.Row(i));
+            for (var i = 0; i < dst.Length; i++)
+            {
+                dst[i] = column.LengthOf(f.Row(i));
+            }
+        }
+        else
+        {
+            for (var i = 0; i < dst.Length; i++)
+            {
+                dst[i] = Lanes.ListLength(ref f, x, i, operandKind);
+            }
         }
     }
 }
 
-/// <summary><c>contains(list, x)</c> / <c>x in list</c> and <c>contains(text, s)</c>. A request-level list is sorted
-/// once per call and probed by binary search.</summary>
+/// <summary><c>contains(list, x)</c> / <c>x in list</c> and <c>contains(text, s)</c>. A request-level int or string list
+/// is sorted once per call and probed by binary search; bool and float lists, which hold attributes rather than ids, are
+/// scanned.</summary>
 internal sealed class ContainsInstr(TypeKind listKind, ExprType type, Opnd list, Opnd element) : Instr(type, list, element)
 {
     private static readonly Comparison<string> Ordinal = string.CompareOrdinal;
@@ -301,6 +382,20 @@ internal sealed class ContainsInstr(TypeKind listKind, ExprType type, Opnd list,
                         }
 
                         break;
+                }
+
+                break;
+            case TypeKind.ListFloat:
+                for (var i = 0; i < n; i++)
+                {
+                    BitKernels.SetBit(dst, i, Lanes.FloatList(ref f, l, i).Contains(Lanes.Float(ref f, x, i)));
+                }
+
+                break;
+            case TypeKind.ListBool:
+                for (var i = 0; i < n; i++)
+                {
+                    BitKernels.SetBit(dst, i, Lanes.BoolList(ref f, l, i).Contains(Lanes.Bool(ref f, x, i)));
                 }
 
                 break;
@@ -441,6 +536,26 @@ internal sealed class OverlapInstr(TypeKind listKind, ExprType type, Opnd first,
         }
 
         var n = f.N;
+        if (listKind == TypeKind.ListFloat)
+        {
+            for (var i = 0; i < n; i++)
+            {
+                dst[i] = Lanes.FloatList(ref f, a, i).OverlapWith(Lanes.FloatList(ref f, b, i));
+            }
+
+            return;
+        }
+
+        if (listKind == TypeKind.ListBool)
+        {
+            for (var i = 0; i < n; i++)
+            {
+                dst[i] = ListOps.Overlap(Lanes.BoolList(ref f, a, i), Lanes.BoolList(ref f, b, i));
+            }
+
+            return;
+        }
+
         if (listKind == TypeKind.ListInt)
         {
             if (b.IsScalar)

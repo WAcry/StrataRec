@@ -73,7 +73,7 @@ internal sealed class Binder
         }
 
         var values = new ScalarValue[list.Items.Length];
-        bool allInt = true, allNumeric = true, allString = true;
+        bool allInt = true, allNumeric = true, allString = true, allBool = true;
         for (var i = 0; i < values.Length; i++)
         {
             var item = list.Items[i];
@@ -85,15 +85,18 @@ internal sealed class Binder
             if (item is not LiteralAst literal)
             {
                 return Fail(ExpressionErrorCodes.TypeMismatch, "List literal elements must be constant literals", item,
-                    "list literals are constant sets, e.g. ['a', 'b'] or [0.0, 0.5, 1.0]");
+                    "list literals are constants, e.g. ['a', 'b'] or [0.0, 0.5, 1.0]");
             }
 
             values[i] = literal.Value;
             allInt &= literal.Value.Kind == StorageKind.Int64;
             allNumeric &= literal.Value.Kind is StorageKind.Int64 or StorageKind.Float64;
             allString &= literal.Value.Kind == StorageKind.String;
+            allBool &= literal.Value.Kind == StorageKind.Bool;
         }
 
+        ScalarValue value;
+        TypeKind kind;
         if (allInt)
         {
             var ints = new long[values.Length];
@@ -102,21 +105,20 @@ internal sealed class Binder
                 ints[i] = values[i].AsInt64();
             }
 
-            return IrNode.Const(ScalarValue.FromInt64List(ints), new ExprType(TypeKind.ListInt, false), list.Start, list.Length);
+            (value, kind) = (ScalarValue.FromInt64List(ints), TypeKind.ListInt);
         }
-
-        if (allNumeric)
+        else if (allNumeric)
         {
+            // Mixed integers and floats are floats, as in arithmetic.
             var floats = new double[values.Length];
             for (var i = 0; i < floats.Length; i++)
             {
                 floats[i] = values[i].AsFloat64();
             }
 
-            return IrNode.Const(default, new ExprType(TypeKind.ListFloat, false), list.Start, list.Length, floats);
+            (value, kind) = (ScalarValue.FromFloat64List(floats), TypeKind.ListFloat);
         }
-
-        if (allString)
+        else if (allString)
         {
             var strings = new string[values.Length];
             for (var i = 0; i < strings.Length; i++)
@@ -124,27 +126,42 @@ internal sealed class Binder
                 strings[i] = values[i].AsString();
             }
 
-            return IrNode.Const(ScalarValue.FromStringList(strings), new ExprType(TypeKind.ListString, false), list.Start, list.Length);
+            (value, kind) = (ScalarValue.FromStringList(strings), TypeKind.ListString);
         }
-
-        // Point at a bool, or at the first element of another kind than the first element.
-        AstNode odd = list.Items[0];
-        for (var i = 1; i < values.Length && Category(values[0]) != 2; i++)
+        else if (allBool)
         {
-            if (Category(values[i]) != Category(values[0]))
+            var bools = new bool[values.Length];
+            for (var i = 0; i < bools.Length; i++)
             {
-                odd = list.Items[i];
-                break;
+                bools[i] = values[i].AsBool();
             }
+
+            (value, kind) = (ScalarValue.FromBoolList(bools), TypeKind.ListBool);
+        }
+        else
+        {
+            // Point at the first element of another kind than the first element.
+            AstNode odd = list.Items[0];
+            for (var i = 1; i < values.Length; i++)
+            {
+                if (Category(values[i]) != Category(values[0]))
+                {
+                    odd = list.Items[i];
+                    break;
+                }
+            }
+
+            return FailAt(odd, ExpressionErrorCodes.TypeMismatch, "List literal elements must all be numbers, all strings or all bools", list);
         }
 
-        return FailAt(odd, ExpressionErrorCodes.TypeMismatch, "List literal elements must all be numbers or all be strings", list);
+        return IrNode.Const(value, new ExprType(kind, false), list.Start, list.Length);
 
         static int Category(in ScalarValue v) => v.Kind switch
         {
             StorageKind.String => 0,
             StorageKind.Int64 or StorageKind.Float64 => 1,
-            _ => 2,
+            StorageKind.Bool => 2,
+            _ => 3,
         };
     }
 
@@ -340,6 +357,7 @@ internal sealed class Binder
         {
             case BinaryOp.Coalesce:
             {
+                AdaptListLiterals(ref l, ref r);
                 if (!TryUnify(l.Type, r.Type, out var kind, out var dim))
                 {
                     // The left side is the value read; the right one, its default, is what disagrees.
@@ -476,6 +494,7 @@ internal sealed class Binder
                 cond.Type.IsNumeric ? "compare explicitly, e.g. 'x > 0.0 ? a : b'" : null);
         }
 
+        AdaptListLiterals(ref a, ref b);
         if (!TryUnify(a.Type, b.Type, out var kind, out var dim))
         {
             return FailAt(c.Else, ExpressionErrorCodes.TypeMismatch, $"The branches of '?:' have different types: {a.Type} and {b.Type}", c);
@@ -686,7 +705,7 @@ internal sealed class Binder
                 return RequireKind(args[0], TypeKind.Vector, name, call.Args[0]) ? Lift(IrOp.L2Norm, TypeKind.Float, call, args[0]) : Poison(call);
 
             case "size":
-                if (args[0].Type.Kind is TypeKind.ListInt or TypeKind.ListString or TypeKind.Text)
+                if (args[0].Type.IsList || args[0].Type.Kind == TypeKind.Text)
                 {
                     return Lift(IrOp.Size, TypeKind.Int, call, args[0]);
                 }
@@ -698,6 +717,7 @@ internal sealed class Binder
                 return BindContains(args[0], call.Args[0], args[1], call.Args[1], call, isIn: false);
 
             case "overlap_count":
+                AdaptListLiterals(ref args[0], ref args[1]);
                 if (args[0].Type.Kind == args[1].Type.Kind && args[0].Type.IsList)
                 {
                     return Lift(IrOp.Overlap, TypeKind.Int, call, args[0], args[1]);
@@ -754,7 +774,7 @@ internal sealed class Binder
             }
             else if (list.Type.Kind is TypeKind.ListInt or TypeKind.ListFloat && x.Type.IsNumeric)
             {
-                set = ConstSet.OfFloats(list.Type.Kind == TypeKind.ListFloat ? (double[])list.Data! : ToDoubles(list.Value.AsInt64List()));
+                set = ConstSet.OfFloats(list.Type.Kind == TypeKind.ListFloat ? list.Value.AsFloat64List().ToArray() : ToDoubles(list.Value.AsInt64List()));
                 element = ToFloat(x);
             }
 
@@ -763,11 +783,14 @@ internal sealed class Binder
                 return IrNode.Make(IrOp.InSet, new ExprType(TypeKind.Bool, element.Type.Nullable), new[] { element }, at.Start, at.Length, set);
             }
         }
-        else if ((list.Type.Kind == TypeKind.ListInt && x.Type.Kind == TypeKind.Int)
-                 || (list.Type.Kind == TypeKind.ListString && x.Type.Kind == TypeKind.String)
+        else if ((list.Type.IsList && x.Type.Kind == ExprType.ElementKind(list.Type.Kind))
                  || (!isIn && list.Type.Kind == TypeKind.Text && x.Type.Kind is TypeKind.String or TypeKind.Text))
         {
             return Lift(IrOp.Contains, TypeKind.Bool, at, list, x);
+        }
+        else if (list.Type.Kind == TypeKind.ListFloat && x.Type.Kind == TypeKind.Int)
+        {
+            return Lift(IrOp.Contains, TypeKind.Bool, at, list, ToFloat(x)); // an int64 compares as a float64, as in ==
         }
 
         var hint = list.Type.Kind == TypeKind.Text && isIn ? "use contains(text, s) for substring tests" : null;
@@ -883,7 +906,7 @@ internal sealed class Binder
     {
         if (list.IsConst && list.Type.Kind == TypeKind.ListFloat)
         {
-            return (double[])list.Data!;
+            return list.Value.AsFloat64List().ToArray();
         }
 
         if (list.IsConst && list.Type.Kind == TypeKind.ListInt)
@@ -898,19 +921,18 @@ internal sealed class Binder
     // ----------------------------------------------------------------------------------------------------------
     // Result checks (design 7.4 rule 4)
 
-    /// <summary>Checks the bound result against the site's requirements.</summary>
-    public void CheckResult(IrNode root, AstNode ast)
+    /// <summary>Checks the bound result against the site's requirements; returns the result, with an integer list
+    /// literal written for a float list site turned into that float list (<see cref="AsFloatList"/>).</summary>
+    public IrNode CheckResult(IrNode root, AstNode ast)
     {
         if (root.Type.IsError)
         {
-            return;
+            return root;
         }
 
-        if (root.Type.Kind == TypeKind.ListFloat)
+        if (_options.ExpectedType is { IsList: true } list && list.ElementType.IsFloat)
         {
-            Report(ExpressionErrorCodes.TypeMismatch, "A float list literal cannot be an expression result", ast.Start, ast.Length,
-                "float lists are only used with 'in' and piecewise_linear");
-            return;
+            root = AsFloatList(root);
         }
 
         if (_options.ExpectedType is { } expected && !Accepts(expected, root.Type))
@@ -928,10 +950,14 @@ internal sealed class Binder
             {
                 hint = "float results cannot be written to integer columns";
             }
+            else if (expected.IsList && expected.ElementType.IsFloat && root.Type.Kind == TypeKind.ListInt)
+            {
+                hint = $"an int64 list is not converted to a float list; declare the site as {ColumnType.List(StorageKind.Int64).AsNonNullable()}, or read a float list";
+            }
 
             Report(ExpressionErrorCodes.TypeMismatch, $"The expression has type {root.Type.WithNullable(false)} but this site expects {expected.AsNonNullable()}",
                 ast.Start, ast.Length, hint);
-            return;
+            return root;
         }
 
         // A computed value outside the int32 range is replaced at run time (design 4.3); a constant one can only be a
@@ -941,12 +967,72 @@ internal sealed class Binder
             Report(ExpressionErrorCodes.InvalidArgument,
                 $"The constant {root.Value} does not fit this site's {narrow.AsNonNullable()} storage, which holds [{int.MinValue}, {int.MaxValue}]",
                 ast.Start, ast.Length, $"declare the column as {narrow.Promoted().AsNonNullable()}, or use values in the int32 range");
-            return;
+            return root;
         }
 
         if (root.Type.Nullable && !_options.AllowNullableResult)
         {
             ReportNullableResult(root, ast);
+        }
+
+        return root;
+    }
+
+    /// <summary>
+    /// An integer list literal where a float list is expected is that float list, converted here: <c>[1, 2]</c> for a
+    /// <c>list&lt;float32&gt;</c> column, in <c>col.weights ?? [0]</c>, or in <c>overlap_count(col.prices, [10, 20])</c>.
+    /// Like an untyped constant, a literal's numbers take the type the site needs, and so does an expression that only
+    /// chooses between such literals (<c>col.x > 0 ? [1, 2] : [3]</c>, <c>let</c> included). A typed int64 list (a column,
+    /// a feature, an input) is not converted: lists of ids and lists of weights are different data, and mixing them is a
+    /// mistake to report, not to paper over.
+    /// </summary>
+    private static IrNode AsFloatList(IrNode node) =>
+        node.Type.Kind == TypeKind.ListInt && IsLiteralList(node) ? ToFloatList(node) : node;
+
+    /// <summary>An integer list made only of list literals: a literal, or a <c>?:</c> or <c>??</c> choosing between them.</summary>
+    private static bool IsLiteralList(IrNode node) => node.Op switch
+    {
+        IrOp.Const => !node.Value.IsMissing,
+        IrOp.Conditional => IsLiteralList(node.Args[1]) && IsLiteralList(node.Args[2]),
+        IrOp.Coalesce => IsLiteralList(node.Args[0]) && IsLiteralList(node.Args[1]),
+        _ => false,
+    };
+
+    private static IrNode ToFloatList(IrNode node)
+    {
+        var type = new ExprType(TypeKind.ListFloat, node.Type.Nullable);
+        if (node.IsConst)
+        {
+            var ints = node.Value.AsInt64List();
+            var floats = new double[ints.Length];
+            for (var i = 0; i < floats.Length; i++)
+            {
+                floats[i] = ints[i];
+            }
+
+            return IrNode.Const(ScalarValue.FromFloat64List(floats), type, node.Start, node.Length);
+        }
+
+        // A condition stays as it is; the lists it chooses between are converted.
+        var args = (IrNode[])node.Args.Clone();
+        for (var i = node.Op == IrOp.Conditional ? 1 : 0; i < args.Length; i++)
+        {
+            args[i] = ToFloatList(args[i]);
+        }
+
+        return node.WithArgs(args, type);
+    }
+
+    /// <summary>Where one side is a float list, an integer list literal on the other is one too (<see cref="AsFloatList"/>).</summary>
+    private static void AdaptListLiterals(ref IrNode a, ref IrNode b)
+    {
+        if (a.Type.Kind == TypeKind.ListFloat)
+        {
+            b = AsFloatList(b);
+        }
+        else if (b.Type.Kind == TypeKind.ListFloat)
+        {
+            a = AsFloatList(a);
         }
     }
 
@@ -958,8 +1044,7 @@ internal sealed class Binder
         StorageKind.String => actual.Kind == TypeKind.String,
         StorageKind.Text => actual.Kind == TypeKind.Text,
         StorageKind.Vector => actual.Kind == TypeKind.Vector && (expected.Dimension == 0 || actual.Dim == 0 || expected.Dimension == actual.Dim),
-        StorageKind.ListInt64 or StorageKind.ListInt32 => actual.Kind == TypeKind.ListInt,
-        StorageKind.ListString => actual.Kind == TypeKind.ListString,
+        StorageKind.List => actual.Kind == ExprType.FromColumnType(expected).Kind,
         _ => false,
     };
 
@@ -1042,7 +1127,7 @@ internal sealed class Binder
     {
         dim = 0;
         kind = TypeKind.Error;
-        if (a.Kind == b.Kind && a.Kind != TypeKind.ListFloat)
+        if (a.Kind == b.Kind)
         {
             if (a.Kind == TypeKind.Vector)
             {

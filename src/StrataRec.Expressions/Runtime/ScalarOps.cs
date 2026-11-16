@@ -92,16 +92,13 @@ internal static class ScalarOps
             case IrOp.Eq or IrOp.Ne or IrOp.Lt or IrOp.Le or IrOp.Gt or IrOp.Ge:
                 return ScalarValue.FromBool(Compare(node.Op, node.Args[0].Type.Kind, args[0], args[1]));
             case IrOp.Size:
-                return ScalarValue.FromInt64(node.Args[0].Type.Kind switch
-                {
-                    TypeKind.ListInt => args[0].AsInt64List().Length,
-                    TypeKind.ListString => args[0].AsStringList().Length,
-                    _ => TextOps.CodePointCount(args[0].AsString()),
-                });
+                return ScalarValue.FromInt64(node.Args[0].Type.IsList ? args[0].ListLength : TextOps.CodePointCount(args[0].AsString()));
             case IrOp.Contains:
                 return ScalarValue.FromBool(node.Args[0].Type.Kind switch
                 {
+                    TypeKind.ListBool => args[0].AsBoolList().Contains(args[1].AsBool()),
                     TypeKind.ListInt => args[0].AsInt64List().Contains(args[1].AsInt64()),
+                    TypeKind.ListFloat => ListOps.Contains(args[0].AsFloat64List(), args[1].AsFloat64()),
                     TypeKind.ListString => ListOps.Contains(args[0].AsStringList(), args[1].AsString()),
                     _ => args[0].AsString().Contains(args[1].AsString(), StringComparison.Ordinal),
                 });
@@ -117,9 +114,13 @@ internal static class ScalarOps
             }
 
             case IrOp.Overlap:
-                return ScalarValue.FromInt64(node.Args[0].Type.Kind == TypeKind.ListInt
-                    ? ListOps.Overlap(args[0].AsInt64List(), args[1].AsInt64List())
-                    : ListOps.Overlap(args[0].AsStringList(), args[1].AsStringList()));
+                return ScalarValue.FromInt64(node.Args[0].Type.Kind switch
+                {
+                    TypeKind.ListBool => ListOps.Overlap(args[0].AsBoolList(), args[1].AsBoolList()),
+                    TypeKind.ListInt => ListOps.Overlap(args[0].AsInt64List(), args[1].AsInt64List()),
+                    TypeKind.ListFloat => ListOps.Overlap(args[0].AsFloat64List(), args[1].AsFloat64List()),
+                    _ => ListOps.Overlap(args[0].AsStringList(), args[1].AsStringList()),
+                });
             case IrOp.StartsWith:
                 return ScalarValue.FromBool(args[0].AsString().StartsWith(args[1].AsString(), StringComparison.Ordinal));
             case IrOp.EndsWith:
@@ -282,6 +283,65 @@ internal static class ScalarOps
 
 internal static class ListOps
 {
+    /// <summary>float64 membership with <c>==</c>, as the language compares floats (NaN equals nothing).</summary>
+    public static bool Contains(ReadOnlySpan<double> list, double value)
+    {
+        foreach (var v in list)
+        {
+            if (v == value)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>float64 membership in float32 storage, each element compared as the float64 it reads as.</summary>
+    public static bool Contains(ReadOnlySpan<float> list, double value)
+    {
+        foreach (var v in list)
+        {
+            if (v == value)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Number of elements of <paramref name="a"/> (with multiplicity) that occur in <paramref name="b"/>.</summary>
+    public static long Overlap(ReadOnlySpan<bool> a, ReadOnlySpan<bool> b)
+    {
+        bool hasTrue = b.Contains(true), hasFalse = b.Contains(false);
+        long count = 0;
+        foreach (var x in a)
+        {
+            if (x ? hasTrue : hasFalse)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    /// <inheritdoc cref="Overlap(ReadOnlySpan{bool}, ReadOnlySpan{bool})"/>
+    public static long Overlap(ReadOnlySpan<double> a, ReadOnlySpan<double> b)
+    {
+        long count = 0;
+        foreach (var x in a)
+        {
+            if (Contains(b, x))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
     public static bool Contains(ReadOnlySpan<string> list, string value)
     {
         foreach (var s in list)
@@ -465,9 +525,13 @@ internal static class ValueAccess
             case TypeKind.String when value.Kind == StorageKind.String:
             case TypeKind.Text when value.Kind == StorageKind.Text:
             case TypeKind.Vector when value.Kind == StorageKind.Vector:
-            case TypeKind.ListInt when value.Kind == StorageKind.ListInt64:
-            case TypeKind.ListString when value.Kind == StorageKind.ListString:
                 return value;
+            case TypeKind.ListBool or TypeKind.ListInt or TypeKind.ListFloat or TypeKind.ListString
+                when value.ListElement == type.ToColumnType().Element:
+                return value;
+            case TypeKind.ListBool or TypeKind.ListInt or TypeKind.ListFloat or TypeKind.ListString
+                when value.TryConvert(type.ToColumnType(), out var list):
+                return list;
             case TypeKind.Float when value.Kind == StorageKind.Int64:
                 return ScalarValue.FromFloat64(value.AsInt64());
             case TypeKind.Int when value.Kind == StorageKind.Float64 && value.TryConvert(ColumnType.Int64, out var asInt):
@@ -532,9 +596,10 @@ internal static class ValueAccess
             (TypeKind.String, DictStringColumn c) => ScalarValue.FromString(c.Get(row)),
             (TypeKind.Text, TextColumn c) => ScalarValue.FromText(c.Get(row)),
             (TypeKind.Vector, VectorColumn c) => ScalarValue.FromVector(c.Row(row).ToArray()),
-            (TypeKind.ListInt, ListColumn<long> c) => ScalarValue.FromInt64List(c.Get(row).ToArray()),
-            (TypeKind.ListInt, ListColumn<int> c) => ScalarValue.FromInt64List(Int32Range.ToInt64Array(c.Get(row))),
-            (TypeKind.ListString, ListColumn<string> c) => ScalarValue.FromStringList(c.Get(row).ToArray()),
+            (TypeKind.ListBool, ListColumn<bool> c) => ColumnValues.GetList(c, row),
+            (TypeKind.ListInt, ListColumn<long> or ListColumn<int>) => ColumnValues.GetList((ListColumn)buffer, row),
+            (TypeKind.ListFloat, ListColumn<double> or ListColumn<float>) => ColumnValues.GetList((ListColumn)buffer, row),
+            (TypeKind.ListString, ListColumn<string> c) => ColumnValues.GetList(c, row),
             _ => throw ColumnTypeMismatch(symbol, buffer),
         };
     }

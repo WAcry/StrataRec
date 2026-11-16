@@ -272,6 +272,60 @@ public static class RecResultJson
     }
 
     /// <summary>
+    /// A list as a JSON array of its elements, each written as a scalar of its element type is (a float32 list's
+    /// elements as the floats they are, a non-finite element as null, as a vector component).
+    /// </summary>
+    private static void WriteList(Utf8JsonWriter json, in ScalarValue value)
+    {
+        json.WriteStartArray();
+        switch (value.ListElement)
+        {
+            case StorageKind.Bool:
+                foreach (var b in value.AsBoolList())
+                {
+                    json.WriteBooleanValue(b);
+                }
+
+                break;
+            case StorageKind.Int64: // also list<int32> values, held promoted
+                foreach (var number in value.AsInt64List())
+                {
+                    json.WriteNumberValue(number);
+                }
+
+                break;
+            case StorageKind.Float64:
+                var single = value.IsFloat32List;
+                foreach (var number in value.AsFloat64List())
+                {
+                    if (!double.IsFinite(number))
+                    {
+                        json.WriteNullValue();
+                    }
+                    else if (single)
+                    {
+                        json.WriteNumberValue((float)number);
+                    }
+                    else
+                    {
+                        json.WriteNumberValue(number);
+                    }
+                }
+
+                break;
+            default:
+                foreach (var text in value.AsStringList())
+                {
+                    json.WriteStringValue(text);
+                }
+
+                break;
+        }
+
+        json.WriteEndArray();
+    }
+
+    /// <summary>
     /// A value as JSON: missing is <c>null</c>, and so is a non-finite float (or vector component), which JSON cannot
     /// represent; integers exact, floats in their shortest round-trip form, a float32 value (a float32 column's, a vector
     /// component) as the float: <c>0.1</c>, not the double <c>0.10000000149011612</c> it widens to.
@@ -311,23 +365,8 @@ public static class RecResultJson
 
                 json.WriteEndArray();
                 break;
-            case StorageKind.ListInt64: // also list<int32> values, held promoted
-                json.WriteStartArray();
-                foreach (var number in value.AsInt64List())
-                {
-                    json.WriteNumberValue(number);
-                }
-
-                json.WriteEndArray();
-                break;
-            case StorageKind.ListString:
-                json.WriteStartArray();
-                foreach (var text in value.AsStringList())
-                {
-                    json.WriteStringValue(text);
-                }
-
-                json.WriteEndArray();
+            case StorageKind.List:
+                WriteList(json, value);
                 break;
             default: // missing, or a non-finite float
                 json.WriteNullValue();

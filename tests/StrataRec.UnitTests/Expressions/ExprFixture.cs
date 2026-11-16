@@ -241,6 +241,9 @@ internal sealed class ExprFixture
             ListColumn<long> c => ScalarValue.FromInt64List(c.Get(row).ToArray()),
             ListColumn<int> c => ScalarValue.FromInt64List(c.Get(row).ToArray().Select(v => (long)v).ToArray()),
             ListColumn<string> c => ScalarValue.FromStringList(c.Get(row).ToArray()),
+            ListColumn<double> c => ScalarValue.FromFloat64List(c.Get(row).ToArray()),
+            ListColumn<float> c => ScalarValue.FromFloat64List(c.Get(row).ToArray().Select(v => (double)v).ToArray()),
+            ListColumn<bool> c => ScalarValue.FromBoolList(c.Get(row).ToArray()),
             _ => throw new InvalidOperationException(),
         };
     }

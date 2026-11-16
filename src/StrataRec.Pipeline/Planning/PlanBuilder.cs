@@ -1913,11 +1913,20 @@ public sealed class PlanBuilder
                 continue;
             }
 
-            if (!type.Nullable && type.IsNumeric && !hasDefault)
+            // A value the column cannot hold (NaN or ±∞ in float storage, beyond int32 in int32 storage, either in one
+            // element of a list) is replaced on write; a non-nullable column must say with what (design 4.3, 4.6).
+            if (!type.Nullable && (type.IsFloatStorage || type.IsInt32Storage) && !hasDefault)
             {
+                var (replaced, example) = (type.IsFloatStorage, type.IsList) switch
+                {
+                    (true, false) => ("NaN/±∞ writes", "0.0"),
+                    (true, true) => ("a list with a NaN/±∞ element", "[]"),
+                    (false, false) => ("writes outside the int32 range", "0"),
+                    (false, true) => ("a list with an element outside the int32 range", "[]"),
+                };
                 _diagnostics.Error("COLUMN_NEEDS_DEFAULT", artifact, pointer,
-                    $"Non-nullable numeric column '{name}' needs a 'default' (it replaces NaN/±∞ writes, design 4.3).",
-                    "add \"default\": 0.0, or declare the type nullable");
+                    $"Non-nullable column '{name}' of type {type} needs a 'default': it replaces {replaced} (design 4.3).",
+                    $"add \"default\": {example}, or declare the type nullable");
                 schema.MarkUnusable("col." + name);
                 continue;
             }

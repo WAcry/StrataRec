@@ -77,6 +77,14 @@ internal static class ExprAssert
             case string[] list:
                 Assert.Equal(list, actual.AsStringList());
                 break;
+            case double[] list:
+                Assert.False(actual.IsMissing, $"{what}: expected a list, got missing");
+                Assert.Equal(list, actual.AsFloat64List().ToArray());
+                break;
+            case bool[] list:
+                Assert.False(actual.IsMissing, $"{what}: expected a list, got missing");
+                Assert.Equal(list, actual.AsBoolList().ToArray());
+                break;
             case float[] vector:
                 Assert.Equal(vector, actual.AsVector());
                 break;

@@ -59,8 +59,7 @@ public static class ReplayJson
         StorageKind.Float64 => ColumnType.Float64,
         StorageKind.Text => ColumnType.Text,
         StorageKind.Vector => ColumnType.Vector(value.AsVector().Length),
-        StorageKind.ListInt64 => ColumnType.ListInt64,
-        StorageKind.ListString => ColumnType.ListString,
+        StorageKind.List => ColumnType.List(value.ListElement),
         _ => ColumnType.String,
     };
 

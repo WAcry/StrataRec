@@ -264,7 +264,7 @@ public sealed class LogPipelineTests
             Columns = new[]
             {
                 // Values are held promoted (int64 lists), like any int32 value; the column keeps its storage type.
-                new LogColumn("tags", ColumnType.ListInt32.AsNullable(), new[] { ScalarValue.FromInt64List(new long[] { 1, int.MinValue, int.MaxValue }), ScalarValue.Missing }),
+                new LogColumn("tags", ColumnType.List(StorageKind.Int32).AsNullable(), new[] { ScalarValue.FromInt64List(new long[] { 1, int.MinValue, int.MaxValue }), ScalarValue.Missing }),
             },
         };
 

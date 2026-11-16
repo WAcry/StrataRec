@@ -10,7 +10,7 @@ namespace StrataRec.UnitTests.Features.Local;
 public class SnapshotFilesUpdateSourceTests
 {
     private const string FullLine =
-        """{"key": 1, "version": 3, "fields": {"b": true, "i32": -2147483648, "i64": 9223372036854775807, "f32": 0.25, "f64": -1e300, "s": "cat", "t": "multi\nline é", "v": [1, 2.5, -3, 4e-3], "li32": [1, 2147483647], "li64": [-9223372036854775808], "ls": ["a", "b\"q"]}}""";
+        """{"key": 1, "version": 3, "fields": {"b": true, "i32": -2147483648, "i64": 9223372036854775807, "f32": 0.25, "f64": -1e300, "s": "cat", "t": "multi\nline é", "v": [1, 2.5, -3, 4e-3], "li32": [1, 2147483647], "li64": [-9223372036854775808], "ls": ["a", "b\"q"], "lb": [true, false], "lf32": [0.5, "NaN"], "lf64": [1e300, -0.25]}}""";
 
     [Fact]
     public void Load_DecodesEveryTypeAndLineForm()
@@ -48,6 +48,9 @@ public class SnapshotFilesUpdateSourceTests
             ["li32"] = ScalarValue.FromInt64List(new long[] { 1, int.MaxValue }),
             ["li64"] = ScalarValue.FromInt64List(new[] { long.MinValue }),
             ["ls"] = ScalarValue.FromStringList(new[] { "a", "b\"q" }),
+            ["lb"] = ScalarValue.FromBoolList(new[] { true, false }),
+            ["lf32"] = ScalarValue.FromFloat64List(new[] { 0.5, double.NaN }),
+            ["lf64"] = ScalarValue.FromFloat64List(new[] { 1e300, -0.25 }),
         }, table.Schema, ReadRecord(version, table.Schema, EntityKey.FromInt64(1)));
 
         var two = ReadRecord(version, table.Schema, EntityKey.FromInt64(2))!;
@@ -91,6 +94,8 @@ public class SnapshotFilesUpdateSourceTests
         { "{\"key\": 1, \"version\": 1, \"fields\": {\"li64\": [1, 2.5]}}", "/fields/li64/1", "fraction" },
         { "{\"key\": 1, \"version\": 1, \"fields\": {\"ls\": [\"a\", null]}}", "/fields/ls/1", "null" },
         { "{\"key\": 1, \"version\": 1, \"fields\": {\"li64\": 5}}", "/fields/li64", "list<int64>" },
+        { "{\"key\": 1, \"version\": 1, \"fields\": {\"lb\": [true, 1]}}", "/fields/lb/1", "bool" },
+        { "{\"key\": 1, \"version\": 1, \"fields\": {\"lf32\": [1, \"x\"]}}", "/fields/lf32/1", "\"NaN\"" },
         { "{\"key\": 1, \"version\": 1, \"fields\": {\"i64\": 1, \"i64\": 2}}", "/fields/i64", "once" },
         { "{\"key\": \"1\", \"version\": 1}", "/key", "JSON number" },
         { "{\"key\": 1, \"version\": \"7\"}", "/version", "event version" },

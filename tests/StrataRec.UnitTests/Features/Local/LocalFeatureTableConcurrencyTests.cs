@@ -45,13 +45,13 @@ public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
         new("q_i32", ColumnType.Int32),
         new("q_text", ColumnType.Text),
         new("q_vec", ColumnType.Vector(8)),
-        new("q_li64", ColumnType.ListInt64),
-        new("q_ls", ColumnType.ListString),
+        new("q_li64", ColumnType.List(StorageKind.Int64)),
+        new("q_ls", ColumnType.List(StorageKind.String)),
         new("p", ColumnType.Int64),         // key << 32 | stamp
         new("p_f32", ColumnType.Float32),
         new("p_b", ColumnType.Bool),
         new("p_s", ColumnType.String),
-        new("p_li32", ColumnType.ListInt32),
+        new("p_li32", ColumnType.List(StorageKind.Int32)),
     };
 
     private const int Q = 0, QF64 = 1, QI32 = 2, QText = 3, QVec = 4, QLi64 = 5, QLs = 6, P = 7, PF32 = 8, PB = 9, PS = 10, PLi32 = 11;

@@ -109,14 +109,14 @@ internal sealed class IrNode
 
     public IrNode[] Args { get; }
 
-    /// <summary>Constant value (<see cref="IrOp.Const"/>; float list literals keep their values in <see cref="Data"/>).</summary>
+    /// <summary>Constant value (<see cref="IrOp.Const"/>).</summary>
     public ScalarValue Value { get; }
 
     /// <summary>Resolved symbol for <see cref="IrOp.Column"/>, <see cref="IrOp.Context"/>, <see cref="IrOp.Param"/>.</summary>
     public Symbol Symbol { get; }
 
     /// <summary>Compile-time payload: <see cref="ConstSet"/> (InSet), <see cref="Knots"/> (PiecewiseLinear),
-    /// <see cref="ILookupTable"/> (Lookup), <c>double[]</c> (float list literal).</summary>
+    /// <see cref="ILookupTable"/> (Lookup).</summary>
     public object? Data { get; }
 
     /// <summary>Source span used for diagnostics.</summary>

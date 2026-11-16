@@ -47,6 +47,12 @@ public sealed class RequestInputs : IReadOnlyDictionary<string, ScalarValue>
 
     public RequestInputs Set(string name, long[]? value) => Set(name, ScalarValue.FromInt64List(value));
 
+    public RequestInputs Set(string name, double[]? value) => Set(name, ScalarValue.FromFloat64List(value));
+
+    public RequestInputs Set(string name, bool[]? value) => Set(name, ScalarValue.FromBoolList(value));
+
+    public RequestInputs Set(string name, string[]? value) => Set(name, ScalarValue.FromStringList(value));
+
     public bool ContainsKey(string key) => _values.ContainsKey(key);
 
     public bool TryGetValue(string key, [MaybeNullWhen(false)] out ScalarValue value) => _values.TryGetValue(key, out value);

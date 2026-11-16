@@ -263,9 +263,9 @@ public class LocalTableWriterTests
         var schema = Schema(fields: new[]
         {
             new LocalTableField("t", ColumnType.Text),
-            new LocalTableField("li32", ColumnType.ListInt32),
-            new LocalTableField("li64", ColumnType.ListInt64),
-            new LocalTableField("ls", ColumnType.ListString),
+            new LocalTableField("li32", ColumnType.List(StorageKind.Int32)),
+            new LocalTableField("li64", ColumnType.List(StorageKind.Int64)),
+            new LocalTableField("ls", ColumnType.List(StorageKind.String)),
         });
         var table = new LocalFeatureTable(schema);
         var field = schema.FieldIndex(list);
@@ -428,7 +428,7 @@ public class LocalTableWriterTests
         {
             new LocalTableField("t", ColumnType.Text),
             new LocalTableField("s", ColumnType.String),
-            new LocalTableField("li32", ColumnType.ListInt32),
+            new LocalTableField("li32", ColumnType.List(StorageKind.Int32)),
         });
         var options = new LocalFeatureTableOptions { PageSize = 1024, MaxBytes = 34_000, CompactionMinBytes = 512 };
         var table = new LocalFeatureTable(schema, options);

@@ -152,13 +152,13 @@ public class ListInt32Tests
     public void ListInt32_IsTheSameExpressionTypeAsListInt64()
     {
         var f = Lists();
-        Assert.Equal(ColumnType.ListInt64.AsNullable(), f.Compile("col.t32").ResultType);
-        Assert.Equal(ColumnType.ListInt64, f.Compile("col.u32").ResultType);
+        Assert.Equal(ColumnType.List(StorageKind.Int64).AsNullable(), f.Compile("col.t32").ResultType);
+        Assert.Equal(ColumnType.List(StorageKind.Int64), f.Compile("col.u32").ResultType);
 
         // Both widths are accepted where an int list is expected, in either direction.
-        f.Compile("col.u32", new CompileOptions { ExpectedType = ColumnType.ListInt64 });
-        f.Compile("col.t64 ?? [1]", new CompileOptions { ExpectedType = ColumnType.ListInt32 });
-        var error = Assert.Single(f.Errors("['a']", new CompileOptions { ExpectedType = ColumnType.ListInt32 }));
+        f.Compile("col.u32", new CompileOptions { ExpectedType = ColumnType.List(StorageKind.Int64) });
+        f.Compile("col.t64 ?? [1]", new CompileOptions { ExpectedType = ColumnType.List(StorageKind.Int32) });
+        var error = Assert.Single(f.Errors("['a']", new CompileOptions { ExpectedType = ColumnType.List(StorageKind.Int32) }));
         Assert.Equal(ExpressionErrorCodes.TypeMismatch, error.Code);
     }
 
@@ -221,17 +221,17 @@ public class ListInt32Tests
         var rows = new[] { 0, 1, 2 };
 
         // Request-level: one value broadcast to every listed row.
-        var fits = ColumnBuffer.Create(ColumnType.ListInt32, f.Capacity, f.Memory);
+        var fits = ColumnBuffer.Create(ColumnType.List(StorageKind.Int32), f.Capacity, f.Memory);
         f.Compile("[1, -2147483648]").Evaluate(f.Context, rows, fits);
         Assert.All(rows, r => ExprAssert.Same(new long[] { 1, int.MinValue }, ExprFixture.Read(fits, r), $"row {r}"));
         Assert.Equal(0, f.Counters.OutOfRange);
 
-        var wide = ColumnBuffer.Create(ColumnType.ListInt32, f.Capacity, f.Memory);
+        var wide = ColumnBuffer.Create(ColumnType.List(StorageKind.Int32), f.Capacity, f.Memory);
         f.Compile("[1, 5000000000]").Evaluate(f.Context, rows, wide, ScalarValue.FromInt64List(new long[] { 0 }));
         Assert.All(rows, r => ExprAssert.Same(new long[] { 0 }, ExprFixture.Read(wide, r), $"row {r}"));
         Assert.Equal(3, f.Counters.OutOfRange); // once per row
 
-        var missing = ColumnBuffer.Create(ColumnType.ListInt32.AsNullable(), f.Capacity, f.Memory);
+        var missing = ColumnBuffer.Create(ColumnType.List(StorageKind.Int32).AsNullable(), f.Capacity, f.Memory);
         f.Compile("ctx.small > 0 ? [5000000000] : [1]").Evaluate(f.Context, rows, missing);
         Assert.All(rows, r => Assert.False(missing.IsValid(r)));
         Assert.Equal(6, f.Counters.OutOfRange);
@@ -251,7 +251,7 @@ public class ListInt32Tests
     public void ConstantOutOfRange_ForAnInt32Site_IsACompileError_WithAFix()
     {
         var f = Lists();
-        var list = Assert.Single(f.Errors("[1, 5000000000]", new CompileOptions { ExpectedType = ColumnType.ListInt32 }));
+        var list = Assert.Single(f.Errors("[1, 5000000000]", new CompileOptions { ExpectedType = ColumnType.List(StorageKind.Int32) }));
         Assert.Equal(ExpressionErrorCodes.InvalidArgument, list.Code);
         Assert.Equal(0, list.Offset);
         Assert.Contains("list<int32>", list.Message);
@@ -261,7 +261,7 @@ public class ListInt32Tests
         Assert.Equal(ExpressionErrorCodes.InvalidArgument, scalar.Code);
         Assert.Contains("int64", scalar.Hint);
 
-        f.Compile("[-2147483648, 2147483647]", new CompileOptions { ExpectedType = ColumnType.ListInt32 });
+        f.Compile("[-2147483648, 2147483647]", new CompileOptions { ExpectedType = ColumnType.List(StorageKind.Int32) });
         f.Compile("2147483647", new CompileOptions { ExpectedType = ColumnType.Int32 });
     }
 
@@ -351,7 +351,7 @@ public class ListInt32Tests
         var f = Lists();
         var rows = new[] { 0, 1 };
         var int32 = ColumnBuffer.Create(ColumnType.Int32, f.Capacity, f.Memory);
-        var list32 = ColumnBuffer.Create(ColumnType.ListInt32, f.Capacity, f.Memory);
+        var list32 = ColumnBuffer.Create(ColumnType.List(StorageKind.Int32), f.Capacity, f.Memory);
 
         Assert.Throws<ArgumentException>(() => f.Compile("col.k").Evaluate(f.Context, rows, int32, ScalarValue.FromInt64(Above)));
         Assert.Throws<ArgumentException>(() => f.Compile("col.k").Evaluate(f.Context, rows, int32, ScalarValue.FromFloat64(1)));

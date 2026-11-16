@@ -442,7 +442,7 @@ public class FetchChunkTests
         var rig = new FeatureTestRig().Source("item_store", connector, maxBatch: MaxBatch);
         var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
         var tag = rig.Physical("item.tag", FeatureTestRig.Item, ColumnType.String, "item_store");
-        var history = rig.Physical("item.history", FeatureTestRig.Item, ColumnType.ListInt64, "item_store");
+        var history = rig.Physical("item.history", FeatureTestRig.Item, ColumnType.List(StorageKind.Int64), "item_store");
         rig.Build();
         var pool = new PoisoningPool();
         var request = rig.NewRequest(Enumerable.Range(1, Chunks * MaxBatch).Select(i => (long)i).ToArray(), pool: pool, hook: hook);
@@ -492,7 +492,7 @@ public class FetchChunkTests
     [InlineData(7, 1000)]
     public void StagingArea_EachChunkOwnsWholeBitmapWords_AndADisjointKeyRange(int keys, int chunkSize)
     {
-        CompiledFieldBinding[] fields = { new("a", 0, ColumnType.Float64), new("t", 1, ColumnType.String), new("l", 2, ColumnType.ListInt64) };
+        CompiledFieldBinding[] fields = { new("a", 0, ColumnType.Float64), new("t", 1, ColumnType.String), new("l", 2, ColumnType.List(StorageKind.Int64)) };
         var area = new StagingArea(fields, keys, chunkSize, new RequestMemory());
         var chunks = (keys + chunkSize - 1) / chunkSize;
 

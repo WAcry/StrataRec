@@ -26,7 +26,7 @@ public class ListInt32FeatureTests
     [Fact]
     public void MemoryConnector_DecodesInt32ListsStraightIntoInt32Staging()
     {
-        CompiledFieldBinding[] fields = { new("tags", 0, ColumnType.ListInt32), new("n", 1, ColumnType.Int32) };
+        CompiledFieldBinding[] fields = { new("tags", 0, ColumnType.List(StorageKind.Int32)), new("n", 1, ColumnType.Int32) };
         const string Data = """
             { "1": { "tags": [1, -2, 2147483647, -2147483648], "n": 5 },
               "2": { "tags": [] },
@@ -53,7 +53,7 @@ public class ListInt32FeatureTests
     [InlineData("""{ "1": { "n": 2147483648 } }""", "2147483648")]
     public void MemoryConnector_ValueOutsideInt32_FailsTheCall_NamingFieldAndValue(string data, string value)
     {
-        CompiledFieldBinding[] fields = { new("tags", 0, ColumnType.ListInt32), new("n", 1, ColumnType.Int32) };
+        CompiledFieldBinding[] fields = { new("tags", 0, ColumnType.List(StorageKind.Int32)), new("n", 1, ColumnType.Int32) };
 
         var error = Assert.Throws<FormatException>(() => Fetch(data, fields, 1));
 
@@ -65,7 +65,7 @@ public class ListInt32FeatureTests
     [Fact]
     public void Staging_ListSetterMustMatchTheFieldWidth()
     {
-        CompiledFieldBinding[] fields = { new("a", 0, ColumnType.ListInt32), new("b", 1, ColumnType.ListInt64) };
+        CompiledFieldBinding[] fields = { new("a", 0, ColumnType.List(StorageKind.Int32)), new("b", 1, ColumnType.List(StorageKind.Int64)) };
         var staging = new StagingBuffer(fields, 2, new RequestMemory());
 
         staging.SetInt32List(0, 0, new[] { 1, 2 });
@@ -86,8 +86,8 @@ public class ListInt32FeatureTests
             { "1": { "tags": [1, 2, -2147483648], "ids": [5] },
               "2": { "tags": [] } }
             """);
-        var tags = rig.Physical("item.tags", FeatureTestRig.Item, ColumnType.ListInt32, "item_store", ScalarValue.FromInt64List(new long[] { 0 }));
-        var ids = rig.Physical("item.ids", FeatureTestRig.Item, ColumnType.ListInt32, "item_store");
+        var tags = rig.Physical("item.tags", FeatureTestRig.Item, ColumnType.List(StorageKind.Int32), "item_store", ScalarValue.FromInt64List(new long[] { 0 }));
+        var ids = rig.Physical("item.ids", FeatureTestRig.Item, ColumnType.List(StorageKind.Int32), "item_store");
         rig.Build();
         var request = rig.NewRequest(ThreeItems);
 
@@ -108,7 +108,7 @@ public class ListInt32FeatureTests
     public async Task Backfill_SourceDataOutsideInt32_FailsTheSource()
     {
         var rig = new FeatureTestRig().MemorySource("item_store", """{ "1": { "tags": [1, 4294967296] } }""");
-        var tags = rig.Physical("item.tags", FeatureTestRig.Item, ColumnType.ListInt32, "item_store");
+        var tags = rig.Physical("item.tags", FeatureTestRig.Item, ColumnType.List(StorageKind.Int32), "item_store");
         rig.Build();
         var request = rig.NewRequest(ThreeItems);
 
@@ -171,9 +171,9 @@ public class ListInt32FeatureTests
     public async Task DerivedListInt32_WithAnOutOfRangeElement_IsReplacedAsAWhole()
     {
         var rig = new FeatureTestRig();
-        var tags = rig.Derived("item.tags", FeatureTestRig.Item, ColumnType.ListInt32,
+        var tags = rig.Derived("item.tags", FeatureTestRig.Item, ColumnType.List(StorageKind.Int32),
             Compile("col.entity_id > 1 ? [1, 3000000000] : [1, 2]"), Array.Empty<int>(), ScalarValue.FromInt64List(new long[] { 0 }));
-        var raw = rig.Derived("item.raw", FeatureTestRig.Item, ColumnType.ListInt32.AsNullable(),
+        var raw = rig.Derived("item.raw", FeatureTestRig.Item, ColumnType.List(StorageKind.Int32).AsNullable(),
             Compile("col.entity_id == 2 ? [3000000000] : [7]"), Array.Empty<int>());
         rig.Build();
         var request = rig.NewRequest(ThreeItems);
@@ -195,10 +195,10 @@ public class ListInt32FeatureTests
         var rig = new FeatureTestRig();
         var withDefault = rig.Derived("user.bucket", FeatureTestRig.User, ColumnType.Int32,
             new TestExpression("3000000000", ColumnType.Int64, scalar: _ => ScalarValue.FromInt64(3_000_000_000)), Array.Empty<int>(), ScalarValue.FromInt64(5));
-        var list = rig.Derived("user.tags", FeatureTestRig.User, ColumnType.ListInt32.AsNullable(),
-            new TestExpression("[1, 3000000000]", ColumnType.ListInt64, scalar: _ => ScalarValue.FromInt64List(new long[] { 1, 3_000_000_000 })), Array.Empty<int>());
-        var fits = rig.Derived("user.ok", FeatureTestRig.User, ColumnType.ListInt32.AsNullable(),
-            new TestExpression("[1, -2]", ColumnType.ListInt64, scalar: _ => ScalarValue.FromInt64List(new long[] { 1, -2 })), Array.Empty<int>());
+        var list = rig.Derived("user.tags", FeatureTestRig.User, ColumnType.List(StorageKind.Int32).AsNullable(),
+            new TestExpression("[1, 3000000000]", ColumnType.List(StorageKind.Int64), scalar: _ => ScalarValue.FromInt64List(new long[] { 1, 3_000_000_000 })), Array.Empty<int>());
+        var fits = rig.Derived("user.ok", FeatureTestRig.User, ColumnType.List(StorageKind.Int32).AsNullable(),
+            new TestExpression("[1, -2]", ColumnType.List(StorageKind.Int64), scalar: _ => ScalarValue.FromInt64List(new long[] { 1, -2 })), Array.Empty<int>());
         rig.Build();
         var request = rig.NewRequest(ThreeItems, userId: 7);
 
@@ -236,11 +236,11 @@ public class ListInt32FeatureTests
     [Fact]
     public void ConfigValues_ParseListInt32_HeldAsInt64Lists()
     {
-        var value = ConfigValues.ToScalar(JsonNode.Parse("[1, -2, 2147483647, -2147483648]"), ColumnType.ListInt32);
-        Assert.Equal(StorageKind.ListInt64, value.Kind);
+        var value = ConfigValues.ToScalar(JsonNode.Parse("[1, -2, 2147483647, -2147483648]"), ColumnType.List(StorageKind.Int32));
+        Assert.Equal(StorageKind.Int64, value.ListElement);
         Assert.Equal(new long[] { 1, -2, int.MaxValue, int.MinValue }, value.AsInt64List());
 
-        Assert.True(ConfigValues.TryToScalar(null, ColumnType.ListInt32.AsNullable(), out var missing, out _));
+        Assert.True(ConfigValues.TryToScalar(null, ColumnType.List(StorageKind.Int32).AsNullable(), out var missing, out _));
         Assert.True(missing.IsMissing);
         Assert.Equal(7, ConfigValues.ToScalar(JsonNode.Parse("7"), ColumnType.Int32).AsInt64());
     }

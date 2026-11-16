@@ -231,63 +231,71 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
                     }
 
                     break;
-                case StorageKind.ListInt64:
-                {
-                    // The writer copies, so the pooled buffer can go back right away (it was a new array per row).
-                    var count = v.GetArrayLength();
-                    var longs = ArrayPool<long>.Shared.Rent(Math.Max(1, count));
-                    try
-                    {
-                        var li = 0;
-                        foreach (var e in v.EnumerateArray())
-                        {
-                            longs[li++] = e.GetInt64();
-                        }
-
-                        writer.SetInt64List(field.FieldIndex, keyIndex, longs.AsSpan(0, count));
-                    }
-                    finally
-                    {
-                        ArrayPool<long>.Shared.Return(longs);
-                    }
-
-                    break;
-                }
-
-                case StorageKind.ListInt32:
-                {
-                    // Decoded straight to int32 (the writer copies, so the pooled buffer can go back right away).
-                    var count = v.GetArrayLength();
-                    var ints = ArrayPool<int>.Shared.Rent(Math.Max(1, count));
-                    try
-                    {
-                        var ii = 0;
-                        foreach (var e in v.EnumerateArray())
-                        {
-                            ints[ii++] = ReadInt32(e, field);
-                        }
-
-                        writer.SetInt32List(field.FieldIndex, keyIndex, ints.AsSpan(0, count));
-                    }
-                    finally
-                    {
-                        ArrayPool<int>.Shared.Return(ints);
-                    }
-
-                    break;
-                }
-                case StorageKind.ListString:
-                    var strings = new string[v.GetArrayLength()];
-                    var si = 0;
-                    foreach (var e in v.EnumerateArray())
-                    {
-                        strings[si++] = e.GetString()!;
-                    }
-
-                    writer.SetStringList(field.FieldIndex, keyIndex, strings);
+                case StorageKind.List:
+                    WriteList(v, keyIndex, field, writer);
                     break;
             }
         }
+    }
+
+    /// <summary>A list value, decoded straight to the field's element storage into a pooled buffer, which can go back
+    /// right away: the writer copies.</summary>
+    private static void WriteList(JsonElement array, int keyIndex, in CompiledFieldBinding field, IFeatureBatchWriter writer)
+    {
+        var count = array.GetArrayLength();
+        var (f, k) = (field.FieldIndex, keyIndex);
+        switch (field.Type.Element)
+        {
+            case StorageKind.Bool:
+                var bools = ArrayPool<bool>.Shared.Rent(Math.Max(1, count));
+                writer.SetBoolList(f, k, Fill(array, field, bools));
+                ArrayPool<bool>.Shared.Return(bools);
+                break;
+            case StorageKind.Int32:
+                var ints = ArrayPool<int>.Shared.Rent(Math.Max(1, count));
+                writer.SetInt32List(f, k, Fill(array, field, ints));
+                ArrayPool<int>.Shared.Return(ints);
+                break;
+            case StorageKind.Int64:
+                var longs = ArrayPool<long>.Shared.Rent(Math.Max(1, count));
+                writer.SetInt64List(f, k, Fill(array, field, longs));
+                ArrayPool<long>.Shared.Return(longs);
+                break;
+            case StorageKind.Float32:
+                var floats = ArrayPool<float>.Shared.Rent(Math.Max(1, count));
+                writer.SetFloat32List(f, k, Fill(array, field, floats));
+                ArrayPool<float>.Shared.Return(floats);
+                break;
+            case StorageKind.Float64:
+                var doubles = ArrayPool<double>.Shared.Rent(Math.Max(1, count));
+                writer.SetFloat64List(f, k, Fill(array, field, doubles));
+                ArrayPool<double>.Shared.Return(doubles);
+                break;
+            default:
+                var strings = ArrayPool<string>.Shared.Rent(Math.Max(1, count));
+                writer.SetStringList(f, k, Fill(array, field, strings));
+                ArrayPool<string>.Shared.Return(strings, clearArray: true);
+                break;
+        }
+    }
+
+    /// <summary>Decodes the array's items into <paramref name="buffer"/>; a buffer a decoding error leaves behind is
+    /// simply not returned to the pool.</summary>
+    private static ReadOnlySpan<T> Fill<T>(JsonElement array, in CompiledFieldBinding field, T[] buffer)
+    {
+        var i = 0;
+        foreach (var e in array.EnumerateArray())
+        {
+            // typeof(T) tests are constants once the method is compiled for T: no boxing remains.
+            buffer[i++] = typeof(T) == typeof(bool) ? (T)(object)e.GetBoolean()
+                : typeof(T) == typeof(int) ? (T)(object)ReadInt32(e, field)
+                : typeof(T) == typeof(long) ? (T)(object)e.GetInt64()
+                : typeof(T) == typeof(float) ? (T)(object)e.GetSingle()
+                : typeof(T) == typeof(double) ? (T)(object)e.GetDouble()
+                : (T)(object)e.GetString()!;
+        }
+
+        return buffer.AsSpan(0, i);
     }
 
     /// <summary>

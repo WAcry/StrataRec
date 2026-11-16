@@ -21,9 +21,12 @@ internal static class LocalTableTestSupport
         new("s", ColumnType.String),
         new("t", ColumnType.Text),
         new("v", ColumnType.Vector(4)),
-        new("li32", ColumnType.ListInt32),
-        new("li64", ColumnType.ListInt64),
-        new("ls", ColumnType.ListString),
+        new("li32", ColumnType.List(StorageKind.Int32)),
+        new("li64", ColumnType.List(StorageKind.Int64)),
+        new("ls", ColumnType.List(StorageKind.String)),
+        new("lb", ColumnType.List(StorageKind.Bool)),
+        new("lf32", ColumnType.List(StorageKind.Float32)),
+        new("lf64", ColumnType.List(StorageKind.Float64)),
     };
 
     public static LocalTableSchema Schema(
@@ -51,6 +54,9 @@ internal static class LocalTableTestSupport
         ["li32"] = ScalarValue.FromInt64List(new long[] { seed, int.MaxValue, int.MinValue, -seed }[..(int)(seed % 4)]),
         ["li64"] = ScalarValue.FromInt64List(new[] { seed, long.MinValue, seed * 7 }),
         ["ls"] = ScalarValue.FromStringList(new[] { "tag-" + (seed % 3), "x", "tag-" + seed }[..(int)(1 + (seed % 3))]),
+        ["lb"] = ScalarValue.FromBoolList(new[] { seed % 2 == 0, true, false }[..(int)(seed % 4 == 3 ? 0 : 1 + (seed % 3))]),
+        ["lf32"] = ScalarValue.FromFloat64List(new[] { seed * 0.25, -1.5, 0.1 }[..(int)(seed % 4)]),
+        ["lf64"] = ScalarValue.FromFloat64List(new[] { seed / 3.0, 1e300 }),
     };
 
     /// <summary>Writes (or partially writes) a record through the writer; returns what <see cref="RecordBuilder.Commit"/> returned.</summary>
@@ -140,6 +146,8 @@ internal static class LocalTableTestSupport
         {
             StorageKind.Float32 => ScalarValue.FromFloat64((float)value.AsFloat64()),
             StorageKind.Text => ScalarValue.FromText(value.AsString()),
+            StorageKind.List when type.Element == StorageKind.Float32 =>
+                ScalarValue.FromFloat64List(value.AsFloat64List().ToArray().Select(x => (double)(float)x).ToArray()),
             _ => value,
         };
 

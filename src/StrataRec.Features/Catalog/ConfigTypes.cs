@@ -27,16 +27,23 @@ public static class ConfigTypes
 {
     private static readonly string[] ColumnSpellings =
     {
-        "bool", "int32", "int64", "float32", "float64", "string", "text", "vec<float32,N>", "list<int32>", "list<int64>", "list<string>",
+        "bool", "int32", "int64", "float32", "float64", "string", "text", "vec<float32,N>", "list<E>",
     };
 
+    /// <summary>A list's element types (<see cref="ColumnType.IsListElement"/>), as written.</summary>
+    private static readonly string[] ElementSpellings = { "bool", "int32", "int64", "float32", "float64", "string" };
+
+    private static readonly string ListElements = "list<E> with E one of " + string.Join(", ", ElementSpellings);
+
     private static readonly string[] ParameterLeaves = { "int64", "float64", "bool", "string" };
+
+    private static string ColumnList => string.Join(", ", ColumnSpellings[..^1]) + ", " + ListElements;
 
     /// <summary>The spellings valid at <paramref name="site"/>, for a hint.</summary>
     public static string Spellings(TypeSite site) => site switch
     {
-        TypeSite.Column => string.Join(", ", ColumnSpellings) + ", each with a trailing '?' to be nullable",
-        TypeSite.Feature => string.Join(", ", ColumnSpellings) + " (a feature without 'default' is nullable; no '?')",
+        TypeSite.Column => ColumnList + ", each with a trailing '?' to be nullable",
+        TypeSite.Feature => ColumnList + " (a feature without 'default' is nullable; no '?')",
         _ => string.Join(", ", ParameterLeaves) + ", or map<string,T> of one of them",
     };
 
@@ -99,6 +106,11 @@ public static class ConfigTypes
         }
 
         message = site == TypeSite.Parameter ? $"Unknown parameter type '{written}'." : $"Unknown type '{written}'.";
+        if (site != TypeSite.Parameter && leaf.StartsWith("list<", StringComparison.Ordinal) && !ColumnType.TryParse(leaf, out _, out var why))
+        {
+            message = why; // why a list cannot hold what was written (text, a nested list, a nullable element)
+        }
+
         var suggestion = Suggest(leaf, site);
         hint = suggestion is null
             ? "valid types: " + Spellings(site)
@@ -123,6 +135,14 @@ public static class ConfigTypes
                 : "vec<float32,N>";
         }
 
+        if (suggestion is null && site != TypeSite.Parameter && ListInner(core) is { } inner)
+        {
+            // Keep the element written, in this place's spelling: list<double> → list<float64>, array<text> → list<string>.
+            var element = inner.EndsWith('?') ? inner[..^1].Trim() : inner;
+            var meant = element == "text" ? "string" : Alias(element, site) ?? (Array.IndexOf(ElementSpellings, element) >= 0 ? element : NameSuggestions.Closest(element, ElementSpellings));
+            suggestion = meant is null ? null : $"list<{meant}>" + (inner.EndsWith('?') && !nullable ? "?" : string.Empty);
+        }
+
         if (suggestion is null && Array.IndexOf(candidates, core) >= 0)
         {
             suggestion = core; // only the case differed
@@ -145,6 +165,21 @@ public static class ConfigTypes
     };
 
     private static string Wrap(string leaf, bool isMap) => isMap ? $"map<string,{leaf}>" : leaf;
+
+    /// <summary>The element written in a list type of this or another language's spelling (<c>list&lt;E&gt;</c>,
+    /// <c>array&lt;E&gt;</c>, <c>E[]</c>), or null.</summary>
+    private static string? ListInner(string core)
+    {
+        foreach (var prefix in new[] { "list<", "array<", "sequence<", "seq<" })
+        {
+            if (core.StartsWith(prefix, StringComparison.Ordinal) && core.EndsWith('>'))
+            {
+                return core[prefix.Length..^1].Trim();
+            }
+        }
+
+        return core.EndsWith("[]", StringComparison.Ordinal) ? core[..^2].Trim() : null;
+    }
 
     /// <summary>A type a parameter (or a map parameter's values) takes: int64, float64, bool or string, never nullable.</summary>
     private static bool IsParameterLeaf(ColumnType type) =>

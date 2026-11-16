@@ -43,6 +43,32 @@ public sealed class RunReplayTests
     }
 
     [Fact]
+    public void RecordedLists_AreWrittenIntoListFieldsOfEveryElementType_AndAFloat32ListThatWouldOverflow_IsATypeChangedGap()
+    {
+        // Each element follows the scalar rule: int64 into int32 when it fits, numbers into float32 unless they overflow.
+        var run = Run();
+        run.FeatureCalls.Add(Feature(0, "[1, 2]",
+            ("b", "list<bool>", "[[true, false], []]"),
+            ("i", "list<int32>", "[[1, -2], [3]]"),
+            ("f", "list<float64>", "[[0.5, \"NaN\"], [1e100]]"),
+            ("w", "list<float32>", "[[0.25], [1]]")));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var (status, staging) = Fetch(replay, new long[] { 1, 2 },
+            ("b", "list<bool>"), ("i", "list<int64>"), ("f", "list<float32>"), ("w", "list<float64>"));
+
+        Assert.Equal(FetchOutcome.Ok, status.Outcome);
+        Assert.Equal(new[] { true, false }, staging.Get(0, 0).AsBoolList().ToArray());
+        Assert.True(staging.Get(0, 1).AsBoolList().IsEmpty);
+        Assert.Equal(new long[] { 1, -2 }, staging.Get(1, 0).AsInt64List().ToArray());
+        Assert.Equal(ScalarValue.FromFloat64List(new[] { 0.5, double.NaN }), staging.Get(2, 0)); // NaN stays NaN
+        Assert.True(staging.Get(2, 1).IsMissing); // 1e100 would become +∞ in float32
+        Assert.Equal(ScalarValue.FromFloat64List(new[] { 0.25 }), staging.Get(3, 0));
+        var gap = Assert.Single(replay.Gaps);
+        Assert.Equal(("f", "type_changed", 1), (gap.Field, gap.Reason, gap.Count));
+    }
+
+    [Fact]
     public void FieldsFetchedInSeparateCalls_AreSynthesizedTogether_WhenTheConfigurationRequestsThemInOneCall()
     {
         // The recording fetched a and b of key 1 in two calls; the replayed plan groups them into one. Neither recorded

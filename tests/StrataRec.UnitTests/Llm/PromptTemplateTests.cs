@@ -66,6 +66,20 @@ public sealed class PromptTemplateTests
         Assert.Equal("30=Green\nscarf;10=Red \"shoes\";", call.Prompts["user"]);
     }
 
+    /// <summary>Float and bool list elements render as scalars of their type do: float32 ones as the floats they are.</summary>
+    [Fact]
+    public async Task FloatAndBoolListElements_RenderAsScalarsOfTheirType()
+    {
+        var models = new TextModels("[1]");
+        const string Template = "{{#ctx.request.weights}}{{.}};{{/ctx.request.weights}} {{#ctx.request.flags}}{{.}},{{/ctx.request.flags}}"
+            + "{{#rows}} {{col.entity_id}}:{{#col.item.weights}}{{.}};{{/col.item.weights}}{{^col.item.weights}}none{{/col.item.weights}}"
+            + "/{{#col.item.clicks}}{{.}},{{/col.item.clicks}}{{/rows}}";
+
+        await Run(Compile(models, Rerank(Template, window: 2)));
+
+        Assert.Equal("0.1;1E-07; false,true, 30:none/ 10:0.1;-2.5;/true,false,", Assert.Single(models.Calls).Prompts["user"]);
+    }
+
     /// <summary>The features a template names are the node's reads: fetched before it runs, though nothing else reads them.</summary>
     [Fact]
     public async Task AFeatureOnlyTheTemplateNames_IsFetchedBeforeTheNode()

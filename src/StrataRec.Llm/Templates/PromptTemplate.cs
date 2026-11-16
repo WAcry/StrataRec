@@ -180,8 +180,9 @@ public sealed class PromptTemplate
 
     /// <summary>A resolved <c>col.*</c>, <c>ctx.*</c> or <c>param.*</c> name, ready to read per request.</summary>
     /// <param name="float32">
-    /// Declared float32, so rendered as float32: a request input's symbol has the promoted type (float64), but its value
-    /// has float32 precision, and its float64 digits would only show the rounding (0.1 as 0.10000000149011612).
+    /// Declared float32 (or a list of float32), so rendered as float32: a request input's symbol has the promoted type
+    /// (float64), but its value has float32 precision, and its float64 digits would only show the rounding (0.1 as
+    /// 0.10000000149011612).
     /// </param>
     private readonly struct Reference(in Symbol symbol, bool float32)
     {
@@ -195,7 +196,7 @@ public sealed class PromptTemplate
 
         public ColumnType Type => Symbol.Type;
 
-        public bool IsList => Type.Kind is StorageKind.ListInt64 or StorageKind.ListInt32 or StorageKind.ListString;
+        public bool IsList => Type.IsList;
     }
 
     /// <summary>What a tag does per request, by <see cref="MustacheTag.Id"/>.</summary>
@@ -435,9 +436,9 @@ public sealed class PromptTemplate
                 return false;
             }
 
-            var float32 = symbol.Type.Kind == StorageKind.Float32
+            var float32 = symbol.Type.ValueKind == StorageKind.Float32
                           || (symbol.Kind == SymbolKind.Context && context.Schema.TryGetContext(name["ctx.".Length..], out var field)
-                              && field.InputType.Kind == StorageKind.Float32);
+                              && field.InputType.ValueKind == StorageKind.Float32);
             reference = new Reference(symbol, float32);
             return true;
         }
@@ -598,36 +599,39 @@ public sealed class PromptTemplate
         {
             if (reference.Symbol.Kind == SymbolKind.Column)
             {
-                return !Present(reference, out var buffer) ? 0 : buffer switch
-                {
-                    ListColumn<long> longs => longs.LengthOf(_row),
-                    ListColumn<int> ints => ints.LengthOf(_row),
-                    ListColumn<string> strings => strings.LengthOf(_row),
-                    _ => throw Unexpected(reference, buffer),
-                };
+                return !Present(reference, out var buffer) ? 0 : buffer is ListColumn list ? list.LengthOf(_row) : throw Unexpected(reference, buffer);
             }
 
             var value = Scalar(reference);
             return value.Kind switch
             {
                 0 => 0,
-                StorageKind.ListInt64 => value.AsInt64List().Length,
-                StorageKind.ListString => value.AsStringList().Length,
+                StorageKind.List => value.ListLength,
                 _ => throw Unexpected(reference, value.Kind),
             };
         }
 
+        /// <summary>Item <paramref name="index"/> of a list, rendered as a value of its element type is.</summary>
         private readonly void WriteItem(in Reference reference, int index, StringBuilder output)
         {
             if (reference.Symbol.Kind == SymbolKind.Column)
             {
                 switch (Column(reference))
                 {
-                    case ListColumn<long> longs:
-                        PromptValues.Append(output, longs.Get(_row)[index]);
+                    case ListColumn<bool> bools:
+                        PromptValues.Append(output, bools.Get(_row)[index]);
                         return;
                     case ListColumn<int> ints:
                         PromptValues.Append(output, ints.Get(_row)[index]);
+                        return;
+                    case ListColumn<long> longs:
+                        PromptValues.Append(output, longs.Get(_row)[index]);
+                        return;
+                    case ListColumn<float> floats:
+                        PromptValues.Append(output, floats.Get(_row)[index]);
+                        return;
+                    case ListColumn<double> doubles:
+                        PromptValues.Append(output, doubles.Get(_row)[index]);
                         return;
                     case ListColumn<string> strings:
                         output.Append(strings.Get(_row)[index]);
@@ -637,13 +641,23 @@ public sealed class PromptTemplate
                 }
             }
 
+            // Request-level values are stored promoted, as in WriteValue.
             var value = Scalar(reference);
-            switch (value.Kind)
+            switch (value.ListElement)
             {
-                case StorageKind.ListInt64:
+                case StorageKind.Bool:
+                    PromptValues.Append(output, value.AsBoolList()[index]);
+                    break;
+                case StorageKind.Int64:
                     PromptValues.Append(output, value.AsInt64List()[index]);
                     break;
-                case StorageKind.ListString:
+                case StorageKind.Float64 when reference.Float32 || value.IsFloat32List:
+                    PromptValues.Append(output, (float)value.AsFloat64List()[index]);
+                    break;
+                case StorageKind.Float64:
+                    PromptValues.Append(output, value.AsFloat64List()[index]);
+                    break;
+                case StorageKind.String:
                     output.Append(value.AsStringList()[index]);
                     break;
                 default:

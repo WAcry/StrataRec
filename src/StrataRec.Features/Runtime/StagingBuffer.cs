@@ -58,7 +58,7 @@ internal sealed class StagingArea
             ColumnBuffer? column = null;
             switch (type.Kind)
             {
-                case StorageKind.ListInt32 or StorageKind.ListInt64 or StorageKind.ListString:
+                case StorageKind.List:
                     hasLists = true;
                     break;
                 case StorageKind.String:
@@ -253,12 +253,8 @@ internal sealed class StagingBuffer : IFeatureBatchWriter, IStagedFeatureValues
     /// chunks and indexed by the fetch key (<c>chunk × ChunkSize + key</c>, the key itself for a buffer of its own); a
     /// list field's buffer is this chunk's and indexed by the chunk-local key.
     /// </summary>
-    internal ColumnBuffer Field(int fieldIndex) => _area.ColumnOf(fieldIndex) ?? _area.TypeOf(fieldIndex).Kind switch
-    {
-        StorageKind.ListInt32 => _area.ListOf<int>(fieldIndex, _chunk, create: false),
-        StorageKind.ListInt64 => _area.ListOf<long>(fieldIndex, _chunk, create: false),
-        _ => _area.ListOf<string>(fieldIndex, _chunk, create: false),
-    };
+    internal ColumnBuffer Field(int fieldIndex) => _area.ColumnOf(fieldIndex) ?? _area.ListBuffer(fieldIndex, _chunk)
+        ?? throw new InvalidOperationException($"Chunk {_chunk} wrote no value of list field {fieldIndex}.");
 
     /// <summary>True when the connector wrote a value for this field and key (and did not withdraw it).</summary>
     public bool HasValue(int fieldIndex, int keyIndex) => _area.GetBit(_area.FirstBit(fieldIndex, _chunk) + keyIndex);
@@ -306,49 +302,56 @@ internal sealed class StagingBuffer : IFeatureBatchWriter, IStagedFeatureValues
         _area.SetBit(bit);
     }
 
-    public void SetInt64List(int fieldIndex, int keyIndex, ReadOnlySpan<long> value)
-    {
-        CheckKey(keyIndex);
-        var bit = _area.FirstBit(fieldIndex, _chunk) + keyIndex;
-        List<long>(fieldIndex, StorageKind.ListInt64, nameof(SetInt64List)).Set(keyIndex, value);
-        _area.SetBit(bit);
-    }
+    public void SetBoolList(int fieldIndex, int keyIndex, ReadOnlySpan<bool> value) =>
+        SetList(fieldIndex, keyIndex, value, StorageKind.Bool, nameof(SetBoolList));
 
-    public void SetInt32List(int fieldIndex, int keyIndex, ReadOnlySpan<int> value)
-    {
-        CheckKey(keyIndex);
-        var bit = _area.FirstBit(fieldIndex, _chunk) + keyIndex;
-        List<int>(fieldIndex, StorageKind.ListInt32, nameof(SetInt32List)).Set(keyIndex, value);
-        _area.SetBit(bit);
-    }
+    public void SetInt32List(int fieldIndex, int keyIndex, ReadOnlySpan<int> value) =>
+        SetList(fieldIndex, keyIndex, value, StorageKind.Int32, nameof(SetInt32List));
+
+    public void SetInt64List(int fieldIndex, int keyIndex, ReadOnlySpan<long> value) =>
+        SetList(fieldIndex, keyIndex, value, StorageKind.Int64, nameof(SetInt64List));
+
+    public void SetFloat32List(int fieldIndex, int keyIndex, ReadOnlySpan<float> value) =>
+        SetList(fieldIndex, keyIndex, value, StorageKind.Float32, nameof(SetFloat32List));
+
+    public void SetFloat64List(int fieldIndex, int keyIndex, ReadOnlySpan<double> value) =>
+        SetList(fieldIndex, keyIndex, value, StorageKind.Float64, nameof(SetFloat64List));
 
     public void SetStringList(int fieldIndex, int keyIndex, ReadOnlySpan<string> value)
     {
-        CheckKey(keyIndex);
-        var bit = _area.FirstBit(fieldIndex, _chunk) + keyIndex;
-        List<string>(fieldIndex, StorageKind.ListString, nameof(SetStringList)).Set(keyIndex, value);
-        _area.SetBit(bit);
+        // A null element would reach the table's string dictionary at backfill, on the request's thread; it is the connector's bug.
+        foreach (var item in value)
+        {
+            ArgumentNullException.ThrowIfNull(item, nameof(value));
+        }
+
+        SetList(fieldIndex, keyIndex, value, StorageKind.String, nameof(SetStringList));
     }
 
     /// <summary>
-    /// This chunk's buffer of a list field. A list setter that does not match the field's declared type (e.g. int64 values
-    /// for a <c>list&lt;int32&gt;</c> field) is a connector bug, reported with the setter it should have used.
+    /// Writes a list into this chunk's buffer of the field. A setter that does not match the field's declared element type
+    /// (e.g. int64 values for a <c>list&lt;int32&gt;</c> field) is a connector bug, reported with the setter it should have used.
     /// </summary>
-    private ListColumn<T> List<T>(int fieldIndex, StorageKind kind, string method)
+    private void SetList<T>(int fieldIndex, int keyIndex, ReadOnlySpan<T> value, StorageKind element, string method)
     {
+        CheckKey(keyIndex);
         var type = _area.TypeOf(fieldIndex);
-        if (type.Kind != kind)
+        if (!type.IsList || type.Element != element)
         {
-            throw new InvalidOperationException($"Field {fieldIndex} has type {type}; {method} does not match it" + type.Kind switch
+            throw new InvalidOperationException($"Field {fieldIndex} has type {type}; {method} does not match it" + (type.IsList ? type.Element switch
             {
-                StorageKind.ListInt32 => " (use SetInt32List).",
-                StorageKind.ListInt64 => " (use SetInt64List).",
-                StorageKind.ListString => " (use SetStringList).",
-                _ => ".",
-            });
+                StorageKind.Bool => " (use SetBoolList).",
+                StorageKind.Int32 => " (use SetInt32List).",
+                StorageKind.Int64 => " (use SetInt64List).",
+                StorageKind.Float32 => " (use SetFloat32List).",
+                StorageKind.Float64 => " (use SetFloat64List).",
+                _ => " (use SetStringList).",
+            } : "."));
         }
 
-        return _area.ListOf<T>(fieldIndex, _chunk, create: true);
+        var bit = _area.FirstBit(fieldIndex, _chunk) + keyIndex;
+        _area.ListOf<T>(fieldIndex, _chunk, create: true).Set(keyIndex, value);
+        _area.SetBit(bit);
     }
 
     private void CheckKey(int keyIndex)

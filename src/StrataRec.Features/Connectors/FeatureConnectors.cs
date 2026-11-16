@@ -43,8 +43,8 @@ public readonly record struct CompiledFieldBinding(string Field, int FieldIndex,
 /// actually wrote are ever read. A key absent from the response needs no call. Values written through
 /// <see cref="GetValues{T}"/> count once <see cref="SetValid"/> is called for that field and key; call it after the
 /// value is fully decoded, so a record that fails half-way never exposes an unwritten (pooled) value.
-/// <see cref="SetString"/>, <see cref="SetInt64List"/>, <see cref="SetInt32List"/> and <see cref="SetStringList"/> mark
-/// their value present themselves. A connector reporting <see cref="FetchOutcome.Partial"/> therefore needs no extra bookkeeping.</para>
+/// <see cref="SetString"/> and the list setters (<see cref="SetInt64List"/> and its siblings) mark their value present
+/// themselves. A connector reporting <see cref="FetchOutcome.Partial"/> therefore needs no extra bookkeeping.</para>
 /// <para>A writer belongs to one connector call while that call runs (each <c>max_batch</c> chunk gets its own), so
 /// implementations may write from any one thread at a time without synchronization. The chunks of one fetch share
 /// buffers: the memory <see cref="GetValues{T}"/> returns is this call's window of a fetch-wide array, so write only
@@ -72,13 +72,30 @@ public interface IFeatureBatchWriter
     /// <summary>Writes a <c>string</c> or <c>text</c> field value.</summary>
     void SetString(int fieldIndex, int keyIndex, string value);
 
-    /// <summary>Writes a <c>list&lt;int64&gt;</c> field value.</summary>
-    void SetInt64List(int fieldIndex, int keyIndex, ReadOnlySpan<long> value);
+    /// <summary>Writes a <c>list&lt;bool&gt;</c> field value.</summary>
+    /// <remarks>One setter per element type, named like the field's declared element type: the field's type decides the
+    /// width, so a connector decoding int32 ids (tags, topics, token ids) or float32 weights writes them as they are,
+    /// with no widened copy. A setter for another element type than the field's is a connector bug and throws.</remarks>
+    void SetBoolList(int fieldIndex, int keyIndex, ReadOnlySpan<bool> value);
 
-    /// <summary>Writes a <c>list&lt;int32&gt;</c> field value. The field's type decides the width: a connector decoding
-    /// int32 ids (tags, topics, token ids) writes them as they are, with no int64 copy.</summary>
+    /// <summary>Writes a <c>list&lt;int32&gt;</c> field value.</summary>
+    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
     void SetInt32List(int fieldIndex, int keyIndex, ReadOnlySpan<int> value);
 
+    /// <summary>Writes a <c>list&lt;int64&gt;</c> field value.</summary>
+    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
+    void SetInt64List(int fieldIndex, int keyIndex, ReadOnlySpan<long> value);
+
+    /// <summary>Writes a <c>list&lt;float32&gt;</c> field value.</summary>
+    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
+    void SetFloat32List(int fieldIndex, int keyIndex, ReadOnlySpan<float> value);
+
+    /// <summary>Writes a <c>list&lt;float64&gt;</c> field value.</summary>
+    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
+    void SetFloat64List(int fieldIndex, int keyIndex, ReadOnlySpan<double> value);
+
+    /// <summary>Writes a <c>list&lt;string&gt;</c> field value; no element may be null.</summary>
+    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
     void SetStringList(int fieldIndex, int keyIndex, ReadOnlySpan<string> value);
 }
 

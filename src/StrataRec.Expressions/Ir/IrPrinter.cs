@@ -185,11 +185,6 @@ internal static class IrPrinter
     private static (string, int) FormatConst(IrNode node)
     {
         var v = node.Value;
-        if (node.Type.Kind == TypeKind.ListFloat)
-        {
-            return (FormatList((double[])node.Data!), PrecPrimary);
-        }
-
         switch (v.Kind)
         {
             case StorageKind.Bool:
@@ -209,10 +204,14 @@ internal static class IrPrinter
 
             case StorageKind.String or StorageKind.Text:
                 return (Quote(v.AsString()), PrecPrimary);
-            case StorageKind.ListInt64:
-                return (FormatList(v.AsInt64List()), PrecPrimary);
-            case StorageKind.ListString:
-                return (FormatList(v.AsStringList()), PrecPrimary);
+            case StorageKind.List:
+                return (v.ListElement switch
+                {
+                    StorageKind.Bool => FormatList(v.AsBoolList()),
+                    StorageKind.Int64 => FormatList(v.AsInt64List()),
+                    StorageKind.Float64 => FormatList(v.AsFloat64List()),
+                    _ => FormatList(v.AsStringList()),
+                }, PrecPrimary);
             default:
                 return (v.ToString(), PrecPrimary);
         }
@@ -240,6 +239,17 @@ internal static class IrPrinter
         for (var i = 0; i < values.Length; i++)
         {
             sb.Append(i > 0 ? ", " : string.Empty).Append(values[i].ToString(CultureInfo.InvariantCulture));
+        }
+
+        return sb.Append(']').ToString();
+    }
+
+    public static string FormatList(ReadOnlySpan<bool> values)
+    {
+        var sb = new StringBuilder("[");
+        for (var i = 0; i < values.Length; i++)
+        {
+            sb.Append(i > 0 ? ", " : string.Empty).Append(values[i] ? "true" : "false");
         }
 
         return sb.Append(']').ToString();

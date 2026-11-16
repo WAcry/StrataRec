@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using StrataRec.Core.Columns;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 
@@ -84,7 +85,7 @@ public static class LogBatchJson
         WriteColumns(json, "float_cols", batch.Columns, static k => k is StorageKind.Float32 or StorageKind.Float64);
         WriteColumns(json, "int_cols", batch.Columns, static k => k is StorageKind.Int32 or StorageKind.Int64 or StorageKind.Bool);
         WriteColumns(json, "string_cols", batch.Columns, static k => k is StorageKind.String or StorageKind.Text);
-        WriteColumns(json, "nested_cols", batch.Columns, static k => k is StorageKind.Vector or StorageKind.ListInt32 or StorageKind.ListInt64 or StorageKind.ListString);
+        WriteColumns(json, "nested_cols", batch.Columns, static k => k is StorageKind.Vector or StorageKind.List);
         json.WriteStartObject("missing");
         foreach (var column in batch.Columns)
         {
@@ -177,25 +178,65 @@ public static class LogBatchJson
 
                 json.WriteEndArray();
                 break;
-            case StorageKind.ListInt64: // also list<int32> columns: values are held promoted (see ScalarValue)
-                json.WriteStartArray();
+            default:
+                WriteList(json, value, nonFiniteAsStrings);
+                break;
+        }
+    }
+
+    /// <summary>A list value as a JSON array of its elements, each written as a scalar of its element type is: a bool as
+    /// 0 or 1, numbers as numbers (<c>list&lt;int32&gt;</c> and <c>list&lt;float32&gt;</c> values are held promoted, see
+    /// <see cref="ScalarValue"/>). A float list holding NaN or ±∞ follows the vector rule: null in logs, names per
+    /// element in replay bundles.</summary>
+    private static void WriteList(Utf8JsonWriter json, in ScalarValue value, bool nonFiniteAsStrings)
+    {
+        if (value.ListElement == StorageKind.Float64 && !nonFiniteAsStrings && !ColumnValues.AllFinite(value.AsFloat64List()))
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        json.WriteStartArray();
+        switch (value.ListElement)
+        {
+            case StorageKind.Bool:
+                foreach (var b in value.AsBoolList())
+                {
+                    json.WriteNumberValue(b ? 1 : 0);
+                }
+
+                break;
+            case StorageKind.Int64:
                 foreach (var l in value.AsInt64List())
                 {
                     json.WriteNumberValue(l);
                 }
 
-                json.WriteEndArray();
+                break;
+            case StorageKind.Float64:
+                foreach (var d in value.AsFloat64List())
+                {
+                    if (double.IsFinite(d))
+                    {
+                        json.WriteNumberValue(d);
+                    }
+                    else
+                    {
+                        json.WriteStringValue(NonFiniteName(d));
+                    }
+                }
+
                 break;
             default:
-                json.WriteStartArray();
                 foreach (var s in value.AsStringList())
                 {
                     json.WriteStringValue(s);
                 }
 
-                json.WriteEndArray();
                 break;
         }
+
+        json.WriteEndArray();
     }
 
     /// <summary>
@@ -280,43 +321,100 @@ public static class LogBatchJson
 
                 value = ScalarValue.FromVector(vector);
                 return true;
-            case StorageKind.ListInt32 or StorageKind.ListInt64 when json.ValueKind == JsonValueKind.Array:
-                var longs = new long[json.GetArrayLength()];
-                var l = 0;
-                foreach (var element in json.EnumerateArray())
+            case StorageKind.List when json.ValueKind == JsonValueKind.Array:
+                return TryReadList(json, type, out value, out error, nonFiniteAsStrings);
+        }
+
+        error = $"{json.GetRawText()} is not a valid {type}";
+        return false;
+    }
+
+    /// <summary>Reads a list written by <see cref="WriteList"/>: each element as <see cref="TryReadValue"/> reads a scalar
+    /// of the element type.</summary>
+    private static bool TryReadList(JsonElement json, ColumnType type, out ScalarValue value, out string? error, bool nonFiniteAsStrings)
+    {
+        value = ScalarValue.Missing;
+        error = null;
+        var element = type.ElementType;
+        var count = json.GetArrayLength();
+        var index = 0;
+        switch (element.Kind)
+        {
+            case StorageKind.Bool:
+                var bools = new bool[count];
+                foreach (var item in json.EnumerateArray())
                 {
-                    if (element.ValueKind != JsonValueKind.Number || !element.TryGetInt64(out var item)
-                        || (type.Kind == StorageKind.ListInt32 && item is < int.MinValue or > int.MaxValue))
+                    if (!TryReadValue(item, element, out var b, out _) || b.IsMissing)
                     {
-                        error = $"element {l} ({element.GetRawText()}) is not a valid {type} element";
+                        error = $"element {index} ({item.GetRawText()}) is not a valid {type} element";
                         return false;
                     }
 
-                    longs[l++] = item;
+                    bools[index++] = b.AsBool();
+                }
+
+                value = ScalarValue.FromBoolList(bools);
+                return true;
+            case StorageKind.Int32 or StorageKind.Int64:
+                var longs = new long[count];
+                foreach (var item in json.EnumerateArray())
+                {
+                    if (!TryReadValue(item, element, out var l, out _) || l.IsMissing)
+                    {
+                        error = $"element {index} ({item.GetRawText()}) is not a valid {type} element";
+                        return false;
+                    }
+
+                    longs[index++] = l.AsInt64();
                 }
 
                 value = ScalarValue.FromInt64List(longs);
                 return true;
-            case StorageKind.ListString when json.ValueKind == JsonValueKind.Array:
-                var strings = new string[json.GetArrayLength()];
-                var s = 0;
-                foreach (var element in json.EnumerateArray())
+            case StorageKind.Float32 or StorageKind.Float64:
+                var doubles = new double[count];
+                var single = element.Kind == StorageKind.Float32;
+                foreach (var item in json.EnumerateArray())
                 {
-                    if (element.ValueKind != JsonValueKind.String)
+                    if (!TryReadValue(item, element, out var d, out _, nonFiniteAsStrings) || d.IsMissing)
                     {
-                        error = $"element {s} is {element.ValueKind}, not a string";
+                        error = $"element {index} ({item.GetRawText()}) is not a valid {type} element";
                         return false;
                     }
 
-                    strings[s++] = element.GetString()!;
+                    doubles[index++] = d.AsFloat64();
+                    single &= d.IsFloat32 || !double.IsFinite(d.AsFloat64());
+                }
+
+                // As for a scalar: a list<float32> value whose elements are all floats prints as the floats they are.
+                value = single ? ScalarValue.FromFloat32List(Narrow(doubles)) : ScalarValue.FromFloat64List(doubles);
+                return true;
+            default:
+                var strings = new string[count];
+                foreach (var item in json.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.String)
+                    {
+                        error = $"element {index} is {item.ValueKind}, not a string";
+                        return false;
+                    }
+
+                    strings[index++] = item.GetString()!;
                 }
 
                 value = ScalarValue.FromStringList(strings);
                 return true;
         }
 
-        error = $"{json.GetRawText()} is not a valid {type}";
-        return false;
+        static float[] Narrow(double[] doubles)
+        {
+            var floats = new float[doubles.Length];
+            for (var i = 0; i < doubles.Length; i++)
+            {
+                floats[i] = (float)doubles[i];
+            }
+
+            return floats;
+        }
     }
 
     /// <summary>The spelling of a non-finite value: <c>NaN</c>, <c>Infinity</c> or <c>-Infinity</c> (as JavaScript and System.Text.Json name them).</summary>

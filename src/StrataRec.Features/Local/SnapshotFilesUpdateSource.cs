@@ -757,7 +757,7 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
                 break;
             }
 
-            case StorageKind.ListInt32 or StorageKind.ListInt64 or StorageKind.ListString:
+            case StorageKind.List:
             {
                 if (reader.TokenType != JsonTokenType.StartArray)
                 {
@@ -765,13 +765,24 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
                 }
 
                 builder.StartList(field);
+                var element = type.ElementType;
                 var n = 0;
                 while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
                 {
-                    switch (type.Kind)
+                    switch (element.Kind)
                     {
-                        case StorageKind.ListInt32: builder.AddInt32Item(field, Int32(ref reader, field, n, ColumnType.Int32)); break;
-                        case StorageKind.ListInt64: builder.AddInt64Item(field, Int64(ref reader, field, n, ColumnType.Int64)); break;
+                        case StorageKind.Bool:
+                            if (reader.TokenType is not (JsonTokenType.True or JsonTokenType.False))
+                            {
+                                throw Mismatch(ref reader, field, n, element);
+                            }
+
+                            builder.AddBoolItem(field, reader.TokenType == JsonTokenType.True);
+                            break;
+                        case StorageKind.Int32: builder.AddInt32Item(field, Int32(ref reader, field, n, element)); break;
+                        case StorageKind.Int64: builder.AddInt64Item(field, Int64(ref reader, field, n, element)); break;
+                        case StorageKind.Float32: builder.AddFloat32Item(field, Float32(ref reader, field, n, element)); break;
+                        case StorageKind.Float64: builder.AddFloat64Item(field, Float64(ref reader, field, n, element)); break;
                         default:
                             if (reader.TokenType != JsonTokenType.String)
                             {

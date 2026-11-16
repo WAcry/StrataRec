@@ -18,7 +18,7 @@ namespace StrataRec.Benchmarks;
 /// <c>Gather</c> evaluates 5,000 live rows scattered over a 20,000-row table (live ratio 0.25), which takes the
 /// gather/scatter path. Both write into a preallocated <c>float64</c> destination, except <c>NarrowInt32</c>, which
 /// writes an int64 result into an <c>int32</c> column. The <c>List*</c> cases run the list kernels over 1–8 topic ids
-/// per candidate, stored as <c>list&lt;int64&gt;</c> or (same values) <c>list&lt;int32&gt;</c>.</para>
+/// per candidate, stored as <c>list&lt;int32&gt;</c>, <c>list&lt;int64&gt;</c> or (same values) <c>list&lt;float32&gt;</c>.</para>
 /// <para>Run: <c>dotnet run -c Release --project tests/StrataRec.Benchmarks -- --filter '*ExpressionBenchmarks*'</c>.</para>
 /// </remarks>
 [MemoryDiagnoser]
@@ -39,11 +39,14 @@ public class ExpressionBenchmarks
     /// <summary>An int64 result written into an <c>int32</c> column: measures the narrowing write (design 4.3).</summary>
     public const string NarrowFormula = "col.entity_id - 1000000";
 
-    /// <summary>The list kernels over a per-candidate topic list: <c>size</c>, <c>in</c> and <c>overlap_count</c>.</summary>
+    /// <summary>The list kernels over a per-candidate topic list stored as <c>list&lt;int32&gt;</c> (read in place, no widening): <c>size</c>, <c>in</c> and <c>overlap_count</c>.</summary>
+    public const string List32Formula = "overlap_count(col.item.topics32, ctx.user.topics) + size(col.item.topics32) + (col.entity_id % 64 in col.item.topics32 ? 1 : 0)";
+
+    /// <summary><see cref="List32Formula"/> over the same topics stored as <c>list&lt;int64&gt;</c>.</summary>
     public const string ListFormula = "overlap_count(col.item.topics64, ctx.user.topics) + size(col.item.topics64) + (col.entity_id % 64 in col.item.topics64 ? 1 : 0)";
 
-    /// <summary><see cref="ListFormula"/> over the same topics stored as <c>list&lt;int32&gt;</c> (read in place, no widening).</summary>
-    public const string List32Formula = "overlap_count(col.item.topics32, ctx.user.topics) + size(col.item.topics32) + (col.entity_id % 64 in col.item.topics32 ? 1 : 0)";
+    /// <summary><see cref="List32Formula"/> over the same values stored as <c>list&lt;float32&gt;</c> (read in place, compared as float64).</summary>
+    public const string ListFloat32Formula = "overlap_count(col.item.topicsf32, ctx.user.topic_weights) + size(col.item.topicsf32) + (col.entity_id % 64 in col.item.topicsf32 ? 1 : 0)";
 
     private const int LiveRows = 5_000;
 
@@ -56,6 +59,7 @@ public class ExpressionBenchmarks
         ("col.creator.follower_count", ColumnType.Parse("float32")),
         ("col.item.topics64", ColumnType.Parse("list<int64>")),
         ("col.item.topics32", ColumnType.Parse("list<int32>")),
+        ("col.item.topicsf32", ColumnType.Parse("list<float32>")),
     };
 
     private Fixture _full = null!;
@@ -63,8 +67,9 @@ public class ExpressionBenchmarks
     private CompiledExpression _fusion = null!;
     private CompiledExpression _exploration = null!;
     private CompiledExpression _narrow = null!;
-    private CompiledExpression _list64 = null!;
     private CompiledExpression _list32 = null!;
+    private CompiledExpression _list64 = null!;
+    private CompiledExpression _listFloat32 = null!;
 
     [GlobalSetup]
     public void Setup()
@@ -78,7 +83,8 @@ public class ExpressionBenchmarks
 
         scope.Add(new Symbol(SymbolKind.Context, "ctx.user.tenure_days", ColumnType.Float32, 0));
         scope.Add(new Symbol(SymbolKind.Context, "ctx.request.seed", ColumnType.Int64, 1));
-        scope.Add(new Symbol(SymbolKind.Context, "ctx.user.topics", ColumnType.ListInt64, 2));
+        scope.Add(new Symbol(SymbolKind.Context, "ctx.user.topics", ColumnType.List(StorageKind.Int64), 2));
+        scope.Add(new Symbol(SymbolKind.Context, "ctx.user.topic_weights", ColumnType.List(StorageKind.Float64), 3));
         string[] parameters = { "param.w_click", "param.w_like", "param.w_fresh", "param.half_life_hours", "param.cold_creator_boost", "param.explore_eps" };
         for (var i = 0; i < parameters.Length; i++)
         {
@@ -88,8 +94,9 @@ public class ExpressionBenchmarks
         _fusion = ExpressionCompiler.Compile(FusionFormula, scope, CompileOptions.Score);
         _exploration = ExpressionCompiler.Compile(ExplorationFormula, scope, CompileOptions.Score);
         _narrow = ExpressionCompiler.Compile(NarrowFormula, scope, new CompileOptions { ExpectedType = ColumnType.Int32 });
-        _list64 = ExpressionCompiler.Compile(ListFormula, scope, CompileOptions.Score);
         _list32 = ExpressionCompiler.Compile(List32Formula, scope, CompileOptions.Score);
+        _list64 = ExpressionCompiler.Compile(ListFormula, scope, CompileOptions.Score);
+        _listFloat32 = ExpressionCompiler.Compile(ListFloat32Formula, scope, CompileOptions.Score);
 
         _full = new Fixture(physicalRows: LiveRows, stride: 1);
         _sparse = new Fixture(physicalRows: LiveRows * 4, stride: 4);
@@ -99,10 +106,12 @@ public class ExpressionBenchmarks
         FusionGather();
         ExplorationFullRange();
         NarrowInt32FullRange();
-        ListInt64FullRange();
-        ListInt64Gather();
         ListInt32FullRange();
         ListInt32Gather();
+        ListInt64FullRange();
+        ListInt64Gather();
+        ListFloat32FullRange();
+        ListFloat32Gather();
     }
 
     [Benchmark(Baseline = true)]
@@ -118,16 +127,22 @@ public class ExpressionBenchmarks
     public void NarrowInt32FullRange() => _narrow.Evaluate(_full.Context, _full.Rows, _full.Int32Destination);
 
     [Benchmark]
+    public void ListInt32FullRange() => _list32.Evaluate(_full.Context, _full.Rows, _full.Destination);
+
+    [Benchmark]
+    public void ListInt32Gather() => _list32.Evaluate(_sparse.Context, _sparse.Rows, _sparse.Destination);
+
+    [Benchmark]
     public void ListInt64FullRange() => _list64.Evaluate(_full.Context, _full.Rows, _full.Destination);
 
     [Benchmark]
     public void ListInt64Gather() => _list64.Evaluate(_sparse.Context, _sparse.Rows, _sparse.Destination);
 
     [Benchmark]
-    public void ListInt32FullRange() => _list32.Evaluate(_full.Context, _full.Rows, _full.Destination);
+    public void ListFloat32FullRange() => _listFloat32.Evaluate(_full.Context, _full.Rows, _full.Destination);
 
     [Benchmark]
-    public void ListInt32Gather() => _list32.Evaluate(_sparse.Context, _sparse.Rows, _sparse.Destination);
+    public void ListFloat32Gather() => _listFloat32.Evaluate(_sparse.Context, _sparse.Rows, _sparse.Destination);
 
     /// <summary>One request: a table whose live rows are every <c>stride</c>-th physical row.</summary>
     private sealed class Fixture
@@ -163,8 +178,10 @@ public class ExpressionBenchmarks
             var followers = (ScalarColumn<float>)table.GetOrCreateSlot(5);
             var topics64 = (ListColumn<long>)table.GetOrCreateSlot(6);
             var topics32 = (ListColumn<int>)table.GetOrCreateSlot(7);
+            var topicsF32 = (ListColumn<float>)table.GetOrCreateSlot(8);
             Span<long> topics = stackalloc long[8];
             Span<int> narrowTopics = stackalloc int[8];
+            Span<float> floatTopics = stackalloc float[8];
             for (var r = 0; r < physicalRows; r++)
             {
                 pClick.Set(r, random.NextDouble() * 0.2);
@@ -185,10 +202,12 @@ public class ExpressionBenchmarks
                 {
                     narrowTopics[t] = random.Next(64);
                     topics[t] = narrowTopics[t];
+                    floatTopics[t] = narrowTopics[t];
                 }
 
                 topics64.Set(r, topics[..count]);
                 topics32.Set(r, narrowTopics[..count]);
+                topicsF32.Set(r, floatTopics[..count]);
             }
 
             Rows = new int[physicalRows / stride];
@@ -203,6 +222,7 @@ public class ExpressionBenchmarks
             {
                 ScalarValue.FromFloat64(45), ScalarValue.FromInt64(42),
                 ScalarValue.FromInt64List(new long[] { 1, 3, 5, 8, 13, 21, 34, 55, 2, 4, 6, 10, 12, 20, 40, 60 }),
+                ScalarValue.FromFloat64List(new double[] { 1, 3, 5, 8, 13, 21, 34, 55, 2, 4, 6, 10, 12, 20, 40, 60 }),
             };
             ScalarValue[] parameters =
             {

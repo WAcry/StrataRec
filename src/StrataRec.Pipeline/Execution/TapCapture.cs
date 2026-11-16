@@ -318,8 +318,8 @@ internal static class TapCapture
     }
 
     /// <summary>
-    /// Non-finite values are logged as missing, never as NaN (design 4.3, 8.7). A vector with any non-finite component
-    /// is missing as a whole: a partial vector has no meaning to a training job.
+    /// Non-finite values are logged as missing, never as NaN (design 4.3, 8.7). A vector or float list with any non-finite
+    /// element is missing as a whole: a partial vector has no meaning to a training job.
     /// </summary>
     private static ScalarValue Sanitize(ScalarValue value)
     {
@@ -328,9 +328,9 @@ internal static class TapCapture
             return value;
         }
 
-        if (value.Kind is StorageKind.Float32 or StorageKind.Float64)
+        if (ColumnValues.IsNonFinite(value))
         {
-            return double.IsFinite(value.AsFloat64()) ? value : ScalarValue.Missing;
+            return ScalarValue.Missing;
         }
 
         if (value.Kind == StorageKind.Vector)

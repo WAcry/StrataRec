@@ -18,7 +18,7 @@ namespace StrataRec.Features.Local;
 ///     int32  key length    in chars
 /// H   fields               8-byte values first (int64, float64, variable-length references), then 4-byte values
 ///                          (int32, float32, string codes, vector elements), then bools; each at its natural alignment
-/// F   variable data        text (UTF-16), lists (native elements; list&lt;string&gt; as string codes), the string key;
+/// F   variable data        text (UTF-16), lists (native elements, a bool one byte; list&lt;string&gt; as string codes), the string key;
 ///                          each item 8-byte aligned
 /// </code>
 /// <para>A variable-length field's slot holds <c>(int32 offset relative to the record start, int32 element count)</c>.
@@ -53,6 +53,8 @@ internal sealed class RecordLayout
 
         HeaderSize = Align(cursor, 8);
         Kinds = new StorageKind[count];
+        Elements = new StorageKind[count];
+        ElementSizes = new int[count];
         Offsets = new int[count];
         Dimensions = new int[count];
         Sizes = new int[count];
@@ -73,10 +75,12 @@ internal sealed class RecordLayout
                 }
 
                 Kinds[f] = type.Kind;
+                Elements[f] = type.Element;
+                ElementSizes[f] = VariableElementSize(type);
                 Dimensions[f] = type.Kind == StorageKind.Vector ? type.Dimension : 0;
                 Offsets[f] = cursor;
                 Sizes[f] = size;
-                VarSlots[f] = IsVariable(type.Kind) ? varCount++ : -1;
+                VarSlots[f] = ElementSizes[f] > 0 ? varCount++ : -1;
                 cursor += size;
             }
         }
@@ -92,7 +96,7 @@ internal sealed class RecordLayout
                 VarFields[VarSlots[f]] = f;
             }
 
-            if (Kinds[f] is StorageKind.String or StorageKind.ListString)
+            if (IsCoded(f))
             {
                 dictionaryFields.Add(f);
             }
@@ -120,6 +124,13 @@ internal sealed class RecordLayout
 
     public StorageKind[] Kinds { get; }
 
+    /// <summary>Each list field's element kind; 0 for other fields.</summary>
+    public StorageKind[] Elements { get; }
+
+    /// <summary>Bytes of one element of each variable-length field (a UTF-16 char of text, a list's native element, a
+    /// string code); 0 for a fixed-size field.</summary>
+    public int[] ElementSizes { get; }
+
     /// <summary>Offset of each field's value (or variable-length reference) from the record start.</summary>
     public int[] Offsets { get; }
 
@@ -139,16 +150,21 @@ internal sealed class RecordLayout
     /// <summary>The fields whose values are codes into the table's string dictionary (<c>string</c>, <c>list&lt;string&gt;</c>).</summary>
     public int[] DictionaryFields { get; }
 
-    public static bool IsVariable(StorageKind kind) => kind is StorageKind.Text or StorageKind.ListInt32 or StorageKind.ListInt64 or StorageKind.ListString;
+    /// <summary>True for a field whose values are codes into the table's string dictionary: <c>string</c>, <c>list&lt;string&gt;</c>.</summary>
+    public bool IsCoded(int field) => (Kinds[field] == StorageKind.List ? Elements[field] : Kinds[field]) == StorageKind.String;
 
-    /// <summary>Bytes of one element of a variable-length field (UTF-16 chars, native list elements, string codes).</summary>
-    public static int ElementSize(StorageKind kind) => kind switch
+    /// <summary>Bytes of one element of a variable-length type (UTF-16 chars, native list elements, string codes); 0 for
+    /// a fixed-size type.</summary>
+    private static int VariableElementSize(ColumnType type) => type.Kind switch
     {
         StorageKind.Text => 2,
-        StorageKind.ListInt32 => 4,
-        StorageKind.ListInt64 => 8,
-        StorageKind.ListString => 4,
-        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Not a variable-length kind."),
+        StorageKind.List => type.Element switch
+        {
+            StorageKind.Bool => 1,
+            StorageKind.Int32 or StorageKind.Float32 or StorageKind.String => 4,
+            _ => 8,
+        },
+        _ => 0,
     };
 
     public static int Align(int value, int alignment) => (value + alignment - 1) & ~(alignment - 1);
@@ -161,7 +177,7 @@ internal sealed class RecordLayout
         StorageKind.Int32 or StorageKind.Float32 or StorageKind.String => (4, 4),
         StorageKind.Int64 or StorageKind.Float64 => (8, 8),
         StorageKind.Vector => (checked(4 * type.Dimension), 4),
-        StorageKind.Text or StorageKind.ListInt32 or StorageKind.ListInt64 or StorageKind.ListString => (8, 8),
+        StorageKind.Text or StorageKind.List => (8, 8),
         _ => throw new ArgumentOutOfRangeException(nameof(type), type, "Unsupported storage type."),
     };
 }

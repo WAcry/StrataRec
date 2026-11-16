@@ -102,6 +102,8 @@ public class LocalFeatureTableTests
                 values["f32"] = ScalarValue.FromFloat64(double.NaN);
                 values["f64"] = ScalarValue.FromFloat64(key % 8 == 0 ? double.PositiveInfinity : double.NegativeInfinity);
                 values["v"] = ScalarValue.FromVector(new[] { float.NaN, 1f, float.PositiveInfinity, 2f });
+                values["lf32"] = ScalarValue.FromFloat64List(new[] { 1, double.NaN });
+                values["lf64"] = ScalarValue.FromFloat64List(new[] { double.NegativeInfinity });
             }
 
             if (key % 3 == 1)
@@ -169,7 +171,7 @@ public class LocalFeatureTableTests
         }
 
         Assert.Equal(request.Fetcher.NonFiniteReplaced, replaced);
-        Assert.Equal(6, replaced); // keys 4, 8 and 12, in f32 and f64
+        Assert.Equal(12, replaced); // keys 4, 8 and 12, in f32, f64 and the float lists (each list as a whole)
         memory.Release();
         request.Memory.Release();
     }
@@ -902,9 +904,18 @@ public class LocalFeatureTableTests
                     value.AsVector().CopyTo(writer.GetValues<float>(i).Span.Slice(k * field.Type.Dimension, field.Type.Dimension));
                     writer.SetValid(i, k);
                     break;
-                case StorageKind.ListInt32: writer.SetInt32List(i, k, value.AsInt64List().ToArray().Select(x => (int)x).ToArray()); break;
-                case StorageKind.ListInt64: writer.SetInt64List(i, k, value.AsInt64List()); break;
-                case StorageKind.ListString: writer.SetStringList(i, k, value.AsStringList()); break;
+                case StorageKind.List:
+                    switch (field.Type.Element)
+                    {
+                        case StorageKind.Bool: writer.SetBoolList(i, k, value.AsBoolList()); break;
+                        case StorageKind.Int32: writer.SetInt32List(i, k, value.AsInt64List().ToArray().Select(x => (int)x).ToArray()); break;
+                        case StorageKind.Int64: writer.SetInt64List(i, k, value.AsInt64List()); break;
+                        case StorageKind.Float32: writer.SetFloat32List(i, k, value.AsFloat64List().ToArray().Select(x => (float)x).ToArray()); break;
+                        case StorageKind.Float64: writer.SetFloat64List(i, k, value.AsFloat64List()); break;
+                        default: writer.SetStringList(i, k, value.AsStringList()); break;
+                    }
+
+                    break;
             }
         }
     }
