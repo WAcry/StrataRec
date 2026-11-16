@@ -156,7 +156,8 @@ public sealed class DebugOptions
     /// <remarks>
     /// An aborted request's bundle is a snapshot taken at the abort: calls still in flight are <c>outstanding</c>, and what
     /// they return afterwards is not in it. Nothing waits for them, so the cancellation reaches the caller as promptly as
-    /// without recording. A request rejected or aborted before any pipeline ran has nothing to replay and no bundle.
+    /// without recording. It is for inspection: having no result to reproduce, it is not replayed
+    /// (<see cref="Replay.ReplayOutcome.NotReplayed"/>). A request rejected or aborted before any pipeline ran has no bundle.
     /// </remarks>
     public Action<ReplayBundle>? OnRecording { get; init; }
 

@@ -16,6 +16,8 @@ namespace StrataRec.CommandLine.Commands;
 /// decisions, and prints each result with its diff against the recorded one, the node decisions and parameters that
 /// changed, and every piece of data the bundle lacked. It replays on a workspace (<c>-c</c>), on a release manifest
 /// (<c>--manifest</c>), or, given only <c>--store</c>, each bundle on the manifest it recorded (<see cref="ReplayEngines"/>).
+/// A bundle of an aborted request is not replayed (<see cref="ReplayOutcome.NotReplayed"/>): its recorded abort and node
+/// decisions are printed instead, and it counts neither as replayed nor as an error.
 /// </summary>
 internal static class ReplayCommand
 {
@@ -32,7 +34,10 @@ internal static class ReplayCommand
             Description = "Replay with these arms (experiment/arm, comma or space separated) instead of the recorded assignment.",
             AllowMultipleArgumentsPerToken = true,
         };
-        var expectIdentical = new Option<bool>("--expect-identical") { Description = "Exit with 1 unless every replay reproduces its recorded result exactly." };
+        var expectIdentical = new Option<bool>("--expect-identical")
+        {
+            Description = "Exit with 1 unless every replayed bundle reproduces its recorded result exactly (a bundle of an aborted request is not replayed, so not checked).",
+        };
         var explain = new Option<string[]>("--explain")
         {
             Description = $"Explain these candidates in each replayed run (entity ids of the pipeline's key type, comma or space separated, at most " +
@@ -40,7 +45,9 @@ internal static class ReplayCommand
             AllowMultipleArgumentsPerToken = true,
         };
         var command = new Command("replay", "Replay recorded requests on a workspace, a release manifest, or (with only --store) the manifest each bundle " +
-            "recorded, and diff against the recorded results. Exits with 2 unless every bundle was replayed; the report is printed either way.")
+            "recorded, and diff against the recorded results. A bundle of an aborted request is not replayed, since it has no result to reproduce: its " +
+            "recorded abort reason and node decisions are printed instead. Exits with 2 when a bundle could not be replayed (unreadable, or no " +
+            "configuration to replay it on) or no bundle was replayed; bundles of aborted requests count against neither. The report is printed either way.")
         {
             config, manifest, store, environment, format, arms, expectIdentical, explain,
         };
@@ -122,8 +129,9 @@ internal static class ReplayCommand
 
             if (!singleFile)
             {
-                var (replayed, unreadable, unresolved, identical) = Counts(results);
-                output.WriteLine($"{Output.Count(results.Count, "bundle")}, {replayed} replayed, {unreadable} unreadable, " +
+                var (replayed, aborted, unreadable, unresolved, identical) = Counts(results);
+                output.WriteLine($"{Output.Count(results.Count, "bundle")}, {replayed} replayed, " +
+                    (aborted > 0 ? $"{aborted} aborted in recording (not replayed), " : string.Empty) + $"{unreadable} unreadable, " +
                     (unresolved > 0 ? $"{unresolved} without a configuration to replay on, " : string.Empty) +
                     $"{identical} reproduced the recorded result exactly; status {Status(results)}");
             }
@@ -132,11 +140,11 @@ internal static class ReplayCommand
         var different = false;
         foreach (var result in results)
         {
-            different |= result.Outcome is null || !result.Outcome.Report.Diff.Identical;
+            different |= result.Outcome is null || (result.Outcome.NotReplayed is null && !result.Outcome.Report.Diff.Identical);
         }
 
-        // A bundle not replayed (unreadable, or its configuration unavailable), or nothing to replay at all, is an input error
-        // even when the rest replayed identically.
+        // A bundle not replayed for an error (unreadable, or its configuration unavailable), or nothing replayed at all, is an
+        // input error even when the rest replayed identically. A bundle of an aborted request is neither: it is reported.
         return Status(results) != "ok" ? 2 : expectIdentical && different ? 1 : 0;
     }
 
@@ -144,25 +152,31 @@ internal static class ReplayCommand
     /// <param name="Unresolved">Not replayed because the configuration it recorded is not available (not because the bundle is unreadable).</param>
     internal sealed record BundleReplay(string File, ReplayOutcome? Outcome, string? Error, bool Unresolved);
 
-    private static (int Replayed, int Unreadable, int Unresolved, int Identical) Counts(List<BundleReplay> results)
+    /// <returns>Bundles replayed, bundles of aborted requests (not replayed), unreadable bundles, bundles without a
+    /// configuration to replay on, and replays that reproduced their recorded result.</returns>
+    private static (int Replayed, int Aborted, int Unreadable, int Unresolved, int Identical) Counts(List<BundleReplay> results)
     {
-        int replayed = 0, unreadable = 0, unresolved = 0, identical = 0;
+        int replayed = 0, aborted = 0, unreadable = 0, unresolved = 0, identical = 0;
         foreach (var result in results)
         {
-            replayed += result.Outcome is not null ? 1 : 0;
+            replayed += result.Outcome is { NotReplayed: null } ? 1 : 0;
+            aborted += result.Outcome is { NotReplayed: not null } ? 1 : 0;
             unreadable += result.Error is not null && !result.Unresolved ? 1 : 0;
             unresolved += result.Unresolved ? 1 : 0;
-            identical += result.Outcome?.Report.Diff.Identical == true ? 1 : 0;
+            identical += result.Outcome is { NotReplayed: null, Report.Diff.Identical: true } ? 1 : 0;
         }
 
-        return (replayed, unreadable, unresolved, identical);
+        return (replayed, aborted, unreadable, unresolved, identical);
     }
 
-    /// <summary><c>ok</c> (every bundle replayed), <c>partial</c> (some not replayed) or <c>failed</c> (none replayed, or no bundles).</summary>
+    /// <summary>
+    /// <c>ok</c> (every bundle replayed, or of an aborted request), <c>partial</c> (some not replayed for an error) or
+    /// <c>failed</c> (none replayed, or no bundles).
+    /// </summary>
     private static string Status(List<BundleReplay> results)
     {
-        var (replayed, _, _, _) = Counts(results);
-        return replayed == 0 ? "failed" : replayed < results.Count ? "partial" : "ok";
+        var (replayed, aborted, _, _, _) = Counts(results);
+        return replayed == 0 ? "failed" : replayed + aborted < results.Count ? "partial" : "ok";
     }
 
     /// <summary>Replays one bundle file on the engine <paramref name="engines"/> chooses for it.</summary>
@@ -213,7 +227,7 @@ internal static class ReplayCommand
 
     private static void WriteReplaySummary(Utf8JsonWriter json, List<BundleReplay> results)
     {
-        var (replayed, unreadable, unresolved, identical) = Counts(results);
+        var (replayed, aborted, unreadable, unresolved, identical) = Counts(results);
         var gaps = 0;
         foreach (var result in results)
         {
@@ -224,6 +238,7 @@ internal static class ReplayCommand
         json.WriteString("status", Status(results));
         json.WriteNumber("bundles", results.Count);
         json.WriteNumber("replayed", replayed);
+        json.WriteNumber("aborted_in_recording", aborted);
         json.WriteNumber("identical", identical);
         json.WriteNumber("unreadable", unreadable);
         json.WriteNumber("unresolved", unresolved);
@@ -246,6 +261,13 @@ internal static class ReplayCommand
         var result = outcome.Result;
         json.WriteString("request_id", outcome.Bundle.Request.RequestId);
         json.WriteString("pipeline_id", outcome.Bundle.Request.PipelineId);
+        if (outcome.NotReplayed is { } abort)
+        {
+            WriteNotReplayed(json, report, abort);
+            json.WriteEndObject();
+            return;
+        }
+
         json.WriteStartObject("manifest");
         json.WriteString("recorded", report.RecordedManifest);
         json.WriteString("replayed", report.ReplayedManifest);
@@ -256,7 +278,6 @@ internal static class ReplayCommand
         WriteStrings(json, "replayed", report.ReplayedArms);
         json.WriteEndObject();
         json.WriteBoolean("succeeded", result.Succeeded);
-        json.WriteBoolean("aborted", outcome.Aborted); // stopped where the recording was aborted: no result, error is the reason
         if (result.Error is not null)
         {
             json.WriteString("error", result.Error);
@@ -309,13 +330,40 @@ internal static class ReplayCommand
         json.WriteEndObject();
     }
 
+    /// <summary>
+    /// A bundle of an aborted request: what it recorded, and no replay (no result, diff, gaps or parameters, which only a
+    /// replay has).
+    /// </summary>
+    private static void WriteNotReplayed(Utf8JsonWriter json, ReplayReport report, RecordedAbort abort)
+    {
+        json.WriteStartObject("manifest");
+        json.WriteString("recorded", report.RecordedManifest);
+        json.WriteEndObject();
+        json.WriteStartObject("arms");
+        WriteStrings(json, "recorded", report.RecordedArms);
+        json.WriteEndObject();
+        json.WriteStartObject("not_replayed");
+        json.WriteString("recorded_abort", abort.Reason);
+        json.WriteString("node", abort.Node);
+        json.WriteEndObject();
+        json.WriteStartArray("nodes");
+        foreach (var node in report.Nodes)
+        {
+            json.WriteStartObject();
+            json.WriteString("node", node.Node);
+            json.WriteString("recorded", node.Recorded);
+            json.WriteString("recorded_detail", node.RecordedDetail);
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
+    }
+
     internal static void WriteDiff(Utf8JsonWriter json, string name, ResultDiff diff)
     {
         json.WriteStartObject(name);
         json.WriteBoolean("identical", diff.Identical);
         json.WriteBoolean("recorded_succeeded", diff.LeftSucceeded);
-        json.WriteBoolean("recorded_aborted", diff.LeftAborted);
-        json.WriteBoolean("replayed_aborted", diff.RightAborted);
         json.WriteNumber("recorded_items", diff.LeftCount);
         json.WriteNumber("replayed_items", diff.RightCount);
         json.WriteNumber("in_both", diff.InBoth);
@@ -413,6 +461,21 @@ internal static class ReplayCommand
         var result = outcome.Result;
         var diff = report.Diff;
         output.WriteLine($"{file}: request {outcome.Bundle.Request.RequestId}, pipeline {outcome.Bundle.Request.PipelineId}");
+        if (outcome.NotReplayed is { } abort)
+        {
+            output.WriteLine($"  manifest  recorded {report.RecordedManifest}");
+            output.WriteLine($"  arms      {Join(report.RecordedArms)}");
+            output.WriteLine($"  result    not replayed: the recording was aborted ({abort.Reason})" + (abort.Node is { } running ? $" while {running} ran" : string.Empty) +
+                "; an aborted request has no result to reproduce");
+            foreach (var node in report.Nodes)
+            {
+                output.WriteLine($"  recorded  {node.Node}: {node.Recorded}" + (node.RecordedDetail is { } recordedDetail ? $" ({recordedDetail})" : string.Empty));
+            }
+
+            output.WriteLine();
+            return;
+        }
+
         output.WriteLine($"  manifest  recorded {report.RecordedManifest}, replayed {report.ReplayedManifest}");
         foreach (var artifact in report.Artifacts)
         {
@@ -421,15 +484,10 @@ internal static class ReplayCommand
 
         output.WriteLine($"  arms      {Join(report.ReplayedArms)}" + (Join(report.RecordedArms) == Join(report.ReplayedArms) ? string.Empty : $" (recorded {Join(report.RecordedArms)})"));
         var elapsed = report.ElapsedMs.ToString("0.###", CultureInfo.InvariantCulture);
-        output.WriteLine(outcome.Aborted
-            ? $"  result    aborted where the recording was ({outcome.AbortReason}): no result, in {result.ServedBy}, {elapsed} ms"
-            : $"  result    {(result.Succeeded ? "succeeded" : "failed: " + result.Error)}, {Output.Count(result.Items.Count, "item")}, served by {result.ServedBy}, {elapsed} ms");
+        output.WriteLine($"  result    {(result.Succeeded ? "succeeded" : "failed: " + result.Error)}, {Output.Count(result.Items.Count, "item")}, served by {result.ServedBy}, {elapsed} ms");
         output.WriteLine(diff switch
         {
-            { Identical: true, LeftAborted: true } => "  diff      aborted, as recorded; node decisions up to the abort are compared below",
             { Identical: true } => "  diff      identical to the recorded result",
-            { LeftAborted: true } => "  diff      differs: the recorded request was aborted, the replay returned a result",
-            { RightAborted: true } => "  diff      differs: the replay was aborted, the recorded request returned a result",
             _ => $"  diff      differs: {diff.LeftCount} recorded vs {Output.Count(diff.RightCount, "replayed item")}, {diff.InBoth} in both " +
                  $"(overlap {diff.Overlap.ToString("0.###", CultureInfo.InvariantCulture)}), " +
                  $"kendall tau {(diff.KendallTau is { } tau ? tau.ToString("0.###", CultureInfo.InvariantCulture) : "n/a")}",

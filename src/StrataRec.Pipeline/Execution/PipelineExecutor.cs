@@ -192,12 +192,6 @@ internal sealed class RequestState
 
     public bool[] Triggered { get; init; } = Array.Empty<bool>();
 
-    /// <summary>
-    /// <see cref="Triggered"/> as the current position started; null unless the request records. An aborted position
-    /// records the difference, the exposure it caused before the abort.
-    /// </summary>
-    public bool[]? TriggeredAtPosition { get; init; }
-
     public bool?[] WhenResults { get; init; } = Array.Empty<bool?>();
 
     /// <summary>Selected tap variant per tap slot; null when absent or its group did not sample the request.</summary>
@@ -379,7 +373,6 @@ public sealed class PipelineExecutor
                 Arms = request.Arms,
                 Variants = variants,
                 Triggered = new bool[plan.Experiments.Length],
-                TriggeredAtPosition = recorder is null ? null : new bool[plan.Experiments.Length],
                 WhenResults = new bool?[plan.Timeline.Length],
                 Events = events,
                 TraceNodes = replay is null && StrataRecTracing.IsRecording,
@@ -414,12 +407,6 @@ public sealed class PipelineExecutor
                 }
             }
 
-            if (result is null && replay?.AbortReason is { } recordedAbort)
-            {
-                // The recording was aborted after its last position: it has no result to reproduce.
-                throw new ReplayAbortedException(recordedAbort);
-            }
-
             result ??= await BuildResultAsync(state, request, start, cancellationToken).ConfigureAwait(false);
             if (state.Explainer is { } explainer)
             {
@@ -442,18 +429,11 @@ public sealed class PipelineExecutor
             // from experiment analysis, biased by arm (design 8.8, 12.6). Request memory is still held here.
             var reason = ex switch
             {
-                ReplayAbortedException => ex.Message, // the recorded reason
                 OperationCanceledException => "cancelled by the caller",
                 _ => "aborted: " + ex.Message,
             };
             if (state.PositionOpen && position < state.Variants.Length && state.Variants[position] is { } open)
             {
-                if (state.TriggeredAtPosition is { } before)
-                {
-                    // The exposure this position caused before the abort: a replay cannot run it again (design 12.6, 13.4).
-                    recorder?.AbortedTriggers(NewlyTriggered(plan, before, state.Triggered));
-                }
-
                 Record(state, open, NodeOutcomeKind.Aborted, reason, null, state.PositionStarted, state.PositionRowsIn);
             }
 
@@ -519,28 +499,6 @@ public sealed class PipelineExecutor
     {
         var slot = state.Plan.Timeline[position];
         var node = state.Variants[position];
-        if (state.TriggeredAtPosition is { } before)
-        {
-            // Only a recorded request: what this position triggers is recorded if the request is aborted while it runs.
-            Array.Copy(state.Triggered, before, before.Length);
-        }
-
-        if (node is not null && state.Replay is { AbortReason: { } recordedAbort } replay && replay.AbortsAt(node.NodeId, out var running))
-        {
-            // The recording was aborted before this position finished: it holds no decision to reproduce here or later.
-            // A node that was running then is recorded as aborted again, with the exposure it had caused by then: a partly
-            // run position cannot be replayed, so the recorded triggers are the facts. One never reached is not recorded.
-            if (running)
-            {
-                state.PositionOpen = true;
-                state.PositionStarted = Stopwatch.GetTimestamp();
-                state.PositionRowsIn = state.Table.Rows.Count;
-                MarkRecordedTriggers(state, replay.AbortedTriggers);
-            }
-
-            throw new ReplayAbortedException(recordedAbort);
-        }
-
         await RecordSiteTriggersAsync(state, slot, fallback: false, cancellationToken).ConfigureAwait(false);
         if (node is null)
         {
@@ -992,39 +950,6 @@ public sealed class PipelineExecutor
                 untrue = when.Source;
             }
         }
-    }
-
-    /// <summary>
-    /// Marks experiments a recording says were triggered, by id: only those the plan has and the request is assigned to,
-    /// so a replay on another configuration or other arms never reports exposure to an experiment it does not run.
-    /// </summary>
-    private static void MarkRecordedTriggers(RequestState state, IReadOnlyList<string> experiments)
-    {
-        foreach (var id in experiments)
-        {
-            for (var i = 0; i < state.Plan.Experiments.Length; i++)
-            {
-                if (state.Plan.Experiments[i].Id == id && IsAssigned(state, i))
-                {
-                    state.Triggered[i] = true;
-                }
-            }
-        }
-    }
-
-    /// <summary>Ids of experiments triggered now that were not in <paramref name="before"/>.</summary>
-    private static List<string> NewlyTriggered(ExecutionPlan plan, bool[] before, bool[] now)
-    {
-        var ids = new List<string>();
-        for (var i = 0; i < now.Length; i++)
-        {
-            if (now[i] && !before[i])
-            {
-                ids.Add(plan.Experiments[i].Id);
-            }
-        }
-
-        return ids;
     }
 
     private static void MarkParamTriggers(RequestState state, CompiledNode node)

@@ -22,11 +22,8 @@ public sealed class ReplaySideSummary
     /// <summary>Engine time per replayed request; recorded mode answers I/O instantly, so this is CPU work only.</summary>
     public required Distribution LatencyMs { get; init; }
 
-    /// <summary>Requests that returned no result, including those whose replay stopped where the recording was aborted.</summary>
+    /// <summary>Replayed requests that returned no result.</summary>
     public required double ErrorRate { get; init; }
-
-    /// <summary>Requests whose replay stopped where the recording was aborted (counted in <see cref="ErrorRate"/>, as serving counts aborts).</summary>
-    public required int Aborted { get; init; }
 
     /// <summary>Requests that succeeded with no items.</summary>
     public required double EmptyRate { get; init; }
@@ -81,8 +78,15 @@ public sealed class ComparisonReport
     public required int Unreadable { get; init; }
 
     /// <summary>
-    /// <c>ok</c> (every bundle compared), <c>partial</c> (some bundles unreadable: the metrics cover the rest) or
-    /// <c>failed</c> (nothing compared, including when there were no bundles).
+    /// Bundles of aborted requests (<see cref="ReplayOutcome.NotReplayed"/>): not replayed, so in neither side's metrics
+    /// and not in <see cref="Requests"/>. Neither are they an error of either configuration: the request had no result to
+    /// compare.
+    /// </summary>
+    public required int AbortedInRecording { get; init; }
+
+    /// <summary>
+    /// <c>ok</c> (every bundle compared, or aborted in its recording), <c>partial</c> (some bundles unreadable: the metrics
+    /// cover the rest) or <c>failed</c> (nothing compared, including when there were no bundles).
     /// </summary>
     public string Status => Compared == 0 ? "failed" : Unreadable > 0 ? "partial" : "ok";
 
@@ -129,6 +133,7 @@ public static class ReplayComparison
         var identical = 0;
         var compared = 0;
         var unreadable = 0;
+        var abortedInRecording = 0;
         foreach (var pair in pairs)
         {
             unreadable += pair.Error is not null ? 1 : 0;
@@ -139,9 +144,15 @@ public static class ReplayComparison
                 continue;
             }
 
+            if (NotReplayed(pair))
+            {
+                abortedInRecording++;
+                continue;
+            }
+
             compared++;
-            var left = ComparableResult.From(baseline.Result, baseline.Aborted);
-            var right = ComparableResult.From(candidate.Result, candidate.Aborted);
+            var left = ComparableResult.From(baseline.Result);
+            var right = ComparableResult.From(candidate.Result);
             var diff = ResultComparison.Diff(left, right);
             var overlap = ResultComparison.Overlap(left.Ids, right.Ids, topK);
             overlaps.Add(overlap);
@@ -163,6 +174,7 @@ public static class ReplayComparison
             Bundles = pairs.Count,
             Compared = compared,
             Unreadable = unreadable,
+            AbortedInRecording = abortedInRecording,
             TopK = topK,
             ScoreColumn = scoreColumn,
             Baseline = baselineSide,
@@ -177,6 +189,9 @@ public static class ReplayComparison
         };
     }
 
+    /// <summary>The bundle records an aborted request: neither side replayed it (the decision is the bundle's alone).</summary>
+    private static bool NotReplayed(ReplayPair pair) => pair.Baseline?.NotReplayed is not null || pair.Candidate?.NotReplayed is not null;
+
     private static ReplaySideSummary Summarize(
         IReadOnlyList<ReplayPair> pairs, Func<ReplayPair, ReplayOutcome?> side, string scoreColumn, string manifest,
         out List<double> scores, out Dictionary<(string Source, string Field), long[]> fields)
@@ -185,11 +200,11 @@ public static class ReplayComparison
         fields = new Dictionary<(string Source, string Field), long[]>();
         var latencies = new List<double>();
         var gaps = new Dictionary<(string Kind, string Source, string? Field, string Reason), (int Count, List<string> Examples)>();
-        int count = 0, errors = 0, aborted = 0, empty = 0, degraded = 0, reproduced = 0, nonFinite = 0;
+        int count = 0, errors = 0, empty = 0, degraded = 0, reproduced = 0, nonFinite = 0;
         long requested = 0, missing = 0;
         foreach (var pair in pairs)
         {
-            if (side(pair) is not { } outcome)
+            if (side(pair) is not { } outcome || NotReplayed(pair))
             {
                 continue;
             }
@@ -198,7 +213,6 @@ public static class ReplayComparison
             var result = outcome.Result;
             latencies.Add(outcome.Report.ElapsedMs);
             errors += result.Succeeded ? 0 : 1;
-            aborted += outcome.Aborted ? 1 : 0;
             empty += result.Succeeded && result.Items.Count == 0 ? 1 : 0;
             degraded += result.Succeeded && IsDegraded(outcome) ? 1 : 0;
             reproduced += outcome.Report.Diff.Identical ? 1 : 0;
@@ -262,7 +276,6 @@ public static class ReplayComparison
             Requests = count,
             LatencyMs = ResultComparison.Summarize(latencies),
             ErrorRate = Rate(errors, count),
-            Aborted = aborted,
             EmptyRate = Rate(empty, count),
             DegradedRate = Rate(degraded, count),
             FeatureMissingRate = requested == 0 ? 0.0 : (double)missing / requested,

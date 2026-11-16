@@ -11,7 +11,7 @@ namespace StrataRec.CommandLine.Commands;
 /// <c>stratarec compare</c>: the recorded-mode comparison of design 10.8. Replays every bundle on a baseline and a
 /// candidate configuration (workspaces or release manifests, <see cref="ConfigRef"/>) and reports latency, error and
 /// empty rates, Top-K overlap, Kendall τ, the score distribution change and the feature-missing rate, plus every gap the
-/// candidate hit.
+/// candidate hit. Bundles of aborted requests are not replayed: they are counted apart, outside both sides' metrics.
 /// </summary>
 internal static class CompareCommand
 {
@@ -37,7 +37,9 @@ internal static class CompareCommand
         var topK = new Option<int>("--top-k", "-k") { Description = "K of the Top-K overlap.", DefaultValueFactory = _ => 10 };
         var score = new Option<string>("--score") { Description = "Output column whose distribution is compared.", DefaultValueFactory = _ => "score" };
         var command = new Command("compare", "Replay recorded requests on a baseline and a candidate configuration and compare the results (design 10.8). " +
-            "Exits with 2 unless every bundle was compared; the report is printed either way.")
+            "Bundles of aborted requests are not replayed, since they have no result to compare: they are counted apart and left out of both sides' " +
+            "metrics. Exits with 2 when a bundle could not be compared (unreadable, or no configuration to replay it on) or no bundle was compared; " +
+            "the report is printed either way.")
         {
             candidate, manifest, store, environment, format, baseline, arms, topK, score,
         };
@@ -129,7 +131,7 @@ internal static class CompareCommand
     {
         foreach (var pair in pairs)
         {
-            if (side(pair) is { } outcome)
+            if (side(pair) is { NotReplayed: null } outcome)
             {
                 return outcome.Report.ReplayedManifest;
             }
@@ -146,6 +148,7 @@ internal static class CompareCommand
         json.WriteNumber("bundles", report.Bundles);
         json.WriteNumber("compared", report.Compared);
         json.WriteNumber("unreadable", report.Unreadable);
+        json.WriteNumber("aborted_in_recording", report.AbortedInRecording);
         json.WriteNumber("top_k", report.TopK);
         json.WriteString("score_column", report.ScoreColumn);
         WriteSide(json, "baseline", baseline, report.Baseline);
@@ -210,7 +213,6 @@ internal static class CompareCommand
         json.WriteNumber("requests", side.Requests);
         WriteDistribution(json, "latency_ms", side.LatencyMs);
         json.WriteNumber("error_rate", Math.Round(side.ErrorRate, 6));
-        json.WriteNumber("aborted", side.Aborted);
         json.WriteNumber("empty_rate", Math.Round(side.EmptyRate, 6));
         json.WriteNumber("degraded_rate", Math.Round(side.DegradedRate, 6));
         json.WriteNumber("feature_missing_rate", Math.Round(side.FeatureMissingRate, 6));
@@ -267,6 +269,11 @@ internal static class CompareCommand
             "partial" => $"status: partial, {report.Compared} compared, {report.Unreadable} unreadable (the metrics cover only the compared bundles)",
             _ => $"status: failed, nothing compared ({report.Unreadable} unreadable)",
         });
+        if (report.AbortedInRecording > 0)
+        {
+            output.WriteLine($"aborted in recording (not replayed): {report.AbortedInRecording}");
+        }
+
         output.WriteLine();
         // The baseline column is as wide as its longest value (paths and manifest ids can be long).
         var width = Math.Max(22, Math.Max(baseline.Length, report.Baseline.Manifest.Length) + 2);
@@ -276,10 +283,6 @@ internal static class CompareCommand
         Row("requests", Number(report.Baseline.Requests), Number(report.Candidate.Requests));
         Row("latency p50 / p95 (ms)", Pair(report.Baseline.LatencyMs.P50, report.Baseline.LatencyMs.P95), Pair(report.Candidate.LatencyMs.P50, report.Candidate.LatencyMs.P95));
         Row("error rate", Percent(report.Baseline.ErrorRate), Percent(report.Candidate.ErrorRate));
-        if (report.Baseline.Aborted + report.Candidate.Aborted > 0)
-        {
-            Row("aborted (as recorded)", Number(report.Baseline.Aborted), Number(report.Candidate.Aborted));
-        }
 
         Row("empty rate", Percent(report.Baseline.EmptyRate), Percent(report.Candidate.EmptyRate));
         Row("degraded rate", Percent(report.Baseline.DegradedRate), Percent(report.Candidate.DegradedRate));
@@ -292,7 +295,7 @@ internal static class CompareCommand
 
         Row("reproduced recording", Number(report.Baseline.ReproducedRecording), Number(report.Candidate.ReproducedRecording));
         output.WriteLine();
-        output.WriteLine($"identical results           {report.Identical} of {report.Bundles}");
+        output.WriteLine($"identical results           {report.Identical} of {report.Compared}");
         output.WriteLine($"top-{report.TopK} overlap mean / min  {Pair(report.Overlap.Mean, report.Overlap.Min)}");
         output.WriteLine($"kendall tau mean / min      {Pair(report.KendallTau.Mean, report.KendallTau.Min)} ({Output.Count(report.KendallTau.Count, "request")} with 2+ shared items)");
         output.WriteLine($"{report.ScoreColumn} distribution KS      {Fixed(report.ScoreKs)}; per-item delta mean {Fixed(report.ScoreDelta.Mean)}");

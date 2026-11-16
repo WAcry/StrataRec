@@ -42,6 +42,33 @@ public sealed class ReplayComparisonTests
         Assert.Equal(0.5, report.Baseline.DegradedRate); // the fallback and the skipped failure; not the failed request
     }
 
+    [Fact]
+    public void AnAbortedRecording_IsLeftOutOfBothSides_AndCountedApart()
+    {
+        // Not replayed on either side: no error, no reproduction, no latency, no overlap; not a request of the comparison.
+        var clean = Outcome(true, Items(0.5));
+        var abortedOutcome = Outcome(false, Items());
+        var aborted = new ReplayOutcome
+        {
+            Bundle = abortedOutcome.Bundle, Result = abortedOutcome.Result, Report = abortedOutcome.Report,
+            NotReplayed = new RecordedAbort("cancelled by the caller", "ctr_ranker"),
+        };
+
+        var report = ReplayComparison.Compare(new[] { Pair(aborted), Pair(clean) }, 10, "score", "base", "base");
+
+        Assert.Equal((2, 1, 0, 1), (report.Bundles, report.Compared, report.Unreadable, report.AbortedInRecording));
+        Assert.Equal("ok", report.Status);
+        Assert.Equal((1, 0.0, 1), (report.Baseline.Requests, report.Baseline.ErrorRate, report.Baseline.ReproducedRecording));
+        Assert.Equal((1, 0.0, 1), (report.Candidate.Requests, report.Candidate.ErrorRate, report.Candidate.ReproducedRecording));
+        Assert.Equal(1, report.Baseline.LatencyMs.Count);
+        Assert.Equal((1, 1), (report.Identical, report.Overlap.Count));
+        Assert.True(Assert.Single(report.Requests).BaselineSucceeded); // the clean one
+
+        var onlyAborted = ReplayComparison.Compare(new[] { Pair(aborted) }, 10, "score", "base", "base");
+
+        Assert.Equal(("failed", 0, 1), (onlyAborted.Status, onlyAborted.Compared, onlyAborted.AbortedInRecording)); // nothing was compared
+    }
+
     private static ReplayPair Pair(ReplayOutcome outcome) => new("b", "r", outcome, outcome);
 
     private static List<RankedItem> Items(params double[] scores)

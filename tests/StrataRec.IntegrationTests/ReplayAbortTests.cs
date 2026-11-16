@@ -15,7 +15,8 @@ namespace StrataRec.IntegrationTests;
 
 /// <summary>
 /// Requests aborted while recorded (design 13.4): the bundle reaches the host through the recording callback while the
-/// cancellation still reaches the caller, calls in flight are outstanding, and a replay stops where the recording did.
+/// cancellation still reaches the caller, calls in flight are outstanding, and a replay reports the recording without
+/// executing it: an aborted request has no result to reproduce.
 /// </summary>
 /// <remarks>
 /// Nothing here depends on timing: the caller cancels once the model client says it has started, and the untimed sample's
@@ -24,7 +25,7 @@ namespace StrataRec.IntegrationTests;
 public sealed class ReplayAbortTests
 {
     [Fact]
-    public async Task ARequestCancelledDuringAModelCall_DeliversItsBundle_AndReplaysItsDecisionsUpToTheAbort()
+    public async Task ARequestCancelledDuringAModelCall_DeliversItsBundle_WhichIsNotReplayed()
     {
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
             "\"on_failure\": \"fallback\", \"fallback\": \"ctr_backup\"", "\"on_failure\": \"fail_request\""));
@@ -50,54 +51,42 @@ public sealed class ReplayAbortTests
 
         var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(delivered)), cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal((true, "cancelled by the caller"), (outcome.Aborted, outcome.AbortReason));
-        Assert.Empty(outcome.Result.Items);
-        Assert.True(outcome.Report.Diff.Identical);
-        Assert.True(outcome.Report.Diff.RightAborted);
-        Assert.Equal(run.Nodes.Select(n => (n.Node, (string?)n.Outcome, n.Detail)), outcome.Report.Nodes.Select(n => (n.Node, n.Replayed, n.ReplayedDetail)));
-        Assert.Equal(0, models.Calls - run.ModelCalls.Count); // the replay never called the client
+        // The recorded reason, the node that was running and every recorded decision, for inspection.
+        Assert.Equal(new RecordedAbort("cancelled by the caller", "ctr_ranker"), outcome.NotReplayed);
+        Assert.Equal(run.Nodes.Select(n => (n.Node, (string?)n.Outcome, n.Detail)), outcome.Report.Nodes.Select(n => (n.Node, n.Recorded, n.RecordedDetail)));
+
+        // Nothing executed: no node ran, no feature value was asked of the recording, no client was called.
+        Assert.All(outcome.Report.Nodes, n => Assert.Null(n.Replayed));
+        Assert.Empty(outcome.Report.FieldStats);
+        Assert.Empty(outcome.Report.Params);
+        Assert.Null(outcome.Result.Trace);
+        Assert.Equal(run.ModelCalls.Count, models.Calls);
+
+        // A placeholder, not a result: it reproduces nothing.
+        Assert.Equal((false, 0), (outcome.Result.Succeeded, outcome.Result.Items.Count));
+        Assert.Contains("not replayed", outcome.Result.Error);
+        Assert.False(outcome.Report.Diff.Identical);
     }
 
     /// <summary>
     /// The position running at the abort had already triggered an experiment: through a parameter its node read (the arm
-    /// changes the model version) or through its site (the arm patches only the node's timeout). The recording keeps that
-    /// exposure on the aborted node, and a replay, which stops before running the position, restores it.
+    /// changes the model version) or through its site (the arm patches only the node's timeout). The exposure happened, so
+    /// the recording's experiment record keeps it (design 8.8, 12.6), and a replay does not execute the bundle.
     /// </summary>
     [Theory]
     [InlineData("param")]
     [InlineData("site")]
-    public async Task AnAbortedPosition_KeepsTheExposureItCaused_AndTheReplayRestoresIt(string trigger)
+    public async Task AnAbortedPosition_KeepsTheExposureItCaused_InTheRecording(string trigger)
     {
         var (engine, bundle) = await RecordAbortedAtTheRanker(trigger);
         var ranker = bundle.Runs[0].Nodes[^1];
         Assert.Equal(("ctr_ranker", "aborted"), (ranker.Node, ranker.Outcome));
-        Assert.Equal(new[] { "exp_quality_weight" }, ranker.Triggered);
+        Assert.Equal(new[] { "exp_quality_weight" }, bundle.Runs[0].Result.TriggeredExperiments);
         Assert.Equal(new[] { "exp_quality_weight" }, bundle.Result.TriggeredExperiments);
 
         var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(bundle)), cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.True(outcome.Aborted);
-        Assert.Equal(bundle.Result.TriggeredExperiments, outcome.Result.Experiments.Triggered);
-        Assert.All(bundle.Runs[0].Nodes.SkipLast(1), n => Assert.Null(n.Triggered)); // only the aborted position carries it
-    }
-
-    [Fact]
-    public async Task APositionAbortedBeforeItTriggeredAnything_IsReplayedWithoutExposure()
-    {
-        // The parameter case, as if the abort had come while ctr_ranker still fetched its features, before it read its
-        // parameters. (A caller cancelling during a fetch fails the fetch instead of aborting the request, so the bundle is
-        // edited.) Not every aborted node read its parameters: the replay restores what was recorded, nothing more.
-        var (engine, recorded) = await RecordAbortedAtTheRanker("param");
-        var bundle = JsonNode.Parse(ReplayBundleFile.Serialize(recorded))!;
-        var nodes = bundle["runs"]![0]!["nodes"]!.AsArray();
-        nodes[nodes.Count - 1]!["triggered"] = new JsonArray();
-        bundle["runs"]![0]!["result"]!["triggered_experiments"] = new JsonArray();
-        bundle["result"]!["triggered_experiments"] = new JsonArray();
-
-        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(bundle.ToJsonString()), cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.True(outcome.Aborted);
-        Assert.Empty(outcome.Result.Experiments.Triggered);
+        Assert.Equal(new RecordedAbort("cancelled by the caller", "ctr_ranker"), outcome.NotReplayed);
     }
 
     /// <summary>Records home_feed under exp_quality_weight/strong, cancelled while ctr_ranker waits for its model.</summary>
@@ -168,13 +157,6 @@ public sealed class ReplayAbortTests
         await stuck.Answered.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
         Assert.Equal("cancelled", delivered.Runs[0].ModelCalls[0].Status);
         Assert.Empty(delivered.Runs[0].ModelCalls[0].Outputs);
-
-        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(delivered)), cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.True(outcome.Aborted);
-        Assert.True(outcome.Report.Diff.Identical);
-        Assert.DoesNotContain(outcome.Report.Nodes, n => n.Changed);
-        Assert.Equal("aborted", outcome.Report.Nodes.Single(n => n.Node == "ctr_ranker").Replayed);
     }
 
     [Fact]
@@ -201,13 +183,45 @@ public sealed class ReplayAbortTests
     }
 
     [Fact]
-    public async Task ARunAbortedBetweenPositions_ReplaysThePositionsItFinished_AndStopsAtTheNextOne()
+    public async Task ARecordingAbortedBetweenPositions_IsNotReplayed_AndNamesNoRunningNode()
+    {
+        var (engine, bundle, finished) = await RecordAbortedAfterThreePositions();
+
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(bundle.ToJsonString()), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(new RecordedAbort("cancelled by the caller", null), outcome.NotReplayed);
+        Assert.Equal(finished, outcome.Report.Nodes.Select(n => n.Node));
+        Assert.All(outcome.Report.Nodes, n => Assert.Null(n.Replayed));
+    }
+
+    [Fact]
+    public async Task ARecordingAbortedInItsFallbackPipeline_NamesTheRunningNodeWithThatPipeline()
+    {
+        // As if the primary pipeline had failed and the request had been aborted while its fallback pipeline ran ctr_ranker.
+        var (engine, bundle, _) = await RecordAbortedAfterThreePositions();
+        var fallback = bundle["runs"]![0]!.DeepClone();
+        fallback["role"] = "fallback_pipeline";
+        fallback["pipeline_id"] = "home_feed_backup";
+        fallback["nodes"]!.AsArray().Add(new JsonObject { ["node"] = "ctr_ranker", ["outcome"] = "aborted", ["detail"] = "cancelled by the caller" });
+        bundle["runs"]![0]!["result"]!["aborted"] = false;
+        bundle["runs"]!.AsArray().Add(fallback);
+
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(bundle.ToJsonString()), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(new RecordedAbort("cancelled by the caller", "home_feed_backup:ctr_ranker"), outcome.NotReplayed);
+        Assert.Equal("aborted", outcome.Report.Nodes[^1].Recorded);
+    }
+
+    /// <summary>
+    /// A home_feed request recorded with its control arms, edited as if it had been aborted right after its third position
+    /// (e.g. while publishing that node), and the ids of the three nodes it finished.
+    /// </summary>
+    private static async Task<(RecEngine Engine, JsonNode Bundle, string[] Finished)> RecordAbortedAfterThreePositions()
     {
         var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
         var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-between", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         Assert.True(recorded.Succeeded, recorded.Error);
 
-        // The same request as if it had been aborted right after its third position (e.g. while publishing that node).
         var bundle = JsonNode.Parse(ReplayBundleFile.Serialize(recorded.Recording!))!;
         var nodes = bundle["runs"]![0]!["nodes"]!.AsArray();
         var finished = nodes.Take(3).Select(n => n!["node"]!.GetValue<string>()).ToArray();
@@ -224,12 +238,7 @@ public sealed class ReplayAbortTests
             result["items"] = new JsonArray();
         }
 
-        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(bundle.ToJsonString()), cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.True(outcome.Aborted);
-        Assert.True(outcome.Report.Diff.Identical);
-        Assert.Equal(finished, outcome.Report.Nodes.Select(n => n.Node)); // nothing past the abort ran, not even as aborted
-        Assert.DoesNotContain(outcome.Report.Nodes, n => n.Changed);
+        return (engine, bundle, finished);
     }
 
     [Fact]
@@ -259,9 +268,11 @@ public sealed class ReplayAbortTests
         var result = schema.RootElement.GetProperty("properties").GetProperty("result").GetProperty("properties");
         Assert.Contains("snapshot", result.GetProperty("aborted").GetProperty("description").GetString());
         Assert.Contains("outstanding", output.ToString());
+        Assert.Contains("does not execute", result.GetProperty("aborted").GetProperty("description").GetString());
         var run = schema.RootElement.GetProperty("properties").GetProperty("runs").GetProperty("items").GetProperty("properties");
-        Assert.Contains("aborted position", run.GetProperty("nodes").GetProperty("items").GetProperty("properties").GetProperty("triggered")
+        Assert.Contains("aborted (the position running", run.GetProperty("nodes").GetProperty("items").GetProperty("properties").GetProperty("outcome")
             .GetProperty("description").GetString());
+        Assert.False(run.GetProperty("nodes").GetProperty("items").GetProperty("properties").TryGetProperty("triggered", out _)); // nothing replays an aborted node
         var threw = run.GetProperty("model_calls").GetProperty("items").GetProperty("properties").GetProperty("threw");
         Assert.Contains("cut the call off", threw.GetProperty("description").GetString());
     }

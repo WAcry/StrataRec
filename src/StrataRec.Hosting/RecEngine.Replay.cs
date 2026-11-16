@@ -22,18 +22,28 @@ public sealed partial class RecEngine
     /// listed in <see cref="ReplayReport.Gaps"/>.
     /// </summary>
     /// <remarks>
-    /// A replay is not traffic: it writes no logs (taps are captured into the result), records no metrics, event logs or
-    /// spans, and does not count as a request of the pipeline or its arms.
+    /// <para>A replay is not traffic: it writes no logs (taps are captured into the result), records no metrics, event logs
+    /// or spans, and does not count as a request of the pipeline or its arms.</para>
+    /// <para>A bundle of an aborted request is not replayed: nothing executes, and the outcome carries the recorded reason,
+    /// the node that was running and the recorded node decisions (<see cref="ReplayOutcome.NotReplayed"/>).</para>
     /// </remarks>
     /// <exception cref="ReplayBundleException">The bundle is malformed; the pointer says where.</exception>
-    /// <exception cref="ObjectDisposedException">The engine is disposed.</exception>
+    /// <exception cref="ObjectDisposedException">The engine is disposed (and the bundle is one to replay).</exception>
     public async ValueTask<ReplayOutcome> ReplayAsync(ReplayBundle bundle, ReplayOptions? options = null, CancellationToken cancellationToken = default)
     {
         var recordedRequest = bundle.Request;
-        var notes = new List<string>();
-        var recordedResult = ComparableResult.From(bundle.Result, "/result");
         var (primaryRecord, primaryIndex) = FindRun(bundle, "primary");
         var (fallbackRecord, fallbackIndex) = FindRun(bundle, "fallback_pipeline");
+
+        // A run with a configuration override records no arms (its plan merged them in); the request's assignment has them.
+        var recordedArms = recordedRequest.ConfigOverride is null ? primaryRecord?.Arms ?? recordedRequest.Assignment.Arms : recordedRequest.Assignment.Arms;
+        if (bundle.Result.Aborted)
+        {
+            return NotReplayed(bundle, recordedArms, primaryRecord, fallbackRecord);
+        }
+
+        var notes = new List<string>();
+        var recordedResult = ComparableResult.From(bundle.Result, "/result");
         var primaryReplay = primaryRecord is null ? RunReplay.Empty() : RunReplay.Create(primaryRecord, $"/runs/{primaryIndex}");
         var fallbackReplay = fallbackRecord is null ? null : RunReplay.Create(fallbackRecord, $"/runs/{fallbackIndex}");
         if (primaryRecord is null)
@@ -51,8 +61,6 @@ public sealed partial class RecEngine
             TimeMs = recordedRequest.TimeMs,
             Debug = new DebugOptions { Trace = true, CaptureLogs = true, ExplainIds = options?.ExplainIds },
         };
-        // A run with a configuration override records no arms (its plan merged them in); the request's assignment has them.
-        var recordedArms = recordedRequest.ConfigOverride is null ? primaryRecord?.Arms ?? recordedRequest.Assignment.Arms : recordedRequest.Assignment.Arms;
         if (Enter(recordedRequest.PipelineId, out var disposed) is not { } pipeline)
         {
             if (disposed)
@@ -61,7 +69,7 @@ public sealed partial class RecEngine
             }
 
             var rejected = Rejected(request, RecErrorKind.UnknownPipeline, $"Unknown pipeline '{recordedRequest.PipelineId}'.");
-            return Outcome(bundle, rejected, null, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null, notes, 0, "<none>");
+            return Outcome(bundle, rejected, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null, notes, 0, "<none>");
         }
 
         // Entered like a request, though a replay calls no client (the bundle answers them): one rule for every run of a plan.
@@ -88,12 +96,12 @@ public sealed partial class RecEngine
             if (plan.RequestSchema.Check(inputs) is { } invalid)
             {
                 var rejected = Rejected(request, RecErrorKind.InvalidRequest, RequestSchema.Describe(invalid), pointer: invalid.Pointer);
-                return Outcome(bundle, rejected, null, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null, notes, 0, plan.ManifestId);
+                return Outcome(bundle, rejected, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null, notes, 0, plan.ManifestId);
             }
 
             if (options?.ExplainIds is { } explainIds && ExplainTargets.Check(explainIds, plan.TableSchema.KeyType, request.PipelineId) is { } explainError)
             {
-                return Outcome(bundle, Rejected(request, RecErrorKind.InvalidRequest, explainError), null, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null,
+                return Outcome(bundle, Rejected(request, RecErrorKind.InvalidRequest, explainError), recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null,
                     notes, 0, plan.ManifestId);
             }
 
@@ -117,7 +125,7 @@ public sealed partial class RecEngine
             }
             catch (ArgumentException ex)
             {
-                return Outcome(bundle, Rejected(request, RecErrorKind.InvalidRequest, ex.Message), null, recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null, notes, 0,
+                return Outcome(bundle, Rejected(request, RecErrorKind.InvalidRequest, ex.Message), recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null, notes, 0,
                     plan.ManifestId);
             }
 
@@ -137,7 +145,7 @@ public sealed partial class RecEngine
                 {
                     var rejected = Rejected(request, compiled.ErrorKind, compiled.Error!, new ExperimentRecord(merged, Array.Empty<string>(), ignored), plan.ManifestId,
                         compiled.Pointer);
-                    return Outcome(bundle, rejected, null, recordedResult, recordedArms, pipeline, primaryRecord, null, primaryReplay, null, notes, 0, plan.ManifestId);
+                    return Outcome(bundle, rejected, recordedResult, recordedArms, pipeline, primaryRecord, null, primaryReplay, null, notes, 0, plan.ManifestId);
                 }
 
                 running = overridden = compiled.Pipeline;
@@ -145,59 +153,47 @@ public sealed partial class RecEngine
             }
 
             var started = Stopwatch.GetTimestamp();
-            var replayed = new RunCapture(); // the replayed runs' recordings, also of a run that stops where its recording was aborted
+            var replayed = new RunCapture(); // the replayed runs' recordings
             RecResult result;
-            string? aborted = null;
-            try
+            var executed = await _executor.ExecuteAsync(running.Plan, ReplayRequest(request, request.Inputs, arms, primaryReplay, replayed, running), cancellationToken)
+                .ConfigureAwait(false);
+            if (executed.Succeeded || pipeline.FallbackPipeline is not { } fallbackId || fallbackId == request.PipelineId
+                || (fallback = Enter(fallbackId, out _)) is null)
             {
-                var executed = await _executor.ExecuteAsync(running.Plan, ReplayRequest(request, request.Inputs, arms, primaryReplay, replayed, running), cancellationToken)
-                    .ConfigureAwait(false);
-                if (executed.Succeeded || pipeline.FallbackPipeline is not { } fallbackId || fallbackId == request.PipelineId
-                    || (fallback = Enter(fallbackId, out _)) is null)
+                if (!executed.Succeeded && fallbackRecord is not null)
                 {
-                    if (!executed.Succeeded && fallbackRecord is not null)
-                    {
-                        // Not a difference of the replayed configuration's behavior: what the request failed over to is absent.
-                        notes.Add(pipeline.FallbackPipeline is { } configured && configured != request.PipelineId
-                            ? $"the recording ran fallback pipeline '{fallbackRecord.PipelineId}' (manifest {fallbackRecord.ManifestId}), and this engine has not loaded '{configured}': the replay ends with the primary pipeline's failure"
-                            : $"the recording ran fallback pipeline '{fallbackRecord.PipelineId}', and the replayed configuration has none");
-                    }
+                    // Not a difference of the replayed configuration's behavior: what the request failed over to is absent.
+                    notes.Add(pipeline.FallbackPipeline is { } configured && configured != request.PipelineId
+                        ? $"the recording ran fallback pipeline '{fallbackRecord.PipelineId}' (manifest {fallbackRecord.ManifestId}), and this engine has not loaded '{configured}': the replay ends with the primary pipeline's failure"
+                        : $"the recording ran fallback pipeline '{fallbackRecord.PipelineId}', and the replayed configuration has none");
+                }
 
-                    result = ToResult(request, pipeline, executed, ignored, request.PipelineId, merged);
-                }
-                else if (fallbackRecord is null && primaryRecord is { Result.Succeeded: false } failed)
-                {
-                    // The recorded request failed too and did not run its fallback pipeline: no time was left (design 5.6), or
-                    // it was aborted first.
-                    notes.Add($"the recording did not run fallback pipeline '{fallbackId}' ({(failed.Result.Aborted ? "it was aborted" : "no time was left")}); " +
-                        "neither does the replay");
-                    result = ToResult(request, pipeline, executed, ignored, request.PipelineId, merged);
-                }
-                else
-                {
-                    if (fallbackReplay is null)
-                    {
-                        notes.Add($"fallback pipeline '{fallbackId}' did not run in the recording: its external calls are gaps");
-                        fallbackReplay = RunReplay.Empty();
-                    }
-
-                    var fallbackInputs = FallbackInputs(request.Inputs, fallback.Plan.RequestSchema); // as the request did (ExecuteAsync)
-                    var served = await _executor.ExecuteAsync(fallback.Plan, ReplayRequest(request, fallbackInputs, RequestArms.None, fallbackReplay, replayed, fallback), cancellationToken)
-                        .ConfigureAwait(false);
-                    result = Combine(request, executed, ToResult(request, fallback, served, ignored, fallbackId), served, ignored, fallbackId, merged);
-                }
+                result = ToResult(request, pipeline, executed, ignored, request.PipelineId, merged);
             }
-            catch (ReplayAbortedException ex)
+            else if (fallbackRecord is null && primaryRecord is { Result.Succeeded: false })
             {
-                // The recorded request was aborted: the replay stops where the recording does and reports that, not a result.
-                aborted = ex.Message;
-                result = AbortedResult(request, replayed.Runs, ignored, ex.Message, merged);
+                // The recorded request failed too and did not run its fallback pipeline: no time was left (design 5.6).
+                notes.Add($"the recording did not run fallback pipeline '{fallbackId}' (no time was left); neither does the replay");
+                result = ToResult(request, pipeline, executed, ignored, request.PipelineId, merged);
+            }
+            else
+            {
+                if (fallbackReplay is null)
+                {
+                    notes.Add($"fallback pipeline '{fallbackId}' did not run in the recording: its external calls are gaps");
+                    fallbackReplay = RunReplay.Empty();
+                }
+
+                var fallbackInputs = FallbackInputs(request.Inputs, fallback.Plan.RequestSchema); // as the request did (ExecuteAsync)
+                var served = await _executor.ExecuteAsync(fallback.Plan, ReplayRequest(request, fallbackInputs, RequestArms.None, fallbackReplay, replayed, fallback), cancellationToken)
+                    .ConfigureAwait(false);
+                result = Combine(request, executed, ToResult(request, fallback, served, ignored, fallbackId), served, ignored, fallbackId, merged);
             }
 
             var elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             var primaryReplayed = replayed.Runs.Count > 0 ? replayed.Runs[0] : null;
             var fallbackReplayed = replayed.Runs.Count > 1 ? replayed.Runs[1] : null;
-            return Outcome(bundle, result, aborted, recordedResult, recordedArms, pipeline, primaryRecord, primaryReplayed, primaryReplay,
+            return Outcome(bundle, result, recordedResult, recordedArms, pipeline, primaryRecord, primaryReplayed, primaryReplay,
                 (fallbackReplayed, fallbackRecord, fallbackReplay), notes, elapsed, plan.ManifestId);
         }
         finally
@@ -226,28 +222,76 @@ public sealed partial class RecEngine
         OnEnd = pipeline.Bindings.Join(), // last: the executor, called next, ends it on every outcome
     };
 
-    /// <summary>The result of a replay that stopped where its recording was aborted: a failure with the recorded reason and no items.</summary>
-    private static RecResult AbortedResult(RecRequest request, List<ReplayRunRecord> replayed, IReadOnlyList<IgnoredArm> ignored, string reason, IReadOnlyList<string>? merged)
+    /// <summary>
+    /// The outcome of a bundle that records an aborted request, which is not replayed (<see cref="ReplayOutcome.NotReplayed"/>):
+    /// the recorded reason, the node that was running and the recorded node decisions, and a placeholder failure.
+    /// </summary>
+    private static ReplayOutcome NotReplayed(ReplayBundle bundle, IReadOnlyList<string> recordedArms, ReplayRunRecord? primary, ReplayRunRecord? fallback)
     {
-        var primary = replayed.Count > 0 ? replayed[0] : null;
-        var last = replayed.Count > 0 ? replayed[^1] : null;
-        return new RecResult
+        var nodes = CompareNodes(primary?.Nodes, null, null);
+        if (fallback is not null)
         {
-            RequestId = request.RequestId,
-            Succeeded = false,
-            ErrorKind = RecErrorKind.Failed,
-            Error = reason,
-            Columns = ResultColumns.Empty,
-            Experiments = new ExperimentRecord(merged ?? primary?.Arms ?? new List<string>(), primary?.Result.TriggeredExperiments ?? new List<string>(), ignored),
-            ManifestId = last?.ManifestId ?? string.Empty,
-            ServedBy = last?.PipelineId ?? request.PipelineId,
+            nodes.AddRange(CompareNodes(fallback.Nodes, null, fallback.PipelineId + ":"));
+        }
+
+        string? running = null;
+        foreach (var node in nodes)
+        {
+            if (node.Recorded == NodeOutcomeNames.Name(NodeOutcomeKind.Aborted))
+            {
+                running = node.Node; // the last run's: the request was aborted in it
+            }
+        }
+
+        var reason = bundle.Result.Error ?? "aborted";
+        return new ReplayOutcome
+        {
+            Bundle = bundle,
+            Result = new RecResult
+            {
+                RequestId = bundle.Request.RequestId,
+                Succeeded = false,
+                ErrorKind = RecErrorKind.Failed,
+                Error = $"not replayed: the recorded request was aborted ({reason}) and has no result to reproduce",
+                Columns = ResultColumns.Empty,
+                Experiments = new ExperimentRecord(Array.Empty<string>(), Array.Empty<string>(), Array.Empty<IgnoredArm>()),
+                ManifestId = string.Empty,
+                ServedBy = bundle.Request.PipelineId,
+            },
+            NotReplayed = new RecordedAbort(reason, running),
+            Report = new ReplayReport
+            {
+                RecordedManifest = bundle.Manifest.Id,
+                ReplayedManifest = "<none>",
+                Artifacts = Array.Empty<ValueChange>(),
+                RecordedArms = recordedArms,
+                ReplayedArms = Array.Empty<string>(),
+                Notes = Array.Empty<string>(),
+                Nodes = nodes,
+                Params = Array.Empty<ValueChange>(),
+                Gaps = Array.Empty<ReplayGap>(),
+                FieldStats = Array.Empty<ReplayFieldStats>(),
+                // Nothing ran, so nothing was reproduced: the placeholder is not compared with the recorded result.
+                Diff = new ResultDiff
+                {
+                    Identical = false,
+                    LeftSucceeded = false,
+                    RightSucceeded = false,
+                    LeftCount = bundle.Result.Items.Count,
+                    RightCount = 0,
+                    Overlap = 0,
+                    KendallTau = null,
+                    AddedColumns = Array.Empty<string>(),
+                    RemovedColumns = Array.Empty<string>(),
+                    Changes = Array.Empty<ItemChange>(),
+                },
+            },
         };
     }
 
     private static ReplayOutcome Outcome(
         ReplayBundle bundle,
         RecResult result,
-        string? aborted,
         ComparableResult recordedResult,
         IReadOnlyList<string> recordedArms,
         LoadedPipeline? pipeline,
@@ -277,7 +321,6 @@ public sealed partial class RecEngine
         {
             Bundle = bundle,
             Result = result,
-            AbortReason = aborted,
             Report = new ReplayReport
             {
                 RecordedManifest = bundle.Manifest.Id,
@@ -290,7 +333,7 @@ public sealed partial class RecEngine
                 Params = CompareParams(primaryRecord?.Params, primaryReplayed?.Params),
                 Gaps = gaps,
                 FieldStats = stats,
-                Diff = ResultComparison.Diff(recordedResult, ComparableResult.From(result, aborted: aborted is not null)),
+                Diff = ResultComparison.Diff(recordedResult, ComparableResult.From(result)),
                 ElapsedMs = elapsedMs,
             },
         };

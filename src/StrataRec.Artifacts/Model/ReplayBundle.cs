@@ -28,9 +28,9 @@ public sealed class ReplayBundle
     /// A format version is the date its layout changed and that day's sequence (<c>2026-11-14.1</c>, then
     /// <c>2026-11-14.2</c>): it says when a bundle was laid out, and sorts as text.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-16.1";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-16.2";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-16.1\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-16.2\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -170,9 +170,6 @@ public sealed class ReplayNodeRecord
 
     [Description("The node's run and its fallback's, with how each ended relative to its time budget.")]
     public List<ReplayAttemptRecord> Attempts { get; init; } = new();
-
-    [Description("Experiments this position triggered before the request was aborted there (its site, a parameter the node read, its fallback's site or parameters), as experiment ids. Present only on an aborted position: a replay cannot run a partly run position again, so it restores this exposure instead.")]
-    public List<string>? Triggered { get; init; }
 }
 
 /// <summary>How one node attempt ended relative to its time budget.</summary>
@@ -351,7 +348,7 @@ public sealed class ReplayResultRecord
 
     public required bool Succeeded { get; init; }
 
-    [Description("The run, or the request, was aborted (cancelled by its caller, or stopped by a defect) and returned no result. The recording is a snapshot taken at the abort: calls still in flight are outstanding, and what they returned afterwards is not recorded.")]
+    [Description("The run, or the request, was aborted (cancelled by its caller, or stopped by a defect) and returned no result. The recording is a snapshot taken at the abort: calls still in flight are outstanding, and what they returned afterwards is not recorded. A replay does not execute an aborted request's bundle: there is no result to reproduce.")]
     public bool Aborted { get; init; }
 
     public string? Error { get; init; }

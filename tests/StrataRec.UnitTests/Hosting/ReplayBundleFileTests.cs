@@ -10,7 +10,7 @@ public sealed class ReplayBundleFileTests
 {
     private const string Minimal = """
         {
-          "format": "stratarec.replay_bundle/2026-11-16.1",
+          "format": "stratarec.replay_bundle/2026-11-16.2",
           "request": { "pipeline_id": "p", "request_id": "r", "seed": 1, "time_ms": 0, "deadline_ms": 100, "assignment": { "source": "none" } },
           "manifest": { "id": "m" },
           "runs": [
@@ -160,7 +160,7 @@ public sealed class ReplayBundleFileTests
         // Review 32 #4: "\uD800" (an unpaired surrogate escape) escaped as InvalidOperationException.
         var unpaired = "\"" + (char)92 + "uD800\"";
         var json = member == "seed"
-            ? """{"format":"stratarec.replay_bundle/2026-11-16.1","request":{"seed":""" + unpaired + "}}"
+            ? """{"format":"stratarec.replay_bundle/2026-11-16.2","request":{"seed":""" + unpaired + "}}"
             : """{"format":""" + unpaired + ""","request":{}}""";
 
         var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(json));

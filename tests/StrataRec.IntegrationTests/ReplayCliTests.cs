@@ -251,6 +251,93 @@ public sealed class ReplayCliTests
         Assert.Equal((status, compared, unreadable), (root.GetProperty("status").GetString(), root.GetProperty("compared").GetInt32(), root.GetProperty("unreadable").GetInt32()));
     }
 
+    /// <summary>
+    /// A bundle of an aborted request is reported, not replayed: its recorded reason, running node and node decisions,
+    /// and no result or diff. It is neither replayed nor an error; a set of nothing else replayed nothing, which fails.
+    /// </summary>
+    [Fact]
+    public async Task Replay_ReportsAnAbortedRecording_WithoutReplayingIt()
+    {
+        var sample = HomeFeedTestHost.SampleRoot();
+        var directory = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
+        var aborted = Path.Combine(directory, "a-aborted.json");
+        File.WriteAllText(aborted, AbortedBundle);
+        File.WriteAllText(Path.Combine(directory, "b-valid.json"), MinimalBundle("[]"));
+
+        var text = new StringWriter();
+        Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, sample, "local", [directory], Array.Empty<string>(), "text", expectIdentical: true, text,
+            CancellationToken.None));
+        Assert.Contains("  result    not replayed: the recording was aborted (cancelled by the caller) while ctr_ranker ran; " +
+            "an aborted request has no result to reproduce", text.ToString());
+        Assert.Contains("  recorded  ctr_ranker: aborted (cancelled by the caller)", text.ToString());
+        Assert.Contains("2 bundles, 1 replayed, 1 aborted in recording (not replayed), 0 unreadable, 1 reproduced the recorded result exactly; status ok",
+            text.ToString());
+
+        var json = new StringWriter();
+        Assert.Equal(2, await ReplayCommand.RunAsync(Tool.Environment, sample, "local", [aborted], Array.Empty<string>(), "json", false, json, CancellationToken.None));
+        using var report = JsonDocument.Parse(json.ToString());
+        var root = report.RootElement;
+        var notReplayed = root.GetProperty("not_replayed");
+        Assert.Equal(("cancelled by the caller", "ctr_ranker"), (notReplayed.GetProperty("recorded_abort").GetString(), notReplayed.GetProperty("node").GetString()));
+        Assert.Equal(new[] { "recall_main", "ctr_ranker" }, root.GetProperty("nodes").EnumerateArray().Select(n => n.GetProperty("node").GetString()));
+        Assert.False(root.TryGetProperty("diff", out _));
+        Assert.False(root.TryGetProperty("items", out _));
+    }
+
+    [Fact]
+    public async Task Compare_LeavesAnAbortedRecordingOutOfBothSides_AndCountsIt()
+    {
+        var sample = HomeFeedTestHost.SampleRoot();
+        var directory = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
+        File.WriteAllText(Path.Combine(directory, "a-aborted.json"), AbortedBundle);
+        File.WriteAllText(Path.Combine(directory, "b-valid.json"), MinimalBundle("[]"));
+
+        var json = new StringWriter();
+        Assert.Equal(0, await CompareCommand.RunAsync(Tool.Environment, sample, sample, "local", [directory], Array.Empty<string>(), 10, "score", "json", json,
+            CancellationToken.None));
+        using (var report = JsonDocument.Parse(json.ToString()))
+        {
+            var root = report.RootElement;
+            Assert.Equal(("ok", 2, 1, 1), (root.GetProperty("status").GetString(), root.GetProperty("bundles").GetInt32(), root.GetProperty("compared").GetInt32(),
+                root.GetProperty("aborted_in_recording").GetInt32()));
+            foreach (var side in new[] { "baseline", "candidate" })
+            {
+                Assert.Equal(1, root.GetProperty(side).GetProperty("requests").GetInt32());
+                Assert.False(root.GetProperty(side).TryGetProperty("aborted", out _));
+                Assert.NotEqual("<none>", root.GetProperty(side).GetProperty("manifest").GetString()); // the first bundle replayed nothing
+            }
+
+            Assert.Equal(1, root.GetProperty("requests").GetArrayLength());
+        }
+
+        var text = new StringWriter();
+        Assert.Equal(0, await CompareCommand.RunAsync(Tool.Environment, sample, sample, "local", [directory], Array.Empty<string>(), 10, "score", "text", text,
+            CancellationToken.None));
+        Assert.Contains("aborted in recording (not replayed): 1", text.ToString());
+        Assert.Contains("identical results           1 of 1", text.ToString());
+    }
+
+    /// <summary>A bundle of a home_feed request cancelled while ctr_ranker ran.</summary>
+    private static string AbortedBundle => $$"""
+        {
+          "format": "{{StrataRec.Artifacts.Model.ReplayBundle.CurrentFormat}}",
+          "request": { "pipeline_id": "home_feed", "request_id": "r-aborted", "seed": 1, "time_ms": 0, "deadline_ms": 100, "assignment": { "source": "none" } },
+          "manifest": { "id": "m" },
+          "runs": [
+            {
+              "pipeline_id": "home_feed", "manifest_id": "m", "role": "primary",
+              "nodes": [
+                { "node": "recall_main", "outcome": "succeeded" },
+                { "node": "ctr_ranker", "outcome": "aborted", "detail": "cancelled by the caller" }
+              ],
+              "sampling": { "logs": "none" },
+              "result": { "succeeded": false, "aborted": true, "error": "cancelled by the caller" }
+            }
+          ],
+          "result": { "served_by": "home_feed", "succeeded": false, "aborted": true, "error": "cancelled by the caller" }
+        }
+        """;
+
     /// <summary>A bundle of the home_feed pipeline that ran nothing (its recorded result failed), with the given runs.</summary>
     internal static string MinimalBundle(string runs) => $$"""
         {
