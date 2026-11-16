@@ -111,7 +111,7 @@ public class PipelineBenchmarks
     [Benchmark]
     public int BaselineTraced()
     {
-        using var request = StrataRecTracing.StartRequest("home_feed", "bench");
+        using var request = StrataRec.Hosting.RequestTelemetry.StartRequest("home_feed", "bench");
         return Run(RequestArms.None, captureLogs: false).Items.Count;
     }
 

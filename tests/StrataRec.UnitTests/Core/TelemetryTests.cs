@@ -108,7 +108,7 @@ public sealed class RequestEventLogTests
 
     private static void Exercise(IoTarget source, IoTarget model, KeyValuePair<string, object?>[] tags)
     {
-        Assert.Null(StrataRecTracing.StartRequest("feed", "req-1"));
+        Assert.Null(StrataRec.Hosting.RequestTelemetry.StartRequest("feed", "req-1"));
         Assert.False(StrataRecTracing.IsRecording);
         source.Start().Complete(IoOutcome.Error, 25, "req-1", "boom");
         model.Start().Complete(IoOutcome.Ok);

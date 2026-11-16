@@ -350,7 +350,7 @@ public sealed record PlanLoadResult(
 public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposable
 {
     private readonly ConcurrentDictionary<string, LoadedPipeline> _pipelines = new(StringComparer.Ordinal);
-    private readonly object _publishGate = new(); // the lifecycle lock: _loads, _disposed, _minAcceptedSeq and every change of _pipelines
+    private readonly object _publishGate = new(); // the lifecycle lock: _loads, _disposed and every change of _pipelines
     private readonly HashSet<PendingLoad> _loads = new();
     private long _loadTicket;
     private readonly PipelineExecutor _executor;
@@ -697,7 +697,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         var started = Stopwatch.GetTimestamp();
 
         // One span per request (design 13.2); null when nobody listens or the host's sampler drops it.
-        var activity = StrataRecTracing.StartRequest(request.PipelineId, request.RequestId);
+        var activity = RequestTelemetry.StartRequest(request.PipelineId, request.RequestId);
         LoadedPipeline? pipeline = null;
         var arms = RequestArms.None;
         var degraded = false;

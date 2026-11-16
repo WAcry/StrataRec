@@ -123,23 +123,6 @@ public static class StrataRecTracing
     public static bool IsRecording =>
         Activity.Current is { Recorded: true } current && ReferenceEquals(current.Source, StrataRecTelemetry.ActivitySource);
 
-    /// <summary>
-    /// Starts the request span; null when nobody listens or the sampler drops it. Starting it costs a listener check
-    /// otherwise, so call it once per request, not per node. Internal: the engine starts it for every request it runs, and
-    /// nothing else runs a pipeline.
-    /// </summary>
-    internal static Activity? StartRequest(string pipelineId, string requestId)
-    {
-        var activity = StrataRecTelemetry.ActivitySource.StartActivity(RequestSpanName, ActivityKind.Internal);
-        if (activity is { IsAllDataRequested: true })
-        {
-            activity.SetTag(StrataRecTags.Pipeline, pipelineId);
-            activity.SetTag(StrataRecTags.RequestId, requestId);
-        }
-
-        return activity;
-    }
-
     /// <summary>Starts a child span only when the current StrataRec span is recorded; otherwise returns null without allocating.</summary>
     public static Activity? StartChild(string name, ActivityKind kind = ActivityKind.Internal) =>
         IsRecording ? StrataRecTelemetry.ActivitySource.StartActivity(name, kind) : null;

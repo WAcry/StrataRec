@@ -32,6 +32,23 @@ internal sealed class RequestTelemetry
 
     public KeyValuePair<string, object?>[] Pipeline { get; }
 
+    /// <summary>
+    /// Starts the request span (<see cref="StrataRecTracing.RequestSpanName"/>); null when nobody listens or the sampler
+    /// drops it. Starting it costs a listener check otherwise, so it is started once per request, not per node. The engine
+    /// starts it for every request it runs; nothing else runs a pipeline.
+    /// </summary>
+    public static Activity? StartRequest(string pipelineId, string requestId)
+    {
+        var activity = StrataRecTelemetry.ActivitySource.StartActivity(StrataRecTracing.RequestSpanName, ActivityKind.Internal);
+        if (activity is { IsAllDataRequested: true })
+        {
+            activity.SetTag(StrataRecTags.Pipeline, pipelineId);
+            activity.SetTag(StrataRecTags.RequestId, requestId);
+        }
+
+        return activity;
+    }
+
     /// <summary>Indexed by global arm index.</summary>
     public KeyValuePair<string, object?>[][] Arms { get; }
 
