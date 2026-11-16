@@ -123,11 +123,12 @@ public sealed class TopKFactory : IOperatorFactory
         {
             var k = K(kParam is { } p ? context.Param(p) : default);
             var live = context.LiveRows;
-            var rows = context.Memory.Rent<int>(Math.Max(1, live.Length));
+            var rows = context.Memory.RentScratch<int>(Math.Max(1, live.Length));
             live.CopyTo(rows);
             var span = rows.AsSpan(0, live.Length);
             RowRanking.SelectTop(span, context.Read(score), context.Table, k, ascending, context.Memory);
-            context.SetOrder(span[..Math.Min(k, span.Length)]);
+            context.SetOrder(span[..Math.Min(k, span.Length)]); // copied
+            context.Memory.ReturnScratch(rows);
             return ValueTask.CompletedTask;
         }
     }
@@ -193,17 +194,18 @@ public sealed class SlidingWindowQuotaFactory : IOperatorFactory
             }
 
             var memory = context.Memory;
-            var groupOf = memory.Rent<int>(n);
+            var groupOf = memory.RentScratch<int>(n);
             var groups = RowGroups.Assign(context.Read(group), live, groupOf.AsSpan(0, n), memory);
-            var placed = memory.Rent<int>(n);
+            var placed = memory.RentScratch<int>(n);
             var count = Place(groupOf.AsSpan(0, n), groups, window, maxPerWindow, placed, memory);
-            var order = memory.Rent<int>(Math.Max(1, count));
             for (var i = 0; i < count; i++)
             {
-                order[i] = live[placed[i]];
+                placed[i] = live[placed[i]]; // in place: each index is read before its slot is written
             }
 
-            context.SetOrder(order.AsSpan(0, count));
+            context.SetOrder(placed.AsSpan(0, count)); // copied
+            memory.ReturnScratch(groupOf);
+            memory.ReturnScratch(placed);
             return ValueTask.CompletedTask;
         }
     }
@@ -226,9 +228,9 @@ public sealed class SlidingWindowQuotaFactory : IOperatorFactory
         var n = groupOf.Length;
         var free = groups; // the rows without a group: a group of their own that is never limited
         var total = groups + 1;
-        var head = memory.Rent<int>(total);
-        var tail = memory.Rent<int>(total);
-        var next = memory.Rent<int>(Math.Max(1, n));
+        var head = memory.RentScratch<int>(total);
+        var tail = memory.RentScratch<int>(total);
+        var next = memory.RentScratch<int>(Math.Max(1, n));
         head.AsSpan(0, total).Fill(-1);
         for (var i = 0; i < n; i++)
         {
@@ -246,8 +248,10 @@ public sealed class SlidingWindowQuotaFactory : IOperatorFactory
             tail[g] = i;
         }
 
-        var inWindow = memory.RentCleared<int>(total);
-        var heap = new GroupHeap(memory.Rent<int>(total), head);
+        var inWindow = memory.RentScratch<int>(total);
+        inWindow.AsSpan(0, total).Clear();
+        var heapItems = memory.RentScratch<int>(total);
+        var heap = new GroupHeap(heapItems, head);
         for (var g = 0; g < total; g++)
         {
             if (head[g] >= 0)
@@ -284,6 +288,11 @@ public sealed class SlidingWindowQuotaFactory : IOperatorFactory
             }
         }
 
+        memory.ReturnScratch(head);
+        memory.ReturnScratch(tail);
+        memory.ReturnScratch(next);
+        memory.ReturnScratch(inWindow);
+        memory.ReturnScratch(heapItems);
         return count;
     }
 
@@ -451,9 +460,10 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
     {
         var n = rows.Length;
         var similar = lambda < 1 && vectors is not null;
-        var maxSim = memory.Rent<double>(n); // read only once a row has been picked, and only with a similarity weight
-        var used = memory.RentCleared<bool>(n);
-        var norms = memory.Rent<float>(n);
+        var maxSim = memory.RentScratch<double>(n); // read only once a row has been picked, and only with a similarity weight
+        var used = memory.RentScratch<bool>(n);
+        used.AsSpan(0, n).Clear();
+        var norms = memory.RentScratch<float>(n);
         for (var i = 0; i < n; i++)
         {
             norms[i] = similar && vectors!.IsValid(rows[i]) ? TensorPrimitives.Norm(vectors.Row(rows[i])) : 0f;
@@ -522,6 +532,10 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
                 }
             }
         }
+
+        memory.ReturnScratch(maxSim);
+        memory.ReturnScratch(used);
+        memory.ReturnScratch(norms);
     }
 
     private sealed class MmrDiversifier(ColumnRef score, ColumnRef embedding, double fixedLambda, ParamRef? lambdaParam, int window) : Operator
@@ -538,16 +552,18 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
 
             var scores = context.Read(score);
             var memory = context.Memory;
-            var relevance = memory.Rent<double>(n);
+            var relevance = memory.RentScratch<double>(n);
             for (var i = 0; i < n; i++)
             {
                 relevance[i] = scores is not null && RowRanking.TryGetScore(scores, live[i], out var s) ? s : double.NegativeInfinity;
             }
 
-            var order = memory.Rent<int>(live.Length);
+            var order = memory.RentScratch<int>(live.Length);
             Order(live[..n], relevance.AsSpan(0, n), context.Read(embedding) as VectorColumn, lambda, order, memory);
             live[n..].CopyTo(order.AsSpan(n));
-            context.SetOrder(order.AsSpan(0, live.Length));
+            context.SetOrder(order.AsSpan(0, live.Length)); // copied
+            memory.ReturnScratch(relevance);
+            memory.ReturnScratch(order);
             return ValueTask.CompletedTask;
         }
     }

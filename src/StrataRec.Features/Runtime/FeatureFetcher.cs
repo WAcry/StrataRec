@@ -861,16 +861,27 @@ public sealed partial class FeatureFetcher
         }
 
         var scratch = default(BackfillScratch); // shared by the fetch's features: a row's key is looked up once, not per feature
-        for (var i = 0; i < pending.Features.Length; i++)
+        try
         {
-            var f = pending.Features[i];
-            if (_state[f] == FeatureState.Failed)
+            for (var i = 0; i < pending.Features.Length; i++)
             {
-                continue;
-            }
+                var f = pending.Features[i];
+                if (_state[f] == FeatureState.Failed)
+                {
+                    continue;
+                }
 
-            Backfill(pending, _plan.Features[f], i, ref scratch);
-            SetFetchedState(f, degraded, error);
+                Backfill(pending, _plan.Features[f], i, ref scratch);
+                SetFetchedState(f, degraded, error);
+            }
+        }
+        finally
+        {
+            if (scratch.Keys is not null)
+            {
+                _memory.ReturnScratch(scratch.Keys);
+                _memory.ReturnScratch(scratch.Copied!);
+            }
         }
     }
 
@@ -1052,9 +1063,9 @@ public sealed partial class FeatureFetcher
         var order = _table.Rows.Order;
         if (scratch.Keys is null)
         {
-            scratch.Keys = _memory.Rent<int>(Math.Max(1, order.Length));
+            scratch.Keys = _memory.RentScratch<int>(Math.Max(1, order.Length));
             scratch.Keys.AsSpan(0, order.Length).Fill(UnresolvedKey);
-            scratch.Copied = _memory.Rent<int>(Math.Max(1, order.Length));
+            scratch.Copied = _memory.RentScratch<int>(Math.Max(1, order.Length));
         }
 
         var keys = scratch.Keys;
@@ -1124,8 +1135,21 @@ public sealed partial class FeatureFetcher
             return;
         }
 
+        var buffer = _memory.RentScratch<int>(Math.Max(1, _table.Rows.Count));
+        try
+        {
+            ComputeDerived(feature, worst, error, buffer);
+        }
+        finally
+        {
+            _memory.ReturnScratch(buffer);
+        }
+    }
+
+    /// <param name="buffer">Scratch for the rows the feature fills, returned by the caller.</param>
+    private void ComputeDerived(FeatureRuntimeInfo feature, FeatureState worst, string? error, int[] buffer)
+    {
         var filled = _table.GetFilled(feature.Slot);
-        var buffer = _memory.Rent<int>(Math.Max(1, _table.Rows.Count));
         var count = 0;
         foreach (var row in _table.Rows.Order)
         {

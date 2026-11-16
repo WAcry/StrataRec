@@ -686,62 +686,69 @@ internal sealed class PipelineExecutor
         // replay, which skips a recorded timeout instead of running it.
         var checkpoint = state.Table.Checkpoint();
 
-        // The attempt's absolute deadline. The context hands the operator a token cancelled at it and bounds every external
-        // wait by it, whether or not the client honours the token. A replay takes timing from its recording instead.
-        var deadline = state.Replay is null
-            ? Stopwatch.GetTimestamp() + (long)(Math.Min(budgetMs, AttemptBudget.MaxWaitMs) * Stopwatch.Frequency / 1000)
-            : long.MaxValue;
-        var budget = new AttemptBudget(cancellationToken, deadline, state.Events, state.RequestId);
-        var context = new OperatorContext(state, node.NodeId, node.Effects, budget);
-        string? failure;
-        var timedOut = false;
         try
         {
-            // The operator is about to read its parameters: that is exposure, whether it then succeeds or fails
-            // (design 12.6). Recording only successes would bias triggered analysis against arms that fail more.
-            MarkParamTriggers(state, node);
-            await node.Operator.ExecuteAsync(context).ConfigureAwait(false);
-            if (budget.RanOut)
+            // The attempt's absolute deadline. The context hands the operator a token cancelled at it and bounds every external
+            // wait by it, whether or not the client honours the token. A replay takes timing from its recording instead.
+            var deadline = state.Replay is null
+                ? Stopwatch.GetTimestamp() + (long)(Math.Min(budgetMs, AttemptBudget.MaxWaitMs) * Stopwatch.Frequency / 1000)
+                : long.MaxValue;
+            var budget = new AttemptBudget(cancellationToken, deadline, state.Events, state.RequestId);
+            var context = new OperatorContext(state, node.NodeId, node.Effects, budget);
+            string? failure;
+            var timedOut = false;
+            try
             {
-                // A late success is not a success (AttemptBudget.RanOut). The operator itself is awaited, never abandoned:
-                // it changes the table the fallback works on.
+                // The operator is about to read its parameters: that is exposure, whether it then succeeds or fails
+                // (design 12.6). Recording only successes would bias triggered analysis against arms that fail more.
+                MarkParamTriggers(state, node);
+                await node.Operator.ExecuteAsync(context).ConfigureAwait(false);
+                if (budget.RanOut)
+                {
+                    // A late success is not a success (AttemptBudget.RanOut). The operator itself is awaited, never abandoned:
+                    // it changes the table the fallback works on.
+                    timedOut = true;
+                    failure = $"timed out after {budgetMs:0} ms";
+                }
+                else if ((failure = context.FailureReason) is null)
+                {
+                    // An explained request sees the attempt as the operator left it, before its outputs are committed: the
+                    // operator explains itself reading the versions it read (CandidateExplainer.Observe).
+                    state.Explainer?.Observe(state, node);
+                    failure = Commit(state, node);
+                }
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
                 timedOut = true;
                 failure = $"timed out after {budgetMs:0} ms";
             }
-            else if ((failure = context.FailureReason) is null)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // An explained request sees the attempt as the operator left it, before its outputs are committed: the
-                // operator explains itself reading the versions it read (CandidateExplainer.Observe).
-                state.Explainer?.Observe(state, node);
-                failure = Commit(state, node);
+                failure = $"{ExceptionName(ex)}: {ex.Message}";
             }
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            timedOut = true;
-            failure = $"timed out after {budgetMs:0} ms";
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            failure = $"{ExceptionName(ex)}: {ex.Message}";
+            finally
+            {
+                // The node token's source lives on while a client the context abandoned still holds its token.
+                budget.Release();
+            }
+
+            state.Recorder?.Attempt(node.NodeId, timedOut ? ReplayTiming.TimedOut : ReplayTiming.Ran, budgetMs);
+
+            if (failure is not null)
+            {
+                // Every way an attempt fails ends here: an exception, a failure it reported, a timeout, a late success, a commit.
+                state.Table.Rollback(checkpoint);
+                return new Attempt(AttemptKind.Failed, failure);
+            }
+
+            var degraded = context.DegradedReason ?? (fill.State == FeatureState.Degraded ? "degraded features: " + fill.Error : null);
+            return new Attempt(degraded is null ? AttemptKind.Succeeded : AttemptKind.Degraded, degraded);
         }
         finally
         {
-            // The node token's source lives on while a client the context abandoned still holds its token.
-            budget.Release();
+            state.Table.Discard(checkpoint); // settled, or the request is cancelled: nothing rolls back to it again
         }
-
-        state.Recorder?.Attempt(node.NodeId, timedOut ? ReplayTiming.TimedOut : ReplayTiming.Ran, budgetMs);
-
-        if (failure is not null)
-        {
-            // Every way an attempt fails ends here: an exception, a failure it reported, a timeout, a late success, a commit.
-            state.Table.Rollback(checkpoint);
-            return new Attempt(AttemptKind.Failed, failure);
-        }
-
-        var degraded = context.DegradedReason ?? (fill.State == FeatureState.Degraded ? "degraded features: " + fill.Error : null);
-        return new Attempt(degraded is null ? AttemptKind.Succeeded : AttemptKind.Degraded, degraded);
     }
 
     /// <summary>The exception's type name for a failure detail.</summary>

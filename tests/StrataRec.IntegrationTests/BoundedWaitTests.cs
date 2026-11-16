@@ -50,7 +50,7 @@ public sealed class BoundedWaitTests
         Assert.False(models.Answered.Task.IsCompleted);
         var ranker = result.Trace!.Single(n => n.NodeId == "ctr_ranker");
         Assert.Equal(("ctr_backup", "timed out after 50 ms; served by fallback 'ctr_backup'"), (ranker.ProducedBy, ranker.Detail));
-        Assert.Equal(0, pool.Returned); // the abandoned call still holds the request memory...
+        Assert.True(pool.Outstanding > 0); // the abandoned call still holds the request memory...
         Assert.Equal(1, Assert.Single(capture.Of(StrataRecMetrics.Names.AbandonedIo)).Value); // ...and is counted once
         Assert.Equal("timeout", Tag(Assert.Single(capture.Of(StrataRecMetrics.Names.ModelErrors)), StrataRecTags.Outcome));
         var run = result.Recording!.Runs[0];
@@ -67,7 +67,7 @@ public sealed class BoundedWaitTests
         // The model answers late, writing its outputs into buffers still rented, and only then lets go of the memory.
         models.Open();
         Assert.True((await models.Answered.Task.WaitAsync(Patience, TestContext.Current.CancellationToken)).Succeeded);
-        Assert.True(SpinWait.SpinUntil(() => pool.Returned > 0, Patience));
+        Assert.True(SpinWait.SpinUntil(() => pool.Outstanding == 0, Patience));
         Assert.Empty(run.ModelCalls[0].Outputs);
 
         await AssertReplaysAtOnce(engine, result.Recording, "ctr_ranker", "fallback", ranker.Detail);
@@ -90,11 +90,11 @@ public sealed class BoundedWaitTests
         Assert.StartsWith("node 'ctr_ranker' failed: timed out after ", result.Error);
         Assert.Equal(1, models.Calls);
         Assert.False(models.Answered.Task.IsCompleted);
-        Assert.Equal(0, pool.Returned);
+        Assert.True(pool.Outstanding > 0);
 
         models.Open();
         Assert.True((await models.Answered.Task.WaitAsync(Patience, TestContext.Current.CancellationToken)).Succeeded);
-        Assert.True(SpinWait.SpinUntil(() => pool.Returned > 0, Patience));
+        Assert.True(SpinWait.SpinUntil(() => pool.Outstanding == 0, Patience));
     }
 
     [Fact]
@@ -119,11 +119,11 @@ public sealed class BoundedWaitTests
         Assert.Empty(capture.Of(StrataRecMetrics.Names.ModelErrors)); // the caller giving up is not the model's fault
         Assert.Empty(capture.Of(StrataRecMetrics.Names.ModelDuration));
         Assert.Equal(1, Assert.Single(capture.Of(StrataRecMetrics.Names.AbandonedIo)).Value);
-        Assert.Equal(0, pool.Returned);
+        Assert.True(pool.Outstanding > 0);
 
         models.Open();
         Assert.True((await models.Answered.Task.WaitAsync(Patience, TestContext.Current.CancellationToken)).Succeeded);
-        Assert.True(SpinWait.SpinUntil(() => pool.Returned > 0, Patience));
+        Assert.True(SpinWait.SpinUntil(() => pool.Outstanding == 0, Patience));
         Assert.Equal("cancelled", delivered.Runs[0].ModelCalls[0].Status);
     }
 
@@ -155,7 +155,7 @@ public sealed class BoundedWaitTests
         Assert.DoesNotContain(result.Items, item => item.Columns["primary_source"].AsString() == "popular");
         var popular = result.Recording!.Runs[0].CandidateCalls.Single(c => c.Source == "popular");
         Assert.Equal(("timeout", null), (popular.Status, popular.Ids));
-        Assert.Equal(0, pool.Returned);
+        Assert.True(pool.Outstanding > 0);
         Assert.Equal(1, Assert.Single(capture.Of(StrataRecMetrics.Names.AbandonedIo)).Value);
         var error = Assert.Single(capture.Of(StrataRecMetrics.Names.SourceErrors));
         Assert.Equal(("popular", "timeout"), (Tag(error, StrataRecTags.Source), Tag(error, StrataRecTags.Outcome)));
@@ -163,7 +163,7 @@ public sealed class BoundedWaitTests
         // It answers late, adding its candidates again into the closed buffer, and then lets go of the memory.
         sources.Open();
         Assert.True((await sources.Answered.Task.WaitAsync(Patience, TestContext.Current.CancellationToken)).Succeeded);
-        Assert.True(SpinWait.SpinUntil(() => pool.Returned > 0, Patience));
+        Assert.True(SpinWait.SpinUntil(() => pool.Outstanding == 0, Patience));
 
         await AssertReplaysAtOnce(engine, result.Recording, "recall", "degraded", recall.Detail);
     }
@@ -239,15 +239,23 @@ public sealed class BoundedWaitTests
     private static string? Tag(Measured m, string key) => m.Tags.TryGetValue(key, out var value) ? value as string : null;
 
     /// <summary>Counts buffers given back to it: none until the request memory's last holder lets go.</summary>
+    /// <summary>
+    /// Counts the arrays out of the pool. A request gives its scratch buffers back as it goes (RequestMemory.RentScratch),
+    /// so while a call holds the memory some are out (its ledger), and none once the last holder releases it.
+    /// </summary>
     private sealed class CountingPool : IBufferPool
     {
-        private int _returned;
+        private int _outstanding;
 
-        public int Returned => Volatile.Read(ref _returned);
+        public int Outstanding => Volatile.Read(ref _outstanding);
 
-        public T[] Rent<T>(int minimumLength) => new T[Math.Max(1, minimumLength)];
+        public T[] Rent<T>(int minimumLength)
+        {
+            Interlocked.Increment(ref _outstanding);
+            return new T[Math.Max(1, minimumLength)];
+        }
 
-        public void Return<T>(T[] array, bool clearArray) => Interlocked.Increment(ref _returned);
+        public void Return<T>(T[] array, bool clearArray) => Interlocked.Decrement(ref _outstanding);
     }
 
     /// <summary>Runs a client's work on a dedicated thread once the gate opens, ignoring cancellation.</summary>

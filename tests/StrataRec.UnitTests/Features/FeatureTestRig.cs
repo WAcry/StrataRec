@@ -594,12 +594,21 @@ internal sealed class PoisoningPool : IBufferPool
     public const byte Pattern = 0xCD;
     private readonly object _gate = new();
 
-    public int Returned { get; private set; }
+    /// <summary>
+    /// Arrays rented and not yet returned. A request gives its scratch buffers back as it goes
+    /// (<see cref="RequestMemory.RentScratch{T}"/>), so while something holds its memory only its ledger is out.
+    /// </summary>
+    public int Outstanding { get; private set; }
 
     public T[] Rent<T>(int minimumLength)
     {
         var array = new T[Math.Max(1, minimumLength)];
         Fill(array);
+        lock (_gate)
+        {
+            Outstanding++;
+        }
+
         return array;
     }
 
@@ -607,7 +616,7 @@ internal sealed class PoisoningPool : IBufferPool
     {
         lock (_gate)
         {
-            Returned++;
+            Outstanding--;
         }
 
         if (clearArray)

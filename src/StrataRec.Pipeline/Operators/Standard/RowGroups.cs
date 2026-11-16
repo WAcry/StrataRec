@@ -20,7 +20,8 @@ internal static class RowGroups
         var n = rows.Length;
         if (keys is DictStringColumn strings)
         {
-            var ids = memory.RentCleared<int>(Math.Max(1, strings.Dictionary.Count));
+            var ids = memory.RentScratch<int>(Math.Max(1, strings.Dictionary.Count));
+            ids.AsSpan(0, Math.Max(1, strings.Dictionary.Count)).Clear();
             var count = 0;
             for (var i = 0; i < n; i++)
             {
@@ -40,11 +41,12 @@ internal static class RowGroups
                 groupOf[i] = id - 1;
             }
 
+            memory.ReturnScratch(ids);
             return count;
         }
 
-        var sorted = memory.Rent<long>(Math.Max(1, n));
-        var index = memory.Rent<int>(Math.Max(1, n));
+        var sorted = memory.RentScratch<long>(Math.Max(1, n));
+        var index = memory.RentScratch<int>(Math.Max(1, n));
         var present = 0;
         for (var i = 0; i < n; i++)
         {
@@ -69,6 +71,8 @@ internal static class RowGroups
             groupOf[index[j]] = groups - 1;
         }
 
+        memory.ReturnScratch(sorted);
+        memory.ReturnScratch(index);
         return groups;
     }
 }

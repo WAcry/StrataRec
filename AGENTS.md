@@ -44,7 +44,7 @@ dotnet run --project src/StrataRec.Cli -- --help
 - C# 14、文件级命名空间、启用 nullable、`TreatWarningsAsErrors`。私有字段用 `_camelCase`。
 - 公开类型写 XML 文档注释，说明为什么这样设计，不要复述名字。
 - **`src/` 中禁止 LINQ。** 请求可能携带大量候选，引擎采用列式（SoA）正是为了减少分配；LINQ 会分配枚举器、闭包和中间集合。用显式循环、数组、`List<T>`、`Dictionary`/`HashSet`、带序数比较器的 `Array.Sort`/`List.Sort`。构建时由 `BannedSymbols.txt`（RS0030）和移除隐式 `System.Linq` using（`Directory.Build.targets`）强制。测试和基准可以用 LINQ。
-- 热路径（按行或按请求执行的代码）不能按行分配。请求生命周期内的缓冲从 `RequestMemory` 租借；算子不自己归还缓冲。
+- 热路径（按行或按请求执行的代码）不能按行分配。请求生命周期内的缓冲从 `RequestMemory` 租借（`Rent`），算子不自己归还；在一个方法里用完、之后没有任何引用的临时缓冲（行列表、掩码、选择）用 `RentScratch` 租、用完 `ReturnScratch` 立即归还。
 - 配置只使用标准语法：JSON(C)、RFC 7396 合并补丁、RFC 6901 指针、RFC 8785 规范化、JSON Schema 2020-12、CEL 风格表达式、Mustache。不要发明 DSL。
 - 配置错误必须说明位置（JSON 指针或表达式偏移）和修复方法（hint）。
 - 改了配置类型，或改了会序列化的成员的 XML 文档注释（它们是 Schema 里的描述），要重新生成示例的 Schema，否则测试失败（失败信息里有命令）：`dotnet run --project src/StrataRec.Cli -- schema --out samples/home_feed/schemas`，以及在 `samples/StrataRec.Samples.Host` 下 `dotnet run -- stratarec schema --out config/schemas`。

@@ -49,7 +49,7 @@ public sealed class BoundedCallTests
 
         budget.Release(); // the attempt ends
         Assert.Equal(1, memory.Release()); // the request returns: the client still holds the memory, once
-        Assert.Equal(0, pool.Returned);
+        Assert.True(pool.Outstanding > 0); // the ledger is still out
         Assert.True(SpinWait.SpinUntil(() => client.IsCancellationRequested, Patience)); // cancelled at the budget...
         _ = client.WaitHandle; // ...and still alive: the source is not disposed while the client runs
 

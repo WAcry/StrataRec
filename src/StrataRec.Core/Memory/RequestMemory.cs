@@ -38,8 +38,9 @@ public interface IRequestEndObserver
 }
 
 /// <summary>
-/// Per-request buffer ledger. Operators rent through it and never return buffers themselves; everything is
-/// returned at once when the request and every external I/O it started have finished (design 4.8).
+/// Per-request buffer ledger. Operators rent through it and never return what they rent with <see cref="Rent{T}"/>;
+/// everything is returned at once when the request and every external I/O it started have finished (design 4.8). A
+/// temporary that is over before its method returns is rented with <see cref="RentScratch{T}"/> and given back at once.
 /// </summary>
 /// <remarks>
 /// <para>The holder count starts at 1 (the request itself). Each external I/O calls <see cref="Hold"/> when it starts
@@ -137,6 +138,23 @@ public sealed class RequestMemory
         Array.Clear(array, 0, length);
         return array;
     }
+
+    /// <summary>
+    /// Rents a buffer for a computation that is over before the caller returns (a row list, a mask, a selection), given
+    /// back with <see cref="ReturnScratch{T}"/> as soon as it is done (design 4.8). It is not on the ledger and not in
+    /// <see cref="RentedBytes"/>. Contents are unspecified.
+    /// </summary>
+    /// <remarks>Held to the request's end, a request's temporaries are all out of the pool at once, and the shared pool
+    /// keeps only so many arrays of a size per core: with many requests in flight, buffers given back past that are dropped
+    /// and later rents allocate. Given back at once, the request's next rent of that size takes the same array. Only for a
+    /// buffer nothing else can still reference once it is given back: nothing an operator writes into the table, hands
+    /// to a client or keeps across an external call. One never given back (an exception between the two) is only lost to the
+    /// pool.</remarks>
+    public T[] RentScratch<T>(int minimumLength) => _pool.Rent<T>(minimumLength);
+
+    /// <summary>Gives back a buffer of <see cref="RentScratch{T}"/>: poisoned when <see cref="PoisonReturnedBuffers"/> is on,
+    /// so a use after this fails in tests.</summary>
+    public void ReturnScratch<T>(T[] array) => Returner<T>.Instance.Return(_pool, array);
 
     /// <summary>Registers an in-flight external operation that may still write into rented buffers.</summary>
     public void Hold()

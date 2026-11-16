@@ -130,6 +130,64 @@ public sealed class RequestAllocationTests
         Assert.True(observed <= quiet, $"without a listener: {quiet} B per request, with one: {observed} B");
     }
 
+    /// <summary>
+    /// Audit A6: a request's temporaries (the ranking copy of each attempt, backfill and derived row lists, the recall
+    /// merge, filter masks, TopK and quota selections) go back to the pool when their computation is done, not with the
+    /// request: held to the end, every array a 4,000-candidate request rented was out at once, and with many requests in
+    /// flight the shared pool dropped what it could not keep and later rents allocated.
+    /// </summary>
+    [Fact]
+    public async Task ARequestsTemporaries_AreBackInThePoolBeforeItEnds()
+    {
+        var pool = new PeakPool();
+        var executor = new PipelineExecutor(pool);
+
+        var result = await executor.ExecuteAsync(Plan(4_000), HomeFeedTestHost.NewRequest(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(10, result.Items.Count);
+        Assert.Equal(0, pool.Outstanding); // everything is back once the request has ended
+        Assert.True(pool.PeakBytes * 100 < pool.TotalBytes * 80, // 70% now, 100% when everything waited for the end
+            $"at most {pool.PeakBytes} B were out at once of the {pool.TotalBytes} B rented in all");
+    }
+
+    /// <summary>Rents fresh arrays and tracks the bytes out of the pool and their peak.</summary>
+    private sealed class PeakPool : Core.Memory.IBufferPool
+    {
+        private readonly object _gate = new();
+        private long _out;
+
+        public int Outstanding { get; private set; }
+
+        public long PeakBytes { get; private set; }
+
+        public long TotalBytes { get; private set; }
+
+        public T[] Rent<T>(int minimumLength)
+        {
+            var array = new T[Math.Max(1, minimumLength)];
+            lock (_gate)
+            {
+                Outstanding++;
+                _out += Size(array);
+                TotalBytes += Size(array);
+                PeakBytes = Math.Max(PeakBytes, _out);
+            }
+
+            return array;
+        }
+
+        public void Return<T>(T[] array, bool clearArray)
+        {
+            lock (_gate)
+            {
+                Outstanding--;
+                _out -= Size(array);
+            }
+        }
+
+        private static long Size<T>(T[] array) => (long)array.Length * System.Runtime.CompilerServices.Unsafe.SizeOf<T>();
+    }
+
     private static ExecutionPlan Plan(int candidates) => HomeFeedTestHost.LoadModified(root => Scale(root, candidates)).Plan();
 
     private static long Measure(ExecutionPlan plan, bool explain = false)

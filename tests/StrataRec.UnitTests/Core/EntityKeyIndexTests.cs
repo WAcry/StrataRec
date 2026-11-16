@@ -330,6 +330,59 @@ public class EntityKeyIndexTests
     }
 
     /// <summary>Rents string arrays of at least <c>stringLength</c> entries and every other array at the exact length.</summary>
+    /// <summary>
+    /// Audit A6: a scratch index gives back each array it outgrows at once (growth, a larger reset, a key type's arrays
+    /// replaced), keeps the other key type's, and gives back the rest with <see cref="EntityKeyIndex.ReturnArrays"/>:
+    /// every array it rented goes back exactly once, and the request's end gives back none of them.
+    /// </summary>
+    [Fact]
+    public void AScratchIndex_GivesBackWhatItOutgrows_AndTheRestWhenAsked_EachOnce()
+    {
+        var pool = new TrackingPool();
+        var memory = new RequestMemory(pool);
+        var index = new EntityKeyIndex(EntityKeyType.Int64, 4, memory, scratch: true);
+        for (var k = 0L; k < 100; k++)
+        {
+            Assert.True(index.TryAdd(k * 7, (int)k)); // grows several times
+        }
+
+        for (var k = 0L; k < 100; k++)
+        {
+            Assert.True(index.TryGetValue(k * 7, out var value) && value == k);
+        }
+
+        index.Reset(EntityKeyType.String, 10); // the slot table fits: only the string arrays are rented
+        Assert.True(index.TryAdd("a", 1));
+        index.Reset(EntityKeyType.Int64, 1000); // larger: every array is replaced, the string arrays too
+        Assert.True(index.TryAdd(5, 2) && index.TryGetValue(5, out var five) && five == 2);
+        Assert.True(pool.Outstanding > 0);
+
+        index.ReturnArrays();
+        Assert.Equal(0, pool.Outstanding);
+        Assert.Equal(0, index.Count);
+        memory.Release();
+        Assert.Equal(0, pool.Outstanding); // none went back twice (Return checks)
+
+        var held = new EntityKeyIndex(EntityKeyType.Int64, 4, new RequestMemory());
+        Assert.Throws<InvalidOperationException>(held.ReturnArrays);
+    }
+
+    private sealed class TrackingPool : IBufferPool
+    {
+        private readonly HashSet<Array> _out = new(ReferenceEqualityComparer.Instance);
+
+        public int Outstanding => _out.Count;
+
+        public T[] Rent<T>(int minimumLength)
+        {
+            var array = new T[Math.Max(1, minimumLength)];
+            _out.Add(array);
+            return array;
+        }
+
+        public void Return<T>(T[] array, bool clearArray) => Assert.True(_out.Remove(array), "returned twice or never rented");
+    }
+
     private sealed class StringRoundingPool(int stringLength) : IBufferPool
     {
         public T[] Rent<T>(int minimumLength) =>

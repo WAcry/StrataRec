@@ -95,7 +95,7 @@ internal static class RowRanking
             return;
         }
 
-        var entries = memory.Rent<Entry>(n);
+        var entries = memory.RentScratch<Entry>(n);
         var intIds = table.Int64Ids;
         for (var i = 0; i < n; i++)
         {
@@ -123,6 +123,8 @@ internal static class RowRanking
         {
             rows[i] = span[i].Row;
         }
+
+        memory.ReturnScratch(entries);
     }
 
     /// <summary>
@@ -138,7 +140,7 @@ internal static class RowRanking
             return;
         }
 
-        var entries = memory.Rent<Entry>(n);
+        var entries = memory.RentScratch<Entry>(n);
         var intIds = table.Int64Ids;
         for (var i = 0; i < n; i++)
         {
@@ -153,6 +155,8 @@ internal static class RowRanking
         {
             rows[i] = span[i].Row;
         }
+
+        memory.ReturnScratch(entries);
     }
 
     /// <summary>
@@ -164,7 +168,7 @@ internal static class RowRanking
         ReadOnlySpan<int> rows, ReadOnlySpan<int> groups, ColumnBuffer? score, CandidateTableView table, bool ascending, Span<long> ranks,
         Core.Memory.RequestMemory memory)
     {
-        var entries = memory.Rent<GroupedEntry>(Math.Max(1, rows.Length));
+        var entries = memory.RentScratch<GroupedEntry>(Math.Max(1, rows.Length));
         var intIds = table.Int64Ids;
         var count = 0;
         for (var i = 0; i < rows.Length; i++)
@@ -189,6 +193,8 @@ internal static class RowRanking
             rank = j > 0 && span[j].Group == span[j - 1].Group ? rank + 1 : 1;
             ranks[span[j].Index] = rank;
         }
+
+        memory.ReturnScratch(entries);
     }
 
     /// <summary>Quickselect: afterwards the k smallest entries (by comparer) occupy [0, k).</summary>

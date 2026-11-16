@@ -31,6 +31,28 @@ public sealed class BufferPoisoningTests
         Assert.Contains((Array)strings, pool.Returned); // references are cleared by the pool, not poisoned
     }
 
+    /// <summary>
+    /// Audit A6: a scratch buffer goes back when the computation that rented it is done, poisoned like the rest, and is
+    /// not on the ledger: the request's end does not give it back again, and it is not in the rented bytes.
+    /// </summary>
+    [Fact]
+    public void AScratchBuffer_GoesBackAtOnce_Poisoned_AndNotAgainWithTheRequest()
+    {
+        var pool = new KeepingPool();
+        var memory = new RequestMemory(pool);
+        var held = memory.Rent<int>(8);
+        var scratch = memory.RentScratch<long>(4);
+        scratch.AsSpan().Fill(42);
+
+        Assert.Equal(8 * sizeof(int), memory.RentedBytes);
+        memory.ReturnScratch(scratch);
+        Assert.All(scratch, n => Assert.Equal(unchecked((long)0xCDCDCDCDCDCDCDCD), n));
+        Assert.Equal(new Array[] { scratch }, pool.Returned);
+
+        memory.Release();
+        Assert.Equal(new Array[] { scratch, held }, pool.Returned);
+    }
+
     private sealed class KeepingPool : IBufferPool
     {
         public List<Array> Returned { get; } = new();

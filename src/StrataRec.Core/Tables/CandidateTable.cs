@@ -463,13 +463,26 @@ public sealed class CandidateTable
 
     /// <summary>
     /// Remembers the table as it is before a node attempt, for <see cref="Rollback"/> if the attempt fails (design 4.6).
-    /// The ranking is copied into an array rented from the request memory.
+    /// The ranking is copied into a scratch array of the request memory, given back by <see cref="Discard"/> once the
+    /// attempt is settled.
     /// </summary>
     public TableCheckpoint Checkpoint()
     {
-        var order = Memory.Rent<int>(Math.Max(1, Rows.Count));
+        var order = Memory.RentScratch<int>(Math.Max(1, Rows.Count));
         var count = Rows.Capture(order);
         return new TableCheckpoint(order, count, PhysicalRowCount, _totalAppended, _compactions, _createdCount);
+    }
+
+    /// <summary>
+    /// Gives back the ranking copy of <paramref name="checkpoint"/>, which cannot be rolled back to afterwards. One never
+    /// discarded is only lost to the pool.
+    /// </summary>
+    public void Discard(in TableCheckpoint checkpoint)
+    {
+        if (checkpoint.Order is not null)
+        {
+            Memory.ReturnScratch(checkpoint.Order);
+        }
     }
 
     /// <summary>

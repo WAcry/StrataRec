@@ -508,7 +508,7 @@ public class FeatureRuntimeReviewRegressionTests
 
         request.Memory.Release(); // the request finishes while the connector is still in flight
         Assert.False(request.Memory.IsReturned);
-        Assert.Equal(0, pool.Returned);
+        Assert.True(pool.Outstanding > 0); // the ledger is still out
 
         release.SetResult();
         await request.Fetcher.WhenIoCompleteAsync();

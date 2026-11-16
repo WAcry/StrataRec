@@ -268,105 +268,128 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 return;
             }
 
-            var index = new EntityKeyIndex(table.KeyType, capacity, memory);
-            var masks = memory.Rent<long>(capacity);
-            var ranks = memory.Rent<long>(capacity);
-            var scores = memory.Rent<double>(capacity);
-            var primaries = memory.Rent<int>(capacity);
-            for (var s = 0; s < sinks.Length; s++)
+            // Everything here is over when the rows are appended and their values written (AppendRows copies the keys).
+            var index = new EntityKeyIndex(table.KeyType, capacity, memory, scratch: true);
+            var masks = memory.RentScratch<long>(capacity);
+            var ranks = memory.RentScratch<long>(capacity);
+            var scores = memory.RentScratch<double>(capacity);
+            var primaries = memory.RentScratch<int>(capacity);
+            string[]? ids = null;
+            int[]? sourceCodes = null;
+            try
             {
-                var sink = sinks[s];
-                if (sink is null)
+                for (var s = 0; s < sinks.Length; s++)
                 {
-                    continue;
-                }
-
-                var sinkKeys = sink.Keys;
-                var sinkScores = sink.Scores;
-                for (var r = 0; r < sinkKeys.Length; r++)
-                {
-                    var key = sinkKeys[r];
-                    if (key.IsString != stringKeys || table.ContainsKey(key))
+                    var sink = sinks[s];
+                    if (sink is null)
                     {
-                        continue; // wrong key type, or already in the table from an earlier row source
+                        continue;
                     }
 
-                    int at;
-                    if (index.Count >= freeRows)
+                    var sinkKeys = sink.Keys;
+                    var sinkScores = sink.Scores;
+                    for (var r = 0; r < sinkKeys.Length; r++)
                     {
-                        if (!index.TryGetValue(key, out at))
+                        var key = sinkKeys[r];
+                        if (key.IsString != stringKeys || table.ContainsKey(key))
                         {
-                            break; // no room for a new key: the rest of this source is dropped
+                            continue; // wrong key type, or already in the table from an earlier row source
                         }
-                    }
-                    else
-                    {
-                        at = index.GetOrAdd(key, index.Count, out var added);
-                        if (added)
+
+                        int at;
+                        if (index.Count >= freeRows)
                         {
-                            masks[at] = 1L << bits[s];
-                            ranks[at] = r + 1;
-                            scores[at] = sinkScores[r];
-                            primaries[at] = s;
-                            continue;
+                            if (!index.TryGetValue(key, out at))
+                            {
+                                break; // no room for a new key: the rest of this source is dropped
+                            }
                         }
+                        else
+                        {
+                            at = index.GetOrAdd(key, index.Count, out var added);
+                            if (added)
+                            {
+                                masks[at] = 1L << bits[s];
+                                ranks[at] = r + 1;
+                                scores[at] = sinkScores[r];
+                                primaries[at] = s;
+                                continue;
+                            }
+                        }
+
+                        masks[at] |= 1L << bits[s];
+                        ranks[at] = Math.Min(ranks[at], r + 1);
+                        scores[at] = Math.Max(scores[at], sinkScores[r]);
+                    }
+                }
+
+                var count = index.Count;
+                if (count == 0)
+                {
+                    return;
+                }
+
+                int first;
+                if (stringKeys)
+                {
+                    ids = memory.RentScratch<string>(count);
+                    index.StringKeys.CopyTo(ids);
+                    first = context.AppendRows(new ArraySegment<string>(ids, 0, count)); // copied
+                }
+                else
+                {
+                    first = context.AppendRows(index.Int64Keys); // copied
+                }
+
+                // The appended rows are consecutive: values are written row by row, their validity once for the whole range
+                // (a bit set per row and column would wait on the store to the same word before it).
+                var maskColumn = (ScalarColumn<long>)context.Output(mask);
+                var rankColumn = (ScalarColumn<long>)context.Output(bestRank);
+                var scoreColumn = (ScalarColumn<double>)context.Output(bestScore);
+                var primaryColumn = (DictStringColumn)context.Output(primary);
+                var maskValues = maskColumn.Values;
+                var rankValues = rankColumn.Values;
+                var scoreValues = scoreColumn.Values;
+                var primaryCodes = primaryColumn.Codes;
+                sourceCodes = memory.RentScratch<int>(sources.Length); // a source's code, looked up once (−1: not yet)
+                sourceCodes.AsSpan(0, sources.Length).Fill(-1);
+                for (var i = 0; i < count; i++)
+                {
+                    var row = first + i;
+                    maskValues[row] = masks[i];
+                    rankValues[row] = ranks[i];
+                    scoreValues[row] = scores[i];
+                    ref var code = ref sourceCodes[primaries[i]];
+                    if (code < 0)
+                    {
+                        code = primaryColumn.GetOrAddCode(sources[primaries[i]].Name);
                     }
 
-                    masks[at] |= 1L << bits[s];
-                    ranks[at] = Math.Min(ranks[at], r + 1);
-                    scores[at] = Math.Max(scores[at], sinkScores[r]);
+                    primaryCodes[row] = code;
                 }
-            }
 
-            var count = index.Count;
-            if (count == 0)
-            {
-                return;
+                maskColumn.SetValid(first, count);
+                rankColumn.SetValid(first, count);
+                scoreColumn.SetValid(first, count);
+                primaryColumn.SetValid(first, count);
             }
-
-            int first;
-            if (stringKeys)
+            finally
             {
-                var ids = memory.Rent<string>(count);
-                index.StringKeys.CopyTo(ids);
-                first = context.AppendRows(new ArraySegment<string>(ids, 0, count));
-            }
-            else
-            {
-                first = context.AppendRows(index.Int64Keys);
-            }
-
-            // The appended rows are consecutive: values are written row by row, their validity once for the whole range
-            // (a bit set per row and column would wait on the store to the same word before it).
-            var maskColumn = (ScalarColumn<long>)context.Output(mask);
-            var rankColumn = (ScalarColumn<long>)context.Output(bestRank);
-            var scoreColumn = (ScalarColumn<double>)context.Output(bestScore);
-            var primaryColumn = (DictStringColumn)context.Output(primary);
-            var maskValues = maskColumn.Values;
-            var rankValues = rankColumn.Values;
-            var scoreValues = scoreColumn.Values;
-            var primaryCodes = primaryColumn.Codes;
-            var sourceCodes = context.Memory.Rent<int>(sources.Length); // a source's code, looked up once (−1: not yet)
-            sourceCodes.AsSpan(0, sources.Length).Fill(-1);
-            for (var i = 0; i < count; i++)
-            {
-                var row = first + i;
-                maskValues[row] = masks[i];
-                rankValues[row] = ranks[i];
-                scoreValues[row] = scores[i];
-                ref var code = ref sourceCodes[primaries[i]];
-                if (code < 0)
+                index.ReturnArrays();
+                memory.ReturnScratch(masks);
+                memory.ReturnScratch(ranks);
+                memory.ReturnScratch(scores);
+                memory.ReturnScratch(primaries);
+                if (ids is not null)
                 {
-                    code = primaryColumn.GetOrAddCode(sources[primaries[i]].Name);
+                    memory.ReturnScratch(ids);
                 }
 
-                primaryCodes[row] = code;
+                if (sourceCodes is not null)
+                {
+                    memory.ReturnScratch(sourceCodes);
+                }
             }
-
-            maskColumn.SetValid(first, count);
-            rankColumn.SetValid(first, count);
-            scoreColumn.SetValid(first, count);
-            primaryColumn.SetValid(first, count);
         }
     }
 }

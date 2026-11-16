@@ -168,7 +168,7 @@ public class FetchChunkTests
             Assert.All(hook.Recorded, call => Assert.Equal(IoOutcome.Timeout, call.Outcome));
 
             Assert.Equal(2, request.Memory.Release()); // both connectors still run: one hold each
-            Assert.Equal(0, pool.Returned);
+            Assert.True(pool.Outstanding > 0); // the ledger is still out
         }
         finally
         {
@@ -317,7 +317,7 @@ public class FetchChunkTests
         var abandoned = request.Memory.Release();
 
         Assert.Equal(2, abandoned);
-        Assert.Equal(0, pool.Returned);
+        Assert.True(pool.Outstanding > 0); // the ledger is still out
         hang.Set();
         await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.True(SpinWait.SpinUntil(() => request.Memory.IsReturned, Patience)); // the last call site lets go right after
@@ -483,7 +483,7 @@ public class FetchChunkTests
 
         request.Memory.Release(); // the request returns; the abandoned chunk still holds the memory
         Assert.False(request.Memory.IsReturned);
-        Assert.Equal(0, pool.Returned);
+        Assert.True(pool.Outstanding > 0); // the ledger is still out
         late.Set();
         await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.True(request.Memory.IsReturned);

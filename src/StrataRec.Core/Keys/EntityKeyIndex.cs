@@ -19,7 +19,10 @@ namespace StrataRec.Core.Keys;
 /// Fibonacci multiplier, which spreads sequential ids evenly. String keys compare ordinally; their hash codes are
 /// stored per entry so growing never rehashes a string. Lookups of a key of the other type find nothing.</para>
 /// <para>Growth rents twice the space and leaves the old arrays on the request's ledger until the request ends, like
-/// Compact does; callers that know an upper bound on the number of keys pass it as the capacity and never grow.</para>
+/// Compact does; callers that know an upper bound on the number of keys pass it as the capacity and never grow. An index
+/// built and dropped within one computation (a recall merge) is a scratch index instead: its arrays are scratch buffers
+/// (<see cref="RequestMemory.RentScratch{T}"/>), the ones it outgrows go back at once, and <see cref="ReturnArrays"/>
+/// gives back the rest.</para>
 /// <para>Not thread-safe; used on the request's logical thread. Nothing may use it after its memory is released.</para>
 /// </remarks>
 public sealed class EntityKeyIndex
@@ -31,6 +34,7 @@ public sealed class EntityKeyIndex
     private const ulong Fibonacci = 0x9E3779B97F4A7C15UL;
 
     private readonly RequestMemory _memory;
+    private readonly bool _scratch;
     private bool _stringKeys;
     private int[] _slots = Array.Empty<int>();
     private int _slotMask;
@@ -45,11 +49,44 @@ public sealed class EntityKeyIndex
     /// <param name="keyType">The type of every key this index holds.</param>
     /// <param name="capacity">Number of keys the index holds without growing.</param>
     /// <param name="memory">The request memory the arrays are rented from.</param>
-    public EntityKeyIndex(EntityKeyType keyType, int capacity, RequestMemory memory)
+    /// <param name="scratch">Whether the arrays are scratch buffers, given back by <see cref="ReturnArrays"/>.</param>
+    public EntityKeyIndex(EntityKeyType keyType, int capacity, RequestMemory memory, bool scratch = false)
     {
         ArgumentNullException.ThrowIfNull(memory);
         _memory = memory;
+        _scratch = scratch;
         Reset(keyType, capacity);
+    }
+
+    /// <summary>
+    /// Gives back the arrays of a scratch index; it is empty and holds no key until the next <see cref="Reset"/>. Nothing
+    /// read from it (<see cref="Int64Keys"/>, <see cref="StringKeys"/>) may be used afterwards.
+    /// </summary>
+    public void ReturnArrays()
+    {
+        if (!_scratch)
+        {
+            throw new InvalidOperationException("Only a scratch index gives its arrays back; a request's index returns them with the request.");
+        }
+
+        GiveBackAll();
+        _slotMask = _shift = _maxCount = _count = 0;
+    }
+
+    /// <summary>Gives back every array of a scratch index (none for a request's) and drops them all, either key type's.</summary>
+    private void GiveBackAll()
+    {
+        GiveBack(_slots);
+        GiveBack(_values);
+        GiveBack(_int64Keys);
+        GiveBack(_strings);
+        GiveBack(_hashes);
+        if (_scratch)
+        {
+            _slots = _values = _hashes = Array.Empty<int>();
+            _int64Keys = Array.Empty<long>();
+            _strings = Array.Empty<string>();
+        }
     }
 
     public EntityKeyType KeyType { get; private set; }
@@ -267,11 +304,24 @@ public sealed class EntityKeyIndex
         var slotCount = capacity <= MinSlots / 2 ? MinSlots : (int)BitOperations.RoundUpToPowerOf2((uint)capacity * 2);
         if (_maxCount == 0 || slotCount > _slotMask + 1)
         {
+            GiveBackAll();
             Allocate(slotCount);
         }
         else if (!KeysFit())
         {
-            RentKeys(); // the slot table is large enough, but this key type's arrays were rented smaller (or not at all)
+            // The slot table is large enough, but this key type's arrays were rented smaller (or not at all); RentKeys
+            // replaces exactly these.
+            if (_stringKeys)
+            {
+                GiveBack(_strings);
+                GiveBack(_hashes);
+            }
+            else
+            {
+                GiveBack(_int64Keys);
+            }
+
+            RentKeys();
         }
     }
 
@@ -314,11 +364,12 @@ public sealed class EntityKeyIndex
     private void Allocate(int slotCount)
     {
         // Entry arrays hold at most half the slot count: the load factor never exceeds 0.5.
-        _slots = _memory.RentCleared<int>(slotCount);
+        _slots = RentArray<int>(slotCount);
+        _slots.AsSpan(0, slotCount).Clear();
         _slotMask = slotCount - 1;
         _shift = 64 - BitOperations.Log2((uint)slotCount);
         _maxCount = slotCount / 2;
-        _values = _memory.Rent<int>(_maxCount);
+        _values = RentArray<int>(_maxCount);
         RentKeys();
     }
 
@@ -326,12 +377,23 @@ public sealed class EntityKeyIndex
     {
         if (_stringKeys)
         {
-            _strings = _memory.Rent<string>(_maxCount);
-            _hashes = _memory.Rent<int>(_maxCount);
+            _strings = RentArray<string>(_maxCount);
+            _hashes = RentArray<int>(_maxCount);
         }
         else
         {
-            _int64Keys = _memory.Rent<long>(_maxCount);
+            _int64Keys = RentArray<long>(_maxCount);
+        }
+    }
+
+    private T[] RentArray<T>(int length) => _scratch ? _memory.RentScratch<T>(length) : _memory.Rent<T>(length);
+
+    /// <summary>A scratch index gives an array it no longer uses back at once; a request's index leaves it on the ledger.</summary>
+    private void GiveBack<T>(T[] array)
+    {
+        if (_scratch && array.Length > 0)
+        {
+            _memory.ReturnScratch(array);
         }
     }
 
@@ -342,6 +404,7 @@ public sealed class EntityKeyIndex
             throw new InvalidOperationException($"An entity key index holds at most {MaxCapacity} keys.");
         }
 
+        var slots = _slots;
         var values = _values;
         var int64Keys = _int64Keys;
         var strings = _strings;
@@ -364,6 +427,19 @@ public sealed class EntityKeyIndex
             {
                 _slots[EmptySlot(Slot((ulong)_int64Keys[e]))] = e + 1;
             }
+        }
+
+        // Allocate replaced the slots, the values and this key type's arrays; the other type's stay as they were.
+        GiveBack(slots);
+        GiveBack(values);
+        if (_stringKeys)
+        {
+            GiveBack(strings);
+            GiveBack(hashes);
+        }
+        else
+        {
+            GiveBack(int64Keys);
         }
     }
 

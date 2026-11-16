@@ -57,13 +57,14 @@ public sealed class ExpressionFilterFactory : IOperatorFactory
             var table = context.Table;
             var result = new ScalarColumn<bool>(ColumnType.Bool, Math.Max(1, table.StorageCapacity), context.Memory);
             predicate.Evaluate(context.EvalContext, rows, result);
-            var keep = context.Memory.Rent<bool>(rows.Length);
+            var keep = context.Memory.RentScratch<bool>(rows.Length);
             for (var i = 0; i < rows.Length; i++)
             {
                 keep[i] = result[rows[i]];
             }
 
             context.Retain(keep.AsSpan(0, rows.Length));
+            context.Memory.ReturnScratch(keep);
             return ValueTask.CompletedTask;
         }
     }
