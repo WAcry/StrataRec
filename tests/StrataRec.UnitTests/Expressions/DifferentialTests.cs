@@ -573,10 +573,15 @@ public class DifferentialTests(ITestOutputHelper output)
         private string Num(int depth) => Gen(random.Next(3) == 0 ? K.Int : K.Float, depth);
 
         /// <summary>
-    /// A literal 0 divisor is a compile error (design 7.5); a 0 that only folding finds is not, and gives missing, so
-    /// the generator keeps the runtime case by writing it as <c>(1 - 1)</c>.
+    /// A divisor the binder knows is 0 (a literal, <c>int(0)</c>, a let of one) is a compile error (design 7.5); a 0 that
+    /// only folding or the data finds gives missing. So a divisor that is not a non-zero literal is written as
+    /// <c>(d + 0)</c>, the same value but never a constant to the binder (review 66: <c>% int(0)</c> stopped seed 88), and
+    /// a non-zero literal stays, for the non-nullable path.
     /// </summary>
-    private static string Divisor(string divisor) => divisor.Trim('(', ')', ' ') is "0" or "-0" ? "(1 - 1)" : divisor;
+    private static string Divisor(string divisor) =>
+        long.TryParse(divisor.Trim('(', ')', ' '), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value) && value != 0
+            ? divisor
+            : $"({divisor} + 0)";
 
     private string Let(K kind, int depth)
         {
@@ -615,7 +620,9 @@ public class DifferentialTests(ITestOutputHelper output)
                 K.Str => Pick("'a'", "'b'", "''", "'zz'"),
                 K.ListInt => "[1, 2, 7]",
                 K.ListStr => "['a', 'zz']",
-                K.ListFloat => Pick("[0.5, 1.0, -1.0]", "[2, 0.5]", "[2, 1]"), // an integer literal is a float list where one is expected
+                // An integer element of a float list literal is a float; a list of integers only is list<int64> wherever it
+                // stands (in the list of 'x in [2, 1]', say), so it is not a float list leaf (seeds 60, 96 of 100).
+                K.ListFloat => Pick("[0.5, 1.0, -1.0]", "[2, 0.5]", "[2, 1.0]"),
                 K.ListBool => "[true]",
                 _ => null,
             };

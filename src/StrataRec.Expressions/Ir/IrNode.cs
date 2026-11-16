@@ -19,7 +19,8 @@ internal enum IrOp : byte
     ToFloat,
 
     /// <summary><c>int(x)</c> of a float64: truncation toward zero, missing when not finite or out of the int64
-    /// range. The only lifted operation that can make a present value missing.</summary>
+    /// range. With <see cref="Mod"/> by a divisor that may be 0, a lifted operation that can make present values missing:
+    /// the result's validity is cleared on those rows, never the operands'.</summary>
     ToInt,
     Abs,
     Sqrt,

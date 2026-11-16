@@ -265,13 +265,40 @@ public sealed class LogPipelineTests
 
         Assert.Equal(empty + 4096 * 2, Titled(rows, _ => shared).ApproximateBytes);
         Assert.Equal(empty - 24 + rows * (24 + 4096 * 2L), Titled(rows, _ => new string('s', 4096)).ApproximateBytes);
-        var alternating = new[] { new string('a', 4096), new string('b', 4096) };
-        Assert.InRange(Titled(rows, i => alternating[i % 2]).ApproximateBytes, empty + 2 * 4096 * 2, empty + 4 * 4096 * 2); // two strings, unless they share a slot
+        // Two strings alternating are two strings; two that share a slot of the table evict each other and count on every
+        // row, an overstatement the estimate accepts (review 66: the test must pick them, not assume new objects differ).
+        var (apart, together) = TwoPairs();
+        Assert.Equal(empty - 24 + 2 * (24 + 4096 * 2L), Titled(rows, i => apart[i % 2]).ApproximateBytes);
+        Assert.Equal(empty - 24 + rows * (24 + 4096 * 2L), Titled(rows, i => together[i % 2]).ApproximateBytes);
 
         var bare = Batch("$experiments", LogDelivery.Durable, rows: 0);
         var outcomes = Batch("$experiments", LogDelivery.Durable, rows: 0);
         outcomes.NodeOutcomes = Enumerable.Range(0, 100).ToDictionary(i => "node_" + i, _ => "succeeded");
         Assert.True(outcomes.ApproximateBytes >= bare.ApproximateBytes + 100 * 32, $"{outcomes.ApproximateBytes} for 100 outcomes");
+    }
+
+    /// <summary>Two 4 KB strings in different slots of the estimate's 256-slot table, and two in the same slot.</summary>
+    private static (string[] Apart, string[] Together) TwoPairs()
+    {
+        var bySlot = new Dictionary<int, string>();
+        string[]? apart = null, together = null;
+        for (var i = 0; apart is null || together is null; i++)
+        {
+            var s = new string((char)('a' + i % 26), 4096);
+            var slot = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(s) & 255;
+            if (bySlot.TryGetValue(slot, out var other))
+            {
+                together ??= new[] { other, s };
+            }
+            else if (bySlot.Count > 0)
+            {
+                apart ??= new[] { bySlot.Values.First(), s };
+            }
+
+            bySlot.TryAdd(slot, s);
+        }
+
+        return (apart, together);
     }
 
     private static LogBatch Titled(int rows, Func<int, string> title) => new()
