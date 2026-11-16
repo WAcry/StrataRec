@@ -785,6 +785,8 @@ internal sealed class RequestMemory
 
 模型客户端、召回源和连接器（内置的或使用方写的）是绑定的实例，与本地特征表一样按身份（类型、设置、基准目录）在计划之间共享：在计划开始服务之前加载，在没有服务中的计划使用、也没有请求还能调用它们时释放（取舍见 `decisions.md`“绑定的实例”）。凭据只写成 `secret://<名字>` 的引用，实例加载时由宿主注册的 `ISecretResolver` 解析，值不出现在诊断、日志和回放包里。
 
+每种绑定类型的工厂声明自己设置的 C# 类型（`SettingsType`；内置基类 `ModelClientFactory<T>`、`CandidateSourceFactory<T>`、`FeatureConnectorFactory<T>`、`FeatureCacheStoreFactory<T>`、`FeatureUpdateSourceFactory<T>` 以类型参数声明）。调用工厂之前，引擎用和算子配置相同的严格规则把绑定自己的设置绑定到这个类型：未知或拼错的键（附相近的名字）、类型不符、缺少必填成员，都报在设置的 JSON 指针处并给出提示；工厂只检查类型表达不了的约束（取值范围、两者择一）。本地文件和密钥引用是设置类型里的 `LocalFile`、`SecretReference` 成员：相对路径按配置根目录解析，`file://` URI 和绝对路径等价，非本地 URI 是配置错误；密钥只以 `secret://名字` 引用，报错不回显它的值。更新来源的工厂同样接收 `BindingContext`，设置错误报在 `bootstrap` 内。上例的 `grpc_tensor@1`、`redis_hash@1`、`kafka@1` 等是宿主注册的类型；内置的模型客户端只有 `linear@1`、`random@1`、`fixed_text@1`。
+
 ### 6.5 实体键与批量形态
 
 特征拉取有三种键的形态：
@@ -1013,7 +1015,7 @@ flowchart LR
 ```csharp
 public interface IModelClient
 {
-    string ClientType { get; }                                   // 例如 "grpc_tensor@1"、"linear@1"
+    string ClientType { get; }                                   // 例如 "linear@1"
     ValueTask<ModelSignature> GetSignatureAsync(                 // 加载期使用：输入输出的名字、元素类型和形状
         string model, string? version, CancellationToken cancellationToken);
 
@@ -1469,6 +1471,7 @@ flowchart LR
 2. **结构定义**：从 C# 配置类型生成 JSON Schema（2020-12 版），C# 类型是唯一的来源。Schema 由服务这个工作区的二进制生成，包含它注册的算子，包括宿主自己的算子：`stratarec schema --out <工作区>/schemas` 为每类文件写一个 `<kind>.schema.json`，`init` 也会写出这些文件，生成的结果随工作区一起提交。每个文件在顶层用 `"$schema": "../schemas/pipeline.schema.json"` 指明自己的 Schema，编辑器（例如 VS Code）据此自动补全、悬停显示说明、即时报错；AI agent 据此生成合法配置。
    - 流水线的 Schema 按节点的 `op` 校验它的 `config`：每个算子一组 `if`/`then`，`op` 是带说明的枚举。
    - 实验臂的 Schema 是流水线可修改部分的合并补丁形式：没有必填项，任何值都可以是 `null`（删除），对象里未知的键只能写 `null`（切换 `op` 时删除旧算子的配置），拼错的键带值时照样报错。
+   - 绑定的 Schema 按类型描述设置：`client`、`connector`、`bootstrap.source`、`cache.distributed.store` 每个类型一组 `if`/`then`，`then` 由这个类型的设置类型生成并封闭（框架自己的成员照常允许）。已知类型列在 `examples` 里而不是 `enum`：绑定了二进制没有的类型，只要没有流水线用到就是合法的。
    - 二进制升级后 Schema 可能变了，`validate` 发现 `schemas/` 与这个二进制写出的不同时给出警告 `SCHEMAS_STALE`。
 3. **规范形式**：构建时去掉注释和顶层的 `$schema`（它只给编辑器用，不属于产物，不计入内容哈希），按 RFC 8785（JSON Canonicalization Scheme）规范化，再计算 sha256。相同内容总是得到相同哈希，与键顺序和空白无关。
 4. **传输与存储**：规范 JSON 经 zstd 压缩。

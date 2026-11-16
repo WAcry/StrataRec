@@ -74,6 +74,8 @@ public sealed class ReleaseRequirementsTests
     {
         public string ClientType => "future@1";
 
+        public Type SettingsType => typeof(MemoryListSettings);
+
         public ICandidateSource Create(BindingContext context) => new MemoryListCandidateSourceFactory().Create(context);
     }
 }

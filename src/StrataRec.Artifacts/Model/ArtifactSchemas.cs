@@ -410,7 +410,7 @@ public static class ArtifactSchemas
     /// when it names the type, the entry takes the framework's members (described where the entry declares them) and the
     /// type's settings, and nothing else. The selector lists the types as <c>examples</c>, which editors complete, not as
     /// an <c>enum</c>: a binding of a type this binary lacks is valid while nothing uses it
-    /// (<see cref="SourceBindingArtifact.RequiredTypes(IReadOnlySet{string})"/>), so such an entry stays open.
+    /// (only what a plan binds is required, <see cref="SourceBindingArtifact.AddTypes"/>), so such an entry stays open.
     /// </summary>
     private static void AddBindingTypes(JsonObject entry, string selector, IReadOnlyList<BindingSchemaSource> bindings, BindingKind kind)
     {
