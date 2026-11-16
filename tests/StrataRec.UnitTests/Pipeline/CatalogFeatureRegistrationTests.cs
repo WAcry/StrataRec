@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using StrataRec.Artifacts.Model;
 using StrataRec.Experiments.Compilation;
@@ -197,6 +198,31 @@ public sealed class CatalogFeatureRegistrationTests
         var compilation = TryCompile(entities, features, derived, expr, nodes, itemStore, authorStore, root);
         Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
         return compilation.Plan!;
+    }
+
+    /// <summary>
+    /// Review 67: reading one feature of a cache source registers its whole table once. Each member used to expand the
+    /// table again, so a table of N features took N² registrations: 40,000 features compiled in 40 s, where the whole
+    /// catalog used to take 1 s. The bound is far above the linear time and far below the quadratic one.
+    /// </summary>
+    [Fact]
+    public void AWideCacheTable_IsRegisteredInLinearTime()
+    {
+        const int extra = 40_000;
+        var features = new StringBuilder();
+        for (var i = 0; i < extra; i++)
+        {
+            features.Append($$""", "item.extra_{{i}}": { "type": "float32", "source": "item_store", "field": "i_score", "default": 0.0 }""");
+        }
+
+        var started = Stopwatch.GetTimestamp();
+        var compilation = TryCompile(features: features.ToString(),
+            itemStore: """{ "connector": "memory@1", "data": { "1": { "i_score": 0.5, "i_author": 10 } }, "timeout_ms": 30000, "mode": "cache", "max_bytes": "1MiB", "cache": { "ttl_ms": 60000 } }""");
+        var elapsed = Stopwatch.GetElapsedTime(started);
+
+        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
+        Assert.True(compilation.GetPlanOrThrow().Features.Features.Count > extra, "the whole cache table is in the plan");
+        Assert.True(elapsed < TimeSpan.FromSeconds(15), $"compiled in {elapsed.TotalSeconds:0.0} s");
     }
 
     /// <summary>

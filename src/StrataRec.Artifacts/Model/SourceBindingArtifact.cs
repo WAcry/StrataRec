@@ -28,14 +28,24 @@ public sealed class SourceBindingArtifact
     /// <summary>
     /// <see cref="RequiredTypes()"/>, without the models and candidate sources <paramref name="excluded"/> names: a client
     /// no node uses is never created (instances are made for the nodes that use them), so a binary that lacks its type
-    /// serves the configuration. Feature sources count always: the catalog names them, and cache stores and update sources
-    /// serve them. Null excludes nothing.
+    /// serves the configuration. Null excludes nothing.
     /// </summary>
-    public List<string> RequiredTypes(IReadOnlySet<string>? excluded)
+    /// <param name="featureSources">
+    /// The feature sources a plan reads: only those are bound (a plan holds the catalog features it reads), so only their
+    /// connector, bootstrap source and distributed store are required (review 67: a source of features nothing read was
+    /// required, so a manifest that built and ran from the workspace was refused by the same binary). Null counts every
+    /// source, for a caller that compiled no plan.
+    /// </param>
+    public List<string> RequiredTypes(IReadOnlySet<string>? excluded, IReadOnlySet<string>? featureSources = null)
     {
         var types = new List<string>();
-        foreach (var (_, source) in Sources)
+        foreach (var (name, source) in Sources)
         {
+            if (featureSources is not null && !featureSources.Contains(name))
+            {
+                continue;
+            }
+
             if (source.Connector is { } connector)
             {
                 types.Add(connector);

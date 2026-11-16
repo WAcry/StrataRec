@@ -41,6 +41,7 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
     private readonly Dictionary<string, Status> _status = new(StringComparer.Ordinal);
     private readonly List<FeatureDefinition> _registering = new();
     private Dictionary<(string Source, string Entity), List<FeatureDefinition>>? _tables;
+    private readonly HashSet<(string Source, string Entity)> _expanded = new();
 
     /// <param name="features">Where registered features go; a feature's index is its position.</param>
     /// <param name="needsWholeTable">Whether a source's features are registered together (its table's records are
@@ -175,7 +176,10 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
             return false;
         }
 
-        if (!feature.IsDerived && feature.Source is { } source && _needsWholeTable is not null && _needsWholeTable(source))
+        // A table is expanded once: its members register the rest of it, so expanding again for each member scanned the
+        // table once per member, quadratic in its width (review 67: 40,000 features took 40 s to compile, not 1 s).
+        if (!feature.IsDerived && feature.Source is { } source && _needsWholeTable is not null && _needsWholeTable(source)
+            && _expanded.Add((source, feature.Entity.Name)))
         {
             foreach (var sibling in TableOf(feature))
             {

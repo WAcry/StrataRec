@@ -19,6 +19,8 @@ public static class ManifestBuilder
     /// Uploads every artifact a pipeline/environment needs to <paramref name="store"/> and returns the manifest
     /// (<c>stratarec build</c>). Returns null after reporting errors.
     /// </summary>
+    /// <param name="featureSources">The feature sources the compiled plan reads (its fetch groups, every arm's included):
+    /// only their types are required. Null requires every feature source's, as when nothing was compiled.</param>
     public static async ValueTask<ReleaseManifest?> BuildAsync(
         ConfigWorkspace workspace,
         string pipelineId,
@@ -28,7 +30,8 @@ public static class ManifestBuilder
         long seq = 1,
         long minAcceptedSeq = 0,
         string? previous = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlySet<string>? featureSources = null)
     {
         var request = workspace.CreateCompileRequest(pipelineId, environment, diagnostics);
         if (request is null)
@@ -80,7 +83,7 @@ public static class ManifestBuilder
             Seq = seq,
             MinAcceptedSeq = minAcceptedSeq,
             Previous = previous,
-            Requires = RequiredCapabilities(request.Pipeline, request.Experiments, request.Bindings, Array.Empty<ExperimentPlacement>(), null),
+            Requires = RequiredCapabilities(request.Pipeline, request.Experiments, request.Bindings, Array.Empty<ExperimentPlacement>(), null, featureSources),
             Artifacts = new ManifestArtifacts
             {
                 Catalog = await store.PutAsync(catalog!.Document, cancellationToken).ConfigureAwait(false),
@@ -392,9 +395,11 @@ public static class ManifestBuilder
     /// <summary>Operators, connectors and clients named by the configuration (design 10.4).</summary>
     /// <param name="removed">Experiments a revocation removes from <paramref name="experiments"/>: see the binding rule inside.</param>
     /// <param name="revoked">The requires of the manifest a revocation revokes; null for a build.</param>
+    /// <param name="featureSources">The feature sources the plan reads; null for all of them. A revocation compiles nothing
+    /// and passes null: its requires are kept to what the revoked manifest required, so it never requires more.</param>
     private static List<string> RequiredCapabilities(
         PipelineArtifact pipeline, IReadOnlyList<ExperimentPlacement> experiments, SourceBindingArtifact bindings, IReadOnlyList<ExperimentPlacement> removed,
-        IReadOnlyList<string>? revoked)
+        IReadOnlyList<string>? revoked, IReadOnlySet<string>? featureSources = null)
     {
         var required = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var (_, node) in pipeline.Nodes)
@@ -451,7 +456,7 @@ public static class ManifestBuilder
         // A revocation requires no binding type the manifest it revokes did not: what an earlier stop freed stays free, as
         // the bindings artifact still lists it (review 42: a second stop required again the client the first one freed).
         HashSet<string>? before = revoked is null ? null : new HashSet<string>(revoked, StringComparer.Ordinal);
-        foreach (var type in bindings.RequiredTypes(excluded))
+        foreach (var type in bindings.RequiredTypes(excluded, featureSources))
         {
             if (before is null || before.Contains(type))
             {

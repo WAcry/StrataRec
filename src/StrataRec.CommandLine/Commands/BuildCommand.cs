@@ -118,6 +118,13 @@ internal static class BuildCommand
             published = pointed;
         }
 
+        // The sources the plan reads, every arm's included: only their connector types are required of the binary.
+        var featureSources = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var group in compilation.GetPlanOrThrow().Features.Groups)
+        {
+            featureSources.Add(group.SourceName);
+        }
+
         ReleaseManifest? manifest;
         var manifestId = string.Empty;
         var unchanged = false;
@@ -125,9 +132,9 @@ internal static class BuildCommand
         {
             manifest = published is { } current
                 ? await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, store, diagnostics, next, current.Manifest.MinAcceptedSeq,
-                    current.Id, cancellationToken).ConfigureAwait(false)
-                : await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, store, diagnostics, seq ?? 1, cancellationToken: cancellationToken)
-                    .ConfigureAwait(false);
+                    current.Id, cancellationToken, featureSources).ConfigureAwait(false)
+                : await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, store, diagnostics, seq ?? 1, cancellationToken: cancellationToken,
+                    featureSources: featureSources).ConfigureAwait(false);
             unchanged = manifest is not null && published is { } was && ManifestBuilder.ContentId(Renumbered(manifest, was.Manifest)) == was.Id;
             if (unchanged)
             {

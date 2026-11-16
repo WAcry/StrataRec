@@ -515,4 +515,36 @@ public sealed class ManifestRefCliTests
         Assert.Equal((code, artifact, pointer), (error.Code, error.Artifact, error.Pointer));
         Assert.Contains(hint, error.Hint);
     }
+    /// <summary>
+    /// Review 67: a plan binds only the feature sources it reads, so the manifest requires only their connector types. A
+    /// catalog shared with another pipeline may name a source whose connector this binary lacks; it validated, built and
+    /// ran from the workspace, but the manifest required the connector, and the same binary refused to load it.
+    /// </summary>
+    [Fact]
+    public async Task TheManifest_RequiresOnlyTheConnectorsOfTheSourcesThePlanReads()
+    {
+        var root = HomeFeedTestHost.LoadModified(root =>
+        {
+            ReplayTests.Edit(root, "catalog/home_feed.jsonc", "\"item.clicks_7d\":",
+                "\"item.ghost\": { \"type\": \"float32\", \"source\": \"ghost_store\", \"field\": \"ghost\" },\n    \"item.clicks_7d\":");
+            ReplayTests.Edit(root, "bindings/local.jsonc", "\"item_store\":", "\"ghost_store\": { \"connector\": \"not_installed@1\" },\n    \"item_store\":");
+        }).Root;
+        var store = ManifestStores.NewStore();
+        var file = Path.Combine(store, "manifest.json");
+
+        Assert.Equal(0, await BuildCommand.RunAsync(Tool.Environment, root, "local", "home_feed", store, file, 1, TextWriter.Null, CancellationToken.None));
+
+        var requires = ManifestStores.Read(file).Requires;
+        Assert.DoesNotContain("not_installed@1", requires);
+        Assert.Contains("memory@1", requires); // item_store's: the plan reads its features
+        // The same binary loads it, as a node does (it refused: MANIFEST_INCOMPATIBLE, not_installed@1).
+        var manifest = ManifestStores.Read(file);
+        var diagnostics = new DiagnosticBag();
+        var request = await ManifestBuilder.LoadAsync(manifest, ContentHash.Compute(ArtifactSerializer.ToNode(manifest)), new FileSystemArtifactStore(store), diagnostics,
+            TestContext.Current.CancellationToken);
+        Assert.True(request is not null, string.Join("\n", diagnostics.Items));
+        await using var engine = new RecEngine(CommonOptions.ForRoot(Tool.Environment, root));
+        var load = await engine.LoadAsync(request, 1, TestContext.Current.CancellationToken);
+        Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
+    }
 }
