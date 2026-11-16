@@ -202,19 +202,25 @@ public sealed class GenerativeRetrieverTests
     }
 
     /// <summary>
-    /// The recall's attribution columns are non-nullable, and a row source after it appends rows without them, which would
-    /// fail every request at commit: the plan is refused, with the fix (declare them nullable) in the hint.
+    /// The recall's attribution columns are non-nullable, and a row source after it appends rows without them. That is
+    /// fine while nothing reads them again: they describe what the recall found. Once something after the retriever reads
+    /// one (here the output), the rows it appended would have no value there, and the plan is refused, naming the reader
+    /// and the fix. The rule used to refuse the retriever after any recall, read or not.
     /// </summary>
     [Fact]
-    public void AfterARecall_ItsNonNullableAttributionColumns_MustBeDeclaredNullable()
+    public void AfterARecall_ItsNonNullableAttributionColumns_NeedAValueOnlyWhereTheyAreReadAgain()
     {
-        var compilation = TryCompile(new TextModels("[]"), Retrieve("x"), Op);
+        var unread = TryCompile(new TextModels("[]"), Retrieve("x"), Op);
+        Assert.True(unread.Succeeded, string.Join("\n", unread.Diagnostics));
+
+        var compilation = TryCompile(new TextModels("[]"), Retrieve("x"), Op, output: DefaultOutput + ", \"best\": \"col.recall.best_score\"");
 
         Assert.False(compilation.Succeeded);
-        var errors = compilation.Diagnostics.Where(d => d.IsError).ToList();
-        Assert.Equal(4, errors.Count);
-        Assert.All(errors, e => Assert.Equal(("ROW_SOURCE_AFTER_COLUMN", "/nodes/rank"), (e.Code, e.Pointer)));
-        Assert.Contains("declare the column nullable", errors[0].Hint);
+        var error = Assert.Single(compilation.Diagnostics, d => d.IsError);
+        Assert.Equal(("ROW_SOURCE_AFTER_COLUMN", "/nodes/rank"), (error.Code, error.Pointer));
+        Assert.Contains("'recall.best_score'", error.Message);
+        Assert.Contains("output column 'best' relies on it for every row", error.Message);
+        Assert.Contains("declare the column nullable", error.Hint);
     }
 
     /// <summary>The call is recorded and replayed whole, by its digest: the same prompt replays it; another is not recorded.</summary>

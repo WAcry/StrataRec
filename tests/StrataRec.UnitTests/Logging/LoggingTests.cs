@@ -156,7 +156,7 @@ public sealed class LogPipelineTests
     public async Task FullBestEffortQueueDropsInsteadOfBlocking()
     {
         var sink = new BlockingSink();
-        await using var pipeline = new LogPipeline(sink, new LogPipelineOptions { BestEffortCapacity = 2, MaxBatchesPerWrite = 1, DrainTimeout = TimeSpan.FromMilliseconds(100) });
+        await using var pipeline = new LogPipeline(sink, new LogPipelineOptions { BestEffortMaxBytes = 2 * Batch("debug", LogDelivery.BestEffort).ApproximateBytes, MaxBatchesPerWrite = 1, DrainTimeout = TimeSpan.FromMilliseconds(100) });
         for (var i = 0; i < 20; i++)
         {
             pipeline.Submit(Batch("debug", LogDelivery.BestEffort));
@@ -189,7 +189,7 @@ public sealed class LogPipelineTests
         // Finding 3: a full durable queue must not drop silently.
         var sink = new BlockingSink();
         var spilled = new List<LogBatch>();
-        await using (var plain = new LogPipeline(sink, new LogPipelineOptions { DurableCapacity = 1, MaxBatchesPerWrite = 1, DrainTimeout = TimeSpan.FromMilliseconds(50) }))
+        await using (var plain = new LogPipeline(sink, new LogPipelineOptions { DurableMaxBytes = OneBatch, MaxBatchesPerWrite = 1, DrainTimeout = TimeSpan.FromMilliseconds(50) }))
         {
             var admissions = Enumerable.Range(0, 5).Select(_ => plain.Submit(Batch("served", LogDelivery.Durable))).ToList();
             Assert.Contains(LogAdmission.Dropped, admissions);
@@ -198,7 +198,7 @@ public sealed class LogPipelineTests
 
         await using (var spilling = new LogPipeline(sink, new LogPipelineOptions
         {
-            DurableCapacity = 1, MaxBatchesPerWrite = 1, DrainTimeout = TimeSpan.FromMilliseconds(50),
+            DurableMaxBytes = OneBatch, MaxBatchesPerWrite = 1, DrainTimeout = TimeSpan.FromMilliseconds(50),
             DurableOverflow = batch => { lock (spilled) { spilled.Add(batch); } return true; },
         }))
         {
@@ -211,6 +211,55 @@ public sealed class LogPipelineTests
 
         sink.Release();
     }
+
+    private static long OneBatch => Batch("served", LogDelivery.Durable).ApproximateBytes;
+
+    /// <summary>
+    /// The queues are bounded by the memory their batches hold, not by their number: behind a stuck sink, wide candidate
+    /// taps (here about 1 MiB each) stop at the default 256 MiB, where a bound of 65,536 batches let them take 64 GiB.
+    /// </summary>
+    [Fact]
+    public async Task AStuckSink_FillsTheQueuesByteBudget_NotMemory()
+    {
+        var sink = new BlockingSink();
+        var wide = Wide(); // shared by the batches, so the test itself stays small
+        await using var pipeline = new LogPipeline(sink, new LogPipelineOptions { MaxBatchesPerWrite = 1, DrainTimeout = TimeSpan.FromMilliseconds(50) });
+        var admissions = Enumerable.Range(0, 400).Select(_ => pipeline.Submit(WideBatch(wide, LogDelivery.Durable))).ToList();
+
+        var size = WideBatch(wide, LogDelivery.Durable).ApproximateBytes;
+        Assert.InRange(size, 1_000_000, 2L << 20);
+        Assert.InRange(admissions.Count(a => a == LogAdmission.Queued), (256L << 20) / size - 1, (256L << 20) / size);
+        Assert.Equal(admissions.Count(a => a == LogAdmission.Dropped), pipeline.DurableOverflow);
+        Assert.InRange(pipeline.DurableQueuedBytes, 0, 256L << 20);
+
+        // Written batches give their bytes back; a batch larger than the whole budget still goes into an empty queue.
+        sink.Release();
+        await pipeline.FlushAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Equal(0, pipeline.DurableQueuedBytes);
+    }
+
+    [Fact]
+    public async Task ABatchLargerThanTheBudget_IsQueuedWhenTheQueueIsEmpty()
+    {
+        var sink = new BlockingSink();
+        var wide = Wide();
+        await using var pipeline = new LogPipeline(sink, new LogPipelineOptions { BestEffortMaxBytes = 1024, MaxBatchesPerWrite = 1, DrainTimeout = TimeSpan.FromMilliseconds(50) });
+
+        Assert.Equal(LogAdmission.Queued, pipeline.Submit(WideBatch(wide, LogDelivery.BestEffort)));
+        Assert.Equal(LogAdmission.Dropped, pipeline.Submit(Batch("debug", LogDelivery.BestEffort)));
+        sink.Release();
+    }
+
+    private static string[] Wide() => Enumerable.Range(0, 1000).Select(i => new string('x', 500)).ToArray();
+
+    private static LogBatch WideBatch(string[] strings, LogDelivery delivery) => new()
+    {
+        TapId = "wide", RequestId = "req-1", PipelineId = "feed", ManifestId = "sha256:test", SchemaId = "sha256:schema",
+        TimeMs = 1_767_225_600_000, Delivery = delivery, RequestProbability = 1.0,
+        Int64EntityIds = new long[] { 1 }, Ranks = new[] { 1 }, RowProbabilities = new[] { 1.0 },
+        Columns = new[] { new LogColumn("titles", ColumnType.List(StorageKind.String), new[] { ScalarValue.FromStringList(strings) }) },
+        Context = Array.Empty<(string, ScalarValue)>(),
+    };
 
     [Fact]
     public async Task PermanentlyRejectedBatchDoesNotBlockTheDurableStream()

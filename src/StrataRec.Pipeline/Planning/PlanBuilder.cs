@@ -895,6 +895,7 @@ public sealed class PlanBuilder
             later.Add(node.NodeId);
         }
 
+        var readAfter = ReadsAfterRowSources(ordered, fallbacks, output, taps);
         for (var i = 0; i < ordered.Count; i++)
         {
             var node = ordered[i];
@@ -950,8 +951,7 @@ public sealed class PlanBuilder
                 }
             }
 
-            var unskippable = node.When is null && node.MinRemainingMs is null
-                && (node.OnFailure == FailurePolicy.FailRequest || (fallback is not null && fallback.OnFailure == FailurePolicy.FailRequest));
+            var unskippable = Unskippable(node, fallback);
 
             // Either the node or, when it fails, its fallback runs here. A failed node is rolled back, so it is not the
             // fallback's predecessor: both are checked against the state before this position, and the state after it is
@@ -962,7 +962,7 @@ public sealed class PlanBuilder
             var rewriter = !IsRowSource(node) ? node : fallback is not null && !IsRowSource(fallback) ? fallback : null;
             if (appender is not null)
             {
-                ValidateRowSource(appender, possible, versions, rowSources, artifact);
+                ValidateRowSource(appender, possible, versions, rowSources, readAfter[i], artifact);
             }
 
             foreach (var output2 in node.Outputs)
@@ -1356,9 +1356,30 @@ public sealed class PlanBuilder
             }
         }
 
+        // Taps logging a non-nullable output column, and the nodes they attach after (for the row-source rule).
+        var tapReaders = new Dictionary<int, SortedSet<string>>();
+        var tapAttach = new Dictionary<int, SortedSet<string>>();
+        foreach (var (tapId, variants) in taps)
+        {
+            foreach (var tap in variants)
+            {
+                foreach (var logical in tap.ReadOutputs)
+                {
+                    if (!schema.Columns[logical].Type.Nullable)
+                    {
+                        Add(tapReaders, logical, tapId);
+                        if (tap.AttachAfter is { } after)
+                        {
+                            Add(tapAttach, logical, after);
+                        }
+                    }
+                }
+            }
+        }
+
         var none = new SortedSet<string>(StringComparer.Ordinal);
         var scopes = new List<DataFlowScope>();
-        void Scope(string subject, string pointer, SortedSet<string> involved, string? tap = null)
+        void Scope(string subject, string pointer, SortedSet<string> involved, string? tap = null, IReadOnlyCollection<string>? moreTaps = null)
         {
             // A position is its node or its fallback: close over both directions until nothing is added.
             var closed = new SortedSet<string>(involved, StringComparer.Ordinal);
@@ -1377,7 +1398,13 @@ public sealed class PlanBuilder
                 }
             }
 
-            scopes.Add(new DataFlowScope(subject, pointer, closed, tap is null ? Array.Empty<string>() : new[] { tap }));
+            var scopeTaps = new SortedSet<string>(moreTaps ?? Array.Empty<string>(), StringComparer.Ordinal);
+            if (tap is not null)
+            {
+                scopeTaps.Add(tap);
+            }
+
+            scopes.Add(new DataFlowScope(subject, pointer, closed, scopeTaps));
         }
 
         SortedSet<string> With(SortedSet<string>? set, IEnumerable<string> more)
@@ -1398,9 +1425,15 @@ public sealed class PlanBuilder
                 Scope($"the producers of column '{column.Name}'", column.Pointer, produced);
                 if (!column.Type.Nullable)
                 {
+                    // Whether a row source must write the column depends on what reads it after the row source, and where
+                    // a tap that logs it attaches.
+                    var relying = With(produced, readers.GetValueOrDefault(logical) ?? none);
+                    var tapsReading = tapReaders.GetValueOrDefault(logical);
+                    relying.UnionWith(tapAttach.GetValueOrDefault(logical) ?? none);
                     foreach (var rowSource in rowSources)
                     {
-                        Scope($"column '{column.Name}' and row source '{rowSource}'", column.Pointer, With(produced, new[] { rowSource }));
+                        Scope($"column '{column.Name}' and row source '{rowSource}'", column.Pointer, With(relying, new[] { rowSource }),
+                            moreTaps: tapsReading);
                     }
                 }
             }
@@ -1536,26 +1569,124 @@ public sealed class PlanBuilder
         }
     }
 
+    /// <summary>A node whose position always leaves its writes: no <c>when</c> or time limit, and a failure fails the request.</summary>
+    private static bool Unskippable(CompiledNode node, CompiledNode? fallback) =>
+        node.When is null && node.MinRemainingMs is null
+        && (node.OnFailure == FailurePolicy.FailRequest || (fallback is not null && fallback.OnFailure == FailurePolicy.FailRequest));
+
+    /// <summary>
+    /// For each position that may append rows (by its node or its fallback): the non-nullable columns something after it
+    /// relies on for every row, with the first that does, before an unskippable node that is not a row source writes them
+    /// again for every live row. What relies on a column: a node or fallback reading it, a tap logging it, the output, and
+    /// a later row source writing it (it writes into the current version and checks every live row at commit).
+    /// </summary>
+    private Dictionary<int, Dictionary<int, string>> ReadsAfterRowSources(
+        List<CompiledNode> ordered, IReadOnlyDictionary<string, CompiledNode> fallbacks, OutputPlan? output, IReadOnlyList<CompiledTap>? taps)
+    {
+        var schema = Schema;
+        var result = new Dictionary<int, Dictionary<int, string>>();
+        var read = new Dictionary<int, string>(); // relied on after the current position → by what (the first after it)
+        if (output is not null)
+        {
+            foreach (var (name, expression) in output.Columns)
+            {
+                foreach (var symbol in expression.Reads)
+                {
+                    if (symbol.Kind == SymbolKind.Column && !symbol.Type.Nullable && schema.Columns[symbol.Id].Kind == ColumnKind.Output)
+                    {
+                        read[symbol.Id] = $"output column '{name}'";
+                    }
+                }
+            }
+        }
+
+        TapReads(null);
+        for (var i = ordered.Count - 1; i >= 0; i--)
+        {
+            var (node, fallback) = Branches(ordered[i], fallbacks);
+            TapReads(node.NodeId);
+            var appends = IsRowSource(node) || (fallback is not null && IsRowSource(fallback));
+            if (appends)
+            {
+                result[i] = new Dictionary<int, string>(read);
+            }
+            else if (Unskippable(node, fallback))
+            {
+                // Every live row has its value after this node, whatever a row source before it appended.
+                foreach (var o in node.Outputs)
+                {
+                    read.Remove(o.LogicalId);
+                }
+            }
+
+            foreach (var branch in new[] { node, fallback })
+            {
+                if (branch is null)
+                {
+                    continue;
+                }
+
+                foreach (var logical in branch.RequiredOutputs)
+                {
+                    read[logical] = $"'{branch.NodeId}'";
+                }
+
+                if (IsRowSource(branch))
+                {
+                    foreach (var o in branch.Outputs)
+                    {
+                        if (!schema.Columns[o.LogicalId].Type.Nullable)
+                        {
+                            read[o.LogicalId] = $"row source '{branch.NodeId}' (it writes the column and checks every live row at commit)";
+                        }
+                    }
+                }
+            }
+        }
+
+        return result;
+
+        void TapReads(string? after)
+        {
+            foreach (var tap in taps ?? Array.Empty<CompiledTap>())
+            {
+                if (string.Equals(tap.AttachAfter, after, StringComparison.Ordinal))
+                {
+                    foreach (var logical in tap.ReadOutputs)
+                    {
+                        if (!schema.Columns[logical].Type.Nullable)
+                        {
+                            read[logical] = $"tap '{tap.TapId}'";
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// <summary>
     /// Checks a row source against the columns around it on one path (design 4.6). A row source writes the rows it appends
     /// into the column's current version (the row sources' shared one, or a later node's; see
     /// <c>RequestState.OutputSlot</c>), and a row has no value in a column until something writes it
-    /// (<c>CandidateTable</c>). So a row source that appends rows after a non-nullable column exists must write it
-    /// (<c>ROW_SOURCE_AFTER_COLUMN</c>), and every row source before the first one that writes a non-nullable column must
-    /// write it too (<c>ROW_SOURCE_BEFORE_COLUMN</c>). Either would otherwise fail every request that runs both nodes, at
-    /// commit.
+    /// (<c>CandidateTable</c>). So a row source that appends rows after a non-nullable column exists must write it when
+    /// something after it relies on the column for every row (<paramref name="readAfter"/>; <c>ROW_SOURCE_AFTER_COLUMN</c>):
+    /// a column nothing reads again, or that a later node writes anew, may stay unwritten for its rows. Every row source
+    /// before the first one that writes a non-nullable column must write it too (<c>ROW_SOURCE_BEFORE_COLUMN</c>): that one
+    /// checks every live row at commit.
     /// </summary>
     private void ValidateRowSource(
-        CompiledNode node, Dictionary<int, string> possible, Dictionary<int, string> versions, List<CompiledNode> earlier, string artifact)
+        CompiledNode node, Dictionary<int, string> possible, Dictionary<int, string> versions, List<CompiledNode> earlier,
+        Dictionary<int, string> readAfter, string artifact)
     {
         var schema = Schema;
         foreach (var logical in possible.Keys)
         {
             var column = schema.Columns[logical];
-            if (!column.Type.Nullable && !Writes(node, logical))
+            if (!column.Type.Nullable && !Writes(node, logical) && readAfter.TryGetValue(logical, out var reader))
             {
                 _diagnostics.Error("ROW_SOURCE_AFTER_COLUMN", artifact, node.Pointer,
-                    $"Row source '{node.NodeId}' appends rows after non-nullable column '{column.Name}' is produced but does not write it.",
+                    $"Row source '{node.NodeId}' appends rows after non-nullable column '{column.Name}' is produced but does not write it, " +
+                    $"and {reader} relies on it for every row.",
                     versions.TryGetValue(logical, out var writer)
                         ? $"write '{column.Name}' for the rows it appends (they join the version '{writer}' wrote), move the row source before '{writer}', or declare the column nullable and handle missing values with '??'"
                         : "write the column in the row source, move it earlier, or declare the column nullable and handle missing values with '??'");

@@ -84,5 +84,82 @@ public sealed class LogBatch
     /// <summary>Per-process sequence number of durable batches (0 for best-effort).</summary>
     public long Seq { get; set; }
 
+    /// <summary>
+    /// About how much memory the batch holds: arrays, column values and what they point to (strings, lists, vectors).
+    /// What the log queues are bounded by (<see cref="LogPipelineOptions.DurableMaxBytes"/>): batches differ in size by
+    /// orders of magnitude (a request-level tap is one row, a candidate tap thousands of rows of lists), so a count of
+    /// batches bounds nothing. Computed once, when the batch is first queued; the batch does not change afterwards.
+    /// </summary>
+    public long ApproximateBytes => _bytes >= 0 ? _bytes : _bytes = Estimate();
+
+    private long _bytes = -1;
+
+    private const int ObjectBytes = 24; // header, method table, and an array's length, rounded
+    private const int ValueBytes = 24; // a ScalarValue: kind, bits, reference
+
+    private long Estimate()
+    {
+        long bytes = 256; // the object, its envelope strings and maps
+        bytes += Ranks.LongLength * 4 + RowProbabilities.LongLength * 8 + (RanksBefore?.LongLength ?? 0) * 4;
+        bytes += (Int64EntityIds?.LongLength ?? 0) * 8;
+        if (StringEntityIds is { } ids)
+        {
+            foreach (var id in ids)
+            {
+                bytes += 8 + StringBytes(id);
+            }
+        }
+
+        foreach (var column in Columns)
+        {
+            bytes += ObjectBytes + column.Values.LongLength * ValueBytes;
+            foreach (var value in column.Values)
+            {
+                bytes += PayloadBytes(value);
+            }
+        }
+
+        foreach (var (_, value) in Context)
+        {
+            bytes += ValueBytes + PayloadBytes(value);
+        }
+
+        return bytes;
+    }
+
+    /// <summary>The heap memory a value points to, beyond the value itself.</summary>
+    private static long PayloadBytes(in ScalarValue value)
+    {
+        switch (value.Kind)
+        {
+            case StorageKind.String or StorageKind.Text:
+                return StringBytes(value.AsString());
+            case StorageKind.Vector:
+                return ObjectBytes + value.AsVector().Length * 4L;
+            case StorageKind.List:
+                var length = value.ListLength;
+                switch (value.ListElement)
+                {
+                    case StorageKind.String:
+                        long strings = ObjectBytes + length * 8L;
+                        foreach (var s in value.AsStringList())
+                        {
+                            strings += StringBytes(s);
+                        }
+
+                        return strings;
+                    case StorageKind.Bool:
+                        return ObjectBytes + length;
+                    default:
+                        return ObjectBytes + length * 8L; // numbers are held promoted: long[] or double[]
+                }
+
+            default:
+                return 0;
+        }
+    }
+
+    private static long StringBytes(string? s) => s is null ? 0 : ObjectBytes + s.Length * 2L;
+
     private static readonly IReadOnlyDictionary<string, string> EmptyMap = new Dictionary<string, string>();
 }

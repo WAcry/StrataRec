@@ -10,14 +10,18 @@ namespace StrataRec.Logging;
 /// <summary>Queue sizes and timing of a <see cref="LogPipeline"/>.</summary>
 public sealed class LogPipelineOptions
 {
-    /// <summary>Best-effort batches buffered before new ones are dropped (and counted).</summary>
-    public int BestEffortCapacity { get; init; } = 4096;
+    /// <summary>
+    /// Memory the best-effort queue may hold (<see cref="LogBatch.ApproximateBytes"/>) before new batches are dropped (and
+    /// counted). Bytes, not batches: one candidate tap of a large request holds as much as thousands of request-level ones.
+    /// </summary>
+    public long BestEffortMaxBytes { get; init; } = 64L << 20;
 
     /// <summary>
-    /// Durable batches buffered in memory. A batch that does not fit goes to <see cref="DurableOverflow"/>; without
-    /// one it is lost, counted in <see cref="LogPipeline.DurableOverflow"/>, and leaves a sequence gap downstream.
+    /// Memory the durable queue may hold in memory. A batch that does not fit goes to <see cref="DurableOverflow"/>;
+    /// without one it is lost, counted in <see cref="LogPipeline.DurableOverflow"/>, and leaves a sequence gap downstream.
+    /// A sink that stops accepting writes fills this, and only this, so it bounds what a stuck sink costs the process.
     /// </summary>
-    public int DurableCapacity { get; init; } = 65536;
+    public long DurableMaxBytes { get; init; } = 256L << 20;
 
     /// <summary>
     /// Spill hook for durable batches the memory queue cannot take (design 8.6 item 4: the local disk buffer). Called
@@ -112,6 +116,8 @@ public sealed partial class LogPipeline : IAsyncDisposable
 
     private long _seq;
     private long _pending;
+    private long _durableBytes; // what the queued batches hold (LogBatch.ApproximateBytes), against DurableMaxBytes
+    private long _bestEffortBytes;
     private int _disposed;
 
     /// <param name="loggerFactory">Receives sink failures and recoveries and hook failures (design 13.2); null logs nothing.</param>
@@ -123,8 +129,12 @@ public sealed partial class LogPipeline : IAsyncDisposable
         _events = loggerFactory is null ? null : new RequestEventLog(_logger);
         _stop = new SinkStop(_logger);
         ProducerId = producerId ?? $"{Environment.MachineName}/{Environment.ProcessId}/{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
-        _durable = Channel.CreateBounded<LogBatch>(new BoundedChannelOptions(_options.DurableCapacity) { SingleReader = true });
-        _bestEffort = Channel.CreateBounded<LogBatch>(new BoundedChannelOptions(_options.BestEffortCapacity) { SingleReader = true });
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.DurableMaxBytes, nameof(LogPipelineOptions.DurableMaxBytes));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.BestEffortMaxBytes, nameof(LogPipelineOptions.BestEffortMaxBytes));
+
+        // Unbounded channels, bounded by the bytes their batches hold (Reserve): a writer never waits either way.
+        _durable = Channel.CreateUnbounded<LogBatch>(new UnboundedChannelOptions { SingleReader = true });
+        _bestEffort = Channel.CreateUnbounded<LogBatch>(new UnboundedChannelOptions { SingleReader = true });
         _durableLoop = Task.Run(() => RunAsync(_durable.Reader, durable: true));
         _bestEffortLoop = Task.Run(() => RunAsync(_bestEffort.Reader, durable: false));
     }
@@ -159,14 +169,20 @@ public sealed partial class LogPipeline : IAsyncDisposable
             return LogAdmission.Closed;
         }
 
+        var bytes = batch.ApproximateBytes;
         Interlocked.Increment(ref _pending);
         if (batch.Delivery == LogDelivery.Durable)
         {
             batch.Seq = Interlocked.Increment(ref _seq);
-            if (_durable.Writer.TryWrite(batch))
+            if (Reserve(ref _durableBytes, bytes, _options.DurableMaxBytes))
             {
-                StrataRecMetrics.LogQueueDepth.Add(1, DurableTags);
-                return LogAdmission.Queued;
+                if (_durable.Writer.TryWrite(batch))
+                {
+                    StrataRecMetrics.LogQueueDepth.Add(1, DurableTags);
+                    return LogAdmission.Queued;
+                }
+
+                Interlocked.Add(ref _durableBytes, -bytes); // completed by a concurrent dispose
             }
 
             Interlocked.Decrement(ref _pending);
@@ -180,15 +196,47 @@ public sealed partial class LogPipeline : IAsyncDisposable
             return LogAdmission.Dropped;
         }
 
-        if (!_bestEffort.Writer.TryWrite(batch))
+        if (Reserve(ref _bestEffortBytes, bytes, _options.BestEffortMaxBytes))
         {
-            Count(batch.TapId, 0, 1);
-            Interlocked.Decrement(ref _pending);
-            return LogAdmission.Dropped;
+            if (_bestEffort.Writer.TryWrite(batch))
+            {
+                StrataRecMetrics.LogQueueDepth.Add(1, BestEffortTags);
+                return LogAdmission.Queued;
+            }
+
+            Interlocked.Add(ref _bestEffortBytes, -bytes);
         }
 
-        StrataRecMetrics.LogQueueDepth.Add(1, BestEffortTags);
-        return LogAdmission.Queued;
+        Count(batch.TapId, 0, 1);
+        Interlocked.Decrement(ref _pending);
+        return LogAdmission.Dropped;
+    }
+
+    /// <summary>Memory the durable queue holds now (<see cref="LogBatch.ApproximateBytes"/> of its batches).</summary>
+    public long DurableQueuedBytes => Interlocked.Read(ref _durableBytes);
+
+    /// <summary>Memory the best-effort queue holds now.</summary>
+    public long BestEffortQueuedBytes => Interlocked.Read(ref _bestEffortBytes);
+
+    /// <summary>
+    /// Takes <paramref name="bytes"/> of a queue's budget, or nothing when they do not fit. A batch larger than the whole
+    /// budget still goes into an empty queue, so one huge batch is delayed behind nothing rather than never delivered.
+    /// </summary>
+    private static bool Reserve(ref long queued, long bytes, long max)
+    {
+        while (true)
+        {
+            var current = Interlocked.Read(ref queued);
+            if (current > 0 && current + bytes > max)
+            {
+                return false;
+            }
+
+            if (Interlocked.CompareExchange(ref queued, current + bytes, current) == current)
+            {
+                return true;
+            }
+        }
     }
 
     private void Overflow()
@@ -287,12 +335,16 @@ public sealed partial class LogPipeline : IAsyncDisposable
 
                 var rejected = new HashSet<LogBatch>(ReferenceEqualityComparer.Instance);
                 var delivered = await WriteAsync(buffer, durable, rejected, token).ConfigureAwait(false);
+                long written = 0;
                 foreach (var batch in buffer)
                 {
                     var ok = delivered && !rejected.Contains(batch);
                     Count(batch.TapId, ok ? 1 : 0, ok ? 0 : 1);
+                    written += batch.ApproximateBytes;
                 }
 
+                // The batches stay in the queue's budget until the sink has them: a stuck sink fills the budget, not memory.
+                Interlocked.Add(ref durable ? ref _durableBytes : ref _bestEffortBytes, -written);
                 Interlocked.Add(ref _pending, -buffer.Count);
                 StrataRecMetrics.LogQueueDepth.Add(-buffer.Count, depthTags);
             }
@@ -303,14 +355,17 @@ public sealed partial class LogPipeline : IAsyncDisposable
             // or pending, flush waiters and the process-wide queue-depth series would wait for them forever. Only this
             // loop reads its queue, so nothing is settled twice.
             var abandoned = 0;
+            long bytes = 0;
             while (reader.TryRead(out var batch))
             {
                 Count(batch.TapId, 0, 1);
                 abandoned++;
+                bytes += batch.ApproximateBytes;
             }
 
             if (abandoned > 0)
             {
+                Interlocked.Add(ref durable ? ref _durableBytes : ref _bestEffortBytes, -bytes);
                 Interlocked.Add(ref _pending, -abandoned);
                 StrataRecMetrics.LogQueueDepth.Add(-abandoned, depthTags);
             }

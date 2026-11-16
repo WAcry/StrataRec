@@ -123,6 +123,49 @@ public sealed class UnwrittenAndUncommittedDataTests
         Assert.Equal("node 'seed' failed: left non-nullable column 'score.x' without a value on 2 of 3 live rows", result.Error);
     }
 
+    /// <summary>
+    /// A row source after a non-nullable column has to write it only when something after it relies on the column for
+    /// every row: a node, the output, or a later row source writing it (which checks every live row at commit), unless an
+    /// unskippable node rewrites the column for every row first. The rule used to require every such column, read or not
+    /// (a retriever after a recall had to write the recall's attribution columns, or they had to be declared nullable).
+    /// </summary>
+    [Theory]
+    [InlineData("", "", null)]
+    [InlineData("", "\"y\": \"col.score.y\"", "output column 'y'")]
+    [InlineData("\"use\": { \"order\": 90, \"op\": \"ExpressionScorer@1\", \"config\": { \"output_col\": \"score.z\", \"expr\": \"col.score.y\" } }", "", "'use'")]
+    [InlineData("\"again\": { \"order\": 90, \"op\": \"Rows@1\", \"config\": { \"ids\": [4], \"output_col\": \"score.y\" } }", "", "row source 'again'")]
+    [InlineData("\"rescore\": { \"order\": 90, \"op\": \"ExpressionScorer@1\", \"config\": { \"output_col\": \"score.y\", \"expr\": \"3.0\" } }", "\"y\": \"col.score.y\"", null)]
+    [InlineData("\"rescore\": { \"order\": 90, \"op\": \"ExpressionScorer@1\", \"when\": \"ctx.request.id == 'x'\", \"config\": { \"output_col\": \"score.y\", \"expr\": \"3.0\" } }", "\"y\": \"col.score.y\"", "output column 'y'")]
+    public async Task ARowSourceAfterANonNullableColumn_WritesItOnlyWhereSomethingLaterReliesOnIt(string after, string output, string? reader)
+    {
+        var compilation = TryCompile("""
+            "score.y": { "type": "float64", "default": 0.0, "flow": true }, "score.z": { "type": "float64", "default": 0.0 }
+            """, """
+            "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [1, 2] } },
+            "score_y": { "order": 70, "op": "ExpressionScorer@1", "config": { "output_col": "score.y", "expr": "2.0" } },
+            "more": { "order": 80, "op": "Rows@1", "config": { "ids": [3] } }
+            """ + (after.Length > 0 ? ", " + after : ""), output);
+
+        if (reader is not null)
+        {
+            Assert.False(compilation.Succeeded);
+            var error = Assert.Single(compilation.Diagnostics, d => d.IsError);
+            Assert.Equal(("ROW_SOURCE_AFTER_COLUMN", "/nodes/more"), (error.Code, error.Pointer));
+            Assert.Contains($"and {reader}", error.Message, StringComparison.Ordinal);
+            Assert.Contains("relies on it for every row", error.Message, StringComparison.Ordinal);
+            return;
+        }
+
+        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
+        var result = await Execute(compilation.Plan!);
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(new long[] { 1, 2, 3 }, result.Items.Select(i => i.Id.Int64Value).Order());
+        if (output.Length > 0)
+        {
+            Assert.All(result.Items, i => Assert.Equal(3.0, i.Columns["y"].AsFloat64())); // the rewrite covers row 3 too
+        }
+    }
+
     [Fact]
     public void ARowSourceAfterANodesNonNullableColumn_IsToldToWriteIt_AndMayWriteAColumnAnotherNodeRewrote()
     {
