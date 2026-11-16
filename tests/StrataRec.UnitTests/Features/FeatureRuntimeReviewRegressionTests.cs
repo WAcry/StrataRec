@@ -118,6 +118,61 @@ public class FeatureRuntimeReviewRegressionTests
         await request.Fetcher.WhenIoCompleteAsync();
     }
 
+    /// <summary>
+    /// Review 72: when sending one context group threw (here a recording hook, as the next group was about to be sent),
+    /// the prefetch released the request memory while a group already sent was still to be stored: once its connector
+    /// answered and released its own hold, the buffers went back, and the store then read poisoned staging and wrote a
+    /// default. The prefetch now holds the memory until every group it started is stored, and still fails.
+    /// </summary>
+    [Fact]
+    public async Task AContextGroupSentBeforeTheStartFailed_IsStoredBeforeTheMemoryGoesBack()
+    {
+        var gate = new TaskCompletionSource();
+        var slow = new ScriptedConnector(async (keys, fields, writer, _) =>
+        {
+            await gate.Task;
+            ScriptedConnector.WriteAll(keys, fields, writer, (_, _) => 99.0);
+            return FetchStatus.Ok;
+        });
+        var other = new ScriptedConnector((keys, fields, writer, _) =>
+        {
+            ScriptedConnector.WriteAll(keys, fields, writer, (_, _) => 1.0);
+            return ValueTask.FromResult(FetchStatus.Ok);
+        });
+        var rig = new FeatureTestRig().Source("a_store", slow).Source("b_store", other);
+        var a = rig.Physical("user.a", FeatureTestRig.User, ColumnType.Float64, "a_store", defaultValue: ScalarValue.FromFloat64(7));
+        var b = rig.Physical("user.b", FeatureTestRig.User, ColumnType.Float64, "b_store");
+        rig.Build();
+        var request = rig.NewRequest(TwoItems, userId: 7, new PoisoningPool(), hook: new FailingSecondBegin());
+
+        request.Fetcher.StartContextFetch(new[] { a, b }, CancellationToken.None);
+        request.Memory.Release(); // the request ends; the first group's connector still holds the memory
+        gate.SetResult();
+        await Assert.ThrowsAsync<IOException>(() => request.Fetcher.WhenIoCompleteAsync().WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
+
+        Assert.True(request.Memory.IsReturned);
+        Assert.Equal(FeatureState.Ok, request.Fetcher.GetState(a));
+        Assert.Equal(99.0, request.ContextValue(a).AsFloat64()); // read from the staging before it went back
+    }
+
+    /// <summary>Records nothing, and throws when the second call is about to be sent.</summary>
+    private sealed class FailingSecondBegin : IFeatureCallHook
+    {
+        private int _begun;
+
+        public bool Replays => false;
+
+        public int Begin(FetchGroup group, in EntityKeyBatch batch, System.Collections.Immutable.ImmutableArray<CompiledFieldBinding> fields) =>
+            ++_begun == 2 ? throw new IOException("recording unavailable") : _begun;
+
+        public void Record(in FeatureCallInfo call, IStagedFeatureValues? values)
+        {
+        }
+
+        public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, System.Collections.Immutable.ImmutableArray<CompiledFieldBinding> fields, IFeatureBatchWriter writer) =>
+            throw new NotSupportedException();
+    }
+
     [Fact]
     public async Task WhenIoComplete_CoversTheWholeContextOperation()
     {

@@ -6,8 +6,8 @@ using StrataRec.Core.Diagnostics;
 namespace StrataRec.Core.Memory;
 
 /// <summary>
-/// Source of large reusable buffers (design 4.8). The default implementation wraps <see cref="ArrayPool{T}.Shared"/>;
-/// hosts can provide tiered pools (for example a dedicated pool for embedding columns).
+/// Source of large reusable buffers (design 4.8). The engine uses <see cref="SharedArrayBufferPool"/>; another pool is
+/// for tests (counting or poisoning what goes back), since hosts run requests through the engine, which takes none.
 /// </summary>
 public interface IBufferPool
 {
@@ -48,7 +48,7 @@ public interface IRequestEndObserver
 /// after it has produced its result. The last release returns all buffers and then tells the
 /// <see cref="IRequestEndObserver"/>, if any: the one moment from which nothing of the request can still run.</para>
 /// <para>The ledger is itself a pooled array of struct entries, so renting allocates nothing per buffer.</para>
-/// <para>A buffer the pool will not take back (a host's <see cref="IBufferPool"/> throws) is left to the GC, the others are
+/// <para>A buffer the pool will not take back (an <see cref="IBufferPool"/> throws; a test's may) is left to the GC, the others are
 /// still returned, and the failure goes to the event log as <see cref="RequestEvent.BufferReturnFailed"/> (design 13.2).
 /// <see cref="Release"/> never throws for the pool: the last release often runs on a client's thread, as the continuation
 /// of a call the request abandoned, where an exception would reach no one.</para>

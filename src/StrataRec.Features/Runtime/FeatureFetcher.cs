@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
@@ -1269,74 +1270,86 @@ public sealed partial class FeatureFetcher
             var ready = _contextGroups = _memory.RentCleared<Task?>(groupCount);
             var storedCount = 0;
             var locals = false;
-            for (var c = 0; c < closure.Count; c++)
+            CacheRead? cached = null;
+            ExceptionDispatchInfo? failure = null;
+            try
             {
-                var info = _plan.Features[closure.Items[c]];
-                if (!info.IsContext || info.IsDerived || info.GroupIndex < 0 || seenGroup[info.GroupIndex])
+                for (var c = 0; c < closure.Count; c++)
                 {
-                    continue;
-                }
-
-                var group = _plan.Groups[info.GroupIndex];
-                if (ReadsLocally(group))
-                {
-                    locals = true; // read below, while the fetches are in flight
-                    continue;
-                }
-
-                seenGroup[info.GroupIndex] = true;
-                var features = RequestedMembers(group, member);
-                var v = group.ContextKeyId >= 0 ? _context[group.ContextKeyId] : ScalarValue.Missing;
-                ContextFetch fetch;
-                if (v.IsMissing)
-                {
-                    fetch = new ContextFetch(features, null, new ValueTask<FetchStatus>(FetchStatus.Ok));
-                }
-                else
-                {
-                    var fields = FieldBindings(group, features);
-                    var batch = new EntityKeyBatch { Shape = group.Shape, ContextKey = ToKey(v) };
-                    var budget = BudgetMs(group);
-                    var cancellation = budget <= 0 || _hook is { Replays: true } ? null : new FetchCancellation(cancellationToken, budget, _events, _requestId);
-                    if (budget <= 0)
+                    var info = _plan.Features[closure.Items[c]];
+                    if (!info.IsContext || info.IsDerived || info.GroupIndex < 0 || seenGroup[info.GroupIndex])
                     {
-                        fetch = new ContextFetch(features, null, new ValueTask<FetchStatus>(NoTimeLeft));
-                        RecordUnsent(group, batch, fields, NoTimeLeft, IoOutcome.Timeout);
+                        continue;
                     }
-                    else if (cancellation is not null && CutOff(cancellation, cancellationToken) is { } cut)
+
+                    var group = _plan.Groups[info.GroupIndex];
+                    if (ReadsLocally(group))
                     {
-                        // As a candidate chunk (FetchCandidates): a context fetch is not sent once the caller has cancelled, or
-                        // its time is up (an earlier group's connector ran its synchronous part; review 49).
-                        cancellation.Release();
-                        var unsent = cut == IoOutcome.Cancelled ? Cancelled(group) : TimedOut(group, budget);
-                        fetch = new ContextFetch(features, null, new ValueTask<FetchStatus>(unsent));
-                        RecordUnsent(group, batch, fields, unsent, cut);
+                        locals = true; // read below, while the fetches are in flight
+                        continue;
+                    }
+
+                    seenGroup[info.GroupIndex] = true;
+                    var features = RequestedMembers(group, member);
+                    var v = group.ContextKeyId >= 0 ? _context[group.ContextKeyId] : ScalarValue.Missing;
+                    ContextFetch fetch;
+                    if (v.IsMissing)
+                    {
+                        fetch = new ContextFetch(features, null, new ValueTask<FetchStatus>(FetchStatus.Ok));
                     }
                     else
                     {
-                        var staging = new StagingBuffer(fields, 1, _memory);
-                        ValueTask<FetchStatus> call;
-                        try
+                        var fields = FieldBindings(group, features);
+                        var batch = new EntityKeyBatch { Shape = group.Shape, ContextKey = ToKey(v) };
+                        var budget = BudgetMs(group);
+                        var cancellation = budget <= 0 || _hook is { Replays: true } ? null : new FetchCancellation(cancellationToken, budget, _events, _requestId);
+                        if (budget <= 0)
                         {
-                            call = CallAsync(group, batch, fields, staging, budget, cancellation, cancellationToken, out _);
+                            fetch = new ContextFetch(features, null, new ValueTask<FetchStatus>(NoTimeLeft));
+                            RecordUnsent(group, batch, fields, NoTimeLeft, IoOutcome.Timeout);
                         }
-                        finally
+                        else if (cancellation is not null && CutOff(cancellation, cancellationToken) is { } cut)
                         {
-                            cancellation?.Release();
+                            // As a candidate chunk (FetchCandidates): a context fetch is not sent once the caller has cancelled, or
+                            // its time is up (an earlier group's connector ran its synchronous part; review 49).
+                            cancellation.Release();
+                            var unsent = cut == IoOutcome.Cancelled ? Cancelled(group) : TimedOut(group, budget);
+                            fetch = new ContextFetch(features, null, new ValueTask<FetchStatus>(unsent));
+                            RecordUnsent(group, batch, fields, unsent, cut);
                         }
+                        else
+                        {
+                            var staging = new StagingBuffer(fields, 1, _memory);
+                            ValueTask<FetchStatus> call;
+                            try
+                            {
+                                call = CallAsync(group, batch, fields, staging, budget, cancellation, cancellationToken, out _);
+                            }
+                            finally
+                            {
+                                cancellation?.Release();
+                            }
 
-                        fetch = new ContextFetch(features, staging, call);
+                            fetch = new ContextFetch(features, staging, call);
+                        }
                     }
+
+                    // Each group is stored as its source answers, not in the order they were sent.
+                    var done = StoreContextGroupAsync(fetch);
+                    ready[info.GroupIndex] = done;
+                    stored[storedCount++] = done;
                 }
 
-                // Each group is stored as its source answers, not in the order they were sent.
-                var done = StoreContextGroupAsync(fetch);
-                ready[info.GroupIndex] = done;
-                stored[storedCount++] = done;
+                cached = locals ? ReadLocalContext(closure, member, cancellationToken) : null;
+            }
+            catch (Exception ex)
+            {
+                failure = ExceptionDispatchInfo.Capture(ex);
             }
 
-            var cached = locals ? ReadLocalContext(closure, member, cancellationToken) : null;
-            Exception? failure = null;
+            // Every group started reads its staging and writes its features when its source answers: the memory is held until
+            // all of them are done, however the start ended (review 72: a recording hook that threw while the next group was
+            // sent released it, and a group answered later read and wrote returned buffers). The first failure is rethrown.
             for (var n = 0; n < storedCount; n++)
             {
                 try
@@ -1345,15 +1358,11 @@ public sealed partial class FeatureFetcher
                 }
                 catch (Exception ex)
                 {
-                    // Every group still reads its staging: the memory is held until all of them are done.
-                    failure ??= ex;
+                    failure ??= ExceptionDispatchInfo.Capture(ex);
                 }
             }
 
-            if (failure is not null)
-            {
-                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(failure);
-            }
+            failure?.Throw();
 
             for (var read = cached; read is not null; read = read.Next)
             {
