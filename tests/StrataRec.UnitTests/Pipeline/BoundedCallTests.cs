@@ -287,7 +287,7 @@ public sealed class BoundedCallTests
         client.SetException(thrown);
         var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
-        Assert.Equal((CallEnd.Threw, IoOutcome.Timeout, "transport", false), (result.End, result.Outcome, result.Error, result.Abandoned));
+        Assert.Equal((CallEnd.Threw, IoOutcome.Timeout, "threw TimeoutException: transport", false), (result.End, result.Outcome, result.Error, result.Abandoned));
         Assert.Same(thrown, result.Exception);
         budget.Release();
         memory.Release();
@@ -374,7 +374,7 @@ public sealed class BoundedCallTests
 
         var result = await Run(site.With(_ => synchronously ? throw thrown : ValueTask.FromException<int>(thrown)), budget, memory, timeoutMs: null);
 
-        Assert.Equal((CallEnd.Threw, timeout ? IoOutcome.Timeout : IoOutcome.Error, thrown.Message), (result.End, result.Outcome, result.Error));
+        Assert.Equal((CallEnd.Threw, timeout ? IoOutcome.Timeout : IoOutcome.Error, $"threw {thrown.GetType().Name}: {thrown.Message}"), (result.End, result.Outcome, result.Error));
         Assert.Same(thrown, result.Exception);
         Assert.Single(site.Recorded);
         budget.Release();

@@ -262,9 +262,8 @@ public sealed class ReplayAbortTests
         var run = schema.RootElement.GetProperty("properties").GetProperty("runs").GetProperty("items").GetProperty("properties");
         Assert.Contains("aborted position", run.GetProperty("nodes").GetProperty("items").GetProperty("properties").GetProperty("triggered")
             .GetProperty("description").GetString());
-        var errorType = run.GetProperty("model_calls").GetProperty("items").GetProperty("properties").GetProperty("error_type");
-        Assert.Contains("never loaded", errorType.GetProperty("description").GetString());
-        Assert.Contains("\"assembly\"", errorType.GetRawText());
+        var threw = run.GetProperty("model_calls").GetProperty("items").GetProperty("properties").GetProperty("threw");
+        Assert.Contains("cut the call off", threw.GetProperty("description").GetString());
     }
 
     private static RecRequest WithCallback(RecRequest request, Action<ReplayBundle> onRecording) => new()

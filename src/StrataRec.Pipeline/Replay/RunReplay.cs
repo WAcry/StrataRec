@@ -291,8 +291,8 @@ public sealed class RunReplay : IFeatureCallHook
     /// Answers a model call. A call without keys is matched by the digest of its whole input. A keyed call
     /// (<paramref name="keys"/>: the entity of each batch row) takes the next recorded call with the same keys and the same
     /// inputs in every row, and replays it as recorded; otherwise each row's output comes from whichever successful call
-    /// scored that entity with the same inputs (<see cref="Synthesize"/>). A recorded failure is returned, or thrown again
-    /// when the client threw (see <see cref="ReplayedExceptions"/>).
+    /// scored that entity with the same inputs (<see cref="Synthesize"/>). A recorded failure is returned; a call the budget
+    /// or the caller cut off throws <see cref="OperationCanceledException"/> again, as the operator saw it.
     /// </summary>
     /// <remarks>
     /// A recorded failure answers only the call it was: same entities, same inputs. Taken by entities alone, the failure of
@@ -457,8 +457,7 @@ public sealed class RunReplay : IFeatureCallHook
         {
             if (entry.Threw)
             {
-                throw ReplayedExceptions.Create(entry.ErrorType, entry.Error, entry.Outcome is IoOutcome.Timeout or IoOutcome.Cancelled,
-                    $"model '{entry.Model}' threw in the recording");
+                throw new OperationCanceledException(entry.Error ?? $"model '{entry.Model}' was cut off in the recording");
             }
 
             return ModelStatus.Failed(entry.Error ?? $"model '{entry.Model}' failed in the recording") with
@@ -979,7 +978,7 @@ public sealed class RunReplay : IFeatureCallHook
                 outputs[name] = ReplayJson.Floats(values, $"{at}/outputs/{JsonPointer.Escape(name)}");
             }
 
-            var entry = new ModelEntry(call.Seq, call.Model, call.BatchSize, outcome, call.Error, call.Threw, call.ErrorType, keys, call.InputDigests.ToArray(), outputs,
+            var entry = new ModelEntry(call.Seq, call.Model, call.BatchSize, outcome, call.Error, call.Threw, keys, call.InputDigests.ToArray(), outputs,
                 new Dictionary<string, string>(call.Texts, StringComparer.Ordinal), call.OutputTokens, call.Truncated == true);
             if (!_modelCalls.TryGetValue((call.Model, call.Version), out var list))
             {
@@ -1053,7 +1052,7 @@ public sealed class RunReplay : IFeatureCallHook
     }
 
     private sealed class ModelEntry(
-        int seq, string model, int batchSize, IoOutcome outcome, string? error, bool threw, ReplayTypeIdentity? errorType, EntityKey[]? keys, string[] digests,
+        int seq, string model, int batchSize, IoOutcome outcome, string? error, bool threw, EntityKey[]? keys, string[] digests,
         Dictionary<string, float[]> outputs, Dictionary<string, string> texts, int? outputTokens, bool truncated)
     {
         public int Seq { get; } = seq;
@@ -1067,8 +1066,6 @@ public sealed class RunReplay : IFeatureCallHook
         public string? Error { get; } = error;
 
         public bool Threw { get; } = threw;
-
-        public ReplayTypeIdentity? ErrorType { get; } = errorType;
 
         public EntityKey[]? Keys { get; } = keys;
 

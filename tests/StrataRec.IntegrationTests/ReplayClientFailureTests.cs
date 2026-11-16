@@ -14,35 +14,13 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// A replayed model call that threw throws what the client threw (design 13.4), so operators that handle particular
-/// client exceptions, and the failure details of nodes that do not, are the same on replay.
+/// A model client that throws gives the operator a failed status naming the exception (design 13.4), live and on replay:
+/// the recording has the status, so a replay takes the same path without recreating the client's exception type.
 /// </summary>
-public sealed class ReplayExceptionTests
+public sealed class ReplayClientFailureTests
 {
     [Fact]
-    public async Task AnOperatorHandlingAClientException_TakesTheSamePathOnReplay()
-    {
-        var call = await AssertHandledAlikeOnReplay(message => new TransientModelException(message));
-
-        Assert.Equal((typeof(TransientModelException).FullName, "StrataRec.IntegrationTests", null), (call.ErrorType!.Name, call.ErrorType.Assembly, call.ErrorType.Args));
-    }
-
-    [Fact]
-    public async Task AnOperatorHandlingAClosedGenericClientException_TakesTheSamePathOnReplay()
-    {
-        var call = await AssertHandledAlikeOnReplay(message => new BackendException<int>(message));
-
-        Assert.Equal((typeof(BackendException<>).FullName, "StrataRec.IntegrationTests"), (call.ErrorType!.Name, call.ErrorType.Assembly));
-        var argument = Assert.Single(call.ErrorType.Args!);
-        Assert.Equal(("System.Int32", "System.Private.CoreLib"), (argument.Name, argument.Assembly));
-    }
-
-    /// <summary>
-    /// Records a request whose operator catches <typeparamref name="TException"/> from its model call and scores without the
-    /// model, replays it, and checks the replay took the same path. Returns the recorded call.
-    /// </summary>
-    private static async Task<ReplayModelCall> AssertHandledAlikeOnReplay<TException>(Func<string, TException> exception)
-        where TException : Exception
+    public async Task AnOperatorHandlingAFailedCall_TakesTheSamePathOnReplay()
     {
         // The baseline pipeline without experiments or taps (they read ctr_ranker's model inputs, which the operator lacks).
         var host = HomeFeedTestHost.Load();
@@ -50,13 +28,14 @@ public sealed class ReplayExceptionTests
         pipeline.LogTaps.Clear();
         pipeline.Nodes["ctr_ranker"] = new NodeSpec
         {
-            Order = 400, Op = "CatchingScorer@1", OnFailure = "fail_request",
+            Order = 400, Op = "CheckingScorer@1", OnFailure = "fail_request",
             Config = new JsonObject { ["output_col"] = "score.ctr", ["expr"] = "col.item.smoothed_ctr" },
         };
+        var errors = new List<string?>();
         var engine = new RecEngine(new PlanEnvironment
         {
             BaseDirectory = host.Root,
-            Operators = OperatorRegistry.CreateDefault().Add(new CatchingScorerFactory<TException>(exception)),
+            Operators = OperatorRegistry.CreateDefault().Add(new CheckingScorerFactory(errors)),
         });
         var load = engine.Load(new PlanCompileRequest
         {
@@ -64,23 +43,23 @@ public sealed class ReplayExceptionTests
         });
         Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
 
-        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-catch", 1001, "home", arms: null));
+        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-catch", 1001, "home", arms: null), TestContext.Current.CancellationToken);
         Assert.True(recorded.Succeeded, recorded.Error);
         Assert.Equal(10, recorded.Items.Count);
         var call = Assert.Single(recorded.Recording!.Runs[0].ModelCalls);
-        Assert.Equal(("error", true), (call.Status, call.Threw));
+        Assert.Equal(("error", false, "threw TransientModelException: the model is warming up"), (call.Status, call.Threw, call.Error));
 
-        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording)));
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording)), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(outcome.Result.Succeeded, outcome.Result.Error);
         Assert.True(outcome.Report.Diff.Identical, ReplayTests.Describe(outcome.Report));
         Assert.Equal("succeeded", outcome.Report.Nodes.Single(n => n.Node == "ctr_ranker").Replayed);
-        return call;
+        Assert.Equal(new[] { call.Error, call.Error }, errors); // what the operator saw, live and replayed
     }
 
     [Theory]
-    [InlineData("timeout", "TimeoutException: backend timed out")]
-    [InlineData("refused", "InvalidOperationException: backend refused")]
+    [InlineData("timeout", "model 'ctr_model' failed: threw TimeoutException: backend timed out")]
+    [InlineData("refused", "model 'ctr_model' failed: threw InvalidOperationException: backend refused")]
     public async Task ANodeFailedByAThrowingClient_FailsWithTheSameDetailOnReplay(string mode, string detail)
     {
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
@@ -104,44 +83,39 @@ public sealed class ReplayExceptionTests
         Assert.Equal(("failed", detail), (node.Replayed, node.ReplayedDetail));
     }
 
-    /// <summary>A client exception an operator knows how to handle.</summary>
+    /// <summary>A client exception.</summary>
     public sealed class TransientModelException(string message) : Exception(message);
 
-    /// <summary>A generic client exception; an operator catches one closed type of it.</summary>
-    public sealed class BackendException<TCode>(string message) : Exception(message);
-
-    /// <summary>
-    /// Calls a model through the framework, and scores with an expression when the call throws
-    /// <typeparamref name="TException"/> (a typed catch of the closed type).
-    /// </summary>
-    private sealed class CatchingScorerFactory<TException>(Func<string, TException> exception) : IOperatorFactory
-        where TException : Exception
+    /// <summary>Calls a model through the framework, and scores with an expression when the call failed.</summary>
+    private sealed class CheckingScorerFactory(List<string?> errors) : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } =
-            new("CatchingScorer", 1, Effects.ColumnWriter, typeof(ExpressionScorerConfig), "Scores with a model, or an expression when the model is unavailable.");
+            new("CheckingScorer", 1, Effects.ColumnWriter, typeof(ExpressionScorerConfig), "Scores with a model, or an expression when the model is unavailable.");
 
         public Operator? Compile(OperatorCompileContext context) =>
-            new ExpressionScorerFactory().Compile(context) is { } fallback ? new CatchingScorer(fallback, exception) : null;
+            new ExpressionScorerFactory().Compile(context) is { } fallback ? new CheckingScorer(fallback, errors) : null;
 
-        private sealed class CatchingScorer(Operator fallback, Func<string, TException> exception) : Operator
+        private sealed class CheckingScorer(Operator fallback, List<string?> errors) : Operator
         {
             public override async ValueTask ExecuteAsync(OperatorContext context)
             {
                 var rows = context.LiveRows.ToArray();
-                try
+                var call = new ModelCall { Model = "flaky", Inputs = Array.Empty<NamedInput>(), BatchSize = rows.Length };
+                var status = await context.InvokeModelAsync(new FlakyClient(), new IoTarget(IoKind.Model, "flaky"), call, new DiscardingWriter(), rows,
+                    timeoutMs: null);
+                lock (errors)
                 {
-                    var call = new ModelCall { Model = "flaky", Inputs = Array.Empty<NamedInput>(), BatchSize = rows.Length };
-                    await context.InvokeModelAsync(new FlakyClient(exception), new IoTarget(IoKind.Model, "flaky"), call, new DiscardingWriter(), rows,
-                        timeoutMs: null);
+                    errors.Add(status.Error);
                 }
-                catch (TException)
+
+                if (!status.Succeeded)
                 {
                     await fallback.ExecuteAsync(context);
                 }
             }
         }
 
-        private sealed class FlakyClient(Func<string, TException> exception) : IModelClient
+        private sealed class FlakyClient : IModelClient
         {
             public string ClientType => "flaky";
 
@@ -149,7 +123,7 @@ public sealed class ReplayExceptionTests
             ValueTask.FromResult(new ModelSignature(Array.Empty<TensorSpec>(), Array.Empty<TensorSpec>()));
 
             public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
-                throw exception("the model is warming up");
+                throw new TransientModelException("the model is warming up");
         }
 
         private sealed class DiscardingWriter : IModelOutputWriter

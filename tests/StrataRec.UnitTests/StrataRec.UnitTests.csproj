@@ -13,9 +13,6 @@
     <PackageReference Include="xunit.v3" />
     <!-- A generic host, to start AddStrataRec's hosted service as a host does (Hosting/StrataRecStartupTests). -->
     <PackageReference Include="Microsoft.Extensions.Hosting" />
-    <!-- Loadable by name but never loaded by these tests: RunReplayTests.ResolvingAnExceptionType_NeverLoadsAnAssembly checks
-         that resolving a recorded exception type does not load it. -->
-    <PackageReference Include="System.CommandLine" />
   </ItemGroup>
 
   <ItemGroup>

@@ -28,9 +28,9 @@ public sealed class ReplayBundle
     /// A format version is the date its layout changed and that day's sequence (<c>2026-11-14.1</c>, then
     /// <c>2026-11-14.2</c>): it says when a bundle was laid out, and sorts as text.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-14.2";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-16.1";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-14.2\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-16.1\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -277,11 +277,8 @@ public sealed class ReplayModelCall
 
     public string? Error { get; init; }
 
-    [Description("The client threw instead of returning a failed status; replay throws too.")]
+    [Description("The node's budget or the caller cut the call off, which the operator saw as cancellation (an OperationCanceledException); replay throws it too. A client's own failure, thrown or returned, is a failed status.")]
     public bool Threw { get; init; }
-
-    [Description("The type of the exception the client threw. Replay throws the same type when the replaying process has already loaded it (it is looked up in the loaded assembly of that name, never loaded) and can create it from its message; otherwise a StrataRec.Pipeline.Replay.ReplayedCallException naming it.")]
-    public ReplayTypeIdentity? ErrorType { get; init; }
 
     public double DurationMs { get; init; }
 
@@ -302,23 +299,6 @@ public sealed class ReplayModelCall
 
     [Description("True when the model stopped at the call's max_output_tokens, so its text may be cut short; absent otherwise.")]
     public bool? Truncated { get; init; }
-}
-
-/// <summary>
-/// A .NET type by identity: its full name and the assembly that defines it, recursively for the arguments of a closed
-/// generic type. A full name alone is ambiguous (two assemblies can define the same one) and an assembly-qualified name
-/// invites the reader to load assemblies; this is matched against types already loaded, nothing else.
-/// </summary>
-public sealed class ReplayTypeIdentity
-{
-    [Description("Full name of the type, or of its generic type definition for a closed generic type, e.g. \"System.TimeoutException\" or \"Backend.RetryException`1\".")]
-    public required string Name { get; init; }
-
-    [Description("Simple name of the assembly that defines the type (or its generic definition), e.g. \"System.Private.CoreLib\".")]
-    public required string Assembly { get; init; }
-
-    [Description("Type arguments of a closed generic type, in order, each an identity of the same shape; absent otherwise.")]
-    public List<ReplayTypeIdentity>? Args { get; init; }
 }
 
 /// <summary>Effective log sampling of the run (design 8.2, 8.4).</summary>

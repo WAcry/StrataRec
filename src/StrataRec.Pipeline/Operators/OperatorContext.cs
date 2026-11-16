@@ -219,8 +219,9 @@ public sealed class OperatorContext
     /// </param>
     /// <param name="timeoutMs">The model's own timeout (its binding's <c>timeout_ms</c>), within the node's budget; null for none.</param>
     /// <returns>
-    /// The client's status. The model's own timeout becomes a failed status; the node's budget running out or the caller
-    /// cancelling throws <see cref="OperationCanceledException"/>; any other exception the client throws propagates.
+    /// The client's status. The model's own timeout and an exception the client throws become a failed status, with the
+    /// exception's message, as a candidate source's do; only the node's budget running out or the caller cancelling throws
+    /// (<see cref="OperationCanceledException"/>).
     /// </returns>
     /// <remarks>
     /// <para>The wait ends at the earlier of the model's timeout and the node's deadline, or when the caller cancels, even
@@ -228,11 +229,10 @@ public sealed class OperatorContext
     /// completes, so what it writes into <paramref name="outputs"/> afterwards lands in live buffers. Nothing reads them:
     /// the call has failed, and an operator must not read the outputs of a call that did not succeed. The recording has
     /// the call as the request saw it (a timeout or a cancellation, without outputs).</para>
-    /// <para>A replay returns or throws what the call returned or threw in the recording, so an operator that handles
-    /// particular client exceptions takes the same path: a <see cref="TimeoutException"/> as
-    /// <see cref="TimeoutException"/>, cancellation as <see cref="OperationCanceledException"/>, any other type recreated
-    /// through its <c>(string message)</c> constructor when the replaying process has the type; otherwise a
-    /// <see cref="ReplayedCallException"/> naming the original type.</para>
+    /// <para>A replay returns what the call returned in the recording, and throws <see cref="OperationCanceledException"/>
+    /// where the recorded call was cut off by the budget or the caller. A client exception is a failed status, not a throw,
+    /// so a replay never has to recreate an exception type the recording saw (it used to, by reflection over the loaded
+    /// assemblies).</para>
     /// </remarks>
     public async Task<ModelStatus> InvokeModelAsync(
         IModelClient client, IoTarget target, ModelCall call, IModelOutputWriter outputs, ReadOnlyMemory<int> rows, int? timeoutMs)
@@ -252,8 +252,8 @@ public sealed class OperatorContext
         return result.End switch
         {
             CallEnd.Answered => result.Value,
-            CallEnd.TimedOut => ModelStatus.Failed(result.Error!),
-            CallEnd.Threw or CallEnd.BudgetRanOut or CallEnd.Cancelled => Rethrow(result.Exception!), // the client's, the budget's or the caller's
+            CallEnd.TimedOut or CallEnd.Threw => ModelStatus.Failed(result.Error ?? "failed"),
+            CallEnd.BudgetRanOut or CallEnd.Cancelled => Rethrow(result.Exception!), // the budget's or the caller's
         };
     }
 
@@ -346,15 +346,15 @@ public sealed class OperatorContext
 
         public void Ended(in CallResult<ModelStatus> result, TimeSpan duration)
         {
-            // What the operator is thrown, so a replay throws the same (an own timeout is a failed status, not a throw).
-            var thrown = result.End is CallEnd.Threw or CallEnd.BudgetRanOut or CallEnd.Cancelled ? result.Exception?.GetType() : null;
+            // Whether the operator is thrown cancellation, so a replay throws it too (a failure is a status, not a throw).
+            var cutOff = result.End is CallEnd.BudgetRanOut or CallEnd.Cancelled;
             var answered = result.End == CallEnd.Answered;
             if (answered)
             {
                 CountGenerated(result.Value, target);
             }
 
-            recorder?.ModelCall(sequence, result.Outcome, result.Error, thrown, duration, recording!, answered ? result.Value : default);
+            recorder?.ModelCall(sequence, result.Outcome, result.Error, cutOff, duration, recording!, answered ? result.Value : default);
         }
 
         private static void CountGenerated(in ModelStatus status, IoTarget target)

@@ -794,21 +794,8 @@ public sealed class PipelineExecutor
         return new Attempt(degraded is null ? NodeOutcomeKind.Succeeded : NodeOutcomeKind.Degraded, degraded);
     }
 
-    /// <summary>The exception's type name for a failure detail; a replayed exception that could not be recreated keeps the recorded name.</summary>
-    private static string ExceptionName(Exception ex)
-    {
-        if (ex is ReplayedCallException { OriginalType: { } original })
-        {
-            // What Type.Name would be: the last segment of the name, without generic arguments.
-            var arguments = original.IndexOf('[');
-            var name = arguments < 0 ? original : original[..arguments];
-            return name[(name.LastIndexOfAny(TypeNameSeparators) + 1)..];
-        }
-
-        return ex.GetType().Name;
-    }
-
-    private static readonly char[] TypeNameSeparators = { '.', '+' };
+    /// <summary>The exception's type name for a failure detail.</summary>
+    private static string ExceptionName(Exception ex) => ex.GetType().Name;
 
     /// <summary>
     /// Validates and publishes a successful node's outputs (design 4.3, 4.6): non-finite values take the column default

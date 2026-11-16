@@ -412,8 +412,10 @@ internal static class BoundedCall
         }
         catch (Exception ex)
         {
-            // A client's own transport timeout is a timeout, as for feature sources.
-            return new CallResult<T>(CallEnd.Threw, default, ex, ex is TimeoutException ? IoOutcome.Timeout : IoOutcome.Error, ex.Message, false);
+            // A client's own transport timeout is a timeout, as for feature sources. The error names the type: the operator
+            // gets a failed status, not the exception, and the type is often what says what went wrong.
+            return new CallResult<T>(CallEnd.Threw, default, ex, ex is TimeoutException ? IoOutcome.Timeout : IoOutcome.Error,
+                $"threw {ex.GetType().Name}: {ExceptionText.Of(ex)}", false);
         }
     }
 

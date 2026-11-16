@@ -208,8 +208,6 @@ public sealed class LlmAnnotatorFactory : IOperatorFactory
         int maxOutputTokens)
         : Operator
     {
-        private static readonly char[] TypeNameSeparators = ['.', '+'];
-
         private readonly KeyValuePair<string, object?>[] _used = LlmNode.Tags(model, "used");
         private readonly KeyValuePair<string, object?>[] _unusable = LlmNode.Tags(model, "unusable");
         private readonly KeyValuePair<string, object?>[] _failed = LlmNode.Tags(model, "failed");
@@ -248,8 +246,9 @@ public sealed class LlmAnnotatorFactory : IOperatorFactory
                 calls[i] = model.InvokeAsync(context, version, inputs[i], 1, writers[i], rows.AsMemory(i, 1), maxOutputTokens);
             }
 
-            // Each wait is bounded by the model's timeout and the node's budget. A call that failed or threw is that row's
-            // failure; the budget running out or the caller cancelling cuts every call off, and fails the node once all ended.
+            // Each wait is bounded by the model's timeout and the node's budget. A call that failed (a client that threw is a
+            // failed status) is that row's failure; the budget running out or the caller cancelling cuts every call off, and
+            // fails the node once all ended.
             var statuses = new ModelStatus[n];
             OperationCanceledException? cutOff = null;
             for (var i = 0; i < n; i++)
@@ -261,10 +260,6 @@ public sealed class LlmAnnotatorFactory : IOperatorFactory
                 catch (OperationCanceledException ex)
                 {
                     cutOff ??= ex;
-                }
-                catch (Exception ex)
-                {
-                    statuses[i] = ModelStatus.Failed(Threw(ex));
                 }
             }
 
@@ -343,21 +338,5 @@ public sealed class LlmAnnotatorFactory : IOperatorFactory
 
         private static string Count(int count) => count.ToString(CultureInfo.InvariantCulture);
 
-        /// <summary>
-        /// A call that threw, as the node's failure would name it: the exception's type name, the recorded one in a replay that
-        /// could not create the type again, so a replay reports the same.
-        /// </summary>
-        private static string Threw(Exception ex)
-        {
-            var name = ex.GetType().Name;
-            if (ex is ReplayedCallException { OriginalType: { } original })
-            {
-                var arguments = original.IndexOf('[', StringComparison.Ordinal);
-                var full = arguments < 0 ? original : original[..arguments];
-                name = full[(full.LastIndexOfAny(TypeNameSeparators) + 1)..];
-            }
-
-            return $"threw {name}: {ex.Message}";
-        }
     }
 }

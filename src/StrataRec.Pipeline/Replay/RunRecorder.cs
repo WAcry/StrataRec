@@ -207,12 +207,12 @@ internal sealed class RunRecorder : IFeatureCallHook
     }
 
     /// <summary>Records a finished model call; outputs are copied only from a call that answered.</summary>
-    /// <param name="thrown">The type of the exception the client threw, or null when it returned a status.</param>
+    /// <param name="cutOff">The node's budget or the caller cut the call off: the operator was thrown cancellation, which a replay throws too.</param>
     /// <param name="status">
     /// The status the client returned (default when it did not answer): its generation details are recorded, so a replay
     /// returns the same status and the operator reports the same (a truncated answer, design 13.4 item 7).
     /// </param>
-    public void ModelCall(int sequence, IoOutcome outcome, string? error, Type? thrown, TimeSpan duration, RecordingOutputWriter outputs, in ModelStatus status)
+    public void ModelCall(int sequence, IoOutcome outcome, string? error, bool cutOff, TimeSpan duration, RecordingOutputWriter outputs, in ModelStatus status)
     {
         if (Begun(_pendingModels, sequence) is not { } begun)
         {
@@ -243,8 +243,7 @@ internal sealed class RunRecorder : IFeatureCallHook
             BatchSize = begun.BatchSize,
             Status = IoCall.OutcomeName(outcome),
             Error = error,
-            Threw = thrown is not null,
-            ErrorType = thrown is null ? null : ReplayedExceptions.Identity(thrown),
+            Threw = cutOff,
             DurationMs = duration.TotalMilliseconds,
             Keys = begun.Keys,
             InputDigests = begun.InputDigests,
