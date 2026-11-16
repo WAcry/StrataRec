@@ -28,10 +28,9 @@ internal sealed class VectorProgram
     private readonly int _iRegs;
     private readonly int _bRegs;
     private readonly int _sRegs;
-    private readonly bool _countsEvents;
     private readonly ExprType _type;
 
-    private VectorProgram(Instr[] instrs, ScalarProgram hoisted, int[] registerCounts, bool countsEvents, ExprType type)
+    private VectorProgram(Instr[] instrs, ScalarProgram hoisted, int[] registerCounts, ExprType type)
     {
         _instrs = instrs;
         _hoisted = hoisted;
@@ -39,7 +38,6 @@ internal sealed class VectorProgram
         _iRegs = registerCounts[(int)RegFile.I];
         _bRegs = registerCounts[(int)RegFile.B];
         _sRegs = registerCounts[(int)RegFile.S];
-        _countsEvents = countsEvents;
         _type = type;
     }
 
@@ -78,19 +76,9 @@ internal sealed class VectorProgram
         var i64 = Rent<long>(_iRegs * n);
         var bits = Rent<ulong>(_bRegs * words);
         var strings = Rent<string?>(_sRegs * n);
-        ulong[]? live = null;
         try
         {
             _hoisted.Run(context, scalars);
-            if (identity && _countsEvents && context.Counters is not null)
-            {
-                live = Rent<ulong>(words);
-                live.AsSpan(0, words).Clear();
-                foreach (var r in rows)
-                {
-                    Bits.Set(live, r);
-                }
-            }
 
             var frame = new Frame
             {
@@ -106,7 +94,6 @@ internal sealed class VectorProgram
                 I = i64,
                 B = bits,
                 S = strings,
-                Live = live,
             };
 
             foreach (var instr in _instrs)
@@ -124,10 +111,6 @@ internal sealed class VectorProgram
             Return(i64, clear: false);
             Return(bits, clear: false);
             Return(strings, clear: true);
-            if (live is not null)
-            {
-                Return(live, clear: false);
-            }
         }
     }
 
@@ -149,7 +132,6 @@ internal sealed class VectorProgram
         private readonly Dictionary<IrNode, int> _index = new(ReferenceEqualityComparer.Instance);
         private readonly List<Instr> _instrs = new();
         private readonly ScalarProgram.Builder _scalars = new();
-        private bool _countsEvents;
 
         public VectorProgram Build(IrNode root, ExprType resultType)
         {
@@ -161,7 +143,7 @@ internal sealed class VectorProgram
 
             var instrs = _instrs.ToArray();
             var counts = AllocateRegisters(instrs);
-            return new VectorProgram(instrs, _scalars.Build(), counts, _countsEvents, resultType);
+            return new VectorProgram(instrs, _scalars.Build(), counts, resultType);
         }
 
         private Opnd Visit(IrNode node)
@@ -215,7 +197,6 @@ internal sealed class VectorProgram
                 case IrOp.Not:
                     return new NotInstr(t, Visit(a[0]));
                 case IrOp.Add or IrOp.Sub or IrOp.Mul or IrOp.Min or IrOp.Max or IrOp.Mod when t.Kind == TypeKind.Int:
-                    _countsEvents |= node.Op == IrOp.Mod;
                     return new IntBinaryInstr(node.Op, t, Visit(a[0]), Visit(a[1]));
                 case IrOp.Add or IrOp.Sub or IrOp.Mul or IrOp.Div or IrOp.Pow or IrOp.Min or IrOp.Max:
                     return new FloatBinaryInstr(node.Op, t, Visit(a[0]), Visit(a[1]));

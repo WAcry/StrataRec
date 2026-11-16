@@ -82,7 +82,7 @@ internal static class ScalarOps
             case IrOp.Div:
                 return ScalarValue.FromFloat64(args[0].AsFloat64() / args[1].AsFloat64());
             case IrOp.Mod:
-                return ScalarValue.FromInt64(Mod(args[0].AsInt64(), args[1].AsInt64(), counters));
+                return args[1].AsInt64() == 0 ? ScalarValue.Missing : ScalarValue.FromInt64(Mod(args[0].AsInt64(), args[1].AsInt64()));
             case IrOp.Pow:
                 return ScalarValue.FromFloat64(MathKernels.Pow(args[0].AsFloat64(), args[1].AsFloat64()));
             case IrOp.Min:
@@ -179,17 +179,8 @@ internal static class ScalarOps
 
     public static long AbsInt(long x) => x < 0 ? unchecked(-x) : x;
 
-    /// <summary>Total integer remainder: <c>x % 0 = 0</c> (counted), <c>long.MinValue % -1 = 0</c> (design 7.5).</summary>
-    public static long Mod(long a, long b, ExpressionCounters? counters)
-    {
-        if (b == 0)
-        {
-            counters?.AddIntModZero(1);
-            return 0;
-        }
-
-        return b == -1 ? 0 : a % b;
-    }
+    /// <summary>Integer remainder of a non-zero divisor, with <c>long.MinValue % -1 = 0</c> (design 7.5); <c>x % 0</c> is missing, decided by the caller.</summary>
+    public static long Mod(long a, long b) => b == -1 ? 0 : a % b;
 
     private static bool Compare(IrOp op, TypeKind kind, in ScalarValue a, in ScalarValue b)
     {

@@ -451,11 +451,13 @@ public class CompilerTests
     }
 
     [Fact]
-    public void Optimizer_KeepsIntegerModuloByZero_ForCounting()
+    public void Optimizer_FoldsModulo_AndLeavesAZeroDivisorFoundByFolding_ToRunTime()
     {
         var f = new ExprFixture().Build(1);
-        Assert.Equal("5 % 0", f.Compile("5 % 0").Describe());
         Assert.Equal("2", f.Compile("5 % 3").Describe());
+        var folded = f.Compile("5 % (1 - 1)", new CompileOptions { AllowNullableResult = true });
+        Assert.True(folded.ResultType.Nullable);
+        Assert.True(folded.EvaluateScalar(f.Context).IsMissing);
     }
 
     [Fact]

@@ -34,18 +34,14 @@ public readonly struct EvalContext
     /// <summary>Parameter snapshot indexed by <see cref="SymbolKind.Param"/> symbol id.</summary>
     internal ScalarValue[] Params { get; }
 
-    /// <summary>Optional counters for total-semantics events (e.g. integer modulo by zero, design 7.5).</summary>
+    /// <summary>Optional counters of values that did not fit their storage (design 4.3).</summary>
     internal ExpressionCounters? Counters { get; }
 }
 
 /// <summary>Counters of total-semantics events observed during evaluation.</summary>
 public sealed class ExpressionCounters
 {
-    private long _intModZero;
     private long _outOfRange;
-
-    /// <summary>Number of <c>x % 0</c> evaluations (metric <c>expr_int_mod_zero_total</c>).</summary>
-    public long IntModZero => Interlocked.Read(ref _intModZero);
 
     /// <summary>
     /// Number of values that did not fit the storage they were written to and were replaced by the column's default or
@@ -58,8 +54,6 @@ public sealed class ExpressionCounters
     /// earlier: a NaN survives in float storage until the engine sanitizes it at commit, while an int64 that does not
     /// fit int32 storage cannot be stored at all, so the write itself must apply the rule.</remarks>
     public long OutOfRange => Interlocked.Read(ref _outOfRange);
-
-    public void AddIntModZero(long count) => Interlocked.Add(ref _intModZero, count);
 
     public void AddOutOfRange(long count) => Interlocked.Add(ref _outOfRange, count);
 }

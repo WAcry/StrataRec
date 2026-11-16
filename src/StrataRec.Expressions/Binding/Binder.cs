@@ -415,7 +415,16 @@ internal sealed class Binder
                         $"'%' needs int64 operands, got {l.Type} and {r.Type}", b, "'%' is integer remainder only (design 7.5)");
                 }
 
-                return Lift(IrOp.Mod, TypeKind.Int, b, l, r);
+                // x % 0 has no value (design 7.5): missing, so the result may be missing unless the divisor is a constant
+                // that is not 0. A constant 0 is a mistake, reported here rather than leaving a column always missing.
+                if (r.IsConst && !r.Value.IsMissing && r.Value.AsInt64() == 0)
+                {
+                    return FailAt(b.Right, ExpressionErrorCodes.InvalidArgument,
+                        "'%' by 0 has no value", b, "use a non-zero divisor");
+                }
+
+                var mod = Lift(IrOp.Mod, TypeKind.Int, b, l, r);
+                return r.IsConst ? mod : IrNode.Make(IrOp.Mod, new ExprType(TypeKind.Int, Nullable: true), mod.Args, b.Start, b.Length);
 
             default:
                 return BindComparison(b, l, r, op);

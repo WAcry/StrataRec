@@ -69,9 +69,6 @@ internal ref struct Frame
     public ulong[] B;
     public string?[] S;
 
-    /// <summary>Live lanes, only for counting total-semantics events in full-range mode (null = all lanes live).</summary>
-    public ulong[]? Live;
-
     public readonly int Row(int lane) => Identity ? lane : Map[lane];
 
     public readonly ReadOnlySpan<double> GetF(int node)
@@ -124,7 +121,6 @@ internal ref struct Frame
         return new WordView(GetB(o.Index));
     }
 
-    public readonly bool IsLive(int lane) => Live is null || Bits.Get(Live, lane);
 }
 
 /// <summary>A bitmap that is either backed by words or constant (all ones / all zeros).</summary>

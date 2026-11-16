@@ -507,7 +507,7 @@ public class DifferentialTests(ITestOutputHelper output)
                         0 => $"({Gen(K.Int, d)} + {Gen(K.Int, d)})",
                         1 => $"({Gen(K.Int, d)} - {Gen(K.Int, d)})",
                         2 => $"({Gen(K.Int, d)} * {Gen(K.Int, d)})",
-                        3 => $"({Gen(K.Int, d)} % {Gen(K.Int, d)})",
+                        3 => $"({Gen(K.Int, d)} % {Divisor(Gen(K.Int, d))})",
                         4 => $"-{Gen(K.Int, d)}",
                         5 => $"abs({Gen(K.Int, d)})",
                         6 => $"min({Gen(K.Int, d)}, {Gen(K.Int, d)})",
@@ -572,7 +572,13 @@ public class DifferentialTests(ITestOutputHelper output)
 
         private string Num(int depth) => Gen(random.Next(3) == 0 ? K.Int : K.Float, depth);
 
-        private string Let(K kind, int depth)
+        /// <summary>
+    /// A literal 0 divisor is a compile error (design 7.5); a 0 that only folding finds is not, and gives missing, so
+    /// the generator keeps the runtime case by writing it as <c>(1 - 1)</c>.
+    /// </summary>
+    private static string Divisor(string divisor) => divisor.Trim('(', ')', ' ') is "0" or "-0" ? "(1 - 1)" : divisor;
+
+    private string Let(K kind, int depth)
         {
             var name = "v" + (_lets++).ToString(CultureInfo.InvariantCulture);
             var value = Gen(kind, depth);

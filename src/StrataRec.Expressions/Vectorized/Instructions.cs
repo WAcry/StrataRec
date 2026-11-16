@@ -589,7 +589,7 @@ internal sealed class IntBinaryInstr(IrOp op, ExprType type, Opnd left, Opnd rig
         }
     }
 
-    /// <summary>Total remainder (design 7.5); counts live, present lanes with a zero divisor.</summary>
+    /// <summary>Integer remainder (design 7.5): a lane with a zero divisor is missing (the binder made the node nullable).</summary>
     private void Mod(scoped ref Frame f, Span<long> dst)
     {
         Opnd a = Operands[0], b = Operands[1];
@@ -614,22 +614,29 @@ internal sealed class IntBinaryInstr(IrOp op, ExprType type, Opnd left, Opnd rig
             }
         }
 
-        var counters = f.Context.Counters;
-        if (zeros && counters is not null)
+        if (!zeros)
         {
-            var valid = f.Validity(Opnd.Node(Out));
-            long count = 0;
-            for (var i = 0; i < n; i++)
-            {
-                if ((b.IsScalar ? ys : y[i]) == 0 && valid.Get(i) && f.IsLive(i))
-                {
-                    count++;
-                }
-            }
+            return;
+        }
 
-            if (count > 0)
+        if (ValidReg < 0)
+        {
+            throw new InvalidOperationException("'%' by a divisor that may be 0 must have a nullable result.");
+        }
+
+        var lifted = f.Locs[Out].Valid is not null; // LiftValidity left the operands' validity there, or nothing (all valid)
+        var valid = OutValid(ref f);
+        if (!lifted)
+        {
+            valid.Clear();
+            Bits.SetRange(valid, 0, n);
+        }
+
+        for (var i = 0; i < n; i++)
+        {
+            if ((b.IsScalar ? ys : y[i]) == 0)
             {
-                counters.AddIntModZero(count);
+                Bits.Clear(valid, i);
             }
         }
     }

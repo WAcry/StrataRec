@@ -185,12 +185,6 @@ internal sealed class Optimizer
             values[i] = node.Args[i].Value;
         }
 
-        // Keep x % 0 for runtime so that expr_int_mod_zero_total still counts it (design 7.5).
-        if (node.Op == IrOp.Mod && values[1].AsInt64() == 0)
-        {
-            return false;
-        }
-
         var value = ScalarOps.Apply(node, values, counters: null);
         if (value.IsMissing)
         {

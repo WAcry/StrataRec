@@ -168,27 +168,28 @@ public class SemanticsTests
         Assert.Equal(ExpressionErrorCodes.ArgCount, Assert.Single(f.Errors("double(col.x, 1)")).Code);
     }
 
+    /// <summary>
+    /// <c>x % 0</c> has no value, so it is missing (design 7.5), never a silent 0: the result is nullable unless the
+    /// divisor is a non-zero constant, and a constant 0 divisor is a compile error. It used to be 0, counted in a metric
+    /// that was never exported.
+    /// </summary>
     [Fact]
-    public void TotalSemantics_Modulo_CountsZeroDivisorsOfLiveRowsOnly()
+    public void Modulo_ByZero_IsMissing_AndAConstantZeroDivisor_IsAnError()
     {
         var f = new ExprFixture().Col("col.i", "int64").Col("col.d", "int64").Build(6);
         f.Fill<long>("col.i", 7, 7, long.MinValue, -7, 9, 9);
         f.Fill<long>("col.d", 0, 3, -1, 3, 0, 4);
-        f.Table.Rows.Replace(new[] { 0, 1, 2, 3, 5 }, allowDrop: true); // row 4 (divisor 0) is dead
 
-        var compiled = f.Compile("col.i % col.d");
-        var destination = ColumnBuffer.Create(ColumnType.Int64, f.Capacity, f.Memory);
-        compiled.Evaluate(f.Context, f.Table.Rows.Order, destination);
-        var values = (ScalarColumn<long>)destination;
-        Assert.Equal(new long[] { 0, 1, 0, -1, 9 % 4 }, new[] { values[0], values[1], values[2], values[3], values[5] });
-        Assert.Equal(1, f.Counters.IntModZero);
+        ExprAssert.Rows(f, "col.i % col.d", null, 1L, 0L, -1L, null, 1L); // vectorized (both paths) and the reference
+        ExprAssert.Rows(f, "(col.i % col.d) ?? -1", -1L, 1L, 0L, -1L, -1L, 1L);
+        Assert.True(f.Compile("col.i % col.d", new CompileOptions { AllowNullableResult = true }).ResultType.Nullable);
+        Assert.False(f.Compile("col.i % 4").ResultType.Nullable); // a non-zero constant divisor is never 0
 
-        // Gather path (2 of 6 rows) counts too.
-        compiled.Evaluate(f.Context, new[] { 0, 5 }, destination);
-        Assert.Equal(2, f.Counters.IntModZero);
+        var error = Assert.Single(f.Errors("col.i % 0"));
+        Assert.Equal((ExpressionErrorCodes.InvalidArgument, 8, 1), (error.Code, error.Offset, error.Length));
+        Assert.Equal("use a non-zero divisor", error.Hint);
 
-        ExprAssert.Scalar(f, "7 % 0", 0L);
-        Assert.Equal(3, f.Counters.IntModZero);
+        ExprAssert.Scalar(f, "7 % (1 - 1)", null); // 0 only after folding: missing, not 0
         ExprAssert.Scalar(f, "-9223372036854775808 % -1", 0L);
         ExprAssert.Scalar(f, "-7 % 3", -1L);
         ExprAssert.Scalar(f, "7 % -3", 1L);
