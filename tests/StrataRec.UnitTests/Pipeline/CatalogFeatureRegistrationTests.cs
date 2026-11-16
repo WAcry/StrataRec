@@ -221,6 +221,24 @@ public sealed class CatalogFeatureRegistrationTests
     }
 
     /// <summary>
+    /// Review 69: a feature keyed by a deprecated key reads the key (it is fetched first), so the key warns though no
+    /// expression names it.
+    /// </summary>
+    [Fact]
+    public void ADeprecatedForeignKey_WarnsWhenItsEntitysFeatureIsRead()
+    {
+        var compilation = TryCompile(
+            entities: """, "editor": { "key": "col.item.editor_id" }""",
+            features: """, "item.editor_id": { "type": "int64", "source": "item_store", "field": "i_author", "deprecated": true }""" +
+                      """, "editor.followers": { "type": "float32", "source": "author_store", "field": "a_followers", "default": 0.0 }""",
+            expr: "col.editor.followers");
+
+        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
+        var warning = Assert.Single(compilation.Diagnostics);
+        Assert.Equal(("FEATURE_DEPRECATED", "/features/item.editor_id"), (warning.Code, warning.Pointer));
+    }
+
+    /// <summary>
     /// A deprecated feature nothing reads does not warn, even when a cache table's whole record registers it with the
     /// sibling a node reads: registered is not read.
     /// </summary>

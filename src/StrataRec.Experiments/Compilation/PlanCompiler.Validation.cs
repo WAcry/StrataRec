@@ -368,29 +368,24 @@ internal sealed partial class UnifiedCompilation
     /// </summary>
     private void ValidateReviewedInteractions()
     {
-        // Experiment → whether every arm compiled: pairs skip an arm with errors, so its interactions are unknown.
-        var placed = new Dictionary<string, bool>(StringComparer.Ordinal);
-        foreach (var (id, _, arms) in _experiments)
+        // With an error anywhere, interactions are not known: an arm whose patch or node did not compile has none to find
+        // (review 69: a node's config error made a valid review "unused", and the hint said to remove it).
+        if (_diagnostics.HasErrors)
         {
-            var valid = true;
-            foreach (var arm in arms)
-            {
-                valid &= _arms[arm].Valid;
-            }
+            return;
+        }
 
-            placed[id] = valid;
+        var placed = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (id, _, _) in _experiments)
+        {
+            placed.Add(id);
         }
 
         foreach (var (experiment, (artifact, reviewed)) in _reviewed)
         {
-            if (!placed[experiment])
-            {
-                continue;
-            }
-
             foreach (var (other, columns) in reviewed)
             {
-                if (!placed.TryGetValue(other, out var valid) || !valid)
+                if (!placed.Contains(other))
                 {
                     continue;
                 }
@@ -431,24 +426,41 @@ internal sealed partial class UnifiedCompilation
                 continue;
             }
 
-            // Only nodes the arm adds: changing an existing node's settings, inline or through a parameter, changes its values
-            // as any parameter does, and composes by the pipeline's structure (design 11.5). Counting them warned for
-            // every pair of experiments tuning different multipliers of one flow column, and never for the same change made
-            // through a parameter.
-            if (!arm.AddedNodes.Contains(nodeId))
-            {
-                continue;
-            }
-
+            // What the arm adds to the pipeline's structure: every column of a node it adds, and of a node it changes only the
+            // columns the baseline's node did not write or read. Changing an existing node's settings, inline or through a
+            // parameter, changes its values as any parameter does and composes by the structure (design 11.5): counting
+            // every column of a touched node warned for every pair of experiments tuning different multipliers of one flow
+            // column. A node whose operator or config now writes or reads another column is a change of structure (review
+            // 69: a filter replaced by a writer of score.final, read by another experiment's added node, did not warn).
+            var baseline = arm.AddedNodes.Contains(nodeId) ? null : v.Variants[v.IndexOf(RequestArms.None)];
             foreach (var output in node.Outputs)
             {
-                writes.TryAdd(output.LogicalId, nodeId);
+                if (baseline is null || !Writes(baseline, output.LogicalId))
+                {
+                    writes.TryAdd(output.LogicalId, nodeId);
+                }
             }
 
             foreach (var read in node.ReadColumns)
             {
-                addedReads.TryAdd(read, nodeId);
+                if (baseline is null || baseline.ReadColumns.IndexOf(read) < 0)
+                {
+                    addedReads.TryAdd(read, nodeId);
+                }
             }
+        }
+
+        static bool Writes(CompiledNode node, int logical)
+        {
+            foreach (var output in node.Outputs)
+            {
+                if (output.LogicalId == logical)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 

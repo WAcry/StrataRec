@@ -141,9 +141,23 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
 
     public void NoteRead(string name, bool context)
     {
-        if (_deprecated is not null && _deprecated.Contains(name) && _catalog.TryGet(name, out var feature) && feature.IsContext == context)
+        // A feature of an entity keyed by a feature reads the key too (it is fetched first, design 6.7), and so on along
+        // the chain (review 69: a deprecated key read only through its entity's features did not warn). Bounded, as a
+        // chain that loops is an error reported elsewhere.
+        for (var depth = 0; _deprecated is not null && depth < 16 && _catalog.TryGet(name, out var feature) && feature.IsContext == context; depth++)
         {
-            _deprecatedReads.Add(name);
+            if (feature.Deprecated)
+            {
+                _deprecatedReads.Add(name);
+            }
+
+            if (!feature.Entity.KeyIsFeature)
+            {
+                break;
+            }
+
+            name = feature.Entity.CandidateKeyColumn!;
+            context = false;
         }
     }
 

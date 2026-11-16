@@ -91,6 +91,42 @@ public sealed class InteractionWarningTests
         Assert.Equal("/reviewed_interactions/exp_freshness_calibration/0", warning.Pointer);
     }
 
+    /// <summary>
+    /// Review 69: an arm that changes an existing node into a writer of a flow column changes the structure, as adding
+    /// one does. A filter becomes a writer of score.final, and another experiment's added node reads score.final: the
+    /// reader warns, naming the changed node. Settings of a node that keeps its columns still do not.
+    /// </summary>
+    [Fact]
+    public void AChangedNodeThatNowWritesAColumn_InteractsAsAnAddedOneDoes()
+    {
+        var compilation = HomeFeedTestHost.LoadModified(root =>
+        {
+            ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"rank_sort\": {",
+                "\"swap\": { \"op\": \"ExpressionFilter@1\", \"order\": 505, \"config\": { \"predicate\": \"true\" } },\n    \"rank_sort\": {");
+            Experiment(root, "exp_swap", "t",
+                """{ "nodes": { "swap": { "op": "ExpressionScorer@1", "config": { "predicate": null, "output_col": "score.final", "expr": "0.0" } } } }""");
+            Experiment(root, "exp_reader", "t",
+                """{ "nodes": { "new_filter": { "op": "ExpressionFilter@1", "order": 510, "config": { "predicate": "col.score.final > 0.0" } } } }""");
+        }).Compile();
+
+        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
+        Assert.Contains(compilation.Diagnostics, d => d.Code == "INTERACTION_READ" && d.Message.Contains("'exp_swap/t' writes in the node it adds, 'swap'", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Review 69: while the configuration has errors, interactions are not known, so no review is called unused: a node's
+    /// config error made the sample's valid review "unused", with a hint to remove it.
+    /// </summary>
+    [Fact]
+    public void WithAnError_NoReviewIsCalledUnused()
+    {
+        var compilation = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "experiments/exp_mmr_diversity.jsonc",
+            "\"lambda_param\": \"mmr_lambda\",", "\"lambda_param\": \"mmr_lambda\", \"unknown_key\": true,")).Compile();
+
+        Assert.Contains(compilation.Diagnostics, d => d.Code == "NODE_BAD_CONFIG");
+        Assert.DoesNotContain(compilation.Diagnostics, d => d.Code == "INTERACTION_REVIEW_UNUSED");
+    }
+
     /// <summary>Adds an experiment of one arm (and a control) in a layer of its own.</summary>
     private static void Experiment(string root, string id, string arm, string patch)
     {

@@ -127,13 +127,20 @@ public static class PlanCompiler
     /// <summary>
     /// What a release of <paramref name="request"/> needs of a binary (design 10.4): compiles the baseline alone, then
     /// the baseline with each experiment (every arm of it, as one layer), and gives each experiment what its compile
-    /// needed beyond the baseline's. A combination of experiments needs nothing neither needs alone: an arm references
-    /// only the baseline and itself (design 11.6). No plan is built and nothing is loaded. Null after reporting the errors
-    /// of a compile that failed; its warnings are the full compile's to report.
+    /// needed beyond the baseline's. No plan is built and nothing is loaded. Null after reporting the errors of a compile
+    /// that failed; its warnings are the full compile's to report.
     /// </summary>
-    /// <remarks>Recording each experiment's own needs is what lets a revocation, which compiles nothing, require exactly
-    /// what is left: inferring them back from the configuration's names kept what an operator used by default and freed
-    /// nothing a feature source needed (reviews 39, 40, 42, 68).</remarks>
+    /// <remarks>
+    /// <para>Recording each experiment's own needs is what lets a revocation, which compiles nothing, require exactly what
+    /// is left: inferring them back from the configuration's names kept what an operator used by default and freed nothing
+    /// a feature source needed (reviews 39, 40, 42, 68).</para>
+    /// <para>A combination can need what no experiment needs alone: one arm points recall at a quota map, an arm of another
+    /// layer adds a source of a new client type to that map (review 69). What the release with every experiment needs
+    /// beyond the baseline's and the experiments' own goes to each experiment without which it is not needed (one compile
+    /// without each experiment, only when there is such a need): removing any of them removes it, and a controller rolling
+    /// a binary back removes every experiment that lists the missing capability. A need no single removal ends (two
+    /// combinations giving it) stays with the baseline. Either way the release requires too much, never too little.</para>
+    /// </remarks>
     public static ReleaseRequirements? Requirements(PlanCompileRequest request, PlanEnvironment? environment, DiagnosticBag diagnostics)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -145,24 +152,71 @@ public static class PlanCompiler
             return null;
         }
 
-        var experiments = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        var own = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+        var alone = new HashSet<string>(baseline, StringComparer.Ordinal);
         foreach (var placement in request.Experiments)
         {
-            if (Needs(UnifiedCompilation.With(request, placement), environment, view, diagnostics) is not { } needs)
+            if (Needs(UnifiedCompilation.With(request, [placement]), environment, view, diagnostics) is not { } needs)
             {
                 return null;
             }
 
-            var own = new List<string>();
-            foreach (var capability in needs)
+            needs.ExceptWith(baseline);
+            own[placement.Experiment.ExperimentId] = needs;
+            alone.UnionWith(needs);
+        }
+
+        if (request.Experiments.Count > 1)
+        {
+            if (Needs(UnifiedCompilation.With(request, request.Experiments), environment, view, diagnostics) is not { } joint)
             {
-                if (!baseline.Contains(capability))
-                {
-                    own.Add(capability);
-                }
+                return null;
             }
 
-            experiments[placement.Experiment.ExperimentId] = own;
+            joint.ExceptWith(alone);
+            if (joint.Count > 0)
+            {
+                var attributed = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var placement in request.Experiments)
+                {
+                    var others = new List<ExperimentPlacement>(request.Experiments.Count - 1);
+                    foreach (var other in request.Experiments)
+                    {
+                        if (!ReferenceEquals(other, placement))
+                        {
+                            others.Add(other);
+                        }
+                    }
+
+                    if (Needs(UnifiedCompilation.With(request, others), environment, view, diagnostics) is not { } without)
+                    {
+                        return null;
+                    }
+
+                    foreach (var capability in joint)
+                    {
+                        if (!without.Contains(capability))
+                        {
+                            own[placement.Experiment.ExperimentId].Add(capability);
+                            attributed.Add(capability);
+                        }
+                    }
+                }
+
+                foreach (var capability in joint)
+                {
+                    if (!attributed.Contains(capability))
+                    {
+                        baseline.Add(capability);
+                    }
+                }
+            }
+        }
+
+        var experiments = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        foreach (var (id, needs) in own)
+        {
+            experiments[id] = new List<string>(needs);
         }
 
         return new ReleaseRequirements(new List<string>(baseline), experiments);
@@ -235,15 +289,15 @@ internal sealed partial class UnifiedCompilation
         _pipelineLabel = "pipeline:" + request.Pipeline.PipelineId;
     }
 
-    /// <summary><paramref name="r"/> with one experiment of its, checked as <see cref="WithoutExperiments"/> is.</summary>
-    public static PlanCompileRequest With(PlanCompileRequest r, ExperimentPlacement experiment) => new()
+    /// <summary><paramref name="r"/> with some of its experiments, checked as <see cref="WithoutExperiments"/> is.</summary>
+    public static PlanCompileRequest With(PlanCompileRequest r, IReadOnlyList<ExperimentPlacement> experiments) => new()
     {
         Pipeline = r.Pipeline,
         Catalog = r.Catalog,
         Bindings = r.Bindings,
         Tables = r.Tables,
         Policy = r.Policy,
-        Experiments = [experiment],
+        Experiments = experiments,
         ManifestId = r.ManifestId,
         ValidateArmsIndependently = false,
         MaxCombinationsPerNode = r.MaxCombinationsPerNode,
