@@ -142,8 +142,9 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
             $"Value of kind {Describe()} cannot be read as a list of {element}.");
 
     /// <summary>Converts to the given type's promoted form; returns false when the value cannot represent it, including an
-    /// integer (or list element) outside the int32 range for <c>int32</c> and <c>list&lt;int32&gt;</c> targets. A list
-    /// converts element by element, as a scalar of its element type would.</summary>
+    /// integer (or list element) outside the int32 range for <c>int32</c> and <c>list&lt;int32&gt;</c> targets, and a finite
+    /// float beyond the float32 range for <c>float32</c> and <c>list&lt;float32&gt;</c> ones (<see cref="Float32Range"/>).
+    /// A list converts element by element, as a scalar of its element type would.</summary>
     public bool TryConvert(ColumnType target, out ScalarValue converted)
     {
         converted = this;
@@ -169,6 +170,7 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
             {
                 StorageKind.Vector => target.Dimension == 0 || AsVector().Length == target.Dimension,
                 StorageKind.Int32 => Int32Range.Fits(_bits),
+                StorageKind.Float32 => Float32Range.Fits(AsFloat64()),
                 _ => true,
             };
         }
@@ -207,7 +209,12 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
                 converted = FromFloat64List((double[])_ref!); // a float64 list prints as the doubles it holds
             }
 
-            return !int32 || Int32Range.AllFit(AsInt64List());
+            return target.Element switch
+            {
+                StorageKind.Int32 => Int32Range.AllFit(AsInt64List()),
+                StorageKind.Float32 => Float32Range.AllFit(AsFloat64List()),
+                _ => true,
+            };
         }
 
         switch (element)

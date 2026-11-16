@@ -96,6 +96,12 @@ public static class ConfigValues
                     return false;
                 }
 
+                if (type.Kind == StorageKind.Float32 && !Float32Range.Fits(number))
+                {
+                    error = FloatOutOfRange(type, JsonWords.Value(element));
+                    return false;
+                }
+
                 value = ScalarValue.FromFloat64(number);
                 return true;
             case StorageKind.String or StorageKind.Text when kind == JsonValueKind.String:
@@ -199,6 +205,12 @@ public static class ConfigValues
                         return false;
                     }
 
+                    if (type.Element == StorageKind.Float32 && !Float32Range.Fits(doubles[index]))
+                    {
+                        error = FloatOutOfRange(type, JsonWords.Value(item), index);
+                        return false;
+                    }
+
                     index++;
                 }
 
@@ -258,6 +270,21 @@ public static class ConfigValues
                 }
 
                 break;
+            case StorageKind.Float32 when value.Kind == StorageKind.Float64:
+                error = FloatOutOfRange(type, Words(value));
+                return false;
+            case StorageKind.List when type.Element == StorageKind.Float32 && value.ListElement == StorageKind.Float64:
+                var floats = value.AsFloat64List();
+                for (var i = 0; i < floats.Length; i++)
+                {
+                    if (!Float32Range.Fits(floats[i]))
+                    {
+                        error = FloatOutOfRange(type, "the number " + floats[i].ToString("R", CultureInfo.InvariantCulture), i);
+                        return false;
+                    }
+                }
+
+                break;
             case StorageKind.Vector when value.Kind == StorageKind.Vector:
                 var length = value.AsVector().Length;
                 error = Expected(type, length == 1 ? "1 element" : $"{length} elements");
@@ -312,6 +339,15 @@ public static class ConfigValues
         return element < 0
             ? $"must be within {range}, got {got}{fix}"
             : $"must be an array of integers within {range}; element {element} is {got}{fix}";
+    }
+
+    /// <summary>A finite number beyond float32 for float32 storage, which would hold it as an infinity (<see cref="Float32Range"/>).</summary>
+    private static string FloatOutOfRange(ColumnType type, string got, int element = -1)
+    {
+        var fix = $"; declare the type as {type.Promoted()} for larger values";
+        return element < 0
+            ? $"must be within the float32 range {Float32Range.Text}, got {got}{fix}"
+            : $"must be an array of numbers within the float32 range {Float32Range.Text}; element {element} is {got}{fix}";
     }
 
     private static bool IsArray(ColumnType type) => type.Kind is StorageKind.Vector or StorageKind.List;

@@ -113,6 +113,60 @@ public class ListElementFeatureTests
     }
 
     [Fact]
+    public async Task DerivedContextFloat32Features_AreRoundedToFloat32_AndOneBeyondItsRangeIsReplaced()
+    {
+        // Review 62: a context-level value is computed in float64 and published without a column; it must be what the
+        // same feature computed per candidate is, after float32 storage: rounded, and an overflow is an infinity.
+        var rig = new FeatureTestRig();
+        var list = Derived(rig, "user.w", "list<float32>", ScalarValue.FromFloat64List(new[] { 0.1, -2.5 }));
+        var overflow = Derived(rig, "user.big", "list<float32>", ScalarValue.FromFloat64List(new[] { 1, 1e300 }), ScalarValue.FromFloat64List(new[] { 0.0 }));
+        var scalar = Derived(rig, "user.x", "float32", ScalarValue.FromFloat64(0.1));
+        var scalarOverflow = Derived(rig, "user.y", "float32", ScalarValue.FromFloat64(-1e300), ScalarValue.FromFloat64(5));
+        var wide = Derived(rig, "user.d", "list<float64>", ScalarValue.FromFloat64List(new[] { 0.1, 1e300 }));
+        rig.Build();
+        var request = rig.NewRequest(ThreeItems, userId: 7);
+
+        request.Fetcher.StartContextFetch(new[] { list, overflow, scalar, scalarOverflow, wide }, CancellationToken.None);
+        var result = await request.EnsureAsync(list, overflow, scalar, scalarOverflow, wide);
+
+        Assert.Equal(FeatureState.Ok, result.State);
+        Assert.Equal(ScalarValue.FromFloat32List(new[] { 0.1f, -2.5f }), request.ContextValue(list));
+        Assert.Equal("[0.1, -2.5]", request.ContextValue(list).ToString());
+        Assert.Equal(ScalarValue.FromFloat64List(new[] { 0.0 }), request.ContextValue(overflow));
+        Assert.Equal((double)0.1f, request.ContextValue(scalar).AsFloat64());
+        Assert.True(request.ContextValue(scalar).IsFloat32);
+        Assert.Equal(5, request.ContextValue(scalarOverflow).AsFloat64());
+        Assert.Equal(ScalarValue.FromFloat64List(new[] { 0.1, 1e300 }), request.ContextValue(wide)); // float64 keeps it
+        Assert.Equal(2, request.Fetcher.NonFiniteReplaced);
+
+        static int Derived(FeatureTestRig rig, string name, string type, ScalarValue value, ScalarValue? defaultValue = null) =>
+            rig.Derived(name, FeatureTestRig.User, ColumnType.Parse(type), new TestExpression("v", ColumnType.Parse(type).Promoted(), scalar: _ => value),
+                Array.Empty<int>(), defaultValue);
+    }
+
+    [Theory]
+    [InlineData("[1, 1e300]", "list<float32>", "must be an array of numbers within the float32 range [-3.4028235E+38, 3.4028235E+38]; element 1 is the number 1e300; declare the type as list<float64>")]
+    [InlineData("-1e39", "float32", "must be within the float32 range [-3.4028235E+38, 3.4028235E+38], got the number -1e39; declare the type as float64")]
+    public void ConfigValuesBeyondFloat32_AreRejected_WithAFix(string json, string type, string error)
+    {
+        // Review 62: a default (or input) a float32 column would hold as an infinity is not a value anyone meant.
+        Assert.False(ConfigValues.TryToScalar(JsonNode.Parse(json), ColumnType.Parse(type), out _, out var message));
+        Assert.Contains(error, message, StringComparison.Ordinal);
+        Assert.True(ConfigValues.TryToScalar(JsonNode.Parse(json), ColumnType.Parse(type).Promoted(), out _, out _));
+        Assert.True(ConfigValues.TryToScalar(JsonNode.Parse("3.4028235e38"), ColumnType.Float32, out _, out _)); // float32's largest
+    }
+
+    [Fact]
+    public void TypedValuesBeyondFloat32_DoNotConvert_AndSayWhy()
+    {
+        Assert.False(ConfigValues.TryConvert(ScalarValue.FromFloat64(1e300), ColumnType.Float32, out _, out var scalar));
+        Assert.Contains("float32 range", scalar, StringComparison.Ordinal);
+        Assert.False(ConfigValues.TryConvert(ScalarValue.FromFloat64List(new[] { 0.5, -1e300 }), ColumnType.Parse("list<float32>"), out _, out var list));
+        Assert.Contains("element 1 is the number -1E+300", list, StringComparison.Ordinal);
+        Assert.True(ConfigValues.TryConvert(ScalarValue.FromFloat64(double.NaN), ColumnType.Float32.AsNullable(), out _, out _)); // NaN is NaN in either width
+    }
+
+    [Fact]
     public void ConfigValues_ParseEveryElementType_HeldPromoted()
     {
         Assert.Equal(ScalarValue.FromBoolList(new[] { true, false }), ConfigValues.ToScalar(JsonNode.Parse("[true, false]"), ColumnType.Parse("list<bool>")));
@@ -148,6 +202,19 @@ public class ListElementFeatureTests
     {
         Assert.False(ConfigTypes.TryParse(written, TypeSite.Column, out _, out _, out _, out var hint));
         Assert.Contains($"did you mean '{suggestion}'", hint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ANullableElement_InAFeatureType_SuggestsThePlainList()
+    {
+        // Review 62: a feature is never written with '?'; a feature that may be missing is the one without a default.
+        Assert.False(ConfigTypes.TryParse("list<int32?>", TypeSite.Feature, out _, out _, out var message, out var hint));
+        Assert.Contains("did you mean 'list<int32>'?", hint, StringComparison.Ordinal);
+        Assert.Contains("a feature without 'default' is the one that may be missing", message, StringComparison.Ordinal);
+        Assert.True(ConfigTypes.TryParse("list<int32>", TypeSite.Feature, out _, out _, out _, out _));
+
+        Assert.False(ConfigTypes.TryParse("list<int32?>", TypeSite.Column, out _, out _, out _, out var columnHint));
+        Assert.Contains("did you mean 'list<int32>?'", columnHint, StringComparison.Ordinal);
     }
 
     [Fact]

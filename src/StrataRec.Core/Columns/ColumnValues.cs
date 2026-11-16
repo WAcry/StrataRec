@@ -195,22 +195,54 @@ public static class ColumnValues
 
     /// <summary>
     /// True when a present (promoted) value can be stored as <paramref name="type"/>. False only for an int64 outside
-    /// the int32 range bound for <c>int32</c> storage, or an int64 list with such an element bound for
-    /// <c>list&lt;int32&gt;</c>; missing values and every other kind fit.
+    /// the int32 range bound for <c>int32</c> storage, a finite float64 beyond the float32 range bound for <c>float32</c>
+    /// storage (<see cref="Float32Range"/>), or a list with such an element bound for a list of them; missing values and
+    /// every other kind fit.
     /// </summary>
-    public static bool FitsStorage(in ScalarValue value, ColumnType type)
+    public static bool FitsStorage(in ScalarValue value, ColumnType type) => type.ValueKind switch
     {
-        if (!type.IsInt32Storage)
-        {
-            return true;
-        }
-
-        return value.Kind switch
+        StorageKind.Int32 => value.Kind switch
         {
             StorageKind.Int64 => Int32Range.Fits(value.AsInt64()),
             StorageKind.List when value.ListElement == StorageKind.Int64 => Int32Range.AllFit(value.AsInt64List()),
             _ => true,
-        };
+        },
+        StorageKind.Float32 => value.Kind switch
+        {
+            StorageKind.Float64 => Float32Range.Fits(value.AsFloat64()),
+            StorageKind.List when value.ListElement == StorageKind.Float64 => Float32Range.AllFit(value.AsFloat64List()),
+            _ => true,
+        },
+        _ => true,
+    };
+
+    /// <summary>
+    /// The value as storage of <paramref name="type"/> holds it: float32 storage rounds each float to float32 (one beyond
+    /// the range becomes an infinity) and the value prints as the float it is; every other type holds the promoted value
+    /// unchanged. For values computed in float64 and published without a column, such as a context-level derived feature,
+    /// so they are what the same feature computed per candidate would be.
+    /// </summary>
+    public static ScalarValue AsStored(in ScalarValue value, ColumnType type)
+    {
+        if (type.ValueKind != StorageKind.Float32)
+        {
+            return value;
+        }
+
+        if (value.Kind == StorageKind.Float64)
+        {
+            return ScalarValue.FromFloat32((float)value.AsFloat64());
+        }
+
+        if (value.ListElement != StorageKind.Float64)
+        {
+            return value;
+        }
+
+        var doubles = value.AsFloat64List();
+        var floats = new float[doubles.Length];
+        NarrowFloats(doubles, floats);
+        return ScalarValue.FromFloat32List(floats);
     }
 
     /// <summary>True for a value the non-finite rule replaces (design 4.3): a float that is NaN or ±∞, or a float list

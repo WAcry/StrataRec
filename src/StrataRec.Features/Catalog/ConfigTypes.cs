@@ -108,7 +108,11 @@ public static class ConfigTypes
         message = site == TypeSite.Parameter ? $"Unknown parameter type '{written}'." : $"Unknown type '{written}'.";
         if (site != TypeSite.Parameter && leaf.StartsWith("list<", StringComparison.Ordinal) && !ColumnType.TryParse(leaf, out _, out var why))
         {
-            message = why; // why a list cannot hold what was written (text, a nested list, a nullable element)
+            // Why a list cannot hold what was written (text, a nested list, a nullable element). A feature is never
+            // written with '?', so there the fix for a nullable element is the plain list, without a default.
+            message = site == TypeSite.Feature && leaf.EndsWith("?>", StringComparison.Ordinal)
+                ? $"Unknown type '{written}': a list's elements are never missing, and a feature without 'default' is the one that may be missing."
+                : why;
         }
 
         var suggestion = Suggest(leaf, site);
@@ -140,7 +144,8 @@ public static class ConfigTypes
             // Keep the element written, in this place's spelling: list<double> → list<float64>, array<text> → list<string>.
             var element = inner.EndsWith('?') ? inner[..^1].Trim() : inner;
             var meant = element == "text" ? "string" : Alias(element, site) ?? (Array.IndexOf(ElementSpellings, element) >= 0 ? element : NameSuggestions.Closest(element, ElementSpellings));
-            suggestion = meant is null ? null : $"list<{meant}>" + (inner.EndsWith('?') && !nullable ? "?" : string.Empty);
+            // A nullable element means a list that may be missing: list<E>? where '?' is written, a plain list elsewhere.
+            suggestion = meant is null ? null : $"list<{meant}>" + (inner.EndsWith('?') && !nullable && site == TypeSite.Column ? "?" : string.Empty);
         }
 
         if (suggestion is null && Array.IndexOf(candidates, core) >= 0)

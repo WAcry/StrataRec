@@ -670,7 +670,7 @@ public sealed class RunReplay : IFeatureCallHook
             case StorageKind.Int64 when value.Kind == StorageKind.Int64:
                 writer.GetValues<long>(field).Span[key] = value.AsInt64();
                 break;
-            case StorageKind.Float32 when value.Kind is StorageKind.Float64 or StorageKind.Int64 && FitsFloat32(value.AsFloat64()):
+            case StorageKind.Float32 when value.Kind is StorageKind.Float64 or StorageKind.Int64 && Float32Range.Fits(value.AsFloat64()):
                 writer.GetValues<float>(field).Span[key] = (float)value.AsFloat64();
                 break;
             case StorageKind.Float64 when value.Kind is StorageKind.Float64 or StorageKind.Int64:
@@ -715,7 +715,7 @@ public sealed class RunReplay : IFeatureCallHook
                 for (var i = 0; i < floats.Length; i++)
                 {
                     var d = recorded == StorageKind.Int64 ? value.AsInt64List()[i] : value.AsFloat64List()[i];
-                    if (!FitsFloat32(d))
+                    if (!Float32Range.Fits(d))
                     {
                         return false;
                     }
@@ -744,9 +744,6 @@ public sealed class RunReplay : IFeatureCallHook
                 return false;
         }
     }
-
-    /// <summary>NaN and ±∞ stay what they are; a finite value must not overflow to an infinity.</summary>
-    private static bool FitsFloat32(double value) => !double.IsFinite(value) || float.IsFinite((float)value);
 
     private static RowKey RowKeyOf(KeyShape shape, in EntityKey context, ReadOnlySpan<EntityKey> keys, int row) => shape switch
     {

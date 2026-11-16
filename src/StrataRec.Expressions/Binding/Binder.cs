@@ -960,13 +960,14 @@ internal sealed class Binder
             return root;
         }
 
-        // A computed value outside the int32 range is replaced at run time (design 4.3); a constant one can only be a
-        // configuration mistake, so it is reported here, where it can be fixed.
-        if (_options.ExpectedType is { IsInt32Storage: true } narrow && root.IsConst && !ColumnValues.FitsStorage(root.Value, narrow))
+        // A computed value outside the int32 or float32 range is replaced at run time (design 4.3); a constant one can
+        // only be a configuration mistake, so it is reported here, where it can be fixed.
+        if (_options.ExpectedType is { } narrow && root.IsConst && !ColumnValues.FitsStorage(root.Value, narrow))
         {
+            var (range, width) = narrow.IsInt32Storage ? ($"[{int.MinValue}, {int.MaxValue}]", "int32") : (Float32Range.Text, "float32");
             Report(ExpressionErrorCodes.InvalidArgument,
-                $"The constant {root.Value} does not fit this site's {narrow.AsNonNullable()} storage, which holds [{int.MinValue}, {int.MaxValue}]",
-                ast.Start, ast.Length, $"declare the column as {narrow.Promoted().AsNonNullable()}, or use values in the int32 range");
+                $"The constant {root.Value} does not fit this site's {narrow.AsNonNullable()} storage, which holds {range}",
+                ast.Start, ast.Length, $"declare the column as {narrow.Promoted().AsNonNullable()}, or use values in the {width} range");
             return root;
         }
 
@@ -986,22 +987,31 @@ internal sealed class Binder
     /// a feature, an input) is not converted: lists of ids and lists of weights are different data, and mixing them is a
     /// mistake to report, not to paper over.
     /// </summary>
-    private static IrNode AsFloatList(IrNode node) =>
-        node.Type.Kind == TypeKind.ListInt && IsLiteralList(node) ? ToFloatList(node) : node;
-
-    /// <summary>An integer list made only of list literals: a literal, or a <c>?:</c> or <c>??</c> choosing between them.</summary>
-    private static bool IsLiteralList(IrNode node) => node.Op switch
+    private static IrNode AsFloatList(IrNode node)
     {
-        IrOp.Const => !node.Value.IsMissing,
-        IrOp.Conditional => IsLiteralList(node.Args[1]) && IsLiteralList(node.Args[2]),
-        IrOp.Coalesce => IsLiteralList(node.Args[0]) && IsLiteralList(node.Args[1]),
-        _ => false,
-    };
+        if (node.Type.Kind != TypeKind.ListInt || node.Op is not (IrOp.Const or IrOp.Conditional or IrOp.Coalesce))
+        {
+            return node;
+        }
 
-    private static IrNode ToFloatList(IrNode node)
+        return ToFloatList(node, node.IsConst ? null : new Dictionary<IrNode, IrNode?>(ReferenceEqualityComparer.Instance)) ?? node;
+    }
+
+    /// <summary>
+    /// The float list of an integer list made only of list literals (a literal, or a <c>?:</c> or <c>??</c> choosing
+    /// between such lists), or null when it is not one. Memoized by node: a <c>let</c>'s references share one node, so the
+    /// IR is a graph whose paths can be exponentially more than its nodes.
+    /// </summary>
+    private static IrNode? ToFloatList(IrNode node, Dictionary<IrNode, IrNode?>? converted)
     {
+        if (converted is not null && converted.TryGetValue(node, out var known))
+        {
+            return known;
+        }
+
+        IrNode? result = null;
         var type = new ExprType(TypeKind.ListFloat, node.Type.Nullable);
-        if (node.IsConst)
+        if (node.IsConst && !node.Value.IsMissing)
         {
             var ints = node.Value.AsInt64List();
             var floats = new double[ints.Length];
@@ -1010,17 +1020,25 @@ internal sealed class Binder
                 floats[i] = ints[i];
             }
 
-            return IrNode.Const(ScalarValue.FromFloat64List(floats), type, node.Start, node.Length);
+            result = IrNode.Const(ScalarValue.FromFloat64List(floats), type, node.Start, node.Length);
         }
-
-        // A condition stays as it is; the lists it chooses between are converted.
-        var args = (IrNode[])node.Args.Clone();
-        for (var i = node.Op == IrOp.Conditional ? 1 : 0; i < args.Length; i++)
+        else if (node.Op is IrOp.Conditional or IrOp.Coalesce)
         {
-            args[i] = ToFloatList(args[i]);
+            // A condition stays as it is; the lists it chooses between are converted.
+            var args = (IrNode[])node.Args.Clone();
+            var all = true;
+            for (var i = node.Op == IrOp.Conditional ? 1 : 0; i < args.Length && all; i++)
+            {
+                var list = args[i].Type.Kind == TypeKind.ListInt ? ToFloatList(args[i], converted) : null;
+                all = list is not null;
+                args[i] = list ?? args[i];
+            }
+
+            result = all ? node.WithArgs(args, type) : null;
         }
 
-        return node.WithArgs(args, type);
+        converted?.Add(node, result);
+        return result;
     }
 
     /// <summary>Where one side is a float list, an integer list literal on the other is one too (<see cref="AsFloatList"/>).</summary>

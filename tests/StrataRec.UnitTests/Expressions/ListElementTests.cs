@@ -179,6 +179,40 @@ public class ListElementTests
     }
 
     [Fact]
+    public void LiteralListConversion_VisitsEachNodeOfASharedLetOnce()
+    {
+        // Review 62: each let doubles the paths to the literal, not the nodes; walking paths took 190 MB at 18 levels.
+        var f = new ExprFixture(capacity: 4).Ctx("ctx.b", "bool", ScalarValue.FromBool(true)).Build(1);
+        var source = new System.Text.StringBuilder("let a0 = [1]; ");
+        for (var i = 1; i <= 20; i++)
+        {
+            source.Append($"let a{i} = ctx.b ? a{i - 1} : a{i - 1}; ");
+        }
+
+        source.Append("a20");
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var expression = f.Compile(source.ToString(), new CompileOptions { ExpectedType = ColumnType.List(StorageKind.Float32) });
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(ColumnType.List(StorageKind.Float64), expression.ResultType);
+        Assert.True(allocated < 2_000_000, $"compiling allocated {allocated:N0} bytes");
+        Assert.Equal(ScalarValue.FromFloat64List(new[] { 1.0 }), expression.EvaluateScalar(f.Context));
+    }
+
+    [Theory]
+    [InlineData("[1, 1e300]", "list<float32>")]
+    [InlineData("1e39", "float32")]
+    public void AConstantBeyondFloat32_ForAFloat32Site_IsAnError(string source, string type)
+    {
+        var error = Assert.Single(Lists().Errors(source, new CompileOptions { ExpectedType = ColumnType.Parse(type) }));
+        Assert.Equal(ExpressionErrorCodes.InvalidArgument, error.Code);
+        Assert.Contains("[-3.4028235E+38, 3.4028235E+38]", error.Message, StringComparison.Ordinal);
+        Assert.Contains("declare the column as " + ColumnType.Parse(type).Promoted(), error.Hint, StringComparison.Ordinal);
+        Lists().Compile(source.Replace("e300", "e30", StringComparison.Ordinal).Replace("e39", "e38", StringComparison.Ordinal),
+            new CompileOptions { ExpectedType = ColumnType.Parse(type) }); // within the range: compiles
+    }
+
+    [Fact]
     public void TypedIntLists_AreNotConvertedToFloatLists()
     {
         var f = new ExprFixture(capacity: 4).Col("col.ids", "list<int64>").Col("col.w", "list<float64>").Build(1);

@@ -1347,15 +1347,18 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>
-    /// Publishes a context feature value: NaN/±∞, and an integer (or list element) outside the int32 range of an
-    /// <c>int32</c> or <c>list&lt;int32&gt;</c> feature, are counted and replaced by the default or missing (design 4.3), and
-    /// a missing value takes the default.
+    /// Publishes a context feature value as its storage holds it (<see cref="ColumnValues.AsStored"/>: a float32 feature's
+    /// value is rounded to float32): NaN/±∞, including a float beyond the float32 range, and an integer (or list element)
+    /// outside the int32 range of an <c>int32</c> or <c>list&lt;int32&gt;</c> feature, are counted and replaced by the
+    /// default or missing (design 4.3), and a missing value takes the default.
     /// </summary>
     /// <remarks>Context values are held promoted, so an out-of-range value would not wrap here; it is still replaced,
-    /// so a feature's value always lies in its declared type wherever it is read, logged or written.</remarks>
+    /// so a feature's value always lies in its declared type wherever it is read, logged or written, and is the value the
+    /// same feature computed per candidate would have.</remarks>
     private void StoreContext(FeatureRuntimeInfo info, ScalarValue value)
     {
         var definition = info.Definition;
+        value = ColumnValues.AsStored(value, info.Type);
         if (ColumnValues.IsNonFinite(value))
         {
             AddNonFinite(info, 1);
