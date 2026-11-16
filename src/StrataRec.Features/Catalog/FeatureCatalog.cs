@@ -1,5 +1,6 @@
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Keys;
+using StrataRec.Core.Columns;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 
@@ -194,7 +195,7 @@ public sealed class FeatureCatalog
                 Source = spec.Source,
                 Field = spec.Field,
                 HasDefault = hasDefault,
-                Default = def,
+                Default = ColumnValues.AsStored(def, type), // as a column of the type holds it, once, not per request
                 Deprecated = spec.Deprecated ?? false,
                 Owner = spec.Owner,
                 Description = spec.Description,
@@ -239,7 +240,7 @@ public sealed class FeatureCatalog
                 Entity = entity,
                 Type = hasDefault ? type : type.AsNullable(),
                 HasDefault = hasDefault,
-                Default = def,
+                Default = ColumnValues.AsStored(def, type), // as a column of the type holds it, once, not per request
                 Expr = spec.Expr,
                 Owner = spec.Owner,
                 Description = spec.Description,

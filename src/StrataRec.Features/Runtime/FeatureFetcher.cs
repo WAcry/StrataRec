@@ -1382,7 +1382,8 @@ public sealed partial class FeatureFetcher
             value = ScalarValue.Missing;
         }
 
-        _context[info.ContextId] = value.IsMissing ? definition.Absent : value;
+        // The default too is published as storage holds it (the catalog's are already; a test's or a host's may not be).
+        _context[info.ContextId] = value.IsMissing ? ColumnValues.AsStored(definition.Absent, info.Type) : value;
     }
 
     private void AddNonFinite(FeatureRuntimeInfo feature, int count)

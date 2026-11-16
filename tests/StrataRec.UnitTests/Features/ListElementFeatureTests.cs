@@ -144,6 +144,53 @@ public class ListElementFeatureTests
                 Array.Empty<int>(), defaultValue);
     }
 
+    [Fact]
+    public async Task ContextFloatFeatures_PublishTheirDefaultAndIntegerResults_AsStorageHoldsThem()
+    {
+        // Review 63: the default replacing a missing or non-finite value, and an integer result of a float32 feature,
+        // were published as given (0.1 as the double, 16777217 exactly), not as the float32 a candidate column holds.
+        var rig = new FeatureTestRig();
+        var missing = Derived(rig, "user.m", "list<float32>", ScalarValue.Missing, ScalarValue.FromFloat64List(new[] { 0.1 }));
+        var nonFinite = Derived(rig, "user.n", "float32", ScalarValue.FromFloat64(double.NaN), ScalarValue.FromFloat64(0.1));
+        var integer = Derived(rig, "user.i", "float32", ScalarValue.FromInt64(16_777_217));
+        var wide = Derived(rig, "user.f", "float64", ScalarValue.FromInt64(3));
+        rig.Build();
+        var request = rig.NewRequest(ThreeItems, userId: 7);
+
+        request.Fetcher.StartContextFetch(new[] { missing, nonFinite, integer, wide }, CancellationToken.None);
+        await request.EnsureAsync(missing, nonFinite, integer, wide);
+
+        Assert.Equal(ScalarValue.FromFloat32List(new[] { 0.1f }), request.ContextValue(missing));
+        Assert.Equal((double)0.1f, request.ContextValue(nonFinite).AsFloat64());
+        Assert.Equal(16_777_216, request.ContextValue(integer).AsFloat64()); // what a float32 column holds
+        Assert.Equal(ScalarValue.FromFloat64(3), request.ContextValue(wide)); // a float64 feature holds a float
+
+        static int Derived(FeatureTestRig rig, string name, string type, ScalarValue value, ScalarValue? defaultValue = null) =>
+            rig.Derived(name, FeatureTestRig.User, ColumnType.Parse(type), new TestExpression("v", ColumnType.Parse(type).Promoted(), scalar: _ => value),
+                Array.Empty<int>(), defaultValue);
+    }
+
+    [Fact]
+    public void CatalogDefaults_AreHeldAsTheirStorageHoldsThem()
+    {
+        var catalog = FeatureCatalog.Build(new StrataRec.Artifacts.Model.FeatureCatalogArtifact
+        {
+            CatalogId = "c",
+            Entities = new() { ["user"] = new() { Scope = "context", Key = JsonValue.Create("ctx.request.user_id"), KeyType = JsonValue.Create("int64") } },
+            DerivedFeatures = new()
+            {
+                ["user.w"] = new() { Type = "list<float32>", Expr = "[0.5]", Default = JsonNode.Parse("[0.1, 2]") },
+                ["user.x"] = new() { Type = "float32", Expr = "0.5", Default = JsonNode.Parse("0.1") },
+            },
+        }, new Dictionary<string, ColumnType> { ["user_id"] = ColumnType.Int64 }, new StrataRec.Artifacts.Model.DiagnosticBag());
+
+        Assert.True(catalog.TryGet("user.w", out var w));
+        Assert.True(w.Default.IsFloat32List);
+        Assert.Equal(ScalarValue.FromFloat32List(new[] { 0.1f, 2f }), w.Default);
+        Assert.True(catalog.TryGet("user.x", out var x));
+        Assert.True(x.Default.IsFloat32);
+    }
+
     [Theory]
     [InlineData("[1, 1e300]", "list<float32>", "must be an array of numbers within the float32 range [-3.4028235E+38, 3.4028235E+38]; element 1 is the number 1e300; declare the type as list<float64>")]
     [InlineData("-1e39", "float32", "must be within the float32 range [-3.4028235E+38, 3.4028235E+38], got the number -1e39; declare the type as float64")]

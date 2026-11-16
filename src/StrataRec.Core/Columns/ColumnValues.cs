@@ -217,32 +217,55 @@ public static class ColumnValues
     };
 
     /// <summary>
-    /// The value as storage of <paramref name="type"/> holds it: float32 storage rounds each float to float32 (one beyond
-    /// the range becomes an infinity) and the value prints as the float it is; every other type holds the promoted value
-    /// unchanged. For values computed in float64 and published without a column, such as a context-level derived feature,
-    /// so they are what the same feature computed per candidate would be.
+    /// The value as storage of <paramref name="type"/> holds it: float storage holds an integer as a float, float32
+    /// storage rounds each float to float32 (one beyond the range becomes an infinity) and the value then prints as the
+    /// float it is; every other type holds the promoted value unchanged. For values published without a column, such as
+    /// a context-level feature or its default, so they are what the same feature in a candidate column would be.
     /// </summary>
+    /// <remarks>A value already in its stored form is returned as it is, without allocating.</remarks>
     public static ScalarValue AsStored(in ScalarValue value, ColumnType type)
     {
-        if (type.ValueKind != StorageKind.Float32)
+        var element = type.ValueKind;
+        if (element is not (StorageKind.Float32 or StorageKind.Float64) || value.IsMissing)
         {
             return value;
         }
 
-        if (value.Kind == StorageKind.Float64)
+        var single = element == StorageKind.Float32;
+        switch (value.Kind)
         {
-            return ScalarValue.FromFloat32((float)value.AsFloat64());
-        }
+            case StorageKind.Int64:
+                return single ? ScalarValue.FromFloat32(value.AsInt64()) : ScalarValue.FromFloat64(value.AsInt64());
+            case StorageKind.Float64:
+                return single && !value.IsFloat32 ? ScalarValue.FromFloat32((float)value.AsFloat64()) : value;
+            case StorageKind.List when value.ListElement == StorageKind.Int64:
+                var longs = value.AsInt64List();
+                if (single)
+                {
+                    var narrowed = new float[longs.Length];
+                    for (var i = 0; i < longs.Length; i++)
+                    {
+                        narrowed[i] = longs[i];
+                    }
 
-        if (value.ListElement != StorageKind.Float64)
-        {
-            return value;
-        }
+                    return ScalarValue.FromFloat32List(narrowed);
+                }
 
-        var doubles = value.AsFloat64List();
-        var floats = new float[doubles.Length];
-        NarrowFloats(doubles, floats);
-        return ScalarValue.FromFloat32List(floats);
+                var widened = new double[longs.Length];
+                for (var i = 0; i < longs.Length; i++)
+                {
+                    widened[i] = longs[i];
+                }
+
+                return ScalarValue.FromFloat64List(widened);
+            case StorageKind.List when single && value.ListElement == StorageKind.Float64 && !value.IsFloat32List:
+                var doubles = value.AsFloat64List();
+                var floats = new float[doubles.Length];
+                NarrowFloats(doubles, floats);
+                return ScalarValue.FromFloat32List(floats);
+            default:
+                return value;
+        }
     }
 
     /// <summary>True for a value the non-finite rule replaces (design 4.3): a float that is NaN or ±∞, or a float list
