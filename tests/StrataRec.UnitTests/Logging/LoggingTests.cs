@@ -250,6 +250,40 @@ public sealed class LogPipelineTests
         sink.Release();
     }
 
+    /// <summary>
+    /// Review 65: a string many values point to (a dictionary-encoded column, a constant) is counted once per batch, not
+    /// per row, which overstated 1,024 rows sharing a 4 KB string 158 times and dropped durable batches that fit; and the
+    /// envelope's maps count per entry, where a fixed 256 bytes let zero-row batches of 100 node outcomes overrun the
+    /// budget 13 times.
+    /// </summary>
+    [Fact]
+    public void TheEstimate_CountsASharedStringOnce_AndTheEnvelopesMapsPerEntry()
+    {
+        const int rows = 1024;
+        var shared = new string('s', 4096);
+        var empty = Titled(rows, _ => "").ApproximateBytes; // "" is one object too
+
+        Assert.Equal(empty + 4096 * 2, Titled(rows, _ => shared).ApproximateBytes);
+        Assert.Equal(empty - 24 + rows * (24 + 4096 * 2L), Titled(rows, _ => new string('s', 4096)).ApproximateBytes);
+        var alternating = new[] { new string('a', 4096), new string('b', 4096) };
+        Assert.InRange(Titled(rows, i => alternating[i % 2]).ApproximateBytes, empty + 2 * 4096 * 2, empty + 4 * 4096 * 2); // two strings, unless they share a slot
+
+        var bare = Batch("$experiments", LogDelivery.Durable, rows: 0);
+        var outcomes = Batch("$experiments", LogDelivery.Durable, rows: 0);
+        outcomes.NodeOutcomes = Enumerable.Range(0, 100).ToDictionary(i => "node_" + i, _ => "Succeeded");
+        Assert.True(outcomes.ApproximateBytes >= bare.ApproximateBytes + 100 * 32, $"{outcomes.ApproximateBytes} for 100 outcomes");
+    }
+
+    private static LogBatch Titled(int rows, Func<int, string> title) => new()
+    {
+        TapId = "titles", RequestId = "req-1", PipelineId = "feed", ManifestId = "sha256:test", SchemaId = "sha256:schema",
+        TimeMs = 1_767_225_600_000, Delivery = LogDelivery.Durable, RequestProbability = 1.0,
+        Int64EntityIds = Enumerable.Range(1, rows).Select(i => (long)i).ToArray(), Ranks = Enumerable.Range(1, rows).ToArray(),
+        RowProbabilities = Enumerable.Repeat(1.0, rows).ToArray(),
+        Columns = new[] { new LogColumn("title", ColumnType.String, Enumerable.Range(0, rows).Select(i => ScalarValue.FromString(title(i))).ToArray()) },
+        Context = Array.Empty<(string, ScalarValue)>(),
+    };
+
     private static string[] Wide() => Enumerable.Range(0, 1000).Select(i => new string('x', 500)).ToArray();
 
     private static LogBatch WideBatch(string[] strings, LogDelivery delivery) => new()

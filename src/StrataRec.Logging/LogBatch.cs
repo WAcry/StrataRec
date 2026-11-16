@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 
@@ -85,55 +86,82 @@ public sealed class LogBatch
     public long Seq { get; set; }
 
     /// <summary>
-    /// About how much memory the batch holds: arrays, column values and what they point to (strings, lists, vectors).
-    /// What the log queues are bounded by (<see cref="LogPipelineOptions.DurableMaxBytes"/>): batches differ in size by
-    /// orders of magnitude (a request-level tap is one row, a candidate tap thousands of rows of lists), so a count of
-    /// batches bounds nothing. Computed once, when the batch is first queued; the batch does not change afterwards.
+    /// About how much memory the batch holds: arrays, column values and what they point to (strings, lists, vectors), and
+    /// the envelope's lists and maps. What the log queues are bounded by (<see cref="LogPipelineOptions.DurableMaxBytes"/>):
+    /// batches differ in size by orders of magnitude (a request-level tap is one row, a candidate tap thousands of rows of
+    /// lists), so a count of batches bounds nothing. Computed once, when the batch is first queued; the batch does not
+    /// change afterwards.
     /// </summary>
+    /// <remarks>
+    /// <para>A string is counted once per batch however many values point to it: a dictionary-encoded column or a constant
+    /// gives every row the same string object, and counting it per row overstated a batch of 1,024 rows sharing a 4 KB
+    /// string 158 times (review 65). Sharing is found by identity in a small direct-mapped table of recent strings, so a
+    /// string evicted by another that maps to the same slot is counted again: an overstatement, never an understatement.
+    /// Lists and vectors are each the row's own array, counted per value.</para>
+    /// <para>Strings of the plan (tap, pipeline, manifest and schema ids, node, arm, column and outcome names) are shared by every
+    /// request and not counted; the envelope's lists and maps are, per entry. The maps of a request are shared by its
+    /// batches and counted in each, a bounded overstatement (taps per request).</para>
+    /// </remarks>
     public long ApproximateBytes => _bytes >= 0 ? _bytes : _bytes = Estimate();
 
     private long _bytes = -1;
 
     private const int ObjectBytes = 24; // header, method table, and an array's length, rounded
     private const int ValueBytes = 24; // a ScalarValue: kind, bits, reference
+    private const int MapEntryBytes = 32; // a dictionary entry (hash, next, key, value) and its bucket, rounded
+    private const int SeenSlots = 256;
+
+    /// <summary>Strings already counted in the batch being estimated; cleared after each estimate, so it holds none.</summary>
+    [ThreadStatic]
+    private static string?[]? _seen;
 
     private long Estimate()
     {
-        long bytes = 256; // the object, its envelope strings and maps
-        bytes += Ranks.LongLength * 4 + RowProbabilities.LongLength * 8 + (RanksBefore?.LongLength ?? 0) * 4;
-        bytes += (Int64EntityIds?.LongLength ?? 0) * 8;
-        if (StringEntityIds is { } ids)
+        var seen = _seen ??= new string?[SeenSlots];
+        try
         {
-            foreach (var id in ids)
+            long bytes = 256 + StringBytes(RequestId); // the object and its fields; the other envelope strings are the plan's
+            bytes += Ranks.LongLength * 4 + RowProbabilities.LongLength * 8 + (RanksBefore?.LongLength ?? 0) * 4;
+            bytes += (Int64EntityIds?.LongLength ?? 0) * 8;
+            bytes += ListBytes(AssignedArms) + ListBytes(TriggeredExperiments) + MapBytes(NodeOutcomes) + MapBytes(ColumnProducers);
+            if (StringEntityIds is { } ids)
             {
-                bytes += 8 + StringBytes(id);
+                bytes += ObjectBytes + ids.LongLength * 8;
+                foreach (var id in ids)
+                {
+                    bytes += Once(seen, id);
+                }
             }
-        }
 
-        foreach (var column in Columns)
-        {
-            bytes += ObjectBytes + column.Values.LongLength * ValueBytes;
-            foreach (var value in column.Values)
+            foreach (var column in Columns)
             {
-                bytes += PayloadBytes(value);
+                bytes += ObjectBytes + column.Values.LongLength * ValueBytes;
+                foreach (var value in column.Values)
+                {
+                    bytes += PayloadBytes(seen, value);
+                }
             }
-        }
 
-        foreach (var (_, value) in Context)
+            foreach (var (_, value) in Context)
+            {
+                bytes += ValueBytes + PayloadBytes(seen, value);
+            }
+
+            return bytes;
+        }
+        finally
         {
-            bytes += ValueBytes + PayloadBytes(value);
+            Array.Clear(seen);
         }
-
-        return bytes;
     }
 
-    /// <summary>The heap memory a value points to, beyond the value itself.</summary>
-    private static long PayloadBytes(in ScalarValue value)
+    /// <summary>The heap memory a value points to, beyond the value itself; strings already counted in the batch are free.</summary>
+    private static long PayloadBytes(string?[] seen, in ScalarValue value)
     {
         switch (value.Kind)
         {
             case StorageKind.String or StorageKind.Text:
-                return StringBytes(value.AsString());
+                return Once(seen, value.AsString());
             case StorageKind.Vector:
                 return ObjectBytes + value.AsVector().Length * 4L;
             case StorageKind.List:
@@ -144,7 +172,7 @@ public sealed class LogBatch
                         long strings = ObjectBytes + length * 8L;
                         foreach (var s in value.AsStringList())
                         {
-                            strings += StringBytes(s);
+                            strings += Once(seen, s);
                         }
 
                         return strings;
@@ -158,6 +186,28 @@ public sealed class LogBatch
                 return 0;
         }
     }
+
+    /// <summary>A string's bytes the first time the batch's estimate meets it, 0 when it was the last one in its slot.</summary>
+    private static long Once(string?[] seen, string? s)
+    {
+        if (s is null)
+        {
+            return 0;
+        }
+
+        var slot = RuntimeHelpers.GetHashCode(s) & (SeenSlots - 1);
+        if (ReferenceEquals(seen[slot], s))
+        {
+            return 0;
+        }
+
+        seen[slot] = s;
+        return StringBytes(s);
+    }
+
+    private static long ListBytes(IReadOnlyList<string> list) => list.Count == 0 ? 0 : ObjectBytes + list.Count * 8L;
+
+    private static long MapBytes(IReadOnlyDictionary<string, string> map) => map.Count == 0 ? 0 : 3 * ObjectBytes + map.Count * (long)MapEntryBytes;
 
     private static long StringBytes(string? s) => s is null ? 0 : ObjectBytes + s.Length * 2L;
 
