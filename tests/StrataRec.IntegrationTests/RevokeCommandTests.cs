@@ -33,19 +33,20 @@ public sealed class RevokeCommandTests
         Assert.True(code == 0, errors);
         var revocationId = await Pointer(store);
         var revocation = await ReadAsync(blobs, revocationId);
-        Assert.Equal((2L, 2L, first), (revocation.Seq, revocation.MinAcceptedSeq, revocation.Previous));
+        Assert.Equal((2L, first), (revocation.Seq, revocation.Previous));
+        Assert.Equal((firstManifest.Experiments["exp_mmr_diversity"].Artifact, 2L), (revocation.Revoked["exp_mmr_diversity"].Artifact, revocation.Revoked["exp_mmr_diversity"].Seq));
         Assert.Equal(["exp_freshness_calibration", "exp_quality_weight"], revocation.Experiments.Keys.Order(StringComparer.Ordinal));
         Assert.Equal(firstManifest.Artifacts.Pipeline, revocation.Artifacts.Pipeline);
         Assert.Equal(firstManifest.Requires, revocation.Requires);
         Assert.DoesNotContain("MmrDiversifier@1", ManifestBuilder.RequiredCapabilities(revocation)); // a binary without it takes the revocation (design 10.4)
         Assert.Equal(
-            $"home_feed (local): revoked exp_mmr_diversity\n  {first} (seq 1) -> {revocationId} (seq 2, min_accepted_seq 2)\n" +
+            $"home_feed (local): revoked exp_mmr_diversity\n  {first} (seq 1) -> {revocationId} (seq 2)\n" +
             $"pointer {Path.Combine(store, "pointers", "local", "home_feed.json")}\n",
             output.ReplaceLineEndings("\n"));
         Assert.Contains("'stratarec build' refuses to release a revoked experiment unchanged", errors);
         Assert.DoesNotContain("0 errors", errors);
 
-        // A node serves it, ignoring the platform's arm of the revoked experiment, and refuses the manifest before it.
+        // A node serves it, ignoring the platform's arm of the revoked experiment; the manifest before it is older, so stale.
         await using var engine = new RecEngine(CommonOptions.ForRoot(Tool.Environment, root));
         var loaded = await engine.LoadManifestAsync(revocation, revocationId, blobs, TestContext.Current.CancellationToken);
         Assert.True(loaded.Applied, loaded.Reason);
@@ -59,22 +60,25 @@ public sealed class RevokeCommandTests
         Assert.Equal(revocationId, result.ManifestId);
         Assert.Equal(["exp_quality_weight/strong"], result.Experiments.Assigned);
         Assert.Equal("exp_mmr_diversity/mmr", Assert.Single(result.Experiments.Ignored).Id);
-        Assert.Equal(ManifestLoadStatus.Revoked, (await engine.LoadManifestAsync(firstManifest, first, blobs, TestContext.Current.CancellationToken)).Status);
+        Assert.Equal(ManifestLoadStatus.Stale, (await engine.LoadManifestAsync(firstManifest, first, blobs, TestContext.Current.CancellationToken)).Status);
 
         // Again: nothing changes, and it succeeds, so a stop can be retried.
         (code, output, errors) = await Revoke(store, "exp_mmr_diversity");
         Assert.True(code == 0, errors);
-        Assert.Equal($"home_feed (local): exp_mmr_diversity was revoked already, by {revocationId} (seq 2)\n", output.ReplaceLineEndings("\n"));
+        Assert.Equal("home_feed (local): exp_mmr_diversity was revoked already (at seq 2)\n", output.ReplaceLineEndings("\n"));
         Assert.Equal(revocationId, await Pointer(store));
 
-        // A second stop: one more revocation; the first experiment is still known as revoked, by the first.
+        // A second stop: one more revocation, which still lists the first experiment as revoked at seq 2.
         (code, output, errors) = await Revoke(store, "--format", "json", "exp_quality_weight", "exp_mmr_diversity");
         Assert.True(code == 0, errors);
         var second = await Pointer(store);
         Assert.Contains($"\"previous\": {{\n    \"manifest\": \"{revocationId}\",\n    \"seq\": 2\n  }}", output.ReplaceLineEndings("\n"));
         Assert.Contains("\"revoked\": [\n    \"exp_quality_weight\"\n  ]", output.ReplaceLineEndings("\n"));
-        Assert.Contains($"\"experiment\": \"exp_mmr_diversity\",\n      \"manifest\": \"{revocationId}\",\n      \"seq\": 2", output.ReplaceLineEndings("\n"));
-        Assert.Equal((3L, 3L), ((await ReadAsync(blobs, second)).Seq, (await ReadAsync(blobs, second)).MinAcceptedSeq));
+        Assert.Contains("\"experiment\": \"exp_mmr_diversity\",\n      \"seq\": 2", output.ReplaceLineEndings("\n"));
+        var secondManifest = await ReadAsync(blobs, second);
+        Assert.Equal(3L, secondManifest.Seq);
+        Assert.Equal([("exp_mmr_diversity", 2L), ("exp_quality_weight", 3L)],
+            secondManifest.Revoked.OrderBy(r => r.Key, StringComparer.Ordinal).Select(r => (r.Key, r.Value.Seq)));
     }
 
     [Fact]
@@ -127,7 +131,7 @@ public sealed class RevokeCommandTests
         var (code, errors) = await Build(root, store);
         Assert.Equal(1, code);
         Assert.Contains("releases/home_feed.local.jsonc:11:5: error EXPERIMENT_REVOKED /experiments/exp_mmr_diversity: Experiment 'exp_mmr_diversity' was " +
-                        $"revoked by manifest '{revocation}' (seq 2), and no release since brought it back; this build releases it again as it was.", errors);
+                        "revoked at seq 2, and no release since brought it back; this build releases it again as it was.", errors);
         Assert.Contains("hint: remove it here until it is fixed (a changed experiment is released), or pass --restore exp_mmr_diversity to release it as it is",
             errors);
 
@@ -140,16 +144,8 @@ public sealed class RevokeCommandTests
         (code, errors) = await Build(root, store);
         Assert.True(code == 0, errors);
 
-        // A revocation whose history cannot be read keeps nothing out, and says so.
-        var blobs = new FileSystemArtifactStore(store);
-        var firstBlob = blobs.GetBlobPath(first);
-        var saved = File.ReadAllBytes(firstBlob);
-        File.Delete(firstBlob);
         File.WriteAllText(experiment, File.ReadAllText(experiment).Replace("\"mmr_lambda\": 0.6", "\"mmr_lambda\": 0.7", StringComparison.Ordinal));
-        (code, errors) = await Build(root, store);
-        Assert.True(code == 0, errors);
-        Assert.Contains($"warning REVOCATIONS_UNKNOWN manifest:{revocation}/previous", errors);
-        File.WriteAllBytes(firstBlob, saved);
+        var blobs = new FileSystemArtifactStore(store);
 
         // Left out of the release file, the configuration is the revocation's: build says so, and the stop stays.
         var releaseFile = Path.Combine(root, "releases", "home_feed.local.jsonc");
@@ -163,7 +159,8 @@ public sealed class RevokeCommandTests
         var pipeline = Path.Combine(root, "pipelines", "home_feed.jsonc");
         File.WriteAllText(pipeline, System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(pipeline), "\"final_top_k\": \\d+,", "\"final_top_k\": 7,"));
         var ordinary = await BuildAndPublishAsync(root, store);
-        Assert.Equal((3L, 2L), ((await ReadAsync(blobs, ordinary)).Seq, (await ReadAsync(blobs, ordinary)).MinAcceptedSeq));
+        Assert.Equal(3L, (await ReadAsync(blobs, ordinary)).Seq);
+        Assert.Empty((await ReadAsync(blobs, ordinary)).Revoked);
         File.WriteAllText(releaseFile, withIt);
         (code, errors) = await Build(root, store);
         Assert.True(code == 0, errors);
@@ -196,7 +193,7 @@ public sealed class RevokeCommandTests
         Assert.Contains("error MANIFEST_OTHER_ENVIRONMENT", errors); // home_feed's prod pointer names the local manifest
         Assert.Equal(
             $"home_feed (local): {revocation}\n" +
-            "  seq          2, min_accepted_seq 2: a revocation, nodes refuse every earlier manifest\n" +
+            "  seq          2\n" +
             $"  previous     {first}\n" +
             "  experiments  exp_freshness_calibration (layer fusion), exp_quality_weight (layer params)\n" +
             "  revoked      exp_mmr_diversity (by seq 2): 'stratarec build' keeps them out until they change\n" +
@@ -207,9 +204,8 @@ public sealed class RevokeCommandTests
         Assert.True(code == 0, errors);
         using var document = System.Text.Json.JsonDocument.Parse(output);
         var published = Assert.Single(document.RootElement.GetProperty("published").EnumerateArray());
-        Assert.True(published.GetProperty("revocation").GetBoolean());
         var revoked = Assert.Single(published.GetProperty("revoked").EnumerateArray());
-        Assert.Equal(("exp_mmr_diversity", revocation), (revoked.GetProperty("experiment").GetString(), revoked.GetProperty("manifest").GetString()));
+        Assert.Equal(("exp_mmr_diversity", 2L), (revoked.GetProperty("experiment").GetString(), revoked.GetProperty("seq").GetInt64()));
         Assert.Equal("rerank", (await ReadAsync(new FileSystemArtifactStore(store), first)).Experiments["exp_mmr_diversity"].Layer);
 
         (code, _, errors) = await Status(Path.Combine(store, "missing"));
@@ -361,12 +357,11 @@ public sealed class RevokeCommandTests
     }
 
     /// <summary>
-    /// What the published manifest releases is not revoked, whatever revocation before it removed it: a controller brought it
-    /// back (review 39: build refused the configuration that was published). A part of the history that cannot be read
-    /// keeps out what the part that was read revoked, and says the rest is not known.
+    /// What the published manifest releases is not revoked, whatever it lists as revoked: a controller brought it back
+    /// (review 39: build refused the configuration that was published), and a later stop no longer lists it.
     /// </summary>
     [Fact]
-    public async Task Build_TakesWhatThePublishedManifestBroughtBack_AndKeepsOutWhatItKnowsRevoked()
+    public async Task Build_TakesWhatThePublishedManifestBroughtBack()
     {
         var root = ManifestStores.Workspace();
         var store = ManifestStores.NewStore();
@@ -374,32 +369,27 @@ public sealed class RevokeCommandTests
         var first = await BuildAndPublishAsync(root, store);
         var firstManifest = await ReadAsync(blobs, first);
         Assert.Equal(0, (await Revoke(store, "exp_mmr_diversity")).Code);
-        var revocation = await Pointer(store);
+        var revocation = await ReadAsync(blobs, await Pointer(store));
 
-        // Another controller publishes the first release's configuration again, as a revocation of its own.
+        // Another controller publishes the first release's configuration again, keeping the revocation's list.
         var back = Path.Combine(store, "back.json");
         File.WriteAllText(back, ArtifactSerializer.ToNode(new ReleaseManifest
         {
-            PipelineId = firstManifest.PipelineId, Environment = firstManifest.Environment, Seq = 3, MinAcceptedSeq = 3, Previous = revocation,
-            Requires = firstManifest.Requires, Artifacts = firstManifest.Artifacts, Experiments = firstManifest.Experiments,
+            PipelineId = firstManifest.PipelineId, Environment = firstManifest.Environment, Seq = 3, Previous = await Pointer(store),
+            Requires = firstManifest.Requires, Artifacts = firstManifest.Artifacts, Experiments = firstManifest.Experiments, Revoked = revocation.Revoked,
         }).ToJsonString());
         Assert.Equal(0, await StrataRecCommandLine.InvokeAsync(["publish", "-s", store, back], Tool.Environment, TextWriter.Null, TextWriter.Null, TestContext.Current.CancellationToken));
         var (code, errors) = await Build(root, store);
         Assert.True(code == 0, errors);
         Assert.Contains(": unchanged, the release the pointer names has this configuration", errors);
 
-        // Two stops, and the manifest before both cannot be read: the second's experiment is still kept out.
-        Assert.Equal(0, (await Revoke(store, "exp_mmr_diversity")).Code);
+        // A stop of another experiment lists only that one.
         Assert.Equal(0, (await Revoke(store, "exp_quality_weight")).Code);
-        var before = await Pointer(store);
-        var beforeBoth = (await ReadAsync(blobs, (await ReadAsync(blobs, before)).Previous!)).Previous!;
-        File.Delete(blobs.GetBlobPath(beforeBoth));
+        Assert.Equal(["exp_quality_weight"], (await ReadAsync(blobs, await Pointer(store))).Revoked.Keys);
         (code, errors) = await Build(root, store);
         Assert.Equal(1, code);
-        Assert.Contains($"warning REVOCATIONS_UNKNOWN manifest:{before}/previous: The published manifest revokes earlier ones, and manifest '{beforeBoth}' " +
-                        "in its history cannot be read", errors);
         Assert.Contains("error EXPERIMENT_REVOKED /experiments/exp_quality_weight", errors);
-        Assert.DoesNotContain("error EXPERIMENT_REVOKED /experiments/exp_mmr_diversity", errors); // its stop is in the part not read
+        Assert.DoesNotContain("error EXPERIMENT_REVOKED /experiments/exp_mmr_diversity", errors);
     }
 
     /// <summary>

@@ -29,7 +29,6 @@ public static class ManifestBuilder
         IArtifactStore store,
         DiagnosticBag diagnostics,
         long seq = 1,
-        long minAcceptedSeq = 0,
         string? previous = null,
         CancellationToken cancellationToken = default)
     {
@@ -81,7 +80,6 @@ public static class ManifestBuilder
             PipelineId = pipelineId,
             Environment = environment,
             Seq = seq,
-            MinAcceptedSeq = minAcceptedSeq,
             Previous = previous,
             Requires = new List<string>(requirements.Baseline),
             Artifacts = new ManifestArtifacts
@@ -97,9 +95,8 @@ public static class ManifestBuilder
 
     /// <summary>
     /// The emergency stop of design 10.6: <paramref name="manifest"/> without <paramref name="experiments"/>, as the next
-    /// release (its <c>seq</c> one more, <paramref name="manifestId"/> its <c>previous</c>) that revokes every earlier one
-    /// (<c>min_accepted_seq</c> its own <c>seq</c>), so a node that restarts does not bring them back from a last-known-good
-    /// manifest. Nothing is compiled or validated: removing experiments keeps a valid release valid (design 11.6), which is
+    /// release (its <c>seq</c> one more, <paramref name="manifestId"/> its <c>previous</c>), listing them in
+    /// <see cref="ReleaseManifest.Revoked"/> with what the manifest revoked before. Nothing is compiled or validated: removing experiments keeps a valid release valid (design 11.6), which is
     /// what makes the stop take seconds. The artifacts are read as a node reads them. What the release requires loses what
     /// the removed experiments required (<see cref="ManifestExperiment.Requires"/>), so removing the experiment that needs a
     /// capability a rolled-back binary lacks makes the release one it serves (design 10.4). Null after reporting errors.
@@ -118,27 +115,40 @@ public static class ManifestBuilder
             return null;
         }
 
-        var revoked = new HashSet<string>(experiments, StringComparer.Ordinal);
+        var removing = new HashSet<string>(experiments, StringComparer.Ordinal);
+        var seq = manifest.Seq + 1;
         var entries = new Dictionary<string, ManifestExperiment>(StringComparer.Ordinal);
+        var revoked = new Dictionary<string, RevokedExperiment>(StringComparer.Ordinal);
+        foreach (var (name, entry) in manifest.Revoked)
+        {
+            if (!manifest.Experiments.ContainsKey(name))
+            {
+                revoked[name] = entry; // one the manifest releases was brought back (review 39)
+            }
+        }
+
         foreach (var (name, entry) in manifest.Experiments)
         {
-            if (!revoked.Contains(name))
+            if (removing.Contains(name))
+            {
+                revoked[name] = new RevokedExperiment { Artifact = entry.Artifact, Seq = seq };
+            }
+            else
             {
                 entries[name] = entry;
             }
         }
 
-        var seq = manifest.Seq + 1;
         return new ReleaseManifest
         {
             PipelineId = manifest.PipelineId,
             Environment = manifest.Environment,
             Seq = seq,
-            MinAcceptedSeq = seq,
             Previous = manifestId,
             Requires = manifest.Requires,
             Artifacts = manifest.Artifacts,
             Experiments = entries,
+            Revoked = revoked,
         };
     }
 

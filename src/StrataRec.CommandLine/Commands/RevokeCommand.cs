@@ -8,17 +8,17 @@ namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
 /// <c>stratarec revoke</c>: the emergency stop of design 10.6 for the release controller that <c>stratarec publish</c> is.
-/// It publishes, at once, what the pointer publishes without the named experiments, as a revocation: <c>seq</c> one more and
-/// <c>min_accepted_seq</c> the same, so nodes refuse every earlier manifest, also one a restarting node would load from its
-/// last-known-good copy. Nothing is compiled or validated (<see cref="ManifestBuilder.RevokeAsync"/>), so the stop takes the
-/// nodes' polling interval and a compile, and needs neither the repository nor CI.
+/// It publishes, at once, what the pointer publishes without the named experiments, as the next release (<c>seq</c> one
+/// more), which lists them as revoked. Nodes take it as they take any newer release. Nothing is compiled or validated
+/// (<see cref="ManifestBuilder.RevokeAsync"/>), so the stop takes the nodes' polling interval and a compile, and needs
+/// neither the repository nor CI.
 /// </summary>
 /// <remarks>
 /// <para>It reads the pointer and moves it under the pointer's lock, as publish does, so no publish comes between what it
-/// read and what it writes. Run again, it changes nothing: an experiment the published revocations removed already is
-/// reported as revoked, and the command succeeds, so a stop can be retried without thought.</para>
-/// <para>The stop lasts without controller state of its own: while a revocation is published, <c>stratarec build</c>
-/// refuses to release an experiment it removed unchanged (see <see cref="BuildCommand"/>), and the owner's change to the
+/// read and what it writes. Run again, it changes nothing: an experiment the published manifest lists as revoked already is
+/// reported as such, and the command succeeds, so a stop can be retried without thought.</para>
+/// <para>The stop lasts without controller state of its own: while the published manifest lists an experiment as revoked,
+/// <c>stratarec build</c> refuses to release it unchanged (see <see cref="BuildCommand"/>), and the owner's change to the
 /// experiment, or <c>--restore</c>, releases it again.</para>
 /// </remarks>
 internal static class RevokeCommand
@@ -114,7 +114,6 @@ internal static class RevokeCommand
                 json.WriteEndObject();
                 json.WriteString("manifest", done.Id);
                 json.WriteNumber("seq", done.Seq);
-                json.WriteNumber("min_accepted_seq", done.MinAcceptedSeq);
                 json.WriteStartArray("revoked");
                 foreach (var name in done.Revoked)
                 {
@@ -127,7 +126,6 @@ internal static class RevokeCommand
                 {
                     json.WriteStartObject();
                     json.WriteString("experiment", name);
-                    json.WriteString("manifest", revocation.ManifestId);
                     json.WriteNumber("seq", revocation.Seq);
                     json.WriteEndObject();
                 }
@@ -141,16 +139,15 @@ internal static class RevokeCommand
 
         foreach (var (name, revocation) in done.RevokedAlready)
         {
-            output.WriteLine($"{pipelineId} ({environment}): {name} was revoked already, by {revocation.ManifestId} (seq {revocation.Seq})");
+            output.WriteLine($"{pipelineId} ({environment}): {name} was revoked already (at seq {revocation.Seq})");
         }
 
         if (done.Revoked.Count > 0)
         {
             output.WriteLine($"{pipelineId} ({environment}): revoked {string.Join(", ", done.Revoked)}");
-            output.WriteLine($"  {done.Previous.Id} (seq {done.Previous.Seq}) -> {done.Id} (seq {done.Seq}, min_accepted_seq {done.MinAcceptedSeq})");
+            output.WriteLine($"  {done.Previous.Id} (seq {done.Previous.Seq}) -> {done.Id} (seq {done.Seq})");
             output.WriteLine($"pointer {path}");
-            errors.WriteLine("nodes refuse every earlier manifest from now on; 'stratarec build' refuses to release a revoked experiment unchanged: " +
-                             "remove it from the release file until it is fixed");
+            errors.WriteLine("'stratarec build' refuses to release a revoked experiment unchanged: remove it from the release file until it is fixed");
         }
 
         return 0;
@@ -183,9 +180,8 @@ internal static class RevokeCommand
             return (null, 1);
         }
 
-        var (revokedBefore, _) = await PublishedRelease.RevokedAsync(store, published.Id, published.Manifest, cancellationToken).ConfigureAwait(false);
         var removing = new List<string>();
-        var already = new List<(string Name, Revocation Revocation)>();
+        var already = new List<(string Name, RevokedExperiment Revocation)>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var name in experiments)
         {
@@ -198,7 +194,7 @@ internal static class RevokeCommand
             {
                 removing.Add(name);
             }
-            else if (revokedBefore.TryGetValue(name, out var revocation))
+            else if (published.Manifest.Revoked.TryGetValue(name, out var revocation))
             {
                 already.Add((name, revocation));
             }
@@ -220,7 +216,7 @@ internal static class RevokeCommand
         if (removing.Count == 0)
         {
             var current = published.Manifest;
-            return (new Outcome(published.Id, current.Seq, current.MinAcceptedSeq, previous, removing, already), 0);
+            return (new Outcome(published.Id, current.Seq, previous, removing, already), 0);
         }
 
         if (PublishedRelease.NextSeq(published.Id, published.Manifest, diagnostics) is null
@@ -232,7 +228,7 @@ internal static class RevokeCommand
 
         var id = await store.PutAsync(ArtifactSerializer.ToNode(revocationManifest), cancellationToken).ConfigureAwait(false);
         await pointers.WritePointerAsync(pipelineId, environment, id, cancellationToken).ConfigureAwait(false);
-        return (new Outcome(id, revocationManifest.Seq, revocationManifest.MinAcceptedSeq, previous, removing, already), 0);
+        return (new Outcome(id, revocationManifest.Seq, previous, removing, already), 0);
     }
 
     private static void NothingPublished(string path, string pipelineId, string environment, DiagnosticBag diagnostics) =>
@@ -253,5 +249,5 @@ internal static class RevokeCommand
 
     /// <summary>What a revoke did: the manifest published now (the revocation, or what was published already), and the one before.</summary>
     private sealed record Outcome(
-        string Id, long Seq, long MinAcceptedSeq, (string Id, long Seq) Previous, List<string> Revoked, List<(string Name, Revocation Revocation)> RevokedAlready);
+        string Id, long Seq, (string Id, long Seq) Previous, List<string> Revoked, List<(string Name, RevokedExperiment Revocation)> RevokedAlready);
 }

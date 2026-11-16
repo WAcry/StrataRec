@@ -227,19 +227,6 @@ internal static partial class PlanLoadTelemetry
         }
     }
 
-    public static void Revoked(ILogger logger, string pipelineId, string manifestId, long sequence, long minAcceptedSeq)
-    {
-        try
-        {
-            Count(pipelineId, "revoked");
-            LogRevoked(logger, pipelineId, manifestId, sequence, minAcceptedSeq);
-        }
-        catch (Exception)
-        {
-            // See the summary.
-        }
-    }
-
     /// <summary>The manifest, or an artifact it names, could not be read: missing, damaged, of another identity.</summary>
     public static void ArtifactsFailed(ILogger logger, string pipelineId, string manifestId, DiagnosticBag diagnostics)
     {
@@ -286,9 +273,7 @@ internal static partial class PlanLoadTelemetry
         Message = "Manifest '{ManifestId}' (sequence {Sequence}) for pipeline '{PipelineId}' is incompatible: this binary lacks {MissingCapabilities}; the current plan stays")]
     private static partial void LogIncompatible(ILogger logger, string pipelineId, string manifestId, long sequence, string missingCapabilities);
 
-    [LoggerMessage(EventId = 1007, Level = LogLevel.Warning,
-        Message = "Manifest '{ManifestId}' for pipeline '{PipelineId}' is revoked: its sequence {Sequence} is below min_accepted_seq {MinAcceptedSeq}; the current plan stays")]
-    private static partial void LogRevoked(ILogger logger, string pipelineId, string manifestId, long sequence, long minAcceptedSeq);
+    // EventId 1007 (a manifest below min_accepted_seq) is retired: a revocation is a newer release like any other.
 
     [LoggerMessage(EventId = 1008, Level = LogLevel.Error,
         Message = "Manifest '{ManifestId}' for pipeline '{PipelineId}' not applied: {ErrorCount} error(s) reading it or its artifacts; the current plan stays. First: {FirstError}")]

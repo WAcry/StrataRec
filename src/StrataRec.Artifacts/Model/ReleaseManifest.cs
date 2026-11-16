@@ -10,9 +10,11 @@ public sealed class ReleaseManifest
 
     public required string Environment { get; init; }
 
+    /// <summary>
+    /// Release order: a node applies a manifest only above the sequence its pipeline serves, so a slow or late delivery of an
+    /// older release never replaces a newer one. A revocation is a newer release like any other (design 10.6).
+    /// </summary>
     public long Seq { get; init; }
-
-    public long MinAcceptedSeq { get; init; }
 
     public string? Previous { get; init; }
 
@@ -25,6 +27,24 @@ public sealed class ReleaseManifest
     public required ManifestArtifacts Artifacts { get; init; }
 
     public Dictionary<string, ManifestExperiment> Experiments { get; init; } = new();
+
+    /// <summary>
+    /// Experiments <c>stratarec revoke</c> removed, by name: <c>stratarec build</c> refuses to release one of them again
+    /// unchanged, so the next build from a repository that still lists it does not undo the stop (design 10.6). A
+    /// revocation keeps what the one before it listed; a build lists nothing (it released nothing revoked unchanged, and
+    /// what it left out it left out on purpose). Nodes do not read it.
+    /// </summary>
+    public Dictionary<string, RevokedExperiment> Revoked { get; init; } = new();
+}
+
+/// <summary>An experiment a revocation removed (<see cref="ReleaseManifest.Revoked"/>).</summary>
+public sealed class RevokedExperiment
+{
+    /// <summary>Content id of the <see cref="ExperimentArtifact"/> it removed: a changed experiment is released again.</summary>
+    public required string Artifact { get; init; }
+
+    /// <summary>The sequence of the manifest that removed it.</summary>
+    public long Seq { get; init; }
 }
 
 public sealed class ManifestArtifacts

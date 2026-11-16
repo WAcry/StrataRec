@@ -636,7 +636,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     {
         ManifestLoadStatus.Applied => "applied",
         ManifestLoadStatus.Stale => "stale",
-        ManifestLoadStatus.Revoked => "revoked",
         ManifestLoadStatus.Incompatible => "incompatible",
         _ => "rejected",
     };

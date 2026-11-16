@@ -15,15 +15,16 @@ namespace StrataRec.CommandLine.Commands;
 /// </summary>
 /// <remarks>
 /// <para>Without <c>--seq</c>, the manifest is the next release of its pipeline in its environment (design 10.2): its
-/// <c>seq</c> is one more than that of the manifest the store's pointer names (<c>stratarec publish</c> writes it), it
-/// keeps that manifest's <c>min_accepted_seq</c>, as an ordinary release does, and names it as <c>previous</c>, which
+/// <c>seq</c> is one more than that of the manifest the store's pointer names (<c>stratarec publish</c> writes it), and it
+/// names that manifest as <c>previous</c>, which
 /// <c>stratarec diff --to</c> compares with; the first release is 1. So build and publish follow each other without
 /// anyone keeping count. A configuration that is the published one's, but for those fields, is no new release: build
 /// writes the published manifest, which publish then finds published already, so a pipeline can run both again.</para>
-/// <para>An experiment that <c>stratarec revoke</c> removed stays out (design 10.6): while the published manifest is a
-/// revocation, a build that releases one of the experiments it revoked, unchanged, fails at the release file's entry, so a
-/// release that follows the stop (a routine one, from CI) does not bring the stopped experiment back. A changed experiment
-/// is the owner's fix and is released; <c>--restore</c> releases one unchanged.</para>
+/// <para>An experiment that <c>stratarec revoke</c> removed stays out (design 10.6): while the published manifest lists it
+/// as revoked (<see cref="ReleaseManifest.Revoked"/>), a build that releases it unchanged fails at the release file's entry,
+/// so a release that follows the stop (a routine one, from CI) does not bring the stopped experiment back. A changed
+/// experiment is the owner's fix and is released; <c>--restore</c> releases one unchanged. A build's manifest lists no
+/// revocations: it released none unchanged, and what it leaves out, the release file now leaves out.</para>
 /// <para>A release controller that numbers releases itself passes <c>--seq</c>, and the store's pointers are not read.</para>
 /// </remarks>
 internal static class BuildCommand
@@ -44,7 +45,7 @@ internal static class BuildCommand
         var seq = new Option<long?>("--seq")
         {
             Description = "The manifest's sequence number (design 10.2), from 1 to 2^53 - 1 (the largest safe integer). By default the next release: one more than the manifest the store's " +
-                          "pointer for the pipeline and environment names ('stratarec publish' writes it), keeping its min_accepted_seq; 1 when none is published.",
+                          "pointer for the pipeline and environment names ('stratarec publish' writes it); 1 when none is published.",
         };
         seq.Validators.Add(static result =>
         {
@@ -107,8 +108,7 @@ internal static class BuildCommand
                 }
 
                 next = following;
-                if (!await KeepsRevokedOutAsync(workspace, request, environment, store, last, restore ?? Array.Empty<string>(), diagnostics, cancellationToken)
-                        .ConfigureAwait(false))
+                if (!KeepsRevokedOut(workspace, request, environment, last.Manifest, restore ?? Array.Empty<string>(), diagnostics))
                 {
                     Output.Diagnostics(diagnostics.Items, "text", errors, locator: DiagnosticLocator.ForWorkspace(config));
                     return 1;
@@ -125,8 +125,8 @@ internal static class BuildCommand
         try
         {
             manifest = published is { } current
-                ? await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, compiledWith, store, diagnostics, next, current.Manifest.MinAcceptedSeq,
-                    current.Id, cancellationToken).ConfigureAwait(false)
+                ? await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, compiledWith, store, diagnostics, next, current.Id, cancellationToken)
+                    .ConfigureAwait(false)
                 : await ManifestBuilder.BuildAsync(workspace, pipelineId, environment, compiledWith, store, diagnostics, seq ?? 1, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
             unchanged = manifest is not null && published is { } was && ManifestBuilder.ContentId(Renumbered(manifest, was.Manifest)) == was.Id;
@@ -179,17 +179,21 @@ internal static class BuildCommand
         return 0;
     }
 
-    /// <summary><paramref name="manifest"/> with the release fields of <paramref name="like"/>: equal ids then mean the same configuration.</summary>
+    /// <summary>
+    /// <paramref name="manifest"/> with the release fields of <paramref name="like"/>: equal ids then mean the same
+    /// configuration. Its revocations are a release field too: a build of what a revocation serves is no new release, and
+    /// the revocation stays published, still keeping out what it removed.
+    /// </summary>
     private static ReleaseManifest Renumbered(ReleaseManifest manifest, ReleaseManifest like) => new()
     {
         PipelineId = manifest.PipelineId,
         Environment = manifest.Environment,
         Seq = like.Seq,
-        MinAcceptedSeq = like.MinAcceptedSeq,
         Previous = like.Previous,
         Requires = manifest.Requires,
         Artifacts = manifest.Artifacts,
         Experiments = manifest.Experiments,
+        Revoked = like.Revoked,
     };
 
     /// <summary>
@@ -219,24 +223,13 @@ internal static class BuildCommand
     }
 
     /// <summary>
-    /// Whether this build keeps out the experiments the published revocations removed (see remarks): false, after
+    /// Whether this build keeps out the experiments the published manifest lists as revoked (see remarks): false, after
     /// reporting at the release file's entry, when it releases one of them as it was and <paramref name="restore"/> does
-    /// not name it. A part of the revocations' history that cannot be read is warned about: what it revoked is not known,
-    /// and what the part that was read revoked is still kept out.
+    /// not name it.
     /// </summary>
-    private static async Task<bool> KeepsRevokedOutAsync(
-        ConfigWorkspace workspace, PlanCompileRequest request, string environment, IArtifactStore store, (string Id, ReleaseManifest Manifest) published,
-        string[] restore, DiagnosticBag diagnostics, CancellationToken cancellationToken)
+    private static bool KeepsRevokedOut(
+        ConfigWorkspace workspace, PlanCompileRequest request, string environment, ReleaseManifest published, string[] restore, DiagnosticBag diagnostics)
     {
-        var (revoked, unread) = await PublishedRelease.RevokedAsync(store, published.Id, published.Manifest, cancellationToken).ConfigureAwait(false);
-        if (unread is not null)
-        {
-            diagnostics.Warning("REVOCATIONS_UNKNOWN", "manifest:" + published.Id, "/previous",
-                $"The published manifest revokes earlier ones, and manifest '{unread}' in its history cannot be read: what the revocations before it removed " +
-                "is not known, and this build does not keep that out (what the later ones removed, it does).",
-                "restore that manifest to the store");
-        }
-
         var releaseFile = workspace.Releases.TryGetValue(request.Pipeline.PipelineId + "/" + environment, out var release)
             ? release.Path
             : "releases/" + request.Pipeline.PipelineId + "." + environment + ".jsonc";
@@ -244,12 +237,13 @@ internal static class BuildCommand
         foreach (var placement in request.Experiments)
         {
             var name = placement.Experiment.ExperimentId;
-            if (revoked.TryGetValue(name, out var revocation)
+            if (published.Revoked.TryGetValue(name, out var revocation)
+                && !published.Experiments.ContainsKey(name) // released by the published manifest: brought back (review 39)
                 && Array.IndexOf(restore, name) < 0
                 && ContentHash.Compute(workspace.Experiments[name].Document) == revocation.Artifact)
             {
                 diagnostics.Error("EXPERIMENT_REVOKED", releaseFile, "/experiments/" + JsonPointer.Escape(name),
-                    $"Experiment '{name}' was revoked by manifest '{revocation.ManifestId}' (seq {revocation.Seq}), and no release since brought it back; " +
+                    $"Experiment '{name}' was revoked at seq {revocation.Seq}, and no release since brought it back; " +
                     "this build releases it again as it was.",
                     $"remove it here until it is fixed (a changed experiment is released), or pass --restore {name} to release it as it is");
                 kept = false;

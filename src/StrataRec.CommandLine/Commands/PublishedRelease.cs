@@ -62,52 +62,6 @@ internal static class PublishedRelease
         return (true, (current, published));
     }
 
-    /// <summary>
-    /// Whether <paramref name="manifest"/> revokes every earlier one: its <c>min_accepted_seq</c> is its own <c>seq</c>, which
-    /// is how a controller revokes content (design 10.2), and an ordinary release keeps the floor of the one before.
-    /// </summary>
-    internal static bool IsRevocation(ReleaseManifest manifest) => manifest.MinAcceptedSeq == manifest.Seq;
-
-    /// <summary>
-    /// The experiments removed by the revocations that end at the published manifest (<paramref name="id"/>): from it back
-    /// along <c>previous</c> while each is a revocation, every experiment the one before had and it lacks, with the artifact
-    /// it had and the revocation that removed it, unless the published manifest releases it again (a controller brought it
-    /// back: review 39). An ordinary release ends the walk: what it left out was left out on purpose, and what it released
-    /// was released again. <c>Unread</c> names a manifest the walk needed and could not read: the revocations before it are
-    /// not known, the ones after it are.
-    /// </summary>
-    internal static async Task<(Dictionary<string, Revocation> Revoked, string? Unread)> RevokedAsync(
-        IArtifactStore store, string id, ReleaseManifest manifest, CancellationToken cancellationToken)
-    {
-        var published = manifest;
-        var revoked = new Dictionary<string, Revocation>(StringComparer.Ordinal);
-        while (IsRevocation(manifest) && manifest.Previous is { } previous)
-        {
-            var before = await ManifestBuilder.ReadAsync(store, previous, new DiagnosticBag(), cancellationToken).ConfigureAwait(false);
-            if (before is null)
-            {
-                return (revoked, previous);
-            }
-
-            if (before.Seq >= manifest.Seq || before.PipelineId != manifest.PipelineId || before.Environment != manifest.Environment)
-            {
-                break; // not this pipeline's history: a manifest another tool wrote
-            }
-
-            foreach (var (name, entry) in before.Experiments)
-            {
-                if (!manifest.Experiments.ContainsKey(name) && !published.Experiments.ContainsKey(name))
-                {
-                    revoked.TryAdd(name, new Revocation(id, manifest.Seq, entry.Artifact));
-                }
-            }
-
-            (id, manifest) = (previous, before);
-        }
-
-        return (revoked, null);
-    }
-
     /// <summary>The next sequence after <paramref name="published"/>'s; null after reporting that there is none.</summary>
     internal static long? NextSeq(string id, ReleaseManifest published, DiagnosticBag diagnostics)
     {
@@ -123,6 +77,3 @@ internal static class PublishedRelease
         return null;
     }
 }
-
-/// <summary>An experiment a revocation removed: the revoking manifest, its sequence, and the experiment's artifact then.</summary>
-internal sealed record Revocation(string ManifestId, long Seq, string Artifact);

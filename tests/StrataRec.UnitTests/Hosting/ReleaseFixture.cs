@@ -83,12 +83,11 @@ internal sealed class ReleaseFixture : IDisposable
     public Task PublishAsync(string pipelineId, string manifestId) => Pointers.WritePointerAsync(pipelineId, "local", manifestId);
 
     /// <summary>A copy of <paramref name="manifest"/> with other release fields.</summary>
-    public static ReleaseManifest With(ReleaseManifest manifest, long? seq = null, long? minAcceptedSeq = null, IEnumerable<string>? requires = null) => new()
+    public static ReleaseManifest With(ReleaseManifest manifest, long? seq = null, IEnumerable<string>? requires = null) => new()
     {
         PipelineId = manifest.PipelineId,
         Environment = manifest.Environment,
         Seq = seq ?? manifest.Seq,
-        MinAcceptedSeq = minAcceptedSeq ?? manifest.MinAcceptedSeq,
         Previous = manifest.Previous,
         Requires = requires is null ? manifest.Requires : [.. manifest.Requires, .. requires],
         Artifacts = manifest.Artifacts,

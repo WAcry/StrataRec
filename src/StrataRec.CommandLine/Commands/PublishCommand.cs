@@ -156,7 +156,6 @@ internal static class PublishCommand
             return null;
         }
 
-        var floor = manifest.MinAcceptedSeq;
         if (pointed is { } last)
         {
             var (current, published) = last;
@@ -179,16 +178,6 @@ internal static class PublishCommand
                           "a rollback is a new build too (design 10.2)");
                 return null;
             }
-
-            floor = Math.Max(floor, published.MinAcceptedSeq);
-        }
-
-        if (manifest.Seq < floor)
-        {
-            diagnostics.Error("PUBLISH_REVOKED", Label(id), "/seq",
-                $"Sequence {manifest.Seq} is below min_accepted_seq {floor}: every node that saw it would refuse the manifest as revoked.",
-                $"build the manifest with --seq {floor} or higher");
-            return null;
         }
 
         if (reference.Kind == ConfigRefKind.ManifestFile)

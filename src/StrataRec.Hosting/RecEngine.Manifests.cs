@@ -21,12 +21,6 @@ public enum ManifestLoadStatus
     Stale,
 
     /// <summary>
-    /// Its <c>seq</c> is below the highest <c>min_accepted_seq</c> the engine has seen for its pipeline: the release
-    /// controller withdrew it (design 10.2, 10.3 item 6). The current plan stays.
-    /// </summary>
-    Revoked,
-
-    /// <summary>
     /// It requires capabilities this binary does not provide (design 10.4 item 2), listed in
     /// <see cref="ManifestLoadResult.MissingCapabilities"/>. The current plan stays, and the node does not look for an older
     /// manifest itself: which release to serve instead is the controller's decision.
@@ -105,13 +99,8 @@ public sealed record ManifestLoadResult(
 
 public sealed partial class RecEngine
 {
-    /// <summary>Per pipeline, the highest <c>min_accepted_seq</c> of any manifest offered to the engine; under the lifecycle lock.</summary>
-    private readonly Dictionary<string, long> _minAcceptedSeq = new(StringComparer.Ordinal);
-
     /// <summary>
-    /// Loads a release manifest by the rules of a serving node (design 10.3, 10.4), in this order: the engine records the
-    /// manifest's <c>min_accepted_seq</c> (the highest one per pipeline, also from manifests it does not apply); a manifest
-    /// whose <c>seq</c> is below it is <see cref="ManifestLoadStatus.Revoked"/>; one not newer than what its pipeline serves
+    /// Loads a release manifest by the rules of a serving node (design 10.3, 10.4), in this order: one not newer than what its pipeline serves
     /// (the same manifest included) is <see cref="ManifestLoadStatus.Stale"/>; one that requires capabilities the binary
     /// lacks is <see cref="ManifestLoadStatus.Incompatible"/>. None of these downloads or compiles anything. Otherwise the
     /// artifacts are read from <paramref name="store"/> and the plan is loaded as by <see cref="LoadAsync"/> at the
@@ -138,7 +127,6 @@ public sealed partial class RecEngine
         cancellationToken.ThrowIfCancellationRequested();
         var pipelineId = manifest.PipelineId;
         var sequence = manifest.Seq;
-        long floor;
         long? served;
         lock (_publishGate)
         {
@@ -147,19 +135,10 @@ public sealed partial class RecEngine
                 throw Disposed(null);
             }
 
-            floor = _minAcceptedSeq.TryGetValue(pipelineId, out var seen) && seen > manifest.MinAcceptedSeq ? seen : manifest.MinAcceptedSeq;
-            _minAcceptedSeq[pipelineId] = floor;
             served = _pipelines.TryGetValue(pipelineId, out var current) ? current.Sequence : null;
         }
 
         var diagnostics = new DiagnosticBag();
-        if (sequence < floor)
-        {
-            Revoked(diagnostics, manifestId, pipelineId, sequence, floor);
-            PlanLoadTelemetry.Revoked(_logger, pipelineId, manifestId, sequence, floor);
-            return Result(manifest, manifestId, ManifestLoadStatus.Revoked, diagnostics, TimeSpan.Zero, RevokedReason(sequence, floor));
-        }
-
         if (served is { } servedSequence && servedSequence >= sequence)
         {
             diagnostics.Info("PLAN_STALE", ManifestBuilder.Label(manifestId), "/seq",
@@ -191,7 +170,7 @@ public sealed partial class RecEngine
             }
 
             // Compile and load, as any plan; it logs and counts its own outcome.
-            loaded = await LoadWithBindingsAsync(request, sequence, released: true, load, cancellationToken).ConfigureAwait(false);
+            loaded = await LoadWithBindingsAsync(request, sequence, load, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (DisposedDuring(load, cancellationToken))
         {
@@ -207,7 +186,6 @@ public sealed partial class RecEngine
         {
             { Applied: true } => (ManifestLoadStatus.Applied, (string?)null),
             { Stale: true } => (ManifestLoadStatus.Stale, StaleReason(pipelineId, ServedSequence(pipelineId) ?? sequence)),
-            { Revoked: true } => (ManifestLoadStatus.Revoked, RevokedReason(sequence, MinAcceptedSeq(pipelineId))),
             _ => (ManifestLoadStatus.Rejected, ManifestLoadResult.RejectedReason(diagnostics.Items)),
         };
         return Result(manifest, manifestId, status, diagnostics, loaded.CompileTime, reason);
@@ -227,21 +205,5 @@ public sealed partial class RecEngine
 
     private long? ServedSequence(string pipelineId) => _pipelines.TryGetValue(pipelineId, out var served) ? served.Sequence : null;
 
-    private long MinAcceptedSeq(string pipelineId)
-    {
-        lock (_publishGate)
-        {
-            return _minAcceptedSeq.TryGetValue(pipelineId, out var floor) ? floor : 0;
-        }
-    }
-
     private static string StaleReason(string pipelineId, long served) => $"pipeline '{pipelineId}' already serves sequence {served}";
-
-    private static string RevokedReason(long sequence, long floor) => $"sequence {sequence} is below min_accepted_seq {floor}";
-
-    /// <summary>The error of a revoked manifest: before it loads, or when a newer manifest revoked it while it loaded.</summary>
-    private static void Revoked(DiagnosticBag diagnostics, string manifestId, string pipelineId, long sequence, long floor) =>
-        diagnostics.Error("MANIFEST_REVOKED", ManifestBuilder.Label(manifestId), "/seq",
-            $"Sequence {sequence} is below min_accepted_seq {floor}, the highest a manifest of pipeline '{pipelineId}' has declared: the release controller revoked it.",
-            $"release the configuration again in a manifest with seq {floor} or higher (stratarec build --seq)");
 }

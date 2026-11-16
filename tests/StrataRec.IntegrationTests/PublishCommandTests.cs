@@ -117,9 +117,10 @@ public sealed class PublishCommandTests
     }
 
     /// <summary>
-    /// Without --seq, build makes the next release of what the store's pointer names (design 10.2): one more seq, the same
-    /// min_accepted_seq, and it as previous, which diff compares with; the same configuration is no new release, so build
-    /// and publish run again change nothing. A pointer build cannot read stops it, unless --seq says the number.
+    /// Without --seq, build makes the next release of what the store's pointer names (design 10.2): one more seq, and it as
+    /// previous, which diff compares with; the same configuration is no new release, so build and publish run again change
+    /// nothing, and a revocation published stays published, still listing what it revoked. A changed configuration is a
+    /// release that lists no revocations. A pointer build cannot read stops it, unless --seq says the number.
     /// </summary>
     [Fact]
     public async Task Build_WithoutSeq_IsTheNextReleaseOfWhatIsPublished()
@@ -127,32 +128,34 @@ public sealed class PublishCommandTests
         var root = ManifestStores.Workspace();
         var store = ManifestStores.NewStore();
         var (first, firstManifest) = await BuildNext(root, store);
-        Assert.Equal((1L, 0L, (string?)null), (firstManifest.Seq, firstManifest.MinAcceptedSeq, firstManifest.Previous));
+        Assert.Equal((1L, (string?)null), (firstManifest.Seq, firstManifest.Previous));
 
-        // Published with a floor, as a controller that revoked something would: the next release keeps it.
-        var flooredManifest = new ReleaseManifest
+        // Published as a revocation of an experiment the release file no longer lists would be.
+        var revocationManifest = new ReleaseManifest
         {
-            PipelineId = firstManifest.PipelineId, Environment = firstManifest.Environment, Seq = 3, MinAcceptedSeq = 3, Previous = first,
+            PipelineId = firstManifest.PipelineId, Environment = firstManifest.Environment, Seq = 3, Previous = first,
             Requires = firstManifest.Requires, Artifacts = firstManifest.Artifacts, Experiments = firstManifest.Experiments,
+            Revoked = new() { ["exp_gone"] = new RevokedExperiment { Artifact = "sha256:" + new string('0', 64), Seq = 3 } },
         };
-        var flooredId = await ManifestStores.PutAsync(store, flooredManifest);
-        Assert.Equal(0, (await Publish(store, flooredId)).Code);
+        var revocationId = await ManifestStores.PutAsync(store, revocationManifest);
+        Assert.Equal(0, (await Publish(store, revocationId)).Code);
 
         // The same configuration: the published manifest, and publishing it changes nothing.
         var errors = new StringWriter();
         var file = Path.Combine(store, "again.json");
         Assert.Equal(0, await BuildCommand.RunAsync(Tool.Environment, root, "local", null, store, file, null, TextWriter.Null, CancellationToken.None, errors));
-        Assert.Equal(flooredId, ManifestBuilder.ContentId(ManifestStores.Read(file)));
+        Assert.Equal(revocationId, ManifestBuilder.ContentId(ManifestStores.Read(file)));
         Assert.Contains("(seq 3, ", errors.ToString());
         Assert.Contains(": unchanged, the release the pointer names has this configuration", errors.ToString());
         Assert.DoesNotContain("publish it with", errors.ToString()); // it is
         Assert.Contains("is published already", (await Publish(store, file)).Output);
 
-        // Changed: seq 4, the floor kept, the published manifest as previous; diff --to compares with it.
+        // Changed: seq 4, the published manifest as previous (diff --to compares with it), no revocations.
         var path = Path.Combine(root, "pipelines", "home_feed.jsonc");
         File.WriteAllText(path, System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(path), "\"final_top_k\": \\d+,", "\"final_top_k\": 7,"));
         var (next, nextManifest) = await BuildNext(root, store);
-        Assert.Equal((4L, 3L, flooredId), (nextManifest.Seq, nextManifest.MinAcceptedSeq, nextManifest.Previous));
+        Assert.Equal((4L, revocationId), (nextManifest.Seq, nextManifest.Previous));
+        Assert.Empty(nextManifest.Revoked);
         Assert.Equal(0, (await Publish(store, next)).Code);
         var diff = new StringWriter();
         Assert.Equal(1, await StrataRecCommandLine.InvokeAsync(["diff", "--to", next, "-s", store], Tool.Environment, diff, TextWriter.Null, TestContext.Current.CancellationToken));
@@ -223,7 +226,7 @@ public sealed class PublishCommandTests
 
     private static ReleaseManifest Renumbered(ReleaseManifest manifest, string environment, long seq) => new()
     {
-        PipelineId = manifest.PipelineId, Environment = environment, Seq = seq, MinAcceptedSeq = manifest.MinAcceptedSeq, Previous = manifest.Previous,
+        PipelineId = manifest.PipelineId, Environment = environment, Seq = seq, Previous = manifest.Previous,
         Requires = manifest.Requires, Artifacts = manifest.Artifacts, Experiments = manifest.Experiments,
     };
 

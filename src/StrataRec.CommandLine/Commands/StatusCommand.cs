@@ -9,7 +9,7 @@ namespace StrataRec.CommandLine.Commands;
 /// <summary>
 /// <c>stratarec status</c>: what a store publishes, as nodes serving releases will load it. For every pointer, the
 /// manifest it names (its sequence, its floor, and whether it is a revocation), the experiments it releases and the
-/// experiments a stop in force removed (<see cref="PublishedRelease.RevokedAsync"/>), which <c>build</c> keeps out.
+/// experiments a stop in force removed (<see cref="ReleaseManifest.Revoked"/>), which <c>build</c> keeps out.
 /// </summary>
 /// <remarks>
 /// It reads the store only: what nodes applied is theirs to report (design 10.3 step 5). A pointer that cannot be read is
@@ -85,15 +85,7 @@ internal static class StatusCommand
                 .ConfigureAwait(false);
             if (read && pointed is { } published)
             {
-                var (revoked, unread) = await PublishedRelease.RevokedAsync(store, published.Id, published.Manifest, cancellationToken).ConfigureAwait(false);
-                if (unread is not null)
-                {
-                    diagnostics.Warning("REVOCATIONS_UNKNOWN", "manifest:" + published.Id, "/previous",
-                        $"The manifest revokes earlier ones, and manifest '{unread}' in its history cannot be read: what the revocations before it removed is not known.",
-                        "restore that manifest to the store");
-                }
-
-                releases.Add(new Release(pipeline, env, path, published.Id, published.Manifest, revoked));
+                releases.Add(new Release(pipeline, env, path, published.Id, published.Manifest));
             }
         }
 
@@ -133,23 +125,21 @@ internal static class StatusCommand
         {
             var manifest = release.Manifest;
             output.WriteLine($"{release.PipelineId} ({release.Environment}): {release.Id}");
-            output.WriteLine(PublishedRelease.IsRevocation(manifest)
-                ? $"  seq          {manifest.Seq}, min_accepted_seq {manifest.MinAcceptedSeq}: a revocation, nodes refuse every earlier manifest"
-                : $"  seq          {manifest.Seq}, min_accepted_seq {manifest.MinAcceptedSeq}");
+            output.WriteLine($"  seq          {manifest.Seq}");
             if (manifest.Previous is { } previous)
             {
                 output.WriteLine($"  previous     {previous}");
             }
 
             output.WriteLine($"  experiments  {Experiments(manifest)}");
-            if (release.Revoked.Count > 0)
+            if (manifest.Revoked.Count > 0)
             {
-                var names = new List<string>(release.Revoked.Keys);
+                var names = new List<string>(manifest.Revoked.Keys);
                 names.Sort(StringComparer.Ordinal);
                 var revoked = new List<string>(names.Count);
                 foreach (var name in names)
                 {
-                    revoked.Add($"{name} (by seq {release.Revoked[name].Seq})");
+                    revoked.Add($"{name} (by seq {manifest.Revoked[name].Seq})");
                 }
 
                 output.WriteLine($"  revoked      {string.Join(", ", revoked)}: 'stratarec build' keeps them out until they change");
@@ -190,8 +180,6 @@ internal static class StatusCommand
             json.WriteString("pointer", release.Pointer);
             json.WriteString("manifest", release.Id);
             json.WriteNumber("seq", manifest.Seq);
-            json.WriteNumber("min_accepted_seq", manifest.MinAcceptedSeq);
-            json.WriteBoolean("revocation", PublishedRelease.IsRevocation(manifest));
             if (manifest.Previous is { } previous)
             {
                 json.WriteString("previous", previous);
@@ -213,15 +201,14 @@ internal static class StatusCommand
             }
 
             json.WriteEndObject();
-            names = new List<string>(release.Revoked.Keys);
+            names = new List<string>(manifest.Revoked.Keys);
             names.Sort(StringComparer.Ordinal);
             json.WriteStartArray("revoked");
             foreach (var name in names)
             {
-                var revocation = release.Revoked[name];
+                var revocation = manifest.Revoked[name];
                 json.WriteStartObject();
                 json.WriteString("experiment", name);
-                json.WriteString("manifest", revocation.ManifestId);
                 json.WriteNumber("seq", revocation.Seq);
                 json.WriteString("artifact", revocation.Artifact);
                 json.WriteEndObject();
@@ -235,6 +222,5 @@ internal static class StatusCommand
         json.WriteEndObject();
     }
 
-    private sealed record Release(
-        string PipelineId, string Environment, string Pointer, string Id, ReleaseManifest Manifest, Dictionary<string, Revocation> Revoked);
+    private sealed record Release(string PipelineId, string Environment, string Pointer, string Id, ReleaseManifest Manifest);
 }

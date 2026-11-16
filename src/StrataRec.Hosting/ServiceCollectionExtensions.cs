@@ -65,7 +65,7 @@ public sealed class StrataRecOptions
 /// <remarks>
 /// <para>Every <see cref="PollInterval"/> the host reads each pipeline's pointer, and loads a manifest id it has not tried
 /// yet (<see cref="RecEngine.LoadManifestAsync"/>). An outcome that trying again would not change is final for that id:
-/// applied, stale, revoked, incompatible. A manifest that was rejected or could not be read is tried again after
+/// applied, stale, incompatible. A manifest that was rejected or could not be read is tried again after
 /// <see cref="PollInterval"/>, then after twice as long, and so on up to <see cref="MaxRetryInterval"/>; a pointer that could
 /// not be read is read again on the same schedule. A new id starts over.</para>
 /// <para>Each pipeline is polled on its own, so a slow load or an unresponsive pointer of one pipeline never delays
@@ -121,7 +121,7 @@ public static class ServiceCollectionExtensions
     /// host (a bare service provider) loads the workspace itself with <see cref="LoadWorkspaceAsync"/>.</para>
     /// <para>The engine serves the workspace as it was at startup. With <see cref="StrataRecOptions.Releases"/> it serves
     /// release manifests instead (design 10.3): it loads the manifest each pipeline's pointer names in the same starting
-    /// phase, and a pipeline without one, or whose manifest is not applied (unreadable, incompatible, revoked, rejected), or
+    /// phase, and a pipeline without one, or whose manifest is not applied (unreadable, incompatible, rejected), or
     /// whose plan falls back to a pipeline not served, stops the host with a <see cref="ConfigException"/> that gives each
     /// pipeline's status. Once the host has started, it polls the pointers in the background and swaps in each new manifest
     /// that loads (<see cref="ReleaseOptions"/>). The container must then hold an <see cref="IManifestSource"/> and an

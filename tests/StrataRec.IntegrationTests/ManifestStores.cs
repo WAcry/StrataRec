@@ -58,11 +58,11 @@ internal static class ManifestStores
         PipelineId = manifest.PipelineId,
         Environment = manifest.Environment,
         Seq = manifest.Seq + 1,
-        MinAcceptedSeq = manifest.MinAcceptedSeq,
         Previous = previous,
         Requires = manifest.Requires,
         Artifacts = manifest.Artifacts,
         Experiments = manifest.Experiments,
+        Revoked = manifest.Revoked,
     };
 
     /// <summary>The errors of a <c>--format json</c> diagnostics report: code, artifact, pointer and hint.</summary>
