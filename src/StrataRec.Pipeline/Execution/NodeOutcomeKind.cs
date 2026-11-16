@@ -1,5 +1,15 @@
 namespace StrataRec.Pipeline.Execution;
 
+/// <summary>What happened at one timeline position (design 5.6).</summary>
+/// <param name="NodeId">Primary node id at the position.</param>
+/// <param name="Kind">Final outcome of the position.</param>
+/// <param name="Detail">Reason for skip/failure/degradation.</param>
+/// <param name="ProducedBy">Node that produced the outputs (the fallback when it ran), or null.</param>
+/// <param name="DurationMs">Wall time spent at the position.</param>
+/// <param name="RowsIn">Live rows before the node.</param>
+/// <param name="RowsOut">Live rows after the node.</param>
+public readonly record struct NodeOutcome(string NodeId, NodeOutcomeKind Kind, string? Detail, string? ProducedBy, double DurationMs, int RowsIn, int RowsOut);
+
 /// <summary>
 /// What happened at one timeline position (design 5.6). One vocabulary everywhere a node outcome appears: results and
 /// traces, the <c>stratarec.outcome</c> tag of metrics and spans, log envelopes, recordings and replay reports, all spelled

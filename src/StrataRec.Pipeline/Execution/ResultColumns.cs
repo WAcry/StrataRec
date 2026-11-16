@@ -3,10 +3,13 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.Pipeline.Execution;
 
+/// <summary>A returned result row.</summary>
+public sealed record RankedItem(EntityKey Id, int Rank, IReadOnlyDictionary<string, ScalarValue> Columns);
+
 /// <summary>
 /// A result's items column by column: the ids in rank order, and each output column's values in the same order. The
-/// form a result is built in; <see cref="PipelineResult.Items"/> (and <c>RecResult.Items</c>) are its rows, a dictionary
-/// per item, made the first time they are read.
+/// form a result is built in; <c>RecResult.Items</c> are its rows (<see cref="Rows"/>), a dictionary per item, made the
+/// first time they are read.
 /// </summary>
 /// <remarks>
 /// Most callers read <c>Items</c>: a result returns far fewer rows than were recalled, and a dictionary per row is the

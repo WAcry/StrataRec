@@ -19,8 +19,8 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.Pipeline.Execution;
 
-/// <summary>One pipeline execution request, already validated and assigned by the host layer.</summary>
-public sealed class PipelineRequest
+/// <summary>One run of a plan as <c>RecEngine</c> asks for it, with the request's arms already decided.</summary>
+internal sealed class PipelineRequest
 {
     public required string RequestId { get; init; }
 
@@ -51,9 +51,9 @@ public sealed class PipelineRequest
 
     /// <summary>
     /// Receives the run's recording on every exit (design 13.4): with the result when the run returns, and before the
-    /// exception propagates when it is aborted (cancelled by the caller, or a defect), so an aborted run can be replayed
-    /// too. Setting it records the run. Called once, on the request's thread; an exception it throws is reported as an
-    /// event and does not change the run's outcome.
+    /// exception propagates when it is aborted (cancelled by the caller, or a defect), so the engine can still deliver the
+    /// request's bundle (<c>DebugOptions.OnRecording</c>). Setting it records the run. Called once, on the request's
+    /// thread; an exception it throws is reported as an event and does not change the run's outcome.
     /// </summary>
     /// <remarks>
     /// An aborted run's recording is a snapshot taken at the abort: calls still in flight are <c>outstanding</c>, and what
@@ -88,21 +88,8 @@ public sealed class PipelineRequest
     public static long DefaultSeed(string requestId) => unchecked((long)StableHash.Hash(StableHash.SeedFromSalt(requestId)));
 }
 
-/// <summary>What happened at one timeline position (design 5.6).</summary>
-/// <param name="NodeId">Primary node id at the position.</param>
-/// <param name="Kind">Final outcome of the position.</param>
-/// <param name="Detail">Reason for skip/failure/degradation.</param>
-/// <param name="ProducedBy">Node that produced the outputs (the fallback when it ran), or null.</param>
-/// <param name="DurationMs">Wall time spent at the position.</param>
-/// <param name="RowsIn">Live rows before the node.</param>
-/// <param name="RowsOut">Live rows after the node.</param>
-public readonly record struct NodeOutcome(string NodeId, NodeOutcomeKind Kind, string? Detail, string? ProducedBy, double DurationMs, int RowsIn, int RowsOut);
-
-/// <summary>A returned result row.</summary>
-public sealed record RankedItem(EntityKey Id, int Rank, IReadOnlyDictionary<string, ScalarValue> Columns);
-
-/// <summary>Result of one pipeline execution.</summary>
-public sealed class PipelineResult
+/// <summary>Result of one run (<see cref="PipelineExecutor"/>); <c>RecEngine</c> turns it into the request's result.</summary>
+internal sealed class PipelineResult
 {
     public required bool Succeeded { get; init; }
 
@@ -263,11 +250,15 @@ internal sealed class RequestState
 /// CPU work runs on the request's logical thread; concurrency comes from overlapping I/O (design 5.4).
 /// </summary>
 /// <remarks>
-/// Observability (design 13): node, source, model, column and memory metrics go to <see cref="StrataRecMetrics"/>.
+/// <para>Internal: <c>RecEngine</c> is the one host API (design 3.4). It owns what a run needs around it (the plan's
+/// binding lease, assignment, the fallback pipeline, bundles, the request span and request-level metrics), which a
+/// second, lower-level way to run plans would have had to repeat or leave out. Tests reach the executor through
+/// <c>InternalsVisibleTo</c>.</para>
+/// <para>Observability (design 13): node, source, model, column and memory metrics go to <see cref="StrataRecMetrics"/>.
 /// Node and I/O spans are created only under a recorded request span (<see cref="StrataRecTracing.IsRecording"/>),
-/// which <c>RecEngine</c> starts; request-level metrics are recorded there too.
+/// which <c>RecEngine</c> starts; request-level metrics are recorded there too.</para>
 /// </remarks>
-public sealed class PipelineExecutor
+internal sealed class PipelineExecutor
 {
     private readonly IBufferPool _pool;
     private readonly Logging.LogPipeline? _logs;

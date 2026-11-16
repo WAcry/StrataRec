@@ -21,6 +21,9 @@
     <!-- The experiment compiler assigns a plan's trigger sites (TimelineSlot.SiteExperiments, ParamExperiments) before the
          plan is built; those setters are internal so a plan cannot be changed once it is shared. -->
     <InternalsVisibleTo Include="StrataRec.Experiments" />
+    <!-- The executor layer (PipelineExecutor, PipelineRequest, PipelineResult, RunReplay, ReplayJson) is internal: hosts
+         run pipelines through RecEngine, the one host API, and tests reach the executor directly. -->
+    <InternalsVisibleTo Include="StrataRec.Hosting" />
     <InternalsVisibleTo Include="StrataRec.UnitTests" />
     <InternalsVisibleTo Include="StrataRec.IntegrationTests" />
     <InternalsVisibleTo Include="StrataRec.Benchmarks" />

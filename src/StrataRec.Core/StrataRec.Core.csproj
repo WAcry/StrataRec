@@ -13,6 +13,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The engine starts each request's span (StrataRecTracing.StartRequest); nothing else runs a pipeline. -->
+    <InternalsVisibleTo Include="StrataRec.Hosting" />
     <InternalsVisibleTo Include="StrataRec.UnitTests" />
     <InternalsVisibleTo Include="StrataRec.IntegrationTests" />
     <InternalsVisibleTo Include="StrataRec.Benchmarks" />

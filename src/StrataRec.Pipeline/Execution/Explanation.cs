@@ -123,7 +123,7 @@ public sealed class RunExplanation
 }
 
 /// <summary>
-/// The rules for the ids a request asks to explain (<see cref="PipelineRequest.ExplainIds"/>), in one place for the engine,
+/// The rules for the ids a request asks to explain (<c>DebugOptions.ExplainIds</c>), in one place for the engine,
 /// which rejects a request that breaks them before anything runs, and for the tools that parse ids from text.
 /// </summary>
 public static class ExplainTargets

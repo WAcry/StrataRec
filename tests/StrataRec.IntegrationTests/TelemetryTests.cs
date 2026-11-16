@@ -396,7 +396,7 @@ public sealed class MetricsTests
 
     internal static (RecEngine Engine, ExecutionPlan Plan) LoadEngine(HomeFeedTestHost host, PipelineExecutor? executor = null)
     {
-        var engine = new RecEngine(host.Environment, executor: executor);
+        var engine = executor is null ? new RecEngine(host.Environment) : new RecEngine(host.Environment, executor);
         var load = engine.Load(host.Request);
         Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
         Assert.True(engine.TryGetPipeline("home_feed", out var loaded));

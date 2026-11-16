@@ -78,7 +78,9 @@ public sealed class ConfigOverrideTests
         var host = HomeFeedTestHost.Load();
         var sink = new InMemoryLogSink();
         await using var logs = new LogPipeline(sink);
-        var (engine, _) = MetricsTests.LoadEngine(host, new PipelineExecutor(logs: logs));
+        await using var engine = new RecEngine(host.Environment, logs: logs);
+        var load = engine.Load(host.Request);
+        Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
         var patch = """{ "params": { "final_top_k": 3 } }""";
 
         var silent = await engine.ExecuteAsync(Request("ov", null, Override(patch)), TestContext.Current.CancellationToken);

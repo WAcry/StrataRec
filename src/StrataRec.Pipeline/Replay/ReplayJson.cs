@@ -10,27 +10,8 @@ using StrataRec.Logging;
 
 namespace StrataRec.Pipeline.Replay;
 
-/// <summary>A replay bundle that cannot be used: where it is wrong (a JSON pointer into the bundle) and how to fix it.</summary>
-public sealed class ReplayBundleException : Exception
-{
-    public ReplayBundleException(string pointer, string message, string? hint = null)
-        : base(pointer.Length == 0 ? message : $"{pointer}: {message}")
-    {
-        Pointer = pointer;
-        Reason = message;
-        Hint = hint;
-    }
-
-    /// <summary>RFC 6901 pointer into the bundle.</summary>
-    public string Pointer { get; }
-
-    public string Reason { get; }
-
-    public string? Hint { get; }
-}
-
 /// <summary>Spellings used in bundles for node attempt timings (<see cref="ReplayAttemptRecord.Timing"/>).</summary>
-public static class ReplayTiming
+internal static class ReplayTiming
 {
     /// <summary>The attempt started and finished (successfully or not) within its budget.</summary>
     public const string Ran = "ran";
@@ -49,7 +30,7 @@ public static class ReplayTiming
 /// <c>"-Infinity"</c>) where a log writes null, because a replay must see what the request saw. A value is always read
 /// with the type recorded next to it. Readers throw <see cref="ReplayBundleException"/> with the pointer of the bad value.
 /// </summary>
-public static class ReplayJson
+internal static class ReplayJson
 {
     /// <summary>The type spelling of a value's kind, for a value without a declared type (e.g. an undeclared input).</summary>
     public static ColumnType TypeOf(in ScalarValue value) => value.Kind switch

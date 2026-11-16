@@ -117,17 +117,18 @@ public static class StrataRecTracing
     public const string RequestSpanName = "stratarec.request";
 
     /// <summary>
-    /// True inside a recorded StrataRec span. Hosts that call the pipeline executor directly can start
-    /// <see cref="StartRequest"/> around the call to get node spans.
+    /// True inside a recorded StrataRec span: within a request whose span (<see cref="RequestSpanName"/>, which the engine
+    /// starts) the host's sampler kept.
     /// </summary>
     public static bool IsRecording =>
         Activity.Current is { Recorded: true } current && ReferenceEquals(current.Source, StrataRecTelemetry.ActivitySource);
 
     /// <summary>
     /// Starts the request span; null when nobody listens or the sampler drops it. Starting it costs a listener check
-    /// otherwise, so call it once per request, not per node.
+    /// otherwise, so call it once per request, not per node. Internal: the engine starts it for every request it runs, and
+    /// nothing else runs a pipeline.
     /// </summary>
-    public static Activity? StartRequest(string pipelineId, string requestId)
+    internal static Activity? StartRequest(string pipelineId, string requestId)
     {
         var activity = StrataRecTelemetry.ActivitySource.StartActivity(RequestSpanName, ActivityKind.Internal);
         if (activity is { IsAllDataRequested: true })

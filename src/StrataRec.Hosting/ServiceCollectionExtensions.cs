@@ -153,9 +153,10 @@ public static class ServiceCollectionExtensions
                 environment = environment with { BaseDirectory = root };
             }
 
+            // The log pipeline is resolved first, so the container disposes it after the engine (in reverse order of creation).
+            var logs = provider.GetService<Logging.LogPipeline>();
             var loggerFactory = provider.GetService<ILoggerFactory>();
-            var executor = new Pipeline.Execution.PipelineExecutor(logs: provider.GetService<Logging.LogPipeline>(), loggerFactory: loggerFactory);
-            return new RecEngine(environment, provider.GetService<IAssignmentProvider>(), executor, loggerFactory,
+            return new RecEngine(environment, provider.GetService<IAssignmentProvider>(), logs, loggerFactory,
                 bindingOptions: new BindingHostOptions { Secrets = provider.GetService<ISecretResolver>() });
         });
         services.AddSingleton<IRecEngine>(provider => provider.GetRequiredService<RecEngine>());

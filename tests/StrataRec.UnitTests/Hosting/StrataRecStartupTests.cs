@@ -104,6 +104,34 @@ public sealed class StrataRecStartupTests : IDisposable
         await host.StopAsync(TestContext.Current.CancellationToken);
     }
 
+    /// <summary>
+    /// The container's log pipeline is the engine's (<c>RecEngine</c> takes it, the executor it ran with being internal):
+    /// a served request's tap batch reaches the sink, and disposing the host drains it.
+    /// </summary>
+    [Fact]
+    public async Task ALogSink_ReceivesTheTapsOfServedRequests()
+    {
+        Workspace(Path.Combine(_contentRoot, "config"), tap: true);
+        var sink = new StrataRec.Logging.InMemoryLogSink();
+        using (var host = Build(new CapturedLog(), options =>
+               {
+                   options.ConfigRoot = "config";
+                   options.LogSink = sink;
+               }))
+        {
+            await host.StartAsync(TestContext.Current.CancellationToken);
+            var result = await host.Services.GetRequiredService<IRecEngine>().ExecuteAsync(new RecRequest
+            {
+                PipelineId = "p", RequestId = "r", Inputs = new StrataRec.Core.Values.RequestInputs().Set("user_id", 1L), Deadline = TimeSpan.FromSeconds(30),
+            }, TestContext.Current.CancellationToken);
+            Assert.True(result.Succeeded, result.Error);
+            await host.StopAsync(TestContext.Current.CancellationToken);
+        }
+
+        var batch = Assert.Single(sink.Snapshot());
+        Assert.Equal(("served", "r"), (batch.TapId, batch.RequestId));
+    }
+
     private IHost Build(CapturedLog log, Action<StrataRecOptions> configure, bool concurrently = false, LaterService? later = null)
     {
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
@@ -165,9 +193,19 @@ public sealed class StrataRecStartupTests : IDisposable
         }
     }
 
-    /// <summary>One pipeline <c>p</c>: a source reading a data file, then a TopK (or another operator with its config).</summary>
-    private static void Workspace(string root, string data = """{ "items": [8, 9] }""", string topK = "\"k\": 2", string op = "TopK@1", string client = "memory_list@1")
+    /// <summary>
+    /// One pipeline <c>p</c>: a source reading a data file, then a TopK (or another operator with its config); with
+    /// <paramref name="tap"/>, a <c>served</c> tap logging its output's <c>source</c> column for every request.
+    /// </summary>
+    private static void Workspace(
+        string root, string data = """{ "items": [8, 9] }""", string topK = "\"k\": 2", string op = "TopK@1", string client = "memory_list@1", bool tap = false)
     {
+        var taps = tap
+            ? """
+              "funnel_groups": { "all": { "key": ["ctx.request.id"], "rate": 1.0 } },
+              "log_taps": { "served": { "group": "all", "delivery": "durable", "attach": { "output": true }, "columns": { "source": "col.recall.primary_source" } } },
+              """
+            : string.Empty;
         foreach (var dir in new[] { "catalog", "bindings", "pipelines", "fixtures" })
         {
             Directory.CreateDirectory(Path.Combine(root, dir));
@@ -186,7 +224,8 @@ public sealed class StrataRecStartupTests : IDisposable
               "nodes": {
                 "recall": { "order": 100, "op": "MultiSourceRecall@1", "config": { "quotas_param": "quotas" } },
                 "top": { "order": 200, "op": "{{op}}", "config": { "score_col": "entity_id", {{topK}} } } },
-              "output": { "limit_param": "k", "columns": { "source": "col.recall.primary_source" } } }
+              {{taps}}
+              "output":{ "limit_param": "k", "columns": { "source": "col.recall.primary_source" } } }
             """);
     }
 

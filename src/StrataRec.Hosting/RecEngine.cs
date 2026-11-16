@@ -342,9 +342,10 @@ public sealed record PlanLoadResult(
 /// ended, so the instances of a replaced plan are disposed only after its last request, and the calls those requests
 /// abandoned at a timeout, returned. A request that finds its plan's lease retired reads the current plan again; after a
 /// disposal it throws <see cref="ObjectDisposedException"/>.</para>
-/// <para>Observability (design 13): each request gets one span (<see cref="StrataRecTracing.StartRequest"/>) and
-/// request-level metrics per pipeline and per assigned arm; plan loads are metrics and event logs. Everything is
-/// optional: without listeners or a logger factory the engine records nothing and allocates nothing for it.</para>
+/// <para>Observability (design 13): each request gets one span (<see cref="StrataRecTracing.RequestSpanName"/>), under
+/// which its nodes and external calls get theirs when it is recorded, and request-level metrics per pipeline and per
+/// assigned arm; plan loads are metrics and event logs. Everything is optional: without listeners or a logger factory
+/// the engine records nothing and allocates nothing for it.</para>
 /// </remarks>
 public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposable
 {
@@ -358,8 +359,14 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     private readonly bool _ownsBindings;
     private bool _disposed;
 
-    /// <param name="executor">Runs the plans; defaults to one sharing <paramref name="loggerFactory"/>.</param>
-    /// <param name="loggerFactory">Receives plan load events (design 13.2); null logs nothing.</param>
+    /// <param name="logs">
+    /// Where served requests' tap batches and trigger records go (design 8.6); null writes no persistent logs. Requests that
+    /// capture their logs, try a configuration override or replay a bundle never write to it. The caller owns it and
+    /// disposes it after the engine, draining its durable batches (design 8.6 item 4);
+    /// <see cref="ServiceCollectionExtensions.AddStrataRec"/> leaves that to the container.
+    /// </param>
+    /// <param name="loggerFactory">Receives plan load events, and windowed summaries of request-level failures and of
+    /// dependency health changes (design 13.2); null logs nothing.</param>
     /// <param name="bindings">Hosts what the plans bind (tables, clients, connectors); null creates one the engine owns and
     /// disposes. A host passed in is the caller's to dispose (it may serve several engines), with its own options.</param>
     /// <param name="bindingOptions">Options of the host the engine creates: its secret store (design 6.4), load and
@@ -367,7 +374,19 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     public RecEngine(
         PlanEnvironment? environment = null,
         IAssignmentProvider? assignmentProvider = null,
-        PipelineExecutor? executor = null,
+        Logging.LogPipeline? logs = null,
+        ILoggerFactory? loggerFactory = null,
+        BindingHost? bindings = null,
+        BindingHostOptions? bindingOptions = null)
+        : this(environment, new PipelineExecutor(logs: logs, loggerFactory: loggerFactory), assignmentProvider, loggerFactory, bindings, bindingOptions)
+    {
+    }
+
+    /// <summary>With an executor of the caller's: a test's own buffer pool, or an event log it flushes by hand.</summary>
+    internal RecEngine(
+        PlanEnvironment? environment,
+        PipelineExecutor executor,
+        IAssignmentProvider? assignmentProvider = null,
         ILoggerFactory? loggerFactory = null,
         BindingHost? bindings = null,
         BindingHostOptions? bindingOptions = null)
@@ -379,7 +398,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
 
         Environment = environment ?? new PlanEnvironment();
         _assignmentProvider = assignmentProvider;
-        _executor = executor ?? new PipelineExecutor(loggerFactory: loggerFactory);
+        _executor = executor;
         _logger = loggerFactory?.CreateLogger<RecEngine>() ?? NullLogger<RecEngine>.Instance;
         _ownsBindings = bindings is null;
         Bindings = bindings ?? new BindingHost(bindingOptions, loggerFactory);
