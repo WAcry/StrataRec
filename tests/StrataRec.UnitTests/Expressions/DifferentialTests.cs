@@ -599,19 +599,22 @@ public class DifferentialTests(ITestOutputHelper output)
 
         private K Pick(params K[] options) => options[random.Next(options.Length)];
 
+        /// <summary>A text value reads as a string (audit C3), so either stands where the other is wanted.</summary>
+        private static bool Reads(K value, K wanted) => value == wanted || (value, wanted) is (K.Text, K.Str) or (K.Str, K.Text);
+
         private string Leaf(K kind)
         {
             var candidates = new List<string>();
             if (rowLevel)
             {
-                candidates.AddRange(Columns.Where(c => c.Kind == kind).Select(c => c.Name));
+                candidates.AddRange(Columns.Where(c => Reads(c.Kind, kind)).Select(c => c.Name));
                 if (kind == K.Int)
                 {
                     candidates.Add("col.entity_id");
                 }
             }
 
-            candidates.AddRange(RequestValues.Where(c => c.Kind == kind).Select(c => c.Name));
+            candidates.AddRange(RequestValues.Where(c => Reads(c.Kind, kind)).Select(c => c.Name));
             var literal = kind switch
             {
                 K.Float => Pick("0.0", "1.0", "-2.5", "0.5", "1e-3", "100.0", "3.0", "-0.0"),

@@ -280,7 +280,7 @@ internal static class Lanes
     }
 }
 
-/// <summary><c>size(list)</c> and <c>size(text)</c> (code points).</summary>
+/// <summary><c>size(list)</c> and <c>size(string)</c> (code points).</summary>
 internal sealed class SizeInstr(TypeKind operandKind, ExprType type, Opnd operand) : Instr(type, operand)
 {
     public override void Execute(ref Frame f)
@@ -292,7 +292,7 @@ internal sealed class SizeInstr(TypeKind operandKind, ExprType type, Opnd operan
             return;
         }
 
-        if (operandKind == TypeKind.Text)
+        if (operandKind == TypeKind.String)
         {
             for (var i = 0; i < dst.Length; i++)
             {
@@ -316,7 +316,7 @@ internal sealed class SizeInstr(TypeKind operandKind, ExprType type, Opnd operan
     }
 }
 
-/// <summary><c>contains(list, x)</c> / <c>x in list</c> and <c>contains(text, s)</c>. A request-level int or string list
+/// <summary><c>contains(list, x)</c> / <c>x in list</c> and <c>contains(s, part)</c>. A request-level int or string list
 /// is sorted once per call and probed by binary search; bool and float lists, which hold attributes rather than ids, are
 /// scanned.</summary>
 internal sealed class ContainsInstr(TypeKind listKind, ExprType type, Opnd list, Opnd element) : Instr(type, list, element)

@@ -258,7 +258,7 @@ public class CompilerTests
     [InlineData("col.recall.primary_source + 'x'", ExpressionErrorCodes.TypeMismatch, 26)]
     [InlineData("dot(col.item.embedding, ctx.small)", ExpressionErrorCodes.TypeMismatch, 24)] // the second vector disagrees
     [InlineData("1.5 in col.tags_int", ExpressionErrorCodes.TypeMismatch, 0)]
-    [InlineData("size(col.recall.primary_source)", ExpressionErrorCodes.TypeMismatch, 5)]
+    [InlineData("size(col.score.final)", ExpressionErrorCodes.TypeMismatch, 5)]
     [InlineData("ctx.request.seed@fusion", ExpressionErrorCodes.UnknownName, 0)]
     [InlineData("let col = 1.0; col", ExpressionErrorCodes.InvalidLet, 4)]
     [InlineData("let size = 1.0; size", ExpressionErrorCodes.InvalidLet, 4)]

@@ -58,7 +58,7 @@ internal abstract class Instr
         TypeKind.Float => RegFile.F,
         TypeKind.Int => RegFile.I,
         TypeKind.Bool => RegFile.B,
-        TypeKind.String or TypeKind.Text => RegFile.S,
+        TypeKind.String => RegFile.S,
         _ => RegFile.None,
     };
 
@@ -412,7 +412,7 @@ internal sealed class ColumnInstr(Symbol symbol, ExprType type) : Instr(type)
                 break;
             }
 
-            case (TypeKind.Text, TextColumn c):
+            case (TypeKind.String, TextColumn c):
             {
                 var dst = OutS(ref f);
                 for (var i = 0; i < n; i++)

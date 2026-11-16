@@ -176,7 +176,8 @@ internal sealed class VectorProgram
             return result;
         }
 
-        private static bool IsDictColumn(IrNode node) => node.Op == IrOp.Column && node.Type.Kind == TypeKind.String;
+        /// <summary>A column stored dictionary-encoded (a string column; a text column reads as a string but is stored plainly).</summary>
+        private static bool IsDictColumn(IrNode node) => node.Op == IrOp.Column && node.Symbol.Type.Kind == StorageKind.String;
 
         private Instr Lower(IrNode node)
         {
@@ -362,8 +363,7 @@ internal static class DestinationWriter
             (TypeKind.Float, ScalarColumn<double> or ScalarColumn<float>) => true,
             (TypeKind.Int, ScalarColumn<long> or ScalarColumn<int> or ScalarColumn<double> or ScalarColumn<float>) => true,
             (TypeKind.Bool, ScalarColumn<bool>) => true,
-            (TypeKind.String, DictStringColumn) => true,
-            (TypeKind.Text, TextColumn) => true,
+            (TypeKind.String, DictStringColumn or TextColumn) => true,
             (TypeKind.Vector, VectorColumn v) => type.Dim == 0 || type.Dim == v.Dimension,
             (TypeKind.ListBool, ListColumn<bool>) => true,
             (TypeKind.ListInt, ListColumn<long> or ListColumn<int>) => true,

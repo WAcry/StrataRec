@@ -514,7 +514,6 @@ internal static class ValueAccess
             case TypeKind.Float when value.Kind == StorageKind.Float64:
             case TypeKind.Bool when value.Kind == StorageKind.Bool:
             case TypeKind.String when value.Kind == StorageKind.String:
-            case TypeKind.Text when value.Kind == StorageKind.Text:
             case TypeKind.Vector when value.Kind == StorageKind.Vector:
                 return value;
             case TypeKind.ListBool or TypeKind.ListInt or TypeKind.ListFloat or TypeKind.ListString
@@ -529,8 +528,6 @@ internal static class ValueAccess
                 return asInt;
             case TypeKind.String when value.Kind == StorageKind.Text:
                 return ScalarValue.FromString(value.AsString());
-            case TypeKind.Text when value.Kind == StorageKind.String:
-                return ScalarValue.FromText(value.AsString());
             default:
                 throw new InvalidOperationException($"'{name}' is declared {type} but holds a {value.Kind} value ({value}).");
         }
@@ -585,7 +582,7 @@ internal static class ValueAccess
             (TypeKind.Int, ScalarColumn<int> c) => ScalarValue.FromInt64(c[row]),
             (TypeKind.Bool, ScalarColumn<bool> c) => ScalarValue.FromBool(MemoryMarshal.AsBytes(c.Values.AsSpan(row, 1))[0] != 0),
             (TypeKind.String, DictStringColumn c) => ScalarValue.FromString(c.Get(row)),
-            (TypeKind.Text, TextColumn c) => ScalarValue.FromText(c.Get(row)),
+            (TypeKind.String, TextColumn c) => ScalarValue.FromString(c.Get(row)),
             (TypeKind.Vector, VectorColumn c) => ScalarValue.FromVector(c.Row(row).ToArray()),
             (TypeKind.ListBool, ListColumn<bool> c) => ColumnValues.GetList(c, row),
             (TypeKind.ListInt, ListColumn<long> or ListColumn<int>) => ColumnValues.GetList((ListColumn)buffer, row),

@@ -22,7 +22,7 @@ internal sealed class Binder
     private readonly List<ExpressionDiagnostic> _diagnostics;
     private readonly List<(string Name, IrNode Node)> _lets = new();
 
-    private const string StringOperations = "strings support ==, !=, 'in', startsWith() and endsWith() only";
+    private const string StringOperations = "strings support ==, !=, 'in', size(), contains(), startsWith() and endsWith()";
 
     /// <summary>
     /// True when the expression reads a name its scope declares with an error (<see cref="IExpressionScope.IsUnusable"/>):
@@ -438,7 +438,7 @@ internal sealed class Binder
         {
             hint = "bool is not a number; write 'cond ? 1.0 : 0.0' (design 7.4)";
         }
-        else if (op == "+" && (l.Type.Kind is TypeKind.String or TypeKind.Text || r.Type.Kind is TypeKind.String or TypeKind.Text))
+        else if (op == "+" && (l.Type.Kind == TypeKind.String || r.Type.Kind == TypeKind.String))
         {
             hint = "expressions do not build strings; use a Mustache template in the operator";
         }
@@ -473,10 +473,6 @@ internal sealed class Binder
         if (l.Type.Kind == TypeKind.String && r.Type.Kind == TypeKind.String)
         {
             hint = StringOperations;
-        }
-        else if (l.Type.Kind == TypeKind.Text || r.Type.Kind == TypeKind.Text)
-        {
-            hint = "text supports size() and contains() only";
         }
 
         // Equality compares numbers, bools and strings; ordering only numbers. An operand of a kind the operator never
@@ -714,13 +710,12 @@ internal sealed class Binder
                 return RequireKind(args[0], TypeKind.Vector, name, call.Args[0]) ? Lift(IrOp.L2Norm, TypeKind.Float, call, args[0]) : Poison(call);
 
             case "size":
-                if (args[0].Type.IsList || args[0].Type.Kind == TypeKind.Text)
+                if (args[0].Type.IsList || args[0].Type.Kind == TypeKind.String)
                 {
                     return Lift(IrOp.Size, TypeKind.Int, call, args[0]);
                 }
 
-                return Fail(ExpressionErrorCodes.TypeMismatch, $"'size' needs a list or text, got {args[0].Type}", call.Args[0],
-                    args[0].Type.Kind == TypeKind.String ? StringOperations : null);
+                return Fail(ExpressionErrorCodes.TypeMismatch, $"'size' needs a list or a string, got {args[0].Type}", call.Args[0]);
 
             case "contains":
                 return BindContains(args[0], call.Args[0], args[1], call.Args[1], call, isIn: false);
@@ -793,7 +788,7 @@ internal sealed class Binder
             }
         }
         else if ((list.Type.IsList && x.Type.Kind == ExprType.ElementKind(list.Type.Kind))
-                 || (!isIn && list.Type.Kind == TypeKind.Text && x.Type.Kind is TypeKind.String or TypeKind.Text))
+                 || (!isIn && list.Type.Kind == TypeKind.String && x.Type.Kind == TypeKind.String))
         {
             return Lift(IrOp.Contains, TypeKind.Bool, at, list, x);
         }
@@ -802,17 +797,17 @@ internal sealed class Binder
             return Lift(IrOp.Contains, TypeKind.Bool, at, list, ToFloat(x)); // an int64 compares as a float64, as in ==
         }
 
-        var hint = list.Type.Kind == TypeKind.Text && isIn ? "use contains(text, s) for substring tests" : null;
+        var hint = list.Type.Kind == TypeKind.String && isIn ? "'in' tests list membership; use contains(s, part) for a substring" : null;
         if (list.Type.Kind == TypeKind.ListInt && x.Type.Kind == TypeKind.Float)
         {
             hint = "the list holds int64 values; compare with an int64";
         }
 
-        // Not a list (or text, for contains) is the list's fault; a list of other elements is the value's.
-        var container = list.Type.IsList || (!isIn && list.Type.Kind == TypeKind.Text);
+        // Not a list (or a string, for contains) is the list's fault; a list of other elements is the value's.
+        var container = list.Type.IsList || (!isIn && list.Type.Kind == TypeKind.String);
         return FailAt(container ? xAt : listAt, ExpressionErrorCodes.TypeMismatch,
             isIn ? $"{what} needs a value and a list of the same element type, got {x.Type} in {list.Type}"
-                 : $"{what} needs (list, element) or (text, string), got {list.Type} and {x.Type}",
+                 : $"{what} needs (list, element) or (string, string), got {list.Type} and {x.Type}",
             at, hint);
     }
 
@@ -1068,8 +1063,7 @@ internal sealed class Binder
         StorageKind.Float32 or StorageKind.Float64 => actual.IsNumeric,
         StorageKind.Int32 or StorageKind.Int64 => actual.Kind == TypeKind.Int,
         StorageKind.Bool => actual.Kind == TypeKind.Bool,
-        StorageKind.String => actual.Kind == TypeKind.String,
-        StorageKind.Text => actual.Kind == TypeKind.Text,
+        StorageKind.String or StorageKind.Text => actual.Kind == TypeKind.String,
         StorageKind.Vector => actual.Kind == TypeKind.Vector && (expected.Dimension == 0 || actual.Dim == 0 || expected.Dimension == actual.Dim),
         StorageKind.List => actual.Kind == ExprType.FromColumnType(expected).Kind,
         _ => false,
@@ -1144,7 +1138,7 @@ internal sealed class Binder
         TypeKind.Float => "0.0",
         TypeKind.Int => "0",
         TypeKind.Bool => "false",
-        TypeKind.String or TypeKind.Text => "''",
+        TypeKind.String => "''",
         _ => null,
     };
 

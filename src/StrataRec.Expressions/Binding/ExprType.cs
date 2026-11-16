@@ -11,7 +11,6 @@ internal enum TypeKind : byte
     Int,
     Float,
     String,
-    Text,
     Vector,
 
     // Lists, by promoted element type (design 4.3: list<int32> reads as list<int64>, list<float32> as list<float64>).
@@ -80,7 +79,7 @@ internal readonly record struct ExprType(TypeKind Kind, bool Nullable, int Dim =
         StorageKind.Int64 => TypeKind.Int,
         StorageKind.Float64 => TypeKind.Float,
         StorageKind.String => TypeKind.String,
-        StorageKind.Text => TypeKind.Text,
+        StorageKind.Text => TypeKind.String, // text reads as string, as int32 reads as int64: storage, not a type of its own
         StorageKind.Vector => TypeKind.Vector,
         _ => TypeKind.Error,
     };
@@ -98,7 +97,6 @@ internal readonly record struct ExprType(TypeKind Kind, bool Nullable, int Dim =
             TypeKind.Int => StorageKind.Int64,
             TypeKind.Float => StorageKind.Float64,
             TypeKind.String => StorageKind.String,
-            TypeKind.Text => StorageKind.Text,
             TypeKind.Vector => StorageKind.Vector,
             _ => throw new InvalidOperationException($"Type {this} has no column representation."),
         };
@@ -113,7 +111,6 @@ internal readonly record struct ExprType(TypeKind Kind, bool Nullable, int Dim =
             TypeKind.Int => "int64",
             TypeKind.Float => "float64",
             TypeKind.String => "string",
-            TypeKind.Text => "text",
             TypeKind.Vector => Dim > 0 ? $"vec<float32,{Dim}>" : "vec",
             TypeKind.ListBool => "list<bool>",
             TypeKind.ListInt => "list<int64>",

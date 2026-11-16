@@ -272,15 +272,32 @@ public class SemanticsTests
         ExprAssert.Scalar(f, "4 in ctx.liked", true);
     }
 
+    /// <summary>
+    /// A text column reads as a string, as an int32 column reads as int64 (audit C3): every string operation works on
+    /// both, and they compare with each other. Text and string differed only in storage (a dictionary for string), but
+    /// the draft gave them disjoint operations, so a text could not be compared, tested for a prefix or checked for '',
+    /// and a string had no size() or contains().
+    /// </summary>
     [Fact]
-    public void Text_Size_Contains()
+    public void Text_ReadsAsString_WithEveryStringOperation()
     {
-        var f = new ExprFixture().Col("col.t", "text?").Ctx("ctx.q", "text", ScalarValue.FromText("lo")).Build(4);
+        var f = new ExprFixture().Col("col.t", "text?").Col("col.s", "string").Ctx("ctx.q", "text", ScalarValue.FromText("lo")).Build(4);
         f.FillStrings("col.t", "héllo 😀", string.Empty, null, "abc");
+        f.FillStrings("col.s", "héllo", "x", "y", "abc");
         ExprAssert.Rows(f, "size(col.t)", 7L, 0L, null, 3L);
         ExprAssert.Rows(f, "contains(col.t, 'll')", true, false, null, false);
         ExprAssert.Rows(f, "col.t.contains(ctx.q)", true, false, null, false);
         ExprAssert.Rows(f, "col.t ?? ctx.q", "héllo 😀", string.Empty, "lo", "abc");
+        ExprAssert.Rows(f, "col.t == ''", false, true, null, false);
+        ExprAssert.Rows(f, "col.t == col.s", false, false, null, true);
+        ExprAssert.Rows(f, "col.t in ['abc', 'x']", false, false, null, true);
+        ExprAssert.Rows(f, "col.t.startsWith(col.s)", true, false, null, true);
+        ExprAssert.Rows(f, "size(col.s)", 5L, 1L, 1L, 3L);
+        ExprAssert.Rows(f, "col.s.contains('ll')", true, false, false, false);
+        Assert.Equal("string?", f.Compile("col.t", new CompileOptions { AllowNullableResult = true }).ResultType.ToString());
+
+        var error = Assert.Single(f.Errors("'b' in col.s"));
+        Assert.Equal("'in' tests list membership; use contains(s, part) for a substring", error.Hint);
     }
 
     [Fact]

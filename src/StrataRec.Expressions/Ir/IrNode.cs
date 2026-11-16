@@ -54,7 +54,7 @@ internal enum IrOp : byte
     Coalesce,
     Has,
 
-    // Lists, text, strings.
+    // Lists and strings.
     Size,
     Contains,
     InSet,
