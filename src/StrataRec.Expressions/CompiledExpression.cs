@@ -12,7 +12,8 @@ public abstract class CompiledExpression
     /// <summary>Original source text.</summary>
     public abstract string Source { get; }
 
-    /// <summary>Promoted result type with nullability (int64, float64, bool, string, text, vec, list).</summary>
+    /// <summary>Promoted result type with nullability (int64, float64, bool, string, vec, list): a text column reads as
+    /// string, as int32 reads as int64; which storage a result is written to is the destination's choice.</summary>
     public abstract ColumnType ResultType { get; }
 
     /// <summary>True when the expression reads any <c>col.*</c> symbol (otherwise it is request-level).</summary>

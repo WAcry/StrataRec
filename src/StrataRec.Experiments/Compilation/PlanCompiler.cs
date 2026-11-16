@@ -238,6 +238,8 @@ internal sealed partial class UnifiedCompilation
                 plan = _builder.Build(_request.ManifestId, features, timeline, fallbacks, output, parameters, LayerInfos(), ExperimentInfos(), ArmInfos(), BuildLogPlan());
                 plan = _diagnostics.HasErrors ? null : plan;
             }
+
+            _builder.ReportDeprecatedReads(_request.Pipeline.PipelineId);
         }
 
         return new PlanCompilation

@@ -175,6 +175,12 @@ internal interface IFeatureRegistrar
     /// qualified (<c>col.</c>, <c>ctx.</c>), or only the candidate features, without <c>col.</c>.
     /// </summary>
     void AddUnregisteredNames(List<string> names, bool candidateColumnsOnly);
+
+    /// <summary>
+    /// Notes that something read <paramref name="name"/> (without <c>col.</c> or <c>ctx.</c>): a registered name may
+    /// also have been registered unread, as a member of a <c>cache</c> table, so a read is not the same as a registration.
+    /// </summary>
+    void NoteRead(string name, bool context);
 }
 
 /// <summary>
@@ -241,15 +247,31 @@ public sealed class PlanSchema
 
     /// <summary>The column named <paramref name="name"/> (without <c>col.</c>). While the plan compiles, looking up a
     /// catalog feature registers it.</summary>
-    public bool TryGetColumn(string name, [NotNullWhen(true)] out LogicalColumn? column) =>
-        _columns.TryGetValue(name, out column)
-        || (_features is not null && _features.TryRegister("col." + name) && _columns.TryGetValue(name, out column));
+    public bool TryGetColumn(string name, [NotNullWhen(true)] out LogicalColumn? column)
+    {
+        if (!_columns.TryGetValue(name, out column)
+            && !(_features is not null && _features.TryRegister("col." + name) && _columns.TryGetValue(name, out column)))
+        {
+            return false;
+        }
+
+        _features?.NoteRead(name, context: false);
+        return true;
+    }
 
     /// <summary>The context field named <paramref name="name"/> (without <c>ctx.</c>). While the plan compiles, looking
     /// up a catalog feature registers it.</summary>
-    public bool TryGetContext(string name, [NotNullWhen(true)] out ContextField? field) =>
-        _context.TryGetValue(name, out field)
-        || (_features is not null && _features.TryRegister("ctx." + name) && _context.TryGetValue(name, out field));
+    public bool TryGetContext(string name, [NotNullWhen(true)] out ContextField? field)
+    {
+        if (!_context.TryGetValue(name, out field)
+            && !(_features is not null && _features.TryRegister("ctx." + name) && _context.TryGetValue(name, out field)))
+        {
+            return false;
+        }
+
+        _features?.NoteRead(name, context: true);
+        return true;
+    }
 
     public bool TryGetParam(string name, [NotNullWhen(true)] out ParamLeaf? leaf) => _params.TryGetValue(name, out leaf);
 

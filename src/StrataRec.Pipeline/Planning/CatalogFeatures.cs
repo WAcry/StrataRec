@@ -42,6 +42,8 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
     private readonly List<FeatureDefinition> _registering = new();
     private Dictionary<(string Source, string Entity), List<FeatureDefinition>>? _tables;
     private readonly HashSet<(string Source, string Entity)> _expanded = new();
+    private readonly HashSet<string>? _deprecated;
+    private readonly SortedSet<string> _deprecatedReads = new(StringComparer.Ordinal);
 
     /// <param name="features">Where registered features go; a feature's index is its position.</param>
     /// <param name="needsWholeTable">Whether a source's features are registered together (its table's records are
@@ -65,6 +67,14 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
         _artifact = artifact;
         _features = features;
         _needsWholeTable = needsWholeTable;
+        foreach (var feature in catalog.Features)
+        {
+            if (feature.Deprecated)
+            {
+                (_deprecated ??= new HashSet<string>(StringComparer.Ordinal)).Add(feature.Name);
+            }
+        }
+
         if (failed is not null)
         {
             foreach (var name in failed)
@@ -124,6 +134,17 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
 
         // The namespace is the entity's: ctx.item.x names no feature, as before.
         return _catalog.TryGet(qualifiedName[4..], out var feature) && feature.IsContext == context && Register(feature);
+    }
+
+    /// <summary>The deprecated features something read, directly or through a derived feature, in name order.</summary>
+    public IReadOnlyCollection<string> DeprecatedReads => _deprecatedReads;
+
+    public void NoteRead(string name, bool context)
+    {
+        if (_deprecated is not null && _deprecated.Contains(name) && _catalog.TryGet(name, out var feature) && feature.IsContext == context)
+        {
+            _deprecatedReads.Add(name);
+        }
     }
 
     public void AddUnregisteredNames(List<string> names, bool candidateColumnsOnly)

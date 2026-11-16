@@ -141,6 +141,9 @@ public sealed class PlanBuilder
 
     private string CatalogLabel => "catalog:" + _sources!.Catalog.CatalogId;
 
+    /// <summary>The plan's registrar of catalog features, which knows what the plan read.</summary>
+    private CatalogFeatures? _catalogFeatures;
+
     /// <summary>
     /// Builds the plan schema: request inputs, columns, parameters and lookup tables. Catalog features are not added here
     /// but when something compiled afterwards reads them (<see cref="CatalogFeatures"/>); the catalog's content is checked
@@ -1931,8 +1934,30 @@ public sealed class PlanBuilder
 
         _catalog = catalog;
         var bindings = sources.Bindings;
-        schema.AttachFeatures(new CatalogFeatures(
-            catalog, schema, _scope!, _diagnostics, CatalogLabel, _features, source => FeaturePlan.NeedsWholeTable(bindings, source), whole.Failed));
+        _catalogFeatures = new CatalogFeatures(
+            catalog, schema, _scope!, _diagnostics, CatalogLabel, _features, source => FeaturePlan.NeedsWholeTable(bindings, source), whole.Failed);
+        schema.AttachFeatures(_catalogFeatures);
+    }
+
+    /// <summary>
+    /// Warns once for each deprecated catalog feature the plan reads (design 6.3), at its declaration: read directly or
+    /// through a derived feature, not when a cache table's whole record registered it unread. Called once, after the
+    /// plan's every variant compiled, so a feature read by several nodes, arms or combinations warns once.
+    /// </summary>
+    internal void ReportDeprecatedReads(string pipelineId)
+    {
+        if (_catalogFeatures is null)
+        {
+            return;
+        }
+
+        foreach (var name in _catalogFeatures.DeprecatedReads)
+        {
+            _catalog!.TryGet(name, out var feature);
+            _diagnostics.Warning("FEATURE_DEPRECATED", CatalogLabel, feature.Pointer,
+                $"Feature '{name}' is deprecated, and pipeline '{pipelineId}' reads it ('{feature.ExpressionName}', directly or through a derived feature).",
+                "read what replaces it (its description may say), or remove \"deprecated\" if the feature stays; 'stratarec explain-plan' lists what each node reads");
+        }
     }
 
     private int FeatureIndexOf(in Symbol symbol)

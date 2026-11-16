@@ -315,8 +315,8 @@ public readonly struct ColumnKey<T>
 | `bool` | `bool` | 按位存储 |
 | `int32`、`int64` | `int64` | 读取时提升为 `int64` 计算；写入 `int32` 列时收窄，不回绕 |
 | `float32`、`float64` | `float64` | 读取时提升为 `float64` 计算；写入 `float32` 列时收窄 |
-| `string` | `string` | 字典编码，适合类目、来源这类低基数值；支持相等、`in` 和前缀判断 |
-| `text` | `text` | 长文本，例如对话上下文、提示词、模型生成的推荐理由；每行存一个字符串，不做字典编码。表达式里按 `string` 读，所有字符串运算都适用 |
+| `string` | `string` | 字典编码，适合类目、来源这类低基数值；和常量比较时，常量在循环外换成编码 |
+| `text` | `string` | 长文本，例如对话上下文、提示词、模型生成的推荐理由；每行存一个字符串，不做字典编码。表达式里按 `string` 读，所有字符串运算都适用，和 `string` 列互相比较 |
 | `vec<float32,N>` | `vec` | 定长向量，所有行连续存放 |
 | `list<E>`，`E` 是 `bool`、`int32`、`int64`、`float32`、`float64` 或 `string` | `list<E 的表达式类型>` | 变长列表，每行的元素连续存放；也用于请求输入中的行为序列。元素的提升与标量相同：`list<int32>` 读作 `list<int64>`，`list<float32>` 读作 `list<float64>`，读取时不复制，写入时逐元素收窄。标签、主题、token ID 用 `list<int32>`，权重、价格序列用 `list<float32>`，都比宽类型省一半内存 |
 
@@ -351,7 +351,7 @@ public sealed class CandidateTable : IDisposable
 
 1. **标量列 `ScalarColumn<T>`**（`T : unmanaged`）：一个连续数组 `T[] Values`，外加可选的有效位图。整列都有效时位图为 `null`，循环不需要读取它。
 2. **字典编码字符串列 `DictStringColumn`**：`string[] Dictionary` 加 `int[] Codes`。比较 `col.recall.primary_source == 'two_tower'` 时，常量在循环外换成整数编码，循环内比较整数。
-3. **文本列 `TextColumn`**：UTF-8 字节连续存放，配一个偏移数组。
+3. **文本列 `TextColumn`**：每行一个 `string` 引用，不做字典编码。长文本大多来自连接器或模型，本来就是 .NET 字符串，转成连续的 UTF-8 再转回来只多两次拷贝。
 4. **定长向量列 `FixedVectorColumn<T>`**：单块数组 `T[] Flat`，长度为容量乘维度；第 `row` 行是 `Flat.AsSpan(row * Dim, Dim)`，适合 SIMD 点积。
 5. **变长列表列 `ListColumn<T>`**（`T` 是元素的存储类型：`bool`、`int`、`long`、`float`、`double`、`string`）：每行一个起点和长度，元素追加在一个共享数组里。与严格的 CSR 偏移不同，行可以按任意顺序写入（回填按物理行的任意顺序写），没写过的行是空列表。只需要长度的读者（`size()`、模板的段、复制的预算）通过非泛型基类 `ListColumn` 读取，不必知道元素类型。
 
@@ -1088,7 +1088,7 @@ public sealed class ModelCall
 
 ### 6.10 特征治理
 
-每个特征可以声明 `owner`、`description` 和 `deprecated`。CI 报告没有被任何节点、表达式或探针引用的特征；引用已弃用特征时给出警告。特征目录还可以生成一份可浏览的文档，方便算法工程师和 AI agent 查找已有特征，避免重复定义同一个信号。
+每个特征可以声明 `owner`、`description` 和 `deprecated`。流水线读取已弃用的特征时（直接读，或经过衍生特征读），编译给出 `FEATURE_DEPRECATED` 警告，每条流水线每个特征一次，位置在特征的声明处；`stratarec explain-plan` 列出每个节点读哪些列，方便找到读取的地方。`cache` 数据源因为整表写回而一起注册的成员不算读取。
 
 ## 7. ColumnExpr 表达式语言
 
@@ -1449,7 +1449,7 @@ flowchart LR
 1. **生产者与序号。** `producer.id` 由进程名和启动时间组成，`seq` 只出现在 `durable` 批次中。下游用 `(producer.id, seq)` 去重，并按序号发现缺口。
 2. **实际产出者。** `column_producers` 记录每个日志列实际由哪个节点产出。上例中主模型超时，`p_click` 来自后备模型 `ctr_backup`；训练任务可以据此过滤或单独处理这些样本。
 3. **列定义血缘。** `schema_sha256` 指向一条单独发布的探针 schema 记录，其中写明每一列的名字、类型、表达式原文和定义它的产物（基线或某个实验桶）。同名列 `p_click` 在不同计划版本中可能来自不同模型，分析时可以准确知道它的含义。
-4. **编码。** 流式传输推荐 Arrow IPC，落地文件推荐 Parquet，调试使用 JSON。批次中每个日志列保留原生类型，包括 `text`、`vec` 和 `list`；上面的 JSON 只是调试编码。
+4. **编码。** 流式传输推荐 Arrow IPC，落地文件推荐 Parquet，调试使用 JSON。批次中每个日志列保留表达式结果的原生类型，包括 `vec` 和 `list`（`text` 列在表达式里读作 `string`，记成 `string`）；上面的 JSON 只是调试编码。
 5. **下游表结构固定。** 原始批次表的结构不随探针变化；标准 ETL 再把标量列展开成按行的视图 `funnel_rows(request_id, tap_id, rank, entity_id, row_prob, req_prob, float_values map<string,double>, int_values map<string,bigint>, string_values map<string,string>)`，`vec` 和 `list` 列留在批次表中按需展开。实验新增日志列不需要修改下游表结构。
 6. **缺失。** `missing` 按列记录缺失行的下标位图，缺失值不会被写成 0 或哨兵值。
 

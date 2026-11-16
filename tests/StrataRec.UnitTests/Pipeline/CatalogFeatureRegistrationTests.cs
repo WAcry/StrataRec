@@ -201,6 +201,42 @@ public sealed class CatalogFeatureRegistrationTests
     }
 
     /// <summary>
+    /// Design 6.10: a plan that reads a deprecated feature warns once, at the feature's declaration, however many reads
+    /// there are and whether they are direct or through a derived feature. The flag was accepted and never read.
+    /// </summary>
+    [Fact]
+    public void ReadingADeprecatedFeature_WarnsOnce_AtItsDeclaration()
+    {
+        var compilation = TryCompile(
+            features: """, "item.old": { "type": "float32", "source": "item_store", "field": "i_score", "default": 0.0, "deprecated": true }""",
+            derived: """, "item.old_boost": { "type": "float32", "expr": "col.item.old * 2.0" }""",
+            expr: "col.item.old + col.item.old + col.item.old_boost");
+
+        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
+        var warning = Assert.Single(compilation.Diagnostics);
+        Assert.Equal("FEATURE_DEPRECATED", warning.Code);
+        Assert.Equal("catalog:c", warning.Artifact);
+        Assert.Equal("/features/item.old", warning.Pointer);
+        Assert.Contains("pipeline 'p' reads it", warning.Message);
+    }
+
+    /// <summary>
+    /// A deprecated feature nothing reads does not warn, even when a cache table's whole record registers it with the
+    /// sibling a node reads: registered is not read.
+    /// </summary>
+    [Fact]
+    public void ADeprecatedFeatureNothingReads_DoesNotWarn_EvenWhenItsCacheTableIsRegistered()
+    {
+        var compilation = TryCompile(
+            features: """, "item.old": { "type": "float32", "source": "item_store", "field": "i_score", "default": 0.0, "deprecated": true }""",
+            itemStore: """{ "connector": "memory@1", "data": { "1": { "i_score": 0.5, "i_author": 10 } }, "timeout_ms": 30000, "mode": "cache", "max_bytes": "1MiB", "cache": { "ttl_ms": 60000 } }""");
+
+        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
+        Assert.Empty(compilation.Diagnostics);
+        Assert.Contains(compilation.GetPlanOrThrow().Features.Features, f => f.Definition.Name == "item.old"); // the table's member
+    }
+
+    /// <summary>
     /// Review 67: reading one feature of a cache source registers its whole table once. Each member used to expand the
     /// table again, so a table of N features took N² registrations: 40,000 features compiled in 40 s, where the whole
     /// catalog used to take 1 s. The bound is far above the linear time and far below the quadratic one.
