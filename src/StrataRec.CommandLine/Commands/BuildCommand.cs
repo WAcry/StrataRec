@@ -237,8 +237,7 @@ internal static class BuildCommand
         foreach (var placement in request.Experiments)
         {
             var name = placement.Experiment.ExperimentId;
-            if (published.Revoked.TryGetValue(name, out var revocation)
-                && !published.Experiments.ContainsKey(name) // released by the published manifest: brought back (review 39)
+            if (published.TryGetStop(name, out var revocation)
                 && Array.IndexOf(restore, name) < 0
                 && ContentHash.Compute(workspace.Experiments[name].Document) == revocation.Artifact)
             {

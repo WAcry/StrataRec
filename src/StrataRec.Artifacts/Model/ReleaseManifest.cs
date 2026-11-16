@@ -35,6 +35,22 @@ public sealed class ReleaseManifest
     /// what it left out it left out on purpose). Nodes do not read it.
     /// </summary>
     public Dictionary<string, RevokedExperiment> Revoked { get; init; } = new();
+
+    /// <summary>
+    /// The stop in force on <paramref name="experiment"/>: its <see cref="Revoked"/> entry, unless this manifest releases
+    /// the experiment again. One released again was brought back, and a controller that publishes it may have kept the
+    /// entry (review 39); <c>build</c>, <c>revoke</c> and <c>status</c> all read stops through this.
+    /// </summary>
+    public bool TryGetStop(string experiment, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out RevokedExperiment? stop)
+    {
+        if (Revoked.TryGetValue(experiment, out stop) && !Experiments.ContainsKey(experiment))
+        {
+            return true;
+        }
+
+        stop = null;
+        return false;
+    }
 }
 
 /// <summary>An experiment a revocation removed (<see cref="ReleaseManifest.Revoked"/>).</summary>

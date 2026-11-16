@@ -1,10 +1,11 @@
 using StrataRec.Core.Columns;
+using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
 
 namespace StrataRec.Pipeline.Operators.Standard;
 
 /// <summary>
-/// Rows grouped by a key column (int64, int32 or string), for the operators that work per group
+/// Rows grouped by a key column (int64, int32, string or text), for the operators that work per group
 /// (<c>GroupAggregate@1</c>, <c>SlidingWindowQuota@1</c>): dense group ids, so per-group state is an array indexed by
 /// group, rented from the request's memory, and nothing is allocated per row.
 /// </summary>
@@ -13,7 +14,8 @@ internal static class RowGroups
     /// <summary>
     /// The group of each row of <paramref name="rows"/> into <paramref name="groupOf"/> (−1 for a row whose key is
     /// missing, or every row when <paramref name="keys"/> is null), and the number of groups. A string column's
-    /// dictionary codes number its values already, in the order they first appear; integers are numbered after a sort.
+    /// dictionary codes number its values already, in the order they first appear, as a text column's values are numbered;
+    /// integers are numbered after a sort.
     /// </summary>
     public static int Assign(ColumnBuffer? keys, ReadOnlySpan<int> rows, Span<int> groupOf, RequestMemory memory)
     {
@@ -43,6 +45,22 @@ internal static class RowGroups
 
             memory.ReturnScratch(ids);
             return count;
+        }
+
+        if (keys is TextColumn text)
+        {
+            // Text (a string entity_id, a high-cardinality string): numbered as they first appear, through a scratch
+            // key index, so equal strings group together without a dictionary per request.
+            var seen = new EntityKeyIndex(EntityKeyType.String, n, memory, scratch: true);
+            for (var i = 0; i < n; i++)
+            {
+                var row = rows[i];
+                groupOf[i] = text.IsValid(row) ? seen.GetOrAdd(text.Get(row), seen.Count, out _) : -1;
+            }
+
+            var distinct = seen.Count;
+            seen.ReturnArrays();
+            return distinct;
         }
 
         var sorted = memory.RentScratch<long>(Math.Max(1, n));

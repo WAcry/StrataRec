@@ -140,6 +140,48 @@ public sealed class InteractionWarningTests
     }
 
     /// <summary>
+    /// Review 71: a node's fallback reads when the node fails, so an arm that turns a fallback on, or points the node at
+    /// another one, adds what that fallback reads. Turned on here, the fallback read the zero another experiment writes
+    /// into score.final, and nothing warned. A fallback the baseline's node already had adds nothing.
+    /// </summary>
+    [Theory]
+    [InlineData("skip", "", """{ "nodes": { "late": { "on_failure": "fallback", "fallback": "late_backup" } } }""", true)]
+    [InlineData("fallback", "old_backup", """{ "nodes": { "late": { "fallback": "late_backup" } } }""", true)]
+    [InlineData("fallback", "late_backup", """{ "nodes": { "late": { "config": { "expr": "2.0" } } } }""", false)]
+    public void AFallbackAnArmTurnsOnOrSwitchesTo_AddsWhatItReads(string onFailure, string fallback, string armPatch, bool warns)
+    {
+        var compilation = HomeFeedTestHost.LoadModified(root =>
+        {
+            var policy = fallback.Length == 0 ? $"\"on_failure\": \"{onFailure}\"" : $"\"on_failure\": \"{onFailure}\", \"fallback\": \"{fallback}\"";
+            ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"score.final\":  {",
+                "\"score.extra\":  { \"type\": \"float32\", \"default\": 0.0 },\n    \"score.final\":  {");
+            ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"rank_sort\": {", $$"""
+                "late": { "order": 505, "op": "ExpressionScorer@1", {{policy}}, "config": { "output_col": "score.extra", "expr": "1.0" } },
+                "late_backup": { "role": "fallback", "op": "ExpressionScorer@1", "config": { "output_col": "score.extra", "expr": "col.score.final" } },
+                "old_backup": { "role": "fallback", "op": "ExpressionScorer@1", "config": { "output_col": "score.extra", "expr": "1.0" } },
+                "rank_sort": {
+                """);
+            Experiment(root, "exp_writer", "on",
+                """{ "nodes": { "zero": { "op": "ExpressionScorer@1", "order": 480, "config": { "output_col": "score.final", "expr": "0.0" } } } }""");
+            Experiment(root, "exp_activate", "on", armPatch);
+        }).Compile();
+
+        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
+        var warned = compilation.Diagnostics.Where(d => d.Code == "INTERACTION_READ" && d.Message.Contains("'exp_activate/on'", StringComparison.Ordinal)
+            && d.Message.Contains("'exp_writer/on'", StringComparison.Ordinal)).ToList();
+        if (warns)
+        {
+            var warning = Assert.Single(warned);
+            Assert.StartsWith("As 'exp_activate/on' changes node 'late', it fails over to 'late_backup', reading 'score.final', which 'exp_writer/on' writes", warning.Message);
+            Assert.EndsWith("/arms/on/nodes/late", warning.Pointer);
+        }
+        else
+        {
+            Assert.Empty(warned);
+        }
+    }
+
+    /// <summary>
     /// Review 69: while the configuration has errors, interactions are not known, so no review is called unused: a node's
     /// config error made the sample's valid review "unused", with a hint to remove it.
     /// </summary>

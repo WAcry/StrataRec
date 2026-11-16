@@ -383,6 +383,14 @@ public sealed class RevokeCommandTests
         Assert.True(code == 0, errors);
         Assert.Contains(": unchanged, the release the pointer names has this configuration", errors);
 
+        // Nor does status call it revoked, in text or JSON (review 71): the entry is no stop in force.
+        var (statusCode, status, statusErrors) = await Status(store);
+        Assert.True(statusCode == 0, statusErrors);
+        Assert.DoesNotContain("revoked ", status);
+        (statusCode, status, statusErrors) = await Status(store, "-f", "json");
+        Assert.True(statusCode == 0, statusErrors);
+        Assert.Empty(System.Text.Json.Nodes.JsonNode.Parse(status)!["published"]![0]!["revoked"]!.AsArray());
+
         // A stop of another experiment lists only that one.
         Assert.Equal(0, (await Revoke(store, "exp_quality_weight")).Code);
         Assert.Equal(["exp_quality_weight"], (await ReadAsync(blobs, await Pointer(store))).Revoked.Keys);

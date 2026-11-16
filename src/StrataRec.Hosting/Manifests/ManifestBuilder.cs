@@ -119,11 +119,11 @@ public static class ManifestBuilder
         var seq = manifest.Seq + 1;
         var entries = new Dictionary<string, ManifestExperiment>(StringComparer.Ordinal);
         var revoked = new Dictionary<string, RevokedExperiment>(StringComparer.Ordinal);
-        foreach (var (name, entry) in manifest.Revoked)
+        foreach (var name in manifest.Revoked.Keys)
         {
-            if (!manifest.Experiments.ContainsKey(name))
+            if (manifest.TryGetStop(name, out var stop))
             {
-                revoked[name] = entry; // one the manifest releases was brought back (review 39)
+                revoked[name] = stop; // not one the manifest releases: that was brought back (review 39)
             }
         }
 

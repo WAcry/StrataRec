@@ -199,6 +199,68 @@ public sealed class GroupAggregateTests
         Assert.Equal(Math.Sqrt(values.Sum(v => (v - mean) * (v - mean)) / values.Length), row["author_std"].AsFloat64(), 6);
     }
 
+    /// <summary>
+    /// Review 71: a string entity_id is stored as text (audit 4e), and both grouping operators refused it as their group
+    /// column ("must be int64, int32 or string, not text"), which they took before. Text groups by string equality,
+    /// numbered as they first appear; a missing value is in no group.
+    /// </summary>
+    [Fact]
+    public void TextGroups_AreEqualStrings_InTheOrderTheyFirstAppear_AndAMissingOneIsInNone()
+    {
+        var memory = new StrataRec.Core.Memory.RequestMemory();
+        var text = new StrataRec.Core.Columns.TextColumn(StrataRec.Core.Types.ColumnType.Text.AsNullable(), 6, memory);
+        string?[] values = ["b", "a", "b", null, "c", "a"];
+        for (var row = 0; row < values.Length; row++)
+        {
+            if (values[row] is { } value)
+            {
+                text.Set(row, new string(value)); // equal strings, not the same instances
+                text.SetValid(row);
+            }
+            else
+            {
+                text.SetMissing(row);
+            }
+        }
+
+        var groupOf = new int[6];
+        var groups = StrataRec.Pipeline.Operators.Standard.RowGroups.Assign(text, [0, 1, 2, 3, 4, 5], groupOf, memory);
+
+        Assert.Equal(3, groups);
+        Assert.Equal([0, 1, 0, -1, 2, 1], groupOf);
+    }
+
+    [Theory]
+    [InlineData("""{ "op": "GroupAggregate@1", "order": 200, "config": { "group_col": "entity_id", "outputs": { "g.count": { "fn": "count" } } } }""")]
+    [InlineData("""{ "op": "SlidingWindowQuota@1", "order": 200, "config": { "group_col": "entity_id", "window": 3, "max_per_window": 1 } }""")]
+    public async Task AStringEntityId_GroupsRows(string node)
+    {
+        var root = Directory.CreateTempSubdirectory("stratarec-text-groups-").FullName;
+        Write(root, "catalog/c.jsonc", """{ "catalog_id": "c" }""");
+        Write(root, "bindings/local.jsonc", """
+            { "environment": "local", "candidate_sources": { "r": { "client": "memory_list@1", "items": ["a", "b", "c"] } } }
+            """);
+        Write(root, "pipelines/p.jsonc", $$"""
+            { "pipeline_id": "p", "entity_key_type": "string",
+              "param_schema": { "q": { "type": "map<string,int64>" }, "k": { "type": "int64" } },
+              "params": { "q": { "r": 3 }, "k": 3 },
+              "nodes": {
+                "recall": { "op": "MultiSourceRecall@1", "order": 100, "config": { "quotas_param": "q" } },
+                "group": {{node}} },
+              "output": { "limit_param": "k", "columns": {} } }
+            """);
+        var diagnostics = new DiagnosticBag();
+        var request = ConfigWorkspace.Load(root, diagnostics).CreateCompileRequest("p", "local", diagnostics);
+        Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
+        var compilation = PlanCompiler.Compile(request!, new PlanEnvironment { BaseDirectory = root });
+        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
+
+        var result = await Run(compilation.Plan!);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(["a", "b", "c"], result.Items.Select(item => item.Id.StringValue).Order());
+    }
+
     private static Dictionary<long, IReadOnlyDictionary<string, ScalarValue>> ById(PipelineResult result)
     {
         Assert.True(result.Succeeded, result.Error);

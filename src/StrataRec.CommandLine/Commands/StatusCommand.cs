@@ -132,14 +132,13 @@ internal static class StatusCommand
             }
 
             output.WriteLine($"  experiments  {Experiments(manifest)}");
-            if (manifest.Revoked.Count > 0)
+            var stopped = Stops(manifest);
+            if (stopped.Count > 0)
             {
-                var names = new List<string>(manifest.Revoked.Keys);
-                names.Sort(StringComparer.Ordinal);
-                var revoked = new List<string>(names.Count);
-                foreach (var name in names)
+                var revoked = new List<string>(stopped.Count);
+                foreach (var (name, stop) in stopped)
                 {
-                    revoked.Add($"{name} (by seq {manifest.Revoked[name].Seq})");
+                    revoked.Add($"{name} (by seq {stop.Seq})");
                 }
 
                 output.WriteLine($"  revoked      {string.Join(", ", revoked)}: 'stratarec build' keeps them out until they change");
@@ -201,12 +200,9 @@ internal static class StatusCommand
             }
 
             json.WriteEndObject();
-            names = new List<string>(manifest.Revoked.Keys);
-            names.Sort(StringComparer.Ordinal);
             json.WriteStartArray("revoked");
-            foreach (var name in names)
+            foreach (var (name, revocation) in Stops(manifest))
             {
-                var revocation = manifest.Revoked[name];
                 json.WriteStartObject();
                 json.WriteString("experiment", name);
                 json.WriteNumber("seq", revocation.Seq);
@@ -223,4 +219,21 @@ internal static class StatusCommand
     }
 
     private sealed record Release(string PipelineId, string Environment, string Pointer, string Id, ReleaseManifest Manifest);
+
+    /// <summary>The stops in force, by name: a revoked experiment the manifest releases again was brought back.</summary>
+    private static List<(string Name, RevokedExperiment Stop)> Stops(ReleaseManifest manifest)
+    {
+        var names = new List<string>(manifest.Revoked.Keys);
+        names.Sort(StringComparer.Ordinal);
+        var stops = new List<(string, RevokedExperiment)>(names.Count);
+        foreach (var name in names)
+        {
+            if (manifest.TryGetStop(name, out var stop))
+            {
+                stops.Add((name, stop));
+            }
+        }
+
+        return stops;
+    }
 }

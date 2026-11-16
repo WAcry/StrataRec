@@ -137,7 +137,7 @@ public sealed class TopKFactory : IOperatorFactory
 /// <summary>Config of <c>SlidingWindowQuota@1</c>.</summary>
 public sealed class SlidingWindowQuotaConfig
 {
-    /// <summary>Grouping column (int64 or string), e.g. <c>item.creator_id</c>. Missing values are never limited.</summary>
+    /// <summary>Grouping column (int64, int32, string or text), e.g. <c>item.creator_id</c>. Missing values are never limited.</summary>
     public required string GroupCol { get; init; }
 
     /// <summary>Window length in ranks.</summary>
@@ -164,9 +164,9 @@ public sealed class SlidingWindowQuotaFactory : IOperatorFactory
             return null;
         }
 
-        if (group.Type.Kind is not (StorageKind.Int64 or StorageKind.Int32 or StorageKind.String))
+        if (group.Type.Kind is not (StorageKind.Int64 or StorageKind.Int32 or StorageKind.String or StorageKind.Text))
         {
-            context.Error("/group_col", "COLUMN_TYPE_MISMATCH", $"Group column '{config.GroupCol}' must be int64, int32 or string, not {group.Type}.",
+            context.Error("/group_col", "COLUMN_TYPE_MISMATCH", $"Group column '{config.GroupCol}' must be int64, int32, string or text, not {group.Type}.",
                 "group by a column that names a group, such as an id or a category");
             return null;
         }

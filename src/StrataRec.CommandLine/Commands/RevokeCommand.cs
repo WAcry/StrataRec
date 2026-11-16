@@ -194,7 +194,7 @@ internal static class RevokeCommand
             {
                 removing.Add(name);
             }
-            else if (published.Manifest.Revoked.TryGetValue(name, out var revocation))
+            else if (published.Manifest.TryGetStop(name, out var revocation))
             {
                 already.Add((name, revocation));
             }

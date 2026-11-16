@@ -283,7 +283,7 @@ internal sealed partial class UnifiedCompilation
     private void ValidatePairs()
     {
         var writes = new Dictionary<int, Dictionary<int, string>>();
-        var addedReads = new Dictionary<int, Dictionary<int, string>>();
+        var addedReads = new Dictionary<int, Dictionary<int, ArmRead>>();
         foreach (var arm in _arms)
         {
             if (arm.Valid)
@@ -322,7 +322,7 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    private void Interactions(ArmPatch a, ArmPatch b, Dictionary<int, Dictionary<int, string>> writes, Dictionary<int, Dictionary<int, string>> addedReads)
+    private void Interactions(ArmPatch a, ArmPatch b, Dictionary<int, Dictionary<int, string>> writes, Dictionary<int, Dictionary<int, ArmRead>> addedReads)
     {
         foreach (var (logical, node) in writes[a.Index])
         {
@@ -334,10 +334,14 @@ internal sealed partial class UnifiedCompilation
                     ReviewHint(a, b, column.Name));
             }
 
-            if (addedReads[b.Index].TryGetValue(logical, out var reader) && !Reviewed(a, b, column.Name))
+            if (addedReads[b.Index].TryGetValue(logical, out var read) && !Reviewed(a, b, column.Name))
             {
+                var reader = read.Node;
+                var how = read.Fallback is { } fallback
+                    ? $"As '{b.Id}' changes node '{reader}', it fails over to '{fallback}', reading '{column.Name}'"
+                    : $"Node '{reader}' added by '{b.Id}' reads '{column.Name}'";
                 _diagnostics.Warning("INTERACTION_READ", b.Artifact, b.PointerPrefix + "/nodes/" + JsonPointer.Escape(reader),
-                    $"Node '{reader}' added by '{b.Id}' reads '{column.Name}', which '{a.Id}' writes in the node it adds, '{node}'; the two arms can be assigned together.",
+                    $"{how}, which '{a.Id}' writes in the node it adds, '{node}'; the two arms can be assigned together.",
                     ReviewHint(b, a, column.Name));
             }
         }
@@ -407,10 +411,10 @@ internal sealed partial class UnifiedCompilation
     /// The column footprint of an arm (design 11.5 item 2) from its single-arm variants: columns its touched nodes write,
     /// and columns its added nodes read.
     /// </summary>
-    private void DescribeArm(ArmPatch arm, out Dictionary<int, string> writes, out Dictionary<int, string> addedReads)
+    private void DescribeArm(ArmPatch arm, out Dictionary<int, string> writes, out Dictionary<int, ArmRead> addedReads)
     {
         writes = new Dictionary<int, string>();
-        addedReads = new Dictionary<int, string>();
+        addedReads = new Dictionary<int, ArmRead>();
         var only = OnlyArm(arm.Index);
         foreach (var nodeId in arm.TouchedNodes)
         {
@@ -447,10 +451,30 @@ internal sealed partial class UnifiedCompilation
             {
                 if (baseline is null || baseline.CurrentReads.IndexOf(read) < 0)
                 {
-                    addedReads.TryAdd(read, nodeId);
+                    addedReads.TryAdd(read, new ArmRead(nodeId, null));
+                }
+            }
+
+            // A node's fallback reads when the node fails: an arm that turns the fallback on, or points the node at another
+            // one, adds what that fallback reads (review 71). Compared with what the baseline's node could reach (itself and
+            // its own fallback), so a fallback the baseline already ran adds nothing, and one no node reaches counts nowhere.
+            if (FallbackOf(node, only) is { } fallback)
+            {
+                var baselineFallback = baseline is null ? null : FallbackOf(baseline, RequestArms.None);
+                foreach (var read in fallback.CurrentReads)
+                {
+                    if (baseline is null || (baseline.CurrentReads.IndexOf(read) < 0 && (baselineFallback is null || baselineFallback.CurrentReads.IndexOf(read) < 0)))
+                    {
+                        addedReads.TryAdd(read, new ArmRead(nodeId, fallback.NodeId));
+                    }
                 }
             }
         }
+
+        CompiledNode? FallbackOf(CompiledNode primary, RequestArms arms) =>
+            primary.OnFailure == FailurePolicy.Fallback && primary.FallbackNodeId is { } id && _variants.TryGetValue(id, out var fv)
+                ? fv.Variants[fv.IndexOf(arms)]
+                : null;
 
         static bool Writes(CompiledNode node, int logical)
         {
@@ -465,6 +489,9 @@ internal sealed partial class UnifiedCompilation
             return false;
         }
     }
+
+    /// <summary>A current read an arm adds: the node the arm adds or changes, and the fallback that reads it, if one does.</summary>
+    private readonly record struct ArmRead(string Node, string? Fallback);
 
     private static bool IsAddition(ArmPatch arm, PatchOperation op)
     {
