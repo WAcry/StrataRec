@@ -480,7 +480,7 @@ internal sealed partial class UnifiedCompilation
                     arm.Valid = false;
                 }
 
-                ArmAnalyzer.Analyze(arm, _view, _request.Policy, _diagnostics);
+                ArmAnalyzer.Analyze(arm, _view, _diagnostics);
                 armIndices[i] = arm.Index;
                 _arms.Add(arm);
             }

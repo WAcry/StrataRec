@@ -5,8 +5,8 @@ namespace StrataRec.Artifacts.Json;
 
 /// <summary>
 /// Serializes <see cref="JsonPointer"/> as its RFC 6901 string, both as a value and as a dictionary key, so model
-/// types can declare pointer-typed members directly (for example the policy's <c>experiment_patchable</c> list and
-/// the <c>owners</c> map keyed by pointer, design 11.4).
+/// types can declare pointer-typed members directly (for example the policy's <c>owners</c> map keyed by pointer, design
+/// 11.4): a malformed pointer is an error at its location, not a prefix that never matches.
 /// </summary>
 public sealed class JsonPointerJsonConverter : JsonConverter<JsonPointer>
 {

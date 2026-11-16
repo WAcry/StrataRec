@@ -76,7 +76,6 @@ public static class ManifestBuilder
             };
         }
 
-        var policy = workspace.Policy is { } p ? await store.PutAsync(p.Document, cancellationToken).ConfigureAwait(false) : null;
         return new ReleaseManifest
         {
             PipelineId = pipelineId,
@@ -91,7 +90,6 @@ public static class ManifestBuilder
                 Bindings = await store.PutAsync(bindings!.Document, cancellationToken).ConfigureAwait(false),
                 Pipeline = await store.PutAsync(pipeline.Document, cancellationToken).ConfigureAwait(false),
                 Tables = tables,
-                Policy = policy,
             },
             Experiments = experiments,
         };
@@ -159,9 +157,6 @@ public static class ManifestBuilder
         var pipeline = await FetchAsync<PipelineArtifact>(store, manifest.Artifacts.Pipeline, label, "/artifacts/pipeline", diagnostics, cancellationToken).ConfigureAwait(false);
         var catalog = await FetchAsync<FeatureCatalogArtifact>(store, manifest.Artifacts.Catalog, label, "/artifacts/catalog", diagnostics, cancellationToken).ConfigureAwait(false);
         var bindings = await FetchAsync<SourceBindingArtifact>(store, manifest.Artifacts.Bindings, label, "/artifacts/bindings", diagnostics, cancellationToken).ConfigureAwait(false);
-        var policy = manifest.Artifacts.Policy is { } policyId
-            ? await FetchAsync<PolicyArtifact>(store, policyId, label, "/artifacts/policy", diagnostics, cancellationToken).ConfigureAwait(false)
-            : new PolicyArtifact();
 
         // Content hashes prove integrity, not identity: a valid blob of another pipeline or experiment must not be served
         // under this manifest's names.
@@ -200,7 +195,7 @@ public static class ManifestBuilder
             }
         }
 
-        if (pipeline is null || catalog is null || bindings is null || policy is null || diagnostics.HasErrors)
+        if (pipeline is null || catalog is null || bindings is null || diagnostics.HasErrors)
         {
             return null;
         }
@@ -211,11 +206,6 @@ public static class ManifestBuilder
             ["catalog:" + catalog.CatalogId] = manifest.Artifacts.Catalog,
             ["bindings:" + bindings.Environment] = manifest.Artifacts.Bindings,
         };
-        if (manifest.Artifacts.Policy is { } policyArtifact)
-        {
-            artifactIds["policy"] = policyArtifact;
-        }
-
         foreach (var (name, id) in manifest.Artifacts.Tables)
         {
             artifactIds["table:" + name] = id;
@@ -232,7 +222,6 @@ public static class ManifestBuilder
             Catalog = catalog,
             Bindings = bindings,
             Tables = tables,
-            Policy = policy,
             Experiments = placements,
             ManifestId = manifestId,
             ArtifactIds = artifactIds,

@@ -9,22 +9,8 @@
       "description": "The JSON Schema of this file, for editors: a path relative to the file (e.g. ../schemas/policy.schema.json, as 'stratarec schema --out schemas' writes them) or a URL. The engine ignores it: it is not part of the file's content id.",
       "type": "string"
     },
-    "experiment_patchable": {
-      "description": "RFC 6901 prefixes experiments may add, delete and modify under.",
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "experiment_add_only": {
-      "description": "RFC 6901 prefixes experiments may only add new entries under.",
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
     "owners": {
-      "description": "RFC 6901 prefix → owning teams that must approve changes (mapped to code review).",
+      "description": "RFC 6901 prefix into the patchable view → teams that review an experiment arm touching it, at or under the prefix, or replacing what contains it, e.g. { \"/nodes/safety_filter\": [\"trust-safety\"] }. stratarec explain-plan lists each arm's owners for code review to route.",
       "type": "object",
       "additionalProperties": {
         "type": "array",

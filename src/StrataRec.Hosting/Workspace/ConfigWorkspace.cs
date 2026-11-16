@@ -20,7 +20,7 @@ public sealed record LoadedArtifact<T>(T Value, JsonNode Document, string Path, 
 /// <remarks>
 /// <code>
 /// config/
-/// ├── policy.jsonc                      patchable paths, owners (optional; defaults apply)
+/// ├── policy.jsonc                      owners: who reviews experiments touching what (optional; review only)
 /// ├── catalog/&lt;catalog_id&gt;.jsonc
 /// ├── bindings/&lt;environment&gt;.jsonc
 /// ├── pipelines/&lt;pipeline_id&gt;.jsonc
@@ -263,11 +263,6 @@ public sealed class ConfigWorkspace
             ["catalog:" + catalog!.Value.CatalogId] = catalog.ContentId,
             ["bindings:" + bindingsEnvironment] = bindings.ContentId,
         };
-        if (Policy is { } policy)
-        {
-            artifactIds["policy"] = policy.ContentId;
-        }
-
         foreach (var table in tables)
         {
             artifactIds["table:" + table.TableId] = Tables[table.TableId].ContentId;

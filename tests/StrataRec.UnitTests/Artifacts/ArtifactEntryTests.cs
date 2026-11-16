@@ -12,13 +12,14 @@ public sealed class ArtifactEntryTests
 {
     public static TheoryData<string, string> Documents => new()
     {
-        { """{ "experiment_patchable": ["/params"], "experiment_patchable": ["/nodes"] }""", "Duplicate key 'experiment_patchable'" },
-        { """{ "experiment_patchable": ["/par\uD800ams"] }""", "unpaired UTF-16 surrogate" },
-        { """{ "experiment_patchable": ["/params"] """, "" }, // a syntax error
+        { """{ "owners": {}, "owners": { "/nodes": [] } }""", "Duplicate key 'owners'" },
+        { """{ "owners": { "/nodes": ["t\uD800s"] } }""", "unpaired UTF-16 surrogate" },
+        { """{ "owners": {} """, "" }, // a syntax error
         { """{ "log_bytes_per_request_budget": 1 }""", "Unknown key 'log_bytes_per_request_budget'" }, // removed: nothing enforced it
         { """{ "owners": null }""", "'owners' must be an object, got null." },
-        { """{ "experiment_patchable": ["/params", null] }""", "Item 1 of 'experiment_patchable' must be a string, got null." },
-        { """{ "experiment_patchabel": [] }""", "Unknown key 'experiment_patchabel'" },
+        { """{ "owners": { "nodes/safety_filter": [] } }""", "nodes/safety_filter" }, // not a pointer: never a prefix that matches nothing
+        { """{ "experiment_patchable": ["/params"] }""", "Unknown key 'experiment_patchable'" }, // removed: the patchable view is the engine's
+        { """{ "ownres": {} }""", "Unknown key 'ownres'" },
     };
 
     [Theory]

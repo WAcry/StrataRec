@@ -1481,7 +1481,7 @@ flowchart LR
 | 标准 | 在 StrataRec 中的用途 |
 | :--- | :--- |
 | RFC 7396 JSON Merge Patch | 实验补丁（第 11.3 节） |
-| RFC 6901 JSON Pointer | 足迹路径、policy 中的可修改范围、校验报告中的出错位置 |
+| RFC 6901 JSON Pointer | 足迹路径、policy 中 owner 的范围、校验报告中的出错位置 |
 | RFC 8785 JSON Canonicalization Scheme | 规范化与内容哈希 |
 | JSON Schema 2020-12 | 产物结构、编辑器补全、第一层校验 |
 | Mustache | 提示词与文本模板（第 5.9 节） |
@@ -1739,7 +1739,7 @@ flowchart LR
 
 ```text
 config/
-├── policy.jsonc                       # 可修改路径与 owner
+├── policy.jsonc                       # owner：碰到哪部分的实验由谁评审（可选）
 ├── catalog/home_feed.jsonc
 ├── bindings/prod-us-east.jsonc
 ├── pipelines/home_feed.jsonc
@@ -1955,14 +1955,12 @@ RFC 7396 有三个容易出错的地方，引擎都用明确的规则处理：
 | `/columns`、`/param_schema`、`/funnel_groups` | `PipelineArtifact` | 只能新增条目 |
 | `/features`、`/derived_features` | `FeatureCatalogArtifact` | 只能新增条目 |
 
-视图之外的部分，包括 `pipeline_id`、`entity_key_type`、`request_schema`、`output` 和整个 `SourceBindingArtifact`，实验都不能修改。
+视图之外的部分，包括 `pipeline_id`、`entity_key_type`、`request_schema`、`output` 和整个 `SourceBindingArtifact`，实验都不能修改。这张表是引擎的规则，每个仓库都一样，不可配置。
 
-`config/policy.jsonc` 用 RFC 6901 路径前缀声明这些范围和各部分的 owner：
+`config/policy.jsonc`（可选）用 RFC 6901 路径前缀声明各部分由谁评审：
 
 ```json
 {
-  "experiment_patchable": ["/params", "/nodes", "/log_taps"],
-  "experiment_add_only": ["/columns", "/param_schema", "/features", "/derived_features", "/funnel_groups"],
   "owners": {
     "/nodes/safety_filter": ["trust-safety"],
     "/features": ["feature-platform"],
@@ -1971,7 +1969,7 @@ RFC 7396 有三个容易出错的地方，引擎都用明确的规则处理：
 }
 ```
 
-没有列出的路径，实验一律不能修改。owner 规则映射到代码评审：第 11.3 节表中修改 `safety_filter` 的两个补丁，所在的 PR 都需要 trust-safety 团队批准。
+臂的足迹在前缀之下，或者替换了包含它的部分，就算碰到了它。`stratarec explain-plan` 列出每个臂的 owner，交给代码评审去要求批准：第 11.3 节表中修改 `safety_filter` 的两个补丁，所在的 PR 都需要 trust-safety 团队批准。owner 只用于评审，不影响编译和服务，所以不进入发布的 manifest。
 
 “只能新增”有三个理由：
 

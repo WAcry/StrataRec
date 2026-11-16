@@ -14,6 +14,7 @@ public sealed class PlanCompileRequest
 
     public IReadOnlyList<DataTableArtifact> Tables { get; init; } = Array.Empty<DataTableArtifact>();
 
+    /// <summary>Who reviews what (<c>policy.jsonc</c>): only for the arm reports' owners; a release does not carry it.</summary>
     public PolicyArtifact Policy { get; init; } = new();
 
     /// <summary>Experiments in the manifest with their layers. Empty compiles the plain baseline.</summary>

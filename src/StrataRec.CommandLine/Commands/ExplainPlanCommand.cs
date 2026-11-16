@@ -126,7 +126,17 @@ internal static class ExplainPlanCommand
                     arms.Add(plan.Arms[a].ArmName);
                 }
 
-                o.WriteLine($"  {e.Id,-32} layer {plan.Layers[e.LayerIndex].Name,-10} arms {string.Join(", ", arms)}");
+                // Who reviews it (policy.jsonc owners of what its arms touch); per arm in --json.
+                var owners = new SortedSet<string>(StringComparer.Ordinal);
+                foreach (var arm in report.Arms)
+                {
+                    if (arm.Id.StartsWith(e.Id + "/", StringComparison.Ordinal))
+                    {
+                        owners.UnionWith(arm.Owners);
+                    }
+                }
+
+                o.WriteLine($"  {e.Id,-32} layer {plan.Layers[e.LayerIndex].Name,-10} arms {string.Join(", ", arms)}{(owners.Count > 0 ? "  owners " + string.Join(", ", owners) : string.Empty)}");
             }
         }
 

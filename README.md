@@ -70,7 +70,7 @@ dotnet run --project samples/StrataRec.Samples.Host -- stratarec validate -c con
 
 ```text
 samples/home_feed/
-  policy.jsonc                      实验可以修改哪些路径
+  policy.jsonc                      碰到哪部分的实验由谁评审（可选）
   catalog/home_feed.jsonc           实体与特征（物理特征和衍生特征）
   bindings/local.jsonc              各环境的连接器、模型和召回源
   pipelines/home_feed.jsonc         参数、列、节点、漏斗组、探针、输出

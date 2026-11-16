@@ -84,7 +84,7 @@ public sealed class EditorSchemaTests
         {
             Assert.Equal(0, InitCommand.Run(Tool.Environment, root, "feed", force: false, TextWriter.Null, TextWriter.Null));
             var files = WorkspaceFiles(root, requestsAreRunFiles: true);
-            Assert.Equal(7, files.Count); // policy, catalog, bindings, pipeline, experiment, release, request
+            Assert.Equal(6, files.Count); // catalog, bindings, pipeline, experiment, release, request
             foreach (var file in files)
             {
                 var document = Assert.IsType<JsonObject>(Jsonc.Parse(File.ReadAllText(Path.Combine(root, file)), file));

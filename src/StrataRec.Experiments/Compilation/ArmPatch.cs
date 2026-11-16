@@ -63,13 +63,11 @@ internal sealed class ArmPatch
     public override string ToString() => Id;
 
     /// <summary>True when the footprint touches <paramref name="pointer"/> (either is a prefix of the other).</summary>
-    public bool Relates(string pointer)
-    {
-        if (!JsonPointer.TryParse(pointer, out var parsed))
-        {
-            return false;
-        }
+    public bool Relates(string pointer) => JsonPointer.TryParse(pointer, out var parsed) && Relates(parsed);
 
+    /// <inheritdoc cref="Relates(string)"/>
+    public bool Relates(JsonPointer parsed)
+    {
         foreach (var op in Footprint)
         {
             if (op.Path.IsPrefixOf(parsed) || parsed.IsPrefixOf(op.Path))
@@ -128,7 +126,7 @@ internal static class ArmAnalyzer
         return true;
     }
 
-    public static void Analyze(ArmPatch arm, PatchableView view, PolicyArtifact policy, DiagnosticBag diagnostics)
+    public static void Analyze(ArmPatch arm, PatchableView view, DiagnosticBag diagnostics)
     {
         var analysis = MergePatchAnalyzer.Analyze(view.Document, arm.Patch);
         foreach (var error in analysis.Errors)
@@ -137,39 +135,13 @@ internal static class ArmAnalyzer
             arm.Valid = false;
         }
 
-        var patchable = ParsePrefixes(policy.ExperimentPatchable);
-        var addOnly = ParsePrefixes(policy.ExperimentAddOnly);
         var paramOps = new List<PatchOperation>();
         foreach (var op in analysis.Footprint)
         {
             var pointer = arm.PointerPrefix + op.Path;
             var tokens = op.Path.Tokens;
 
-            // 1. Authorization (policy.jsonc): patchable, or add-only with a new entry.
-            if (FirstPrefix(patchable, op.Path) is null)
-            {
-                if (FirstPrefix(addOnly, op.Path) is not { } root)
-                {
-                    diagnostics.Error("PATCH_NOT_ALLOWED", arm.Artifact, pointer,
-                        $"Experiments may not change '{op.Path}'.",
-                        $"patchable paths: {string.Join(", ", policy.ExperimentPatchable)}; add-only: {string.Join(", ", policy.ExperimentAddOnly)} (experiment_patchable and experiment_add_only in policy.jsonc)");
-                    arm.Valid = false;
-                    continue;
-                }
-
-                if (!(op.Kind == PatchOpKind.Add && op.Path.Depth == root.Depth + 1))
-                {
-                    if (!IsNoOp(op, view))
-                    {
-                        AddOnlyError(arm, diagnostics, pointer, root.ToString(), op);
-                    }
-
-                    continue;
-                }
-            }
-
-            // 2. Engine constraint, whatever the policy says: one schema is compiled for every arm, so schema
-            //    sections only take new entries (design 11.4 reason 2).
+            // 1. Schema sections only take new entries: one schema is compiled for every arm (design 11.4 reason 2).
             if (tokens.Length >= 1 && Array.IndexOf(SchemaSections, tokens[0]) >= 0)
             {
                 if (op.Kind != PatchOpKind.Add || tokens.Length != 2)
@@ -201,7 +173,7 @@ internal static class ArmAnalyzer
                 continue;
             }
 
-            // 3. Effects: what the arm changes in the plan.
+            // 2. Everything else the arm may change: parameters, nodes and taps; nothing outside the patchable view.
             arm.Footprint.Add(op);
             switch (tokens.Length == 0 ? string.Empty : tokens[0])
             {
@@ -361,31 +333,4 @@ internal static class ArmAnalyzer
     /// <summary>RFC 8785 equality: equal canonical forms (numbers compare by value, member order is irrelevant).</summary>
     public static bool JsonEquals(JsonNode? a, JsonNode? b) =>
         string.Equals(JsonCanonicalizer.CanonicalizeToString(a), JsonCanonicalizer.CanonicalizeToString(b), StringComparison.Ordinal);
-
-    private static List<JsonPointer> ParsePrefixes(List<string> prefixes)
-    {
-        var list = new List<JsonPointer>(prefixes.Count);
-        foreach (var p in prefixes)
-        {
-            if (JsonPointer.TryParse(p, out var parsed))
-            {
-                list.Add(parsed);
-            }
-        }
-
-        return list;
-    }
-
-    private static JsonPointer? FirstPrefix(List<JsonPointer> prefixes, JsonPointer path)
-    {
-        foreach (var prefix in prefixes)
-        {
-            if (prefix.IsPrefixOf(path))
-            {
-                return prefix;
-            }
-        }
-
-        return null;
-    }
 }

@@ -1,3 +1,4 @@
+using StrataRec.Artifacts.Json;
 using System.Text.Json.Nodes;
 
 namespace StrataRec.Artifacts.Model;
@@ -34,17 +35,21 @@ public sealed class ReleaseExperiment
     public required string Layer { get; init; }
 }
 
-/// <summary>Repository policy <c>policy.jsonc</c> (design 11.4): patchable paths and owners.</summary>
+/// <summary>
+/// Repository policy <c>policy.jsonc</c> (design 11.4): who reviews an experiment that touches a part of the pipeline.
+/// </summary>
+/// <remarks>
+/// Review only: it does not change what compiles or serves, so it is not part of a release. What experiments may change
+/// is the engine's rule (the patchable view), the same in every repository.
+/// </remarks>
 public sealed class PolicyArtifact
 {
-    /// <summary>RFC 6901 prefixes experiments may add, delete and modify under.</summary>
-    public List<string> ExperimentPatchable { get; init; } = new() { "/params", "/nodes", "/log_taps" };
-
-    /// <summary>RFC 6901 prefixes experiments may only add new entries under.</summary>
-    public List<string> ExperimentAddOnly { get; init; } = new() { "/columns", "/param_schema", "/features", "/derived_features", "/funnel_groups" };
-
-    /// <summary>RFC 6901 prefix → owning teams that must approve changes (mapped to code review).</summary>
-    public Dictionary<string, List<string>> Owners { get; init; } = new();
+    /// <summary>
+    /// RFC 6901 prefix into the patchable view → teams that review an experiment arm touching it, at or under the prefix,
+    /// or replacing what contains it, e.g. <c>{ "/nodes/safety_filter": ["trust-safety"] }</c>. <c>stratarec explain-plan</c>
+    /// lists each arm's owners for code review to route.
+    /// </summary>
+    public Dictionary<JsonPointer, List<string>> Owners { get; init; } = new();
 }
 
 /// <summary>Static lookup table for <c>lookup(table, key, default)</c> (design 7.6).</summary>

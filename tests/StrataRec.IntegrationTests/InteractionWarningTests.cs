@@ -128,7 +128,7 @@ public sealed class InteractionWarningTests
     }
 
     /// <summary>Adds an experiment of one arm (and a control) in a layer of its own.</summary>
-    private static void Experiment(string root, string id, string arm, string patch)
+    internal static void Experiment(string root, string id, string arm, string patch)
     {
         File.WriteAllText(Path.Combine(root, "experiments", id + ".jsonc"), $$"""
             { "experiment_id": "{{id}}", "pipeline_id": "home_feed", "owner": "t", "description": "d", "expires_at": "2099-01-01",

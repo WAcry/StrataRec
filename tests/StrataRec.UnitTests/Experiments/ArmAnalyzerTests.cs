@@ -29,7 +29,7 @@ public sealed class ArmAnalyzerTests
     { "catalog_id": "main", "features": { "item.ctr": { "type": "float32?", "source": "item_store", "field": "ctr" } } }
     """;
 
-    private static (ArmPatch Arm, DiagnosticBag Diagnostics) Analyze(string patch, PolicyArtifact? policy = null)
+    private static (ArmPatch Arm, DiagnosticBag Diagnostics) Analyze(string patch)
     {
         var view = PatchableView.Create(
             ArtifactSerializer.Deserialize<PipelineArtifact>(PipelineJson),
@@ -47,7 +47,7 @@ public sealed class ArmAnalyzerTests
             PointerPrefix = "/arms/treatment",
         };
         var diagnostics = new DiagnosticBag();
-        ArmAnalyzer.Analyze(arm, view, policy ?? new PolicyArtifact(), diagnostics);
+        ArmAnalyzer.Analyze(arm, view, diagnostics);
         return (arm, diagnostics);
     }
 
@@ -118,7 +118,7 @@ public sealed class ArmAnalyzerTests
     }
 
     [Fact]
-    public void PathsOutsideThePolicyAreRejected()
+    public void ChangingAFeatureDefinition_IsAddOnly()
     {
         var (_, diagnostics) = Analyze("""{ "features": { "item.ctr": { "source": "other" } } }""");
 
@@ -128,14 +128,14 @@ public sealed class ArmAnalyzerTests
     }
 
     [Fact]
-    public void PolicyCanRestrictPatchableRoots()
+    public void PathsOutsideThePatchableView_AreRejected_WithWhatIsPatchable()
     {
-        var policy = new PolicyArtifact { ExperimentPatchable = new() { "/params" } };
-        var (_, diagnostics) = Analyze("""{ "nodes": { "top_k": { "order": 450 } } }""", policy);
+        // The rule is the engine's, the same in every repository (design 11.4): policy.jsonc no longer narrows or widens it.
+        var (_, diagnostics) = Analyze("""{ "entity_key_type": "string" }""");
 
         var error = Assert.Single(diagnostics.Items);
-        Assert.Equal("PATCH_NOT_ALLOWED", error.Code);
-        Assert.Contains("/params", error.Hint);
+        Assert.Equal(("PATCH_NOT_ALLOWED", "/arms/treatment/entity_key_type"), (error.Code, error.Pointer));
+        Assert.Contains("/params, /nodes, /log_taps", error.Hint);
     }
 
     [Fact]
@@ -211,24 +211,9 @@ public sealed class ArmAnalyzerTests
     }
 
     [Fact]
-    public void AddOnlyNodePolicyStillRecordsTheAddedNode()
+    public void SchemaSectionsAreAddOnly()
     {
-        var policy = new PolicyArtifact { ExperimentPatchable = new() { "/params" }, ExperimentAddOnly = new() { "/nodes", "/columns" } };
-        var (arm, diagnostics) = Analyze("""{ "nodes": { "extra": { "order": 600, "op": "TopK@1", "config": { "score_col": "score.base", "k": 5 } } } }""", policy);
-
-        Assert.Empty(diagnostics.Items);
-        Assert.Equal(new[] { "extra" }, arm.AddedNodes);
-        Assert.Equal(new[] { "extra" }, arm.TouchedNodes);
-
-        var (_, modify) = Analyze("""{ "nodes": { "top_k": { "order": 450 } } }""", policy);
-        Assert.Equal("PATCH_ADD_ONLY", Assert.Single(modify.Items).Code);
-    }
-
-    [Fact]
-    public void SchemaSectionsStayAddOnlyEvenWhenThePolicyMakesThemPatchable()
-    {
-        var policy = new PolicyArtifact { ExperimentPatchable = new() { "/params", "/nodes", "/columns" } };
-        var (_, diagnostics) = Analyze("""{ "columns": { "score.base": { "type": "float64" } } }""", policy);
+        var (_, diagnostics) = Analyze("""{ "columns": { "score.base": { "type": "float64" } } }""");
 
         Assert.Equal("PATCH_ADD_ONLY", Assert.Single(diagnostics.Items).Code);
     }

@@ -43,7 +43,6 @@ internal static class InitTemplates
     /// <summary>The files, in the order init lists them.</summary>
     public static InitFile[] Files(string pipeline) =>
     [
-        new("policy.jsonc", "what experiments may change", Policy),
         new($"catalog/{pipeline}.jsonc", "entities and features", Catalog(pipeline)),
         new("bindings/local.jsonc", "the local environment: sources, model and recall bound to fixtures", Bindings),
         new(PipelinePath(pipeline), "the pipeline: parameters, nodes, output", Pipeline(pipeline)),
@@ -53,17 +52,6 @@ internal static class InitTemplates
         new("fixtures/recall.jsonc", "the candidates recall returns", Recall),
         new(RequestPath, $"a request, assigned to {ExperimentId}/{AssignedArm}", Request(pipeline)),
     ];
-
-    private const string Policy = """
-        // What experiments may change: RFC 6901 path prefixes into the pipeline. These are the defaults: narrow them to protect
-        // what experiments must not change, and add "owners" (path prefix → teams) to route reviews.
-        {
-          "$schema": "schemas/policy.schema.json",
-          "experiment_patchable": ["/params", "/nodes", "/log_taps"],
-          "experiment_add_only": ["/columns", "/param_schema", "/features", "/derived_features", "/funnel_groups"]
-        }
-
-        """;
 
     private static string Catalog(string pipeline) => $$"""
         // The features pipelines read, by entity (here one: the candidate item, keyed by its id). Replace the item features

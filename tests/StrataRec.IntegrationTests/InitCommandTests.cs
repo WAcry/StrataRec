@@ -107,7 +107,7 @@ public sealed class InitCommandTests
         var workspace = Path.Combine(temp.Path, "ws");
         Assert.Equal(0, Init(workspace, InitTemplates.DefaultPipeline, force: false, out _, out _));
         Assert.Equal(2, Init(workspace, InitTemplates.DefaultPipeline, force: false, out _, out errors));
-        Assert.Contains("'policy.jsonc' is in the way", errors);
+        Assert.Contains($"'{Path.Combine("catalog", "feed.jsonc")}' is in the way", errors);
         Assert.Contains($"overwrite the {InitCommand.Files(Tool.Environment, InitTemplates.DefaultPipeline).Length} files", errors); // schemas/ too
     }
 
@@ -120,7 +120,7 @@ public sealed class InitCommandTests
 
         Assert.Equal(0, Init(temp.Path, InitTemplates.DefaultPipeline, force: false, out _, out var errors));
         Assert.Empty(errors);
-        Assert.True(File.Exists(Path.Combine(temp.Path, "policy.jsonc")));
+        Assert.True(File.Exists(Path.Combine(temp.Path, "catalog", "feed.jsonc")));
         Assert.Equal("bin/\n", File.ReadAllText(Path.Combine(temp.Path, ".gitignore")));
         Assert.True(Directory.Exists(Path.Combine(temp.Path, ".git")));
 
@@ -168,7 +168,7 @@ public sealed class InitCommandTests
         Assert.Equal(0, Init(root, "other", force: false, out _, out _));
         File.WriteAllText(Path.Combine(root, "notes.txt"), "mine");
         File.WriteAllText(Path.Combine(root, "fixtures", "extra.json"), "{}");
-        File.WriteAllText(Path.Combine(root, "policy.jsonc"), "edited");
+        File.WriteAllText(Path.Combine(root, "bindings", "local.jsonc"), "edited");
 
         Assert.Equal(0, Init(root, InitTemplates.DefaultPipeline, force: true, out var printed, out var errors));
 
@@ -183,7 +183,7 @@ public sealed class InitCommandTests
         }
 
         var lines = printed.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
-        Assert.Contains(lines, l => l.Contains("policy.jsonc", StringComparison.Ordinal) && l.EndsWith("(overwritten)", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.Contains($"bindings{Path.DirectorySeparatorChar}local.jsonc", StringComparison.Ordinal) && l.EndsWith("(overwritten)", StringComparison.Ordinal));
         Assert.Contains(lines, l => l.Contains($"pipelines{Path.DirectorySeparatorChar}feed.jsonc", StringComparison.Ordinal) && !l.Contains("overwritten", StringComparison.Ordinal));
 
         // Two pipelines now: validate and explain-plan are told which one.
@@ -286,7 +286,7 @@ public sealed class InitCommandTests
     }
 
     [Theory]
-    [InlineData("policy.jsonc", "file")] // the file itself, pointing at a file outside
+    [InlineData("bindings/local.jsonc", "file")] // the file itself, pointing at a file outside
     [InlineData("fixtures", "directory")] // a directory on the way, pointing at one outside
     [InlineData("catalog", "nowhere")] // a dangling link
     public void Force_NeverWritesThroughASymbolicLink_AndWritesNothing(string link, string target)
@@ -300,6 +300,12 @@ public sealed class InitCommandTests
         File.WriteAllText(outsideFile, "do not change");
         Directory.CreateDirectory(outsideDirectory);
         var pointsAt = target switch { "file" => outsideFile, "directory" => outsideDirectory, _ => Path.Combine(temp.Path, "nowhere") };
+        var top = link.Split('/')[0];
+        if (top != link)
+        {
+            Directory.CreateDirectory(Path.Combine(root, top));
+        }
+
         if (target == "directory")
         {
             Directory.CreateSymbolicLink(Path.Combine(root, link), pointsAt);
@@ -313,11 +319,15 @@ public sealed class InitCommandTests
 
         Assert.Empty(printed);
         Assert.Contains("INIT_PATH_IS_LINK", errors);
-        Assert.Contains($"'{link}' is a symbolic link", errors);
+        Assert.Contains($"'{link.Replace('/', Path.DirectorySeparatorChar)}' is a symbolic link", errors);
         Assert.Equal("do not change", File.ReadAllText(outsideFile));
         Assert.Empty(Directory.GetFileSystemEntries(outsideDirectory));
         Assert.False(File.Exists(Path.Combine(temp.Path, "nowhere")));
-        Assert.Equal(new[] { link }, Directory.GetFileSystemEntries(root).Select(Path.GetFileName)); // nothing written
+        Assert.Equal(new[] { top }, Directory.GetFileSystemEntries(root).Select(Path.GetFileName)); // nothing written
+        if (top != link)
+        {
+            Assert.Single(Directory.GetFileSystemEntries(Path.Combine(root, top)));
+        }
     }
 
     [Fact]
@@ -330,7 +340,7 @@ public sealed class InitCommandTests
 
         Assert.Equal(0, Init(link, InitTemplates.DefaultPipeline, force: false, out _, out var errors));
         Assert.Empty(errors);
-        Assert.True(File.Exists(Path.Combine(real, "policy.jsonc")));
+        Assert.True(File.Exists(Path.Combine(real, "catalog", "feed.jsonc")));
     }
 
     [Fact]
