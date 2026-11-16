@@ -17,16 +17,22 @@ public sealed class FeatureCatalogArtifact
 }
 
 /// <summary>An entity that features hang off (design 6.2).</summary>
+/// <remarks>
+/// Only the key is declared. Whether the entity is per request or per candidate, and the key's type, follow from it: a
+/// request input (<c>ctx.request.user_id</c>) keys a context entity and has its declared type; <c>col.entity_id</c> keys
+/// the candidates and has the pipeline's <c>entity_key_type</c>; a feature (<c>col.item.creator_id</c>) is a foreign key
+/// of that feature's type; a request input and a candidate column together key a cross entity. Declaring scope and key
+/// type as well only gave them a way to disagree: a <c>key_type</c> of int64 on <c>col.entity_id</c> in a pipeline of
+/// string ids made every lookup miss without an error.
+/// </remarks>
 public sealed class EntitySpec
 {
-    /// <summary><c>context</c> or <c>candidate</c>.</summary>
-    public required string Scope { get; init; }
-
-    /// <summary>Key reference (string) or, for cross entities, a list of references.</summary>
+    /// <summary>
+    /// What keys the entity: a request input (<c>ctx.request.user_id</c>), the candidate id (<c>col.entity_id</c>), a
+    /// candidate feature (<c>col.item.creator_id</c>), or for a cross entity a list of a request input and a candidate
+    /// column. Each key is an int64 or a string.
+    /// </summary>
     public required JsonNode Key { get; init; }
-
-    /// <summary><c>int64</c>/<c>string</c>, or a list matching <see cref="Key"/>.</summary>
-    public required JsonNode KeyType { get; init; }
 
     public string? Description { get; init; }
 }

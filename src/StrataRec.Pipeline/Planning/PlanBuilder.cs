@@ -1912,7 +1912,7 @@ public sealed class PlanBuilder
     private void DefineFeatures(SchemaSources sources, Dictionary<string, ColumnType> inputTypes, HashSet<string> unusableInputs)
     {
         var schema = Schema;
-        var catalog = FeatureCatalog.Build(sources.Catalog, inputTypes, _diagnostics, CatalogLabel, unusableInputs);
+        var catalog = FeatureCatalog.Build(sources.Catalog, inputTypes, schema.KeyType, _diagnostics, CatalogLabel, unusableInputs);
         foreach (var name in catalog.Unusable)
         {
             // Its entity decides the namespace; one that failed has none, so both are marked.

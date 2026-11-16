@@ -822,9 +822,9 @@ public class LocalFeatureTableTests
             {
               "catalog_id": "c",
               "entities": {
-                "item": { "scope": "candidate", "key": "col.entity_id", "key_type": "int64" },
-                "user": { "scope": "context", "key": "ctx.request.user_id", "key_type": "string" },
-                "user_item": { "scope": "candidate", "key": ["ctx.request.user_id", "col.entity_id"], "key_type": ["string", "int64"] }
+                "item": { "key": "col.entity_id" },
+                "user": { "key": "ctx.request.user_id" },
+                "user_item": { "key": ["ctx.request.user_id", "col.entity_id"] }
               },
               "features": {
                 "item.clicks": { "type": "float32", "source": "item_store", "field": "i_clk", "default": 0.0 },
@@ -840,7 +840,7 @@ public class LocalFeatureTableTests
             }
             """);
         var diagnostics = new DiagnosticBag();
-        var catalog = FeatureCatalog.Build(artifact, new Dictionary<string, ColumnType> { ["user_id"] = ColumnType.String }, diagnostics);
+        var catalog = FeatureCatalog.Build(artifact, new Dictionary<string, ColumnType> { ["user_id"] = ColumnType.String }, EntityKeyType.Int64, diagnostics);
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
 
         var items = LocalTableSchema.FromCatalog(catalog, "item_store", "item", LocalTableMode.Local);

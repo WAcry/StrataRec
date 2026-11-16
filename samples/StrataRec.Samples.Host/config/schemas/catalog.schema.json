@@ -23,15 +23,8 @@
       "additionalProperties": {
         "type": "object",
         "properties": {
-          "scope": {
-            "description": "context or candidate.",
-            "type": "string"
-          },
           "key": {
-            "description": "Key reference (string) or, for cross entities, a list of references."
-          },
-          "key_type": {
-            "description": "int64/string, or a list matching key."
+            "description": "What keys the entity: a request input (ctx.request.user_id), the candidate id (col.entity_id), a candidate feature (col.item.creator_id), or for a cross entity a list of a request input and a candidate column. Each key is an int64 or a string."
           },
           "description": {
             "type": [
@@ -41,9 +34,7 @@
           }
         },
         "required": [
-          "scope",
-          "key",
-          "key_type"
+          "key"
         ],
         "additionalProperties": false
       }

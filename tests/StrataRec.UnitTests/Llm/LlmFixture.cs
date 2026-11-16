@@ -82,8 +82,8 @@ internal static class LlmFixture
         Write(root, "catalog/c.jsonc", $$"""
             { "catalog_id": "c",
               "entities": {
-                "item": { "scope": "candidate", "key": "col.entity_id", "key_type": "{{(stringKeys ? "string" : "int64")}}" },
-                "user": { "scope": "context", "key": "ctx.request.user_id", "key_type": "int64" } },
+                "item": { "key": "col.entity_id" },
+                "user": { "key": "ctx.request.user_id" } },
               "features": {
                 "item.title":  { "type": "string",         "source": "items", "field": "title",  "default": "" },
                 "item.blurb":  { "type": "text",           "source": "items", "field": "blurb" },

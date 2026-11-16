@@ -487,7 +487,7 @@ public sealed class ModelRankerTests
         var root = Directory.CreateTempSubdirectory("stratarec-model-ranker-").FullName;
         Write(root, "catalog/c.jsonc", """
             { "catalog_id": "c",
-              "entities": { "item": { "scope": "candidate", "key": "col.entity_id", "key_type": "int64" } },
+              "entities": { "item": { "key": "col.entity_id" } },
               "features": {
                 "item.code": { "type": "int64",          "source": "items", "field": "code", "default": 0 },
                 "item.ctr":  { "type": "float64",        "source": "items", "field": "ctr",  "default": 0.0 },

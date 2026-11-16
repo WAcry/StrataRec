@@ -65,7 +65,7 @@ public class ListInt32EndToEndTests
         var root = Workspace();
         File.WriteAllText(Path.Combine(root, "catalog", "c.jsonc"), $$"""
             { "catalog_id": "c",
-              "entities": { "item": { "scope": "candidate", "key": "col.entity_id", "key_type": "int64" } },
+              "entities": { "item": { "key": "col.entity_id" } },
               "derived_features": { "item.narrow": { "type": "{{type}}", "expr": "{{expr}}" } } }
             """);
         var pipeline = Path.Combine(root, "pipelines", "p.jsonc");
@@ -90,7 +90,7 @@ public class ListInt32EndToEndTests
         var root = Workspace();
         File.WriteAllText(Path.Combine(root, "catalog", "c.jsonc"), """
             { "catalog_id": "c",
-              "entities": { "item": { "scope": "candidate", "key": "col.entity_id", "key_type": "int64" } },
+              "entities": { "item": { "key": "col.entity_id" } },
               "derived_features": { "item.narrow": { "type": "int32", "expr": "col.entity_id * 1500000000" } } }
             """);
         var pipeline = Path.Combine(root, "pipelines", "p.jsonc");

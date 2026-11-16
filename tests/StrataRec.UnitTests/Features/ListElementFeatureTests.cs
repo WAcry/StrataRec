@@ -176,13 +176,13 @@ public class ListElementFeatureTests
         var catalog = FeatureCatalog.Build(new StrataRec.Artifacts.Model.FeatureCatalogArtifact
         {
             CatalogId = "c",
-            Entities = new() { ["user"] = new() { Scope = "context", Key = JsonValue.Create("ctx.request.user_id"), KeyType = JsonValue.Create("int64") } },
+            Entities = new() { ["user"] = new() { Key = JsonValue.Create("ctx.request.user_id") } },
             DerivedFeatures = new()
             {
                 ["user.w"] = new() { Type = "list<float32>", Expr = "[0.5]", Default = JsonNode.Parse("[0.1, 2]") },
                 ["user.x"] = new() { Type = "float32", Expr = "0.5", Default = JsonNode.Parse("0.1") },
             },
-        }, new Dictionary<string, ColumnType> { ["user_id"] = ColumnType.Int64 }, new StrataRec.Artifacts.Model.DiagnosticBag());
+        }, new Dictionary<string, ColumnType> { ["user_id"] = ColumnType.Int64 }, EntityKeyType.Int64, new StrataRec.Artifacts.Model.DiagnosticBag());
 
         Assert.True(catalog.TryGet("user.w", out var w));
         Assert.True(w.Default.IsFloat32List);

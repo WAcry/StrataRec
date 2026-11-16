@@ -5,8 +5,8 @@
   "$schema": "../schemas/catalog.schema.json",
   "catalog_id": "trending",
   "entities": {
-    "user": { "scope": "context",   "key": "ctx.request.user_id", "key_type": "int64" },
-    "item": { "scope": "candidate", "key": "col.entity_id",       "key_type": "int64" }
+    "user": { "key": "ctx.request.user_id" },
+    "item": { "key": "col.entity_id" }
   },
   "features": {
     "user.affinity":  { "type": "float32", "source": "user_store", "field": "affinity",  "default": 0.0 },

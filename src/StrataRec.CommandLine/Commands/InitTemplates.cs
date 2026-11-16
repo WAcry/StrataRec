@@ -74,7 +74,7 @@ internal static class InitTemplates
           "$schema": "../schemas/catalog.schema.json",
           "catalog_id": "{{pipeline}}",
           "entities": {
-            "item": { "scope": "candidate", "key": "col.entity_id", "key_type": "int64" }
+            "item": { "key": "col.entity_id" }
           },
           "features": {
             "item.clicks_7d":      { "type": "float32", "source": "item_store", "field": "clicks_7d", "default": 0.0 },

@@ -306,7 +306,7 @@ public sealed class CandidateExplainerTests
         var root = Directory.CreateTempSubdirectory("stratarec-explain-").FullName;
         Write(root, "catalog/c.jsonc", $$"""
             { "catalog_id": "c",
-              "entities": { "item": { "scope": "candidate", "key": "col.entity_id", "key_type": "{{keyType}}" } },
+              "entities": { "item": { "key": "col.entity_id" } },
               "features": {
                 "item.quality": { "type": "float64", "source": "items", "field": "q",     "default": 0.0 },
                 "item.boost":   { "type": "float64", "source": "items", "field": "boost", "default": 0.0 },

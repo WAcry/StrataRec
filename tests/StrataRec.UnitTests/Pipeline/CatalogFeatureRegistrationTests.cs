@@ -76,7 +76,7 @@ public sealed class CatalogFeatureRegistrationTests
     {
         // owner is keyed by item.owner_id, computed from a feature of owner: the key would be needed to fetch itself.
         var compilation = TryCompile(
-            entities: """, "owner": { "scope": "candidate", "key": "col.item.owner_id", "key_type": "int64" }""",
+            entities: """, "owner": { "key": "col.item.owner_id" }""",
             features: """, "owner.rank": { "type": "float32", "source": "item_store", "field": "o_rank" }""",
             derived: """, "item.owner_id": { "type": "int64", "expr": "int(col.owner.rank ?? 0.0)" }""");
 
@@ -102,7 +102,7 @@ public sealed class CatalogFeatureRegistrationTests
         // An entity named 'request' makes ctx.request.<feature> collide with ctx.request.<input>; this threw while the plan
         // registered every feature.
         var compilation = TryCompile(
-            entities: """, "request": { "scope": "context", "key": "ctx.request.user_id", "key_type": "int64" }""",
+            entities: """, "request": { "key": "ctx.request.user_id" }""",
             features: """, "request.user_id": { "type": "int64", "source": "user_store", "field": "u_id" }""",
             expr: "col.item.boost + (ctx.request.user_id ?? 0)");
 
@@ -213,9 +213,9 @@ public sealed class CatalogFeatureRegistrationTests
         Write(root, "catalog/c.jsonc", $$"""
             { "catalog_id": "c",
               "entities": {
-                "user":   { "scope": "context",   "key": "ctx.request.user_id", "key_type": "int64" },
-                "item":   { "scope": "candidate", "key": "col.entity_id",       "key_type": "int64" },
-                "author": { "scope": "candidate", "key": "col.item.author_id",  "key_type": "int64" }
+                "user":   { "key": "ctx.request.user_id" },
+                "item":   { "key": "col.entity_id" },
+                "author": { "key": "col.item.author_id" }
                 {{entities}} },
               "features": {
                 "user.age":         { "type": "float32", "source": "user_store",   "field": "u_age", "default": 0.0 },

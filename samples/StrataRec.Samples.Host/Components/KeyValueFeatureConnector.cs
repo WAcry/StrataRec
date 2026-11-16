@@ -99,7 +99,7 @@ public sealed class KeyValueFeatureConnector : IFeatureSourceConnector, ILoadabl
             {
                 if (batch[i].IsString)
                 {
-                    return FetchStatus.Failed("kv_store@1 is keyed by int64; declare the entity's key_type as int64.");
+                    return FetchStatus.Failed("kv_store@1 is keyed by int64; key the entity by int64 ids (an int64 entity_key_type, request input or key feature).");
                 }
 
                 records[i] = store.Records.TryGetValue(batch[i].Int64Value, out var record) ? record : -1;

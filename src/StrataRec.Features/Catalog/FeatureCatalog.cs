@@ -40,7 +40,9 @@ public sealed class EntityDefinition
     /// </summary>
     public string? CandidateKeyColumn { get; init; }
 
-    public EntityKeyType? CandidateKeyType { get; init; }
+    /// <summary>The candidate key's type: the pipeline's for <c>entity_id</c>, the key feature's for a foreign key (set when
+    /// the features are built).</summary>
+    public EntityKeyType? CandidateKeyType { get; internal set; }
 
     public bool IsContextScoped => Kind == EntityKind.Context;
 
@@ -132,12 +134,14 @@ public sealed class FeatureCatalog
     public bool TryGet(string name, out FeatureDefinition feature) => _features.TryGetValue(name, out feature!);
 
     /// <summary>Validates and compiles a catalog artifact. Problems go to <paramref name="diagnostics"/>.</summary>
-    /// <param name="requestSchema">Request input name → type, for context-key validation.</param>
+    /// <param name="requestSchema">Request input name → type: the type of a context key.</param>
+    /// <param name="entityKeyType">The pipeline's <c>entity_key_type</c>: the type of <c>col.entity_id</c> as a key.</param>
     /// <param name="unusableInputs">Request inputs declared with an error reported already (an unknown type): an entity
     /// keyed by one fails without a second error, and so do its features.</param>
     public static FeatureCatalog Build(
         FeatureCatalogArtifact artifact,
         IReadOnlyDictionary<string, ColumnType> requestSchema,
+        EntityKeyType entityKeyType,
         DiagnosticBag diagnostics,
         string artifactName = "catalog",
         IReadOnlySet<string>? unusableInputs = null)
@@ -150,7 +154,7 @@ public sealed class FeatureCatalog
         foreach (var name in entityNames)
         {
             var spec = artifact.Entities[name];
-            var entity = BuildEntity(name, spec, requestSchema, unusableInputs, diagnostics, artifactName);
+            var entity = BuildEntity(name, spec, requestSchema, entityKeyType, unusableInputs, diagnostics, artifactName);
             if (entity is not null)
             {
                 entities[name] = entity;
@@ -277,29 +281,16 @@ public sealed class FeatureCatalog
     }
 
     private static EntityDefinition? BuildEntity(
-        string name, EntitySpec spec, IReadOnlyDictionary<string, ColumnType> requestSchema, IReadOnlySet<string>? unusableInputs,
-        DiagnosticBag diagnostics, string artifactName)
+        string name, EntitySpec spec, IReadOnlyDictionary<string, ColumnType> requestSchema, EntityKeyType entityKeyType,
+        IReadOnlySet<string>? unusableInputs, DiagnosticBag diagnostics, string artifactName)
     {
         var pointer = "/entities/" + EscapePointer(name);
         var keys = StringsOf(spec.Key);
-        var keyTypes = StringsOf(spec.KeyType);
-        if (keys.Length != keyTypes.Length || keys.Length is < 1 or > 2)
+        if (keys.Length is < 1 or > 2)
         {
-            diagnostics.Error("ENTITY_BAD_KEY", artifactName, pointer, "'key' and 'key_type' must both have one element, or two for cross entities.");
+            diagnostics.Error("ENTITY_BAD_KEY", artifactName, pointer + "/key", "'key' is one reference, or a list of two for a cross entity.",
+                "e.g. \"key\": \"col.entity_id\", or \"key\": [\"ctx.request.user_id\", \"col.entity_id\"]");
             return null;
-        }
-
-        var parsedTypes = new EntityKeyType[keys.Length];
-        for (var i = 0; i < keyTypes.Length; i++)
-        {
-            switch (keyTypes[i])
-            {
-                case "int64": parsedTypes[i] = EntityKeyType.Int64; break;
-                case "string": parsedTypes[i] = EntityKeyType.String; break;
-                default:
-                    diagnostics.Error("ENTITY_BAD_KEY", artifactName, pointer + "/key_type", $"Unknown key type '{keyTypes[i]}'.", "use int64 or string");
-                    return null;
-            }
         }
 
         string? ctxInput = null;
@@ -309,7 +300,8 @@ public sealed class FeatureCatalog
         for (var i = 0; i < keys.Length; i++)
         {
             var key = keys[i];
-            if (key.StartsWith("ctx.request.", StringComparison.Ordinal))
+            var at = keys.Length == 1 ? pointer + "/key" : pointer + "/key/" + i;
+            if (key.StartsWith("ctx.request.", StringComparison.Ordinal) && ctxInput is null)
             {
                 var input = key["ctx.request.".Length..];
                 if (!requestSchema.TryGetValue(input, out var inputType))
@@ -319,63 +311,42 @@ public sealed class FeatureCatalog
                         return null; // its declaration's error is reported; the entity fails with it
                     }
 
-                    diagnostics.Error("ENTITY_BAD_KEY", artifactName, pointer + "/key",
+                    diagnostics.Error("ENTITY_BAD_KEY", artifactName, at,
                         $"Request input '{input}' is not declared in the pipeline's request_schema.",
                         NameSuggestions.DidYouMean(input, requestSchema.Keys));
                     return null;
                 }
 
-                var expected = parsedTypes[i] == EntityKeyType.Int64 ? StorageKind.Int64 : StorageKind.String;
-                if (inputType.Promoted().Kind != expected)
+                if (KeyTypeOf(inputType) is not { } type)
                 {
-                    diagnostics.Error("ENTITY_BAD_KEY", artifactName, pointer + "/key",
-                        $"Request input '{input}' has type {inputType}, but the key type is {keyTypes[i]}.");
+                    diagnostics.Error("ENTITY_BAD_KEY", artifactName, at,
+                        $"Request input '{input}' has type {inputType}; an entity key is an int64 or a string.",
+                        "key the entity by an int64 or string input");
                     return null;
                 }
 
                 ctxInput = input;
-                ctxType = parsedTypes[i];
+                ctxType = type;
             }
-            else if (key.StartsWith("col.", StringComparison.Ordinal))
+            else if (key.StartsWith("col.", StringComparison.Ordinal) && candCol is null)
             {
                 candCol = key["col.".Length..];
-                candType = parsedTypes[i];
+                candType = candCol == "entity_id" ? entityKeyType : null; // a foreign key's is its feature's, set with the features
             }
             else
             {
-                diagnostics.Error("ENTITY_BAD_KEY", artifactName, pointer + "/key",
-                    $"Key '{key}' must reference a request input (ctx.request.*) or a candidate column (col.*).");
+                diagnostics.Error("ENTITY_BAD_KEY", artifactName, at,
+                    keys.Length == 1
+                        ? $"Key '{key}' must reference a request input (ctx.request.*) or a candidate column (col.*)."
+                        : $"Key '{key}': a cross entity is keyed by one request input (ctx.request.*) and one candidate column (col.*).");
                 return null;
             }
         }
 
-        EntityKind kind;
-        if (spec.Scope == "context")
-        {
-            if (ctxInput is null || candCol is not null)
-            {
-                diagnostics.Error("ENTITY_BAD_KEY", artifactName, pointer, "Context entities are keyed by exactly one request input (ctx.request.*).");
-                return null;
-            }
-
-            kind = EntityKind.Context;
-        }
-        else if (spec.Scope == "candidate")
-        {
-            if (candCol is null)
-            {
-                diagnostics.Error("ENTITY_BAD_KEY", artifactName, pointer, "Candidate entities need a candidate key (col.*).");
-                return null;
-            }
-
-            kind = ctxInput is not null ? EntityKind.Cross : candCol == "entity_id" ? EntityKind.Candidate : EntityKind.ForeignKey;
-        }
-        else
-        {
-            diagnostics.Error("ENTITY_BAD_SCOPE", artifactName, pointer + "/scope", $"Unknown scope '{spec.Scope}'.", "use context or candidate");
-            return null;
-        }
-
+        var kind = candCol is null ? EntityKind.Context
+            : ctxInput is not null ? EntityKind.Cross
+            : candCol == "entity_id" ? EntityKind.Candidate
+            : EntityKind.ForeignKey;
         return new EntityDefinition
         {
             Name = name,
@@ -386,6 +357,14 @@ public sealed class FeatureCatalog
             CandidateKeyType = candType,
         };
     }
+
+    /// <summary>The key type a value of <paramref name="type"/> keys an entity with; null when it cannot be a key.</summary>
+    private static EntityKeyType? KeyTypeOf(ColumnType type) => type.Promoted().Kind switch
+    {
+        StorageKind.Int64 => EntityKeyType.Int64,
+        StorageKind.String => EntityKeyType.String,
+        _ => null,
+    };
 
     private static void ValidateForeignKeys(
         Dictionary<string, EntityDefinition> entities, Dictionary<string, FeatureDefinition> features, SortedSet<string> unusable,
@@ -412,13 +391,15 @@ public sealed class FeatureCatalog
                 continue;
             }
 
-            var expected = entity.CandidateKeyType == EntityKeyType.Int64 ? StorageKind.Int64 : StorageKind.String;
-            if (keyFeature.IsContext || keyFeature.Type.Promoted().Kind != expected)
+            if (keyFeature.IsContext || KeyTypeOf(keyFeature.Type) is not { } keyType)
             {
                 diagnostics.Error("ENTITY_BAD_KEY", artifactName, pointer,
-                    $"Key column '{keyFeature.Name}' must be a candidate feature of type {expected}.");
+                    $"Key column '{keyFeature.Name}' must be a candidate feature of type int64 or string, got {(keyFeature.IsContext ? "a context feature" : keyFeature.Type.ToString())}.",
+                    "key the entity by a candidate feature holding int64 or string ids");
                 continue;
             }
+
+            entity.CandidateKeyType = keyType;
 
             // Foreign-key chains must terminate (design 6.7: cycles are configuration errors).
             var seen = new HashSet<string>(StringComparer.Ordinal) { entity.Name };

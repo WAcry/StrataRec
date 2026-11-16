@@ -689,10 +689,10 @@ internal sealed class RequestMemory
 {
   "catalog_id": "home_feed",
   "entities": {
-    "user":      { "scope": "context",   "key": "ctx.request.user_id", "key_type": "int64" },
-    "item":      { "scope": "candidate", "key": "col.entity_id",       "key_type": "int64" },
-    "creator":   { "scope": "candidate", "key": "col.item.creator_id", "key_type": "int64" },
-    "user_item": { "scope": "candidate", "key": ["ctx.request.user_id", "col.entity_id"], "key_type": ["int64", "int64"] }
+    "user":      { "key": "ctx.request.user_id" },
+    "item":      { "key": "col.entity_id" },
+    "creator":   { "key": "col.item.creator_id" },
+    "user_item": { "key": ["ctx.request.user_id", "col.entity_id"] }
   },
   "features": {
     "user.tenure_days":         { "type": "float32", "source": "user_profile", "field": "u_tenure_d", "default": 0.0, "owner": "growth" },
@@ -722,7 +722,7 @@ internal sealed class RequestMemory
 3. 声明了 `default` 的特征类型为 `T`，没有声明的为 `T?`。`item.age_hours` 的类型是 `float32?`，用它打分或过滤的表达式必须写 `??`；`user.embedding` 和 `item.embedding` 也是可空的，所以 `dot` 的结果是 `float64?`，`user_item.embedding_dot` 用 `?? 0.0` 把它消解为非可空值（第 7.4 节）。
 4. 衍生特征的可空性由表达式推导：`item.smoothed_ctr_7d` 的输入都有默认值，结果是 `T`。衍生特征也可以显式声明 `default`：例如 `clicks / impressions` 在曝光为 0 时得到非有限值，声明 `"default": 0.0` 之后这些行取默认值并计数，特征类型为 `T`。
 5. `creator` 的主键来自候选表中的 `item.creator_id`，引擎由此识别出外键关系：拉取创作者特征之前，必须先有 `item.creator_id`。
-6. 实体的 `key_type` 可以是 `int64` 或 `string`；交叉实体的 `key_type` 是一个列表，与 `key` 一一对应。
+6. 实体只声明 `key`，类别和键的类型都由它决定（第 6.2 节的表）：请求输入做键是上下文实体，键的类型是该输入在 `request_schema` 中的类型；`col.entity_id` 做键是候选实体，键的类型是流水线的 `entity_key_type`；候选表的另一列做键是外键实体，键的类型是那个特征的类型；一个请求输入加一个候选列是交叉实体。键必须是 `int64` 或 `string`（`int32` 按 `int64`）。
 7. 衍生特征用 `ColumnExpr` 定义。只引用上下文特征的衍生特征每个请求算一次，引用候选列的按列计算。衍生特征被多个节点使用时只计算一次，结果写入候选表。
 8. 一份特征目录由多条流水线共用，计划只包含它读到的特征。编译时某个名字第一次解析到目录特征，才把它加入计划（分配槽位或上下文位置）：衍生特征这时编译，它读的特征随之加入；外键实体的特征先加入它的键；`cache` 数据源的特征把同一张表的全部特征一起加入（第 6.6 节）。节点（含后备节点和所有臂的变体）、`when`、探针、输出、漏斗组的键和模型输入都经过同一个名字解析，没有遗漏的引用路径。请求期按特征、槽位和上下文字段计的开销只随计划读到的特征增长，与目录大小无关；绑定也只解析计划读到的数据源，目录里只有别的环境才绑定的数据源不影响这条流水线。目录内容仍然整体检查：每个衍生特征都编译一次，不论是否被读，表达式错误和依赖环（`FEATURE_CYCLE`）照常报告；读一个有错误的衍生特征不再重复报错。
 

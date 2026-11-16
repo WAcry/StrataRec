@@ -54,7 +54,7 @@ public sealed class CompactionTests
 
         var root = Directory.CreateTempSubdirectory("stratarec-compaction-").FullName;
         Write(root, "catalog/c.jsonc", $$"""
-            { "catalog_id": "c", "entities": { "item": { "scope": "candidate", "key": "col.entity_id", "key_type": "{{keyType}}" } }, "features": {} }
+            { "catalog_id": "c", "entities": { "item": { "key": "col.entity_id" } }, "features": {} }
             """);
         Write(root, "bindings/local.jsonc", $$"""
             { "environment": "local",

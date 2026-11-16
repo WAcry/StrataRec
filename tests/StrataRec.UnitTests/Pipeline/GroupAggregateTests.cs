@@ -237,7 +237,7 @@ public sealed class GroupAggregateTests
         var root = Directory.CreateTempSubdirectory("stratarec-group-aggregate-").FullName;
         Write(root, "catalog/c.jsonc", """
             { "catalog_id": "c",
-              "entities": { "item": { "scope": "candidate", "key": "col.entity_id", "key_type": "int64" } },
+              "entities": { "item": { "key": "col.entity_id" } },
               "features": {
                 "item.author": { "type": "int64",   "source": "items", "field": "author" },
                 "item.tag":    { "type": "string",  "source": "items", "field": "tag", "default": "" },
