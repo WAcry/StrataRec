@@ -75,7 +75,7 @@ public sealed class SourceBindingArtifact
 /// <summary>Binding of a logical feature source (design 6.4, 6.6).</summary>
 /// <remarks>
 /// <c>mode</c> selects which of the other settings apply: <c>fetch</c> uses <c>connector</c>, <c>timeout_ms</c>,
-/// <c>max_batch</c>, <c>lookup</c> and connector settings; <c>local</c> uses <c>max_bytes</c> and <c>bootstrap</c>;
+/// <c>max_batch</c> and connector settings; <c>local</c> uses <c>max_bytes</c> and <c>bootstrap</c>;
 /// <c>cache</c> uses the connector and its settings (the origin), <c>timeout_ms</c>, <c>max_batch</c>, <c>max_bytes</c>
 /// and <c>cache</c>. A setting the binding's mode does not take is an error (the Features runtime checks it, with the
 /// pointer of the setting), so a binding switched from one mode to another cannot keep a setting that silently does

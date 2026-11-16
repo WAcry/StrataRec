@@ -2023,7 +2023,7 @@ stateDiagram-v2
 
 1. **上线**：实验合并到仓库后进入 Validated。发布控制器把它加入 manifest 之前，先运行 manifest 校验（第 10.5 节），通过后进入 Released。Released 期间的流量由实验平台控制：平台从小比例开始分配、逐步扩量，也可以随时停止分配；这些变化不经过引擎（第 11.2 节）。
 2. **毕业**：把胜出桶的补丁按 RFC 7396 应用到基线，形成新的基线，再删除该实验。CI 随后用新基线重新校验所有在线实验（相当于 rebase），有冲突时通知对应的 owner。其他实验中与新基线完全相同的新增条目视为空操作（第 11.4 节）。
-3. **过期**：每个实验必须声明 `expires_at`。`stratarec validate` 和 `stratarec build` 在到期前 14 天内给出警告 `EXPERIMENT_EXPIRING`（CI 用 `--warnings-as-errors` 时就是错误）；过期的实验在这两个命令中是错误，不能进入新的 manifest，owner 必须决定毕业或结束，被遗忘的实验不会长期留在配置里。日期只在决定发布的这两个命令里检查：宿主加载计划、`run`、`explain-plan`、`replay` 等命令不看日期，服务不会因为日历翻过一天而起不来，上周的请求也照样能回放。
+3. **过期**：每个实验必须声明 `expires_at`。`stratarec validate` 和 `stratarec build` 在到期前 14 天内给出警告 `EXPERIMENT_EXPIRING`（CI 运行 `validate --warnings-as-errors` 时就是错误）；过期的实验在这两个命令中是错误，不能进入新的 manifest，owner 必须决定毕业或结束，被遗忘的实验不会长期留在配置里。日期只在决定发布的这两个命令里检查：宿主加载计划、`run`、`explain-plan`、`replay` 等命令不看日期，服务不会因为日历翻过一天而起不来，上周的请求也照样能回放。
 4. **清理**：`stratarec lint` 报告没有被任何节点引用的参数、特征和探针。
 
 ### 11.8 参数 Schema 与参数扁平化
