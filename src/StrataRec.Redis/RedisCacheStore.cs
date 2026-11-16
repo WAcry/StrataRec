@@ -1,8 +1,6 @@
 using System.Globalization;
 using System.Net;
-using System.Text.Json;
 using StackExchange.Redis;
-using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Features.Cache;
@@ -16,10 +14,7 @@ namespace StrataRec.Redis;
 /// gives (the record's lifetime and its <c>stale_if_error_ms</c> window).
 /// </summary>
 /// <remarks>
-/// <para><b>Settings</b> (members of <c>cache.distributed</c> besides <c>store</c> and <c>timeout_ms</c>):
-/// <c>endpoint</c> (required, <c>host:port</c>; for a cluster, any node), <c>key_prefix</c> (default
-/// <c>stratarec:</c>), <c>user</c> (an ACL user), <c>password</c> (a <c>secret://</c> reference), <c>tls</c> (default
-/// false), <c>database</c> (default 0; a cluster has only 0).</para>
+/// <para><b>Settings:</b> <see cref="RedisSettings"/>.</para>
 /// <para><b>Round trips.</b> A read is one round trip per chunk: one <c>MGET</c> on a standalone server; on a cluster, whose
 /// <c>MGET</c> cannot span hash slots, pipelined <c>GET</c>s, sent together. A write is one pipelined batch of
 /// <c>SET … PX</c>. Keys are not hash-tagged, so a keyspace spreads over the cluster's shards.</para>
@@ -356,63 +351,56 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
 /// <summary>The checked settings of one <c>redis@1</c> binding.</summary>
 internal sealed record RedisStoreSettings(string Endpoint, string KeyPrefix, string? User, SecretReference? Password, bool Tls, int Database);
 
-/// <summary>Creates <see cref="RedisCacheStore"/>s; register it with <see cref="RedisRegistration.AddRedis"/>.</summary>
-public sealed class RedisCacheStoreFactory : IFeatureCacheStoreFactory
+/// <summary>Settings of <c>redis@1</c>: the members of <c>cache.distributed</c> besides <c>store</c> and <c>timeout_ms</c>.</summary>
+public sealed class RedisSettings
 {
-    private static readonly string[] Known = ["endpoint", "key_prefix", "user", "password", "tls", "database"];
+    /// <summary>The server as host:port, e.g. <c>redis.internal:6379</c>; for a cluster, any of its nodes.</summary>
+    public required string Endpoint { get; init; }
 
-    public string StoreType => RedisCacheStore.Type;
+    /// <summary>What every key starts with (default <c>stratarec:</c>), so that services sharing a server keep apart.</summary>
+    public string KeyPrefix { get; init; } = "stratarec:";
 
-    public IFeatureCacheStore Create(BindingContext context)
+    /// <summary>The ACL user to authenticate as.</summary>
+    public string? User { get; init; }
+
+    /// <summary>The password, as a reference to the host's secret store (<c>secret://name</c>), resolved at load.</summary>
+    public SecretReference? Password { get; init; }
+
+    /// <summary>Connect over TLS (default false).</summary>
+    public bool Tls { get; init; }
+
+    /// <summary>The database number (default 0; a cluster has only 0).</summary>
+    public int Database { get; init; }
+}
+
+/// <summary>Creates <see cref="RedisCacheStore"/>s; register it with <see cref="RedisRegistration.AddRedis"/>.</summary>
+public sealed class RedisCacheStoreFactory : FeatureCacheStoreFactory<RedisSettings>
+{
+    public override string StoreType => RedisCacheStore.Type;
+
+    protected override IFeatureCacheStore Create(RedisSettings settings, BindingContext context)
     {
-        ArgumentNullException.ThrowIfNull(context);
-        foreach (var (name, _) in context.Settings)
+        if (!IsEndpoint(settings.Endpoint))
         {
-            if (Array.IndexOf(Known, name) < 0)
-            {
-                throw new BindingException("/" + BindingContext.EscapePointerToken(name), $"'{name}' is not a setting of {RedisCacheStore.Type}.",
-                    NameSuggestions.DidYouMean(name, Known) ?? $"its settings are {string.Join(", ", Known)}");
-            }
+            throw new BindingException("/endpoint", $"'{settings.Endpoint}' is not a host and port.", "write it as host:port, e.g. \"redis.internal:6379\"");
         }
 
-        var endpoint = String(context, "endpoint") ?? throw new BindingException(string.Empty, $"{RedisCacheStore.Type} needs an 'endpoint'.",
-            "add the server, e.g. \"endpoint\": \"redis.internal:6379\" (for a cluster, any of its nodes)");
-        if (!IsEndpoint(endpoint))
+        if (settings.KeyPrefix.Length == 0)
         {
-            throw new BindingException("/endpoint", $"'{endpoint}' is not a host and port.", "write it as host:port, e.g. \"redis.internal:6379\"");
+            throw new BindingException("/key_prefix", "'key_prefix' must not be empty.", "leave it out for the prefix 'stratarec:'");
         }
 
-        var keyPrefix = String(context, "key_prefix") ?? "stratarec:";
-        var database = 0;
-        if (context.Settings.TryGetValue("database", out var db) && (db.ValueKind != JsonValueKind.Number || !db.TryGetInt32(out database) || database < 0))
+        if (settings.User is { Length: 0 })
+        {
+            throw new BindingException("/user", "'user' must not be empty.", "name the ACL user, or leave it out for the default user");
+        }
+
+        if (settings.Database < 0)
         {
             throw new BindingException("/database", "'database' must be a database number, 0 or more.", "leave it out for database 0 (a cluster has only 0)");
         }
 
-        var tls = false;
-        if (context.Settings.TryGetValue("tls", out var t))
-        {
-            tls = t.ValueKind switch
-            {
-                JsonValueKind.True => true,
-                JsonValueKind.False => false,
-                _ => throw new BindingException("/tls", "'tls' must be true or false.", "write \"tls\": true to connect over TLS"),
-            };
-        }
-
-        return new RedisCacheStore(new RedisStoreSettings(endpoint, keyPrefix, String(context, "user"), context.SecretReference("password"), tls, database));
-    }
-
-    private static string? String(BindingContext context, string setting)
-    {
-        if (!context.Settings.TryGetValue(setting, out var value))
-        {
-            return null;
-        }
-
-        return value.ValueKind == JsonValueKind.String && value.GetString() is { Length: > 0 } text
-            ? text
-            : throw new BindingException("/" + setting, $"'{setting}' must be a non-empty string.");
+        return new RedisCacheStore(new RedisStoreSettings(settings.Endpoint, settings.KeyPrefix, settings.User, settings.Password, settings.Tls, settings.Database));
     }
 
     private static bool IsEndpoint(string endpoint)

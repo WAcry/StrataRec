@@ -582,7 +582,8 @@ public sealed class BindingHostClientTests
         var factory = new Factory();
         using var lease = host.OpenLease();
         var instance = lease.Acquire(Spec(factory, """{ "uri": "m.bin", "credentials": "secret://ctr-token" }"""), factory.Create);
-        instance.OnLoad = async token => instance.Credential = await instance.Context.SecretReference("credentials")!.ResolveAsync(token);
+        instance.OnLoad = async token =>
+            instance.Credential = await instance.Context.SecretReference(instance.Context.Settings["credentials"], "/credentials").ResolveAsync(token);
         instance.FinishLoad();
 
         Assert.Empty(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken));

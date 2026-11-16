@@ -307,6 +307,8 @@ public sealed class MetricsTests
     {
         public string ClientType => inner.ClientType;
 
+        public Type SettingsType => inner.SettingsType;
+
         public IModelClient Create(BindingContext context) => new Client(inner.Create(context));
 
         private sealed class Client(IModelClient inner) : IModelClient
@@ -324,6 +326,8 @@ public sealed class MetricsTests
     private sealed class TimingOutSources(ICandidateSourceFactory inner) : ICandidateSourceFactory
     {
         public string ClientType => inner.ClientType;
+
+        public Type SettingsType => inner.SettingsType;
 
         public ICandidateSource Create(BindingContext context) =>
             new Source(inner.Create(context));

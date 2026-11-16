@@ -137,69 +137,53 @@ public sealed class SnapshotFilesUpdateSource : IFeatureUpdateSource
     }
 }
 
-/// <summary>Factory for <c>snapshot_files@1</c>.</summary>
-public sealed class SnapshotFilesUpdateSourceFactory : IFeatureUpdateSourceFactory
+/// <summary>Settings of <c>snapshot_files@1</c>.</summary>
+public sealed class SnapshotFilesSettings
 {
-    public string SourceType => SnapshotFilesUpdateSource.Type;
+    /// <summary>
+    /// The snapshot directory (holding <c>snapshot.json</c>) or the manifest itself: a path relative to the configuration
+    /// directory, an absolute path, or a <c>file://</c> URI.
+    /// </summary>
+    public required LocalFile Uri { get; init; }
 
-    public IFeatureUpdateSource Create(string sourceName, IReadOnlyDictionary<string, JsonElement> settings, string? baseDirectory)
-    {
-        ArgumentNullException.ThrowIfNull(settings);
-        var location = $"source '{sourceName}' ({SnapshotFilesUpdateSource.Type})";
-        string? uri = null;
-        TimeSpan? reload = null;
-        foreach (var (name, value) in settings)
-        {
-            switch (name)
-            {
-                case "source":
-                    break; // the binding's own selector of this factory
-                case "uri":
-                    uri = value.ValueKind == JsonValueKind.String ? value.GetString() : null;
-                    if (string.IsNullOrEmpty(uri))
-                    {
-                        throw new FeatureUpdateException(location, "/uri", "uri must be a non-empty string.",
-                            "give the snapshot directory or its snapshot.json, as a path or a file:// URI");
-                    }
+    /// <summary>
+    /// How often to look for a new snapshot, as an ISO 8601 duration such as <c>PT1H</c>, at most <c>P49D</c>; without it,
+    /// the snapshot is loaded once.
+    /// </summary>
+    public string? Reload { get; init; }
+}
 
-                    break;
-                case "reload":
-                    reload = ParseDuration(value, location);
-                    break;
-                default:
-                    throw new FeatureUpdateException(location, "/" + JsonPointer.Escape(name), $"Unknown setting '{name}'.",
-                        $"{SnapshotFilesUpdateSource.Type} takes 'uri' and optionally 'reload'");
-            }
-        }
-
-        if (uri is null)
-        {
-            throw new FeatureUpdateException(location, string.Empty, "The 'uri' setting is required.",
-                "add \"uri\": the snapshot directory (holding snapshot.json) or the manifest file");
-        }
-
-        return new SnapshotFilesUpdateSource(ResolveManifest(uri, baseDirectory, location), reload);
-    }
-
+/// <summary>Factory for <c>snapshot_files@1</c>.</summary>
+public sealed class SnapshotFilesUpdateSourceFactory : FeatureUpdateSourceFactory<SnapshotFilesSettings>
+{
     private static readonly TimeSpan MaxReload = TimeSpan.FromDays(49);
 
+    public override string SourceType => SnapshotFilesUpdateSource.Type;
+
+    /// <summary>
+    /// The manifest's path is fixed now, absolute (the <c>uri</c> is resolved against the pinned base directory when the
+    /// settings are bound), so a malformed <c>uri</c> is a configuration error that <c>validate</c>, which reads no
+    /// snapshot file, finds.
+    /// </summary>
+    protected override IFeatureUpdateSource Create(SnapshotFilesSettings settings, BindingContext context)
+    {
+        var path = settings.Uri.Path;
+        var manifest = path.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ? path : Path.Combine(path, SnapshotFilesUpdateSource.ManifestFileName);
+        return new SnapshotFilesUpdateSource(manifest, settings.Reload is { } reload ? ParseDuration(reload) : null);
+    }
+
     /// <summary>ISO 8601 duration (the JSON Schema <c>duration</c> format), e.g. <c>PT1H</c> or <c>PT30M</c>.</summary>
-    private static TimeSpan ParseDuration(JsonElement value, string location)
+    private static TimeSpan ParseDuration(string value)
     {
         const string Hint = "write an ISO 8601 duration such as \"PT1H\" (1 hour), \"PT15M\" or \"P1D\"";
-        if (value.ValueKind != JsonValueKind.String)
-        {
-            throw new FeatureUpdateException(location, "/reload", $"reload must be a string, got {value.GetRawText()}.", Hint);
-        }
-
         TimeSpan period;
         try
         {
-            period = XmlConvert.ToTimeSpan(value.GetString()!);
+            period = XmlConvert.ToTimeSpan(value);
         }
         catch (FormatException)
         {
-            throw new FeatureUpdateException(location, "/reload", $"'{value.GetString()}' is not an ISO 8601 duration.", Hint);
+            throw new BindingException("/reload", $"'{value}' is not an ISO 8601 duration.", Hint);
         }
         catch (OverflowException)
         {
@@ -208,37 +192,17 @@ public sealed class SnapshotFilesUpdateSourceFactory : IFeatureUpdateSourceFacto
 
         if (period <= TimeSpan.Zero)
         {
-            throw new FeatureUpdateException(location, "/reload", $"reload must be positive, got '{value.GetString()}'.", Hint);
+            throw new BindingException("/reload", $"'reload' must be positive, got '{value}'.", Hint);
         }
 
         if (period > MaxReload)
         {
             // Task.Delay waits at most uint.MaxValue - 1 ms (49.7 days); a longer period would fail after the first load.
-            throw new FeatureUpdateException(location, "/reload", $"reload must be at most P49D, the longest wait a timer takes, got '{value.GetString()}'.",
+            throw new BindingException("/reload", $"'reload' must be at most P49D, the longest wait a timer takes, got '{value}'.",
                 "write \"P49D\" or less: a reload that finds the same manifest loads nothing, so checking more often costs little");
         }
 
         return period;
-    }
-
-    /// <summary>
-    /// The manifest's absolute path, fixed now: a relative path resolves against <paramref name="baseDirectory"/>, or the
-    /// current directory as it is now, never as it is when the source runs. The syntax of <c>uri</c> is checked here, so
-    /// a malformed one is a configuration error at <c>/uri</c> (found by <c>validate</c>, which reads no snapshot file).
-    /// </summary>
-    private static string ResolveManifest(string uri, string? baseDirectory, string location)
-    {
-        if (!LocalPaths.TryResolve(uri, BindingContext.PinBaseDirectory(baseDirectory), out var path, out var error))
-        {
-            var local = uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase) || !uri.Contains("://", StringComparison.Ordinal);
-            throw new FeatureUpdateException(location, "/uri", local ? error! : $"{error} {SnapshotFilesUpdateSource.Type} reads local files.",
-                local
-                    ? "give the snapshot directory or its snapshot.json as a local path (absolute, or relative to the configuration directory), " +
-                      "or as a file:// URI such as file:///var/lib/snapshots/authors"
-                    : "sync the snapshot to a local directory first, or register an update source for the object store");
-        }
-
-        return path.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ? path : Path.Combine(path, SnapshotFilesUpdateSource.ManifestFileName);
     }
 }
 

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using StrataRec.Core.Bindings;
 using StrataRec.Models;
 using StrataRec.Samples.Host.Components;
@@ -54,6 +55,52 @@ public sealed class ComponentTests
             File.Delete(file);
         }
     }
+
+    /// <summary>
+    /// The components' settings bind to the types their factories declare: a mistake is an error at its pointer with a
+    /// hint, worded as for every built-in component, and the factories check only what the types cannot say.
+    /// </summary>
+    [Theory]
+    [InlineData("logistic@1", """{ "version": "v3", "weights": { "ctr": 1 }, "bais": 1 }""", "/bais", "did you mean 'bias'?")]
+    [InlineData("logistic@1", """{ "weights": { "ctr": 1 } }""", "", "'version': ")]
+    [InlineData("logistic@1", """{ "version": "v3", "weights": { "ctr": "high" } }""", "/weights/ctr", "'stratarec schema bindings'")]
+    [InlineData("logistic@1", """{ "version": "v3", "weights": { "ctr": 1e400 } }""", "/weights/ctr", "use a smaller magnitude")] // review 32: finite only
+    [InlineData("logistic@1", """{ "version": "v3", "weights": {} }""", "/weights", "e.g. { \"ctr\": 20.0")]
+    [InlineData("trending@1", """{ "items": [{ "id": 7 }] }""", "/items/0", "'score': ")]
+    [InlineData("trending@1", """{ "items": [{ "id": "7", "score": 1 }] }""", "/items/0/id", "'stratarec schema bindings'")]
+    [InlineData("trending@1", """{ "items": [], "region_input": "" }""", "/region_input", "a string input of the pipeline's request_schema")]
+    [InlineData("kv_store@1", """{ "data_file": "s3://bucket/users.jsonl" }""", "/data_file", "local directory")]
+    [InlineData("kv_store@1", """{ "data_file": "users.jsonl", "key_feild": "id" }""", "/key_feild", "did you mean 'key_field'?")]
+    [InlineData("kv_store@1", """{ "data_file": "users.jsonl", "latency_ms": -1 }""", "/latency_ms", "simulated round trip")]
+    public void ASettingsMistake_IsAnErrorAtItsPointer_WithAHint(string type, string settings, string pointer, string hint)
+    {
+        var context = new BindingContext("b", JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(settings)!, AppContext.BaseDirectory, null);
+
+        var error = Assert.Throws<BindingException>(() => Create(type, context));
+
+        Assert.Equal(pointer, error.Pointer);
+        Assert.Contains(hint, error.Hint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheKeyValueStoresFile_ResolvesAgainstTheConfigurationDirectory_AndKeepsItsPointer()
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "kv-config");
+        var context = new BindingContext("b", JsonSerializer.Deserialize<Dictionary<string, JsonElement>>("""{ "data_file": "data/missing.jsonl" }""")!, directory, null);
+        var connector = (KeyValueFeatureConnector)Create("kv_store@1", context);
+
+        var error = Assert.Throws<BindingException>(() => connector.LoadAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult());
+
+        Assert.Equal("/data_file", error.Pointer);
+        Assert.Contains(Path.Combine(directory, "data", "missing.jsonl"), error.Reason, StringComparison.Ordinal);
+    }
+
+    private static object Create(string type, BindingContext context) => type switch
+    {
+        "logistic@1" => new LogisticModelClientFactory().Create(context),
+        "trending@1" => new TrendingCandidateSourceFactory().Create(context),
+        _ => new KeyValueFeatureConnectorFactory().Create(context),
+    };
 
     private static ModelCall Call(params (string Name, float Value)[] inputs)
     {

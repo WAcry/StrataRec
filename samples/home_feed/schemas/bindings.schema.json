@@ -35,6 +35,9 @@
             "type": [
               "string",
               "null"
+            ],
+            "examples": [
+              "memory@1"
             ]
           },
           "timeout_ms": {
@@ -67,13 +70,51 @@
             ],
             "properties": {
               "source": {
-                "description": "Required: update-source type and version, e.g. 'snapshot_files@1'. The other members are the source's own settings: for snapshot_files@1, 'uri' (the snapshot directory or its snapshot.json, relative to the config root) and optionally 'reload' (an ISO 8601 duration such as \"PT1H\").",
+                "description": "Required: update-source type and version, e.g. 'snapshot_files@1'. The other members are the source's own settings, which the schema describes for each type of the binary that wrote it.",
                 "type": [
                   "string",
                   "null"
+                ],
+                "examples": [
+                  "snapshot_files@1"
                 ]
               }
-            }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "source": {
+                      "const": "snapshot_files@1"
+                    }
+                  },
+                  "required": [
+                    "source"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "source": {},
+                    "uri": {
+                      "description": "The snapshot directory (holding snapshot.json) or the manifest itself: a path relative to the configuration directory, an absolute path, or a file:// URI.",
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "reload": {
+                      "description": "How often to look for a new snapshot, as an ISO 8601 duration such as PT1H, at most P49D; without it, the snapshot is loaded once.",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "uri"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            ]
           },
           "cache": {
             "description": "Mode cache, required: { \"ttl_ms\": 60000 }, optionally \"stale_if_error_ms\" and a \"distributed\" cache shared by the service's instances.",
@@ -104,10 +145,13 @@
                 ],
                 "properties": {
                   "store": {
-                    "description": "Required: store type and version, e.g. 'redis@1'. The other members are the store's own settings: for redis@1, 'endpoint' (host:port; for a cluster, any node), and optionally 'key_prefix' (default 'stratarec:'), 'user', 'password' (a secret:// reference), 'tls' (default false) and 'database' (default 0).",
+                    "description": "Required: store type and version, e.g. 'redis@1'. The other members are the store's own settings, which the schema describes for each type of the binary that wrote it.",
                     "type": [
                       "string",
                       "null"
+                    ],
+                    "examples": [
+                      "redis@1"
                     ]
                   },
                   "timeout_ms": {
@@ -117,12 +161,112 @@
                       "null"
                     ]
                   }
-                }
+                },
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "store": {
+                          "const": "redis@1"
+                        }
+                      },
+                      "required": [
+                        "store"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "store": {},
+                        "timeout_ms": {},
+                        "endpoint": {
+                          "description": "The server as host:port, e.g. redis.internal:6379; for a cluster, any of its nodes.",
+                          "type": "string"
+                        },
+                        "key_prefix": {
+                          "description": "What every key starts with (default stratarec:), so that services sharing a server keep apart.",
+                          "type": "string"
+                        },
+                        "user": {
+                          "description": "The ACL user to authenticate as.",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "password": {
+                          "description": "The password, as a reference to the host's secret store (secret://name), resolved at load.",
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "pattern": "^secret://."
+                        },
+                        "tls": {
+                          "description": "Connect over TLS (default false).",
+                          "type": "boolean"
+                        },
+                        "database": {
+                          "description": "The database number (default 0; a cluster has only 0).",
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "endpoint"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                ]
               }
             },
             "additionalProperties": false
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "connector": {
+                  "const": "memory@1"
+                }
+              },
+              "required": [
+                "connector"
+              ]
+            },
+            "then": {
+              "properties": {
+                "mode": {},
+                "connector": {},
+                "timeout_ms": {},
+                "max_batch": {},
+                "max_bytes": {},
+                "bootstrap": {},
+                "cache": {},
+                "data": {
+                  "description": "The records, by entity key: { \"10042\": { \"i_clk_7d\": 12.0 } }, or for a cross entity, context key to candidate key to fields. Not with data_file; without either, there are none."
+                },
+                "data_file": {
+                  "description": "A JSON file of the records, as data holds them: a path relative to the configuration directory, an absolute path or a file:// URI.",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1
+                },
+                "latency_ms": {
+                  "description": "Simulated latency of every fetch, in milliseconds (default 0).",
+                  "type": "integer"
+                },
+                "fail": {
+                  "description": "Fail every fetch (fault injection).",
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        ]
       }
     },
     "models": {
@@ -131,10 +275,16 @@
         "type": "object",
         "properties": {
           "client": {
-            "description": "Client type and version, e.g. grpc_tensor@1, memory_list@1, linear@1.",
-            "type": "string"
+            "description": "Required: client type and version, e.g. 'linear@1' or 'random@1' for a model, 'memory_list@1' for a candidate source. The other members are the client's own settings, which the schema describes for each type of the binary that wrote it.",
+            "type": "string",
+            "examples": [
+              "fixed_text@1",
+              "linear@1",
+              "random@1"
+            ]
           },
           "timeout_ms": {
+            "description": "Time limit of one call to the client, in milliseconds. The node's deadline bounds the call too, and alone without it.",
             "type": [
               "integer",
               "null"
@@ -143,6 +293,150 @@
         },
         "required": [
           "client"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "client": {
+                  "const": "fixed_text@1"
+                }
+              },
+              "required": [
+                "client"
+              ]
+            },
+            "then": {
+              "properties": {
+                "client": {},
+                "timeout_ms": {},
+                "inputs": {
+                  "description": "The model's text input names, as its signature declares them (the prompts the calling operator renders), e.g. [\"system\", \"user\"]: at least one, each once.",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "outputs": {
+                  "description": "Each text output and the text every call answers, e.g. { \"answer\": \"[3, 1, 2]\" }: at least one.",
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "inputs",
+                "outputs"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "client": {
+                  "const": "linear@1"
+                }
+              },
+              "required": [
+                "client"
+              ]
+            },
+            "then": {
+              "properties": {
+                "client": {},
+                "timeout_ms": {},
+                "outputs": {
+                  "description": "The model's outputs by name, each a weighted sum of its inputs, e.g. { \"p_click\": { \"bias\": -2.0, \"weights\": { \"smoothed_ctr\": 8.0 }, \"activation\": \"sigmoid\" } }.",
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "bias": {
+                        "description": "Added to the weighted sum (default 0).",
+                        "type": "number"
+                      },
+                      "weights": {
+                        "description": "Input name to its weight. The model's inputs are the names the outputs weigh.",
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "number"
+                        }
+                      },
+                      "activation": {
+                        "description": "sigmoid, or identity (the default).",
+                        "type": "string",
+                        "enum": [
+                          "sigmoid",
+                          "identity"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "versions": {
+                  "description": "The model versions a call may ask for, e.g. [\"v12\", \"v13\"]; any version when omitted.",
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "latency_ms": {
+                  "description": "Simulated latency of every call, in milliseconds (default 0).",
+                  "type": "integer"
+                },
+                "fail": {
+                  "description": "Fail every call (fault injection).",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "outputs"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "client": {
+                  "const": "random@1"
+                }
+              },
+              "required": [
+                "client"
+              ]
+            },
+            "then": {
+              "properties": {
+                "client": {},
+                "timeout_ms": {},
+                "inputs": {
+                  "description": "The inputs of the model it stands in for, as the model declares them: their names, each a float32 tensor of shape [-1] ([\"smoothed_ctr\", \"log_followers\"]), or each name mapped to its tensor ({ \"item_id\": { \"type\": \"int64\", \"shape\": [-1, 2] } }). At least one, each once."
+                },
+                "outputs": {
+                  "description": "The outputs, as the model declares them: their names, each a float32 tensor of shape [-1] ([\"p_click\"]), or each name mapped to its shape ({ \"p_first\": { \"shape\": [-1] } }). At least one, each once."
+                },
+                "seed": {
+                  "description": "A fixed seed instead of the call's (ctx.request.seed): every request gets the same scores.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "inputs",
+                "outputs"
+              ],
+              "additionalProperties": false
+            }
+          }
         ]
       }
     },
@@ -152,10 +446,14 @@
         "type": "object",
         "properties": {
           "client": {
-            "description": "Client type and version, e.g. grpc_tensor@1, memory_list@1, linear@1.",
-            "type": "string"
+            "description": "Required: client type and version, e.g. 'linear@1' or 'random@1' for a model, 'memory_list@1' for a candidate source. The other members are the client's own settings, which the schema describes for each type of the binary that wrote it.",
+            "type": "string",
+            "examples": [
+              "memory_list@1"
+            ]
           },
           "timeout_ms": {
+            "description": "Time limit of one call to the client, in milliseconds. The node's deadline bounds the call too, and alone without it.",
             "type": [
               "integer",
               "null"
@@ -164,6 +462,73 @@
         },
         "required": [
           "client"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "client": {
+                  "const": "memory_list@1"
+                }
+              },
+              "required": [
+                "client"
+              ]
+            },
+            "then": {
+              "properties": {
+                "client": {},
+                "timeout_ms": {},
+                "data_file": {
+                  "description": "A JSON file of the other members: a path relative to the configuration directory, an absolute path or a file:// URI. A member the binding has too is the binding's.",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1
+                },
+                "items": {
+                  "description": "The list, best first: ids (strings or int64s) or { \"id\": …, \"score\": … } objects; scores default to a descending ramp.",
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "by_input": {
+                  "description": "The request input whose value picks the list of lists a request gets.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "lists": {
+                  "description": "A list per value of by_input, each like items; \"*\" is the list of every other value.",
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "additionalProperties": {
+                    "type": "array"
+                  }
+                },
+                "latency_ms": {
+                  "description": "Simulated latency of every retrieval, in milliseconds (default 0).",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "fail": {
+                  "description": "Fail every retrieval (fault injection).",
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          }
         ]
       }
     }

@@ -122,7 +122,8 @@ public sealed class FeatureSourceBinding
         "shared by the service's instances.")]
     public CacheBinding? Cache { get; init; }
 
-    /// <summary>Connector-specific settings (endpoint, credentials reference, data file, …); modes <c>fetch</c> and <c>cache</c>.</summary>
+    /// <summary>Connector-specific settings (endpoint, credentials reference, data file, …), bound to the settings type of its
+    /// factory; modes <c>fetch</c> and <c>cache</c>.</summary>
     [JsonExtensionData]
     public Dictionary<string, JsonElement> Settings { get; init; } = new();
 
@@ -135,11 +136,10 @@ public sealed class UpdateSourceBinding
 {
     /// <summary>Update-source type and version, e.g. <c>snapshot_files@1</c>.</summary>
     [Description("Required: update-source type and version, e.g. 'snapshot_files@1'. The other members are the source's own " +
-        "settings: for snapshot_files@1, 'uri' (the snapshot directory or its snapshot.json, relative to the config root) and " +
-        "optionally 'reload' (an ISO 8601 duration such as \"PT1H\").")]
+        "settings, which the schema describes for each type of the binary that wrote it.")]
     public string? Source { get; init; }
 
-    /// <summary>Settings of the update source, e.g. <c>uri</c> and <c>reload</c> for <c>snapshot_files@1</c>.</summary>
+    /// <summary>Settings of the update source, e.g. <c>uri</c> and <c>reload</c> for <c>snapshot_files@1</c>, bound to the settings type of its factory.</summary>
     [JsonExtensionData]
     public Dictionary<string, JsonElement> Settings { get; init; } = new();
 }
@@ -168,16 +168,15 @@ public sealed class CacheBinding
 /// <summary>The distributed tier of a <c>cache</c> source: its store type, the framework's bound on its reads, and the store's own settings.</summary>
 public sealed class DistributedCacheBinding
 {
-    [Description("Required: store type and version, e.g. 'redis@1'. The other members are the store's own settings: for " +
-        "redis@1, 'endpoint' (host:port; for a cluster, any node), and optionally 'key_prefix' (default 'stratarec:'), 'user', " +
-        "'password' (a secret:// reference), 'tls' (default false) and 'database' (default 0).")]
+    [Description("Required: store type and version, e.g. 'redis@1'. The other members are the store's own settings, which the " +
+        "schema describes for each type of the binary that wrote it.")]
     public string? Store { get; init; }
 
     [Description("The longest a request waits for one read of the distributed cache, in milliseconds (default: half the " +
         "source's timeout_ms); always within the source's timeout_ms, so the connector keeps the rest of it.")]
     public int? TimeoutMs { get; init; }
 
-    /// <summary>The store's own settings, e.g. <c>endpoint</c> and <c>credentials</c> for <c>redis@1</c>.</summary>
+    /// <summary>The store's own settings, e.g. <c>endpoint</c> and <c>password</c> for <c>redis@1</c>, bound to the settings type of its factory.</summary>
     [JsonExtensionData]
     public Dictionary<string, JsonElement> Settings { get; init; } = new();
 }
@@ -185,12 +184,14 @@ public sealed class DistributedCacheBinding
 /// <summary>Binding of a model or candidate source to a client implementation.</summary>
 public sealed class ClientBinding
 {
-    /// <summary>Client type and version, e.g. <c>grpc_tensor@1</c>, <c>memory_list@1</c>, <c>linear@1</c>.</summary>
+    [Description("Required: client type and version, e.g. 'linear@1' or 'random@1' for a model, 'memory_list@1' for a candidate source. " +
+        "The other members are the client's own settings, which the schema describes for each type of the binary that wrote it.")]
     public required string Client { get; init; }
 
+    [Description("Time limit of one call to the client, in milliseconds. The node's deadline bounds the call too, and alone without it.")]
     public int? TimeoutMs { get; init; }
 
-    /// <summary>Client-specific settings.</summary>
+    /// <summary>The client's own settings, bound to the settings type of its factory.</summary>
     [JsonExtensionData]
     public Dictionary<string, JsonElement> Settings { get; init; } = new();
 }

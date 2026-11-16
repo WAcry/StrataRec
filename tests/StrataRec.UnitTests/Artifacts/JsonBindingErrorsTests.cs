@@ -174,6 +174,20 @@ public class JsonBindingErrorsTests
     }
 
     [Fact]
+    public void NullForAMemberAConverterReads_ThatIsNotNullable_SaysSo_WithoutTheSerializersWords()
+    {
+        // The converter never sees the null: the serializer refused it with a message naming the .NET type.
+        var error = Error<Pointed>("""{ "at": null }""");
+
+        Assert.Equal(("/at", "'at' must not be null."), (error.Pointer, error.Message));
+    }
+
+    public sealed class Pointed
+    {
+        public JsonPointer At { get; init; } = JsonPointer.Parse("/a");
+    }
+
+    [Fact]
     public void NullDocument_SaysWhatItMustBe()
     {
         Assert.False(ArtifactSerializer.TryBind<Sample>(null, "the config of TopK@1", out _, out var error));

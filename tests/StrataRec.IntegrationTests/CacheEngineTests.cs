@@ -303,6 +303,8 @@ internal sealed class SharedStores : IFeatureCacheStoreFactory
 
     public string StoreType => Type;
 
+    public Type SettingsType => typeof(Core.Bindings.NoSettings);
+
     public ConcurrentQueue<Store> Created { get; } = new();
 
     /// <summary>Whether every key any store was asked for has a record: what was missed has been written back.</summary>

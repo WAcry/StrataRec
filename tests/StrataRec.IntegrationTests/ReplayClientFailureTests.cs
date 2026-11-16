@@ -142,6 +142,8 @@ public sealed class ReplayClientFailureTests
 
         public string ClientType => _inner.ClientType;
 
+        public Type SettingsType => _inner.SettingsType;
+
         public IModelClient Create(BindingContext context) => new Client(_inner.Create(context), exception);
 
         private sealed class Client(IModelClient inner, Func<Exception> exception) : IModelClient

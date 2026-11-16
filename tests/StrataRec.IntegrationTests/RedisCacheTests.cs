@@ -675,6 +675,8 @@ internal sealed class RecordedStores(IFeatureCacheStoreFactory inner) : IFeature
 
     public string StoreType => inner.StoreType;
 
+    public Type SettingsType => inner.SettingsType;
+
     /// <summary>The full keys written (with the binding's <c>key_prefix</c>).</summary>
     public IEnumerable<string> Written => _written.Keys.Select(k => _prefix + k);
 

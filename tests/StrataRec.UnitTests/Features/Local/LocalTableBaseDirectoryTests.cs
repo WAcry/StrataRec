@@ -1,4 +1,5 @@
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Features.Local;
@@ -61,7 +62,7 @@ public class LocalTableBaseDirectoryTests
         var factory = new SnapshotFilesUpdateSourceFactory();
         var settings = ArtifactSerializer.Deserialize<FeatureSourceBinding>("""{ "bootstrap": { "source": "snapshot_files@1", "uri": "snap" } }""").Bootstrap!.Settings;
 
-        var source = (SnapshotFilesUpdateSource)factory.Create("item_store", settings, baseDirectory: null);
+        var source = (SnapshotFilesUpdateSource)factory.Create(new BindingContext("item_store", settings, BindingContext.PinBaseDirectory(null), secrets: null));
 
         Assert.True(Path.IsPathFullyQualified(source.ManifestPath));
         Assert.Equal(Path.Combine(Directory.GetCurrentDirectory(), "snap", "snapshot.json"), source.ManifestPath);

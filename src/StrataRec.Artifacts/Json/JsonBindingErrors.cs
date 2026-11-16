@@ -146,6 +146,12 @@ public static class JsonBindingErrors
         var expected = Expect(info);
         if (expected == Kind.Custom || HasConfiguredConverter(at.Property, info.Type, options))
         {
+            if (at.Node is null && !nullable)
+            {
+                // The converter does not see it: the serializer refuses null for a member that is not nullable, in its own words.
+                return new JsonBindingError(pointer, $"{at.Name} must not be null.", null);
+            }
+
             // A converter of our own words its message for the reader; one we did not write gets no guess at its shape.
             return IsOwn(at.Property, converter) && !string.IsNullOrEmpty(exception.Message)
                 ? new JsonBindingError(pointer, $"{at.Name}: {exception.Message}", null)

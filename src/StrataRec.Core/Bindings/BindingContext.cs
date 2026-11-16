@@ -3,9 +3,9 @@ using System.Text.Json;
 namespace StrataRec.Core.Bindings;
 
 /// <summary>
-/// What a factory gets to create the instance one binding names (design 6.4): a model client, a candidate source or a
-/// feature connector, built in or written by the user. The remarks are the lifetime contract of every such instance:
-/// what the engine guarantees, and what the implementation must do.
+/// What a factory gets to create the instance one binding names (design 6.4): a model client, a candidate source, a
+/// feature connector, a distributed cache store or an update source, built in or written by the user. The remarks are the
+/// lifetime contract of every such instance: what the engine guarantees, and what the implementation must do.
 /// </summary>
 /// <remarks>
 /// <para><b>Create.</b> The factory's <c>Create</c> is called when a plan is compiled and nothing holds a usable instance
@@ -16,7 +16,9 @@ namespace StrataRec.Core.Bindings;
 /// <c>IModelClient.GetSignatureAsync</c>). Two plans loading at once
 /// may both create one; the extra one is disposed without being loaded or called. So <c>Create</c> only reads and checks
 /// the settings: no I/O, no connections, threads or anything else that needs releasing. It may run on several threads at
-/// once. Throw <see cref="BindingException"/> with the setting's pointer and a hint for a wrong setting.</para>
+/// once. The settings reach it bound to the type its factory declares, as strictly as an operator's config (an unknown,
+/// misspelled or missing member, or one of the wrong kind, is an error at its pointer); what a type cannot say, the
+/// factory checks and reports with a <see cref="BindingException"/> carrying the setting's pointer and a hint.</para>
 /// <para><b>Sharing.</b> One instance serves every plan of the engine whose binding has the same identity: section,
 /// logical name, type, all of the binding's own <see cref="Settings"/> and the <see cref="BaseDirectory"/>, from the
 /// same factory object. A plan swap that leaves the binding unchanged keeps the instance, loaded; changing any of its
@@ -24,9 +26,9 @@ namespace StrataRec.Core.Bindings;
 /// <c>timeout_ms</c>, is not part of the identity. All requests of all those plans
 /// call the one instance concurrently: it must be thread-safe.</para>
 /// <para><b>Load.</b> An instance that needs I/O before it serves implements <see cref="ILoadable"/>: that is where it
-/// reads files, connects and resolves its secrets (<see cref="SecretReference(string)"/>). The engine calls it at most
-/// once, on the thread pool, bounded and cancellable, and serves no plan with the instance before it completed. Nothing
-/// on the request path waits for I/O the load could have done.</para>
+/// reads files, connects and resolves its secrets (the <see cref="Bindings.SecretReference"/> members of its settings).
+/// The engine calls it at most once, on the thread pool, bounded and cancellable, and serves no plan with the instance
+/// before it completed. Nothing on the request path waits for I/O the load could have done.</para>
 /// <para><b>Calls.</b> The request calls (<c>InvokeAsync</c>, <c>FetchAsync</c>, <c>RetrieveAsync</c>) and model
 /// signature lookups come only after the load completed; signature lookups run on the thread pool, bounded by the load's
 /// timeout. The engine may stop waiting for a call at its timeout and cancel its token; the instance stays alive until
@@ -70,7 +72,10 @@ public sealed class BindingContext
     /// <summary>The logical name the configuration uses, e.g. <c>ctr_ranker</c>.</summary>
     public string Name { get; }
 
-    /// <summary>The binding's own settings (everything but what the framework interprets, such as <c>client</c> and <c>timeout_ms</c>).</summary>
+    /// <summary>
+    /// The binding's own settings as written (everything but what the framework interprets, such as <c>client</c> and
+    /// <c>timeout_ms</c>): what the factory's settings type is bound from, and the instance's identity.
+    /// </summary>
     public IReadOnlyDictionary<string, JsonElement> Settings { get; }
 
     /// <summary>
@@ -92,22 +97,22 @@ public sealed class BindingContext
         string.IsNullOrEmpty(baseDirectory) ? Directory.GetCurrentDirectory() : Path.GetFullPath(baseDirectory);
 
     /// <summary>
-    /// The setting <paramref name="setting"/> as a reference to a secret (<c>"secret://interaction-store-token"</c>,
-    /// design 6.4 item 4), to resolve at load; null when the binding does not have the setting.
+    /// A setting's value as a reference to a secret (<c>"secret://interaction-store-token"</c>, design 6.4 item 4), to
+    /// resolve at load: what a <see cref="Bindings.SecretReference"/> member of a factory's settings type is bound with.
+    /// Call it for a value a factory reads by hand.
     /// </summary>
-    /// <exception cref="BindingException">The setting is not a <c>secret://</c> reference; the pointer is the setting's.</exception>
-    public SecretReference? SecretReference(string setting)
+    /// <param name="value">The value as written.</param>
+    /// <param name="pointer">The value's pointer within the binding, e.g. <c>/password</c>: errors are reported there,
+    /// now and when the reference is resolved.</param>
+    /// <exception cref="BindingException">The value is not a <c>secret://</c> reference with a name. The message never
+    /// quotes it: it may be a credential pasted in by mistake.</exception>
+    public SecretReference SecretReference(JsonElement value, string pointer)
     {
-        if (!Settings.TryGetValue(setting, out var value))
-        {
-            return null;
-        }
-
-        var pointer = "/" + EscapePointerToken(setting);
+        ArgumentNullException.ThrowIfNull(pointer);
         var text = value.ValueKind == JsonValueKind.String ? value.GetString() : null;
         if (text is null || !text.StartsWith(Bindings.SecretReference.Scheme, StringComparison.Ordinal) || text.Length == Bindings.SecretReference.Scheme.Length)
         {
-            // The value itself may be a credential pasted in by mistake: never quote it.
+            var setting = SettingName(pointer);
             throw new BindingException(pointer, $"'{setting}' must be a reference to a secret, not a value.",
                 $"write \"{setting}\": \"{Bindings.SecretReference.Scheme}<name>\" and add the secret <name> to the host's secret store");
         }
@@ -116,39 +121,81 @@ public sealed class BindingContext
     }
 
     /// <summary>
-    /// The setting <paramref name="setting"/> as a local file: a path relative to <see cref="BaseDirectory"/>, an absolute
-    /// path, or a <c>file://</c> URI. The syntax is checked here, so a malformed value is a configuration error that
-    /// <c>validate</c> finds; whether the file exists is checked when the instance loads.
+    /// A setting's value as a local file or directory: a path relative to <see cref="BaseDirectory"/>, an absolute path, or
+    /// a <c>file://</c> URI (<see cref="LocalPaths"/>); what a <see cref="Bindings.LocalFile"/> member of a factory's
+    /// settings type is bound with. Call it for a value a factory reads by hand. The syntax is checked here, so a
+    /// malformed value is a configuration error that <c>validate</c> finds; whether the file exists is for the instance
+    /// to find when it reads it.
     /// </summary>
-    /// <exception cref="BindingException">The setting is missing, not a string, not local, or malformed.</exception>
-    public string LocalFile(string setting, string what)
+    /// <param name="value">The value as written.</param>
+    /// <param name="pointer">The value's pointer within the binding, e.g. <c>/data_file</c>, for errors now and when the
+    /// file is read.</param>
+    /// <exception cref="BindingException">The value is not a non-empty string, not local, or malformed.</exception>
+    public LocalFile LocalFile(JsonElement value, string pointer)
     {
-        var pointer = "/" + EscapePointerToken(setting);
-        if (!Settings.TryGetValue(setting, out var value) || value.ValueKind != JsonValueKind.String || string.IsNullOrEmpty(value.GetString()))
+        ArgumentNullException.ThrowIfNull(pointer);
+        const string Hint = "give a local path: relative to the configuration directory, absolute, or a file:// URI such as file:///data/items.json";
+        if (value.ValueKind != JsonValueKind.String || value.GetString() is not { Length: > 0 } uri)
         {
-            throw new BindingException(pointer, $"'{setting}' is required: the {what}.",
-                $"give the {what} as a path relative to the configuration directory, an absolute path, or a file:// URI");
+            throw new BindingException(pointer, $"'{SettingName(pointer)}' must be a local path or a file:// URI, got {value.GetRawText()}.", Hint);
         }
 
-        return LocalFile(value.GetString()!, pointer, what);
-    }
-
-    /// <summary><see cref="LocalFile(string, string)"/> for a value that is not a top-level setting, e.g. one entry of a map.</summary>
-    /// <param name="pointer">The value's pointer within the binding, for the error.</param>
-    public string LocalFile(string uri, string pointer, string what)
-    {
-        if (LocalPaths.TryResolve(uri, BaseDirectory, out var path, out var error))
+        if (!LocalPaths.TryResolve(uri, BaseDirectory, out var path, out var error))
         {
-            return path;
+            var local = uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase) || !uri.Contains("://", StringComparison.Ordinal);
+            throw new BindingException(pointer, error!, local
+                ? Hint
+                : "copy or sync it to a local directory and give that path (relative to the configuration directory, absolute, or a file:// URI)");
         }
 
-        throw new BindingException(pointer, error!,
-            $"give the {what} as a path relative to the configuration directory, an absolute path, or a file:// URI such as file:///data/items.json");
+        return new LocalFile(path, pointer);
     }
 
     /// <summary>A setting name or map key as an RFC 6901 reference token (<c>~</c> as <c>~0</c>, <c>/</c> as <c>~1</c>), to build
     /// the pointer of a <see cref="BindingException"/>.</summary>
     public static string EscapePointerToken(string token) => token.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal);
+
+    /// <summary>How a message names the value at <paramref name="pointer"/>: its last reference token, unescaped.</summary>
+    private static string SettingName(string pointer)
+    {
+        var slash = pointer.LastIndexOf('/');
+        return slash < 0
+            ? "the setting"
+            : pointer[(slash + 1)..].Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal);
+    }
+}
+
+/// <summary>
+/// A local file or directory a binding's setting names: the type of such a member of a factory's settings type. Bound
+/// with <see cref="BindingContext.LocalFile(JsonElement, string)"/>, which resolves a relative path against the pinned
+/// <see cref="BindingContext.BaseDirectory"/> when the settings are bound: every binding that reads local files accepts
+/// the same spellings, and a later change of the process's current directory changes nothing. The instance reads the
+/// file at load and reports a missing or unreadable one at <see cref="Pointer"/>.
+/// </summary>
+public sealed class LocalFile
+{
+    internal LocalFile(string path, string pointer)
+    {
+        Path = path;
+        Pointer = pointer;
+    }
+
+    /// <summary>The absolute path.</summary>
+    public string Path { get; }
+
+    /// <summary>The setting's pointer within the binding, e.g. <c>/data_file</c>, for errors when the file is read.</summary>
+    public string Pointer { get; }
+
+    /// <summary>The absolute path.</summary>
+    public override string ToString() => Path;
+}
+
+/// <summary>
+/// The settings type of a binding type that takes no settings of its own: a binding of it with a member the framework
+/// does not read is an error at that member.
+/// </summary>
+public sealed class NoSettings
+{
 }
 
 /// <summary>

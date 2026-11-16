@@ -71,8 +71,7 @@ public sealed class EditorSchemaTests
     {
         foreach (var schema in SchemaFiles.Generate(Tool.Environment))
         {
-            var path = Path.Combine(Samples, "home_feed", "schemas", schema.Name);
-            Assert.True(File.Exists(path) && File.ReadAllText(path) == schema.Text,
+            var path = Path.Combine(Samples, "home_feed", "schemas", schema.Name);            Assert.True(File.Exists(path) && File.ReadAllText(path) == schema.Text,
                 $"samples/home_feed/schemas/{schema.Name} is stale: run 'dotnet run --project src/StrataRec.Cli -- schema --out samples/home_feed/schemas'");
         }
     }
@@ -158,6 +157,83 @@ public sealed class EditorSchemaTests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    /// <summary>
+    /// A binding's own settings are checked in the editor as the engine binds them: the schema describes each type's
+    /// settings, generated from the settings type its factory declares, where it used to take any member. Each edit of the
+    /// sample's bindings is rejected by the schema at the pointer, and by 'stratarec validate' at the same one.
+    /// </summary>
+    [Theory]
+    [InlineData("misspelled setting", "/models/ctr_model/lantency_ms", "")]
+    [InlineData("misspelled nested setting", "/models/ctr_model/outputs/p_click/activaton", "")]
+    [InlineData("missing required", "/models/ctr_model", "required")]
+    [InlineData("wrong type", "/sources/item_store/data_file", "type")]
+    [InlineData("misspelled update source setting", "/sources/author_store/bootstrap/url", "")]
+    [InlineData("misspelled candidate source setting", "/candidate_sources/popular/itmes", "")]
+    public void TheBindingsSchema_RejectsASettingTheEngineRejects(string mistake, string at, string keyword)
+    {
+        var path = Path.Combine(Samples, "home_feed", "bindings", "local.jsonc");
+        var bindings = Assert.IsType<JsonObject>(Jsonc.Parse(File.ReadAllText(path), path));
+        var model = bindings["models"]!["ctr_model"]!.AsObject();
+        switch (mistake)
+        {
+            case "misspelled setting":
+                model["lantency_ms"] = 5;
+                break;
+            case "misspelled nested setting":
+                var output = model["outputs"]!["p_click"]!.AsObject();
+                output["activaton"] = output["activation"]!.DeepClone();
+                output.Remove("activation");
+                break;
+            case "missing required":
+                model.Remove("outputs");
+                break;
+            case "wrong type":
+                bindings["sources"]!["item_store"]!["data_file"] = 7; // the pipeline reads item_store, so validate binds it
+                break;
+            case "misspelled update source setting":
+                var bootstrap = bindings["sources"]!["author_store"]!["bootstrap"]!.AsObject();
+                bootstrap["url"] = bootstrap["uri"]!.DeepClone();
+                bootstrap.Remove("uri");
+                break;
+            case "misspelled candidate source setting":
+                bindings["candidate_sources"]!["popular"]!["itmes"] = new JsonArray(1, 2);
+                break;
+        }
+
+        var errors = SchemaCheck.Errors(BindingsSchema.Value, bindings);
+        Assert.True(errors.Any(e => e.At == at && e.Keyword == keyword), $"{mistake}: expected '{keyword}' at {at}, got:\n{string.Join("\n", errors)}");
+
+        var root = CopyOfHomeFeed();
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "bindings", "local.jsonc"), bindings.ToJsonString());
+            var report = new StringWriter();
+            Assert.Equal(1, ValidateCommand.Run(Tool.Environment, root, "local", "home_feed", "json", warningsAsErrors: false, report));
+            using var json = JsonDocument.Parse(report.ToString());
+            Assert.Contains(json.RootElement.GetProperty("diagnostics").EnumerateArray(),
+                d => d.GetProperty("severity").GetString() == "error" && d.GetProperty("artifact").GetString() == "bindings:local" && d.GetProperty("pointer").GetString() == at);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void TheBindingsSchema_ListsTheTypesThisBinaryHas_WithoutRejectingOthers()
+    {
+        // A binding of a type the binary lacks is valid while no pipeline uses it (design 6.4): the types are suggestions.
+        var path = Path.Combine(Samples, "home_feed", "bindings", "local.jsonc");
+        var bindings = Assert.IsType<JsonObject>(Jsonc.Parse(File.ReadAllText(path), path));
+        bindings["models"]!["remote"] = new JsonObject { ["client"] = "triton@1", ["endpoint"] = "triton:8001" };
+
+        Assert.Empty(SchemaCheck.Errors(BindingsSchema.Value, bindings));
+        var client = JsonNode.Parse(SchemaFiles.Generate(Tool.Environment).Single(f => f.Name == "bindings.schema.json").Text)!
+            ["properties"]!["models"]!["additionalProperties"]!["properties"]!["client"]!;
+        Assert.Contains("linear@1", client["examples"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Null(client["enum"]);
     }
 
     /// <summary>
@@ -401,6 +477,8 @@ public sealed class EditorSchemaTests
         Assert.DoesNotContain("LlmReranker@1", ops(core));
         Assert.Contains("TopK@1", ops(core));
     }
+
+    private static readonly Lazy<JsonSchema> BindingsSchema = new(() => SchemaCheck.Load(SchemaFiles.Generate(Tool.Environment).Single(f => f.Name == "bindings.schema.json").Text));
 
     private static readonly Lazy<JsonSchema> PipelineSchema = new(() => SchemaCheck.Load(SchemaFiles.Generate(Tool.Environment).Single(f => f.Name == "pipeline.schema.json").Text));
 

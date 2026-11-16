@@ -1,4 +1,3 @@
-using System.Text.Json;
 using StrataRec.Core.Bindings;
 using StrataRec.Models;
 
@@ -10,8 +9,8 @@ namespace StrataRec.Samples.Host.Components;
 /// <c>[batch]</c>.
 /// </summary>
 /// <remarks>
-/// <para>Binding settings: <c>version</c> (required; the one version this binding serves), <c>weights</c> (required,
-/// input name → number), <c>bias</c> (default 0) and <c>output</c> (default <c>p</c>).</para>
+/// <para>Binding settings: <see cref="LogisticSettings"/>, which the factory declares as its type argument; the engine
+/// binds them to it, and the factory only checks what the type cannot say.</para>
 /// <para>The rules of the contract, and how this client keeps them:</para>
 /// <list type="bullet">
 /// <item>The signature is the training-serving contract (design 6.9): the engine checks every node calling the model
@@ -138,61 +137,52 @@ public sealed class LogisticModelClient : IModelClient
     }
 }
 
+/// <summary>
+/// The settings of <c>logistic@1</c>: the members of a binding besides <c>client</c> and <c>timeout_ms</c>. The engine binds
+/// them strictly (an unknown, misspelled or missing member, or one of the wrong kind, is an error at its pointer), and
+/// the schema editors check bindings with is generated from this type, its documentation included.
+/// </summary>
+public sealed class LogisticSettings
+{
+    /// <summary>The one model version this binding serves, e.g. <c>v3</c>.</summary>
+    public required string Version { get; init; }
+
+    /// <summary>Input name to its weight, e.g. <c>{ "ctr": 20.0, "freshness": 1.0 }</c>: at least one. The model's inputs are these names.</summary>
+    public required Dictionary<string, double> Weights { get; init; }
+
+    /// <summary>Added to the weighted sum (default 0).</summary>
+    public double Bias { get; init; }
+
+    /// <summary>The name of the model's one output (default <c>p</c>).</summary>
+    public string Output { get; init; } = "p";
+}
+
 /// <summary>Creates <c>logistic@1</c> clients; registered in <see cref="SampleEnvironment"/>.</summary>
-public sealed class LogisticModelClientFactory : IModelClientFactory
+public sealed class LogisticModelClientFactory : ModelClientFactory<LogisticSettings>
 {
     public const string Type = "logistic@1";
 
-    public string ClientType => Type;
+    public override string ClientType => Type;
 
-    /// <summary>Reads and checks the settings; a wrong one is a <see cref="BindingException"/> at its pointer, with a hint.</summary>
-    public IModelClient Create(BindingContext context)
+    /// <summary>Checks what the settings type cannot say; a wrong setting is a <see cref="BindingException"/> at its pointer, with a hint.</summary>
+    protected override IModelClient Create(LogisticSettings settings, BindingContext context)
     {
-        string? version = null;
-        string output = "p";
-        double bias = 0;
-        var weights = new SortedDictionary<string, double>(StringComparer.Ordinal);
-        foreach (var (name, value) in context.Settings)
+        if (settings.Version.Length == 0)
         {
-            switch (name)
-            {
-                case "version":
-                    version = NonEmptyString(value, "/version", "the model version this binding serves, e.g. \"v3\"");
-                    break;
-                case "output":
-                    output = NonEmptyString(value, "/output", "the name of the model's output, e.g. \"p_engage\"");
-                    break;
-                case "bias":
-                    bias = Finite(value, "/bias");
-                    break;
-                case "weights":
-                    if (value.ValueKind != JsonValueKind.Object)
-                    {
-                        throw new BindingException("/weights", "'weights' must be an object: input name → weight.", "e.g. { \"ctr\": 20.0, \"freshness\": 1.0 }");
-                    }
-
-                    foreach (var weight in value.EnumerateObject())
-                    {
-                        weights[weight.Name] = Finite(weight.Value, "/weights/" + BindingContext.EscapePointerToken(weight.Name));
-                    }
-
-                    break;
-                default:
-                    throw new BindingException("/" + BindingContext.EscapePointerToken(name), $"logistic@1 has no setting '{name}'.",
-                        "its settings are version, weights, bias and output");
-            }
+            throw new BindingException("/version", "'version' must not be empty.", "give the model version this binding serves, e.g. \"v3\"");
         }
 
-        if (version is null)
+        if (settings.Output.Length == 0)
         {
-            throw new BindingException("/version", "'version' is required.", "give the model version this binding serves, e.g. \"v3\"");
+            throw new BindingException("/output", "'output' must not be empty.", "give the name of the model's output, e.g. \"p_engage\"");
         }
 
-        if (weights.Count == 0)
+        if (settings.Weights.Count == 0)
         {
             throw new BindingException("/weights", "'weights' must name at least one input.", "e.g. { \"ctr\": 20.0, \"freshness\": 1.0 }");
         }
 
+        var weights = new SortedDictionary<string, double>(settings.Weights, StringComparer.Ordinal); // inputs in ordinal order
         var inputs = new string[weights.Count];
         var values = new double[weights.Count];
         var i = 0;
@@ -202,16 +192,6 @@ public sealed class LogisticModelClientFactory : IModelClientFactory
             values[i++] = weight;
         }
 
-        return new LogisticModelClient(context.Name, version, output, bias, inputs, values);
+        return new LogisticModelClient(context.Name, settings.Version, settings.Output, settings.Bias, inputs, values);
     }
-
-    private static string NonEmptyString(JsonElement value, string pointer, string what) =>
-        value.ValueKind == JsonValueKind.String && value.GetString() is { Length: > 0 } text
-            ? text
-            : throw new BindingException(pointer, $"'{pointer[1..]}' must be a non-empty string.", "give " + what);
-
-    private static double Finite(JsonElement value, string pointer) =>
-        value.ValueKind == JsonValueKind.Number && double.IsFinite(value.GetDouble())
-            ? value.GetDouble()
-            : throw new BindingException(pointer, $"'{pointer}' must be a finite number.");
 }

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Types;
 using StrataRec.Pipeline.Sources;
@@ -10,10 +9,9 @@ namespace StrataRec.Samples.Host.Components;
 /// would refresh the list from a stream job in the background; the request path would stay the same.
 /// </summary>
 /// <remarks>
-/// <para>Binding settings: <c>items</c> (required), each <c>{"id": int64, "score": number, "region": "us"}</c> with an
-/// optional region, and <c>region_input</c> (optional): the request input that picks a region's list. A request without
-/// that input, or with a region that has no list, gets the overall list. That is the explicit meaning of a missing region;
-/// no region is ever made up.</para>
+/// <para>Binding settings: <see cref="TrendingSettings"/>, the items and optionally the request input that picks a region's
+/// list. A request without that input, or with a region that has no list, gets the overall list. That is the explicit
+/// meaning of a missing region; no region is ever made up.</para>
 /// <para>The rules of the contract, and how this source keeps them:</para>
 /// <list type="bullet">
 /// <item>The lists are built and sorted once, from the settings, when the source is created (CPU only, no I/O, so no
@@ -105,68 +103,50 @@ public sealed class TrendingCandidateSource : ICandidateSource
     private readonly record struct Entry(long Id, double Score);
 }
 
+/// <summary>The settings of <c>trending@1</c>, bound strictly by the engine; the bindings schema is generated from this type.</summary>
+public sealed class TrendingSettings
+{
+    /// <summary>The trending items, e.g. <c>[{ "id": 7, "score": 0.9, "region": "us" }]</c>.</summary>
+    public required List<TrendingItem> Items { get; init; }
+
+    /// <summary>The request input whose value picks a region's list, e.g. <c>region</c>; without it, every request gets the overall list.</summary>
+    public string? RegionInput { get; init; }
+}
+
+/// <summary>One item of <c>trending@1</c>.</summary>
+public sealed class TrendingItem
+{
+    /// <summary>The item's id.</summary>
+    public required long Id { get; init; }
+
+    /// <summary>How much it trends: a higher score ranks first.</summary>
+    public required double Score { get; init; }
+
+    /// <summary>The region whose list it is on too; on the overall list only when omitted.</summary>
+    public string? Region { get; init; }
+}
+
 /// <summary>Creates <c>trending@1</c> sources; registered in <see cref="SampleEnvironment"/>.</summary>
-public sealed class TrendingCandidateSourceFactory : ICandidateSourceFactory
+public sealed class TrendingCandidateSourceFactory : CandidateSourceFactory<TrendingSettings>
 {
     public const string Type = "trending@1";
 
-    public string ClientType => Type;
+    public override string ClientType => Type;
 
-    /// <summary>Reads and checks the settings; a wrong one is a <see cref="BindingException"/> at its pointer, with a hint.</summary>
-    public ICandidateSource Create(BindingContext context)
+    /// <summary>Checks what the settings type cannot say; a wrong setting is a <see cref="BindingException"/> at its pointer, with a hint.</summary>
+    protected override ICandidateSource Create(TrendingSettings settings, BindingContext context)
     {
-        string? regionInput = null;
-        List<(long, double, string?)>? items = null;
-        foreach (var (name, value) in context.Settings)
+        if (settings.RegionInput is { Length: 0 })
         {
-            switch (name)
-            {
-                case "region_input":
-                    regionInput = value.ValueKind == JsonValueKind.String && value.GetString() is { Length: > 0 } input
-                        ? input
-                        : throw new BindingException("/region_input", "'region_input' must name a request input.", "e.g. \"region\", a string input of the pipeline's request_schema");
-                    break;
-                case "items":
-                    items = ReadItems(value);
-                    break;
-                default:
-                    throw new BindingException("/" + BindingContext.EscapePointerToken(name), $"trending@1 has no setting '{name}'.", "its settings are items and region_input");
-            }
+            throw new BindingException("/region_input", "'region_input' must name a request input.", "e.g. \"region\", a string input of the pipeline's request_schema");
         }
 
-        return TrendingCandidateSource.Create(
-            items ?? throw new BindingException("/items", "'items' is required.", "list the trending items: [{ \"id\": 7, \"score\": 0.9, \"region\": \"us\" }]"),
-            regionInput);
-    }
-
-    private static List<(long, double, string?)> ReadItems(JsonElement value)
-    {
-        if (value.ValueKind != JsonValueKind.Array)
+        var items = new List<(long, double, string?)>(settings.Items.Count);
+        foreach (var item in settings.Items)
         {
-            throw new BindingException("/items", "'items' must be an array.", "e.g. [{ \"id\": 7, \"score\": 0.9, \"region\": \"us\" }]");
+            items.Add((item.Id, item.Score, item.Region));
         }
 
-        var items = new List<(long, double, string?)>(value.GetArrayLength());
-        var index = 0;
-        foreach (var item in value.EnumerateArray())
-        {
-            var pointer = "/items/" + index++;
-            if (item.ValueKind != JsonValueKind.Object
-                || !item.TryGetProperty("id", out var id) || id.ValueKind != JsonValueKind.Number || !id.TryGetInt64(out var key)
-                || !item.TryGetProperty("score", out var score) || score.ValueKind != JsonValueKind.Number || !double.IsFinite(score.GetDouble()))
-            {
-                throw new BindingException(pointer, "An item needs an int64 'id' and a finite 'score'.", "e.g. { \"id\": 7, \"score\": 0.9, \"region\": \"us\" }");
-            }
-
-            string? region = null;
-            if (item.TryGetProperty("region", out var r) && r.ValueKind != JsonValueKind.Null)
-            {
-                region = r.ValueKind == JsonValueKind.String ? r.GetString() : throw new BindingException(pointer + "/region", "'region' must be a string.");
-            }
-
-            items.Add((key, score.GetDouble(), region));
-        }
-
-        return items;
+        return TrendingCandidateSource.Create(items, settings.RegionInput);
     }
 }

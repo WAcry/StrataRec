@@ -1,6 +1,8 @@
 using System.Buffers;
+using System.ComponentModel.DataAnnotations;
 using System.Text;
 using System.Text.Json;
+using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Hashing;
 
@@ -450,47 +452,52 @@ public sealed class RandomModelClient : IModelClient
     };
 }
 
+/// <summary>Settings of <c>random@1</c>.</summary>
+public sealed class RandomSettings
+{
+    /// <summary>
+    /// The inputs of the model it stands in for, as the model declares them: their names, each a float32 tensor of shape
+    /// <c>[-1]</c> (<c>["smoothed_ctr", "log_followers"]</c>), or each name mapped to its tensor
+    /// (<c>{ "item_id": { "type": "int64", "shape": [-1, 2] } }</c>). At least one, each once.
+    /// </summary>
+    public required JsonElement Inputs { get; init; }
+
+    /// <summary>
+    /// The outputs, as the model declares them: their names, each a float32 tensor of shape <c>[-1]</c>
+    /// (<c>["p_click"]</c>), or each name mapped to its shape (<c>{ "p_first": { "shape": [-1] } }</c>). At least one, each once.
+    /// </summary>
+    public required JsonElement Outputs { get; init; }
+
+    /// <summary>A fixed seed instead of the call's (<c>ctx.request.seed</c>): every request gets the same scores.</summary>
+    public long? Seed { get; init; }
+}
+
+/// <summary>A tensor of <c>random@1</c>'s inputs or outputs mapped by name, as the model declares it.</summary>
+public sealed class RandomTensorSettings
+{
+    /// <summary>Required for an input: <c>float32</c> or <c>int64</c>. An output is <c>float32</c>.</summary>
+    [AllowedValues("float32", "int64")]
+    public string? Type { get; init; }
+
+    /// <summary>The dimensions, each -1 (dynamic) or a positive size, e.g. <c>[-1, 2]</c>: at least one.</summary>
+    public required List<int> Shape { get; init; }
+}
+
 /// <summary>Factory for <c>random@1</c>. <see cref="Create"/> only reads and checks the settings.</summary>
-public sealed class RandomModelClientFactory : IModelClientFactory
+public sealed class RandomModelClientFactory : ModelClientFactory<RandomSettings>
 {
     public const string Type = "random@1";
 
     private const string InputExample = "smoothed_ctr\", \"log_followers";
     private const string OutputExample = "p_click";
 
-    public string ClientType => Type;
+    public override string ClientType => Type;
 
-    /// <exception cref="BindingException">A setting is missing, unknown or invalid: at its pointer, with a hint.</exception>
-    public IModelClient Create(BindingContext context)
+    protected override IModelClient Create(RandomSettings settings, BindingContext context)
     {
-        ArgumentNullException.ThrowIfNull(context);
-        Tensors? inputs = null;
-        Tensors? outputs = null;
-        long? seed = null;
-        foreach (var (name, value) in context.Settings)
-        {
-            switch (name)
-            {
-                case "inputs":
-                    inputs = Parse(value, name);
-                    break;
-                case "outputs":
-                    outputs = Parse(value, name);
-                    break;
-                case "seed":
-                    seed = value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var fixedSeed)
-                        ? fixedSeed
-                        : throw new BindingException("/seed", $"'seed' must be an integer, got {value.GetRawText()}.",
-                            "write an int64 such as \"seed\": 42 to give every request the same scores, or remove 'seed' to vary them with ctx.request.seed");
-                    break;
-                default:
-                    throw BindingException.Unknown(string.Empty, name, ["inputs", "outputs", "seed"],
-                        $"{Type} takes 'inputs' and 'outputs' (the tensors the model declares) and optionally 'seed'");
-            }
-        }
-
-        var (inputSpecs, _) = inputs ?? throw Required("inputs");
-        var (outputSpecs, outputPointers) = outputs ?? throw Required("outputs");
+        var (inputSpecs, _) = Parse(context, settings.Inputs, "inputs");
+        var (outputSpecs, outputPointers) = Parse(context, settings.Outputs, "outputs");
+        var seed = settings.Seed;
         for (var o = 0; o < outputSpecs.Length; o++)
         {
             var perElement = false;
@@ -517,18 +524,20 @@ public sealed class RandomModelClientFactory : IModelClientFactory
     private readonly record struct Tensors(TensorSpec[] Specs, string[] ShapePointers);
 
     /// <summary>
-    /// <c>"inputs": ["smoothed_ctr"]</c> (each float32 <c>[-1]</c>) or <c>"inputs": { "item_id": { "type": "int64", "shape": [-1, 2] } }</c>.
+    /// <c>"inputs": ["smoothed_ctr"]</c> (each float32 <c>[-1]</c>) or <c>"inputs": { "item_id": { "type": "int64", "shape": [-1, 2] } }</c>:
+    /// a setting of two forms, bound as the one it is written in.
     /// </summary>
-    private static Tensors Parse(JsonElement value, string setting)
+    private static Tensors Parse(BindingContext context, JsonElement value, string setting)
     {
         var pointer = "/" + setting;
         var specs = new List<TensorSpec>();
         var pointers = new List<string>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
         switch (value.ValueKind)
         {
             case JsonValueKind.Array:
-                foreach (var name in SettingNames.Read(value, setting, Hint(setting)))
+                var names = BindingSettings.Bind<List<string>>(context, value, pointer, $"'{setting}' of {Type}");
+                SettingChecks.Names(names, setting, Hint(setting));
+                foreach (var name in names)
                 {
                     pointers.Add(pointer + "/" + specs.Count);
                     specs.Add(new TensorSpec(name, TensorElementType.Float32, new[] { -1 }));
@@ -536,21 +545,15 @@ public sealed class RandomModelClientFactory : IModelClientFactory
 
                 break;
             case JsonValueKind.Object:
-                foreach (var property in value.EnumerateObject())
+                foreach (var (name, spec) in BindingSettings.Bind<Dictionary<string, RandomTensorSettings>>(context, value, pointer, $"'{setting}' of {Type}"))
                 {
-                    var name = property.Name;
                     var specPointer = pointer + "/" + BindingContext.EscapePointerToken(name);
                     if (name.Length == 0)
                     {
                         throw new BindingException(specPointer, $"'{setting}' maps an empty name.", Hint(setting));
                     }
 
-                    if (!seen.Add(name))
-                    {
-                        throw new BindingException(specPointer, $"'{name}' is listed twice in '{setting}'.", "list each name once");
-                    }
-
-                    specs.Add(Spec(property.Value, setting, name, specPointer));
+                    specs.Add(Spec(spec, setting == "inputs", name, specPointer));
                     pointers.Add(specPointer + "/shape");
                 }
 
@@ -571,80 +574,36 @@ public sealed class RandomModelClientFactory : IModelClientFactory
     }
 
     /// <summary>One tensor spec of the full form: <c>{ "type": "int64", "shape": [-1, 2] }</c>; an output's type is float32.</summary>
-    private static TensorSpec Spec(JsonElement spec, string setting, string name, string pointer)
+    private static TensorSpec Spec(RandomTensorSettings spec, bool input, string name, string pointer)
     {
-        var input = setting == "inputs";
         var what = (input ? "input '" : "output '") + name + "'";
         var title = (input ? "Input '" : "Output '") + name + "'";
         var hint = SpecHint(input);
-        if (spec.ValueKind != JsonValueKind.Object)
+        var type = spec.Type switch
         {
-            throw new BindingException(pointer, $"{title} must be a tensor spec object, got {spec.GetRawText()}.", hint);
+            null when input => throw new BindingException(pointer + "/type", $"{title} needs a 'type': float32 or int64, as the model declares it.", hint),
+            null or "float32" => TensorElementType.Float32,
+            "int64" when input => TensorElementType.Int64,
+            _ => throw new BindingException(pointer + "/type", input
+                ? $"{title} has type \"{spec.Type}\", but the model operators send float32 and int64 tensors only."
+                : $"{title} has type \"{spec.Type}\", but the model operators read float32 outputs only.", hint),
+        };
+
+        if (spec.Shape.Count == 0)
+        {
+            throw new BindingException(pointer + "/shape", $"The shape of {what} must have at least one dimension.", hint);
         }
 
-        TensorElementType? type = input ? null : TensorElementType.Float32;
-        int[]? shape = null;
-        foreach (var property in spec.EnumerateObject())
+        for (var d = 0; d < spec.Shape.Count; d++)
         {
-            var (key, field) = (property.Name, property.Value);
-            var fieldPointer = pointer + "/" + BindingContext.EscapePointerToken(key);
-            switch (key)
+            if (spec.Shape[d] != -1 && spec.Shape[d] < 1)
             {
-                case "type":
-                    type = (field.ValueKind == JsonValueKind.String ? field.GetString() : null) switch
-                    {
-                        "float32" => TensorElementType.Float32,
-                        "int64" when input => TensorElementType.Int64,
-                        _ => throw new BindingException(fieldPointer, input
-                            ? $"{title} has type {field.GetRawText()}, but the model operators send float32 and int64 tensors only."
-                            : $"{title} has type {field.GetRawText()}, but the model operators read float32 outputs only.", hint),
-                    };
-                    break;
-                case "shape":
-                    shape = Shape(field, what, fieldPointer, hint);
-                    break;
-                default:
-                    throw new BindingException(fieldPointer, $"Unknown key '{key}' in the spec of {what}.", hint);
+                throw new BindingException(pointer + "/shape/" + d, $"Dimension {d} of {what} must be -1 (dynamic) or a positive size, got {spec.Shape[d]}.", hint);
             }
         }
 
-        if (type is null)
-        {
-            throw new BindingException(pointer + "/type", $"{title} needs a 'type': float32 or int64, as the model declares it.", hint);
-        }
-
-        if (shape is null)
-        {
-            throw new BindingException(pointer + "/shape", $"{title} needs a 'shape', as the model declares it.", hint);
-        }
-
-        return new TensorSpec(name, type.Value, shape);
+        return new TensorSpec(name, type, spec.Shape.ToArray());
     }
-
-    private static int[] Shape(JsonElement value, string what, string pointer, string hint)
-    {
-        if (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() == 0)
-        {
-            throw new BindingException(pointer, $"The shape of {what} must be an array of at least one dimension, got {value.GetRawText()}.", hint);
-        }
-
-        var shape = new int[value.GetArrayLength()];
-        var d = 0;
-        foreach (var item in value.EnumerateArray())
-        {
-            if (item.ValueKind != JsonValueKind.Number || !item.TryGetInt32(out var size) || (size != -1 && size < 1))
-            {
-                throw new BindingException(pointer + "/" + d, $"Dimension {d} of {what} must be -1 (dynamic) or a positive size, got {item.GetRawText()}.", hint);
-            }
-
-            shape[d++] = size;
-        }
-
-        return shape;
-    }
-
-    private static BindingException Required(string setting) =>
-        new("/" + setting, $"'{setting}' is required: the {setting[..^1]} names of the model {Type} stands in for.", Hint(setting));
 
     private static string Hint(string setting) => setting == "inputs"
         ? $"list the input names the model declares, e.g. \"inputs\": [\"{InputExample}\"], each a float32 tensor of shape [-1] (one value per row), "

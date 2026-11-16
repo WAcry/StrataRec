@@ -1,4 +1,5 @@
 using System.Text.Json;
+using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
@@ -138,10 +139,43 @@ public interface ICandidateSourceFactory
 {
     string ClientType { get; }
 
+    /// <summary>
+    /// The C# type the binding's own settings bind to (<see cref="BindingSettings"/>): the single source of their JSON
+    /// Schema (design 9.1). <see cref="CandidateSourceFactory{TSettings}"/> binds them to it before its <c>Create</c> sees
+    /// them; <see cref="NoSettings"/> for a source that takes none.
+    /// </summary>
+    Type SettingsType { get; }
+
     /// <param name="context">The source's logical name, the binding's own settings, the base directory relative files
     /// resolve against and the host's secret store.</param>
     /// <exception cref="BindingException">The settings are wrong: at the setting's pointer, with a hint.</exception>
     ICandidateSource Create(BindingContext context);
+}
+
+/// <summary>
+/// The base of a candidate source factory: it declares the type of its settings once, as its type argument, and gets
+/// them bound to it, so the type the schema describes is the type that binds, and the factory parses no JSON.
+/// </summary>
+/// <typeparam name="TSettings">The settings type: snake_case members, documented for the schema, required ones
+/// <c>required</c>; <see cref="LocalFile"/> and <see cref="SecretReference"/> for files and credentials.</typeparam>
+public abstract class CandidateSourceFactory<TSettings> : ICandidateSourceFactory
+    where TSettings : class
+{
+    public abstract string ClientType { get; }
+
+    public Type SettingsType => typeof(TSettings);
+
+    /// <summary>Binds the settings strictly (<see cref="BindingSettings"/>) and creates the source from them.</summary>
+    /// <exception cref="BindingException">The settings are wrong: at the setting's pointer, with a hint.</exception>
+    public ICandidateSource Create(BindingContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return Create(BindingSettings.Bind<TSettings>(context, ClientType), context);
+    }
+
+    /// <summary>Creates the source: checks what the settings type cannot say, and reads nothing else (see <see cref="BindingContext"/>).</summary>
+    /// <exception cref="BindingException">A setting is wrong: at its pointer, with a hint.</exception>
+    protected abstract ICandidateSource Create(TSettings settings, BindingContext context);
 }
 
 /// <summary>
@@ -217,168 +251,132 @@ public sealed class MemoryListCandidateSource : ICandidateSource
     internal readonly record struct Entry(long Int64Id, string? StringId, double Score);
 }
 
+/// <summary>The members of <c>memory_list@1</c>'s settings that its data file may hold too.</summary>
+public class MemoryListData
+{
+    /// <summary>
+    /// The list, best first: ids (strings or int64s) or <c>{ "id": …, "score": … }</c> objects; scores default to a
+    /// descending ramp.
+    /// </summary>
+    public List<JsonElement>? Items { get; init; }
+
+    /// <summary>The request input whose value picks the list of <c>lists</c> a request gets.</summary>
+    public string? ByInput { get; init; }
+
+    /// <summary>A list per value of <c>by_input</c>, each like <c>items</c>; <c>"*"</c> is the list of every other value.</summary>
+    public Dictionary<string, List<JsonElement>>? Lists { get; init; }
+
+    /// <summary>Simulated latency of every retrieval, in milliseconds (default 0).</summary>
+    public int? LatencyMs { get; init; }
+
+    /// <summary>Fail every retrieval (fault injection).</summary>
+    public bool? Fail { get; init; }
+}
+
+/// <summary>Settings of <c>memory_list@1</c>.</summary>
+public sealed class MemoryListSettings : MemoryListData
+{
+    /// <summary>
+    /// A JSON file of the other members: a path relative to the configuration directory, an absolute path or a file:// URI.
+    /// A member the binding has too is the binding's.
+    /// </summary>
+    public LocalFile? DataFile { get; init; }
+}
+
+/// <summary>An item of a <c>memory_list@1</c> list written as an object.</summary>
+public sealed class MemoryListItem
+{
+    /// <summary>The candidate's id: a string or an int64.</summary>
+    public required JsonElement Id { get; init; }
+
+    /// <summary>Its score; without one, its place on the list's descending ramp.</summary>
+    public double? Score { get; init; }
+}
+
 /// <summary>Factory for <c>memory_list@1</c>.</summary>
-public sealed class MemoryListCandidateSourceFactory : ICandidateSourceFactory
+public sealed class MemoryListCandidateSourceFactory : CandidateSourceFactory<MemoryListSettings>
 {
     public const string Type = "memory_list@1";
 
-    public string ClientType => Type;
+    public override string ClientType => Type;
 
-    private const string Takes = "memory_list@1 takes 'items' (ids, or { \"id\", \"score\" } objects, best first), or 'by_input' with 'lists' " +
-                                 "(a list per value of that input, '*' for the others), 'latency_ms' and 'fail', and 'data_file': a JSON file of the same members";
-
-    private static readonly string[] Members = ["items", "by_input", "lists", "latency_ms", "fail"];
-    private static readonly string[] Settings = ["data_file", "items", "by_input", "lists", "latency_ms", "fail"];
-
-    /// <remarks>
-    /// A test fixture: it reads its data file here, at create time, so it needs no load. Members are checked strictly, in
-    /// the binding and in the file: a misspelled one would otherwise be ignored and the list served empty or unchanged.
-    /// </remarks>
-    /// <exception cref="BindingException">A setting or a member of the data file is unknown or invalid: at the setting, or
-    /// at <c>/data_file</c> naming the member in the file, with a hint.</exception>
-    public ICandidateSource Create(BindingContext context)
+    /// <remarks>A test fixture: it reads its data file here, at create time, so it needs no load.</remarks>
+    /// <exception cref="BindingException">A setting or a member of the data file is invalid: at the setting, or at
+    /// <c>/data_file</c> naming the place in the file, with a hint.</exception>
+    protected override ICandidateSource Create(MemoryListSettings settings, BindingContext context)
     {
-        ArgumentNullException.ThrowIfNull(context);
-        var members = new Dictionary<string, (JsonElement Value, Where Where)>(StringComparer.Ordinal);
-        foreach (var (name, _) in context.Settings)
+        var file = settings.DataFile;
+        var data = file is null ? null : InFile(file, () => BindingSettings.Bind<MemoryListData>(context, DataFile.Read(file), string.Empty, "the file"));
+
+        // A member the binding has is the binding's; else the file's.
+        var items = settings.Items is { } own
+            ? Entries(context, own, "/items")
+            : data?.Items is { } fromFile ? InFile(file!, () => Entries(context, fromFile, "/items")) : [];
+        var byInput = settings.ByInput ?? data?.ByInput;
+        if (byInput is { Length: 0 })
         {
-            if (Array.IndexOf(Settings, name) < 0)
-            {
-                throw BindingException.Unknown(string.Empty, name, Settings, Takes);
-            }
-        }
-
-        if (context.Settings.TryGetValue("data_file", out var dataFile))
-        {
-            var (root, path) = DataFile.Read(dataFile, context.BaseDirectory);
-            if (root.ValueKind != JsonValueKind.Object)
-            {
-                throw new BindingException("/data_file", $"'{path}' must hold a JSON object of memory_list@1's members.", Takes);
-            }
-
-            foreach (var member in root.EnumerateObject())
-            {
-                if (Array.IndexOf(Members, member.Name) < 0)
-                {
-                    var guess = Core.Diagnostics.Spelling.DidYouMean(member.Name, Members);
-                    throw new BindingException("/data_file", $"'{path}' has a member '{member.Name}', which memory_list@1 does not take.",
-                        guess is null ? Takes : guess + " " + Takes);
-                }
-
-                members[member.Name] = (member.Value, new Where(path, "/" + BindingContext.EscapePointerToken(member.Name)));
-            }
-        }
-
-        foreach (var (name, value) in context.Settings)
-        {
-            if (name != "data_file")
-            {
-                members[name] = (value, new Where(null, "/" + BindingContext.EscapePointerToken(name))); // the binding's own settings override the file's
-            }
-        }
-
-        var items = members.TryGetValue("items", out var i) ? List(i.Value, i.Where) : Array.Empty<MemoryListCandidateSource.Entry>();
-        string? byInput = null;
-        if (members.TryGetValue("by_input", out var b))
-        {
-            byInput = b.Value.ValueKind == JsonValueKind.String && b.Value.GetString() is { Length: > 0 } input
-                ? input
-                : throw b.Where.Error(string.Empty, $"'by_input' must name a request input; got {b.Value.GetRawText()}.");
+            throw In(settings.ByInput is null ? file : null, new BindingException("/by_input", "'by_input' must name a request input.",
+                "give the request input whose value picks the list, e.g. \"by_input\": \"user_id\""));
         }
 
         var lists = new Dictionary<string, MemoryListCandidateSource.Entry[]>(StringComparer.Ordinal);
-        if (members.TryGetValue("lists", out var l))
+        var listsFrom = settings.Lists is null ? file : null;
+        foreach (var (value, list) in settings.Lists ?? data?.Lists ?? [])
         {
-            if (l.Value.ValueKind != JsonValueKind.Object)
-            {
-                throw l.Where.Error(string.Empty, $"'lists' must be an object of input value to list; got {l.Value.GetRawText()}.");
-            }
-
-            foreach (var list in l.Value.EnumerateObject())
-            {
-                lists[list.Name] = List(list.Value, l.Where.In("/" + BindingContext.EscapePointerToken(list.Name)));
-            }
+            lists[value] = InFile(listsFrom, () => Entries(context, list, "/lists/" + BindingContext.EscapePointerToken(value)));
         }
 
-        var latency = 0;
-        if (members.TryGetValue("latency_ms", out var t))
+        var latency = settings.LatencyMs ?? data?.LatencyMs ?? 0;
+        if (latency < 0)
         {
-            latency = t.Value.ValueKind == JsonValueKind.Number && t.Value.TryGetInt32(out var ms) && ms >= 0
-                ? ms
-                : throw t.Where.Error(string.Empty, $"'latency_ms' must be a whole number of milliseconds, 0 or more; got {t.Value.GetRawText()}.");
+            throw In(settings.LatencyMs is null ? file : null, new BindingException("/latency_ms", $"'latency_ms' must be 0 or more, got {latency}.",
+                "give the simulated latency of every retrieval in milliseconds, or remove it for none"));
         }
 
-        var fail = false;
-        if (members.TryGetValue("fail", out var f))
-        {
-            fail = f.Value.ValueKind is JsonValueKind.True or JsonValueKind.False
-                ? f.Value.GetBoolean()
-                : throw f.Where.Error(string.Empty, $"'fail' must be true or false; got {f.Value.GetRawText()}.");
-        }
-
-        return MemoryListCandidateSource.Create(items, byInput, lists, latency, fail);
+        return MemoryListCandidateSource.Create(items, byInput, lists, latency, settings.Fail ?? data?.Fail ?? false);
     }
 
     /// <summary>A list: ids or <c>{"id", "score"}</c> objects, best first; scores default to a descending ramp.</summary>
-    private static MemoryListCandidateSource.Entry[] List(JsonElement array, Where where)
+    private static MemoryListCandidateSource.Entry[] Entries(BindingContext context, List<JsonElement> list, string pointer)
     {
-        if (array.ValueKind != JsonValueKind.Array)
+        var result = new MemoryListCandidateSource.Entry[list.Count];
+        for (var i = 0; i < list.Count; i++)
         {
-            throw where.Error(string.Empty, $"A list must be an array of ids or {{ \"id\", \"score\" }} objects; got {array.GetRawText()}.");
-        }
-
-        var result = new MemoryListCandidateSource.Entry[array.GetArrayLength()];
-        var index = 0;
-        foreach (var item in array.EnumerateArray())
-        {
-            var at = "/" + index;
-            var score = 1.0 - (index / (double)Math.Max(1, result.Length));
-            var id = item;
-            if (item.ValueKind == JsonValueKind.Object)
+            var at = pointer + "/" + i;
+            var score = 1.0 - (i / (double)Math.Max(1, result.Length));
+            var id = list[i];
+            if (id.ValueKind == JsonValueKind.Object)
             {
-                id = default;
-                foreach (var member in item.EnumerateObject())
-                {
-                    switch (member.Name)
-                    {
-                        case "id":
-                            id = member.Value;
-                            break;
-                        case "score":
-                            score = member.Value.ValueKind == JsonValueKind.Number && member.Value.TryGetDouble(out var s) && double.IsFinite(s)
-                                ? s
-                                : throw where.Error(at + "/score", $"A score must be a finite number; got {member.Value.GetRawText()}.");
-                            break;
-                        default:
-                            throw where.Error(at + "/" + BindingContext.EscapePointerToken(member.Name), $"An item has 'id' and 'score', not '{member.Name}'.",
-                                Core.Diagnostics.Spelling.DidYouMean(member.Name, ["id", "score"]));
-                    }
-                }
-
-                if (id.ValueKind == JsonValueKind.Undefined)
-                {
-                    throw where.Error(at, "An item object needs its 'id'.");
-                }
+                var item = BindingSettings.Bind<MemoryListItem>(context, id, at, "an item of " + Type);
+                (id, score) = (item.Id, item.Score ?? score);
             }
 
-            result[index++] = id.ValueKind switch
+            result[i] = id.ValueKind switch
             {
                 JsonValueKind.String => new MemoryListCandidateSource.Entry(0, id.GetString(), score),
                 JsonValueKind.Number when id.TryGetInt64(out var int64) => new MemoryListCandidateSource.Entry(int64, null, score),
-                _ => throw where.Error(at, $"An id must be a string or an int64; got {id.GetRawText()}."),
+                _ => throw new BindingException(at, $"An id must be a string or an int64; got {id.GetRawText()}."),
             };
         }
 
         return result;
     }
 
-    /// <summary>Where a member came from: the binding's setting at <c>Pointer</c>, or the data file (<c>File</c>) at it.</summary>
-    private readonly record struct Where(string? File, string Pointer)
+    /// <summary>What <paramref name="read"/> finds wrong in the data file, reported at its setting, naming the place in the file.</summary>
+    private static T InFile<T>(LocalFile? file, Func<T> read)
     {
-        public Where In(string pointer) => this with { Pointer = Pointer + pointer };
-
-        public BindingException Error(string pointer, string message, string? hint = null) => File is null
-            ? new BindingException(Pointer + pointer, message, hint)
-            : new BindingException("/data_file", $"'{File}' at {Pointer + pointer}: {message}", hint);
+        try
+        {
+            return read();
+        }
+        catch (BindingException ex) when (file is not null)
+        {
+            throw In(file, ex);
+        }
     }
+
+    /// <summary>An error in the data file <paramref name="file"/> (at a pointer within it), as an error of its setting; as it is when null.</summary>
+    private static BindingException In(LocalFile? file, BindingException error) => file is null
+        ? error
+        : new BindingException(file.Pointer, $"'{file.Path}' at {(error.Pointer.Length == 0 ? "its root" : error.Pointer)}: {error.Reason}", error.Hint);
 }

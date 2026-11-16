@@ -503,6 +503,8 @@ public sealed class BindingLifetimeTests
 
         public string ClientType => Type;
 
+        public Type SettingsType => _linear.SettingsType;
+
         public List<Client> Created => _created.ToList();
 
         public Func<Client, CancellationToken, Task>? Load { get; set; }
@@ -517,7 +519,8 @@ public sealed class BindingLifetimeTests
 
         public IModelClient Create(BindingContext context)
         {
-            var client = new Client(this, _linear.Create(Only(context, LinearSettings)), context.SecretReference("credentials"));
+            var credentials = context.Settings.TryGetValue("credentials", out var reference) ? context.SecretReference(reference, "/credentials") : null;
+            var client = new Client(this, _linear.Create(Only(context, LinearSettings)), credentials);
             _created.Enqueue(client);
             return client;
         }
@@ -630,6 +633,8 @@ public sealed class BindingLifetimeTests
 
         public string ConnectorType => Type;
 
+        public Type SettingsType => _memory.SettingsType;
+
         public List<Connector> Created => _created.ToList();
 
         public Connector Last(string name) => Created.Last(c => c.Name == name);
@@ -675,6 +680,8 @@ public sealed class BindingLifetimeTests
 
         public string ClientType => Type;
 
+        public Type SettingsType => _list.SettingsType;
+
         public List<Source> Created => _created.ToList();
 
         public Source Last(string name) => Created.Last(s => s.Name == name);
@@ -719,6 +726,8 @@ public sealed class BindingLifetimeTests
         private int _lookups;
 
         public string ClientType => Type;
+
+        public Type SettingsType => _linear.SettingsType;
 
         public ModelSignature? Answer { get; init; }
 

@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\StrataRec.Core\StrataRec.Core.csproj" />
+    <ProjectReference Include="..\StrataRec.Artifacts\StrataRec.Artifacts.csproj" />
   </ItemGroup>
 
   <ItemGroup>

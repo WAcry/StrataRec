@@ -1,4 +1,3 @@
-using System.Text.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Values;
@@ -268,7 +267,9 @@ public sealed class EngineLifecycleTests
             return Slot(index).Task;
         }
 
-        public IFeatureUpdateSource Create(string sourceName, IReadOnlyDictionary<string, JsonElement> settings, string? baseDirectory) => new Source(this);
+        public Type SettingsType => typeof(Core.Bindings.NoSettings);
+
+        public IFeatureUpdateSource Create(Core.Bindings.BindingContext context) => new Source(this);
 
         private TaskCompletionSource<Run> Slot(int index)
         {

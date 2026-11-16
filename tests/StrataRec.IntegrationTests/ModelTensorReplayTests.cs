@@ -74,6 +74,8 @@ public sealed class ModelTensorReplayTests
 
         public string ClientType => Type;
 
+        public Type SettingsType => typeof(NoSettings);
+
         /// <summary>Every input sent, as <c>name type [shape]</c>, in the order sent.</summary>
         public List<string> Seen
         {

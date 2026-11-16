@@ -74,18 +74,18 @@ public sealed class FixedTextModelClientTests
     }
 
     [Theory]
-    [InlineData("""{ "outputs": { "answer": "x" } }""", "", "fixed_text@1 needs 'inputs'")]
-    [InlineData("""{ "inputs": ["user"] }""", "", "fixed_text@1 needs 'outputs'")]
-    [InlineData("""{ "inputs": ["user"], "outputs": { "answer": "x" }, "seed": 1 }""", "/seed", "Unknown setting 'seed'.")]
-    [InlineData("""{ "inputs": "user", "outputs": { "answer": "x" } }""", "/inputs", "'inputs' must be an array of names")]
+    [InlineData("""{ "outputs": { "answer": "x" } }""", "", "'inputs' is required in the settings of fixed_text@1.")]
+    [InlineData("""{ "inputs": ["user"] }""", "", "'outputs' is required in the settings of fixed_text@1.")]
+    [InlineData("""{ "inputs": ["user"], "outputs": { "answer": "x" }, "seed": 1 }""", "/seed", "Unknown key 'seed' in the settings of fixed_text@1.")]
+    [InlineData("""{ "inputs": "user", "outputs": { "answer": "x" } }""", "/inputs", "'inputs' must be an array, got the string \"user\".")]
     [InlineData("""{ "inputs": [], "outputs": { "answer": "x" } }""", "/inputs", "'inputs' is empty")]
     [InlineData("""{ "inputs": ["user", ""], "outputs": { "answer": "x" } }""", "/inputs/1", "'inputs' item 1 must be a non-empty name")]
     [InlineData("""{ "inputs": ["user", "user"], "outputs": { "answer": "x" } }""", "/inputs/1", "'user' is listed twice in 'inputs'.")]
     [InlineData("""{ "inputs": ["user"], "outputs": ["answer"] }""", "/outputs", "'outputs' must be an object")]
     [InlineData("""{ "inputs": ["user"], "outputs": { } }""", "/outputs", "'outputs' is empty")]
-    [InlineData("""{ "inputs": ["user"], "outputs": { "answer": [3, 1] } }""", "/outputs/answer", "Output 'answer' must be a string")]
+    [InlineData("""{ "inputs": ["user"], "outputs": { "answer": [3, 1] } }""", "/outputs/answer", "Entry 'answer' of 'outputs' must be a string")]
     [InlineData("""{ "inputs": ["user"], "outputs": { "": "x" } }""", "/outputs/", "'outputs' maps an empty name.")]
-    [InlineData("""{ "inputs": ["user"], "outputs": { "a/b": "x", "a/b": "y" } }""", "/outputs/a~1b", "'a/b' is listed twice in 'outputs'.")]
+    [InlineData("""{ "inputs": ["user"], "outputs": { "a/b": "x", "a/b": "y" } }""", "/outputs/a~1b", "Duplicate key 'a/b'")] // settings built in code
     public void BadSettings_AreBindingErrors_AtTheirPointer_WithAHint(string settings, string pointer, string message)
     {
         var error = Assert.Throws<BindingException>(() => Create(settings));

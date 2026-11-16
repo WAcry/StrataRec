@@ -380,6 +380,8 @@ internal sealed class TestCacheStoreFactory(IReadOnlyDictionary<string, IFeature
 
     public string StoreType => Type;
 
+    public Type SettingsType => typeof(NoSettings);
+
     public IFeatureCacheStore Create(BindingContext context) => stores[context.Name];
 }
 
@@ -493,8 +495,9 @@ internal sealed class TestUpdateSourceFactory : IFeatureUpdateSourceFactory
 
     public string SourceType => Type;
 
-    public IFeatureUpdateSource Create(string sourceName, IReadOnlyDictionary<string, JsonElement> settings, string? baseDirectory) =>
-        new MemoryFeatureUpdateSource();
+    public Type SettingsType => typeof(NoSettings);
+
+    public IFeatureUpdateSource Create(BindingContext context) => new MemoryFeatureUpdateSource();
 }
 
 /// <summary>Serves connectors registered by source name under the connector type <c>test@1</c>.</summary>
@@ -503,6 +506,8 @@ internal sealed class TestConnectorFactory(IReadOnlyDictionary<string, IFeatureS
     public const string Type = "test@1";
 
     public string ConnectorType => Type;
+
+    public Type SettingsType => typeof(NoSettings);
 
     public IFeatureSourceConnector Create(BindingContext context) =>
         connectors[context.Name];

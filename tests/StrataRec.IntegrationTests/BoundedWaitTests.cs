@@ -304,6 +304,8 @@ public sealed class BoundedWaitTests
 
         public string ClientType => _inner.ClientType;
 
+        public Type SettingsType => _inner.SettingsType;
+
         public IModelClient Create(BindingContext context) => new Client(_inner.Create(context), this);
 
         private sealed class Client(IModelClient inner, GatedModels owner) : IModelClient
@@ -327,6 +329,8 @@ public sealed class BoundedWaitTests
         private readonly MemoryListCandidateSourceFactory _inner = new();
 
         public string ClientType => _inner.ClientType;
+
+        public Type SettingsType => _inner.SettingsType;
 
         public ICandidateSource Create(BindingContext context)
         {
@@ -352,6 +356,8 @@ public sealed class BoundedWaitTests
         private readonly LinearModelClientFactory _inner = new();
 
         public string ClientType => _inner.ClientType;
+
+        public Type SettingsType => _inner.SettingsType;
 
         public IModelClient Create(BindingContext context) => new Client(_inner.Create(context));
 

@@ -1,5 +1,5 @@
+using System.ComponentModel.DataAnnotations;
 using System.Globalization;
-using System.Text.Json;
 using StrataRec.Core.Bindings;
 
 namespace StrataRec.Models;
@@ -164,142 +164,76 @@ public sealed class LinearModelClient : IModelClient
 /// <summary>One output of <see cref="LinearModelClient"/>.</summary>
 public sealed record LinearOutput(string Name, double Bias, IReadOnlyDictionary<string, double> Weights, bool Sigmoid);
 
+/// <summary>Settings of <c>linear@1</c>.</summary>
+public sealed class LinearSettings
+{
+    /// <summary>
+    /// The model's outputs by name, each a weighted sum of its inputs, e.g.
+    /// <c>{ "p_click": { "bias": -2.0, "weights": { "smoothed_ctr": 8.0 }, "activation": "sigmoid" } }</c>.
+    /// </summary>
+    public required Dictionary<string, LinearOutputSettings> Outputs { get; init; }
+
+    /// <summary>The model versions a call may ask for, e.g. <c>["v12", "v13"]</c>; any version when omitted.</summary>
+    public List<string>? Versions { get; init; }
+
+    /// <summary>Simulated latency of every call, in milliseconds (default 0).</summary>
+    public int LatencyMs { get; init; }
+
+    /// <summary>Fail every call (fault injection).</summary>
+    public bool Fail { get; init; }
+}
+
+/// <summary>One output of <c>linear@1</c>: <c>activation(bias + Σ weight · input)</c>.</summary>
+public sealed class LinearOutputSettings
+{
+    /// <summary>Added to the weighted sum (default 0).</summary>
+    public double Bias { get; init; }
+
+    /// <summary>Input name to its weight. The model's inputs are the names the outputs weigh.</summary>
+    public Dictionary<string, double> Weights { get; init; } = new();
+
+    /// <summary><c>sigmoid</c>, or <c>identity</c> (the default).</summary>
+    [AllowedValues("sigmoid", "identity")]
+    public string Activation { get; init; } = "identity";
+}
+
 /// <summary>Factory for <c>linear@1</c>.</summary>
-public sealed class LinearModelClientFactory : IModelClientFactory
+public sealed class LinearModelClientFactory : ModelClientFactory<LinearSettings>
 {
     public const string Type = "linear@1";
 
-    public string ClientType => Type;
+    public override string ClientType => Type;
 
-    private const string Takes = "linear@1 takes 'outputs' (each output's 'bias', 'weights' and 'activation'), and optionally 'versions', 'latency_ms' and 'fail'";
-    private const string OutputTakes = "an output takes 'bias' (a number), 'weights' (input name to number) and 'activation' ('sigmoid' or 'identity')";
-    private static readonly string[] Settings = ["outputs", "versions", "latency_ms", "fail"];
-    private static readonly string[] OutputSettings = ["bias", "weights", "activation"];
-
-    /// <exception cref="BindingException">A setting is missing, unknown or invalid: at its pointer, with a hint.</exception>
-    public IModelClient Create(BindingContext context)
+    protected override IModelClient Create(LinearSettings settings, BindingContext context)
     {
-        ArgumentNullException.ThrowIfNull(context);
-        List<LinearOutput>? outputs = null;
-        List<string>? versions = null;
-        var latency = 0;
-        var fail = false;
-        foreach (var (name, value) in context.Settings)
+        var outputs = new List<LinearOutput>(settings.Outputs.Count);
+        foreach (var (name, output) in settings.Outputs)
         {
-            switch (name)
+            var sigmoid = output.Activation switch
             {
-                case "outputs":
-                    outputs = Outputs(value);
-                    break;
-                case "versions":
-                    versions = Versions(value);
-                    break;
-                case "latency_ms":
-                    latency = value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var ms) && ms >= 0
-                        ? ms
-                        : throw new BindingException("/latency_ms", $"'latency_ms' must be a whole number of milliseconds, 0 or more; got {value.GetRawText()}.");
-                    break;
-                case "fail":
-                    fail = value.ValueKind is JsonValueKind.True or JsonValueKind.False
-                        ? value.GetBoolean()
-                        : throw new BindingException("/fail", $"'fail' must be true or false; got {value.GetRawText()}.");
-                    break;
-                default:
-                    throw BindingException.Unknown(string.Empty, name, Settings, Takes);
-            }
+                "sigmoid" => true,
+                "identity" => false,
+                _ => throw new BindingException("/outputs/" + BindingContext.EscapePointerToken(name) + "/activation",
+                    $"Unknown activation '{output.Activation}'.", "use 'sigmoid' or 'identity'"),
+            };
+            outputs.Add(new LinearOutput(name, output.Bias, output.Weights, sigmoid));
         }
 
-        if (outputs is null)
+        if (settings.Versions is { } versions)
         {
-            throw new BindingException(string.Empty, "linear@1 needs 'outputs': the model's outputs, each a weighted sum of its inputs.",
-                "add it, e.g. \"outputs\": { \"p_click\": { \"bias\": -2.0, \"weights\": { \"smoothed_ctr\": 8.0 }, \"activation\": \"sigmoid\" } }");
-        }
-
-        return new LinearModelClient(context.Name, outputs, versions, latency, fail);
-    }
-
-    private static List<LinearOutput> Outputs(JsonElement value)
-    {
-        if (value.ValueKind != JsonValueKind.Object)
-        {
-            throw new BindingException("/outputs", $"'outputs' must be an object of output name to its bias, weights and activation; got {value.GetRawText()}.");
-        }
-
-        var outputs = new List<LinearOutput>();
-        foreach (var output in value.EnumerateObject())
-        {
-            var pointer = "/outputs/" + BindingContext.EscapePointerToken(output.Name);
-            if (output.Value.ValueKind != JsonValueKind.Object)
+            for (var i = 0; i < versions.Count; i++)
             {
-                throw new BindingException(pointer, $"Output '{output.Name}' must be an object; got {output.Value.GetRawText()}.", OutputTakes);
-            }
-
-            var bias = 0.0;
-            var weights = new Dictionary<string, double>(StringComparer.Ordinal);
-            var sigmoid = false;
-            foreach (var member in output.Value.EnumerateObject())
-            {
-                var at = pointer + "/" + BindingContext.EscapePointerToken(member.Name);
-                switch (member.Name)
+                if (versions[i].Length == 0)
                 {
-                    case "bias":
-                        bias = Number(member.Value, at, "'bias'");
-                        break;
-                    case "weights":
-                        if (member.Value.ValueKind != JsonValueKind.Object)
-                        {
-                            throw new BindingException(at, $"'weights' must be an object of input name to weight; got {member.Value.GetRawText()}.");
-                        }
-
-                        foreach (var weight in member.Value.EnumerateObject())
-                        {
-                            weights[weight.Name] = Number(weight.Value, at + "/" + BindingContext.EscapePointerToken(weight.Name), $"The weight of '{weight.Name}'");
-                        }
-
-                        break;
-                    case "activation":
-                        sigmoid = member.Value.ValueKind == JsonValueKind.String ? member.Value.GetString() switch
-                        {
-                            "sigmoid" => true,
-                            "identity" => false,
-                            _ => throw new BindingException(at, $"Unknown activation '{member.Value.GetString()}'.", "use 'sigmoid' or 'identity'"),
-                        }
-                        : throw new BindingException(at, $"'activation' must be 'sigmoid' or 'identity'; got {member.Value.GetRawText()}.");
-                        break;
-                    default:
-                        throw BindingException.Unknown(pointer, member.Name, OutputSettings, OutputTakes);
+                    throw new BindingException("/versions/" + i, "A version must be a non-empty string.",
+                        "list the versions a call may ask for, e.g. \"versions\": [\"v12\", \"v13\"], or remove 'versions' to accept any");
                 }
             }
-
-            outputs.Add(new LinearOutput(output.Name, bias, weights, sigmoid));
         }
 
-        return outputs;
+        SettingChecks.Latency(settings.LatencyMs);
+        return new LinearModelClient(context.Name, outputs, settings.Versions, settings.LatencyMs, settings.Fail);
     }
-
-    private static List<string> Versions(JsonElement value)
-    {
-        var versions = new List<string>();
-        if (value.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in value.EnumerateArray())
-            {
-                versions.Add(item.ValueKind == JsonValueKind.String && item.GetString() is { Length: > 0 } version
-                    ? version
-                    : throw new BindingException("/versions/" + versions.Count, $"A version must be a non-empty string; got {item.GetRawText()}."));
-            }
-
-            return versions;
-        }
-
-        throw new BindingException("/versions", $"'versions' must be an array of the versions the model accepts; got {value.GetRawText()}.",
-            "list them, e.g. \"versions\": [\"v12\", \"v13\"], or remove it to accept any");
-    }
-
-    private static double Number(JsonElement value, string pointer, string what) =>
-        value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number) && double.IsFinite(number)
-            ? number
-            : throw new BindingException(pointer, $"{what} must be a finite number; got {value.GetRawText()}.");
 
     public override string ToString() => Type.ToString(CultureInfo.InvariantCulture);
 }

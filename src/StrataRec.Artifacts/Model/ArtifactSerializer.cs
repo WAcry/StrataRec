@@ -62,7 +62,7 @@ public static class ArtifactSerializer
         {
             throw Failed(JsonBindingErrors.Describe(ex, node, typeof(T), Options, Subject(typeof(T))), sourceName, ex);
         }
-        catch (Exception ex) when (NotBindable(ex, node, typeof(T), Subject(typeof(T))) is { } error)
+        catch (Exception ex) when (NotBindable(ex, node, typeof(T), Options, Subject(typeof(T))) is { } error)
         {
             throw Failed(error, sourceName, ex);
         }
@@ -137,7 +137,7 @@ public static class ArtifactSerializer
             error = JsonBindingErrors.Describe(ex, node, typeof(T), Options, subject);
             return false;
         }
-        catch (Exception ex) when (NotBindable(ex, node, typeof(T), subject) is { } found)
+        catch (Exception ex) when (NotBindable(ex, node, typeof(T), Options, subject) is { } found)
         {
             value = null;
             error = found;
@@ -160,19 +160,79 @@ public static class ArtifactSerializer
         return true;
     }
 
+    /// <summary>
+    /// <see cref="TryBind{T}(JsonNode, string, out T, out JsonBindingError)"/> for a document given as compact UTF-8 JSON,
+    /// with options that derive from <see cref="Options"/> (a binding's settings add converters of their own,
+    /// <see cref="BindingSettings"/>). Deserialized from the bytes themselves, so a converter's
+    /// <see cref="Utf8JsonReader.TokenStartIndex"/> is an offset into them. An exception that is not about the document,
+    /// such as a <see cref="Core.Bindings.BindingException"/> a converter throws, propagates.
+    /// </summary>
+    internal static bool TryBind<T>(
+        ReadOnlySpan<byte> utf8, JsonSerializerOptions options, string subject, [NotNullWhen(true)] out T? value, [NotNullWhen(false)] out JsonBindingError? error)
+        where T : class
+    {
+        try
+        {
+            value = JsonSerializer.Deserialize<T>(utf8, options);
+        }
+        catch (JsonException ex)
+        {
+            value = null;
+            error = JsonBindingErrors.Describe(ex, JsonNode.Parse(utf8), typeof(T), options, subject);
+            return false;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or NotSupportedException
+                                   && NotBindable(ex, JsonNode.Parse(utf8), typeof(T), options, subject) is { } found)
+        {
+            value = null;
+            error = found;
+            return false;
+        }
+
+        if (value is null)
+        {
+            error = JsonBindingErrors.Null(typeof(T), options, subject);
+            return false;
+        }
+
+        error = HasNull(utf8) ? NullElements.Find(JsonSerializer.Deserialize<JsonElement>(utf8), typeof(T), options) : null;
+        if (error is not null)
+        {
+            value = null;
+            return false;
+        }
+
+        return true;
+    }
+
     /// <summary>A null element of <paramref name="node"/> where <typeparamref name="T"/> requires a value; walked only when it has a null.</summary>
     private static JsonBindingError? NullElementOf<T>(JsonNode? node) =>
         NullElements.AnyNull(node) ? NullElements.Find(JsonSerializer.SerializeToElement(node, Options), typeof(T), Options) : null;
+
+    /// <summary>Whether the JSON has a <c>null</c> anywhere: without one, no null element needs looking for.</summary>
+    private static bool HasNull(ReadOnlySpan<byte> utf8)
+    {
+        var reader = new Utf8JsonReader(utf8);
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.Null)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// The error for a document the serializer rejects with an exception other than a <see cref="JsonException"/>: one
     /// with a part that cannot be read (writing a leniently parsed node reads it), or an object of an abstract
     /// polymorphic type without its discriminator. Null when the exception is not about the document, so it propagates.
     /// </summary>
-    private static JsonBindingError? NotBindable(Exception exception, JsonNode? node, Type type, string subject) => exception switch
+    private static JsonBindingError? NotBindable(Exception exception, JsonNode? node, Type type, JsonSerializerOptions options, string subject) => exception switch
     {
         InvalidOperationException or ArgumentException => JsonBindingErrors.Unreadable(node, subject),
-        NotSupportedException => JsonBindingErrors.MissingDiscriminator(node, type, Options, subject),
+        NotSupportedException => JsonBindingErrors.MissingDiscriminator(node, type, options, subject),
         _ => null,
     };
 

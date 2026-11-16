@@ -44,7 +44,7 @@ public sealed class LocalTableSpec
     /// <param name="pointer">The binding's pointer, e.g. <c>/sources/item_store</c>, for load errors.</param>
     /// <param name="baseDirectory">Directory relative paths in the settings resolve against (relative: against the current
     /// directory; null: the current directory); pinned, it is part of the identity.</param>
-    /// <exception cref="FeatureUpdateException">The bootstrap settings are wrong; the pointer is within <c>bootstrap</c>.</exception>
+    /// <exception cref="BindingException">The bootstrap settings are wrong; the pointer is within <c>bootstrap</c>.</exception>
     public static LocalTableSpec Create(
         LocalTableSchema schema,
         LocalFeatureTableOptions options,
@@ -65,7 +65,7 @@ public sealed class LocalTableSpec
         }
 
         var directory = BindingContext.PinBaseDirectory(baseDirectory);
-        var source = bootstrapFactory.Create(sourceName, bootstrap.Settings, directory);
+        var source = bootstrapFactory.Create(new BindingContext(sourceName, bootstrap.Settings, directory, secrets: null));
         return new LocalTableSpec(schema, options, binding, source, bootstrapFactory, artifact, pointer, directory);
     }
 

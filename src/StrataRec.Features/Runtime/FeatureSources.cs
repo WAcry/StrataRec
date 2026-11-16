@@ -316,7 +316,7 @@ internal sealed class FeatureSourceResolver
                 ? LocalTableSpec.CreateCache(schema, supply.Options!, supply.Binding, supply.Connector!, _artifact, pointer, _baseDirectory)
                 : LocalTableSpec.Create(schema, supply.Options!, supply.Binding, supply.BootstrapFactory!, supply.Name, _artifact, pointer, _baseDirectory);
         }
-        catch (FeatureUpdateException ex)
+        catch (BindingException ex)
         {
             ReportSourceSettings(supply.Pointer, ex);
             return null;
@@ -675,9 +675,9 @@ internal sealed class FeatureSourceResolver
         {
             try
             {
-                _ = factory.Create(sourceName, binding.Bootstrap!.Settings, BindingContext.PinBaseDirectory(_baseDirectory));
+                _ = factory.Create(new BindingContext(sourceName, binding.Bootstrap!.Settings, BindingContext.PinBaseDirectory(_baseDirectory), secrets: null));
             }
-            catch (FeatureUpdateException ex)
+            catch (BindingException ex)
             {
                 ok = false;
                 ReportSourceSettings(pointer, ex);
@@ -698,7 +698,7 @@ internal sealed class FeatureSourceResolver
         };
     }
 
-    private void ReportSourceSettings(string pointer, FeatureUpdateException ex) =>
+    private void ReportSourceSettings(string pointer, BindingException ex) =>
         _diagnostics.Error("UPDATE_SOURCE_CONFIG", _artifact, pointer + "/bootstrap" + ex.Pointer, ex.Reason, ex.Hint);
 
     /// <summary>

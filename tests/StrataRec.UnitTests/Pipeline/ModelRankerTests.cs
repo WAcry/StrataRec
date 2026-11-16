@@ -550,6 +550,8 @@ public sealed class ModelRankerTests
 
         public string ClientType => Type;
 
+        public Type SettingsType => typeof(NoSettings);
+
         public List<CapturedCall> Calls
         {
             get

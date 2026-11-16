@@ -503,6 +503,8 @@ internal static class TimerFaultChild
 
         public string ClientType => Type;
 
+        public Type SettingsType => _inner.SettingsType;
+
         public ICandidateSource Create(BindingContext context) => new Source(_inner.Create(context));
 
         private sealed class Source(ICandidateSource inner) : ICandidateSource
@@ -521,6 +523,8 @@ internal static class TimerFaultChild
         private readonly MemoryFeatureConnectorFactory _inner = new();
 
         public string ConnectorType => Type;
+
+        public Type SettingsType => _inner.SettingsType;
 
         public IFeatureSourceConnector Create(BindingContext context) => new Connector(_inner.Create(context));
 

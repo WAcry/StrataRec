@@ -12,7 +12,8 @@ internal sealed record SchemaFile(string Name, string Text);
 
 /// <summary>
 /// The schemas a workspace's files name in <c>$schema</c>: one file per kind in <c>schemas/</c>, for every artifact kind a
-/// workspace holds and <c>stratarec run</c>'s request file, with the operators of the binary that writes them. What
+/// workspace holds and <c>stratarec run</c>'s request file, with the operators and binding types (clients, connectors,
+/// update sources, cache stores) of the binary that writes them. What
 /// <c>stratarec schema --out</c> and <c>stratarec init</c> write, and what <c>stratarec validate</c> compares the
 /// workspace's <c>schemas/</c> with.
 /// </summary>
@@ -38,6 +39,43 @@ internal static class SchemaFiles
         return operators;
     }
 
+    /// <summary>The model clients, candidate sources, connectors, update sources and cache stores of <paramref name="environment"/>, as the bindings schema describes them.</summary>
+    public static List<BindingSchemaSource> Bindings(PlanEnvironment environment)
+    {
+        var bindings = new List<BindingSchemaSource>();
+        foreach (var type in environment.Models.Types)
+        {
+            _ = environment.Models.TryGet(type, out var factory);
+            bindings.Add(new BindingSchemaSource(BindingKind.Model, type, factory.SettingsType));
+        }
+
+        foreach (var type in environment.CandidateSources.Types)
+        {
+            _ = environment.CandidateSources.TryGet(type, out var factory);
+            bindings.Add(new BindingSchemaSource(BindingKind.CandidateSource, type, factory.SettingsType));
+        }
+
+        foreach (var type in environment.Connectors.Types)
+        {
+            _ = environment.Connectors.TryGet(type, out var factory);
+            bindings.Add(new BindingSchemaSource(BindingKind.Connector, type, factory.SettingsType));
+        }
+
+        foreach (var type in environment.UpdateSources.Types)
+        {
+            _ = environment.UpdateSources.TryGet(type, out var factory);
+            bindings.Add(new BindingSchemaSource(BindingKind.UpdateSource, type, factory.SettingsType));
+        }
+
+        foreach (var type in environment.CacheStores.Types)
+        {
+            _ = environment.CacheStores.TryGet(type, out var factory);
+            bindings.Add(new BindingSchemaSource(BindingKind.CacheStore, type, factory.SettingsType));
+        }
+
+        return bindings;
+    }
+
     /// <summary>The schema of <paramref name="kind"/> (an artifact kind or <see cref="RequestKind"/>), or null for another word.</summary>
     public static JsonObject? Schema(string kind, PlanEnvironment environment)
     {
@@ -50,7 +88,7 @@ internal static class SchemaFiles
         {
             if (name == kind)
             {
-                return ArtifactSchemas.Artifact(kind, Operators(environment));
+                return ArtifactSchemas.Artifact(kind, Operators(environment), Bindings(environment));
             }
         }
 
@@ -82,10 +120,11 @@ internal static class SchemaFiles
     public static List<SchemaFile> Generate(PlanEnvironment environment)
     {
         var operators = Operators(environment);
+        var bindings = Bindings(environment);
         var files = new List<SchemaFile>();
         foreach (var kind in ArtifactSchemas.WorkspaceKinds)
         {
-            files.Add(new SchemaFile(ArtifactSchemas.FileName(kind), ArtifactSchemas.ToText(ArtifactSchemas.Artifact(kind, operators))));
+            files.Add(new SchemaFile(ArtifactSchemas.FileName(kind), ArtifactSchemas.ToText(ArtifactSchemas.Artifact(kind, operators, bindings))));
         }
 
         files.Add(new SchemaFile(ArtifactSchemas.FileName(RequestKind), ArtifactSchemas.ToText(ArtifactSchemas.File(typeof(RunCommand.RequestFile), RequestKind))));

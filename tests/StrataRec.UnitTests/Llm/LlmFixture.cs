@@ -242,6 +242,8 @@ internal sealed class TextModels(Func<TextCall, (string? Text, ModelStatus Statu
 
     public string ClientType => Type;
 
+    public Type SettingsType => typeof(NoSettings);
+
     public List<TextCall> Calls
     {
         get

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
@@ -259,11 +260,11 @@ public class SnapshotFilesUpdateSourceTests
     {
         using var dir = new TempDirectory();
         var factory = new SnapshotFilesUpdateSourceFactory();
-        var relative = (SnapshotFilesUpdateSource)factory.Create("item_store", Settings("""{"source": "snapshot_files@1", "uri": "snapshots/items", "reload": "PT1H"}"""), dir.Path);
+        var relative = (SnapshotFilesUpdateSource)factory.Create(Context("""{"uri": "snapshots/items", "reload": "PT1H"}""", dir.Path));
         Assert.Equal(Path.Combine(dir.Path, "snapshots/items", "snapshot.json"), relative.ManifestPath);
         Assert.Equal(TimeSpan.FromHours(1), relative.Reload);
 
-        var uri = (SnapshotFilesUpdateSource)factory.Create("item_store", Settings($$"""{"uri": "{{new Uri(Path.Combine(dir.Path, "m.json")).AbsoluteUri}}"}"""), null);
+        var uri = (SnapshotFilesUpdateSource)factory.Create(Context($$"""{"uri": "{{new Uri(Path.Combine(dir.Path, "m.json")).AbsoluteUri}}"}"""));
         Assert.Equal(Path.Combine(dir.Path, "m.json"), uri.ManifestPath);
         Assert.Null(uri.Reload);
     }
@@ -272,20 +273,28 @@ public class SnapshotFilesUpdateSourceTests
     [InlineData("""{"uri": "s3://features/items/"}""", "/uri", "local directory")]
     [InlineData("""{"uri": ""}""", "/uri", "file://")]
     [InlineData("""{"uri": 5}""", "/uri", "file://")]
-    [InlineData("""{"reload": "PT1H"}""", "", "\"uri\"")]
+    [InlineData("""{"reload": "PT1H"}""", "", "'uri': ")] // what the required setting means, from its documentation
     [InlineData("""{"uri": "x", "reload": "1h"}""", "/reload", "PT1H")]
     [InlineData("""{"uri": "x", "reload": "-PT1H"}""", "/reload", "PT1H")]
-    [InlineData("""{"uri": "x", "reload": 3600}""", "/reload", "PT1H")]
+    [InlineData("""{"uri": "x", "reload": 3600}""", "/reload", "stratarec schema bindings")]
     [InlineData("""{"uri": "x", "reload": "P60D"}""", "/reload", "P49D")] // longer than a timer waits (Gemini review 2026-11-14, finding 7)
     [InlineData("""{"uri": "x", "reload": "P1000000000D"}""", "/reload", "P49D")] // longer than a TimeSpan holds (review 59)
-    [InlineData("""{"uri": "x", "reloads": "PT1H"}""", "/reloads", "'reload'")]
-    [InlineData("""{"uri": "x", "a/b~c": 1}""", "/a~1b~0c", "'reload'")] // review 54: the setting's name escaped
+    [InlineData("""{"uri": "x", "reloads": "PT1H"}""", "/reloads", "did you mean 'reload'?")]
+    [InlineData("""{"uri": "x", "a/b~c": 1}""", "/a~1b~0c", "reload")] // review 54: the setting's name escaped
     public void Factory_SettingErrors_NameTheSetting(string settings, string pointer, string hint)
     {
-        var error = Assert.Throws<FeatureUpdateException>(() => new SnapshotFilesUpdateSourceFactory().Create("item_store", Settings(settings), null));
-        Assert.Contains("item_store", error.Location, StringComparison.Ordinal);
+        var error = Assert.Throws<BindingException>(() => new SnapshotFilesUpdateSourceFactory().Create(Context(settings)));
         Assert.Equal(pointer, error.Pointer);
         Assert.Contains(hint, error.Hint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Factory_ATypeMismatch_SaysWhatTheSettingTakes()
+    {
+        // Before typed settings, 3600 got the duration hint without saying a string was wanted.
+        var error = Assert.Throws<BindingException>(() => new SnapshotFilesUpdateSourceFactory().Create(Context("""{"uri": "x", "reload": 3600}""")));
+
+        Assert.Equal("'reload' must be a string or null, got the number 3600.", error.Reason);
     }
 
     /// <summary>
@@ -484,7 +493,8 @@ public class SnapshotFilesUpdateSourceTests
         return string.Join("\n", lines);
     }
 
-    private static Dictionary<string, JsonElement> Settings(string json)
+    /// <summary>The context an update source's factory gets: the bootstrap's settings, no secret store.</summary>
+    private static BindingContext Context(string json, string? baseDirectory = null)
     {
         using var document = JsonDocument.Parse(json);
         var settings = new Dictionary<string, JsonElement>();
@@ -493,7 +503,7 @@ public class SnapshotFilesUpdateSourceTests
             settings[property.Name] = property.Value.Clone();
         }
 
-        return settings;
+        return new BindingContext("item_store", settings, BindingContext.PinBaseDirectory(baseDirectory), secrets: null);
     }
 
     /// <summary>Waits for a condition the background source makes true; the timeout only bounds a broken run.</summary>

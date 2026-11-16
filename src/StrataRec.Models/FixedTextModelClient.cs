@@ -1,4 +1,3 @@
-using System.Text.Json;
 using StrataRec.Core.Bindings;
 
 namespace StrataRec.Models;
@@ -97,106 +96,53 @@ public sealed class FixedTextModelClient : IModelClient
     }
 }
 
+/// <summary>Settings of <c>fixed_text@1</c>.</summary>
+public sealed class FixedTextSettings
+{
+    /// <summary>
+    /// The model's text input names, as its signature declares them (the prompts the calling operator renders), e.g.
+    /// <c>["system", "user"]</c>: at least one, each once.
+    /// </summary>
+    public required List<string> Inputs { get; init; }
+
+    /// <summary>Each text output and the text every call answers, e.g. <c>{ "answer": "[3, 1, 2]" }</c>: at least one.</summary>
+    public required Dictionary<string, string> Outputs { get; init; }
+}
+
 /// <summary>Creates <see cref="FixedTextModelClient"/>s from binding settings.</summary>
-public sealed class FixedTextModelClientFactory : IModelClientFactory
+public sealed class FixedTextModelClientFactory : ModelClientFactory<FixedTextSettings>
 {
     public const string Type = "fixed_text@1";
 
-    private const string Example = "\"inputs\": [\"system\", \"user\"], \"outputs\": { \"answer\": \"[3, 1, 2]\" }";
+    public override string ClientType => Type;
 
-    public string ClientType => Type;
-
-    /// <exception cref="BindingException">A setting is missing, unknown or invalid: at its pointer, with a hint.</exception>
-    public IModelClient Create(BindingContext context)
+    protected override IModelClient Create(FixedTextSettings settings, BindingContext context)
     {
-        ArgumentNullException.ThrowIfNull(context);
-        string[]? inputs = null;
-        (string Name, string Text)[]? outputs = null;
-        foreach (var (name, value) in context.Settings)
+        const string InputHint = "list the model's text input names, e.g. \"inputs\": [\"system\", \"user\"]: the prompts the operator renders";
+        const string OutputHint = "map each text output to the text every call answers, e.g. \"outputs\": { \"answer\": \"[3, 1, 2]\" }";
+        SettingChecks.Names(settings.Inputs, "inputs", InputHint);
+        if (settings.Inputs.Count == 0)
         {
-            switch (name)
+            throw new BindingException("/inputs", "'inputs' is empty: a generative model reads at least one prompt.", InputHint);
+        }
+
+        var outputs = new (string Name, string Text)[settings.Outputs.Count];
+        var i = 0;
+        foreach (var (name, text) in settings.Outputs)
+        {
+            if (name.Length == 0)
             {
-                case "inputs":
-                    inputs = Inputs(value);
-                    break;
-                case "outputs":
-                    outputs = Outputs(value);
-                    break;
-                default:
-                    throw BindingException.Unknown(string.Empty, name, ["inputs", "outputs"],
-                        $"{Type} takes 'inputs' (the model's text input names) and 'outputs' (each text output's fixed answer), e.g. {Example}");
-            }
-        }
-
-        return new FixedTextModelClient(
-            context.Name,
-            inputs ?? throw Required("inputs", "the text inputs the model accepts, as its signature declares them"),
-            outputs ?? throw Required("outputs", "each text output and the fixed text every call answers"));
-    }
-
-    private static BindingException Required(string setting, string what) =>
-        new(string.Empty, $"{Type} needs '{setting}': {what}.", $"add it, e.g. {Example}");
-
-    /// <summary><c>"inputs": ["system", "user"]</c>: distinct, non-empty names; at least one.</summary>
-    private static string[] Inputs(JsonElement value)
-    {
-        const string Hint = "list the model's text input names, e.g. \"inputs\": [\"system\", \"user\"]: the prompts the operator renders";
-        if (value.ValueKind != JsonValueKind.Array)
-        {
-            throw new BindingException("/inputs", $"'inputs' must be an array of names, got {value.GetRawText()}.", Hint);
-        }
-
-        var names = SettingNames.Read(value, "inputs", Hint);
-
-        if (names.Count == 0)
-        {
-            throw new BindingException("/inputs", "'inputs' is empty: a generative model reads at least one prompt.", Hint);
-        }
-
-        return names.ToArray();
-    }
-
-    /// <summary><c>"outputs": { "answer": "[3, 1, 2]" }</c>: non-empty names, each with a string; at least one.</summary>
-    private static (string Name, string Text)[] Outputs(JsonElement value)
-    {
-        const string Hint = "map each text output to the text every call answers, e.g. \"outputs\": { \"answer\": \"[3, 1, 2]\" }";
-        if (value.ValueKind != JsonValueKind.Object)
-        {
-            throw new BindingException("/outputs", $"'outputs' must be an object mapping each output name to its fixed text, got {value.GetRawText()}.", Hint);
-        }
-
-        var outputs = new List<(string Name, string Text)>();
-        foreach (var property in value.EnumerateObject())
-        {
-            var pointer = "/outputs/" + BindingContext.EscapePointerToken(property.Name);
-            if (property.Name.Length == 0)
-            {
-                throw new BindingException(pointer, "'outputs' maps an empty name.", Hint);
+                throw new BindingException("/outputs/", "'outputs' maps an empty name.", OutputHint);
             }
 
-            // JSON objects may repeat a name; the reader keeps both, so a repeat is refused rather than silently picking one.
-            foreach (var (existing, _) in outputs)
-            {
-                if (string.Equals(existing, property.Name, StringComparison.Ordinal))
-                {
-                    throw new BindingException(pointer, $"'{property.Name}' is listed twice in 'outputs'.", "list each name once");
-                }
-            }
-
-            if (property.Value.ValueKind != JsonValueKind.String)
-            {
-                throw new BindingException(pointer, $"Output '{property.Name}' must be a string (the fixed text), got {property.Value.GetRawText()}.",
-                    "write the answer as a JSON string, e.g. \"[3, 1, 2]\" for a list of window ranks");
-            }
-
-            outputs.Add((property.Name, property.Value.GetString()!));
+            outputs[i++] = (name, text);
         }
 
-        if (outputs.Count == 0)
+        if (outputs.Length == 0)
         {
-            throw new BindingException("/outputs", "'outputs' is empty: the model would produce nothing.", Hint);
+            throw new BindingException("/outputs", "'outputs' is empty: the model would produce nothing.", OutputHint);
         }
 
-        return outputs.ToArray();
+        return new FixedTextModelClient(context.Name, settings.Inputs.ToArray(), outputs);
     }
 }

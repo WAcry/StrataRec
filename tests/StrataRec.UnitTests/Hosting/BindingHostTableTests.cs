@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
@@ -524,8 +525,9 @@ public class BindingHostTableTests
 
         public string SourceType => "scripted@1";
 
-        public IFeatureUpdateSource Create(string sourceName, IReadOnlyDictionary<string, System.Text.Json.JsonElement> settings, string? baseDirectory) =>
-            sources[Math.Min(_created++, sources.Length - 1)];
+        public Type SettingsType => typeof(NoSettings);
+
+        public IFeatureUpdateSource Create(BindingContext context) => sources[Math.Min(_created++, sources.Length - 1)];
     }
 
     /// <summary>
@@ -539,7 +541,9 @@ public class BindingHostTableTests
 
         public string SourceType => "scripted@1";
 
-        public IFeatureUpdateSource Create(string sourceName, IReadOnlyDictionary<string, System.Text.Json.JsonElement> settings, string? baseDirectory) => this;
+        public Type SettingsType => typeof(NoSettings);
+
+        public IFeatureUpdateSource Create(BindingContext context) => this;
 
         public int Runs => Volatile.Read(ref _runs);
 

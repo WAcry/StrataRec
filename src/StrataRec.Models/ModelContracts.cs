@@ -127,7 +127,7 @@ public readonly record struct ModelStatus(bool Succeeded, string? Error = null)
 /// </summary>
 public interface IModelClient
 {
-    /// <summary>Client type and version, e.g. <c>grpc_tensor@1</c>.</summary>
+    /// <summary>Client type and version, e.g. <c>linear@1</c>.</summary>
     string ClientType { get; }
 
     /// <summary>
@@ -158,8 +158,41 @@ public interface IModelClientFactory
 {
     string ClientType { get; }
 
+    /// <summary>
+    /// The C# type the binding's own settings bind to (<see cref="Artifacts.Model.BindingSettings"/>): the single source of
+    /// their JSON Schema (design 9.1). <see cref="ModelClientFactory{TSettings}"/> binds them to it before its
+    /// <c>Create</c> sees them; <see cref="NoSettings"/> for a client that takes none.
+    /// </summary>
+    Type SettingsType { get; }
+
     /// <param name="context">The logical model name, the binding's own settings, the base directory relative files
     /// resolve against and the host's secret store.</param>
     /// <exception cref="BindingException">The settings are wrong: at the setting's pointer, with a hint.</exception>
     IModelClient Create(BindingContext context);
+}
+
+/// <summary>
+/// The base of a model client factory: it declares the type of its settings once, as its type argument, and gets them
+/// bound to it, so the type the schema describes is the type that binds, and the factory parses no JSON.
+/// </summary>
+/// <typeparam name="TSettings">The settings type: snake_case members, documented for the schema, required ones
+/// <c>required</c>; <see cref="Core.Bindings.LocalFile"/> and <see cref="SecretReference"/> for files and credentials.</typeparam>
+public abstract class ModelClientFactory<TSettings> : IModelClientFactory
+    where TSettings : class
+{
+    public abstract string ClientType { get; }
+
+    public Type SettingsType => typeof(TSettings);
+
+    /// <summary>Binds the settings strictly (<see cref="Artifacts.Model.BindingSettings"/>) and creates the client from them.</summary>
+    /// <exception cref="BindingException">The settings are wrong: at the setting's pointer, with a hint.</exception>
+    public IModelClient Create(BindingContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return Create(Artifacts.Model.BindingSettings.Bind<TSettings>(context, ClientType), context);
+    }
+
+    /// <summary>Creates the client: checks what the settings type cannot say, and reads nothing else (see <see cref="BindingContext"/>).</summary>
+    /// <exception cref="BindingException">A setting is wrong: at its pointer, with a hint.</exception>
+    protected abstract IModelClient Create(TSettings settings, BindingContext context);
 }

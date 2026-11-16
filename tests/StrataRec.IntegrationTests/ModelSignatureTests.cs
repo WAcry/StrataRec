@@ -111,6 +111,8 @@ public sealed class ModelSignatureTests
     {
         public string ClientType => LinearModelClientFactory.Type;
 
+        public Type SettingsType => typeof(LinearSettings);
+
         public IModelClient Create(BindingContext context) => new Client(signature);
 
         private sealed class Client(Func<string?, ModelSignature> signature) : IModelClient

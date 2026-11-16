@@ -150,6 +150,8 @@ public sealed class StrataRecStartupTests : IDisposable
     {
         public string ClientType => "slow_list@1";
 
+        public Type SettingsType => typeof(MemoryListSettings);
+
         public ICandidateSource Create(BindingContext context) => new SlowList(new MemoryListCandidateSourceFactory().Create(context));
 
         private sealed class SlowList(ICandidateSource inner) : ICandidateSource, ILoadable

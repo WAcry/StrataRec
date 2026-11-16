@@ -160,6 +160,8 @@ public sealed class ModelRankerReplayTests
 
         public string ClientType => Type;
 
+        public Type SettingsType => typeof(NoSettings);
+
         public List<string> Seen
         {
             get
@@ -215,6 +217,8 @@ public sealed class ModelRankerReplayTests
         private readonly List<string> _seen = new();
 
         public string ClientType => Type;
+
+        public Type SettingsType => typeof(NoSettings);
 
         /// <summary>Every input sent, as <c>name type [shape]</c>, in the order sent.</summary>
         public List<string> Seen

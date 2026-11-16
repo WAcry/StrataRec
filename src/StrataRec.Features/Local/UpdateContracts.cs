@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 
 namespace StrataRec.Features.Local;
@@ -38,15 +39,52 @@ public interface IFeatureUpdateSource
 
 /// <summary>Creates update sources for bindings of one source type (the update-source counterpart of
 /// <see cref="Connectors.IFeatureConnectorFactory"/>).</summary>
+/// <remarks>
+/// <see cref="Create"/> only reads and checks the settings, as every binding factory does (see
+/// <see cref="BindingContext"/>); the source does its I/O when it runs. Its context has no secret store: an update source
+/// is created with the plan's tables, outside the engine's binding instances.
+/// </remarks>
 public interface IFeatureUpdateSourceFactory
 {
     string SourceType { get; }
 
-    /// <param name="sourceName">Logical source name, e.g. <c>item_store</c>.</param>
-    /// <param name="settings">Source-specific settings (<c>bootstrap</c> or <c>updates</c> of the binding, without <c>source</c>).</param>
-    /// <param name="baseDirectory">Directory relative paths resolve against (the config root), if any.</param>
-    /// <exception cref="FeatureUpdateException">A setting is missing or invalid; the pointer names it.</exception>
-    IFeatureUpdateSource Create(string sourceName, IReadOnlyDictionary<string, JsonElement> settings, string? baseDirectory);
+    /// <summary>
+    /// The C# type the source's settings bind to (<see cref="Artifacts.Model.BindingSettings"/>): the single source of
+    /// their JSON Schema (design 9.1). <see cref="FeatureUpdateSourceFactory{TSettings}"/> binds them to it before its
+    /// <c>Create</c> sees them; <see cref="NoSettings"/> for a source that takes none.
+    /// </summary>
+    Type SettingsType { get; }
+
+    /// <param name="context">The logical source name (e.g. <c>item_store</c>), the source's own settings (the members of
+    /// <c>bootstrap</c> other than <c>source</c>) and the base directory relative paths resolve against.</param>
+    /// <exception cref="BindingException">A setting is wrong: at its pointer within <c>bootstrap</c>, with a hint.</exception>
+    IFeatureUpdateSource Create(BindingContext context);
+}
+
+/// <summary>
+/// The base of an update source factory: it declares the type of its settings once, as its type argument, and gets them
+/// bound to it, so the type the schema describes is the type that binds, and the factory parses no JSON.
+/// </summary>
+/// <typeparam name="TSettings">The settings type: snake_case members, documented for the schema, required ones
+/// <c>required</c>; <see cref="LocalFile"/> for files and directories.</typeparam>
+public abstract class FeatureUpdateSourceFactory<TSettings> : IFeatureUpdateSourceFactory
+    where TSettings : class
+{
+    public abstract string SourceType { get; }
+
+    public Type SettingsType => typeof(TSettings);
+
+    /// <summary>Binds the settings strictly (<see cref="Artifacts.Model.BindingSettings"/>) and creates the source from them.</summary>
+    /// <exception cref="BindingException">The settings are wrong: at the setting's pointer within <c>bootstrap</c>, with a hint.</exception>
+    public IFeatureUpdateSource Create(BindingContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return Create(Artifacts.Model.BindingSettings.Bind<TSettings>(context, SourceType), context);
+    }
+
+    /// <summary>Creates the source: checks what the settings type cannot say, and reads nothing else.</summary>
+    /// <exception cref="BindingException">A setting is wrong: at its pointer, with a hint.</exception>
+    protected abstract IFeatureUpdateSource Create(TSettings settings, BindingContext context);
 }
 
 /// <summary>
@@ -244,8 +282,9 @@ public sealed class UpdatePosition : IEquatable<UpdatePosition>
 }
 
 /// <summary>
-/// Update data or settings an update source cannot use: where the problem is (a file and line, or the source's name),
-/// the RFC 6901 pointer of the bad value within that line or document, and how to fix it.
+/// Update data an update source cannot use: where the problem is (a file and line, or the source's name), the RFC 6901
+/// pointer of the bad value within that line or document, and how to fix it. A wrong setting is a
+/// <see cref="BindingException"/> of the factory instead, reported at the binding.
 /// </summary>
 public sealed class FeatureUpdateException : Exception
 {
@@ -258,7 +297,7 @@ public sealed class FeatureUpdateException : Exception
         Hint = hint;
     }
 
-    /// <summary>E.g. <c>/data/items/part-0000.jsonl:12</c>, or <c>source 'item_store'</c> for a setting.</summary>
+    /// <summary>E.g. <c>/data/items/part-0000.jsonl:12</c>, or <c>memory_updates@1 update 3</c> for a message.</summary>
     public string Location { get; }
 
     /// <summary>RFC 6901 pointer within the line or document, e.g. <c>/fields/i_clk_7d</c>; empty for the whole of it.</summary>

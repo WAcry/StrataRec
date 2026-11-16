@@ -8,6 +8,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
 using System.Text.Json.Serialization;
 using StrataRec.Artifacts.Json;
+using StrataRec.Core.Bindings;
 
 namespace StrataRec.Artifacts.Model;
 
@@ -16,6 +17,31 @@ namespace StrataRec.Artifacts.Model;
 /// <param name="Description">One line, which an editor shows next to the id when it completes <c>op</c>.</param>
 /// <param name="ConfigType">The C# type the operator binds its <c>config</c> to: the single source of the config's schema (design 9.1).</param>
 public sealed record OperatorSchemaSource(string Id, string Description, Type ConfigType);
+
+/// <summary>What a binding's type is selected by, and where its settings are, in the bindings artifact (design 6.4).</summary>
+public enum BindingKind : byte
+{
+    /// <summary><c>models.*.client</c>: a model client; the settings are the entry's other members.</summary>
+    Model = 1,
+
+    /// <summary><c>candidate_sources.*.client</c>: a candidate source.</summary>
+    CandidateSource,
+
+    /// <summary><c>sources.*.connector</c>: a feature connector.</summary>
+    Connector,
+
+    /// <summary><c>sources.*.bootstrap.source</c>: the update source of a <c>local</c> source.</summary>
+    UpdateSource,
+
+    /// <summary><c>sources.*.cache.distributed.store</c>: the distributed cache store of a <c>cache</c> source.</summary>
+    CacheStore,
+}
+
+/// <summary>A binding type as the bindings schema describes it: where it is named, its id, and the type of its settings.</summary>
+/// <param name="Type">The type and version, e.g. <c>linear@1</c>.</param>
+/// <param name="SettingsType">The C# type its factory binds the binding's own settings to (<see cref="BindingSettings"/>):
+/// the single source of their schema.</param>
+public sealed record BindingSchemaSource(BindingKind Kind, string Type, Type SettingsType);
 
 /// <summary>
 /// JSON Schema (2020-12) of the artifacts and operator configs, generated from the C# types that bind them (design 9.1),
@@ -26,9 +52,11 @@ public sealed record OperatorSchemaSource(string Id, string Description, Type Co
 /// <remarks>
 /// <para>What a type cannot say is added here: each member's description (its <see cref="DescriptionAttribute"/>, else its
 /// XML documentation summary, as errors already use: <see cref="MemberDocs"/>), allowed values and patterns; in the
-/// pipeline, the config of every operator of the binary, chosen by the node's <c>op</c>; in the experiment, each arm as a
-/// merge patch of the pipeline (<see cref="MergePatch"/>). A workspace file may name its schema in a top-level
-/// <c>$schema</c>, which its schema declares and the engine ignores (<see cref="TryRemoveSchemaMember"/>).</para>
+/// pipeline, the config of every operator of the binary, chosen by the node's <c>op</c>; in the bindings, the settings of
+/// every client, connector, update source and cache store type of the binary, chosen by the member that names the type;
+/// in the experiment, each arm as a merge patch of the pipeline (<see cref="MergePatch"/>). A workspace file may name its
+/// schema in a top-level <c>$schema</c>, which its schema declares and the engine ignores
+/// (<see cref="TryRemoveSchemaMember"/>).</para>
 /// <para>Beyond 2020-12, the schemas carry the keywords VS Code's JSON service reads and other validators ignore as
 /// unknown keywords: <c>allowComments</c> and <c>allowTrailingCommas</c> (files are JSONC) and <c>enumDescriptions</c>
 /// (what each operator does). The text is stable (<see cref="ToText"/>): the same binary writes the same bytes, so a
@@ -84,10 +112,13 @@ public static class ArtifactSchemas
 
     /// <summary>
     /// The schema of an artifact kind (<see cref="ArtifactSerializer.ArtifactTypes"/>). The pipeline's nodes are checked
-    /// against the config of each of <paramref name="operators"/>, and so are the nodes an experiment's arms patch.
+    /// against the config of each of <paramref name="operators"/>, and so are the nodes an experiment's arms patch; the
+    /// bindings' entries against the settings of each of <paramref name="bindings"/>.
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="kind"/> is not an artifact kind.</exception>
-    public static JsonObject Artifact(string kind, IReadOnlyList<OperatorSchemaSource> operators)
+    /// <exception cref="InvalidOperationException">A settings type declares a member the framework reads from the binding
+    /// itself (e.g. <c>timeout_ms</c>): the factory would never see it.</exception>
+    public static JsonObject Artifact(string kind, IReadOnlyList<OperatorSchemaSource> operators, IReadOnlyList<BindingSchemaSource>? bindings = null)
     {
         ArgumentNullException.ThrowIfNull(operators);
         Type? type = null;
@@ -109,6 +140,7 @@ public static class ArtifactSchemas
         {
             "pipeline" => Pipeline(Sorted(operators)),
             "experiment" => Experiment(Sorted(operators)),
+            "bindings" => Bindings(bindings ?? Array.Empty<BindingSchemaSource>()),
             _ => Export(type, Describe, inline: editable),
         };
         return Document(schema, type.Name, editable ? kind : null);
@@ -355,6 +387,98 @@ public static class ArtifactSchemas
         node["allOf"] = branches;
     }
 
+    /// <summary>
+    /// The bindings: an entry's settings are checked against the settings type of the type it names, one <c>if</c>/<c>then</c>
+    /// per type, as a node's config is by its <c>op</c> (<see cref="AddOperators"/>).
+    /// </summary>
+    private static JsonObject Bindings(IReadOnlyList<BindingSchemaSource> bindings)
+    {
+        var schema = Export(typeof(SourceBindingArtifact), Describe, inline: true);
+        var sections = Member(schema, "properties");
+        AddBindingTypes(Member(Member(sections, "models"), "additionalProperties"), "client", bindings, BindingKind.Model);
+        AddBindingTypes(Member(Member(sections, "candidate_sources"), "additionalProperties"), "client", bindings, BindingKind.CandidateSource);
+        var source = Member(Member(sections, "sources"), "additionalProperties");
+        var members = Member(source, "properties");
+        AddBindingTypes(source, "connector", bindings, BindingKind.Connector);
+        AddBindingTypes(Member(members, "bootstrap"), "source", bindings, BindingKind.UpdateSource);
+        AddBindingTypes(Member(Member(Member(members, "cache"), "properties"), "distributed"), "store", bindings, BindingKind.CacheStore);
+        return schema;
+    }
+
+    /// <summary>
+    /// The settings of each type of <paramref name="kind"/>, in the entry that names one with <paramref name="selector"/>:
+    /// when it names the type, the entry takes the framework's members (described where the entry declares them) and the
+    /// type's settings, and nothing else. The selector lists the types as <c>examples</c>, which editors complete, not as
+    /// an <c>enum</c>: a binding of a type this binary lacks is valid while nothing uses it
+    /// (<see cref="SourceBindingArtifact.RequiredTypes(IReadOnlySet{string})"/>), so such an entry stays open.
+    /// </summary>
+    private static void AddBindingTypes(JsonObject entry, string selector, IReadOnlyList<BindingSchemaSource> bindings, BindingKind kind)
+    {
+        var types = new List<BindingSchemaSource>();
+        foreach (var binding in bindings)
+        {
+            if (binding.Kind == kind)
+            {
+                types.Add(binding);
+            }
+        }
+
+        if (types.Count == 0)
+        {
+            return;
+        }
+
+        types.Sort(static (a, b) => string.CompareOrdinal(a.Type, b.Type));
+        var own = Member(entry, "properties");
+        var examples = new JsonArray();
+        var branches = new JsonArray();
+        foreach (var type in types)
+        {
+            examples.Add(type.Type);
+            var settings = Export(type.SettingsType, Describe, inline: true, BindingSettings.Options);
+            var properties = new JsonObject();
+            foreach (var (name, _) in own)
+            {
+                properties[name] = new JsonObject();
+            }
+
+            if (settings["properties"] is JsonObject declared)
+            {
+                foreach (var (name, member) in declared)
+                {
+                    if (own.ContainsKey(name))
+                    {
+                        throw new InvalidOperationException(
+                            $"The settings of {type.Type} ({type.SettingsType}) declare '{name}', which the framework reads from the binding itself: " +
+                            "the factory would never get it. Give the setting another name.");
+                    }
+
+                    properties[name] = member?.DeepClone();
+                }
+            }
+
+            var then = new JsonObject { ["properties"] = properties };
+            if (settings["required"] is JsonArray { Count: > 0 } required)
+            {
+                then["required"] = required.DeepClone();
+            }
+
+            then["additionalProperties"] = false;
+            branches.Add(new JsonObject
+            {
+                ["if"] = new JsonObject
+                {
+                    ["properties"] = new JsonObject { [selector] = new JsonObject { ["const"] = type.Type } },
+                    ["required"] = new JsonArray(selector),
+                },
+                ["then"] = then,
+            });
+        }
+
+        Member(own, selector)["examples"] = examples;
+        entry["allOf"] = branches;
+    }
+
     private static JsonObject Config(OperatorSchemaSource source)
     {
         var config = Export(source.ConfigType, Describe, inline: true);
@@ -441,9 +565,10 @@ public static class ArtifactSchemas
         return false;
     }
 
-    private static JsonObject Export(Type type, Func<JsonSchemaExporterContext, JsonNode, JsonNode> transform, bool inline)
+    /// <param name="options">The options the type binds with; <see cref="ArtifactSerializer.Options"/> when null.</param>
+    private static JsonObject Export(Type type, Func<JsonSchemaExporterContext, JsonNode, JsonNode> transform, bool inline, JsonSerializerOptions? options = null)
     {
-        var node = JsonSchemaExporter.GetJsonSchemaAsNode(ArtifactSerializer.Options, type, new JsonSchemaExporterOptions
+        var node = JsonSchemaExporter.GetJsonSchemaAsNode(options ?? ArtifactSerializer.Options, type, new JsonSchemaExporterOptions
         {
             TreatNullObliviousAsNonNullable = true,
             TransformSchemaNode = transform,
@@ -538,6 +663,23 @@ public static class ArtifactSchemas
         if (schema is JsonObject open && HasExtensionData(context.TypeInfo.Type))
         {
             open.Remove("additionalProperties");
+        }
+
+        // A setting the binding's context binds from a string (BindingSettings): the exporter knows nothing of its converter.
+        if (context.TypeInfo.Type == typeof(LocalFile) || context.TypeInfo.Type == typeof(SecretReference))
+        {
+            var text = schema as JsonObject ?? new JsonObject();
+            text["type"] = context.PropertyInfo is { IsSetNullable: true } ? new JsonArray("string", "null") : "string";
+            if (context.TypeInfo.Type == typeof(SecretReference))
+            {
+                text["pattern"] = "^" + SecretReference.Scheme + ".";
+            }
+            else
+            {
+                text["minLength"] = 1;
+            }
+
+            schema = text;
         }
 
         string? description = null;

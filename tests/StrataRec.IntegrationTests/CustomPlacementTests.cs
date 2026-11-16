@@ -320,6 +320,8 @@ public sealed class CustomPlacementTests
     {
         public string ClientType => "failing@1";
 
+        public Type SettingsType => typeof(Core.Bindings.NoSettings);
+
         public ICandidateSource Create(Core.Bindings.BindingContext context) => new Failing();
 
         private sealed class Failing : ICandidateSource

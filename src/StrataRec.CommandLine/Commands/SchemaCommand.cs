@@ -7,7 +7,7 @@ namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
 /// <c>stratarec schema</c>: the JSON Schema (2020-12) of each kind of file and of each operator's config, generated from
-/// the C# types that deserialize them with the operators of the binary that runs it (<see cref="ArtifactSchemas"/>,
+/// the C# types that deserialize them with the operators and binding types of the binary that runs it (<see cref="ArtifactSchemas"/>,
 /// design 9.1), so editors and agents validate against exactly what the engine accepts. <c>--out</c> writes the schemas
 /// a workspace's files name in <c>$schema</c> (<see cref="SchemaFiles"/>).
 /// </summary>

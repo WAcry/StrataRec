@@ -41,20 +41,6 @@ public sealed class BindingException : Exception
     public string Reason { get; }
 
     public string? Hint { get; }
-
-    /// <summary>
-    /// The error for a member a client does not take, at <paramref name="parent"/> followed by its name: the closest member
-    /// it takes, when the name looks like a typo of one, then what it takes (<paramref name="takes"/>). Check settings
-    /// strictly with it: a misspelled setting is otherwise ignored, and its default used without a word.
-    /// </summary>
-    /// <param name="parent">The pointer of the object the member is in; empty for the binding itself.</param>
-    public static BindingException Unknown(string parent, string name, IEnumerable<string> known, string takes)
-    {
-        ArgumentNullException.ThrowIfNull(name);
-        var guess = Diagnostics.Spelling.DidYouMean(name, known);
-        return new BindingException(parent + "/" + BindingContext.EscapePointerToken(name), $"Unknown setting '{name}'.",
-            guess is null ? takes : guess + " " + takes);
-    }
 }
 
 /// <summary>
@@ -72,8 +58,8 @@ public interface ISecretResolver
 
 /// <summary>
 /// A credential named in a binding (<c>"credentials": "secret://interaction-store-token"</c>), resolved by the host's
-/// <see cref="ISecretResolver"/> when the instance loads. Read it at create time with
-/// <see cref="BindingContext.SecretReference"/>; only the name and the setting's pointer are kept.
+/// <see cref="ISecretResolver"/> when the instance loads. A member of this type in a factory's settings type takes one
+/// (<see cref="BindingContext.SecretReference"/> binds it); only the name and the setting's pointer are kept.
 /// </summary>
 public sealed class SecretReference
 {

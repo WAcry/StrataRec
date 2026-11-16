@@ -318,74 +318,54 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
     private readonly record struct Record(JsonElement Value, Dictionary<long, JsonElement>? NestedByInt64);
 }
 
+/// <summary>Settings of <c>memory@1</c>.</summary>
+public sealed class MemoryConnectorSettings
+{
+    /// <summary>
+    /// The records, by entity key: <c>{ "10042": { "i_clk_7d": 12.0 } }</c>, or for a cross entity, context key to candidate
+    /// key to fields. Not with <c>data_file</c>; without either, there are none.
+    /// </summary>
+    public JsonElement? Data { get; init; }
+
+    /// <summary>A JSON file of the records, as <c>data</c> holds them: a path relative to the configuration directory, an absolute path or a file:// URI.</summary>
+    public LocalFile? DataFile { get; init; }
+
+    /// <summary>Simulated latency of every fetch, in milliseconds (default 0).</summary>
+    public int LatencyMs { get; init; }
+
+    /// <summary>Fail every fetch (fault injection).</summary>
+    public bool Fail { get; init; }
+}
+
 /// <summary>Factory for <c>memory@1</c>.</summary>
-public sealed class MemoryFeatureConnectorFactory : IFeatureConnectorFactory
+public sealed class MemoryFeatureConnectorFactory : FeatureConnectorFactory<MemoryConnectorSettings>
 {
     public const string Type = "memory@1";
 
-    public string ConnectorType => Type;
+    public override string ConnectorType => Type;
 
-    private const string Takes = "memory@1 takes 'data' (the records, by entity key) or 'data_file' (a JSON file of them), and optionally 'latency_ms' and 'fail'";
-    private static readonly string[] Settings = ["data", "data_file", "latency_ms", "fail"];
-
-    /// <remarks>
-    /// A test fixture: it reads its data file here, at create time, so it needs no load. Settings are checked strictly: a
-    /// misspelled one would otherwise be ignored, and every feature read missing.
-    /// </remarks>
-    /// <exception cref="BindingException">A setting is unknown or invalid, or the data file cannot be read: at the setting,
-    /// with a hint.</exception>
-    public IFeatureSourceConnector Create(BindingContext context)
+    /// <remarks>A test fixture: it reads its data file here, at create time, so it needs no load.</remarks>
+    /// <exception cref="BindingException">A setting is invalid, or the data file cannot be read: at the setting, with a hint.</exception>
+    protected override IFeatureSourceConnector Create(MemoryConnectorSettings settings, BindingContext context)
     {
-        ArgumentNullException.ThrowIfNull(context);
-        var settings = context.Settings;
-        foreach (var (name, _) in settings)
+        const string Records = "the records are a JSON object by entity key, e.g. { \"10042\": { \"i_clk_7d\": 12.0 } }";
+        if (settings.Data is not null && settings.DataFile is not null)
         {
-            if (Array.IndexOf(Settings, name) < 0)
-            {
-                throw BindingException.Unknown(string.Empty, name, Settings, Takes);
-            }
+            throw new BindingException(settings.DataFile.Pointer, "memory@1 takes 'data' or 'data_file', not both.", "keep the one that holds the records");
         }
 
-        JsonElement data;
-        if (settings.TryGetValue("data", out var inline))
-        {
-            if (settings.ContainsKey("data_file"))
-            {
-                throw new BindingException("/data_file", "memory@1 takes 'data' or 'data_file', not both.", "keep the one that holds the records");
-            }
-
-            data = inline;
-        }
-        else if (settings.TryGetValue("data_file", out var file))
-        {
-            data = DataFile.Read(file, context.BaseDirectory).Root;
-        }
-        else
-        {
-            data = JsonDocument.Parse("{}").RootElement;
-        }
-
+        var data = settings.Data ?? (settings.DataFile is { } file ? DataFile.Read(file) : JsonDocument.Parse("{}").RootElement);
         if (data.ValueKind != JsonValueKind.Object)
         {
-            throw new BindingException(settings.ContainsKey("data") ? "/data" : "/data_file", "The records must be a JSON object, by entity key.", Takes);
+            throw new BindingException(settings.DataFile?.Pointer ?? "/data", "The records must be a JSON object, by entity key.", Records);
         }
 
-        var latency = 0;
-        if (settings.TryGetValue("latency_ms", out var l))
+        if (settings.LatencyMs < 0)
         {
-            latency = l.ValueKind == JsonValueKind.Number && l.TryGetInt32(out var ms) && ms >= 0
-                ? ms
-                : throw new BindingException("/latency_ms", $"'latency_ms' must be a whole number of milliseconds, 0 or more; got {l.GetRawText()}.");
+            throw new BindingException("/latency_ms", $"'latency_ms' must be 0 or more, got {settings.LatencyMs}.",
+                "give the simulated latency of every fetch in milliseconds, or remove it for none");
         }
 
-        var fail = false;
-        if (settings.TryGetValue("fail", out var f))
-        {
-            fail = f.ValueKind is JsonValueKind.True or JsonValueKind.False
-                ? f.GetBoolean()
-                : throw new BindingException("/fail", $"'fail' must be true or false; got {f.GetRawText()}.");
-        }
-
-        return new MemoryFeatureConnector(data, latency, fail);
+        return new MemoryFeatureConnector(data, settings.LatencyMs, settings.Fail);
     }
 }

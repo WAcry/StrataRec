@@ -12,9 +12,9 @@ namespace StrataRec.Samples.Host.Components;
 /// Each line of a JSON Lines file is one record keyed by an int64, e.g. <c>{"id": 7, "ctr_7d": 0.04, "category": "sports"}</c>.
 /// </summary>
 /// <remarks>
-/// <para>Binding settings (everything else in the binding, such as <c>timeout_ms</c> and <c>max_batch</c>, is the
-/// framework's): <c>data_file</c> (required), <c>key_field</c> (default <c>id</c>) and <c>latency_ms</c> (default 0, a
-/// simulated network round trip).</para>
+/// <para>Binding settings: <see cref="KeyValueSettings"/>, which the factory declares as its type argument (everything else
+/// in the binding, such as <c>timeout_ms</c> and <c>max_batch</c>, is the framework's). Its <c>data_file</c> is a
+/// <see cref="LocalFile"/>: resolved against the configuration directory when the settings are bound.</para>
 /// <para>The rules of the contract, and how this connector keeps them:</para>
 /// <list type="bullet">
 /// <item>The factory only reads the settings; the file is read in <see cref="LoadAsync"/>, which the engine calls once, off
@@ -302,46 +302,48 @@ public sealed class KeyValueFeatureConnector : IFeatureSourceConnector, ILoadabl
     }
 }
 
+/// <summary>
+/// The settings of <c>kv_store@1</c>: the members of a source's binding besides the framework's own (<c>connector</c>,
+/// <c>timeout_ms</c>, <c>max_batch</c>, ...). Bound strictly by the engine; the bindings schema is generated from this type.
+/// </summary>
+public sealed class KeyValueSettings
+{
+    /// <summary>
+    /// The JSON Lines file of the records: a path relative to the configuration directory, an absolute path or a file:// URI.
+    /// Read when the connector loads.
+    /// </summary>
+    public required LocalFile DataFile { get; init; }
+
+    /// <summary>The member that holds each record's int64 key (default <c>id</c>).</summary>
+    public string KeyField { get; init; } = "id";
+
+    /// <summary>A simulated network round trip, in milliseconds (default 0).</summary>
+    public int LatencyMs { get; init; }
+}
+
 /// <summary>Creates <c>kv_store@1</c> connectors; registered in <see cref="SampleEnvironment"/>.</summary>
-public sealed class KeyValueFeatureConnectorFactory : IFeatureConnectorFactory
+public sealed class KeyValueFeatureConnectorFactory : FeatureConnectorFactory<KeyValueSettings>
 {
     public const string Type = "kv_store@1";
 
-    private static readonly string[] Known = { "data_file", "key_field", "latency_ms" };
-
-    public string ConnectorType => Type;
+    public override string ConnectorType => Type;
 
     /// <summary>
-    /// Reads and checks the settings only: <c>Create</c> runs for every compile, including <c>validate</c>, and may run on
-    /// several threads at once. A wrong setting is a <see cref="BindingException"/> at its pointer, with a hint.
+    /// Checks the settings only: <c>Create</c> runs for every compile, including <c>validate</c>, and may run on several
+    /// threads at once. A wrong setting is a <see cref="BindingException"/> at its pointer, with a hint.
     /// </summary>
-    public IFeatureSourceConnector Create(BindingContext context)
+    protected override IFeatureSourceConnector Create(KeyValueSettings settings, BindingContext context)
     {
-        foreach (var (name, _) in context.Settings)
+        if (settings.KeyField.Length == 0)
         {
-            if (Array.IndexOf(Known, name) < 0)
-            {
-                throw new BindingException("/" + BindingContext.EscapePointerToken(name), $"kv_store@1 has no setting '{name}'.",
-                    "its settings are " + string.Join(", ", Known));
-            }
+            throw new BindingException("/key_field", "'key_field' must not be empty.", "name the member that holds each record's int64 key, e.g. \"id\"");
         }
 
-        var path = context.LocalFile("data_file", "JSON Lines file of the records");
-        var keyField = "id";
-        if (context.Settings.TryGetValue("key_field", out var key))
+        if (settings.LatencyMs < 0)
         {
-            keyField = key.ValueKind == JsonValueKind.String && key.GetString() is { Length: > 0 } name
-                ? name
-                : throw new BindingException("/key_field", "'key_field' must be a non-empty string.", "name the member that holds each record's int64 key, e.g. \"id\"");
+            throw new BindingException("/latency_ms", "'latency_ms' must not be negative.", "remove it, or give the simulated round trip in milliseconds");
         }
 
-        var latencyMs = 0;
-        if (context.Settings.TryGetValue("latency_ms", out var latency)
-            && (latency.ValueKind != JsonValueKind.Number || !latency.TryGetInt32(out latencyMs) || latencyMs < 0))
-        {
-            throw new BindingException("/latency_ms", "'latency_ms' must be a non-negative integer.", "remove it, or give the simulated round trip in milliseconds");
-        }
-
-        return new KeyValueFeatureConnector(path, keyField, latencyMs);
+        return new KeyValueFeatureConnector(settings.DataFile.Path, settings.KeyField, settings.LatencyMs);
     }
 }

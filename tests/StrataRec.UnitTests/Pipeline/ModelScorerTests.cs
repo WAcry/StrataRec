@@ -239,6 +239,8 @@ public sealed class ModelScorerTests
 
         public string ClientType => Type;
 
+        public Type SettingsType => typeof(NoSettings);
+
         public List<CapturedCall> Calls
         {
             get

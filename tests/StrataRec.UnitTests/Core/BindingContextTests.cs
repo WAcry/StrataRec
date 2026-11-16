@@ -1,4 +1,5 @@
 using System.Text.Json;
+using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Memory;
 
@@ -6,7 +7,8 @@ namespace StrataRec.UnitTests.Core;
 
 /// <summary>
 /// What a factory gets for a binding (design 6.4): local file settings resolved by one rule, credentials only by
-/// reference, and secret values that never show in a message.
+/// reference, and secret values that never show in a message. Settings members of type <see cref="LocalFile"/> and
+/// <see cref="SecretReference"/> are bound by the context (<see cref="BindingSettings"/>).
 /// </summary>
 public sealed class BindingContextTests
 {
@@ -17,32 +19,43 @@ public sealed class BindingContextTests
     [InlineData("./models/../models/ctr.bin", "models/ctr.bin")]
     public void ARelativePath_ResolvesAgainstTheConfigRoot(string uri, string expected)
     {
-        var context = Context($$"""{ "uri": "{{uri}}" }""");
+        var file = Files($$"""{ "uri": "{{uri}}" }""").Uri!;
 
-        Assert.Equal(Path.GetFullPath(Path.Combine(Root, expected)), context.LocalFile("uri", "model file"));
+        Assert.Equal((Path.GetFullPath(Path.Combine(Root, expected)), "/uri"), (file.Path, file.Pointer));
     }
 
     [Fact]
     public void AFileUriAndAnAbsolutePath_NameTheSameFile()
     {
         var absolute = Path.Combine(Path.GetTempPath(), "elsewhere", "ctr.bin");
-        var context = Context($$"""{ "uri": {{JsonSerializer.Serialize(new Uri(absolute).AbsoluteUri)}}, "path": {{JsonSerializer.Serialize(absolute)}} }""");
+        var files = Files($$"""{ "uri": {{JsonSerializer.Serialize(new Uri(absolute).AbsoluteUri)}}, "path": {{JsonSerializer.Serialize(absolute)}} }""");
 
-        Assert.Equal(absolute, context.LocalFile("uri", "model file"));
-        Assert.Equal(absolute, context.LocalFile("path", "model file"));
+        Assert.Equal(absolute, files.Uri!.Path);
+        Assert.Equal(absolute, files.Path!.Path);
     }
 
     [Theory]
-    [InlineData("""{ "uri": "s3://bucket/ctr.bin" }""", "is not a local path")]
-    [InlineData("""{ "uri": 7 }""", "'uri' is required")]
-    [InlineData("""{ }""", "'uri' is required")]
-    public void AFileSettingThatIsNotLocal_IsAnErrorAtTheSetting_WithAHint(string settings, string reason)
+    [InlineData("""{ "uri": "s3://bucket/ctr.bin" }""", "is not a local path", "local directory")]
+    [InlineData("""{ "uri": 7 }""", "'uri' must be a local path or a file:// URI, got 7.", "file://")]
+    [InlineData("""{ "uri": "" }""", "'uri' must be a local path or a file:// URI, got \"\".", "file://")]
+    [InlineData("""{ "uri": { "path": "a" } }""", "'uri' must be a local path", "file://")]
+    public void AFileSettingThatIsNotLocal_IsAnErrorAtTheSetting_WithAHint(string settings, string reason, string hint)
     {
-        var error = Assert.Throws<BindingException>(() => Context(settings).LocalFile("uri", "model file"));
+        var error = Assert.Throws<BindingException>(() => Files(settings));
 
         Assert.Equal("/uri", error.Pointer);
         Assert.Contains(reason, error.Reason, StringComparison.Ordinal);
-        Assert.Contains("file://", error.Hint, StringComparison.Ordinal);
+        Assert.Contains(hint, error.Hint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ARequiredFileSetting_ThatIsMissing_IsAnErrorWithWhatItMeans()
+    {
+        var error = Assert.Throws<BindingException>(() => BindingSettings.Bind<RequiredFile>(Context("{}"), "files@1"));
+
+        Assert.Equal(string.Empty, error.Pointer);
+        Assert.Contains("'uri' is required", error.Reason, StringComparison.Ordinal);
+        Assert.Contains("'uri':", error.Hint, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -57,7 +70,7 @@ public sealed class BindingContextTests
     [Fact]
     public void ThePointerOfASettingIsEscaped()
     {
-        var error = Assert.Throws<BindingException>(() => Context("""{ "a/b": "s3://x" }""").LocalFile("a/b", "file"));
+        var error = Assert.Throws<BindingException>(() => BindingSettings.Bind<Dictionary<string, LocalFile>>(Context("""{ "a/b": "s3://x" }"""), "files@1"));
 
         Assert.Equal("/a~1b", error.Pointer);
     }
@@ -74,7 +87,7 @@ public sealed class BindingContextTests
     public async Task ASecretReference_IsResolvedByTheHostsStore_AndItsValueNeverShows()
     {
         var store = new Store(("ctr-token", "s3cr3t-value"));
-        var reference = Context("""{ "credentials": "secret://ctr-token" }""", store).SecretReference("credentials")!;
+        var reference = Secrets("""{ "credentials": "secret://ctr-token" }""", store).Credentials!;
 
         Assert.Equal(("ctr-token", "/credentials", "secret://ctr-token"), (reference.Name, reference.Pointer, reference.ToString()));
         Assert.Empty(store.Asked); // a reference is read at create time; the store is asked at load
@@ -90,7 +103,7 @@ public sealed class BindingContextTests
     [Fact]
     public void ACredentialWrittenAsAValue_IsAnErrorThatDoesNotQuoteIt()
     {
-        var error = Assert.Throws<BindingException>(() => Context("""{ "credentials": "AKIA-pasted-by-mistake" }""").SecretReference("credentials"));
+        var error = Assert.Throws<BindingException>(() => Secrets("""{ "credentials": "AKIA-pasted-by-mistake" }"""));
 
         Assert.Equal("/credentials", error.Pointer);
         Assert.Contains("secret://", error.Hint, StringComparison.Ordinal);
@@ -100,26 +113,40 @@ public sealed class BindingContextTests
     [Theory]
     [InlineData("""{ "credentials": "secret://" }""")]
     [InlineData("""{ "credentials": { "user": "u" } }""")]
+    [InlineData("""{ "credentials": 7 }""")]
     public void AReferenceWithoutAName_OrNotAString_IsAnError(string settings)
     {
-        var error = Assert.Throws<BindingException>(() => Context(settings).SecretReference("credentials"));
+        var error = Assert.Throws<BindingException>(() => Secrets(settings));
 
         Assert.Equal("/credentials", error.Pointer);
+        Assert.Contains("secret://", error.Hint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ACredentialInANestedSetting_IsAnErrorAtItsOwnPointer_ThatDoesNotQuoteIt()
+    {
+        // The converter finds the value's pointer from its offset in the settings being bound.
+        var error = Assert.Throws<BindingException>(() =>
+            BindingSettings.Bind<Dictionary<string, List<SecretReference>>>(Context("""{ "a": [], "b/c": ["secret://ok", "hunter2"] }"""), "secrets@1"));
+
+        Assert.Equal("/b~1c/1", error.Pointer);
+        Assert.DoesNotContain("hunter2", error.Message + error.Reason + error.Hint, StringComparison.Ordinal);
     }
 
     [Fact]
     public void ABindingWithoutTheSetting_HasNoReference()
     {
-        Assert.Null(Context("{}").SecretReference("credentials"));
+        Assert.Null(Secrets("{}").Credentials);
+        Assert.Null(Secrets("""{ "credentials": null }""").Credentials);
     }
 
     [Fact]
     public async Task AMissingSecret_OrAMissingStore_IsAnErrorAtTheSetting_WithAHint()
     {
         var missing = await Assert.ThrowsAsync<BindingException>(() =>
-            Context("""{ "credentials": "secret://nope" }""", new Store()).SecretReference("credentials")!.ResolveAsync(CancellationToken.None).AsTask());
+            Secrets("""{ "credentials": "secret://nope" }""", new Store()).Credentials!.ResolveAsync(CancellationToken.None).AsTask());
         var noStore = await Assert.ThrowsAsync<BindingException>(() =>
-            Context("""{ "credentials": "secret://nope" }""").SecretReference("credentials")!.ResolveAsync(CancellationToken.None).AsTask());
+            Secrets("""{ "credentials": "secret://nope" }""").Credentials!.ResolveAsync(CancellationToken.None).AsTask());
 
         Assert.Equal(("/credentials", "/credentials"), (missing.Pointer, noStore.Pointer));
         Assert.Contains("no secret 'nope'", missing.Reason, StringComparison.Ordinal);
@@ -156,6 +183,29 @@ public sealed class BindingContextTests
     }
 
     private static BindingContext Context(string settings, ISecretResolver? secrets = null) => new("ctr_model", Settings(settings), Root, secrets);
+
+    private static FileSettings Files(string settings) => BindingSettings.Bind<FileSettings>(Context(settings), "files@1");
+
+    private static SecretSettings Secrets(string settings, ISecretResolver? secrets = null) =>
+        BindingSettings.Bind<SecretSettings>(Context(settings, secrets), "secrets@1");
+
+    private sealed class FileSettings
+    {
+        public LocalFile? Uri { get; init; }
+
+        public LocalFile? Path { get; init; }
+    }
+
+    private sealed class RequiredFile
+    {
+        /// <summary>The model file.</summary>
+        public required LocalFile Uri { get; init; }
+    }
+
+    private sealed class SecretSettings
+    {
+        public SecretReference? Credentials { get; init; }
+    }
 
     private static Dictionary<string, JsonElement> Settings(string json)
     {

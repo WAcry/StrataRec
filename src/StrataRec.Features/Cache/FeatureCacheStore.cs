@@ -84,10 +84,43 @@ public interface IFeatureCacheStoreFactory
 {
     string StoreType { get; }
 
+    /// <summary>
+    /// The C# type the store's settings bind to (<see cref="Artifacts.Model.BindingSettings"/>): the single source of their
+    /// JSON Schema (design 9.1). <see cref="FeatureCacheStoreFactory{TSettings}"/> binds them to it before its
+    /// <c>Create</c> sees them; <see cref="NoSettings"/> for a store that takes none.
+    /// </summary>
+    Type SettingsType { get; }
+
     /// <param name="context">The source's logical name, the store's own settings (the members of <c>cache.distributed</c> other
     /// than <c>store</c> and <c>timeout_ms</c>), the base directory and the host's secret store.</param>
     /// <exception cref="BindingException">A setting is wrong: at its pointer within <c>cache.distributed</c>, with a hint.</exception>
     IFeatureCacheStore Create(BindingContext context);
+}
+
+/// <summary>
+/// The base of a distributed cache store factory: it declares the type of its settings once, as its type argument, and
+/// gets them bound to it, so the type the schema describes is the type that binds, and the factory parses no JSON.
+/// </summary>
+/// <typeparam name="TSettings">The settings type: snake_case members, documented for the schema, required ones
+/// <c>required</c>; <see cref="LocalFile"/> and <see cref="SecretReference"/> for files and credentials.</typeparam>
+public abstract class FeatureCacheStoreFactory<TSettings> : IFeatureCacheStoreFactory
+    where TSettings : class
+{
+    public abstract string StoreType { get; }
+
+    public Type SettingsType => typeof(TSettings);
+
+    /// <summary>Binds the settings strictly (<see cref="Artifacts.Model.BindingSettings"/>) and creates the store from them.</summary>
+    /// <exception cref="BindingException">The settings are wrong: at the setting's pointer within <c>cache.distributed</c>, with a hint.</exception>
+    public IFeatureCacheStore Create(BindingContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return Create(Artifacts.Model.BindingSettings.Bind<TSettings>(context, StoreType), context);
+    }
+
+    /// <summary>Creates the store: checks what the settings type cannot say, and reads nothing else (see <see cref="BindingContext"/>).</summary>
+    /// <exception cref="BindingException">A setting is wrong: at its pointer, with a hint.</exception>
+    protected abstract IFeatureCacheStore Create(TSettings settings, BindingContext context);
 }
 
 /// <summary>Distributed cache store factories available in this binary, keyed by type (<c>name@version</c>). Empty by
