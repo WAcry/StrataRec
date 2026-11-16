@@ -131,7 +131,7 @@ public sealed class RowRankingTests
     public void ScoresAnOperatorComputed_RankHigherFirst_NaNLast_TiesByEntityId_NotByTheIncomingOrder()
     {
         var memory = new RequestMemory();
-        var table = new CandidateTable(new TableSchema(EntityKeyType.String, new[] { ColumnType.String }), 8, memory);
+        var table = new CandidateTable(new TableSchema(EntityKeyType.String, new[] { ColumnType.Text }), 8, memory);
         table.AppendRows(new[] { "e", "d", "c", "b", "a", "f", "g", "h" });
         var rows = table.Rows.Order.ToArray();
         double[] scores = { 1, double.NaN, 2, -0.0, 0.0, double.PositiveInfinity, double.NaN, 1 };

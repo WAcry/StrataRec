@@ -316,7 +316,7 @@ public readonly struct ColumnKey<T>
 | `int32`、`int64` | `int64` | 读取时提升为 `int64` 计算；写入 `int32` 列时收窄，不回绕 |
 | `float32`、`float64` | `float64` | 读取时提升为 `float64` 计算；写入 `float32` 列时收窄 |
 | `string` | `string` | 字典编码，适合类目、来源这类低基数值；和常量比较时，常量在循环外换成编码 |
-| `text` | `string` | 长文本，例如对话上下文、提示词、模型生成的推荐理由；每行存一个字符串，不做字典编码。表达式里按 `string` 读，所有字符串运算都适用，和 `string` 列互相比较 |
+| `text` | `string` | 长文本和高基数的字符串，例如对话上下文、提示词、模型生成的推荐理由、ID、URL；每行存一个字符串，不做字典编码。表达式里按 `string` 读，所有字符串运算都适用，和 `string` 列互相比较 |
 | `vec<float32,N>` | `vec` | 定长向量，所有行连续存放 |
 | `list<E>`，`E` 是 `bool`、`int32`、`int64`、`float32`、`float64` 或 `string` | `list<E 的表达式类型>` | 变长列表，每行的元素连续存放；也用于请求输入中的行为序列。元素的提升与标量相同：`list<int32>` 读作 `list<int64>`，`list<float32>` 读作 `list<float64>`，读取时不复制，写入时逐元素收窄。标签、主题、token ID 用 `list<int32>`，权重、价格序列用 `list<float32>`，都比宽类型省一半内存 |
 
@@ -347,7 +347,7 @@ public sealed class CandidateTable : IDisposable
 }
 ```
 
-主键列 `col.entity_id` 的类型由流水线的 `entity_key_type` 声明，可以是 `int64` 或 `string`。所有缓冲区从池中租借，由请求统一归还（第 4.8 节）。列缓冲有五种实现：
+主键列 `col.entity_id` 的类型由流水线的 `entity_key_type` 声明，可以是 `int64` 或 `string`；`string` 的主键每行各不相同，按 `text` 存（每行一个字符串），不做字典编码。所有缓冲区从池中租借，由请求统一归还（第 4.8 节）。列缓冲有五种实现：
 
 1. **标量列 `ScalarColumn<T>`**（`T : unmanaged`）：一个连续数组 `T[] Values`，外加可选的有效位图。整列都有效时位图为 `null`，循环不需要读取它。
 2. **字典编码字符串列 `DictStringColumn`**：`string[] Dictionary` 加 `int[] Codes`。比较 `col.recall.primary_source == 'two_tower'` 时，常量在循环外换成整数编码，循环内比较整数。

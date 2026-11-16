@@ -124,55 +124,42 @@ public class CandidateTableTests
     [InlineData(5000)]
     [InlineData(500)]
     [InlineData(25)]
-    public void StringIds_AppendedInBatches_AllocateNoMoreThanTheirDictionaryGrownStepByStep(int batch)
+    public void StringIds_AppendedInBatches_AllocateNothingOnceThePoolIsWarm(int batch)
     {
-        // Review 44: reserving exactly each batch's need resized the id dictionary on every batch (866 KB for batches of
-        // 500, where the dictionary and list grown by Add are 583 KB), and doubling alone overshot the last batch.
-        // Measured on this thread, which runs the code under test alone; the first round warms the pools.
+        // String ids are distinct, so they are stored one string per row in pooled arrays: as a dictionary they took about
+        // 200 KB a request for 5,000 ids that were not pooled (583 KB grown step by step; review 44), and duplicated the
+        // key index. Measured on this thread, which runs the code under test alone; the first round warms the pools.
         var ids = Enumerable.Range(0, 5000).Select(i => "id-" + i).ToArray();
+        var batches = Enumerable.Range(0, (ids.Length + batch - 1) / batch)
+            .Select(b => (IReadOnlyList<string>)new ArraySegment<string>(ids, b * batch, Math.Min(batch, ids.Length - (b * batch)))).ToArray();
         long Appended()
         {
             var memory = new RequestMemory();
-            var table = new CandidateTable(new TableSchema(EntityKeyType.String, new[] { ColumnType.String }), ids.Length, memory);
+            var table = new CandidateTable(new TableSchema(EntityKeyType.String, new[] { ColumnType.Text }), ids.Length, memory);
             var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var start = 0; start < ids.Length; start += batch)
+            foreach (var keys in batches)
             {
-                table.AppendRows(new ArraySegment<string>(ids, start, Math.Min(batch, ids.Length - start)));
+                table.AppendRows(keys);
             }
 
             var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
             Assert.Equal(ids.Length, table.Rows.Count);
+            Assert.Equal("id-4999", table.StringIds.Get(4999));
             memory.Release();
             return allocated;
         }
 
-        long GrownByAdd()
-        {
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            var codes = new Dictionary<string, int>(StringComparer.Ordinal);
-            var values = new List<string>();
-            foreach (var id in ids)
-            {
-                codes.Add(id, values.Count);
-                values.Add(id);
-            }
-
-            return GC.GetAllocatedBytesForCurrentThread() - before;
-        }
-
         Appended();
-        GrownByAdd();
-        var batches = Appended();
-        var grown = GrownByAdd();
+        var allocated = Appended();
 
-        Assert.True(batches <= grown, $"{batches} B in batches of {batch}, {grown} B grown by Add");
+        Assert.True(allocated < 4096, $"{allocated} B for 5,000 ids in batches of {batch}");
     }
 
     [Fact]
     public void Rollback_ReleasesKeysThatWereNeverLookedUp_ForStringKeysToo()
     {
         var memory = new RequestMemory();
-        var table = new CandidateTable(new TableSchema(EntityKeyType.String, new[] { ColumnType.String }), 4, memory);
+        var table = new CandidateTable(new TableSchema(EntityKeyType.String, new[] { ColumnType.Text }), 4, memory);
         table.AppendRows(new[] { "a", "b" });
         var checkpoint = table.Checkpoint();
         table.AppendRows(new[] { "c" });
@@ -277,7 +264,7 @@ public class CandidateTableTests
     public void ContainsKey_KnowsTheKeysACompactReleased_AcrossCompactions_ButNotWhatARollbackReleased(EntityKeyType keyType)
     {
         var memory = new RequestMemory();
-        var table = new CandidateTable(new TableSchema(keyType, new[] { keyType == EntityKeyType.Int64 ? ColumnType.Int64 : ColumnType.String }), 8, memory);
+        var table = new CandidateTable(new TableSchema(keyType, new[] { keyType == EntityKeyType.Int64 ? ColumnType.Int64 : ColumnType.Text }), 8, memory);
         EntityKey K(long n) => keyType == EntityKeyType.Int64 ? EntityKey.FromInt64(n) : EntityKey.FromString("k" + n);
         void Append(params long[] keys)
         {
@@ -320,7 +307,7 @@ public class CandidateTableTests
     public void FindRow_StringKeys()
     {
         var memory = new RequestMemory();
-        var table = new CandidateTable(new TableSchema(EntityKeyType.String, new[] { ColumnType.String }), 8, memory);
+        var table = new CandidateTable(new TableSchema(EntityKeyType.String, new[] { ColumnType.Text }), 8, memory);
         table.AppendRows(new[] { "a", "B", "a" });
         Assert.Equal(0, table.FindRow(EntityKey.FromString("a")));
         Assert.Equal(1, table.FindRow(EntityKey.FromString("B")));

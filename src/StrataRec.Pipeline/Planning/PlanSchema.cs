@@ -213,7 +213,8 @@ public sealed class PlanSchema
     public PlanSchema(EntityKeyType keyType)
     {
         KeyType = keyType;
-        var keyColumnType = keyType == EntityKeyType.Int64 ? ColumnType.Int64 : ColumnType.String;
+        // A string id reads as a string in expressions and is stored plainly (TableSchema).
+        var keyColumnType = keyType == EntityKeyType.Int64 ? ColumnType.Int64 : ColumnType.Text;
         _slotTypes.Add(keyColumnType);
         AddColumn(new LogicalColumn
         {
