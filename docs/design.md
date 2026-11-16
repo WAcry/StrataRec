@@ -1437,7 +1437,7 @@ flowchart LR
   "row_count": 3,
   "entity_ids": [10042, 20089, 50112],
   "ranks": [1, 2, 3],
-  "row_probs": [1.0, 1.0, 1.0],
+  "row_prob": 1.0,
   "context": { "user_id": null, "country": "BR" },
   "float_cols": { "final": [0.892, 0.845, 0.811], "p_click": [0.061, 0.054, 0.049] },
   "int_cols": {},
@@ -1448,7 +1448,7 @@ flowchart LR
 
 1. **生产者与序号。** `producer.id` 由进程名和启动时间组成，`seq` 只出现在 `durable` 批次中。下游用 `(producer.id, seq)` 去重，并按序号发现缺口。
 2. **实际产出者。** `column_producers` 记录每个日志列实际由哪个节点产出。上例中主模型超时，`p_click` 来自后备模型 `ctr_backup`；训练任务可以据此过滤或单独处理这些样本。
-3. **列定义血缘。** `schema_sha256` 指向一条单独发布的探针 schema 记录，其中写明每一列的名字、类型、表达式原文和定义它的产物（基线或某个实验桶）。同名列 `p_click` 在不同计划版本中可能来自不同模型，分析时可以准确知道它的含义。
+3. **列定义血缘。** `schema_sha256` 指向这个探针变体的 schema 记录，其中写明每一列和上下文字段的名字、类型和表达式原文；批次直接带着这条记录（所有请求共用一个对象），日志接收端按 id 每条只写一次（JSON Lines 接收端在第一个用到它的批次之前写一行 `{"log_schema": ...}`）。哪些实验桶生效看批次的 `assigned_arms`。同名列 `p_click` 在不同计划版本中可能来自不同模型，分析时可以准确知道它的含义。
 4. **编码。** 流式传输推荐 Arrow IPC，落地文件推荐 Parquet，调试使用 JSON。批次中每个日志列保留表达式结果的原生类型，包括 `vec` 和 `list`（`text` 列在表达式里读作 `string`，记成 `string`）；上面的 JSON 只是调试编码。
 5. **下游表结构固定。** 原始批次表的结构不随探针变化；标准 ETL 再把标量列展开成按行的视图 `funnel_rows(request_id, tap_id, rank, entity_id, row_prob, req_prob, float_values map<string,double>, int_values map<string,bigint>, string_values map<string,string>)`，`vec` 和 `list` 列留在批次表中按需展开。实验新增日志列不需要修改下游表结构。
 6. **缺失。** `missing` 按列记录缺失行的下标位图，缺失值不会被写成 0 或哨兵值。

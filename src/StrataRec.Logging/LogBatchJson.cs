@@ -31,7 +31,7 @@ public static class LogBatchJson
         json.WriteString("pipeline_id", batch.PipelineId);
         json.WriteString("manifest", batch.ManifestId);
         json.WriteString("tap_id", batch.TapId);
-        json.WriteString("schema", batch.SchemaId);
+        json.WriteString("schema", batch.Schema.Id);
         json.WriteString("delivery", batch.Delivery == LogDelivery.Durable ? "durable" : "best_effort");
         json.WriteStartObject("producer");
         json.WriteString("id", batch.ProducerId);
@@ -67,13 +67,7 @@ public static class LogBatchJson
             WriteInts(json, "ranks_before", before);
         }
 
-        json.WriteStartArray("row_probs");
-        foreach (var p in batch.RowProbabilities)
-        {
-            json.WriteNumberValue(p);
-        }
-
-        json.WriteEndArray();
+        json.WriteNumber("row_prob", batch.RowProbability);
         json.WriteStartObject("context");
         foreach (var (name, value) in batch.Context)
         {
@@ -89,21 +83,15 @@ public static class LogBatchJson
         json.WriteStartObject("missing");
         foreach (var column in batch.Columns)
         {
-            var any = false;
-            for (var i = 0; i < column.Values.Length && !any; i++)
-            {
-                any = column.Values[i].IsMissing;
-            }
-
-            if (!any)
+            if (column.Validity is null)
             {
                 continue;
             }
 
             json.WriteStartArray(column.Name);
-            for (var i = 0; i < column.Values.Length; i++)
+            for (var i = 0; i < column.RowCount; i++)
             {
-                if (column.Values[i].IsMissing)
+                if (column.IsMissing(i))
                 {
                     json.WriteNumberValue(i);
                 }
@@ -458,15 +446,113 @@ public static class LogBatchJson
             }
 
             json.WriteStartArray(column.Name);
-            foreach (var value in column.Values)
+            for (var row = 0; row < column.RowCount; row++)
             {
-                WriteValue(json, value);
+                WriteRow(json, column, row);
             }
 
             json.WriteEndArray();
         }
 
         json.WriteEndObject();
+    }
+
+    /// <summary>A row of a column, from its typed arrays; missing is null. Logged values are finite (<see cref="LogColumn.Capture"/>).</summary>
+    private static void WriteRow(Utf8JsonWriter json, LogColumn column, int row)
+    {
+        if (column.IsMissing(row))
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        if (column.Values is float[] vectors)
+        {
+            json.WriteStartArray();
+            foreach (var f in vectors.AsSpan(row * column.Type.Dimension, column.Type.Dimension))
+            {
+                json.WriteNumberValue(f);
+            }
+
+            json.WriteEndArray();
+            return;
+        }
+
+        var (start, end) = column.Offsets is { } offsets ? (offsets[row], offsets[row + 1]) : (row, row + 1);
+        if (column.Offsets is not null)
+        {
+            json.WriteStartArray();
+        }
+
+        for (var i = start; i < end; i++)
+        {
+            switch (column.Values)
+            {
+                case bool[] b:
+                    json.WriteBooleanValue(b[i]);
+                    break;
+                case long[] l:
+                    json.WriteNumberValue(l[i]);
+                    break;
+                case double[] d:
+                    json.WriteNumberValue(d[i]);
+                    break;
+                case string?[] s:
+                    json.WriteStringValue(s[i]);
+                    break;
+            }
+        }
+
+        if (column.Offsets is not null)
+        {
+            json.WriteEndArray();
+        }
+    }
+
+    /// <summary>
+    /// The record a batch's <c>schema</c> id names (design 8.7): <c>{"log_schema": {"id", "tap_id", "columns", "context"}}</c>,
+    /// each field with its name, type and expression. A sink writes it once per id, before the first batch that names it
+    /// (<see cref="JsonLinesLogSink"/> does), so a reader of the log knows each column's type and definition.
+    /// </summary>
+    public static void WriteSchema(Utf8JsonWriter json, LogSchema schema)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        ArgumentNullException.ThrowIfNull(schema);
+        json.WriteStartObject();
+        json.WriteStartObject("log_schema");
+        json.WriteString("id", schema.Id);
+        json.WriteString("tap_id", schema.TapId);
+        WriteFields(json, "columns", schema.Columns);
+        WriteFields(json, "context", schema.Context);
+        json.WriteEndObject();
+        json.WriteEndObject();
+    }
+
+    /// <summary><see cref="WriteSchema"/> as a string.</summary>
+    public static string EncodeSchema(LogSchema schema, bool indented = true)
+    {
+        using var stream = new MemoryStream();
+        using (var json = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = indented }))
+        {
+            WriteSchema(json, schema);
+        }
+
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    private static void WriteFields(Utf8JsonWriter json, string name, System.Collections.Immutable.ImmutableArray<LogField> fields)
+    {
+        json.WriteStartArray(name);
+        foreach (var field in fields)
+        {
+            json.WriteStartObject();
+            json.WriteString("name", field.Name);
+            json.WriteString("type", field.Type.ToString());
+            json.WriteString("expr", field.Expression);
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
     }
 
     private static void WriteStrings(Utf8JsonWriter json, string name, IReadOnlyList<string> values)

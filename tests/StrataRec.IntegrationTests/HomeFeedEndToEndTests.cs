@@ -194,7 +194,7 @@ public sealed class HomeFeedEndToEndTests
         Assert.All(dropped.RanksBefore!, rank => Assert.InRange(rank, 1, 60));
         Assert.Equal(dropped.RanksBefore!.Length, dropped.RanksBefore!.Distinct().Count());
         Assert.All(dropped.Ranks, rank => Assert.Equal(0, rank));
-        Assert.All(dropped.RowProbabilities, p => Assert.InRange(p, 0.0, 1.0));
+        Assert.InRange(dropped.RowProbability, 0.0, 1.0);
 
         var ranker = Assert.Single(result.LogBatches, b => b.TapId == "ranker_inputs");
         Assert.Equal(new[] { "log_followers", "p_click", "smoothed_ctr" }, ranker.Columns.Select(c => c.Name).Order());

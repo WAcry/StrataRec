@@ -51,8 +51,8 @@ public class ListElementEndToEndTests
 
         var tap = Assert.Single(result.LogBatches, b => b.TapId == "lists");
         Assert.Equal(3, tap.RowCount);
-        Assert.Contains(ScalarValue.FromFloat32List(new[] { 0.1f, 2.5f }), Assert.Single(tap.Columns, c => c.Name == "w").Values);
-        Assert.Contains(ScalarValue.FromBoolList(new[] { false }), Assert.Single(tap.Columns, c => c.Name == "f").Values);
+        Assert.Contains(ScalarValue.FromFloat32List(new[] { 0.1f, 2.5f }), Assert.Single(tap.Columns, c => c.Name == "w").Rows());
+        Assert.Contains(ScalarValue.FromBoolList(new[] { false }), Assert.Single(tap.Columns, c => c.Name == "f").Rows());
     }
 
     [Fact]

@@ -117,8 +117,8 @@ public class ListInt32EndToEndTests
         Assert.Contains(result.Outcomes, t => t.NodeId == "narrow" && t.Kind == NodeOutcomeKind.Failed);
         var values = Assert.Single(result.LogBatches, b => b.TapId == "values");
         Assert.Equal(3, values.RowCount);
-        Assert.All(Assert.Single(values.Columns, c => c.Name == "narrow").Values, v => Assert.True(v.IsMissing, v.ToString()));
-        Assert.Contains(Assert.Single(values.Columns, c => c.Name == "id32").Values, v => !v.IsMissing); // other columns unaffected
+        Assert.All(Assert.Single(values.Columns, c => c.Name == "narrow").Rows(), v => Assert.True(v.IsMissing, v.ToString()));
+        Assert.Contains(Assert.Single(values.Columns, c => c.Name == "id32").Rows(), v => !v.IsMissing); // other columns unaffected
         Assert.DoesNotContain(result.LogBatches, b => b.TapId == "filtered" && b.RowCount > 0);
     }
 

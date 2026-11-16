@@ -115,14 +115,14 @@ public sealed class Review4RegressionTests
             return Assert.Single(result.LogBatches, b => b.TapId == "ranker_inputs");
         }
 
-        static ScalarValue[] Column(LogBatch batch, string name) => Assert.Single(batch.Columns, c => c.Name == name).Values;
+        static ScalarValue[] Column(LogBatch batch, string name) => Assert.Single(batch.Columns, c => c.Name == name).Rows();
 
         var control = await RankerInputs("exp_inputs/control");
         var treatment = await RankerInputs("exp_inputs/swap");
 
         Assert.NotEqual(Column(control, "smoothed_ctr"), Column(control, "log_followers"));
         Assert.Equal(Column(treatment, "smoothed_ctr"), Column(treatment, "log_followers"));
-        Assert.NotEqual(control.SchemaId, treatment.SchemaId);
+        Assert.NotEqual(control.Schema.Id, treatment.Schema.Id);
     }
 
     [Fact]

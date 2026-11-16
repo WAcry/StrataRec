@@ -510,6 +510,7 @@ public sealed class PlanBuilder
         }
 
         var context = new List<(string, CompiledExpression)>();
+        var contextFields = new List<Logging.LogField>();
         if (spec.Context is not null)
         {
             foreach (var name in Sorted(spec.Context.Keys))
@@ -518,6 +519,7 @@ public sealed class PlanBuilder
                 if (e is not null)
                 {
                     context.Add((name, e));
+                    contextFields.Add(new Logging.LogField(name, e.ResultType, spec.Context[name]));
                 }
             }
         }
@@ -578,6 +580,7 @@ public sealed class PlanBuilder
         }
 
         var columns = new List<(string, CompiledExpression)>();
+        var columnFields = new List<Logging.LogField>();
         var columnSources = new List<int>();
         var pinned = new List<string?>();
         var types = new JsonObject();
@@ -591,6 +594,7 @@ public sealed class PlanBuilder
             }
 
             columns.Add((name, e));
+            columnFields.Add(new Logging.LogField(name, e.ResultType, source));
             types[name] = new JsonObject { ["type"] = e.ResultType.ToString(), ["expr"] = source };
             var direct = -1;
             string? pin = null;
@@ -659,7 +663,8 @@ public sealed class PlanBuilder
             MaxRows = spec.Rows?.MaxRows,
             Context = [.. context],
             Columns = [.. columns],
-            SchemaId = CanonicalJson.Hash(new JsonObject { ["tap"] = definition.DeepClone(), ["types"] = types }),
+            Schema = new Logging.LogSchema(
+                CanonicalJson.Hash(new JsonObject { ["tap"] = definition.DeepClone(), ["types"] = types }), tapId, [.. columnFields], [.. contextFields]),
             ReadOutputs = ToSortedArray(readOutputs),
             ReadFeatures = ToSortedArray(readFeatures),
             ReadContextFeatures = ToSortedArray(readContext),

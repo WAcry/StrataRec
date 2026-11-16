@@ -67,8 +67,9 @@ public sealed class CompiledTap
 
     public required ImmutableArray<(string Name, CompiledExpression Expression)> Columns { get; init; }
 
-    /// <summary>Content id of the tap's schema: definition plus resolved column types (lineage, design 8.7).</summary>
-    public required string SchemaId { get; init; }
+    /// <summary>The tap's schema (lineage, design 8.7): its columns and context fields with their types and expressions,
+    /// and as its id the content id of the definition plus the resolved types. Every batch of the tap shares it.</summary>
+    public required Logging.LogSchema Schema { get; init; }
 
     /// <summary>Output columns (logical ids) the tap reads through bindings; must be produced before the attach point.</summary>
     public required ImmutableArray<int> ReadOutputs { get; init; }

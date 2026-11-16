@@ -40,12 +40,16 @@ public sealed class InMemoryLogSink : ILogSink
     }
 }
 
-/// <summary>Writes one JSON document per batch per line (the debug encoding of design 8.7).</summary>
+/// <summary>
+/// Writes one JSON document per batch per line (the debug encoding of design 8.7), and before the first batch of each
+/// schema id the sink has not written, that schema's record (<see cref="LogBatchJson.WriteSchema"/>).
+/// </summary>
 public sealed class JsonLinesLogSink : ILogSink, IDisposable
 {
     private readonly TextWriter _writer;
     private readonly bool _ownsWriter;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly HashSet<string> _schemas = new(StringComparer.Ordinal);
 
     public JsonLinesLogSink(TextWriter writer, bool ownsWriter = false)
     {
@@ -83,8 +87,26 @@ public sealed class JsonLinesLogSink : ILogSink, IDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await _writer.WriteAsync(text, cancellationToken).ConfigureAwait(false);
+            // The records of schemas this sink has not written, ahead of the batches; noted only once written, so a failed
+            // write writes them again with the retry.
+            List<string>? added = null;
+            var records = new StringBuilder();
+            for (var i = 0; i < batches.Count; i++)
+            {
+                var schema = batches[i].Schema;
+                if (!_schemas.Contains(schema.Id) && (added is null || !added.Contains(schema.Id)))
+                {
+                    (added ??= new List<string>()).Add(schema.Id);
+                    records.Append(LogBatchJson.EncodeSchema(schema, indented: false)).Append('\n');
+                }
+            }
+
+            await _writer.WriteAsync(records.Append(text), cancellationToken).ConfigureAwait(false);
             await _writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+            if (added is not null)
+            {
+                _schemas.UnionWith(added);
+            }
         }
         finally
         {

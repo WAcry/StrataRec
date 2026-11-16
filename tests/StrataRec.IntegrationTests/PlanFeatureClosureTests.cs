@@ -108,7 +108,7 @@ public sealed class PlanFeatureClosureTests
         for (var row = 0; row < served.RowCount; row++)
         {
             var expected = items[served.Int64EntityIds![row].ToString(System.Globalization.CultureInfo.InvariantCulture)]!["i_age_h"];
-            Assert.Equal(expected is null, logged.Values[row].IsMissing);
+            Assert.Equal(expected is null, logged.IsMissing(row));
         }
     }
 

@@ -217,7 +217,6 @@ internal static class TapCapture
         var selected = memory.Rent<int>(Math.Max(1, count));
         var batchRanks = new int[count];
         int[]? ranksBefore = dropped ? new int[count] : null;
-        var probabilities = new double[count];
         long[]? intIds = table.KeyType == EntityKeyType.Int64 ? new long[count] : null;
         string[]? stringIds = intIds is null ? new string[count] : null;
         for (var i = 0; i < count; i++)
@@ -230,7 +229,6 @@ internal static class TapCapture
                 ranksBefore[i] = ranks[positions[i]];
             }
 
-            probabilities[i] = rowProbability;
             if (intIds is not null)
             {
                 intIds[i] = table.Int64Ids![row];
@@ -247,22 +245,17 @@ internal static class TapCapture
         for (var c = 0; c < tap.Columns.Length; c++)
         {
             var (name, expression) = tap.Columns[c];
-            var values = new ScalarValue[count];
-            if (count > 0 && ReadsFailedFeature(state, expression))
+            if (count == 0 || ReadsFailedFeature(state, expression))
             {
-                Array.Fill(values, ScalarValue.Missing);
+                columns[c] = LogColumn.AllMissing(name, expression.ResultType, count);
             }
-            else if (count > 0)
+            else
             {
                 var buffer = ColumnBuffer.Create(expression.ResultType, capacity, memory);
                 expression.Evaluate(eval, selectedRows, buffer);
-                for (var i = 0; i < count; i++)
-                {
-                    values[i] = Sanitize(ColumnValues.Get(buffer, selectedRows[i]));
-                }
+                columns[c] = LogColumn.Capture(name, buffer, selectedRows); // non-finite values are missing in logs
             }
 
-            columns[c] = new LogColumn(name, expression.ResultType, values);
             if (tap.PinnedProducers[c] is { } pinned)
             {
                 if (Produced(state, pinned))
@@ -288,7 +281,7 @@ internal static class TapCapture
             RequestId = state.RequestId,
             PipelineId = state.Plan.PipelineId,
             ManifestId = state.Plan.ManifestId,
-            SchemaId = tap.SchemaId,
+            Schema = tap.Schema,
             TimeMs = state.Context[PlanSchema.RequestTimeContext].AsInt64(),
             Delivery = tap.Delivery,
             RequestProbability = group.Rate,
@@ -296,7 +289,7 @@ internal static class TapCapture
             StringEntityIds = stringIds,
             Ranks = batchRanks,
             RanksBefore = ranksBefore,
-            RowProbabilities = probabilities,
+            RowProbability = rowProbability,
             Columns = columns,
             Context = context,
             ColumnProducers = producers,

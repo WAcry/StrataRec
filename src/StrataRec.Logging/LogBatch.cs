@@ -14,12 +14,6 @@ public enum LogDelivery : byte
     Durable,
 }
 
-/// <summary>One logged column of a batch: native type plus one value per row; missing values stay missing (design 8.7).</summary>
-/// <param name="Name">Log column name.</param>
-/// <param name="Type">Declared type of the column expression.</param>
-/// <param name="Values">One value per batch row; <see cref="ScalarValue.Missing"/> where the value is missing.</param>
-public sealed record LogColumn(string Name, ColumnType Type, ScalarValue[] Values);
-
 /// <summary>
 /// One tap firing: a fixed envelope plus a columnar payload (design 8.7). Batches own their data, so the request's
 /// candidate table can be returned to the pool while the batch waits in a queue.
@@ -35,8 +29,11 @@ public sealed class LogBatch
     /// <summary>Content id of the manifest the plan was built from.</summary>
     public required string ManifestId { get; init; }
 
-    /// <summary>Content id of this tap variant's schema (columns, types, expressions, defining artifact).</summary>
-    public required string SchemaId { get; init; }
+    /// <summary>
+    /// The tap variant's schema (columns, types, expressions), shared by its batches; its <see cref="LogSchema.Id"/> is what
+    /// a batch records, and a sink that needs the record publishes it once per id (design 8.7).
+    /// </summary>
+    public required LogSchema Schema { get; init; }
 
     public required long TimeMs { get; init; }
 
@@ -57,8 +54,11 @@ public sealed class LogBatch
     /// <summary>For <c>dropped</c> taps, the rank each row had before the node removed it.</summary>
     public int[]? RanksBefore { get; init; }
 
-    /// <summary>Inclusion probability of each row given the request was sampled (design 8.4).</summary>
-    public required double[] RowProbabilities { get; init; }
+    /// <summary>
+    /// Inclusion probability of every row given the request was sampled (design 8.4): coordinated sampling keeps each row
+    /// with the same probability, so the batch holds one number, not one per row.
+    /// </summary>
+    public required double RowProbability { get; init; }
 
     public required LogColumn[] Columns { get; init; }
 
@@ -97,7 +97,7 @@ public sealed class LogBatch
     /// gives every row the same string object, and counting it per row overstated a batch of 1,024 rows sharing a 4 KB
     /// string 158 times (review 65). Sharing is found by identity in a small direct-mapped table of recent strings, so a
     /// string evicted by another that maps to the same slot is counted again: an overstatement, never an understatement.
-    /// Lists and vectors are each the row's own array, counted per value.</para>
+    /// A column's values are one array (<see cref="LogColumn"/>), counted by its length.</para>
     /// <para>Strings of the plan (tap, pipeline, manifest and schema ids, node, arm, column and outcome names) are shared by every
     /// request and not counted; the envelope's lists and maps are, per entry. The maps of a request are shared by its
     /// batches and counted in each, a bounded overstatement (taps per request).</para>
@@ -121,7 +121,7 @@ public sealed class LogBatch
         try
         {
             long bytes = 256 + StringBytes(RequestId); // the object and its fields; the other envelope strings are the plan's
-            bytes += Ranks.LongLength * 4 + RowProbabilities.LongLength * 8 + (RanksBefore?.LongLength ?? 0) * 4;
+            bytes += Ranks.LongLength * 4 + (RanksBefore?.LongLength ?? 0) * 4;
             bytes += (Int64EntityIds?.LongLength ?? 0) * 8;
             bytes += ListBytes(AssignedArms) + ListBytes(TriggeredExperiments) + MapBytes(NodeOutcomes) + MapBytes(ColumnProducers);
             if (StringEntityIds is { } ids)
@@ -135,10 +135,26 @@ public sealed class LogBatch
 
             foreach (var column in Columns)
             {
-                bytes += ObjectBytes + column.Values.LongLength * ValueBytes;
-                foreach (var value in column.Values)
+                bytes += 2 * ObjectBytes + (column.Offsets?.LongLength ?? 0) * 4 + (column.Validity?.LongLength ?? 0) * 8;
+                switch (column.Values)
                 {
-                    bytes += PayloadBytes(seen, value);
+                    case string?[] strings:
+                        bytes += strings.LongLength * 8;
+                        foreach (var s in strings)
+                        {
+                            bytes += Once(seen, s);
+                        }
+
+                        break;
+                    case bool[] flags:
+                        bytes += flags.LongLength;
+                        break;
+                    case float[] floats:
+                        bytes += floats.LongLength * 4;
+                        break;
+                    default:
+                        bytes += column.Values.LongLength * 8; // long[] or double[]
+                        break;
                 }
             }
 
