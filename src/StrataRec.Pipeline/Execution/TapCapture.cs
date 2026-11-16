@@ -308,7 +308,7 @@ internal static class TapCapture
     {
         foreach (var outcome in state.Outcomes)
         {
-            if (outcome.ProducedBy == nodeId && outcome.Kind is NodeOutcomeKind.Succeeded or NodeOutcomeKind.Degraded)
+            if (outcome.ProducedBy == nodeId && outcome.Kind is NodeOutcomeKind.Succeeded or NodeOutcomeKind.Degraded or NodeOutcomeKind.Fallback)
             {
                 return true;
             }

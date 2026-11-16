@@ -69,7 +69,7 @@ public sealed class SampleTimingTests
 
         var error = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => LiveRunAssert.SameNodeOutcomes(served, fellBack));
 
-        Assert.Contains("\n  ctr_ranker: Succeeded → Degraded by ctr_backup (", error.Message);
+        Assert.Contains("\n  ctr_ranker: succeeded → fallback by ctr_backup (", error.Message);
         Assert.Single(error.Message.Split('\n'), line => line.StartsWith("  ", StringComparison.Ordinal)); // only that node differs
         LiveRunAssert.SameNodeOutcomes(served, fellBack, except: "ctr_ranker");
     }
@@ -94,7 +94,7 @@ public sealed class SampleTimingTests
         LiveRunAssert.SameNodeOutcomes(fellBackTrace, fellBackRecording);
 
         var error = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => LiveRunAssert.SameNodeOutcomes(servedTrace, fellBackRecording));
-        Assert.Contains("\n  ctr_ranker: Succeeded → Degraded by ctr_backup (", error.Message);
+        Assert.Contains("\n  ctr_ranker: succeeded → fallback by ctr_backup (", error.Message);
         Assert.Single(error.Message.Split('\n'), line => line.StartsWith("  ", StringComparison.Ordinal));
 
         static RecRequest Traced(string requestId)

@@ -406,7 +406,7 @@ public static class RecResultJson
     {
         json.WriteStartObject();
         json.WriteString("node", outcome.NodeId);
-        json.WriteString("outcome", outcome.Kind.ToString().ToLowerInvariant());
+        json.WriteString("outcome", NodeOutcomeNames.Name(outcome.Kind));
         if (outcome.Detail is not null)
         {
             json.WriteString("detail", outcome.Detail);

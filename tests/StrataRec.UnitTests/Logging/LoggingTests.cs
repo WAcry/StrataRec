@@ -270,7 +270,7 @@ public sealed class LogPipelineTests
 
         var bare = Batch("$experiments", LogDelivery.Durable, rows: 0);
         var outcomes = Batch("$experiments", LogDelivery.Durable, rows: 0);
-        outcomes.NodeOutcomes = Enumerable.Range(0, 100).ToDictionary(i => "node_" + i, _ => "Succeeded");
+        outcomes.NodeOutcomes = Enumerable.Range(0, 100).ToDictionary(i => "node_" + i, _ => "succeeded");
         Assert.True(outcomes.ApproximateBytes >= bare.ApproximateBytes + 100 * 32, $"{outcomes.ApproximateBytes} for 100 outcomes");
     }
 

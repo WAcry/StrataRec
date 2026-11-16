@@ -70,7 +70,7 @@ public sealed class BindingLifetimeTests
 
         var result = await engine.ExecuteAsync(Request("req-abandoning"), TestContext.Current.CancellationToken).AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.True(result.Succeeded); // served by ctr_backup; the model call runs on, abandoned
-        Assert.Contains(result.Trace!, o => o is { NodeId: "ctr_ranker", Kind: NodeOutcomeKind.Degraded, ProducedBy: "ctr_backup" });
+        Assert.Contains(result.Trace!, o => o is { NodeId: "ctr_ranker", Kind: NodeOutcomeKind.Fallback, ProducedBy: "ctr_backup" });
 
         Rebind(root, generation: 2);
         Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);

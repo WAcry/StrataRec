@@ -1,6 +1,7 @@
 using System.Globalization;
 using StrataRec.Experiments.Assignment;
 using StrataRec.Hosting;
+using StrataRec.Pipeline.Execution;
 
 namespace StrataRec.CommandLine.Commands;
 
@@ -53,7 +54,7 @@ internal static class ResultText
                 var node = trace[i];
                 var detail = node.Detail is null ? string.Empty : $" ({node.Detail})";
                 var producer = node.ProducedBy is { } by && by != node.NodeId ? $", produced by {by}" : string.Empty;
-                output.WriteLine($"{(i == 0 ? "  trace     " : Continued)}{node.NodeId}: {node.Kind.ToString().ToLowerInvariant()}{detail}{producer}, " +
+                output.WriteLine($"{(i == 0 ? "  trace     " : Continued)}{node.NodeId}: {NodeOutcomeNames.Name(node.Kind)}{detail}{producer}, " +
                                  $"{node.DurationMs.ToString("0.###", CultureInfo.InvariantCulture)} ms, {node.RowsIn} -> {node.RowsOut} rows");
             }
         }

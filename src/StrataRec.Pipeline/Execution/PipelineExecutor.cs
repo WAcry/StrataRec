@@ -88,14 +88,6 @@ public sealed class PipelineRequest
     public static long DefaultSeed(string requestId) => unchecked((long)StableHash.Hash(StableHash.SeedFromSalt(requestId)));
 }
 
-public enum NodeOutcomeKind : byte
-{
-    Succeeded = 1,
-    Degraded,
-    Skipped,
-    Failed,
-}
-
 /// <summary>What happened at one timeline position (design 5.6).</summary>
 /// <param name="NodeId">Primary node id at the position.</param>
 /// <param name="Kind">Final outcome of the position.</param>
@@ -462,7 +454,7 @@ public sealed class PipelineExecutor
                     recorder?.AbortedTriggers(NewlyTriggered(plan, before, state.Triggered));
                 }
 
-                Record(state, open, NodeOutcomeCategory.Aborted, reason, null, state.PositionStarted, state.PositionRowsIn);
+                Record(state, open, NodeOutcomeKind.Aborted, reason, null, state.PositionStarted, state.PositionRowsIn);
             }
 
             EndNodeSpan(state, position, reason);
@@ -570,7 +562,7 @@ public sealed class PipelineExecutor
         state.PositionFallback = null;
         if (!await EvaluateWhenAsync(state, position, node, cancellationToken).ConfigureAwait(false))
         {
-            Record(state, node, NodeOutcomeCategory.SkippedWhen, "when is false", null, started, rowsIn);
+            Record(state, node, NodeOutcomeKind.SkippedWhen, "when is false", null, started, rowsIn);
             state.Explainer?.Skipped(node.NodeId, "when is false");
             return null;
         }
@@ -582,7 +574,7 @@ public sealed class PipelineExecutor
             state.Recorder?.Remaining(remainingMs);
             if (node.MinRemainingMs is { } minRemaining && remainingMs < minRemaining)
             {
-                Record(state, node, NodeOutcomeCategory.SkippedDeadline, $"less than {minRemaining} ms remaining", null, started, rowsIn);
+                Record(state, node, NodeOutcomeKind.SkippedDeadline, $"less than {minRemaining} ms remaining", null, started, rowsIn);
                 state.Explainer?.Skipped(node.NodeId, $"less than {minRemaining} ms remaining");
                 return null;
             }
@@ -600,9 +592,9 @@ public sealed class PipelineExecutor
             ? node.FallbackReserveMs ?? state.Plan.SelectFallback(node, state.Arms)?.TimeoutMs ?? 0
             : 0;
         var attempt = await RunNodeAsync(state, node, reserve, cancellationToken).ConfigureAwait(false);
-        if (attempt.Kind is NodeOutcomeKind.Succeeded or NodeOutcomeKind.Degraded)
+        if (attempt.Kind is AttemptKind.Succeeded or AttemptKind.Degraded)
         {
-            var category = attempt.Kind == NodeOutcomeKind.Succeeded ? NodeOutcomeCategory.Succeeded : NodeOutcomeCategory.Degraded;
+            var category = attempt.Kind == AttemptKind.Succeeded ? NodeOutcomeKind.Succeeded : NodeOutcomeKind.Degraded;
             Record(state, node, category, attempt.Detail, node.NodeId, started, rowsIn);
             if (state.Batches is not null)
             {
@@ -613,9 +605,9 @@ public sealed class PipelineExecutor
             return null;
         }
 
-        if (attempt.Kind == NodeOutcomeKind.Skipped)
+        if (attempt.Kind == AttemptKind.Skipped)
         {
-            Record(state, node, NodeOutcomeCategory.SkippedInput, attempt.Detail, null, started, rowsIn);
+            Record(state, node, NodeOutcomeKind.SkippedInput, attempt.Detail, null, started, rowsIn);
             return null;
         }
 
@@ -623,7 +615,7 @@ public sealed class PipelineExecutor
         switch (node.OnFailure)
         {
             case FailurePolicy.Skip:
-                Record(state, node, NodeOutcomeCategory.Failed, attempt.Detail + " (skipped)", null, started, rowsIn);
+                Record(state, node, NodeOutcomeKind.Failed, attempt.Detail + " (skipped)", null, started, rowsIn);
                 return null;
             case FailurePolicy.Fallback when state.Plan.SelectFallback(node, state.Arms) is { } fallback:
                 // A fallback site triggers only when the fallback is invoked, which is independent of the arm (design 12.6).
@@ -634,9 +626,9 @@ public sealed class PipelineExecutor
                 }
 
                 var fb = await RunNodeAsync(state, fallback, 0, cancellationToken).ConfigureAwait(false);
-                if (fb.Kind is NodeOutcomeKind.Succeeded or NodeOutcomeKind.Degraded)
+                if (fb.Kind is AttemptKind.Succeeded or AttemptKind.Degraded)
                 {
-                    Record(state, node, NodeOutcomeCategory.Fallback, $"{attempt.Detail}; served by fallback '{fallback.NodeId}'", fallback.NodeId, started, rowsIn);
+                    Record(state, node, NodeOutcomeKind.Fallback, $"{attempt.Detail}; served by fallback '{fallback.NodeId}'", fallback.NodeId, started, rowsIn);
                     if (state.Batches is not null)
                     {
                         await TapCapture.AfterNodeAsync(state, node.NodeId, entered, rowsIn, cancellationToken).ConfigureAwait(false);
@@ -646,21 +638,30 @@ public sealed class PipelineExecutor
                     return null;
                 }
 
-                if (fallback.OnFailure == FailurePolicy.Skip || fb.Kind == NodeOutcomeKind.Skipped)
+                if (fallback.OnFailure == FailurePolicy.Skip || fb.Kind == AttemptKind.Skipped)
                 {
-                    Record(state, node, NodeOutcomeCategory.Failed, $"{attempt.Detail}; fallback '{fallback.NodeId}': {fb.Detail} (skipped)", null, started, rowsIn);
+                    Record(state, node, NodeOutcomeKind.Failed, $"{attempt.Detail}; fallback '{fallback.NodeId}': {fb.Detail} (skipped)", null, started, rowsIn);
                     return null;
                 }
 
-                Record(state, node, NodeOutcomeCategory.Failed, $"{attempt.Detail}; fallback '{fallback.NodeId}': {fb.Detail}", null, started, rowsIn);
+                Record(state, node, NodeOutcomeKind.Failed, $"{attempt.Detail}; fallback '{fallback.NodeId}': {fb.Detail}", null, started, rowsIn);
                 return $"node '{node.NodeId}' failed ({attempt.Detail}) and its fallback '{fallback.NodeId}' failed ({fb.Detail})";
             default:
-                Record(state, node, NodeOutcomeCategory.Failed, attempt.Detail, null, started, rowsIn);
+                Record(state, node, NodeOutcomeKind.Failed, attempt.Detail, null, started, rowsIn);
                 return $"node '{node.NodeId}' failed: {attempt.Detail}";
         }
     }
 
-    private readonly record struct Attempt(NodeOutcomeKind Kind, string? Detail);
+    private readonly record struct Attempt(AttemptKind Kind, string? Detail);
+
+    /// <summary>How one attempt of a node ended; the position's <see cref="NodeOutcomeKind"/> also says what was done about it.</summary>
+    private enum AttemptKind : byte
+    {
+        Succeeded = 1,
+        Degraded,
+        Skipped,
+        Failed,
+    }
 
     /// <summary>Runs one attempt of a node; for a request that explains candidates, also records the attempt's step (design 13.3).</summary>
     private static ValueTask<Attempt> RunNodeAsync(RequestState state, CompiledNode node, int reserveMs, CancellationToken cancellationToken)
@@ -673,10 +674,10 @@ public sealed class PipelineExecutor
             var explainer = state.Explainer!;
             switch (attempt.Kind)
             {
-                case NodeOutcomeKind.Skipped:
+                case AttemptKind.Skipped:
                     explainer.Skipped(node.NodeId, attempt.Detail);
                     break;
-                case NodeOutcomeKind.Failed:
+                case AttemptKind.Failed:
                     explainer.RolledBack(node.NodeId, attempt.Detail);
                     break;
                 default:
@@ -695,14 +696,14 @@ public sealed class PipelineExecutor
         {
             if (!state.Bindings.IsProduced(logical))
             {
-                return new Attempt(NodeOutcomeKind.Skipped, $"input column '{state.Plan.Schema.Columns[logical].Name}' was not produced");
+                return new Attempt(AttemptKind.Skipped, $"input column '{state.Plan.Schema.Columns[logical].Name}' was not produced");
             }
         }
 
         var fill = await state.Features.EnsureAsync(node.ReadFeatures.AsSpan(), cancellationToken).ConfigureAwait(false);
         if (fill.Failed)
         {
-            return new Attempt(NodeOutcomeKind.Failed, "feature fetch failed: " + fill.Error);
+            return new Attempt(AttemptKind.Failed, "feature fetch failed: " + fill.Error);
         }
 
         var remainingMs = state.Remaining.TotalMilliseconds - reserveMs;
@@ -715,20 +716,20 @@ public sealed class PipelineExecutor
             if (recorded?.Timing == ReplayTiming.DeadlineExceeded)
             {
                 state.Recorder?.Attempt(node.NodeId, ReplayTiming.DeadlineExceeded, recorded.BudgetMs ?? budgetMs);
-                return new Attempt(NodeOutcomeKind.Failed, "deadline exceeded");
+                return new Attempt(AttemptKind.Failed, "deadline exceeded");
             }
 
             if (recorded?.Timing == ReplayTiming.TimedOut)
             {
                 MarkParamTriggers(state, node);
                 state.Recorder?.Attempt(node.NodeId, ReplayTiming.TimedOut, recorded.BudgetMs ?? budgetMs);
-                return new Attempt(NodeOutcomeKind.Failed, $"timed out after {recorded.BudgetMs ?? budgetMs:0} ms");
+                return new Attempt(AttemptKind.Failed, $"timed out after {recorded.BudgetMs ?? budgetMs:0} ms");
             }
         }
         else if (budgetMs <= 0)
         {
             state.Recorder?.Attempt(node.NodeId, ReplayTiming.DeadlineExceeded, budgetMs);
-            return new Attempt(NodeOutcomeKind.Failed, "deadline exceeded");
+            return new Attempt(AttemptKind.Failed, "deadline exceeded");
         }
 
         // A failed attempt leaves the table exactly as it was (design 4.6): the ranking, no rows and no slots of its own, so
@@ -787,11 +788,11 @@ public sealed class PipelineExecutor
         {
             // Every way an attempt fails ends here: an exception, a failure it reported, a timeout, a late success, a commit.
             state.Table.Rollback(checkpoint);
-            return new Attempt(NodeOutcomeKind.Failed, failure);
+            return new Attempt(AttemptKind.Failed, failure);
         }
 
         var degraded = context.DegradedReason ?? (fill.State == FeatureState.Degraded ? "degraded features: " + fill.Error : null);
-        return new Attempt(degraded is null ? NodeOutcomeKind.Succeeded : NodeOutcomeKind.Degraded, degraded);
+        return new Attempt(degraded is null ? AttemptKind.Succeeded : AttemptKind.Degraded, degraded);
     }
 
     /// <summary>The exception's type name for a failure detail.</summary>
@@ -1048,16 +1049,15 @@ public sealed class PipelineExecutor
     /// Records a position's outcome: in the result, as node metrics (design 13.1: duration and rows by node only, the
     /// category on a counter), in the windowed failure summaries (design 13.2), and on the node span.
     /// </summary>
-    private static void Record(RequestState state, CompiledNode node, NodeOutcomeCategory category, string? detail, string? producedBy, long started, int rowsIn)
+    private static void Record(RequestState state, CompiledNode node, NodeOutcomeKind category, string? detail, string? producedBy, long started, int rowsIn)
     {
         state.PositionOpen = false;
         var elapsed = Stopwatch.GetElapsedTime(started);
         var rowsOut = state.Table.Rows.Count;
-        var kind = PlanTelemetry.Kind(category);
-        var outcome = new NodeOutcome(node.NodeId, kind, detail, producedBy, elapsed.TotalMilliseconds, rowsIn, rowsOut);
+        var outcome = new NodeOutcome(node.NodeId, category, detail, producedBy, elapsed.TotalMilliseconds, rowsIn, rowsOut);
         state.Outcomes.Add(outcome);
-        state.Degraded |= category is not (NodeOutcomeCategory.Succeeded or NodeOutcomeCategory.SkippedWhen);
-        state.Recorder?.Position(outcome, PlanTelemetry.CategoryName(category));
+        state.Degraded |= category is not (NodeOutcomeKind.Succeeded or NodeOutcomeKind.SkippedWhen);
+        state.Recorder?.Position(outcome, NodeOutcomeNames.Name(category));
         if (state.Replay is not null)
         {
             return; // a replay records no metrics, event logs or spans
@@ -1065,14 +1065,14 @@ public sealed class PipelineExecutor
 
         var telemetry = state.Plan.Telemetry.Nodes[node.Index];
         StrataRecMetrics.NodeOutcomes.Add(1, telemetry.Outcomes[(int)category]);
-        if (kind != NodeOutcomeKind.Skipped)
+        if (!NodeOutcomeNames.IsSkipped(category))
         {
             StrataRecMetrics.NodeDuration.Record(elapsed.TotalSeconds, telemetry.Tags);
             StrataRecMetrics.NodeRowsIn.Record(rowsIn, telemetry.Tags);
             StrataRecMetrics.NodeRowsOut.Record(rowsOut, telemetry.Tags);
         }
 
-        if (category == NodeOutcomeCategory.Fallback)
+        if (category == NodeOutcomeKind.Fallback)
         {
             state.Events?.Report(RequestEvent.NodeFallback, telemetry.Subject, state.RequestId, detail);
             if (telemetry.Model is { } model)
@@ -1080,14 +1080,14 @@ public sealed class PipelineExecutor
                 StrataRecMetrics.ModelFallbacks.Add(1, model);
             }
         }
-        else if (category == NodeOutcomeCategory.Failed)
+        else if (category == NodeOutcomeKind.Failed)
         {
             state.Events?.Report(RequestEvent.NodeFailed, telemetry.Subject, state.RequestId, detail);
         }
 
         if (state.NodeSpan is { IsAllDataRequested: true } span)
         {
-            span.SetTag(StrataRecTags.Outcome, PlanTelemetry.CategoryName(category));
+            span.SetTag(StrataRecTags.Outcome, NodeOutcomeNames.Name(category));
             span.SetTag(StrataRecTags.RowsIn, rowsIn);
             span.SetTag(StrataRecTags.RowsOut, rowsOut);
             if (producedBy is not null && producedBy != node.NodeId)
@@ -1095,7 +1095,7 @@ public sealed class PipelineExecutor
                 span.SetTag(StrataRecTags.Fallback, producedBy);
             }
 
-            if (category == NodeOutcomeCategory.Failed)
+            if (category == NodeOutcomeKind.Failed)
             {
                 span.SetStatus(ActivityStatusCode.Error, detail);
             }
@@ -1318,15 +1318,7 @@ public sealed class PipelineExecutor
         var outcomes = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var outcome in result.Outcomes)
         {
-            if (outcome.ProducedBy is { } producer && producer != outcome.NodeId)
-            {
-                // Served by the fallback: the primary failed (design 8.7 envelope example).
-                outcomes[outcome.NodeId] = nameof(NodeOutcomeKind.Failed);
-                outcomes[producer] = nameof(NodeOutcomeKind.Succeeded);
-                continue;
-            }
-
-            outcomes[outcome.NodeId] = outcome.Kind.ToString();
+            outcomes[outcome.NodeId] = NodeOutcomeNames.Name(outcome.Kind); // a fallback that served is "fallback" at the primary
         }
 
         foreach (var batch in batches)

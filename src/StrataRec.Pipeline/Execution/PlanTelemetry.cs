@@ -3,40 +3,12 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Pipeline.Execution;
 
-/// <summary>Outcome category of a timeline position: the <c>stratarec.outcome</c> tag of node outcome counts (design 5.6).</summary>
-internal enum NodeOutcomeCategory : byte
-{
-    Succeeded,
-    Degraded,
-
-    /// <summary>The node failed and its fallback node served.</summary>
-    Fallback,
-
-    /// <summary>`when` was false.</summary>
-    SkippedWhen,
-
-    /// <summary>Less than <c>min_remaining_ms</c> was left.</summary>
-    SkippedDeadline,
-
-    /// <summary>A required input column was not produced.</summary>
-    SkippedInput,
-
-    /// <summary>The node failed (and was skipped, or failed the request).</summary>
-    Failed,
-
-    /// <summary>The request was cancelled by its caller (or hit a defect) while the node was running.</summary>
-    Aborted,
-}
-
 /// <summary>
 /// Metric tags of one plan, built once per compiled plan (design 13.1 rule 5) so recording a node outcome passes cached
 /// arrays and allocates nothing.
 /// </summary>
 internal sealed class PlanTelemetry
 {
-    private static readonly string[] CategoryNames =
-        { "succeeded", "degraded", "fallback", "skipped_when", "skipped_deadline", "skipped_input", "failed", "aborted" };
-
     private PlanTelemetry(KeyValuePair<string, object?>[] pipeline, NodeTelemetry[] nodes)
     {
         Pipeline = pipeline;
@@ -48,36 +20,6 @@ internal sealed class PlanTelemetry
 
     /// <summary>Per node variant, indexed by <see cref="CompiledNode.Index"/>.</summary>
     public NodeTelemetry[] Nodes { get; }
-
-    public static string CategoryName(NodeOutcomeCategory category) => CategoryNames[(int)category];
-
-    /// <summary>The category of a <see cref="CategoryName"/> (a recording's node outcome); false for an unknown name.</summary>
-    public static bool TryParseCategory(string name, out NodeOutcomeCategory category)
-    {
-        for (var i = 0; i < CategoryNames.Length; i++)
-        {
-            if (string.Equals(CategoryNames[i], name, StringComparison.Ordinal))
-            {
-                category = (NodeOutcomeCategory)i;
-                return true;
-            }
-        }
-
-        category = default;
-        return false;
-    }
-
-    /// <summary>
-    /// The <see cref="NodeOutcomeKind"/> a result and a trace report for a category. Recordings and metrics keep the
-    /// category; this is the one mapping between the two, so a comparison of either kind of run goes through it.
-    /// </summary>
-    public static NodeOutcomeKind Kind(NodeOutcomeCategory category) => category switch
-    {
-        NodeOutcomeCategory.Succeeded => NodeOutcomeKind.Succeeded,
-        NodeOutcomeCategory.Degraded or NodeOutcomeCategory.Fallback => NodeOutcomeKind.Degraded,
-        NodeOutcomeCategory.Failed or NodeOutcomeCategory.Aborted => NodeOutcomeKind.Failed,
-        NodeOutcomeCategory.SkippedWhen or NodeOutcomeCategory.SkippedDeadline or NodeOutcomeCategory.SkippedInput => NodeOutcomeKind.Skipped,
-    };
 
     public static PlanTelemetry Create(ExecutionPlan plan)
     {
@@ -117,7 +59,7 @@ internal sealed class PlanTelemetry
         /// <summary><c>stratarec.pipeline</c>, <c>stratarec.node</c>.</summary>
         public KeyValuePair<string, object?>[] Tags { get; }
 
-        /// <summary>Indexed by <see cref="NodeOutcomeCategory"/>: the node tags plus <c>stratarec.outcome</c>.</summary>
+        /// <summary>Indexed by <see cref="NodeOutcomeKind"/> (slot 0 unused): the node tags plus <c>stratarec.outcome</c>.</summary>
         public KeyValuePair<string, object?>[][] Outcomes { get; }
 
         /// <summary>Per entry of <see cref="CompiledNode.Outputs"/>: the node tags plus <c>stratarec.column</c>.</summary>
@@ -129,10 +71,10 @@ internal sealed class PlanTelemetry
         public static NodeTelemetry Create(string pipeline, CompiledNode node)
         {
             KeyValuePair<string, object?>[] tags = [new(StrataRecTags.Pipeline, pipeline), new(StrataRecTags.Node, node.NodeId)];
-            var outcomes = new KeyValuePair<string, object?>[CategoryNames.Length][];
-            for (var i = 0; i < outcomes.Length; i++)
+            var outcomes = new KeyValuePair<string, object?>[NodeOutcomeNames.MaxKind + 1][];
+            for (var i = 1; i < outcomes.Length; i++)
             {
-                outcomes[i] = [tags[0], tags[1], new(StrataRecTags.Outcome, CategoryNames[i])];
+                outcomes[i] = [tags[0], tags[1], new(StrataRecTags.Outcome, NodeOutcomeNames.Name((NodeOutcomeKind)i))];
             }
 
             return new NodeTelemetry(pipeline + "/" + node.NodeId, tags, outcomes, OutputTags(tags, node), node.Operator.ModelTarget?.Tags);

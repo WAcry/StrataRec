@@ -128,7 +128,7 @@ public sealed class ReviewRegressionTests
                 {
                     var arms = plan.ArmsFromIds(new[] { "exp_cap_limit/" + limit, "exp_cap_search/" + search });
                     var result = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(surface: surface, arms: arms), TestContext.Current.CancellationToken);
-                    var ran = result.Outcomes.Single(o => o.NodeId == "author_cap").Kind != NodeOutcomeKind.Skipped;
+                    var ran = result.Outcomes.Single(o => o.NodeId == "author_cap").Kind != NodeOutcomeKind.SkippedWhen;
                     var label = $"cap_search {search}, cap_limit {limit}, {surface}";
 
                     Assert.True(result.Succeeded, result.Error);

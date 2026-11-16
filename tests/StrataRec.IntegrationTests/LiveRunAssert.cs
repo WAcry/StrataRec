@@ -6,7 +6,7 @@ namespace StrataRec.IntegrationTests;
 /// <summary>
 /// Asserts that two live runs, whose results a test compares, took the same decisions at every node. Call it before
 /// comparing the results: when one run fell back, skipped or failed where the other did not (a budget hit on a slow
-/// machine, say), the failure names the node and why, e.g. <c>ctr_ranker: Succeeded → Degraded by ctr_backup (timed out
+/// machine, say), the failure names the node and why, e.g. <c>ctr_ranker: succeeded → fallback by ctr_backup (timed out
 /// after 50 ms; ...)</c>, instead of showing a truncated diff of scores.
 /// </summary>
 internal static class LiveRunAssert
@@ -21,7 +21,7 @@ internal static class LiveRunAssert
         Same(Describe(expected), Describe(actual), except);
 
     private static List<(string Node, string Outcome)> Describe(IReadOnlyList<NodeOutcome> outcomes) =>
-        outcomes.Select(o => (o.NodeId, Outcome(o.Kind.ToString(), o.NodeId, o.ProducedBy, o.Detail))).ToList();
+        outcomes.Select(o => (o.NodeId, Outcome(NodeOutcomeNames.Name(o.Kind), o.NodeId, o.ProducedBy, o.Detail))).ToList();
 
     /// <summary>
     /// The decisions of an engine result: which pipeline served it, and the outcome of every node of that pipeline's run.
@@ -39,16 +39,15 @@ internal static class LiveRunAssert
 
         Assert.True(result.Recording is not null, "compare the node outcomes of a request that traces (DebugOptions.Trace) or records");
         var run = result.Recording.Runs.Last(r => r.PipelineId == result.ServedBy);
-        served.AddRange(run.Nodes.Select(n => (n.Node, Outcome(Kind(n.Outcome), n.Node, n.ProducedBy, n.Detail))));
+        served.AddRange(run.Nodes.Select(n => (n.Node, Outcome(Known(n.Outcome), n.Node, n.ProducedBy, n.Detail))));
         return served;
     }
 
-    /// <summary>A recording keeps the outcome category (<c>fallback</c>, <c>skipped_when</c>); a trace reports its kind. The
-    /// engine's own mapping makes the two comparable; the detail and the producer still tell the categories apart.</summary>
-    private static string Kind(string category)
+    /// <summary>A recording spells the outcome as a trace does; a name the engine does not know fails the comparison.</summary>
+    private static string Known(string outcome)
     {
-        Assert.True(PlanTelemetry.TryParseCategory(category, out var parsed), $"unknown outcome category '{category}' in the recording");
-        return PlanTelemetry.Kind(parsed).ToString();
+        Assert.True(NodeOutcomeNames.TryParse(outcome, out _), $"unknown node outcome '{outcome}' in the recording");
+        return outcome;
     }
 
     private static string Outcome(string kind, string node, string? producedBy, string? detail) =>

@@ -70,7 +70,7 @@ public sealed class HomeFeedEndToEndTests
         Assert.Equal(Describe(first), Describe(second));
         Assert.All(first.Items, item => Assert.False(item.Columns["score"].IsMissing));
         Assert.Equal("fusion", first.ColumnProducers["score"]);
-        Assert.All(first.Outcomes, o => Assert.Contains(o.Kind, new[] { NodeOutcomeKind.Succeeded, NodeOutcomeKind.Skipped }));
+        Assert.All(first.Outcomes, o => Assert.True(o.Kind == NodeOutcomeKind.Succeeded || NodeOutcomeNames.IsSkipped(o.Kind), $"{o.NodeId}: {o.Kind}"));
     }
 
     [Fact]
@@ -163,12 +163,12 @@ public sealed class HomeFeedEndToEndTests
 
         Assert.True(result.Succeeded, result.Error);
         var ranker = Assert.Single(result.Outcomes, o => o.NodeId == "ctr_ranker");
-        Assert.Equal(NodeOutcomeKind.Degraded, ranker.Kind);
+        Assert.Equal(NodeOutcomeKind.Fallback, ranker.Kind);
         Assert.Equal("ctr_backup", ranker.ProducedBy);
 
         var inputs = Assert.Single(result.LogBatches, b => b.TapId == "ranker_inputs");
-        Assert.Equal("Failed", inputs.NodeOutcomes["ctr_ranker"]);
-        Assert.Equal("Succeeded", inputs.NodeOutcomes["ctr_backup"]);
+        Assert.Equal("fallback", inputs.NodeOutcomes["ctr_ranker"]); // the same names as the result, the trace and the metrics
+        Assert.False(inputs.NodeOutcomes.ContainsKey("ctr_backup")); // a fallback is not a position of its own
         Assert.Equal("ctr_backup", inputs.ColumnProducers["p_click"]);
     }
 
