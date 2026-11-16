@@ -88,7 +88,8 @@ public sealed class DiagnosticLocationCliTests : IDisposable
     [Fact]
     public void Json_EveryLocatedDiagnostic_HasFileLineAndColumn()
     {
-        var root = Workspace();
+        // Without the sample's review of calibration × MMR, its interaction warning is reported at the node MMR adds.
+        var root = Workspace(("experiments/exp_mmr_diversity.jsonc", "\"reviewed_interactions\": { \"exp_freshness_calibration\": [\"score.final\"] },", ""));
         var output = new StringWriter();
 
         Assert.Equal(0, ValidateCommand.Run(Tool.Environment, root, "local", null, "json", warningsAsErrors: false, output));

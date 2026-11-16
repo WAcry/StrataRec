@@ -23,7 +23,7 @@ public sealed class ManifestRefCliTests
     [InlineData("json")]
     public async Task ExplainPlan_OfAManifest_ById_OrByFile_PrintsThePlanOfItsWorkspace(string format)
     {
-        var root = ManifestStores.Workspace();
+        var root = ManifestStores.Workspace(InteractionWarningTests.Unreviewed); // a warning to place
         var store = ManifestStores.NewStore();
         var (id, file) = await ManifestStores.BuildAsync(root, store);
 

@@ -6,6 +6,8 @@
   "owner": "rerank-team",
   "description": "MMR on item embeddings instead of a per-category sliding window.",
   "expires_at": "2099-12-31",
+  // Reviewed: MMR may diversify the calibrated score when a request is in both experiments (design 9.4, 11.5).
+  "reviewed_interactions": { "exp_freshness_calibration": ["score.final"] },
   "arms": {
     "control": {},
     "mmr": {

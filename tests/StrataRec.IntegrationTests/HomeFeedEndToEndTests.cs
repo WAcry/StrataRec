@@ -18,17 +18,14 @@ public sealed class HomeFeedEndToEndTests
     };
 
     [Fact]
-    public void SampleCompilesWithOnlyTheExpectedInteractionWarning()
+    public void SampleCompilesWithoutDiagnostics()
     {
         var compilation = HomeFeedTestHost.Load(SampleTiming.AsWritten).Compile();
 
+        // Its one interaction (calibration writes score.final at 470, MMR's added node reads it at 550, design 11.5) is
+        // recorded as reviewed in exp_mmr_diversity: InteractionWarningTests has the warning without it.
         Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
-        Assert.DoesNotContain(compilation.Diagnostics, d => d.IsError);
-
-        // Calibration writes score.final at 470; MMR's added node reads it at 550 (design 11.5 example).
-        var warning = Assert.Single(compilation.Diagnostics, d => d.Code == "INTERACTION_READ");
-        Assert.Contains("mmr_diversifier", warning.Message);
-        Assert.Contains("exp_freshness_calibration/calibrated", warning.Message);
+        Assert.Empty(compilation.Diagnostics);
         Assert.True(compilation.Report.CombinationCheckExhaustive);
     }
 

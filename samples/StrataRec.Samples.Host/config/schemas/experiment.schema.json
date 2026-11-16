@@ -1262,6 +1262,19 @@
         },
         "additionalProperties": false
       }
+    },
+    "reviewed_interactions": {
+      "description": "Interactions with experiments of other layers that were reviewed and may happen together (design 11.5): experiment id → the columns, e.g. { \"exp_freshness_calibration\": [\"score.final\"] }. The two experiments' interaction warnings on those columns are not repeated, so a reviewed pair stops warning on every validate, build and load; a new column still warns. An entry no interaction of this release needs is a warning, so a review does not outlive the interaction it was for. It lives with the experiment, not the release file, because the manifest carries it.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
     }
   },
   "required": [

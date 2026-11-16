@@ -142,6 +142,12 @@ internal sealed partial class UnifiedCompilation
 
     private readonly List<string> _layers = new();
     private readonly List<(string Id, int Layer, ImmutableArray<int> Arms)> _experiments = new();
+
+    /// <summary>Experiment id → its artifact label and its <see cref="ExperimentArtifact.ReviewedInteractions"/>.</summary>
+    private readonly Dictionary<string, (string Artifact, Dictionary<string, List<string>> Columns)> _reviewed = new(StringComparer.Ordinal);
+
+    /// <summary>The reviewed interactions an interaction matched: (experiment, other experiment, column).</summary>
+    private readonly HashSet<(string, string, string)> _reviewUsed = new();
     private readonly List<ArmPatch> _arms = new();
     private readonly SortedDictionary<string, NodeVariants> _variants = new(StringComparer.Ordinal);
     private readonly SortedDictionary<string, TapVariants> _taps = new(StringComparer.Ordinal);
@@ -210,6 +216,7 @@ internal sealed partial class UnifiedCompilation
         }
 
         ValidatePairs();
+        ValidateReviewedInteractions();
         ValidateBaselineAlone();
         if (_request.ValidateArmsIndependently)
         {
@@ -343,6 +350,10 @@ internal sealed partial class UnifiedCompilation
             }
 
             _experiments.Add((e.ExperimentId, layer, ImmutableCollectionsMarshal.AsImmutableArray(armIndices)));
+            if (e.ReviewedInteractions is { Count: > 0 } reviewed)
+            {
+                _reviewed[e.ExperimentId] = (artifact, reviewed);
+            }
         }
     }
 

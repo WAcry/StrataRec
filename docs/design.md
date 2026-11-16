@@ -1702,16 +1702,16 @@ flowchart LR
 
 ```text
 $ stratarec validate -c config -p home_feed
-config/experiments/exp_mmr_diversity.jsonc:16:9: warning INTERACTION_READ /arms/mmr/nodes/mmr_diversifier: Node 'mmr_diversifier' added by 'exp_mmr_diversity/mmr' reads 'score.final', which 'exp_freshness_calibration/calibrated' changes through 'freshness_calibration'; the two arms can be assigned together.
+config/experiments/exp_mmr_diversity.jsonc:16:9: warning INTERACTION_READ /arms/mmr/nodes/mmr_diversifier: Node 'mmr_diversifier' added by 'exp_mmr_diversity/mmr' reads 'score.final', which 'exp_freshness_calibration/calibrated' writes in the node it adds, 'freshness_calibration'; the two arms can be assigned together.
     "mmr_diversifier": {
     ^
-    hint: confirm in review that the added node should see the other experiment's values; otherwise put the experiments in the same layer
+    hint: if the two may compose, record the review in 'exp_mmr_diversity': "reviewed_interactions": { "exp_freshness_calibration": ["score.final"] }; otherwise put the experiments in the same layer (design 11.5)
 
 0 errors, 1 warning
-home_feed: ok — 11 nodes, 11 compiled variants, 3 experiments, 6 arms, 4 arm combinations checked
+home_feed: ok — 13 nodes, 13 compiled variants, 3 experiments, 6 arms, 4 arm combinations checked
 ```
 
-警告不阻止合并，它要求评审人做一个决定：如果两个效果可以叠加（这里 MMR 本来就应该基于最终分），两个 owner 在 PR 中确认后合并；如果需要互斥，就把两个实验放进同一层。这个决定留在 PR 的评审记录中，实验产物里没有任何跨实验的字段，所以每个实验仍然只依赖基线。
+警告不阻止合并，它要求评审人做一个决定：如果两个效果可以叠加（这里 MMR 本来就应该基于最终分），就照提示在 `exp_mmr_diversity` 里写上 `"reviewed_interactions": { "exp_freshness_calibration": ["score.final"] }`，两个 owner 在 PR 中确认后合并，此后这一对不再警告；如果需要互斥，就把两个实验放进同一层。这一项只影响警告，不影响编译，所以每个实验的含义仍然只依赖基线（第 11.6 节）。
 
 ## 10. 控制面与发布
 
@@ -1981,7 +1981,7 @@ RFC 7396 有三个容易出错的地方，引擎都用明确的规则处理：
 一个实验桶的足迹包括四部分：
 
 1. **路径**：补丁修改的 RFC 6901 路径。设置非对象值或 `null` 覆盖整个子树，设置对象则递归到各个叶子。
-2. **列**：它新增或修改的节点读取和写入的列，由编译后的算子报告。
+2. **列**：它新增的节点读取和写入的列，由编译后的算子报告。修改已有节点的设置（直接改配置或通过参数）和改参数一样，不计入。
 3. **行集合效果**：它新增、删除或移动的行集合节点及其位置。
 4. **参数**：它覆盖的参数叶子。
 
@@ -1990,16 +1990,16 @@ RFC 7396 有三个容易出错的地方，引擎都用明确的规则处理：
 | 情况 | 结果 |
 | :--- | :--- |
 | 路径相同，或一条是另一条的前缀，包括新增同一个节点 ID | 错误。只能新增的集合中定义完全相同的新增除外 |
-| 写同一个流动列 | 交互警告 |
-| a 写入的列被 b 新增的节点读取 | 交互警告 |
+| 两个桶新增的节点写同一个流动列 | 交互警告 |
+| a 新增的节点写入的列被 b 新增的节点读取 | 交互警告 |
 
 同一层的桶不会同时命中，不需要检查。
 
 路径冲突一律是错误。两个实验确实要修改同一处时，把它们放进同一层，让它们互斥；或者合并成一个实验，用组合桶表达。
 
-交互警告只覆盖两种情况，因为只有这两种情况下，一个实验的作者无法预见另一个实验的影响：两个实验都想决定同一个流动列的最终值；或者一个实验新增的节点是按基线的列值设计的，另一个实验却改变了这些值。基线节点读取实验写出的列是写入方有意的设计（例如时效校准就是为了让 `rank_sort` 读到校准后的分数），不报警告。
+交互警告只覆盖两种情况，因为只有这两种情况下，一个实验的作者无法预见另一个实验的影响：两个实验都新增节点去决定同一个流动列的最终值；或者一个实验新增的节点是按基线的列值设计的，另一个实验新增的节点却改写了这些值。基线节点读取实验写出的列是写入方有意的设计（例如时效校准就是为了让 `rank_sort` 读到校准后的分数），不报警告。只改已有节点设置的实验和调参数一样，沿用流水线已有的结构，不报警告。
 
-交互警告不阻止合并。它出现在 CI 的校验报告里，由 PR 评审者确认：两个实验可以同时生效时直接批准，否则把它们放进同一层。以第 9.4 节的两个实验为例：时效校准在第 470 位写 `score.final`，MMR 实验新增的 `mmr_diversifier` 在第 550 位读取 `score.final`。报告会列出这一对，评审者确认 MMR 在校准后的分数上做多样性重排是预期的行为。
+交互警告不阻止合并。它出现在 CI 的校验报告里，由 PR 评审者确认：两个实验可以同时生效时，在其中一个实验里用 `reviewed_interactions` 记下另一个实验和这些列，此后这一对在这些列上不再警告；否则把它们放进同一层。以第 9.4 节的两个实验为例：时效校准在第 470 位写 `score.final`，MMR 实验新增的 `mmr_diversifier` 在第 550 位读取 `score.final`。报告会列出这一对，评审者确认 MMR 在校准后的分数上做多样性重排是预期的行为，并在 `exp_mmr_diversity` 里记下这次评审。记录了却没有交互需要它（两个实验后来进了同一层，或者都不再新增相关节点）时报 `INTERACTION_REVIEW_UNUSED` 警告，评审记录不会比它对应的交互活得更久；记录里的实验不在这次发布中则不检查，它可能属于别的环境。
 
 校验分四道：
 

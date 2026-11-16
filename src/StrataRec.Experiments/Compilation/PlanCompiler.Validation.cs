@@ -327,18 +327,83 @@ internal sealed partial class UnifiedCompilation
         foreach (var (logical, node) in writes[a.Index])
         {
             var column = _builder.Schema.Columns[logical];
-            if (a.Index < b.Index && column.Flow && writes[b.Index].TryGetValue(logical, out var otherNode))
+            if (a.Index < b.Index && column.Flow && writes[b.Index].TryGetValue(logical, out var otherNode) && !Reviewed(a, b, column.Name))
             {
                 _diagnostics.Warning("INTERACTION_FLOW_COLUMN", a.Artifact, a.PointerPrefix + "/nodes/" + JsonPointer.Escape(node),
-                    $"Arms '{a.Id}' ('{node}') and '{b.Id}' ('{otherNode}') can be assigned together and both write flow column '{column.Name}'.",
-                    "confirm in review that the two changes compose; otherwise put the experiments in the same layer (design 11.5)");
+                    $"Arms '{a.Id}' ('{node}') and '{b.Id}' ('{otherNode}') can be assigned together and both add a node writing flow column '{column.Name}'.",
+                    ReviewHint(a, b, column.Name));
             }
 
-            if (addedReads[b.Index].TryGetValue(logical, out var reader))
+            if (addedReads[b.Index].TryGetValue(logical, out var reader) && !Reviewed(a, b, column.Name))
             {
                 _diagnostics.Warning("INTERACTION_READ", b.Artifact, b.PointerPrefix + "/nodes/" + JsonPointer.Escape(reader),
-                    $"Node '{reader}' added by '{b.Id}' reads '{column.Name}', which '{a.Id}' changes through '{node}'; the two arms can be assigned together.",
-                    "confirm in review that the added node should see the other experiment's values; otherwise put the experiments in the same layer");
+                    $"Node '{reader}' added by '{b.Id}' reads '{column.Name}', which '{a.Id}' writes in the node it adds, '{node}'; the two arms can be assigned together.",
+                    ReviewHint(b, a, column.Name));
+            }
+        }
+    }
+
+    private static string ReviewHint(ArmPatch a, ArmPatch b, string column) =>
+        $"if the two may compose, record the review in '{a.ExperimentId}': \"reviewed_interactions\": {{ \"{b.ExperimentId}\": [\"{column}\"] }}; " +
+        "otherwise put the experiments in the same layer (design 11.5)";
+
+    /// <summary>Whether either experiment recorded the interaction on <paramref name="column"/> as reviewed; marks what matched.</summary>
+    private bool Reviewed(ArmPatch a, ArmPatch b, string column) => Reviewed(a.ExperimentId, b.ExperimentId, column) | Reviewed(b.ExperimentId, a.ExperimentId, column);
+
+    private bool Reviewed(string experiment, string other, string column)
+    {
+        if (_reviewed.TryGetValue(experiment, out var reviewed) && reviewed.Columns.TryGetValue(other, out var columns) && columns.Contains(column))
+        {
+            _reviewUsed.Add((experiment, other, column));
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// A reviewed interaction with an experiment of this release that no interaction needed is a warning: the experiments
+    /// share a layer now, or neither adds a node interacting on the column, and a review that outlived its interaction would
+    /// silence the next one. One with an experiment this release does not have says nothing here (another environment's).
+    /// </summary>
+    private void ValidateReviewedInteractions()
+    {
+        // Experiment → whether every arm compiled: pairs skip an arm with errors, so its interactions are unknown.
+        var placed = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var (id, _, arms) in _experiments)
+        {
+            var valid = true;
+            foreach (var arm in arms)
+            {
+                valid &= _arms[arm].Valid;
+            }
+
+            placed[id] = valid;
+        }
+
+        foreach (var (experiment, (artifact, reviewed)) in _reviewed)
+        {
+            if (!placed[experiment])
+            {
+                continue;
+            }
+
+            foreach (var (other, columns) in reviewed)
+            {
+                if (!placed.TryGetValue(other, out var valid) || !valid)
+                {
+                    continue;
+                }
+
+                for (var i = 0; i < columns.Count; i++)
+                {
+                    if (!_reviewUsed.Contains((experiment, other, columns[i])))
+                    {
+                        _diagnostics.Warning("INTERACTION_REVIEW_UNUSED", artifact, $"/reviewed_interactions/{JsonPointer.Escape(other)}/{i}",
+                            $"No interaction between '{experiment}' and '{other}' on '{columns[i]}' needs a review in this release.",
+                            "remove the entry: the experiments share a layer, or neither adds a node that interacts on the column");
+                    }
+                }
             }
         }
     }
@@ -366,17 +431,23 @@ internal sealed partial class UnifiedCompilation
                 continue;
             }
 
+            // Only nodes the arm adds: changing an existing node's settings, inline or through a parameter, changes its values
+            // as any parameter does, and composes by the pipeline's structure (design 11.5). Counting them warned for
+            // every pair of experiments tuning different multipliers of one flow column, and never for the same change made
+            // through a parameter.
+            if (!arm.AddedNodes.Contains(nodeId))
+            {
+                continue;
+            }
+
             foreach (var output in node.Outputs)
             {
                 writes.TryAdd(output.LogicalId, nodeId);
             }
 
-            if (arm.AddedNodes.Contains(nodeId))
+            foreach (var read in node.ReadColumns)
             {
-                foreach (var read in node.ReadColumns)
-                {
-                    addedReads.TryAdd(read, nodeId);
-                }
+                addedReads.TryAdd(read, nodeId);
             }
         }
     }
