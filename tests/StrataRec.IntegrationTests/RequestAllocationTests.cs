@@ -1,6 +1,7 @@
 using System.Diagnostics.Metrics;
 using System.Globalization;
 using System.Text;
+using System.Text.Json.Nodes;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Hosting;
@@ -27,6 +28,28 @@ public sealed class RequestAllocationTests
         // Before the rented key index, 3,750 more candidates cost ~2.1 MB per request (dictionaries, key lists, a string
         // per key); now both sizes allocate the same.
         Assert.True(large - small < 4 * 1024, $"250 candidates: {small} B per request, 4,000 candidates: {large} B per request");
+    }
+
+    [Fact]
+    public void HomeFeedRequest_CostsWhatItReads_NotWhatTheCatalogDeclares()
+    {
+        // Design 6.3: a catalog is shared by many pipelines, and a plan holds only the features it reads. 2,000 features
+        // this pipeline does not read (physical and derived, candidate and context, of a fetched and a local source) used to
+        // cost about 25 B each per request (slots, fill state, the fetcher's per-feature state, output bindings, context
+        // values) and 40% more time; now the plan, and so the request, is the same.
+        var lean = Plan(250);
+        var wide = HomeFeedTestHost.LoadModified(root =>
+        {
+            Scale(root, 250);
+            AddUnusedFeatures(root, 2_000);
+        }).Plan();
+
+        Assert.Equal(
+            (lean.Features.Features.Count, lean.Schema.SlotCount, lean.Schema.ContextFields.Count, lean.Schema.Columns.Count),
+            (wide.Features.Features.Count, wide.Schema.SlotCount, wide.Schema.ContextFields.Count, wide.Schema.Columns.Count));
+        var leanBytes = Measure(lean);
+        var wideBytes = Measure(wide);
+        Assert.True(wideBytes - leanBytes < 256, $"the sample's catalog: {leanBytes} B per request, with 2,000 unused features: {wideBytes} B per request");
     }
 
     [Fact]
@@ -197,6 +220,33 @@ public sealed class RequestAllocationTests
             .Replace("\"two_tower\": 40, \"popular\": 20", $"\"two_tower\": {twoTower}, \"popular\": {popular}", StringComparison.Ordinal));
         var bindings = Path.Combine(root, "bindings", "local.jsonc");
         File.WriteAllText(bindings, File.ReadAllText(bindings).Replace("\"max_batch\": 25", "\"max_batch\": 10000", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Adds <paramref name="count"/> features no node, tap or output of the sample reads to its catalog: a quarter each
+    /// physical item features (a fetched source), physical user features (context), derived item features and derived user
+    /// features, and a few of author_store (a local table, laid out from the catalog either way).
+    /// </summary>
+    internal static void AddUnusedFeatures(string root, int count)
+    {
+        var quarter = (count - Math.Min(20, count)) / 4;
+        PlanFeatureClosureTests.EditJson(root, "catalog/home_feed.jsonc", catalog =>
+        {
+            var features = catalog["features"]!.AsObject();
+            var derived = catalog["derived_features"]!.AsObject();
+            for (var i = 0; i < quarter; i++)
+            {
+                features[$"item.unused_{i}"] = new JsonObject { ["type"] = "float32", ["source"] = "item_store", ["field"] = $"i_unused_{i}" };
+                features[$"user.unused_{i}"] = new JsonObject { ["type"] = "float32", ["source"] = "user_store", ["field"] = $"u_unused_{i}", ["default"] = 0.0 };
+                derived[$"item.unused_d{i}"] = new JsonObject { ["type"] = "float32", ["expr"] = $"(col.item.unused_{i} ?? 0.0) + col.item.clicks_7d" };
+                derived[$"user.unused_d{i}"] = new JsonObject { ["type"] = "float32", ["expr"] = $"ctx.user.unused_{i} * ctx.user.tenure_days" };
+            }
+
+            for (var i = 0; i < count - (4 * quarter); i++)
+            {
+                features[$"author.unused_{i}"] = new JsonObject { ["type"] = "float32", ["source"] = "author_store", ["field"] = $"a_unused_{i}" };
+            }
+        });
     }
 
     private static string RecallList(int firstId, int count)

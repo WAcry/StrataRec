@@ -121,13 +121,8 @@ public sealed class OperatorCompileContext
                 return false;
             }
 
-            var known = new List<string>();
-            foreach (var c in _schema.Columns)
-            {
-                known.Add(c.Name);
-            }
-
-            Error(configKey, "COLUMN_UNKNOWN", $"Column '{name}' is not declared, produced or a catalog feature.", NameSuggestions.DidYouMean(name, known));
+            Error(configKey, "COLUMN_UNKNOWN", $"Column '{name}' is not declared, produced or a catalog feature.",
+                NameSuggestions.DidYouMean(name, _schema.KnownColumnNames()));
             return false;
         }
 

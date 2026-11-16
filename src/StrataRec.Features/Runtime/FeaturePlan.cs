@@ -202,6 +202,9 @@ public sealed class FeaturePlan
     /// <param name="instances">Where connectors and distributed cache stores come from; null creates them for this plan alone.</param>
     /// <param name="cacheStores">Distributed cache store factories for cache bindings; null has none.</param>
     /// <param name="clock">The clock of the cache tables the plan creates; null is the system clock.</param>
+    /// <param name="catalog">The catalog the features come from: a <c>local</c> table holds every physical feature it
+    /// binds to the table's source and entity, not only those of <paramref name="features"/> (see
+    /// <see cref="NeedsWholeTable"/>); null holds the plan's features alone.</param>
     /// <exception cref="ArgumentException">An info of <paramref name="features"/> belongs to a plan already.</exception>
     /// <remarks>The plan takes <paramref name="features"/> as they are and fills in their groups, fields, key dependencies
     /// and waves. So an info belongs to one plan: one that a plan has taken (another plan's <see cref="Features"/>, which
@@ -218,7 +221,8 @@ public sealed class FeaturePlan
         IBindingInstances? instances = null,
         FeatureCacheStoreRegistry? cacheStores = null,
         TimeProvider? clock = null,
-        string catalogArtifact = "catalog")
+        string catalogArtifact = "catalog",
+        FeatureCatalog? catalog = null)
     {
         foreach (var f in features)
         {
@@ -259,7 +263,7 @@ public sealed class FeaturePlan
         var resolver = new FeatureSourceResolver(
             bindings, connectors, updateSources ?? FeatureUpdateSourceRegistry.CreateDefault(), cacheStores ?? new FeatureCacheStoreRegistry(),
             localTables ?? UnloadedLocalTables.Instance, instances ?? UnsharedInstances.Instance, baseDirectory, clock ?? TimeProvider.System, diagnostics,
-            catalogArtifact);
+            catalogArtifact, catalog);
 
         foreach (var (groupKey, memberList) in grouped)
         {
@@ -338,6 +342,30 @@ public sealed class FeaturePlan
         var derivedOrder = TopologicalDerivedOrder(all, diagnostics, catalogArtifact);
         AssignWaves(all, groups);
         return new FeaturePlan(all, groups.ToArray(), derivedOrder);
+    }
+
+    /// <summary>
+    /// Whether a plan that reads one feature of <paramref name="source"/> must hold every physical feature of the source's
+    /// tables, as the plan builder registers them (design 6.6). A <c>cache</c> table is filled by the misses of the plans
+    /// that read it, and a record written back must be complete, or a later read of another field would take the field
+    /// for missing: a miss fetches every member of the group, so every field of the table must be a member. A <c>local</c>
+    /// table is loaded whole by its source, whatever the plan reads (<see cref="Create"/> lays it out from the catalog),
+    /// and a <c>fetch</c> carries only the features a request needs: those plans hold only what they read. False for a
+    /// source with no binding or an unknown mode, which the feature plan reports.
+    /// </summary>
+    public static bool NeedsWholeTable(SourceBindingArtifact bindings, string source)
+    {
+        if (!bindings.Sources.TryGetValue(source, out var binding) || !FeatureSourceResolver.TryParseMode(binding.Mode, out var mode))
+        {
+            return false;
+        }
+
+        return mode switch
+        {
+            SupplyMode.Fetch => false,
+            SupplyMode.Local => false,
+            SupplyMode.Cache => true,
+        };
     }
 
     /// <summary>The requested features plus everything they depend on, in dependency order.</summary>

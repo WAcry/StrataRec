@@ -30,6 +30,8 @@ namespace StrataRec.Pipeline.Execution;
 /// </remarks>
 internal sealed class CandidateExplainer
 {
+    private static readonly Comparison<ExplainValue> ByName = static (a, b) => string.CompareOrdinal(a.Name, b.Name);
+
     private readonly EntityKey[] _keys;
     private readonly List<ExplainStep>[] _steps;
 
@@ -338,8 +340,9 @@ internal sealed class CandidateExplainer
     };
 
     /// <summary>
-    /// The row's values, after the node, of the columns it read (but the entity id) and then those it wrote that it did not
-    /// read. A column resolves as a later reader would see it: a feature by its slot, an output by its committed version.
+    /// The row's values, after the node, of the columns it read (but the entity id), by name, and then those it wrote that
+    /// it did not read. A column resolves as a later reader would see it: a feature by its slot, an output by its committed
+    /// version. Reads are sorted by name: column ids say nothing (a feature's is the order the plan first read it in).
     /// </summary>
     private static ExplainValue[] Values(RequestState state, CompiledNode node, int row)
     {
@@ -352,6 +355,8 @@ internal sealed class CandidateExplainer
                 values.Add(new ExplainValue(columns[logical].Name, ValueOf(state, columns[logical], row)));
             }
         }
+
+        values.Sort(ByName);
 
         foreach (var output in node.Outputs)
         {

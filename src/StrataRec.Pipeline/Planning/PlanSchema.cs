@@ -158,11 +158,37 @@ public sealed class ParamLeaf
 }
 
 /// <summary>
+/// Adds a catalog feature to a plan schema the first time a name resolves to it (design 6.3): a plan holds only the
+/// features it reads, so what a request sizes by feature, slot or context field does not grow with a shared catalog.
+/// </summary>
+internal interface IFeatureRegistrar
+{
+    /// <summary>
+    /// Registers the catalog feature written as <paramref name="qualifiedName"/> (<c>col.item.clicks_7d</c>,
+    /// <c>ctx.user.tenure_days</c>) with what it needs, unless it is registered already; false when the catalog has no
+    /// such feature in that namespace, or it cannot be registered (an error reported at its declaration).
+    /// </summary>
+    bool TryRegister(string qualifiedName);
+
+    /// <summary>
+    /// Adds the catalog features not registered yet that a reference would register, for "did you mean" suggestions:
+    /// qualified (<c>col.</c>, <c>ctx.</c>), or only the candidate features, without <c>col.</c>.
+    /// </summary>
+    void AddUnregisteredNames(List<string> names, bool candidateColumnsOnly);
+}
+
+/// <summary>
 /// The name → id/slot layout of a compiled plan (design 4.2): logical columns, physical slots, context fields and
 /// parameter leaves. Built once per plan; all requests share it.
 /// </summary>
-/// <remarks>It is filled while the plan compiles, by the plan builder and the operators' compile context (so its mutators
-/// are internal); afterwards it is read-only like the rest of the plan.</remarks>
+/// <remarks>
+/// <para>It is filled while the plan compiles, by the plan builder and the operators' compile context (so its mutators
+/// are internal); afterwards it is read-only like the rest of the plan.</para>
+/// <para>Catalog features are added on first reference (<see cref="IFeatureRegistrar"/>): while the plan compiles, a
+/// lookup of a feature not added yet adds it, so every way of reading one (expressions, operator configs, taps, the
+/// output) brings in exactly what is read. Once the feature plan is built the registrar is detached, and the schema of a
+/// plan that serves answers only for what it holds.</para>
+/// </remarks>
 public sealed class PlanSchema
 {
     private readonly Dictionary<string, LogicalColumn> _columns = new(StringComparer.Ordinal);
@@ -176,6 +202,7 @@ public sealed class PlanSchema
     private readonly List<ParamLeaf> _paramList = new();
     private readonly Dictionary<string, ILookupTable> _tables = new(StringComparer.Ordinal);
     private readonly HashSet<string> _unusable = new(StringComparer.Ordinal);
+    private IFeatureRegistrar? _features;
 
     public PlanSchema(EntityKeyType keyType)
     {
@@ -212,9 +239,17 @@ public sealed class PlanSchema
 
     public TableSchema CreateTableSchema() => new(KeyType, _slotTypes);
 
-    public bool TryGetColumn(string name, [NotNullWhen(true)] out LogicalColumn? column) => _columns.TryGetValue(name, out column);
+    /// <summary>The column named <paramref name="name"/> (without <c>col.</c>). While the plan compiles, looking up a
+    /// catalog feature registers it.</summary>
+    public bool TryGetColumn(string name, [NotNullWhen(true)] out LogicalColumn? column) =>
+        _columns.TryGetValue(name, out column)
+        || (_features is not null && _features.TryRegister("col." + name) && _columns.TryGetValue(name, out column));
 
-    public bool TryGetContext(string name, [NotNullWhen(true)] out ContextField? field) => _context.TryGetValue(name, out field);
+    /// <summary>The context field named <paramref name="name"/> (without <c>ctx.</c>). While the plan compiles, looking
+    /// up a catalog feature registers it.</summary>
+    public bool TryGetContext(string name, [NotNullWhen(true)] out ContextField? field) =>
+        _context.TryGetValue(name, out field)
+        || (_features is not null && _features.TryRegister("ctx." + name) && _context.TryGetValue(name, out field));
 
     public bool TryGetParam(string name, [NotNullWhen(true)] out ParamLeaf? leaf) => _params.TryGetValue(name, out leaf);
 
@@ -245,6 +280,54 @@ public sealed class PlanSchema
         // param.<map>.<key>: the map's declaration decides.
         var dot = name.StartsWith("param.", StringComparison.Ordinal) ? name.LastIndexOf('.') : -1;
         return dot > "param.".Length && _unusable.Contains(name[..dot]);
+    }
+
+    /// <summary>
+    /// The candidate column names a reference may name (without <c>col.</c>), for suggestions: the schema's, and while
+    /// the plan compiles the catalog features not registered yet.
+    /// </summary>
+    internal List<string> KnownColumnNames()
+    {
+        var names = new List<string>(_columnList.Count);
+        foreach (var c in _columnList)
+        {
+            names.Add(c.Name);
+        }
+
+        _features?.AddUnregisteredNames(names, candidateColumnsOnly: true);
+        return names;
+    }
+
+    /// <summary>Whether a column of this name is in the schema now, without registering a catalog feature.</summary>
+    internal bool HoldsColumn(string name) => _columns.ContainsKey(name);
+
+    /// <summary>Whether a context field of this name is in the schema now, without registering a catalog feature.</summary>
+    internal bool HoldsContext(string name) => _context.ContainsKey(name);
+
+    /// <summary>From now on, looking up a catalog feature registers it (<see cref="IFeatureRegistrar"/>).</summary>
+    internal void AttachFeatures(IFeatureRegistrar registrar) => _features = registrar;
+
+    /// <summary>Stops registering catalog features: the plan's features are final once its feature plan is built.</summary>
+    internal void DetachFeatures() => _features = null;
+
+    /// <summary>
+    /// A new schema with this one's request-level names (the built-ins, and the request inputs as declared) and the names
+    /// marked unusable: what the catalog's derived features may read besides features and <c>col.entity_id</c>, for
+    /// compiling them apart from the plan (<see cref="PlanBuilder"/>).
+    /// </summary>
+    internal PlanSchema CopyRequestFields()
+    {
+        var copy = new PlanSchema(KeyType);
+        foreach (var field in _contextList)
+        {
+            if (field.Kind == ContextFieldKind.RequestInput)
+            {
+                copy.AddRequestInput(field.Name["request.".Length..], field.InputType);
+            }
+        }
+
+        copy._unusable.UnionWith(_unusable);
+        return copy;
     }
 
     public List<ParamLeaf> MapLeaves(string mapName)
@@ -394,6 +477,7 @@ public sealed class PlanSchema
                     names.Add("param." + p.Name);
                 }
 
+                schema._features?.AddUnregisteredNames(names, candidateColumnsOnly: false);
                 return names;
             }
         }
@@ -419,7 +503,7 @@ public sealed class PlanSchema
                     return true;
                 }
 
-                if (!schema._columns.TryGetValue(rest, out var col))
+                if (!schema.TryGetColumn(rest, out var col))
                 {
                     return false;
                 }
@@ -428,7 +512,7 @@ public sealed class PlanSchema
                 return true;
             }
 
-            if (name.StartsWith("ctx.", StringComparison.Ordinal) && schema._context.TryGetValue(name[4..], out var ctx))
+            if (name.StartsWith("ctx.", StringComparison.Ordinal) && schema.TryGetContext(name[4..], out var ctx))
             {
                 symbol = new Symbol(SymbolKind.Context, name, ctx.Type, ctx.Id);
                 return true;

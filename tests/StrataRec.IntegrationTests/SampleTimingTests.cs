@@ -51,13 +51,14 @@ public sealed class SampleTimingTests
     [Fact]
     public void AFetchedSourceLeftWithTheFrameworksDefaultTimeout_FailsTheRelaxation()
     {
-        // Without timeout_ms a fetched source gets 50 ms, and there is no number in the text to raise.
+        // Without timeout_ms a fetched source gets 50 ms, and there is no number in the text to raise. (A source the plan
+        // reads: user_store, which no node reads, is not bound into it.)
         var host = HomeFeedTestHost.LoadModified(root =>
-            ReplayTests.Edit(root, "bindings/local.jsonc", "\"fixtures/users.json\", \"timeout_ms\": 1000", "\"fixtures/users.json\""), SampleTiming.AsWritten);
+            ReplayTests.Edit(root, "bindings/local.jsonc", "\"fixtures/items.json\", \"timeout_ms\": 1000,", "\"fixtures/items.json\","), SampleTiming.AsWritten);
 
         var error = Assert.Throws<InvalidOperationException>(() => SampleBudgets.Relax(host.Root));
 
-        Assert.Contains("feature source 'user_store': timeout 50 ms", error.Message);
+        Assert.Contains("feature source 'item_store': timeout 50 ms", error.Message);
     }
 
     [Fact]

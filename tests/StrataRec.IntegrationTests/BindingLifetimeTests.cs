@@ -269,7 +269,9 @@ public sealed class BindingLifetimeTests
         BindCounting(root, latencyMs: null);
         var engine = new RecEngine(Environment(root, models, connectors, sources));
         Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
-        Assert.Equal((1, 2, 2), (models.Created.Count, connectors.Created.Count, sources.Created.Count));
+        // The baseline reads no user feature, so user_store is not bound: only item_store has a connector.
+        Assert.Equal((1, 1, 2), (models.Created.Count, connectors.Created.Count, sources.Created.Count));
+        Assert.DoesNotContain(connectors.Created, c => c.Name == "user_store");
         var model = Assert.Single(models.Created);
         var items = connectors.Last("item_store");
         var popular = sources.Last("popular");
@@ -281,8 +283,8 @@ public sealed class BindingLifetimeTests
         await models.CallStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         BindCounting(root, latencyMs: 0);
         Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
-        Assert.Equal((1, 3, 3), (models.Created.Count, connectors.Created.Count, sources.Created.Count));
-        Assert.Single(connectors.Created, c => c.Name == "user_store");
+        Assert.Equal((1, 2, 3), (models.Created.Count, connectors.Created.Count, sources.Created.Count));
+        Assert.DoesNotContain(connectors.Created, c => c.Name == "user_store");
         Assert.Single(sources.Created, s => s.Name == "two_tower");
         await Task.Delay(50, TestContext.Current.CancellationToken);
         Assert.False(items.Disposed.Task.IsCompleted || popular.Disposed.Task.IsCompleted);
@@ -302,11 +304,10 @@ public sealed class BindingLifetimeTests
         // The engine's disposal takes the rest: every instance was disposed exactly once, and none was called after.
         await engine.DisposeAsync().AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken);
         var all = models.Created.Cast<Counted>().Concat(connectors.Created).Concat(sources.Created).ToList();
-        Assert.Equal(8, all.Count); // two models, three connectors (one replaced), three sources (one replaced)
+        Assert.Equal(7, all.Count); // two models, two connectors (one replaced), three sources (one replaced)
         await Task.WhenAll(all.Select(i => i.Disposed.Task)).WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.All(all, i => Assert.Equal((1, 0), (i.Disposals, i.LateCalls)));
-        Assert.All(all.Where(i => i is not CountingConnectors.Connector { Name: "user_store" }), // the baseline reads no user feature
-            i => Assert.True(i.Calls > 0, "every instance served a request"));
+        Assert.All(all, i => Assert.True(i.Calls > 0, "every instance served a request"));
         Assert.Equal(1, models.Created[0].Loads);
     }
 
@@ -356,7 +357,7 @@ public sealed class BindingLifetimeTests
         Assert.True((await engine.ExecuteAsync(Request("req-after-the-metric-failure"), TestContext.Current.CancellationToken)).Succeeded);
         await engine.DisposeAsync().AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken);
         var all = models.Created.Cast<Counted>().Concat(connectors.Created).Concat(sources.Created).ToList();
-        Assert.Equal(8, all.Count);
+        Assert.Equal(7, all.Count); // two models, two item_store connectors, three sources (user_store is not read)
         await Task.WhenAll(all.Select(i => i.Disposed.Task)).WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.All(all, i => Assert.Equal((1, 0), (i.Disposals, i.LateCalls)));
         Assert.Equal(0, engine.Bindings.InstanceCount);

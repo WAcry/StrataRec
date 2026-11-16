@@ -185,11 +185,14 @@ internal sealed class FeatureSourceResolver
     private readonly DiagnosticBag _diagnostics;
     private readonly string _artifact;
     private readonly string _catalogArtifact;
+    private readonly FeatureCatalog? _catalog;
     private readonly Dictionary<string, SourceSupply?> _resolved = new(StringComparer.Ordinal);
 
     /// <param name="instances">Where connectors and distributed cache stores come from: the engine shares them across plans by
     /// binding identity.</param>
     /// <param name="clock">The clock of the cache tables the plan creates (write times and expiry).</param>
+    /// <param name="catalog">The catalog a local table's layout comes from (<see cref="TableFeatures"/>); null lays it
+    /// out from the group's members.</param>
     public FeatureSourceResolver(
         SourceBindingArtifact bindings,
         FeatureConnectorRegistry connectors,
@@ -200,10 +203,12 @@ internal sealed class FeatureSourceResolver
         string? baseDirectory,
         TimeProvider clock,
         DiagnosticBag diagnostics,
-        string catalogArtifact = "catalog")
+        string catalogArtifact = "catalog",
+        FeatureCatalog? catalog = null)
     {
         _bindings = bindings;
         _catalogArtifact = catalogArtifact;
+        _catalog = catalog;
         _connectors = connectors;
         _updateSources = updateSources;
         _cacheStores = cacheStores;
@@ -288,21 +293,16 @@ internal sealed class FeatureSourceResolver
             return null;
         }
 
-        var definitions = new FeatureDefinition[members.Length];
-        for (var i = 0; i < members.Length; i++)
-        {
-            definitions[i] = members[i].Definition;
-        }
-
         var tableMode = supply.Mode switch
         {
             SupplyMode.Local => LocalTableMode.Local,
             SupplyMode.Cache => LocalTableMode.Cache,
             SupplyMode.Fetch => throw new InvalidOperationException("A fetched source has no table."),
         };
+        var definitions = TableFeatures(supply, entity, members);
         if (!LocalTableSchema.TryFromFeatures(supply.Name, entity, tableMode, definitions, out var schema, out var conflict))
         {
-            _diagnostics.Error("LOCAL_FIELD_TYPE_CONFLICT", _catalogArtifact, ConflictPointer(members, conflict!), conflict!,
+            _diagnostics.Error("LOCAL_FIELD_TYPE_CONFLICT", _catalogArtifact, ConflictPointer(definitions, conflict!), conflict!,
                 "give every feature that reads the field the same type, or read it through a derived feature");
             return null;
         }
@@ -701,18 +701,58 @@ internal sealed class FeatureSourceResolver
     private void ReportSourceSettings(string pointer, FeatureUpdateException ex) =>
         _diagnostics.Error("UPDATE_SOURCE_CONFIG", _artifact, pointer + "/bootstrap" + ex.Pointer, ex.Reason, ex.Hint);
 
-    /// <summary>The pointer of the conflicting feature's type: the conflict message names the feature first.</summary>
-    private static string ConflictPointer(FeatureRuntimeInfo[] members, string conflict)
+    /// <summary>
+    /// The features a table of <paramref name="supply"/>'s source and <paramref name="entity"/> holds, in name order. A
+    /// <c>local</c> table holds every physical feature the catalog binds there, whichever of them the plan reads: its
+    /// source loads whole records, so its layout, and with it the table's identity (<see cref="LocalTableSpec.Identity"/>),
+    /// is the catalog's. Plans that read different features of it share one table, and a pipeline or an experiment that
+    /// starts reading another of them does not reload it. A <c>cache</c> table holds the group's members, which are the
+    /// whole table already (<see cref="FeaturePlan.NeedsWholeTable"/>), as is every table laid out without a catalog.
+    /// </summary>
+    private FeatureDefinition[] TableFeatures(SourceSupply supply, EntityDefinition entity, FeatureRuntimeInfo[] members)
     {
-        foreach (var member in members)
+        var fromCatalog = _catalog is not null && supply.Mode switch
         {
-            if (conflict.StartsWith($"Feature '{member.Definition.Name}'", StringComparison.Ordinal))
+            SupplyMode.Local => true,
+            SupplyMode.Cache => false,
+            SupplyMode.Fetch => throw new InvalidOperationException("A fetched source has no table."),
+        };
+        if (fromCatalog)
+        {
+            var features = new List<FeatureDefinition>();
+            foreach (var feature in _catalog!.Features)
             {
-                return member.Definition.Pointer + "/type";
+                if (!feature.IsDerived && string.Equals(feature.Entity.Name, entity.Name, StringComparison.Ordinal)
+                    && string.Equals(feature.Source, supply.Name, StringComparison.Ordinal))
+                {
+                    features.Add(feature);
+                }
+            }
+
+            return features.ToArray();
+        }
+
+        var definitions = new FeatureDefinition[members.Length];
+        for (var i = 0; i < members.Length; i++)
+        {
+            definitions[i] = members[i].Definition;
+        }
+
+        return definitions;
+    }
+
+    /// <summary>The pointer of the conflicting feature's type: the conflict message names the feature first.</summary>
+    private static string ConflictPointer(FeatureDefinition[] features, string conflict)
+    {
+        foreach (var feature in features)
+        {
+            if (conflict.StartsWith($"Feature '{feature.Name}'", StringComparison.Ordinal))
+            {
+                return feature.Pointer + "/type";
             }
         }
 
-        return members[0].Definition.Pointer;
+        return features[0].Pointer;
     }
 
     private static string FirstLine(string message)

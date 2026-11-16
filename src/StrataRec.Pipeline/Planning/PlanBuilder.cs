@@ -117,6 +117,7 @@ public sealed class PlanBuilder
     private IExpressionScope? _scope;
     private ClientResolver? _clients;
     private SchemaSources? _sources;
+    private FeatureCatalog? _catalog;
     private Dictionary<string, ContextField>? _requestInputs;
 
     /// <param name="bindings">Where the plan's local tables, clients and connectors come from (design 6.4, 6.6): an
@@ -140,7 +141,11 @@ public sealed class PlanBuilder
 
     private string CatalogLabel => "catalog:" + _sources!.Catalog.CatalogId;
 
-    /// <summary>Builds the plan schema: request inputs, features, columns, parameters and lookup tables.</summary>
+    /// <summary>
+    /// Builds the plan schema: request inputs, columns, parameters and lookup tables. Catalog features are not added here
+    /// but when something compiled afterwards reads them (<see cref="CatalogFeatures"/>); the catalog's content is checked
+    /// here, whole.
+    /// </summary>
     public PlanSchema DefineSchema(SchemaSources sources)
     {
         _sources = sources;
@@ -1786,9 +1791,14 @@ public sealed class PlanBuilder
         }
     }
 
-    /// <summary>Builds the feature plan from the features registered by <see cref="DefineSchema"/>.</summary>
+    /// <summary>
+    /// Builds the feature plan from the catalog features the compiled nodes, taps, funnel groups and output read (and
+    /// what those are computed from). Call after everything that reads features is compiled: from here on the schema no
+    /// longer registers features (<see cref="PlanSchema.DetachFeatures"/>), and only these sources are bound.
+    /// </summary>
     public FeaturePlan BuildFeaturePlan()
     {
+        Schema.DetachFeatures();
         var inputs = _requestInputs!;
         return FeaturePlan.Create(
             _features,
@@ -1802,7 +1812,8 @@ public sealed class PlanBuilder
             _bindings,
             _environment.CacheStores,
             _environment.Clock,
-            CatalogLabel);
+            CatalogLabel,
+            _catalog);
     }
 
     /// <summary>Assembles the final plan. Call after every node, the output and the feature plan are compiled.</summary>
@@ -1909,122 +1920,19 @@ public sealed class PlanBuilder
             schema.MarkUnusable("ctx." + name);
         }
 
-        var pendingDerived = new List<FeatureDefinition>();
-        foreach (var feature in catalog.Features)
-        {
-            if (feature.IsDerived)
-            {
-                pendingDerived.Add(feature);
-                continue;
-            }
+        // The catalog's content is checked whole, whichever features this plan reads: every derived feature compiles on a
+        // schema of its own that registers the entire catalog, and its errors and cycles are reported there, once. The
+        // plan's schema then registers a feature when something reads it (CatalogFeatures); what failed the check is
+        // unusable in it, so reading it is not a second error.
+        var check = schema.CopyRequestFields();
+        var whole = new CatalogFeatures(catalog, check, check.CreateScope(), _diagnostics, CatalogLabel, new List<FeatureRuntimeInfo>());
+        check.AttachFeatures(whole);
+        whole.RegisterAll();
 
-            if (schema.TryGetColumn(feature.Name, out _))
-            {
-                _diagnostics.Error("FEATURE_DUPLICATE", CatalogLabel, feature.Pointer, $"'{feature.Name}' collides with another column.");
-                continue;
-            }
-
-            RegisterFeature(feature, feature.Type, null, []);
-        }
-
-        // Derived features may reference each other: compile in dependency order by retrying until no progress.
-        var progress = true;
-        var lastErrors = new Dictionary<string, IReadOnlyList<ExpressionDiagnostic>>(StringComparer.Ordinal);
-        while (pendingDerived.Count > 0 && progress)
-        {
-            progress = false;
-            for (var i = 0; i < pendingDerived.Count; i++)
-            {
-                var feature = pendingDerived[i];
-                if (!ExpressionCompiler.TryCompile(feature.Expr!, _scope!, DerivedOptions(feature), out var expression, out var errors))
-                {
-                    lastErrors[feature.Name] = errors;
-                    continue;
-                }
-
-                var type = feature.HasDefault ? feature.Type.AsNonNullable() : feature.Type.WithNullable(expression.ResultType.Nullable);
-                var dependencies = new List<int>();
-                foreach (var symbol in expression.Reads)
-                {
-                    var index = FeatureIndexOf(symbol);
-                    if (index >= 0)
-                    {
-                        dependencies.Add(index);
-                    }
-                    else if (symbol.Kind == SymbolKind.Param || (symbol.Kind == SymbolKind.Column && schema.Columns[symbol.Id].Kind == ColumnKind.Output))
-                    {
-                        _diagnostics.Error("FEATURE_BAD_REFERENCE", CatalogLabel, feature.Pointer + "/expr",
-                            $"Derived feature '{feature.Name}' reads '{symbol.Name}'; derived features may only read features, request inputs and col.entity_id.");
-                    }
-                }
-
-                RegisterFeature(feature, type, expression, [.. dependencies]);
-                pendingDerived.RemoveAt(i);
-                i--;
-                progress = true;
-            }
-        }
-
-        // One that failed without an error reads a name declared with an error: it is unusable too, and so is one that
-        // failed only because it reads such a derived feature. Recompiling those says which: they now fail silently.
-        for (var marked = true; marked;)
-        {
-            marked = false;
-            foreach (var feature in pendingDerived)
-            {
-                if (lastErrors[feature.Name].Count == 0 && !schema.IsUnusable(feature.ExpressionName))
-                {
-                    schema.MarkUnusable(feature.ExpressionName);
-                    marked = true;
-                }
-            }
-
-            foreach (var feature in pendingDerived)
-            {
-                if (marked && !schema.IsUnusable(feature.ExpressionName))
-                {
-                    ExpressionCompiler.TryCompile(feature.Expr!, _scope!, DerivedOptions(feature), out _, out var errors);
-                    lastErrors[feature.Name] = errors;
-                }
-            }
-        }
-
-        foreach (var feature in pendingDerived)
-        {
-            ExpressionErrors.Report(_diagnostics, lastErrors[feature.Name], CatalogLabel, feature.Pointer + "/expr", feature.Expr!);
-        }
-
-        static CompileOptions DerivedOptions(FeatureDefinition feature) => new()
-        {
-            ExpectedType = feature.Type.AsNonNullable(),
-            AllowNullableResult = true,
-            RequestLevelOnly = feature.IsContext,
-        };
-    }
-
-    private void RegisterFeature(FeatureDefinition feature, ColumnType type, CompiledExpression? expression, ImmutableArray<int> dependencies)
-    {
-        var index = _features.Count;
-        int slot = -1, contextId = -1;
-        if (feature.IsContext)
-        {
-            contextId = Schema.AddContextFeature(feature.Name, type.Promoted(), index).Id;
-        }
-        else
-        {
-            slot = Schema.AddFeatureColumn(feature.Name, type, index, feature.Pointer).FixedSlot;
-        }
-
-        _features.Add(new FeatureRuntimeInfo
-        {
-            Index = index,
-            Definition = feature,
-            Type = type,
-            Slot = slot,
-            ContextId = contextId,
-            Expression = expression,
-            Dependencies = dependencies,
-        });
+        _catalog = catalog;
+        var bindings = sources.Bindings;
+        schema.AttachFeatures(new CatalogFeatures(
+            catalog, schema, _scope!, _diagnostics, CatalogLabel, _features, source => FeaturePlan.NeedsWholeTable(bindings, source), whole.Failed));
     }
 
     private int FeatureIndexOf(in Symbol symbol)

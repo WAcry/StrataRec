@@ -279,8 +279,9 @@ internal static class ExplainPlanCommand
     }
 
     /// <summary>
-    /// The columns a node reads (but the entity id, which every row has) and those it writes, by name, as the compiled node
-    /// declares them: what the executor fetches before it, and versions after it.
+    /// The columns a node reads (but the entity id, which every row has), in name order, and those it writes, as the
+    /// compiled node declares them: what the executor fetches before it, and versions after it. Reads are sorted by name,
+    /// not listed by column id: a feature's id is the order the plan first read it in (design 6.3), which says nothing.
     /// </summary>
     private static (List<string> Reads, List<string> Writes) Flow(ExecutionPlan plan, CompiledNode node)
     {
@@ -293,6 +294,8 @@ internal static class ExplainPlanCommand
                 reads.Add(columns[logical].Name);
             }
         }
+
+        reads.Sort(StringComparer.Ordinal);
 
         var writes = new List<string>(node.Outputs.Length);
         foreach (var output in node.Outputs)
