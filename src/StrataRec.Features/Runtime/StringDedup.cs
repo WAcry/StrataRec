@@ -32,6 +32,11 @@ internal sealed class StringDedup
     /// <summary>Number of distinct values held.</summary>
     public int Count => _values?.Count ?? 0;
 
+    /// <summary>Starts a new scope: drops the values held (the strings stay with whoever was handed them), keeping the
+    /// table's capacity, so a scope reusing this object sees neither the previous scope's values nor its use of
+    /// <see cref="MaxValues"/>.</summary>
+    public void Clear() => _values?.Clear();
+
     /// <summary>A string with these characters: the held instance when an equal value was seen in this scope.</summary>
     public string Intern(ReadOnlySpan<char> value)
     {

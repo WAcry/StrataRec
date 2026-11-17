@@ -204,9 +204,10 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     /// <summary>
     /// The write time to pass to <see cref="Compact"/> so that it drops the oldest-written records of a <c>cache</c> table
     /// and frees at least <paramref name="bytes"/> (records written at the same time go together); <see cref="long.MaxValue"/>
-    /// when even all of them hold less. A record frees its own bytes and its share of the dictionary strings it references
-    /// (<see cref="TableVersion.Footprint"/>): a string costs its record only a code, so counting record bytes alone would
-    /// drop many times what is needed from a table of long strings.
+    /// when even all of them hold less. A record frees its own bytes and the dictionary strings no record left references
+    /// (<see cref="TableVersion.Drop"/>): a string costs its record only a code, so counting record bytes alone would drop
+    /// many times what is needed from a table of long strings, and a string still shared with a record that stays is not
+    /// freed at all.
     /// </summary>
     internal long WriteTimeCutoff(long bytes)
     {
@@ -214,7 +215,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         var index = version.Index;
         var entries = index.Entries;
         var writtenAt = new long[index.Count];
-        var footprints = new long[index.Count];
+        var positions = new long[index.Count];
         var count = 0;
         for (var s = 0; s < index.SlotCount; s++)
         {
@@ -232,14 +233,15 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             }
 
             writtenAt[count] = BinaryPrimitives.ReadInt64LittleEndian(page.AsSpan(offset + RecordLayout.VersionOffset));
-            footprints[count++] = version.Footprint(page, offset);
+            positions[count++] = position;
         }
 
-        Array.Sort(writtenAt, footprints, 0, count);
+        Array.Sort(writtenAt, positions, 0, count);
+        var dropped = new int[version.StringCount]; // per code, the references of the records dropped so far
         long freed = 0;
         for (var i = 0; i < count; i++)
         {
-            freed += footprints[i];
+            freed += version.Drop(version.PageOf(positions[i]), (int)positions[i], dropped);
             if (freed >= bytes)
             {
                 return writtenAt[i] == long.MaxValue ? long.MaxValue : writtenAt[i] + 1;

@@ -60,6 +60,31 @@ public sealed class StagingStringTests
     }
 
     [Fact]
+    public void Intern_StartsOverForEachCall_WhenACompletedCallsWriterIsBoundToTheNextChunk()
+    {
+        // Review 75: a writer reused for the next call after a call completed synchronously kept the first call's
+        // values, so a first call of 4,096 distinct values left the next call no room: each of its repeated values was
+        // a string of its own.
+        var memory = new RequestMemory();
+        var staging = new StagingBuffer(new StagingArea(Fields, 8192, 4096, memory));
+        staging.Bind(0);
+        string? seven = null;
+        for (var key = 0; key < 4096; key++)
+        {
+            var value = staging.Intern(("unique-" + key).AsSpan());
+            seven ??= key == 7 ? value : null;
+            staging.SetString(0, key, value);
+        }
+
+        Assert.Same(seven, staging.Intern("unique-7".AsSpan()));
+        staging.Bind(1);
+        var first = staging.Intern("new-category".AsSpan());
+        Assert.Same(first, staging.InternUtf8("new-category"u8));
+        Assert.NotSame(seven, staging.Intern("unique-7".AsSpan())); // the first call's values are gone with it
+        memory.Release();
+    }
+
+    [Fact]
     public void SetString_KeepsTheConnectorsInstance_AndRefusesNullAndAnotherFieldType()
     {
         var staging = new StagingBuffer(Fields, 4, new RequestMemory());
@@ -124,10 +149,16 @@ public sealed class StagingStringTests
             return allocated;
         }
 
+        // The best of three rounds: a pool rent can miss and allocate when tests running in parallel hold the shared
+        // pool's arrays (a once-off 6.5 KB at 50,000 keys in review 75), which is not a cost of the keys.
         Written(5_000);
         Written(50_000);
-        var few = Written(5_000);
-        var many = Written(50_000);
+        long few = long.MaxValue, many = long.MaxValue;
+        for (var round = 0; round < 3; round++)
+        {
+            few = Math.Min(few, Written(5_000));
+            many = Math.Min(many, Written(50_000));
+        }
 
         Assert.True(many - few < 1024, $"5,000 keys: {few} B; 50,000 keys: {many} B");
     }

@@ -1347,18 +1347,24 @@ public sealed class TableVersion
     }
 
     /// <summary>
-    /// What dropping the record at <paramref name="offset"/> (a current record of this version) frees: its bytes, and for
-    /// each dictionary string it references, the string's charge divided by the references to it, so that dropping every
-    /// record of a string frees the whole string. Writer side, for choosing what to evict.
+    /// What dropping the record at <paramref name="offset"/> (a current record of this version) frees after the records
+    /// already dropped: its bytes, and each dictionary string whose last reference it holds. <paramref name="dropped"/>
+    /// counts, per code, the references of the records dropped so far, and this record's are added. A string another
+    /// record still references frees nothing (compaction keeps it whole), so the sum never counts what compaction cannot
+    /// free (review 75: a share per reference counted part of a long shared string as freed, and a write-back the
+    /// eviction was for still did not fit). Writer side, for choosing what to evict.
     /// </summary>
-    internal long Footprint(byte[] page, int offset)
+    internal long Drop(byte[] page, int offset, int[] dropped)
     {
         long bytes = BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(offset + RecordLayout.LengthOffset));
         foreach (var field in _layout.DictionaryFields)
         {
             foreach (var code in _layout.Codes(page, offset, field))
             {
-                bytes += StringObjectBytes(_strings[code].Length) / Math.Max(1, _references[code]);
+                if (++dropped[code] == _references[code])
+                {
+                    bytes += StringObjectBytes(_strings[code].Length);
+                }
             }
         }
 

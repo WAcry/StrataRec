@@ -231,8 +231,9 @@ internal sealed class StagingBuffer : IFeatureBatchWriter, IStagedFeatureValues
     private int _offset;
 
     /// <summary>
-    /// The values <see cref="Intern"/> handed out, for every chunk this writer is bound to (a writer is written by one call
-    /// at a time, so it needs no lock); made by the first call, and dropped with the writer.
+    /// The values <see cref="Intern"/> handed out to the call writing now (a writer is written by one call at a time, so it
+    /// needs no lock); made by the first call that interns, and cleared when the writer is bound to the next chunk, whose
+    /// call starts with none of the previous call's values and all of <see cref="StringDedup.MaxValues"/>.
     /// </summary>
     private StringDedup? _strings;
 
@@ -253,6 +254,7 @@ internal sealed class StagingBuffer : IFeatureBatchWriter, IStagedFeatureValues
     /// <summary>Points the view at a chunk. Only while no call is writing through it.</summary>
     public void Bind(int chunk)
     {
+        _strings?.Clear(); // each call interns on its own: one call's distinct values must not use up the next call's
         _chunk = chunk;
         _offset = chunk * _area.ChunkSize;
         KeyCount = _area.ChunkKeyCount(chunk);

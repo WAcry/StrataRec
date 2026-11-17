@@ -35,6 +35,42 @@ public class CacheTableTests
     }
 
     [Fact]
+    public void Eviction_CountsASharedStringAsFreed_OnlyWhenItsLastRecordGoes()
+    {
+        // Review 75: ten records share one 25,000-char string. Each record's share of it was counted as freed, so the
+        // eviction for a 10,000-char write-back dropped one record, the shared string stayed whole, and the write-back
+        // still did not fit and was dropped.
+        var schema = new LocalTableSchema("s", "item", EntityKeyType.Int64, LocalTableMode.Cache, [new("name", ColumnType.String)]);
+        var clock = new StrataRec.UnitTests.Features.ManualClock();
+        var table = new LocalFeatureTable(schema, new LocalFeatureTableOptions
+        {
+            MaxBytes = 64 << 10,
+            PageSize = 16 << 10,
+            CompactionMinBytes = 0,
+            Cache = new CacheTableOptions { TtlMs = 60_000, Clock = clock },
+        });
+        var shared = new string('s', 25_000);
+        for (long key = 1; key <= 10; key++)
+        {
+            var b = table.Writer.Begin(EntityKey.FromInt64(key), clock.NowMs + key);
+            b.SetString(0, shared);
+            Assert.True(b.Commit());
+        }
+
+        var cache = table.Cache!;
+        var codec = new CacheRecordWriter(cache.Layout, 64);
+        codec.Begin(clock.NowMs + 100, cache.Fingerprint, absent: false);
+        codec.String(0, new string('n', 10_000));
+        var (offset, length) = codec.End();
+        Assert.True(cache.TryWriteBack(new CacheWriteBatch([EntityKey.FromInt64(100)], [codec.Bytes.AsMemory(offset, length)], 1)));
+        cache.WriteQueued(table.Writer);
+
+        var version = table.Pin();
+        Assert.True(version.Find(100L).Found);
+        Assert.True(version.Bytes <= 64 << 10);
+    }
+
+    [Fact]
     public void AWriteThatDoesNotFit_DropsExpiredRecordsFirst_ThenTheOldestWritten_AndTheTableStaysWithinMaxBytes()
     {
         const long MaxBytes = 256 << 10;
