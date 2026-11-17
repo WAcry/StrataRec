@@ -693,6 +693,108 @@ public class ChainedContextKeyTests
     }
 
     /// <summary>
+    /// Review 77: the drain is a promise that every operation has really finished. A chained group whose key was stored
+    /// before the request ended registers its connector call on another thread, possibly after the drain was asked for;
+    /// the drain took one snapshot, completed while that call still ran (it ignores cancellation), and the memory was
+    /// still held. The drain now waits until a round finds nothing new.
+    /// </summary>
+    [Fact]
+    public async Task TheDrain_WaitsForAChainedCallRegisteredAfterItWasAskedFor()
+    {
+        var upstream = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var actual = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pool = new PausingPool();
+        var identity = new ScriptedConnector(async (_, fields, writer, _) =>
+        {
+            await upstream.Task;
+            ScriptedConnector.Write(writer, fields[0], 0, 1001L);
+            return FetchStatus.Ok;
+        });
+        var account = new ScriptedConnector(async (_, fields, writer, _) =>
+        {
+            started.SetResult();
+            await actual.Task; // ignores cancellation: the call outlives its budget
+            ScriptedConnector.Write(writer, fields[0], 0, 7L);
+            return FetchStatus.Ok;
+        });
+        var accountEntity = EntityDefinition.Of("account", EntityKeyPartDefinition.ContextFeature("identity.user_id", EntityKeyType.Int64));
+        var rig = new FeatureTestRig().Source("identity", identity).Source("account", account, timeoutMs: 150);
+        var input = rig.RequestInput("user_key");
+        rig.Physical("identity.user_id", Identity, ColumnType.Int64, "identity");
+        var value = rig.Physical("account.value", accountEntity, ColumnType.Int64, "account");
+        rig.Build();
+        var request = rig.NewRequest(TwoItems, pool: pool);
+        request.Context[input] = ScalarValue.FromString("login");
+        request.Fetcher.StartContextFetch([value], TestContext.Current.CancellationToken);
+        var released = false;
+        pool.Arm = true;
+        try
+        {
+            upstream.SetResult();
+            await pool.Entered.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken); // the chained group is starting
+            request.Fetcher.EndRequest();
+            var drain = request.Fetcher.WhenIoCompleteAsync();
+            request.Memory.Release();
+            released = true;
+            pool.Resume.Set();
+            await started.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+            await Task.WhenAny(drain, Task.Delay(400, TestContext.Current.CancellationToken)); // past the 150 ms budget
+            Assert.False(drain.IsCompleted);
+            Assert.Equal(FeatureState.Failed, request.Fetcher.GetState(value)); // timed out
+            Assert.False(request.Memory.IsReturned);
+
+            actual.SetResult();
+            await drain.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+            Assert.True(request.Memory.IsReturned);
+            Assert.Equal(0, pool.Inner.Outstanding);
+        }
+        finally
+        {
+            pool.Resume.Set();
+            upstream.TrySetResult();
+            actual.TrySetResult();
+            if (!released)
+            {
+                request.Fetcher.EndRequest();
+                request.Memory.Release();
+            }
+
+            await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        }
+    }
+
+    /// <summary>Pauses the first rent of entity keys once armed (a chained group about to send), until resumed.</summary>
+    private sealed class PausingPool : IBufferPool
+    {
+        public volatile bool Arm;
+
+        public PoisoningPool Inner { get; } = new();
+
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ManualResetEventSlim Resume { get; } = new();
+
+        public T[] Rent<T>(int count)
+        {
+            if (typeof(T) == typeof(EntityKey) && Arm)
+            {
+                Arm = false;
+                Entered.TrySetResult();
+                if (!Resume.Wait(TimeSpan.FromSeconds(10)))
+                {
+                    throw new TimeoutException();
+                }
+            }
+
+            return Inner.Rent<T>(count);
+        }
+
+        public void Return<T>(T[] value, bool clear) => Inner.Return(value, clear);
+    }
+
+    /// <summary>
     /// Records which sources were begun and their keys, and throws an <see cref="IOException"/> when call number
     /// <paramref name="begin"/> is about to be sent, or when a call of <paramref name="recordSource"/> is recorded.
     /// </summary>

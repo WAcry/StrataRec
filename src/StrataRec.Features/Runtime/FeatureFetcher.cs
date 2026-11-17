@@ -134,12 +134,42 @@ public sealed partial class FeatureFetcher
     /// whose result was rejected because it arrived after its time budget) and the whole background context fetch.
     /// Each releases its hold on the request memory just before it counts as finished.
     /// </summary>
-    public Task WhenIoCompleteAsync()
+    /// <remarks>
+    /// The set of operations can grow while this waits: a chained context group starts where its key was stored, on a
+    /// connector's thread, and registers its call then, possibly after this was called (review 77). It always registers
+    /// before the context fetch, which is tracked, completes, so a wait that finds nothing registered since it began has
+    /// seen everything: this waits round after round until one finds nothing new, and every round to its end before it
+    /// rethrows the first failure.
+    /// </remarks>
+    public async Task WhenIoCompleteAsync()
     {
-        lock (_io)
+        var seen = 0;
+        ExceptionDispatchInfo? first = null;
+        while (true)
         {
-            return Task.WhenAll(_io.ToArray());
+            Task[] round;
+            lock (_io)
+            {
+                if (_io.Count == seen)
+                {
+                    break;
+                }
+
+                round = _io.GetRange(seen, _io.Count - seen).ToArray();
+                seen = _io.Count;
+            }
+
+            try
+            {
+                await Task.WhenAll(round).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                first ??= ExceptionDispatchInfo.Capture(ex);
+            }
         }
+
+        first?.Throw();
     }
 
     /// <summary>
