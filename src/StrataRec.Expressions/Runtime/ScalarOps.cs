@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using StrataRec.Core.Columns;
@@ -124,18 +126,73 @@ internal static class ScalarOps
                 return ScalarValue.FromBool(args[0].AsString().StartsWith(args[1].AsString(), StringComparison.Ordinal));
             case IrOp.EndsWith:
                 return ScalarValue.FromBool(args[0].AsString().EndsWith(args[1].AsString(), StringComparison.Ordinal));
-            case IrOp.Dot:
-                return VectorOps.TryDot(args[0].AsFloat64List(), args[1].AsFloat64List(), out var dot) ? ScalarValue.FromFloat64(dot) : ScalarValue.Missing;
-            case IrOp.Cosine:
-                return VectorOps.TryCosine(args[0].AsFloat64List(), args[1].AsFloat64List(), out var cosine) ? ScalarValue.FromFloat64(cosine) : ScalarValue.Missing;
-            case IrOp.L2Norm:
-                return ScalarValue.FromFloat64(VectorOps.L2Norm(args[0].AsFloat64List()));
+            case IrOp.Dot or IrOp.Cosine or IrOp.L2Norm:
+                return ListFunction(node, args);
             case IrOp.PiecewiseLinear:
                 return ScalarValue.FromFloat64(((Knots)node.Data!).Evaluate(args[0].AsFloat64()));
             case IrOp.Hash01:
                 return ScalarValue.FromFloat64(Hash01(node, args));
             default:
                 throw new InvalidOperationException($"No scalar semantics for {node.Op}.");
+        }
+    }
+
+    /// <summary>Elements a float32 <c>dot</c>, <c>cosine</c> or <c>l2_norm</c> narrows on the stack (1 KB a list).</summary>
+    private const int StackElements = 256;
+
+    /// <summary>
+    /// <c>dot</c>, <c>cosine</c> or <c>l2_norm</c> in the node's precision (<see cref="VectorOps"/>). Lists are float64
+    /// here; a float32 call's lists were declared float32, so they hold float32 values, narrowed back exactly to call the
+    /// function the vectorized backend calls on their storage (on the stack up to <see cref="StackElements"/>).
+    /// </summary>
+    private static ScalarValue ListFunction(IrNode node, ReadOnlySpan<ScalarValue> args)
+    {
+        var a = args[0].AsFloat64List();
+        var b = node.Op == IrOp.L2Norm ? default : args[1].AsFloat64List();
+        if (node.Data is not Float32Lists)
+        {
+            return ListFunction(node.Op, a, b);
+        }
+
+        float[]? rentedA = null, rentedB = null;
+        var a32 = Narrow(a, a.Length <= StackElements ? stackalloc float[StackElements] : rentedA = ArrayPool<float>.Shared.Rent(a.Length));
+        var b32 = Narrow(b, b.Length <= StackElements ? stackalloc float[StackElements] : rentedB = ArrayPool<float>.Shared.Rent(b.Length));
+        var result = ListFunction<float>(node.Op, a32, b32);
+        if (rentedA is not null)
+        {
+            ArrayPool<float>.Shared.Return(rentedA);
+        }
+
+        if (rentedB is not null)
+        {
+            ArrayPool<float>.Shared.Return(rentedB);
+        }
+
+        return result;
+    }
+
+    private static ReadOnlySpan<float> Narrow(ReadOnlySpan<double> source, Span<float> buffer)
+    {
+        var target = buffer[..source.Length];
+        for (var i = 0; i < source.Length; i++)
+        {
+            target[i] = (float)source[i];
+        }
+
+        return target;
+    }
+
+    private static ScalarValue ListFunction<T>(IrOp op, ReadOnlySpan<T> a, ReadOnlySpan<T> b)
+        where T : unmanaged, IFloatingPointIeee754<T>
+    {
+        switch (op)
+        {
+            case IrOp.Dot:
+                return VectorOps.TryDot(a, b, out var dot) ? ScalarValue.FromFloat64(dot) : ScalarValue.Missing;
+            case IrOp.Cosine:
+                return VectorOps.TryCosine(a, b, out var cosine) ? ScalarValue.FromFloat64(cosine) : ScalarValue.Missing;
+            default:
+                return ScalarValue.FromFloat64(VectorOps.L2Norm(a));
         }
     }
 

@@ -714,13 +714,16 @@ internal sealed class Binder
                 // Lists of different lengths have no dot product: a row where they differ is missing. Only when both
                 // lengths are declared (and equal) can no row differ, and the result is as nullable as the lists are.
                 var op = name == "dot" ? IrOp.Dot : IrOp.Cosine;
-                var product = Lift(op, TypeKind.Float, call, args[0], args[1]);
-                return left > 0 && left == right ? product : IrNode.Make(op, new ExprType(TypeKind.Float, true), product.Args, call.Start, call.Length);
+                var precision = IsFloat32List(args[0]) && IsFloat32List(args[1]) ? Float32Lists.Instance : null;
+                var product = LiftWithData(op, TypeKind.Float, call, precision, args[0], args[1]);
+                return left > 0 && left == right ? product : IrNode.Make(op, new ExprType(TypeKind.Float, true), product.Args, call.Start, call.Length, precision);
             }
 
             case "l2_norm":
                 args[0] = AsFloatList(args[0]);
-                return RequireFloatList(args[0], name, call.Args[0]) ? Lift(IrOp.L2Norm, TypeKind.Float, call, args[0]) : Poison(call);
+                return RequireFloatList(args[0], name, call.Args[0])
+                    ? LiftWithData(IrOp.L2Norm, TypeKind.Float, call, IsFloat32List(args[0]) ? Float32Lists.Instance : null, args[0])
+                    : Poison(call);
 
             case "size":
                 if (args[0].Type.IsList || args[0].Type.Kind == TypeKind.String)
@@ -1062,6 +1065,41 @@ internal sealed class Binder
 
         converted?.Add(node, result);
         return result;
+    }
+
+    /// <summary>
+    /// True when every list <paramref name="node"/> can give is read from a column or a request-level value declared
+    /// <c>list&lt;float32&gt;</c> (of a fixed length or not), directly or through <c>let</c>, <c>?:</c> and <c>??</c>: then
+    /// <c>dot</c>, <c>cosine</c> and <c>l2_norm</c> compute in float32 (<see cref="Float32Lists"/>). A literal, and a list
+    /// that may be declared <c>list&lt;float64&gt;</c>, is float64. Memoized by node, as <see cref="ToFloatList"/> is.
+    /// </summary>
+    private static bool IsFloat32List(IrNode node, Dictionary<IrNode, bool>? known = null)
+    {
+        switch (node.Op)
+        {
+            case IrOp.Column or IrOp.Context or IrOp.Param:
+                return node.Symbol.Type.Kind == StorageKind.List && node.Symbol.Type.Element == StorageKind.Float32;
+            case IrOp.Conditional or IrOp.Coalesce:
+            {
+                known ??= new Dictionary<IrNode, bool>(ReferenceEqualityComparer.Instance);
+                if (known.TryGetValue(node, out var result))
+                {
+                    return result;
+                }
+
+                result = true;
+                for (var i = node.Op == IrOp.Conditional ? 1 : 0; i < node.Args.Length && result; i++)
+                {
+                    result = IsFloat32List(node.Args[i], known);
+                }
+
+                known.Add(node, result);
+                return result;
+            }
+
+            default:
+                return false;
+        }
     }
 
     /// <summary>Where one side is a float list, an integer list literal on the other is one too (<see cref="AsFloatList"/>).</summary>

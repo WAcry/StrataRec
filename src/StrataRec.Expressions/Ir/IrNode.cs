@@ -62,7 +62,7 @@ internal enum IrOp : byte
     StartsWith,
     EndsWith,
 
-    // Float lists (embeddings): dot, cosine, l2_norm.
+    // Float lists (embeddings): dot, cosine, l2_norm; in float32 when the payload is Float32Lists, else in float64.
     Dot,
     Cosine,
     L2Norm,
@@ -117,7 +117,7 @@ internal sealed class IrNode
     public Symbol Symbol { get; }
 
     /// <summary>Compile-time payload: <see cref="ConstSet"/> (InSet), <see cref="Knots"/> (PiecewiseLinear),
-    /// <see cref="ILookupTable"/> (Lookup).</summary>
+    /// <see cref="ILookupTable"/> (Lookup), <see cref="Float32Lists"/> (Dot, Cosine, L2Norm computed in float32).</summary>
     public object? Data { get; }
 
     /// <summary>Source span used for diagnostics.</summary>
@@ -236,6 +236,20 @@ internal sealed class IrNode
     }
 
     public override string ToString() => IrPrinter.Print(this);
+}
+
+/// <summary>
+/// The payload of a <see cref="IrOp.Dot"/>, <see cref="IrOp.Cosine"/> or <see cref="IrOp.L2Norm"/> whose operands are all
+/// declared <c>list&lt;float32&gt;</c>: it is computed in float32 (<see cref="Runtime.VectorOps"/>); without it, in float64.
+/// The binder decides once, from the declared types, so every backend computes the node in the same precision.
+/// </summary>
+internal sealed class Float32Lists
+{
+    public static readonly Float32Lists Instance = new();
+
+    private Float32Lists()
+    {
+    }
 }
 
 /// <summary>Constant membership set of an <c>x in [literal list]</c> test, prepared at compile time.</summary>

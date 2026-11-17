@@ -169,6 +169,8 @@ public sealed class MmrDiversifierTests
         return picked.Concat(Enumerable.Range(0, scores.Length).Where(i => double.IsNegativeInfinity(scores[i]))).ToArray();
     }
 
+    /// <summary>The cosine of a <c>list&lt;float32,N&gt;</c> column, as the expressions' <c>cosine</c> computes it: the dot
+    /// product and the norms in float32, the cosine from them in float64.</summary>
     private static double Cosine(float[]? a, float[]? b)
     {
         if (a is null || b is null)
@@ -176,8 +178,10 @@ public sealed class MmrDiversifierTests
             return 0;
         }
 
-        var norms = MathF.Sqrt((a[0] * a[0]) + (a[1] * a[1])) * MathF.Sqrt((b[0] * b[0]) + (b[1] * b[1]));
-        return norms == 0 ? 0 : ((a[0] * b[0]) + (a[1] * b[1])) / norms;
+        double dot = (a[0] * b[0]) + (a[1] * b[1]);
+        double normA = MathF.Sqrt((a[0] * a[0]) + (a[1] * a[1]));
+        double normB = MathF.Sqrt((b[0] * b[0]) + (b[1] * b[1]));
+        return normA == 0 || normB == 0 ? 0 : dot / (normA * normB);
     }
 
     /// <summary>The cosine in float64, as a <c>list&lt;float64,N&gt;</c> column computes it.</summary>

@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Numerics.Tensors;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Hashing;
 using StrataRec.Core.Types;
@@ -314,16 +316,16 @@ public class SemanticsTests
         v.SetMissing(2);
         v.Set(3, new float[] { 3, 4, 0 });
 
-        // In float64 over the float32 elements, so both backends and the reference give the same bits.
+        // Declared float32, computed in float32: the norm is the float32 square root; the cosine is formed in float64.
         ExprAssert.Rows(f, "dot(col.v, ctx.u)", 1.0, 0.0, null, 3.0);
         ExprAssert.Rows(f, "dot(col.v, col.v)", 14.0, 0.0, null, 25.0);
-        ExprAssert.Rows(f, "l2_norm(col.v)", Math.Sqrt(14), 0.0, null, 5.0);
-        ExprAssert.Rows(f, "cosine(col.v, ctx.u)", 1.0 / Math.Sqrt(14), double.NaN, null, 0.6);
+        ExprAssert.Rows(f, "l2_norm(col.v)", (double)MathF.Sqrt(14), 0.0, null, 5.0);
+        ExprAssert.Rows(f, "cosine(col.v, ctx.u)", 1.0 / MathF.Sqrt(14), double.NaN, null, 0.6);
         ExprAssert.Rows(f, "dot(col.v, ctx.u) ?? 0.0", 1.0, 0.0, 0.0, 3.0);
         ExprAssert.Rows(f, "dot(col.v, ctx.none) ?? -1.0", -1.0, -1.0, -1.0, -1.0);
         ExprAssert.Rows(f, "has(col.v)", true, true, false, true);
         ExprAssert.Rows(f, "col.v ?? ctx.u", new float[] { 1, 2, 3 }, new float[] { 0, 0, 0 }, new float[] { 1, 0, 0 }, new float[] { 3, 4, 0 });
-        ExprAssert.Rows(f, "l2_norm(col.entity_id > 1001 ? ctx.u : col.v)", Math.Sqrt(14), 0.0, 1.0, 1.0);
+        ExprAssert.Rows(f, "l2_norm(col.entity_id > 1001 ? ctx.u : col.v)", (double)MathF.Sqrt(14), 0.0, 1.0, 1.0);
     }
 
     [Fact]
@@ -345,12 +347,12 @@ public class SemanticsTests
         d.Set(2, new double[] { 0, 0, 1 });
         d.Set(3, new double[] { 1, 1, 1 });
 
-        // float32 × float64: the float32 elements widen, no copy.
+        // float32 × float64 is computed in float64: the float32 elements widen, exactly.
         ExprAssert.Rows(f, "dot(col.a, col.d)", 7.0, null, null, null);
         ExprAssert.Rows(f, "cosine(col.a, col.d)", 7.0 / (Math.Sqrt(14) * Math.Sqrt(4.3125)), null, null, null);
         ExprAssert.Rows(f, "dot(col.d, ctx.u)", 0.5, 3.0, 0.0, 1.0);
         ExprAssert.Rows(f, "l2_norm(col.d)", Math.Sqrt(4.3125), 5.0, 1.0, Math.Sqrt(3));
-        ExprAssert.Rows(f, "l2_norm(col.a)", Math.Sqrt(14), Math.Sqrt(5), null, 0.0);
+        ExprAssert.Rows(f, "l2_norm(col.a)", (double)MathF.Sqrt(14), (double)MathF.Sqrt(5), null, 0.0); // float32 alone: in float32
         ExprAssert.Rows(f, "dot(col.a, [1.0, 1.0])", null, 3.0, null, null);
         ExprAssert.Rows(f, "dot(col.a, [1, 1])", null, 3.0, null, null); // an int list literal is a float list here
 
@@ -368,6 +370,82 @@ public class SemanticsTests
         // Not a float list.
         var ints = Assert.Single(f.Errors("l2_norm(['a'])"));
         Assert.Contains("float list", ints.Message);
+    }
+
+    /// <summary>
+    /// dot, cosine and l2_norm compute in the precision the lists are declared in: float32 when every operand is a
+    /// <c>list&lt;float32&gt;</c> (a column, a context value, a choice between them), as TensorPrimitives' float32 kernels
+    /// compute it; float64 when any is a <c>list&lt;float64&gt;</c> or a literal. The vectorized backend, the reference
+    /// interpreter and the request-level program give the same bits, a float32 list held as float64 included.
+    /// </summary>
+    [Theory]
+    [InlineData(3)]
+    [InlineData(300)] // longer than the scalar backend's stack buffer (256), and many SIMD blocks
+    public void VectorFunctions_ComputeInTheDeclaredPrecision_WithTheSameBitsInEveryBackend(int length)
+    {
+        var random = new Random(length);
+        float[] Floats() => Enumerable.Range(0, length).Select(_ => (float)((random.NextDouble() * 2) - 1)).ToArray();
+        static double[] Widen(float[] values) => values.Select(v => (double)v).ToArray();
+        const int rows = 4;
+        float[][] a = [Floats(), Floats(), Floats(), Floats()];
+        float[][] b = [Floats(), Floats(), Floats(), Floats()];
+        double[][] d = [Widen(Floats()), Widen(Floats()), Widen(Floats()), Widen(Floats())];
+        var u = Floats();
+        var w = Widen(Floats());
+        var f = new ExprFixture()
+            .Col("col.a", $"list<float32,{length}>")
+            .Col("col.b", $"list<float32,{length}>")
+            .Col("col.d", $"list<float64,{length}>")
+            .Ctx("ctx.u", $"list<float32,{length}>", ScalarValue.FromFloat32List(u))
+            .Ctx("ctx.w", $"list<float64,{length}>", ScalarValue.FromFloat64List(w))
+            .Build(rows);
+        for (var r = 0; r < rows; r++)
+        {
+            f.Buffer<ListColumn<float>>("col.a").Set(r, a[r]);
+            f.Buffer<ListColumn<float>>("col.b").Set(r, b[r]);
+            f.Buffer<ListColumn<double>>("col.d").Set(r, d[r]);
+        }
+
+        static double Cosine32(float[] x, float[] y) =>
+            (double)TensorPrimitives.Dot(x, y) / ((double)TensorPrimitives.Norm(x) * (double)TensorPrimitives.Norm(y));
+        static double Cosine64(double[] x, double[] y) => TensorPrimitives.Dot(x, y) / (TensorPrimitives.Norm(x) * TensorPrimitives.Norm(y));
+
+        void Check(string source, Func<int, double> expected)
+        {
+            var compiled = f.Compile(source);
+            var vectorized = f.Rows(source);
+            for (var r = 0; r < rows; r++)
+            {
+                var bits = BitConverter.DoubleToInt64Bits(expected(r));
+                Assert.True(bits == BitConverter.DoubleToInt64Bits(vectorized[r].AsFloat64()), $"{source} @row {r}: expected {expected(r):R}, got {vectorized[r]}");
+                Assert.True(bits == BitConverter.DoubleToInt64Bits(f.Reference(compiled, r).AsFloat64()), $"{source} @row {r} (reference)");
+            }
+        }
+
+        // float32: columns, a context value (held as float64), a choice between them.
+        Check("dot(col.a, col.b)", r => TensorPrimitives.Dot(a[r], b[r]));
+        Check("dot(ctx.u, col.a)", r => TensorPrimitives.Dot(u, a[r]));
+        Check("cosine(ctx.u, col.a)", r => Cosine32(u, a[r]));
+        Check("l2_norm(col.a)", r => TensorPrimitives.Norm(a[r]));
+        Check("dot(col.entity_id % 2 == 0 ? ctx.u : col.b, col.a)", r => TensorPrimitives.Dot(r % 2 == 0 ? u : b[r], a[r]));
+        Check("let e = col.a ?? ctx.u; cosine(e, col.b)", r => Cosine32(a[r], b[r]));
+        Assert.Equal((double)TensorPrimitives.Dot(u, u), f.Scalar("dot(ctx.u, ctx.u)").AsFloat64());
+        Assert.Equal((double)TensorPrimitives.Norm(u), f.Scalar("l2_norm(ctx.u)").AsFloat64());
+
+        // float64: a float64 list, a literal, or a choice that may give one; a float32 list beside one widens.
+        Check("dot(col.d, ctx.w)", r => TensorPrimitives.Dot(d[r], w));
+        Check("cosine(col.a, col.d)", r => Cosine64(Widen(a[r]), d[r]));
+        Check("dot(col.a, ctx.w)", r => TensorPrimitives.Dot(Widen(a[r]), w));
+        Check("l2_norm(col.entity_id % 2 == 0 ? col.a : col.d)", r => TensorPrimitives.Norm(r % 2 == 0 ? Widen(a[r]) : d[r]));
+        var literal = "[" + string.Join(", ", u.Select(v => ((double)v).ToString("R", CultureInfo.InvariantCulture))) + "]";
+        Check($"dot(col.a, {literal})", r => TensorPrimitives.Dot(Widen(a[r]), Widen(u)));
+        Assert.Equal(TensorPrimitives.Dot(Widen(u), w), f.Scalar("dot(ctx.u, ctx.w)").AsFloat64());
+
+        if (length >= 100)
+        {
+            // The two precisions differ here, so the checks above tell them apart.
+            Assert.NotEqual((double)TensorPrimitives.Dot(u, a[0]), TensorPrimitives.Dot(Widen(u), Widen(a[0])));
+        }
     }
 
     [Fact]

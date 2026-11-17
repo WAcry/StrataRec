@@ -456,8 +456,9 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
     /// largest λ·relevance − (1−λ)·(the row's largest similarity to a row already picked); equal values keep the incoming
     /// order. Rows without relevance come after every row with one, in their incoming order. The similarity is the cosine
     /// of the rows' vectors, and 0 where either has none (or a zero one, or one of another length than the column's); with
-    /// λ = 1 it has no weight and is not computed. A <c>list&lt;float32,N&gt;</c> column is computed in float32 (TensorPrimitives'
-    /// SIMD), a <c>list&lt;float64,N&gt;</c> one in float64.
+    /// λ = 1 it has no weight and is not computed. As the expressions' <c>cosine</c> is, to the bit: a <c>list&lt;float32,N&gt;</c>
+    /// column's dot product and norms are computed in float32 (TensorPrimitives' SIMD), a <c>list&lt;float64,N&gt;</c> one's in
+    /// float64, and the cosine from them in float64.
     /// </summary>
     /// <remarks>
     /// The similarity was floored at 0 (the largest started at 0), so a row opposite every pick counted as merely
@@ -559,8 +560,10 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
             {
                 if (!used[i])
                 {
+                    // The expressions' cosine to the bit: dot / (|a| |b|) in float64 over the results of T.
                     var sim = norms[best] > T.Zero && norms[i] > T.Zero
-                        ? double.CreateTruncating(TensorPrimitives.Dot(chosen, vectors!.Get(rows[i])) / (norms[best] * norms[i]))
+                        ? double.CreateTruncating(TensorPrimitives.Dot(chosen, vectors!.Get(rows[i])))
+                          / (double.CreateTruncating(norms[best]) * double.CreateTruncating(norms[i]))
                         : 0.0;
                     maxSim[i] = step == 0 ? sim : Math.Max(maxSim[i], sim);
                 }

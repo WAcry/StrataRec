@@ -1,4 +1,7 @@
 using System.Buffers;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Hashing;
 using StrataRec.Core.Types;
@@ -653,11 +656,11 @@ internal sealed class AffixInstr(IrOp op, ExprType type, Opnd text, Opnd affix) 
 }
 
 /// <summary>
-/// <c>dot</c>, <c>cosine</c>, <c>l2_norm</c> per lane with the shared SIMD kernels (<see cref="VectorOps"/>), on the lists'
-/// storage in place: float32 or float64 elements, in any mix. A lane whose two lists differ in length is missing; the
-/// binder makes the result nullable unless both lengths are declared and equal, when no lane can differ.
+/// <c>dot</c>, <c>cosine</c>, <c>l2_norm</c> per lane with the shared kernels (<see cref="VectorOps"/>), in the precision the
+/// binder chose (<see cref="Float32Lists"/>). A lane whose two lists differ in length is missing; the binder makes the
+/// result nullable unless both lengths are declared and equal, when no lane can differ.
 /// </summary>
-internal sealed class VectorFunctionInstr(IrOp op, ExprType type, Opnd[] operands) : Instr(type, operands)
+internal sealed class VectorFunctionInstr(IrOp op, bool float32, ExprType type, Opnd[] operands) : Instr(type, operands)
 {
     public override void Execute(ref Frame f)
     {
@@ -667,65 +670,193 @@ internal sealed class VectorFunctionInstr(IrOp op, ExprType type, Opnd[] operand
             return;
         }
 
-        var a = Operands[0];
-        var n = f.N;
-        if (op == IrOp.L2Norm)
+        if (float32)
         {
-            for (var i = 0; i < n; i++)
-            {
-                var list = Lanes.FloatList(ref f, a, i);
-                dst[i] = list.IsFloat32 ? VectorOps.L2Norm(list.Float32) : VectorOps.L2Norm(list.Float64);
-            }
-
-            return;
+            Execute<float>(ref f, dst);
         }
-
-        var b = Operands[1];
-        if (ValidReg < 0)
+        else
         {
-            // Both lengths are declared and equal, so every lane's lists have that length; NaN only if a writer broke that.
-            for (var i = 0; i < n; i++)
-            {
-                dst[i] = TryApply(Lanes.FloatList(ref f, a, i), Lanes.FloatList(ref f, b, i), out var value) ? value : double.NaN;
-            }
-
-            return;
-        }
-
-        var lifted = f.Locs[Out].Valid is not null; // LiftValidity left the operands' validity there, or nothing (all valid)
-        var valid = OutValid(ref f);
-        for (var i = 0; i < n; i += 64)
-        {
-            ulong word = 0;
-            var count = Math.Min(64, n - i);
-            for (var j = 0; j < count; j++)
-            {
-                if (TryApply(Lanes.FloatList(ref f, a, i + j), Lanes.FloatList(ref f, b, i + j), out var value))
-                {
-                    word |= 1UL << j;
-                }
-
-                dst[i + j] = value;
-            }
-
-            valid[i >> 6] = lifted ? valid[i >> 6] & word : word;
+            Execute<double>(ref f, dst);
         }
     }
 
-    /// <summary><c>dot</c> or <c>cosine</c> of one lane, over whichever storage each list has; false when the lengths differ.</summary>
-    private bool TryApply(FloatListLane a, FloatListLane b, out double value)
+    private void Execute<T>(ref Frame f, Span<double> dst)
+        where T : unmanaged, IFloatingPointIeee754<T>
     {
-        var dot = op == IrOp.Dot;
-        if (a.IsFloat32)
+        var n = f.N;
+        var a = new PrecisionLanes<T>(ref f, Operands[0]);
+        var b = op == IrOp.L2Norm ? default : new PrecisionLanes<T>(ref f, Operands[1]);
+        try
         {
-            return b.IsFloat32
-                ? dot ? VectorOps.TryDot(a.Float32, b.Float32, out value) : VectorOps.TryCosine(a.Float32, b.Float32, out value)
-                : dot ? VectorOps.TryDot(a.Float32, b.Float64, out value) : VectorOps.TryCosine(a.Float32, b.Float64, out value);
+            if (op == IrOp.L2Norm)
+            {
+                for (var i = 0; i < n; i++)
+                {
+                    dst[i] = VectorOps.L2Norm(a.Lane(ref f, i));
+                }
+
+                return;
+            }
+
+            var dot = op == IrOp.Dot;
+            if (ValidReg < 0)
+            {
+                // Both lengths are declared and equal, so every lane's lists have that length; NaN only if a writer broke that.
+                if (dot)
+                {
+                    for (var i = 0; i < n; i++)
+                    {
+                        dst[i] = VectorOps.TryDot(a.Lane(ref f, i), b.Lane(ref f, i), out var value) ? value : double.NaN;
+                    }
+                }
+                else
+                {
+                    for (var i = 0; i < n; i++)
+                    {
+                        dst[i] = VectorOps.TryCosine(a.Lane(ref f, i), b.Lane(ref f, i), out var value) ? value : double.NaN;
+                    }
+                }
+
+                return;
+            }
+
+            var lifted = f.Locs[Out].Valid is not null; // LiftValidity left the operands' validity there, or nothing (all valid)
+            var valid = OutValid(ref f);
+            for (var i = 0; i < n; i += 64)
+            {
+                ulong word = 0;
+                var count = Math.Min(64, n - i);
+                for (var j = 0; j < count; j++)
+                {
+                    var x = a.Lane(ref f, i + j);
+                    var y = b.Lane(ref f, i + j);
+                    if (dot ? VectorOps.TryDot(x, y, out var value) : VectorOps.TryCosine(x, y, out value))
+                    {
+                        word |= 1UL << j;
+                    }
+
+                    dst[i + j] = value;
+                }
+
+                valid[i >> 6] = lifted ? valid[i >> 6] & word : word;
+            }
+        }
+        finally
+        {
+            a.Return();
+            b.Return();
+        }
+    }
+}
+
+/// <summary>
+/// One operand of <see cref="VectorFunctionInstr"/> read as lists of <typeparamref name="T"/>, the call's precision. A
+/// column whose storage is <typeparamref name="T"/> is read in place, and so is a request-level list (a context value, a
+/// hoisted invariant) of <typeparamref name="T"/>; one of the other storage, the same on every lane, is converted once
+/// per call (a <c>list&lt;float32&gt;</c> context value, held as float64, in a float32 call). Any other lane of the other
+/// storage (a <c>?:</c> choosing such a value, or float32 storage in a float64 call) is converted into a scratch buffer:
+/// exactly, as the scalar backend converts it.
+/// </summary>
+internal struct PrecisionLanes<T>
+    where T : unmanaged
+{
+    private readonly Opnd _operand;
+    private readonly ListColumn<T>? _column;
+    private readonly int _invariantLength = -1;
+    private readonly T[]? _invariant;
+    private T[]? _buffer;
+
+    public PrecisionLanes(ref Frame f, Opnd operand)
+    {
+        _operand = operand;
+        if (operand.IsScalar || f.Locs[operand.Index].Source == SourceKind.Broadcast)
+        {
+            var list = Lanes.FloatList(ref f, operand, 0);
+            if (list.IsFloat32 != (typeof(T) == typeof(float)))
+            {
+                _invariant = ArrayPool<T>.Shared.Rent(Math.Max(1, list.Length));
+                Convert(list, _invariant);
+                _invariantLength = list.Length;
+            }
+        }
+        else
+        {
+            _column = Lanes.DirectListColumn(ref f, operand) as ListColumn<T>;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySpan<T> Lane(ref Frame f, int lane)
+    {
+        if (_column is not null)
+        {
+            return _column.Get(f.Row(lane));
         }
 
-        return b.IsFloat32
-            ? dot ? VectorOps.TryDot(a.Float64, b.Float32, out value) : VectorOps.TryCosine(a.Float64, b.Float32, out value)
-            : dot ? VectorOps.TryDot(a.Float64, b.Float64, out value) : VectorOps.TryCosine(a.Float64, b.Float64, out value);
+        return _invariantLength >= 0 ? _invariant.AsSpan(0, _invariantLength) : Resolve(ref f, lane);
+    }
+
+    private ReadOnlySpan<T> Resolve(ref Frame f, int lane)
+    {
+        var list = Lanes.FloatList(ref f, _operand, lane);
+        if (typeof(T) == typeof(float) && list.IsFloat32)
+        {
+            return MemoryMarshal.Cast<float, T>(list.Float32);
+        }
+
+        if (typeof(T) == typeof(double) && !list.IsFloat32)
+        {
+            return MemoryMarshal.Cast<double, T>(list.Float64);
+        }
+
+        if (_buffer is null || _buffer.Length < list.Length)
+        {
+            if (_buffer is not null)
+            {
+                ArrayPool<T>.Shared.Return(_buffer);
+            }
+
+            _buffer = ArrayPool<T>.Shared.Rent(Math.Max(16, list.Length));
+        }
+
+        Convert(list, _buffer);
+        return _buffer.AsSpan(0, list.Length);
+    }
+
+    /// <summary>Returns the buffers a conversion rented, if any.</summary>
+    public readonly void Return()
+    {
+        if (_invariant is not null)
+        {
+            ArrayPool<T>.Shared.Return(_invariant);
+        }
+
+        if (_buffer is not null)
+        {
+            ArrayPool<T>.Shared.Return(_buffer);
+        }
+    }
+
+    /// <summary>The list's elements as <typeparamref name="T"/> into <paramref name="target"/>: float32 widens exactly; a
+    /// float64 list in a float32 call was declared float32, so it holds float32 values and narrows exactly.</summary>
+    private static void Convert(FloatListLane list, T[] target)
+    {
+        if (typeof(T) == typeof(float))
+        {
+            var floats = MemoryMarshal.Cast<T, float>(target.AsSpan(0, list.Length));
+            for (var i = 0; i < floats.Length; i++)
+            {
+                floats[i] = (float)list.Float64[i];
+            }
+        }
+        else
+        {
+            var doubles = MemoryMarshal.Cast<T, double>(target.AsSpan(0, list.Length));
+            for (var i = 0; i < doubles.Length; i++)
+            {
+                doubles[i] = list.Float32[i];
+            }
+        }
     }
 }
 

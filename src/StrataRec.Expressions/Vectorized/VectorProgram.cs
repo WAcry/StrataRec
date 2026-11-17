@@ -236,7 +236,7 @@ internal sealed class VectorProgram
                 case IrOp.Overlap:
                     return new OverlapInstr(a[0].Type.Kind, t, Visit(a[0]), Visit(a[1]));
                 case IrOp.Dot or IrOp.Cosine or IrOp.L2Norm:
-                    return new VectorFunctionInstr(node.Op, t, VisitAll(a));
+                    return new VectorFunctionInstr(node.Op, node.Data is Float32Lists, t, VisitAll(a));
                 case IrOp.PiecewiseLinear:
                     return new PiecewiseInstr((Knots)node.Data!, t, Visit(a[0]));
                 case IrOp.Hash01:
