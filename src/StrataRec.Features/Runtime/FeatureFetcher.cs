@@ -48,8 +48,9 @@ public readonly record struct FeatureFillResult(FeatureState State, string? Erro
 /// underneath.</para>
 /// <para>Memory (design 4.8): every connector call holds the request's <see cref="RequestMemory"/> until the connector
 /// really completes, even when the request stopped waiting for it at the source timeout or deadline; the background
-/// context fetch holds it until its last staging read and derived computation. Buffers therefore never return to the
-/// pool while anything may still write or read them.</para>
+/// context fetch holds it until its last group is stored and its last derived feature computed
+/// (<c>FeatureFetcher.Context.cs</c>). Buffers therefore never return to the pool while anything may still write or read
+/// them.</para>
 /// <para>Allocation (design 4.8, 15): a fetch is split into <c>max_batch</c> chunks, often hundreds per request, so a
 /// chunk whose connector answers synchronously allocates nothing: its keys are a struct, its staging is a window of the
 /// fetch's <see cref="StagingArea"/> seen through a reused view, its cancellation is the fetch's, and its status comes
@@ -74,14 +75,6 @@ public sealed partial class FeatureFetcher
     private readonly List<Task> _io = new(); // guarded by lock (_io): connector completions and the context fetch
     private readonly ExpressionCounters _counters;
     private readonly IFeatureCallHook? _hook;
-    private Task? _contextTask;
-
-    /// <summary>
-    /// Per fetch group, the task that has stored the values of a context group fetched by itself; null for a group read
-    /// locally or not fetched. Set before <see cref="StartContextFetch"/> returns, so a reader waits for the sources it
-    /// reads, not for the slowest one (audit B6).
-    /// </summary>
-    private Task?[]? _contextGroups;
     private int _nonFiniteReplaced;
 
     /// <param name="counters">The request's expression counters, shared with the operators' evaluations so a request
@@ -147,26 +140,6 @@ public sealed partial class FeatureFetcher
         {
             return Task.WhenAll(_io.ToArray());
         }
-    }
-
-    /// <summary>
-    /// Starts fetching context features (and computes context-derived ones) concurrently with recall (design 6.8).
-    /// </summary>
-    public void StartContextFetch(ReadOnlySpan<int> features, CancellationToken cancellationToken)
-    {
-        var closure = Closure(features, out var member);
-        if (!AnyContext(closure))
-        {
-            _contextTask = Task.CompletedTask;
-            return;
-        }
-
-        // The operation reads its staging buffers and evaluates derived features after its connectors complete, which
-        // may be after the request has returned (a failed request, or one that never reads context features). Holding
-        // the memory for the whole operation, not just for each connector call, keeps those reads off returned buffers.
-        _memory.Hold();
-        _contextTask = FetchContextAsync(closure, member, cancellationToken);
-        TrackIo(_contextTask);
     }
 
     /// <summary>
@@ -305,25 +278,6 @@ public sealed partial class FeatureFetcher
         var order = _memory.Rent<int>(length);
         member = _memory.RentCleared<bool>(length);
         return new IndexList(order, _plan.Closure(features, order, member));
-    }
-
-    /// <summary>
-    /// Waits until the context features of <paramref name="closure"/> are stored: a fetched one when its group is (an
-    /// ANN recall reading the user's embedding does not wait for a slower source of other user features), a derived one or
-    /// one read locally when the whole context fetch is, which computes and reads them last.
-    /// </summary>
-    private async ValueTask ContextReadyAsync(IndexList closure)
-    {
-        for (var c = 0; c < closure.Count; c++)
-        {
-            var info = _plan.Features[closure.Items[c]];
-            if (info.IsContext)
-            {
-                // Awaited even when complete, so a fault is observed; a completed task does not yield.
-                var ready = !info.IsDerived && info.GroupIndex >= 0 && _contextGroups?[info.GroupIndex] is { } group ? group : _contextTask!;
-                await ready.ConfigureAwait(false);
-            }
-        }
     }
 
     private bool AnyContext(IndexList features)
@@ -485,12 +439,16 @@ public sealed partial class FeatureFetcher
         return worst;
     }
 
-    /// <summary>Whether every key feature of the group is filled for the live rows (a prefetch finds no keys otherwise).</summary>
+    /// <summary>
+    /// Whether every key feature of the group is available (a prefetch finds no keys otherwise): a candidate one filled for
+    /// the live rows, a context one stored by the context prefetch (a prefetch does not wait; the group's reader does).
+    /// </summary>
     private bool KeyFeaturesFilled(FetchGroup group)
     {
         foreach (var k in group.KeyFeatures)
         {
-            if (!_table.IsFilledForLiveRows(_plan.Features[k].Slot))
+            var key = _plan.Features[k];
+            if (key.IsContext ? !ContextStored(k) : !_table.IsFilledForLiveRows(key.Slot))
             {
                 return false;
             }
@@ -991,10 +949,10 @@ public sealed partial class FeatureFetcher
     /// Counts the fetches no reader took (<see cref="StrataRecMetrics.SourceValues"/>): a prefetch whose features only a
     /// node that did not run needed (a fallback, review 25), or one the request ended before reading. A source that
     /// answered was asked whether or not the request used the answer. Only chunks whose calls completed within their
-    /// budget count, as for a fetch that was read; a chunk still running when the request ends is abandoned. Call once, at
-    /// the end of the request, before its memory is released (the staging lives in it).
+    /// budget count, as for a fetch that was read; a chunk still running when the request ends is abandoned. Called once, by
+    /// <see cref="EndRequest"/>, before the request's memory is released (the staging lives in it).
     /// </summary>
-    public void CountUnreadFetches()
+    private void CountUnreadFetches()
     {
         if (!CountsValues)
         {
@@ -1316,264 +1274,6 @@ public sealed partial class FeatureFetcher
         return (worst, error);
     }
 
-    /// <param name="closure">The features to make available; only its context features are fetched.</param>
-    /// <param name="member">Marks <paramref name="closure"/> by feature index.</param>
-    private async Task FetchContextAsync(IndexList closure, bool[] member, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var groupCount = Math.Max(1, _plan.Groups.Count);
-            var seenGroup = _memory.RentCleared<bool>(groupCount);
-            var stored = _memory.Rent<Task>(groupCount);
-            var ready = _contextGroups = _memory.RentCleared<Task?>(groupCount);
-            var storedCount = 0;
-            var locals = false;
-            CacheRead? cached = null;
-            ExceptionDispatchInfo? failure = null;
-            try
-            {
-                for (var c = 0; c < closure.Count; c++)
-                {
-                    var info = _plan.Features[closure.Items[c]];
-                    if (!info.IsContext || info.IsDerived || info.GroupIndex < 0 || seenGroup[info.GroupIndex])
-                    {
-                        continue;
-                    }
-
-                    var group = _plan.Groups[info.GroupIndex];
-                    if (ReadsLocally(group))
-                    {
-                        locals = true; // read below, while the fetches are in flight
-                        continue;
-                    }
-
-                    seenGroup[info.GroupIndex] = true;
-                    var features = RequestedMembers(group, member);
-                    ContextFetch fetch;
-                    if (!TryContextKey(group, out var batch))
-                    {
-                        fetch = new ContextFetch(features, null, new ValueTask<FetchStatus>(FetchStatus.Ok));
-                    }
-                    else
-                    {
-                        var fields = FieldBindings(group, features);
-                        var budget = BudgetMs(group);
-                        var cancellation = budget <= 0 || _hook is { Replays: true } ? null : new FetchCancellation(cancellationToken, budget, _events, _requestId);
-                        if (budget <= 0)
-                        {
-                            fetch = new ContextFetch(features, null, new ValueTask<FetchStatus>(NoTimeLeft));
-                            RecordUnsent(group, batch, fields, NoTimeLeft, IoOutcome.Timeout);
-                        }
-                        else if (cancellation is not null && CutOff(cancellation, cancellationToken) is { } cut)
-                        {
-                            // As a candidate chunk (FetchCandidates): a context fetch is not sent once the caller has cancelled, or
-                            // its time is up (an earlier group's connector ran its synchronous part; review 49).
-                            cancellation.Release();
-                            var unsent = cut == IoOutcome.Cancelled ? Cancelled(group) : TimedOut(group, budget);
-                            fetch = new ContextFetch(features, null, new ValueTask<FetchStatus>(unsent));
-                            RecordUnsent(group, batch, fields, unsent, cut);
-                        }
-                        else
-                        {
-                            var staging = new StagingBuffer(fields, 1, _memory);
-                            ValueTask<FetchStatus> call;
-                            try
-                            {
-                                call = CallAsync(group, batch, fields, staging, budget, cancellation, cancellationToken, out _);
-                            }
-                            finally
-                            {
-                                cancellation?.Release();
-                            }
-
-                            fetch = new ContextFetch(features, staging, call);
-                        }
-                    }
-
-                    // Each group is stored as its source answers, not in the order they were sent.
-                    var done = StoreContextGroupAsync(fetch);
-                    ready[info.GroupIndex] = done;
-                    stored[storedCount++] = done;
-                }
-
-                cached = locals ? ReadLocalContext(closure, member, cancellationToken) : null;
-            }
-            catch (Exception ex)
-            {
-                failure = ExceptionDispatchInfo.Capture(ex);
-            }
-
-            // Every group started reads its staging and writes its features when its source answers: the memory is held until
-            // all of them are done, however the start ended (review 72: a recording hook that threw while the next group was
-            // sent released it, and a group answered later read and wrote returned buffers). The first failure is rethrown.
-            for (var n = 0; n < storedCount; n++)
-            {
-                try
-                {
-                    await stored[n].ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    failure ??= ExceptionDispatchInfo.Capture(ex);
-                }
-            }
-
-            failure?.Throw();
-
-            for (var read = cached; read is not null; read = read.Next)
-            {
-                await CompleteCachedContextAsync(read).ConfigureAwait(false);
-            }
-
-            var order = _plan.DerivedOrder;
-            for (var d = 0; d < order.Count; d++)
-            {
-                var f = order[d];
-                var info = _plan.Features[f];
-                if (!info.IsContext || !member[f])
-                {
-                    continue;
-                }
-
-                var (worst, error) = WorstDependency(info);
-                _state[f] = worst;
-                _errors[f] = error;
-                if (worst == FeatureState.Failed)
-                {
-                    continue;
-                }
-
-                ScalarValue derived;
-                try
-                {
-                    derived = info.Expression!.EvaluateScalar(new EvalContext(null, null, _context, _params, _counters));
-                }
-                catch (Exception ex) when (ex is not OutOfMemoryException)
-                {
-                    // Same rule as candidate-derived features: a throwing expression fails this feature only.
-                    _state[f] = FeatureState.Failed;
-                    _errors[f] = $"derived feature '{info.Definition.Name}' failed to evaluate: {ex.Message}";
-                    continue;
-                }
-
-                StoreContext(info, derived);
-            }
-        }
-        finally
-        {
-            _memory.Release();
-        }
-    }
-
-    /// <summary>
-    /// Stores one context group's values when its source answers: the features' states and values, and the values
-    /// counted. Groups complete concurrently; each writes only its own features' slots.
-    /// </summary>
-    private async Task StoreContextGroupAsync(ContextFetch fetch)
-    {
-        var status = await fetch.Call.ConfigureAwait(false);
-        if (CountsValues && fetch.Staging is { } answered && status.Outcome != FetchOutcome.Failed)
-        {
-            // The one key was asked for (a missing context key sends nothing) and answered in time.
-            for (var i = 0; i < fetch.Features.Length; i++)
-            {
-                var present = answered.HasValue(i, 0) ? 1 : 0;
-                CountValues(_plan.Features[fetch.Features[i]], present, 1 - present);
-            }
-        }
-
-        for (var i = 0; i < fetch.Features.Length; i++)
-        {
-            var f = fetch.Features[i];
-            if (status.Outcome == FetchOutcome.Failed)
-            {
-                _state[f] = FeatureState.Failed;
-                _errors[f] = status.Error;
-                continue;
-            }
-
-            var value = fetch.Staging is null ? ScalarValue.Missing : fetch.Staging.Get(i, 0);
-            var partial = status.Outcome == FetchOutcome.Partial;
-            _state[f] = partial ? FeatureState.Degraded : FeatureState.Ok;
-            _errors[f] = partial ? status.Error : null;
-            StoreContext(_plan.Features[f], value);
-        }
-    }
-
-    /// <summary>
-    /// The members of a context group the prefetch needs (late materialization applies to context entities too), in
-    /// group order. The context fetch runs once per request, so nothing is filled or in flight yet.
-    /// </summary>
-    private static int[] RequestedMembers(FetchGroup group, bool[] member)
-    {
-        var count = 0;
-        foreach (var f in group.FeatureIndices)
-        {
-            count += member[f] ? 1 : 0;
-        }
-
-        if (count == group.FeatureIndices.Length)
-        {
-            return group.FeatureIndexArray;
-        }
-
-        var selected = new int[count];
-        count = 0;
-        foreach (var f in group.FeatureIndices)
-        {
-            if (member[f])
-            {
-                selected[count++] = f;
-            }
-        }
-
-        return selected;
-    }
-
-    /// <summary>
-    /// Publishes a context feature value as its storage holds it (<see cref="ColumnValues.AsStored"/>: a float32 feature's
-    /// value is rounded to float32): NaN/±∞, including a float beyond the float32 range, an integer (or list element)
-    /// outside the int32 range of an <c>int32</c> or <c>list&lt;int32&gt;</c> feature, and a list of another length than a
-    /// <c>list&lt;E,N&gt;</c> feature's, are counted and replaced by the default or missing (design 4.3), and a missing value
-    /// takes the default.
-    /// </summary>
-    /// <remarks>Context values are held promoted, so an out-of-range value would not wrap here; it is still replaced,
-    /// so a feature's value always lies in its declared type wherever it is read, logged or written, and is the value the
-    /// same feature computed per candidate would have.</remarks>
-    private void StoreContext(FeatureRuntimeInfo info, ScalarValue value)
-    {
-        var definition = info.Definition;
-        value = ColumnValues.AsStored(value, info.Type);
-        // A list of the wrong length is out of range whatever its elements are, as the column writers count it.
-        var wrongLength = value.Kind == StorageKind.List && !ColumnValues.FitsLength(value.ListLength, info.Type);
-        if (!wrongLength && ColumnValues.IsNonFinite(value))
-        {
-            AddNonFinite(info, 1);
-            value = ScalarValue.Missing;
-            if (!definition.HasDefault && !info.Type.Nullable)
-            {
-                _state[info.Index] = FeatureState.Failed;
-                _errors[info.Index] = $"feature '{definition.Name}' produced a non-finite value but is non-nullable and declares no default";
-            }
-        }
-        else if (!value.IsMissing && !ColumnValues.FitsStorage(value, info.Type))
-        {
-            _counters.AddOutOfRange(1);
-            if (!definition.HasDefault && !info.Type.Nullable)
-            {
-                var produced = wrongLength ? "a list" : value.ToString();
-                _state[info.Index] = FeatureState.Failed;
-                _errors[info.Index] = $"feature '{definition.Name}' produced {produced} its {info.Type} type cannot hold ({ColumnValues.Misfit(value, info.Type)}) "
-                    + "but is non-nullable and declares no default";
-            }
-
-            value = ScalarValue.Missing;
-        }
-
-        // The default too is published as storage holds it (the catalog's are already; a test's or a host's may not be).
-        _context[info.ContextId] = value.IsMissing ? ColumnValues.AsStored(definition.Absent, info.Type) : value;
-    }
-
     private void AddNonFinite(FeatureRuntimeInfo feature, int count)
     {
         if (count > 0)
@@ -1629,8 +1329,8 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>
-    /// The values of the group's shared key parts (request inputs; later context features), in part order. False when one
-    /// is missing: then no row has a key.
+    /// The values of the group's shared key parts (request inputs and context key features, as the prefetch stored them),
+    /// in part order. False when one is missing: then no row has a key.
     /// </summary>
     private bool TrySharedKey(FetchGroup group, Span<EntityKey> shared)
     {
@@ -1654,23 +1354,6 @@ public sealed partial class FeatureFetcher
         return true;
     }
 
-    /// <summary>The one key of a context-scoped group, every part shared, in a buffer rented from the request memory;
-    /// false when a part is missing, which leaves the features absent.</summary>
-    private bool TryContextKey(FetchGroup group, out EntityKeyBatch batch)
-    {
-        var layout = group.KeyLayout;
-        var buffer = _memory.Rent<EntityKey>(layout.PartCount);
-        if (!TrySharedKey(group, buffer))
-        {
-            batch = default;
-            return false;
-        }
-
-        batch = new EntityKeyBatch(buffer, 1, 0, 1, layout.PartCount, layout.SharedMask);
-        return true;
-    }
-
-    /// <summary>One key part read from a key feature's column for a row.</summary>
     /// <summary>A row's value of one varying key part: the candidate's entity id (<paramref name="feature"/> -1) or the
     /// value of key feature <paramref name="feature"/> (<see cref="ColumnKey"/>).</summary>
     private KeyLookup PartKey(int feature, int row, out EntityKey key)
@@ -1770,15 +1453,12 @@ public sealed partial class FeatureFetcher
         /// <summary>Set on completion: chunks whose staging must not be read.</summary>
         public bool[] ChunkFailed { get; } = chunkFailed;
 
-        /// <summary>A shared key part (a request input) is missing: no row has a key.</summary>
+        /// <summary>A shared key part (a request input or a context key feature) is missing: no row has a key.</summary>
         public bool NoSharedKey { get; } = noSharedKey;
     }
 
     /// <summary>Feature or group indices in an array rented from the request memory, valid up to <see cref="Count"/>.</summary>
     private readonly record struct IndexList(int[] Items, int Count);
-
-    /// <param name="Call">Awaited once, by <see cref="FetchContextAsync"/>.</param>
-    private readonly record struct ContextFetch(int[] Features, StagingBuffer? Staging, ValueTask<FetchStatus> Call);
 
     /// <summary>
     /// The cancellation of one fetch: a single source for all its chunks' connectors, linked to the caller's token and

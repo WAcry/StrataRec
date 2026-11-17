@@ -73,16 +73,87 @@ public sealed class CatalogFeatureRegistrationTests
     }
 
     [Fact]
-    public void ADerivedForeignKeyComputedFromItsOwnEntity_IsACycle()
+    public void ADerivedForeignKeyComputedFromItsOwnEntity_IsAKeyCycle_AtTheKey()
     {
-        // owner is keyed by item.owner_id, computed from a feature of owner: the key would be needed to fetch itself.
+        // owner is keyed by item.owner_id, computed from a feature of owner: the key would be needed to fetch itself. A cycle
+        // through a key is a key cycle, at the key part, whether a derived feature is on it or not.
         var compilation = TryCompile(
             entities: """, "owner": { "key": "col.item.owner_id" }""",
             features: """, "owner.rank": { "type": "float32", "source": "item_store", "field": "o_rank" }""",
             derived: """, "item.owner_id": { "type": "int64", "expr": "int(col.owner.rank ?? 0.0)" }""");
 
-        Assert.Equal([("FEATURE_CYCLE", "/derived_features/item.owner_id/expr")], Errors(compilation));
-        Assert.Contains("item.owner_id → owner.rank → item.owner_id", compilation.Diagnostics.First(d => d.IsError).Message);
+        Assert.Equal([("ENTITY_KEY_CYCLE", "/entities/owner/key")], Errors(compilation));
+        var error = compilation.Diagnostics.First(d => d.IsError);
+        Assert.Contains("item.owner_id → owner.rank → item.owner_id", error.Message);
+        Assert.Contains("through derived feature 'item.owner_id'", error.Message);
+        Assert.NotNull(error.Hint);
+    }
+
+    /// <summary>
+    /// The same for context keys (design 6.2): an account keyed by a derived user feature computed from the account's own
+    /// feature, directly or through an entity keyed by it, never has a key. Reported once at the key, whatever reads it.
+    /// </summary>
+    [Theory]
+    [InlineData("col.item.boost")]
+    [InlineData("col.item.boost * (ctx.account.tier ?? 1.0)")]
+    public void ADerivedContextKeyComputedFromItsOwnEntity_IsAKeyCycle_AtTheKey(string expr)
+    {
+        var compilation = TryCompile(
+            entities: """, "account": { "key": ["ctx.request.user_id", "ctx.user.account_id"] }, "household": { "key": "ctx.account.household_id" }""",
+            features: """
+                , "account.tier": { "type": "float32", "source": "user_store", "field": "a_tier" }
+                , "account.household_id": { "type": "int64", "source": "user_store", "field": "a_household" }
+                , "household.account_id": { "type": "int64", "source": "user_store", "field": "h_account" }
+                """,
+            derived: """, "user.account_id": { "type": "int64", "expr": "ctx.household.account_id ?? 0" }""",
+            expr: expr);
+
+        var error = Assert.Single(compilation.Diagnostics, d => d.IsError);
+        Assert.Equal("ENTITY_KEY_CYCLE", error.Code);
+        Assert.StartsWith("/entities/", error.Pointer, StringComparison.Ordinal);
+        Assert.Contains("through derived feature 'user.account_id'", error.Message);
+        Assert.Contains("account.household_id", error.Message); // the path goes through the household's key
+    }
+
+    /// <summary>
+    /// A feature of an entity keyed by a context feature brings the key into the plan (design 6.3), and into the context
+    /// prefetch with it: the chain is fetched at request start, each group once what its key reads is stored.
+    /// </summary>
+    [Fact]
+    public void AFeatureOfAnEntityKeyedByAContextFeature_BringsInItsKey_AndIsPrefetched()
+    {
+        var plan = Plan(
+            entities: """, "account": { "key": "ctx.user.account_id" }""",
+            features: """
+                , "user.account_id": { "type": "int64", "source": "user_store", "field": "u_account" }
+                , "account.tier": { "type": "float32", "source": "author_store", "field": "a_tier", "default": 1.0 }
+                """,
+            expr: "col.item.boost * ctx.account.tier");
+
+        Assert.Equal(["account.tier", "item.boost", "item.score", "user.account_id"], Names(plan));
+        var key = plan.Features.Features.Single(f => f.Definition.Name == "user.account_id").Index;
+        var tier = plan.Features.Features.Single(f => f.Definition.Name == "account.tier").Index;
+        var account = plan.Features.Groups.Single(g => g.Entity.Name == "account");
+        Assert.Equal([key], account.KeyFeatures);
+        Assert.Equal([key], account.ContextKeyFeatures);
+        Assert.Equal([key], plan.Features.Features[tier].Dependencies);
+        Assert.Equal([key, tier], plan.ContextFeatures.Order()); // prefetched with the request, the key with it
+        Assert.True(account.KeyLayout[0].IsShared);
+    }
+
+    [Fact]
+    public void ADeprecatedContextKey_WarnsWhenItsEntitysFeatureIsRead()
+    {
+        var compilation = TryCompile(
+            entities: """, "account": { "key": "ctx.user.account_id" }""",
+            features: """
+                , "user.account_id": { "type": "int64", "source": "user_store", "field": "u_account", "deprecated": true }
+                , "account.tier": { "type": "float32", "source": "author_store", "field": "a_tier", "default": 1.0 }
+                """,
+            expr: "col.item.boost * ctx.account.tier");
+
+        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
+        Assert.Equal(("FEATURE_DEPRECATED", "/features/user.account_id"), (Assert.Single(compilation.Diagnostics).Code, compilation.Diagnostics[0].Pointer));
     }
 
     [Fact]

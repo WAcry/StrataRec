@@ -50,9 +50,11 @@ public interface IFeatureCallHook
     bool Replays { get; }
 
     /// <summary>
-    /// A call is about to be sent: returns its start order (calls start on the request's thread, so the order is
-    /// deterministic). Every begun call is later passed to <see cref="Record"/> with this sequence; until then a recorder
-    /// holds it as in flight, so a recording taken when the request is aborted lists it as outstanding.
+    /// A call is about to be sent: returns its start order. Calls start on the request's thread, so the order is
+    /// deterministic, but for a context group keyed by context features, which starts where the last of them was stored (a
+    /// connector's completion), so its place follows when that was; may be called concurrently. Every begun call is later
+    /// passed to <see cref="Record"/> with this sequence; until then a recorder holds it as in flight, so a recording taken
+    /// when the request is aborted lists it as outstanding.
     /// </summary>
     /// <param name="batch">The keys; valid only during the call (they live in pooled buffers).</param>
     int Begin(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields);

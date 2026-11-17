@@ -62,7 +62,8 @@
         "base_expr": "col.score.ctr",
         "multipliers": {
           "quality": "1.0 + param.quality_weight * (1.0 - col.item.report_rate * 10.0)",
-          "locale": "col.item_country.boost"
+          "locale": "col.item_country.boost",
+          "region": "ctx.region.boost"
         }
       }
     },

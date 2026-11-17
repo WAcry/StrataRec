@@ -456,8 +456,9 @@ internal sealed class PipelineExecutor
         }
         finally
         {
-            // Prefetches no node read were still answered (stratarec.source.values); their staging is in the memory.
-            fetcher?.CountUnreadFetches();
+            // Prefetches no node read were still answered (stratarec.source.values); their staging is in the memory. A
+            // chained context group whose key is stored from now on is not sent: nothing can read it.
+            fetcher?.EndRequest();
 
             // In-flight connector calls hold the memory themselves; buffers return when the last one finishes. Those
             // still running now outlive the request (design 4.8).

@@ -91,6 +91,13 @@ public sealed class FeatureRuntimeInfo
 
     /// <summary>A physical feature of an entity whose key reads features depends on those key features alone.</summary>
     internal void DependOnKey(ImmutableArray<int> keyFeatures) => _dependencies = keyFeatures;
+
+    /// <summary>
+    /// A derived context feature that a key reads, directly or through other derived features (set by
+    /// <see cref="FeaturePlan.Create"/>): the context prefetch computes it as soon as its inputs are stored, so the groups
+    /// keyed by it start then; other derived context features are computed once the whole prefetch is.
+    /// </summary>
+    internal bool ReadByKey { get; set; }
 }
 
 /// <summary>The two tag sets of <see cref="StrataRecMetrics.SourceValues"/> for one feature of a source.</summary>
@@ -143,6 +150,13 @@ public sealed class FetchGroup
     public required ImmutableArray<int> KeyFeatures { get; init; }
 
     /// <summary>
+    /// The context features among <see cref="KeyFeatures"/> (shared parts read from the request's context values): a
+    /// context group starts, and a candidate group is fetched, once the context prefetch has stored them. Empty for a key of
+    /// request inputs and candidate parts alone.
+    /// </summary>
+    internal int[] ContextKeyFeatures { get; init; } = [];
+
+    /// <summary>
     /// The feature read as the key's only varying part (-1 for the candidate's entity id), or <see cref="int.MinValue"/>
     /// when several parts vary. One varying part (every one-part key, and one column beside request inputs) is resolved,
     /// deduplicated and looked up as one value per row, without a tuple: the per-row cost one-part keys always had.
@@ -173,8 +187,9 @@ public sealed class FetchGroup
 }
 
 /// <summary>Where a request reads one key part of a <see cref="FetchGroup"/>.</summary>
-/// <param name="Context">The request's context value it is (a request input; later a context feature), or -1.</param>
-/// <param name="Feature">The feature column it is (a key feature), or -1; both -1 for <c>col.entity_id</c>.</param>
+/// <param name="Context">The request's context value it is (a request input or a context key feature), or -1.</param>
+/// <param name="Feature">The key feature it is (a candidate feature's column, or a context feature also read at
+/// <paramref name="Context"/>), or -1; both -1 for <c>col.entity_id</c>.</param>
 internal readonly record struct KeyPartSource(int Context, int Feature)
 {
     public static KeyPartSource EntityId => new(-1, -1);
@@ -309,7 +324,7 @@ public sealed class FeaturePlan
             }
 
             if (resolver.Group(supply, entity, members) is not { } groupSupply
-                || !TryKeyParts(entity, byName, contextIdOfRequestInput, diagnostics, catalogArtifact, out var keyParts, out var varying, out var keyFeatures))
+                || !TryKeyParts(entity, byName, contextIdOfRequestInput, diagnostics, catalogArtifact, out var keyParts, out var varying, out var keyFeatures, out var contextKeys))
             {
                 continue;
             }
@@ -331,6 +346,7 @@ public sealed class FeaturePlan
                 KeyParts = keyParts,
                 VaryingParts = varying,
                 KeyFeatures = keyFeatures,
+                ContextKeyFeatures = contextKeys,
                 FeatureIndices = ImmutableCollectionsMarshal.AsImmutableArray(featureIndices),
                 Fields = ImmutableCollectionsMarshal.AsImmutableArray(fields),
             };
@@ -356,59 +372,102 @@ public sealed class FeaturePlan
         // Cycles are reported here; the wave computation below only has to terminate on them.
         var derivedOrder = TopologicalDerivedOrder(all, diagnostics, catalogArtifact);
         AssignWaves(all, groups);
+        MarkReadByKey(all, groups);
         return new FeaturePlan(all, groups.ToArray(), derivedOrder);
     }
 
     /// <summary>
     /// Where a request reads each part of <paramref name="entity"/>'s key (design 6.8): a request input from the request's
-    /// context values, <c>col.entity_id</c>, or a key feature of the plan, which the group's members then depend on. False
-    /// (diagnosed) when a key feature is not in the plan.
+    /// context values, <c>col.entity_id</c>, a candidate key feature's column, or a context key feature's context value; the
+    /// group's members then depend on the key features. False (diagnosed) when a key feature is not in the plan.
     /// </summary>
-    /// <remarks>The one place a part's kind becomes a source: a context feature as a part would be one more case here, read
-    /// from its context id like a request input.</remarks>
+    /// <remarks>The one place a part's kind becomes a source.</remarks>
     private static bool TryKeyParts(
         EntityDefinition entity, Dictionary<string, FeatureRuntimeInfo> byName, Func<string, int> contextIdOfRequestInput, DiagnosticBag diagnostics,
-        string catalogArtifact, out KeyPartSource[] parts, out int[] varying, out ImmutableArray<int> keyFeatures)
+        string catalogArtifact, out KeyPartSource[] parts, out int[] varying, out ImmutableArray<int> keyFeatures, out int[] contextKeys)
     {
         parts = new KeyPartSource[entity.Key.Count];
         var varyingList = new List<int>(parts.Length);
         var features = new List<int>();
+        var context = new List<int>();
         for (var p = 0; p < parts.Length; p++)
         {
             var part = entity.Key[p];
-            switch (part.Kind)
+            if (part.Kind == EntityKeyPartKind.RequestInput)
             {
-                case EntityKeyPartKind.RequestInput:
-                    parts[p] = new KeyPartSource(contextIdOfRequestInput(part.Name), -1);
-                    continue;
-                case EntityKeyPartKind.EntityId:
-                    parts[p] = KeyPartSource.EntityId;
-                    break;
-                case EntityKeyPartKind.Feature:
-                    if (!byName.TryGetValue(part.Name, out var keyFeature))
-                    {
-                        diagnostics.Error("ENTITY_BAD_KEY", catalogArtifact, FeatureCatalog.KeyPointer(entity, p),
-                            $"Key feature '{part.Name}' is not available.", "a key feature is compiled with the features keyed by it; check its declaration");
-                        varying = Array.Empty<int>();
-                        keyFeatures = [];
-                        return false;
-                    }
-
-                    parts[p] = new KeyPartSource(-1, keyFeature.Index);
-                    if (!features.Contains(keyFeature.Index))
-                    {
-                        features.Add(keyFeature.Index);
-                    }
-
-                    break;
+                parts[p] = new KeyPartSource(contextIdOfRequestInput(part.Name), -1);
+                continue;
             }
 
+            if (part.Kind == EntityKeyPartKind.EntityId)
+            {
+                parts[p] = KeyPartSource.EntityId;
+                varyingList.Add(p);
+                continue;
+            }
+
+            if (!byName.TryGetValue(part.Name, out var keyFeature))
+            {
+                diagnostics.Error("ENTITY_BAD_KEY", catalogArtifact, FeatureCatalog.KeyPointer(entity, p),
+                    $"Key feature '{part.Name}' is not available.", "a key feature is compiled with the features keyed by it; check its declaration");
+                varying = Array.Empty<int>();
+                keyFeatures = [];
+                contextKeys = Array.Empty<int>();
+                return false;
+            }
+
+            if (!features.Contains(keyFeature.Index))
+            {
+                features.Add(keyFeature.Index);
+            }
+
+            if (part.Kind == EntityKeyPartKind.ContextFeature)
+            {
+                // Shared, like a request input: read from the request's context values once the prefetch has stored it.
+                parts[p] = new KeyPartSource(keyFeature.ContextId, keyFeature.Index);
+                context.Add(keyFeature.Index);
+                continue;
+            }
+
+            parts[p] = new KeyPartSource(-1, keyFeature.Index);
             varyingList.Add(p);
         }
 
         varying = varyingList.ToArray();
         keyFeatures = [.. features];
+        contextKeys = context.ToArray();
         return true;
+    }
+
+    /// <summary>
+    /// Marks the derived context features keys read, directly or through other derived features
+    /// (<see cref="FeatureRuntimeInfo.ReadByKey"/>), whether the key is a context group's or a shared part of a candidate
+    /// group's: the prefetch computes them as soon as their inputs are stored.
+    /// </summary>
+    private static void MarkReadByKey(FeatureRuntimeInfo[] features, IReadOnlyList<FetchGroup> groups)
+    {
+        foreach (var group in groups)
+        {
+            foreach (var k in group.ContextKeyFeatures)
+            {
+                Mark(k);
+            }
+        }
+
+        void Mark(int f)
+        {
+            var info = features[f];
+            if (!info.IsDerived || !info.IsContext || info.ReadByKey)
+            {
+                return; // a physical one is stored by its group; one marked already (a cycle is rejected anyway)
+            }
+
+            info.ReadByKey = true;
+            foreach (var d in info.Dependencies)
+            {
+                Mark(d);
+            }
+        }
     }
 
     /// <summary>

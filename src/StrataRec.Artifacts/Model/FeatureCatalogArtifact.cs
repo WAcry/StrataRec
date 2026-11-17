@@ -29,9 +29,10 @@ public sealed class EntitySpec
 {
     /// <summary>
     /// What keys the entity: one reference, or a list of 1 to 8 distinct ones in the order of the key's parts. A part is a
-    /// request input (<c>ctx.request.user_id</c>), the candidate id (<c>col.entity_id</c>) or a candidate feature
-    /// (<c>col.item.creator_id</c>), of type int64 or string, e.g. <c>["col.entity_id", "ctx.request.country"]</c>. A key of
-    /// request inputs only is one per request; a key with a missing part is not looked up.
+    /// request input (<c>ctx.request.user_id</c>), the candidate id (<c>col.entity_id</c>), a candidate feature
+    /// (<c>col.item.creator_id</c>) or a context feature (<c>ctx.identity.user_id</c>, fetched first), of type int64 or
+    /// string, e.g. <c>["col.entity_id", "ctx.request.country"]</c>. A key of request inputs and context features only is
+    /// one per request; a key with a missing part is not looked up.
     /// </summary>
     public required JsonNode Key { get; init; }
 

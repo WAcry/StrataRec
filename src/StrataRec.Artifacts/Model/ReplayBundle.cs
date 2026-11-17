@@ -220,7 +220,7 @@ public sealed class ReplayFeatureCall
 
     public required string Entity { get; init; }
 
-    [Description("The call's keys in staging order (design 6.5): each an int64 number or a string for a one-part key, or an array of its parts in the entity's key order (a request input repeated in every key).")]
+    [Description("The call's keys in staging order (design 6.5): each an int64 number or a string for a one-part key, or an array of its parts in the entity's key order (a shared part, a request input or a context feature, repeated in every key).")]
     public required JsonElement Keys { get; init; }
 
     [Description("False when the request had no time left to send the call.")]

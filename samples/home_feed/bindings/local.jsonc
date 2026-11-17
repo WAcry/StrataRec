@@ -14,6 +14,9 @@
       "max_bytes": "16MiB",
       "bootstrap": { "source": "snapshot_files@1", "uri": "fixtures/author_snapshot" }
     },
+    // A country's region, and each region's weight, keyed by the region geo_store answered (a chain of context keys).
+    "geo_store":    { "connector": "memory@1", "data": { "US": { "region": "na" }, "CA": { "region": "na" }, "DE": { "region": "eu" } }, "timeout_ms": 1000 },
+    "region_store": { "connector": "memory@1", "data": { "na": { "boost": 1.1 }, "eu": { "boost": 0.9 } }, "timeout_ms": 1000 },
     // Per-country boosts of items, keyed by [item, country]: a snapshot line's key is the array of both parts.
     "item_country_store": {
       "mode": "local",

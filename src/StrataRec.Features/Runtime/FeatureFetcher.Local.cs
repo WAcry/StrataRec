@@ -14,8 +14,9 @@ namespace StrataRec.Features.Runtime;
 /// The request read path of local groups (design 6.6 "读取路径"): everything a request does with a local table is here.
 /// </summary>
 /// <remarks>
-/// <para><b>When.</b> A local group is read synchronously by <see cref="EnsureAsync"/> (or the context prefetch) when a
-/// reader needs its features, for the rows live then: never prefetched, never held by a fetch barrier, never staged.
+/// <para><b>When.</b> A local group is read synchronously by <see cref="EnsureAsync"/> when a reader needs its features,
+/// for the rows live then (a context group by the context prefetch, once its key is stored): never prefetched, never held
+/// by a fetch barrier, never staged.
 /// Within a wave, fetches are started first and local reads run while they are in flight.</para>
 /// <para><b>How.</b> The table is pinned once per request (<see cref="Pin"/>): every read of the request uses that
 /// version. For the features a node needs, one <see cref="LocalReadBatch"/>: the rows' distinct keys, one
@@ -325,59 +326,11 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>
-    /// Reads the local context groups of <paramref name="closure"/> (one key each, the request input), at the start of
-    /// the request with the other context features. A missing context key gives every feature its absent value, as for
-    /// a fetch.
+    /// Reads a local or cache context group (one key, from request inputs or context key features) for the context prefetch,
+    /// once its key is stored. A missing context key gives every feature its absent value, as for a fetch.
     /// </summary>
-    /// <returns>The cache reads that missed, resolving: <see cref="CompleteCachedContextAsync"/> completes them.</returns>
-    private CacheRead? ReadLocalContext(IndexList closure, bool[] member, CancellationToken cancellationToken)
-    {
-        CacheRead? first = null;
-        CacheRead? last = null;
-        var seen = _memory.RentCleared<bool>(Math.Max(1, _plan.Groups.Count));
-        for (var c = 0; c < closure.Count; c++)
-        {
-            var info = _plan.Features[closure.Items[c]];
-            if (!info.IsContext || info.IsDerived || info.GroupIndex < 0 || seen[info.GroupIndex])
-            {
-                continue;
-            }
-
-            var group = _plan.Groups[info.GroupIndex];
-            if (!ReadsLocally(group))
-            {
-                continue;
-            }
-
-            seen[info.GroupIndex] = true;
-            var selected = _memory.Rent<int>(group.FeatureIndices.Length);
-            var count = 0;
-            foreach (var f in group.FeatureIndices)
-            {
-                if (member[f])
-                {
-                    selected[count++] = f;
-                }
-            }
-
-            if (ReadLocalContext(group, selected.AsSpan(0, count), cancellationToken) is { } read)
-            {
-                if (last is null)
-                {
-                    first = read;
-                }
-                else
-                {
-                    last.Next = read;
-                }
-
-                last = read;
-            }
-        }
-
-        return first;
-    }
-
+    /// <returns>A cache read that missed, resolving: <see cref="CompleteCachedContextAsync"/> completes it; null when the
+    /// features are stored.</returns>
     private CacheRead? ReadLocalContext(FetchGroup group, ReadOnlySpan<int> features, CancellationToken cancellationToken)
     {
         var local = group.Supply.Table!;

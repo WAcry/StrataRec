@@ -168,6 +168,33 @@ public class FeatureFetchAllocationTests
         Assert.True(largeBytes - smallBytes < 1024, $"100 keys: {smallBytes} B, 4000 keys: {largeBytes} B");
     }
 
+    [Fact]
+    public void AFetchKeyedByAContextFeature_AllocationDoesNotGrowWithTheKeyCount()
+    {
+        // [entity_id, ctx.user.segment]: the segment is stored by the context prefetch (a synchronous memory@1 source) and
+        // carried once per batch, as a request input is; the rows' ids are deduplicated as one part.
+        var bySegment = EntityDefinition.Of(
+            "item_segment", EntityKeyPartDefinition.EntityId(EntityKeyType.Int64), EntityKeyPartDefinition.ContextFeature("user.segment", EntityKeyType.String));
+        var rig = new FeatureTestRig()
+            .Source("is_store", new SynchronousConnector(), maxBatch: 10_000)
+            .MemorySource("user_store", """{ "7": { "segment": "a" } }""");
+        var segment = rig.Physical("user.segment", FeatureTestRig.User, ColumnType.String, "user_store");
+        var score = rig.Physical("item_segment.score", bySegment, ColumnType.Float64, "is_store");
+        var clicks = rig.Physical("item_segment.clicks", bySegment, ColumnType.Float32, "is_store", ScalarValue.FromFloat64(0));
+        rig.Build();
+
+        void StartContext(TestRequest request)
+        {
+            request.Context[FeatureTestRig.UserIdContext] = ScalarValue.FromInt64(7);
+            request.Fetcher.StartContextFetch([segment], CancellationToken.None);
+        }
+
+        var smallBytes = Measure(rig, [score, clicks], 100, StartContext);
+        var largeBytes = Measure(rig, [score, clicks], 4_000, StartContext);
+
+        Assert.True(largeBytes - smallBytes < 1024, $"100 keys: {smallBytes} B, 4000 keys: {largeBytes} B");
+    }
+
     /// <summary>Bytes the first ensure of <paramref name="features"/> allocates beyond a second one: best of three after a warm-up.</summary>
     private static long MeasureLocalRead(
         FeatureTestRig rig, int[] features, int keys, Action<TestRequest>? setup = null, Action<TestRequest>? check = null)

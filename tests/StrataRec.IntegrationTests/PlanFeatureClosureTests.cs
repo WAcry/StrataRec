@@ -16,8 +16,8 @@ public sealed class PlanFeatureClosureTests
 {
     private static readonly string[] SampleFeatures =
     [
-        "author.followers", "author.log_followers", "item.age_hours", "item.author_id", "item.category", "item.clicks_7d", "item.embedding",
-        "item.impressions_7d", "item.is_policy_safe", "item.report_rate", "item.smoothed_ctr", "item_country.boost",
+        "author.followers", "author.log_followers", "country.region", "item.age_hours", "item.author_id", "item.category", "item.clicks_7d",
+        "item.embedding", "item.impressions_7d", "item.is_policy_safe", "item.report_rate", "item.smoothed_ctr", "item_country.boost", "region.boost",
     ];
 
     [Fact]
@@ -26,8 +26,9 @@ public sealed class PlanFeatureClosureTests
         var plan = HomeFeedTestHost.Load().Plan();
 
         Assert.Equal(SampleFeatures, Names(plan));
-        Assert.Equal(["author_store", "item_country_store", "item_store"], plan.Features.Groups.Select(g => g.SourceName).Order(StringComparer.Ordinal));
-        Assert.DoesNotContain(plan.Schema.ContextFields, f => f.Kind == ContextFieldKind.Feature);
+        Assert.Equal(["author_store", "geo_store", "item_country_store", "item_store", "region_store"], plan.Features.Groups.Select(g => g.SourceName).Order(StringComparer.Ordinal));
+        // The context features are the fusion's regional weight and the region it is keyed by, none of the user's.
+        Assert.Equal(["country.region", "region.boost"], plan.Schema.ContextFields.Where(f => f.Kind == ContextFieldKind.Feature).Select(f => f.Name).Order(StringComparer.Ordinal));
 
         // Features are registered in the order the compile first reads them: the same for the same configuration.
         var again = HomeFeedTestHost.Load().Plan();
@@ -42,8 +43,8 @@ public sealed class PlanFeatureClosureTests
             "\"order\": 515, \"op\": \"ExpressionFilter@1\", \"when\": \"ctx.request.surface == 'home' && ctx.user.tenure_days > 100.0\"")).Plan();
 
         Assert.Equal([.. SampleFeatures, "user.tenure_days"], Names(plan));
-        var tenure = Assert.Single(plan.ContextFeatures); // prefetched with the request
-        Assert.Equal("user.tenure_days", plan.Features.Features[tenure].Definition.Name);
+        // Prefetched with the request, beside the sample's region chain.
+        Assert.Equal(["country.region", "region.boost", "user.tenure_days"], plan.ContextFeatures.Select(f => plan.Features.Features[f].Definition.Name).Order(StringComparer.Ordinal));
 
         // users.json: 1001 has 420 days, 1002 has 12.
         var veteran = await Run(plan, HomeFeedTestHost.NewRequest(userId: 1001));

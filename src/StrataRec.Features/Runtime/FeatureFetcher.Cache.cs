@@ -156,7 +156,7 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>
-    /// The read of a context cache group (one key, from request inputs), from the context prefetch: a fresh record is
+    /// The read of a context cache group (one key, from request inputs or context key features), from the context prefetch: a fresh record is
     /// published at once; otherwise the read is returned resolving, for <see cref="CompleteCachedContextAsync"/>.
     /// </summary>
     private CacheRead? ReadCachedContext(
@@ -799,8 +799,9 @@ public sealed partial class FeatureFetcher
         }
     }
 
-    /// <summary>Completes a context cache read (from the context prefetch) by the rule of a fetched context group.</summary>
-    private async ValueTask CompleteCachedContextAsync(CacheRead read)
+    /// <summary>Completes a context cache read (from the context prefetch) by the rule of a fetched context group: the
+    /// prefetch's task for its group, which readers of its features wait for.</summary>
+    private async Task CompleteCachedContextAsync(CacheRead read)
     {
         await read.Resolution.ConfigureAwait(false);
         var status = read.Status();

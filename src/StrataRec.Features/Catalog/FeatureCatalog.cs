@@ -7,8 +7,6 @@ using StrataRec.Core.Values;
 namespace StrataRec.Features.Catalog;
 
 /// <summary>What one part of an entity key reads (design 6.2).</summary>
-/// <remarks>A context feature (<c>ctx.&lt;entity&gt;.&lt;feature&gt;</c>) as a part is a later step: it would be one more kind,
-/// shared like a request input (the plan reads both from the request's context values).</remarks>
 public enum EntityKeyPartKind : byte
 {
     /// <summary>A request input, <c>ctx.request.&lt;input&gt;</c>: one value per request, shared by every key of a batch.</summary>
@@ -20,6 +18,13 @@ public enum EntityKeyPartKind : byte
     /// <summary>A candidate-scope feature, <c>col.&lt;entity&gt;.&lt;feature&gt;</c> (physical or derived): fetched before the
     /// entity's features, as a foreign key.</summary>
     Feature,
+
+    /// <summary>
+    /// A context-scope feature, <c>ctx.&lt;entity&gt;.&lt;feature&gt;</c> (physical or derived): one value per request, shared
+    /// like a request input, which the context prefetch stores before it fetches the entities keyed by it (a key resolved by
+    /// another source, such as a user id looked up from a login key).
+    /// </summary>
+    ContextFeature,
 }
 
 /// <summary>One part of a compiled entity key: what it reads and its type.</summary>
@@ -35,23 +40,29 @@ public sealed class EntityKeyPartDefinition
     public EntityKeyPartKind Kind { get; }
 
     /// <summary>The request input (<see cref="EntityKeyPartKind.RequestInput"/>), the feature's catalog name such as
-    /// <c>item.creator_id</c> (<see cref="EntityKeyPartKind.Feature"/>), or <c>entity_id</c>.</summary>
+    /// <c>item.creator_id</c> or <c>identity.user_id</c> (<see cref="EntityKeyPartKind.Feature"/>,
+    /// <see cref="EntityKeyPartKind.ContextFeature"/>), or <c>entity_id</c>.</summary>
     public string Name { get; }
+
+    /// <summary>Whether the part reads a feature (candidate or context): the entity's features then wait for it.</summary>
+    public bool IsFeature => Kind is EntityKeyPartKind.Feature or EntityKeyPartKind.ContextFeature;
 
     /// <summary>The part's type: the input's, the pipeline's <c>entity_key_type</c>, or the key feature's (set when the
     /// catalog's features are built); null until then.</summary>
     public EntityKeyType? Type { get; internal set; }
 
-    /// <summary>As the catalog writes it: <c>ctx.request.country</c>, <c>col.entity_id</c>, <c>col.item.creator_id</c>.</summary>
+    /// <summary>As the catalog writes it: <c>ctx.request.country</c>, <c>col.entity_id</c>, <c>col.item.creator_id</c>,
+    /// <c>ctx.identity.user_id</c>.</summary>
     public string Reference => Kind switch
     {
         EntityKeyPartKind.RequestInput => "ctx.request." + Name,
         EntityKeyPartKind.EntityId => "col.entity_id",
         EntityKeyPartKind.Feature => "col." + Name,
+        EntityKeyPartKind.ContextFeature => "ctx." + Name,
     };
 
-    /// <summary>One value per request (a context part), so every key of a batch shares it.</summary>
-    public bool IsShared => Kind == EntityKeyPartKind.RequestInput;
+    /// <summary>One value per request (a context part: a request input or a context feature), so every key of a batch shares it.</summary>
+    public bool IsShared => Kind is EntityKeyPartKind.RequestInput or EntityKeyPartKind.ContextFeature;
 
     public static EntityKeyPartDefinition RequestInput(string input, EntityKeyType type) => new(EntityKeyPartKind.RequestInput, input, type);
 
@@ -61,14 +72,19 @@ public sealed class EntityKeyPartDefinition
     /// <param name="type">The key feature's type; null for the catalog to set when it builds the features.</param>
     public static EntityKeyPartDefinition Feature(string feature, EntityKeyType? type = null) => new(EntityKeyPartKind.Feature, feature, type);
 
+    /// <param name="feature">The context key feature's catalog name, e.g. <c>identity.user_id</c>.</param>
+    /// <param name="type">The key feature's type; null for the catalog to set when it builds the features.</param>
+    public static EntityKeyPartDefinition ContextFeature(string feature, EntityKeyType? type = null) => new(EntityKeyPartKind.ContextFeature, feature, type);
+
     public override string ToString() => Reference;
 }
 
 /// <summary>A compiled entity declaration: its name and its key, an ordered tuple of 1 to 8 parts (design 6.2).</summary>
 /// <remarks>
 /// The key decides the rest. The entity is context-scoped (one key per request, <c>ctx.&lt;entity&gt;.*</c>) when every part
-/// is a request input, candidate-scoped (one key per row, <c>col.&lt;entity&gt;.*</c>) otherwise; a part that is a feature
-/// makes the entity's features wait for that feature, as a foreign key does.
+/// is a context part (a request input or a context feature), candidate-scoped (one key per row, <c>col.&lt;entity&gt;.*</c>)
+/// otherwise; a part that is a feature makes the entity's features wait for that feature, as a foreign key does, on either
+/// side: a context entity keyed by a context feature is fetched once the source of that feature has answered.
 /// </remarks>
 public sealed class EntityDefinition
 {
@@ -89,7 +105,7 @@ public sealed class EntityDefinition
         {
             foreach (var part in Key)
             {
-                if (part.Kind == EntityKeyPartKind.Feature)
+                if (part.IsFeature)
                 {
                     return true;
                 }
@@ -99,7 +115,8 @@ public sealed class EntityDefinition
         }
     }
 
-    /// <summary>Every part is a request input: one key per request (asked per feature by every read, so worked out once).</summary>
+    /// <summary>Every part is a context part (a request input or a context feature): one key per request (asked per feature
+    /// by every read, so worked out once).</summary>
     public bool IsContextScoped
     {
         get
@@ -130,6 +147,28 @@ public sealed class EntityDefinition
 
     /// <summary>An entity keyed by <paramref name="parts"/>, in order.</summary>
     public static EntityDefinition Of(string name, params EntityKeyPartDefinition[] parts) => new() { Name = name, Key = parts };
+
+    /// <summary>The catalog pointer of key part <paramref name="part"/>, where a problem with it is reported:
+    /// <c>/entities/&lt;name&gt;/key/&lt;i&gt;</c>, or <c>/entities/&lt;name&gt;/key</c> for a key written as one reference.</summary>
+    public string KeyPointer(int part) =>
+        "/entities/" + FeatureCatalog.EscapePointer(Name) + "/key"
+        + (Key.Count == 1 && !KeyIsList ? string.Empty : "/" + part.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+    /// <summary>The position of the key part that reads feature <paramref name="feature"/>, or -1.</summary>
+    public int KeyPartReading(FeatureDefinition feature)
+    {
+        for (var p = 0; p < Key.Count; p++)
+        {
+            var part = Key[p];
+            if (part.IsFeature && (part.Kind == EntityKeyPartKind.ContextFeature) == feature.IsContext
+                && string.Equals(part.Name, feature.Name, StringComparison.Ordinal))
+            {
+                return p;
+            }
+        }
+
+        return -1;
+    }
 
     private EntityKeyLayout BuildLayout()
     {
@@ -350,8 +389,8 @@ public sealed class FeatureCatalog
         }
 
         // A key part that reads a feature takes the feature's type. An entity keyed by a feature that cannot key it (not
-        // declared, of another type, a context feature, or declared with an error) has no key: it and its features fail,
-        // and so does an entity keyed by one of their features.
+        // declared, of another type, of the other scope than its reference says, or declared with an error) has no key: it
+        // and its features fail, and so does an entity keyed by one of their features.
         ResolveFeatureParts(entities, features, unusable, diagnostics, artifactName);
         ValidateKeyCycles(entities, features, diagnostics, artifactName);
         return new FeatureCatalog(artifact.CatalogId, entities, features, unusable);
@@ -414,17 +453,16 @@ public sealed class FeatureCatalog
     }
 
     /// <summary>
-    /// One key part: <c>ctx.request.&lt;input&gt;</c> (an int64 or string input, int32 promoted), <c>col.entity_id</c>, or
-    /// <c>col.&lt;entity&gt;.&lt;feature&gt;</c> (typed later, with the features). A context feature is refused for now: as a
-    /// part it would be read from the request's context values like a request input, once the context prefetch orders it
-    /// before the entities keyed by it.
+    /// One key part: <c>ctx.request.&lt;input&gt;</c> (an int64 or string input, int32 promoted), <c>col.entity_id</c>,
+    /// <c>col.&lt;entity&gt;.&lt;feature&gt;</c> or <c>ctx.&lt;entity&gt;.&lt;feature&gt;</c> (a candidate or a context feature,
+    /// typed later, with the features).
     /// </summary>
     /// <remarks>Null when the part is wrong (reported here) or reads a request input declared with an error (reported there).</remarks>
     private static EntityKeyPartDefinition? ParsePart(
         string reference, string at, IReadOnlyDictionary<string, ColumnType> requestSchema, EntityKeyType entityKeyType,
         IReadOnlySet<string>? unusableInputs, DiagnosticBag diagnostics, string artifactName)
     {
-        const string Parts = "a key part is a request input (ctx.request.*), the candidate id (col.entity_id) or a candidate feature (col.<entity>.<feature>)";
+        const string Parts = "a key part is a request input (ctx.request.*), the candidate id (col.entity_id), a candidate feature (col.<entity>.<feature>) or a context feature (ctx.<entity>.<feature>)";
         if (reference.StartsWith("ctx.request.", StringComparison.Ordinal))
         {
             var input = reference["ctx.request.".Length..];
@@ -452,17 +490,14 @@ public sealed class FeatureCatalog
             return EntityKeyPartDefinition.RequestInput(input, type);
         }
 
-        if (reference.StartsWith("ctx.", StringComparison.Ordinal))
-        {
-            diagnostics.Error("ENTITY_BAD_KEY", artifactName, at,
-                $"Key part '{reference}' is a context feature; an entity key cannot read a context feature yet.",
-                "key the entity by the request input the context feature is keyed by (ctx.request.*)");
-            return null;
-        }
-
         if (reference == "col.entity_id")
         {
             return EntityKeyPartDefinition.EntityId(entityKeyType);
+        }
+
+        if (reference.StartsWith("ctx.", StringComparison.Ordinal) && reference.Length > "ctx.".Length)
+        {
+            return EntityKeyPartDefinition.ContextFeature(reference["ctx.".Length..]); // typed with the features
         }
 
         if (reference.StartsWith("col.", StringComparison.Ordinal) && reference.Length > "col.".Length)
@@ -484,9 +519,10 @@ public sealed class FeatureCatalog
 
     /// <summary>
     /// Types every key part that reads a feature (design 6.3: a key feature's type is the part's). A part whose feature is
-    /// not declared, is a context feature or is of another type than int64 or string is an <c>ENTITY_BAD_KEY</c> at the
-    /// part; one whose feature was declared with an error fails silently (reported there). An entity with such a part has
-    /// no key: it is removed with its features, which become unusable, and an entity keyed by one of those fails in turn.
+    /// not declared, is of the other scope than its prefix says (<c>col.</c> a candidate feature, <c>ctx.</c> a context
+    /// one) or is of another type than int64 or string is an <c>ENTITY_BAD_KEY</c> at the part; one whose feature was declared
+    /// with an error fails silently (reported there). An entity with such a part has no key: it is removed with its features,
+    /// which become unusable, and an entity keyed by one of those fails in turn.
     /// </summary>
     private static void ResolveFeatureParts(
         Dictionary<string, EntityDefinition> entities, Dictionary<string, FeatureDefinition> features, SortedSet<string> unusable,
@@ -526,28 +562,40 @@ public sealed class FeatureCatalog
         for (var i = 0; i < entity.Key.Count; i++)
         {
             var part = entity.Key[i];
-            if (part.Kind != EntityKeyPartKind.Feature || part.Type is not null)
+            if (!part.IsFeature || part.Type is not null)
             {
                 continue;
             }
 
+            var context = part.Kind == EntityKeyPartKind.ContextFeature;
+            var scope = context ? "context" : "candidate";
             var at = KeyPointer(entity, i);
             if (!features.TryGetValue(part.Name, out var keyFeature))
             {
                 if (!unusable.Contains(part.Name))
                 {
-                    diagnostics.Error("ENTITY_BAD_KEY", artifactName, at, $"Key part 'col.{part.Name}' is not a declared feature.",
-                        NameSuggestions.DidYouMean(part.Name, features.Keys) ?? "key the entity by a declared candidate feature, or declare it");
+                    diagnostics.Error("ENTITY_BAD_KEY", artifactName, at, $"Key part '{part.Reference}' is not a declared feature.",
+                        NameSuggestions.DidYouMean(part.Name, features.Keys) ?? $"key the entity by a declared {scope} feature, or declare it");
                 }
 
                 return false;
             }
 
-            if (keyFeature.IsContext || KeyTypeOf(keyFeature.Type) is not { } keyType)
+            if (keyFeature.IsContext != context)
+            {
+                // The prefix names the scope: a candidate feature is col.*, a context feature ctx.* (a shared part of a
+                // candidate-scoped key, or any part of a context-scoped one).
+                diagnostics.Error("ENTITY_BAD_KEY", artifactName, at,
+                    $"Key part '{part.Reference}' names {(keyFeature.IsContext ? "a context" : "a candidate")} feature, which is written {keyFeature.ExpressionName}.",
+                    $"write the part as \"{keyFeature.ExpressionName}\"");
+                return false;
+            }
+
+            if (KeyTypeOf(keyFeature.Type) is not { } keyType)
             {
                 diagnostics.Error("ENTITY_BAD_KEY", artifactName, at,
-                    $"Key part '{keyFeature.Name}' must be a candidate feature of type int64 or string, got {(keyFeature.IsContext ? "a context feature" : keyFeature.Type.ToString())}.",
-                    "key the entity by a candidate feature holding int64 or string ids");
+                    $"Key part '{keyFeature.Name}' must be a {scope} feature of type int64 or string, got {keyFeature.Type}.",
+                    $"key the entity by a {scope} feature holding int64 or string ids");
                 return false;
             }
 
@@ -560,9 +608,12 @@ public sealed class FeatureCatalog
     /// <summary>
     /// Key chains must end (design 6.7: cycles are configuration errors): an entity whose key reads a feature of an entity
     /// whose key leads back to one already on the way is an <c>ENTITY_KEY_CYCLE</c>, at the part that leads into it. Every
-    /// feature part is an edge, so a cycle through any part of a composite key is found. An entity found to lead into no
-    /// cycle is remembered for the whole catalog and not walked again: without it, eight parts reading eight features of
-    /// the same parent walk the parent's chain eight times each, and a valid chain of ten such entities took 6 s (review 76).
+    /// feature part is an edge, candidate (<c>col.</c>) or context (<c>ctx.</c>), so a cycle through any part of a composite
+    /// key is found. An entity found to lead into no cycle is remembered for the whole catalog and not walked again, whatever
+    /// kind of edge reached it: without it, eight parts reading eight features of the same parent walk the parent's chain
+    /// eight times each, and a valid chain of ten such entities took 6 s (review 76). A cycle that also passes through a
+    /// derived feature is found where the plan compiles the derived feature (the catalog does not compile expressions), and
+    /// reported there with the same code at a key part on the cycle.
     /// </summary>
     private static void ValidateKeyCycles(
         Dictionary<string, EntityDefinition> entities, Dictionary<string, FeatureDefinition> features, DiagnosticBag diagnostics, string artifactName)
@@ -614,12 +665,11 @@ public sealed class FeatureCatalog
         }
 
         static EntityDefinition? KeyEntity(EntityKeyPartDefinition part, Dictionary<string, FeatureDefinition> features) =>
-            part.Kind == EntityKeyPartKind.Feature && features.TryGetValue(part.Name, out var feature) ? feature.Entity : null;
+            part.IsFeature && features.TryGetValue(part.Name, out var feature) ? feature.Entity : null;
     }
 
     /// <summary>The pointer of key part <paramref name="part"/>: <c>/key</c> for a one-part key written as one reference.</summary>
-    internal static string KeyPointer(EntityDefinition entity, int part) =>
-        "/entities/" + EscapePointer(entity.Name) + "/key" + (entity.Key.Count == 1 && !entity.KeyIsList ? string.Empty : "/" + part.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    internal static string KeyPointer(EntityDefinition entity, int part) => entity.KeyPointer(part);
 
     private static bool TryEntity(
         string featureName, Dictionary<string, EntityDefinition> entities, HashSet<string> broken, DiagnosticBag diagnostics, string artifactName,

@@ -9,8 +9,8 @@ namespace StrataRec.Pipeline.Planning;
 
 /// <summary>
 /// Registers catalog features into a plan schema the first time a name resolves to one (design 6.3), with what each
-/// needs: a derived feature compiles then, and its own reads register the features it is computed from; a feature of a
-/// foreign-key entity registers the key first; a feature of a <c>cache</c> source registers every feature of its table
+/// needs: a derived feature compiles then, and its own reads register the features it is computed from; a feature of an
+/// entity keyed by features (candidate or context) registers them first; a feature of a <c>cache</c> source registers every feature of its table
 /// (<see cref="FeaturePlan.NeedsWholeTable"/>). The one place that decides what of a catalog a plan holds, and that
 /// compiles derived features and finds their cycles.
 /// </summary>
@@ -167,7 +167,7 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
 
             foreach (var part in feature.Entity.Key)
             {
-                if (part.Kind == EntityKeyPartKind.Feature && _catalog.TryGet(part.Name, out var key) && !key.IsContext)
+                if (part.IsFeature && _catalog.TryGet(part.Name, out var key) && key.IsContext == (part.Kind == EntityKeyPartKind.ContextFeature))
                 {
                     pending.Push(key);
                 }
@@ -239,14 +239,14 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
         return true;
     }
 
-    /// <summary>A physical feature: its key features first when its entity's key reads features (design 6.7: they are
-    /// fetched first); an entity a key feature of which cannot be registered has no key, and its features fail with the
-    /// key's error.</summary>
+    /// <summary>A physical feature: its key features first when its entity's key reads features, candidate or context
+    /// (design 6.7: they are fetched first); an entity a key feature of which cannot be registered has no key, and its
+    /// features fail with the key's error.</summary>
     private bool RegisterPhysical(FeatureDefinition feature)
     {
         foreach (var part in feature.Entity.Key)
         {
-            if (part.Kind == EntityKeyPartKind.Feature && !TryRegister("col." + part.Name))
+            if (part.IsFeature && !TryRegister(part.Reference))
             {
                 return false;
             }
@@ -296,9 +296,11 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
 
     /// <summary>
     /// A feature met again while it is being registered: it depends on itself. Through a derived feature this is reported
-    /// here, once, at the first derived feature of the cycle; a cycle of foreign keys alone is the catalog's
-    /// <c>ENTITY_KEY_CYCLE</c>. The feature is marked unusable at once, so every expression on the way fails without an
-    /// error of its own.
+    /// here, once: a cycle that also passes through an entity's key (a physical feature registers its key's features
+    /// first) is an <c>ENTITY_KEY_CYCLE</c> at the first key part on it, the key that can never be computed, candidate or
+    /// context alike; a cycle of derived features alone is a <c>FEATURE_CYCLE</c> at the first derived feature of it; a
+    /// cycle of keys alone is the catalog's <c>ENTITY_KEY_CYCLE</c>, reported there. The feature is marked unusable at once,
+    /// so every expression on the way fails without an error of its own.
     /// </summary>
     private bool Cycle(FeatureDefinition feature)
     {
@@ -310,14 +312,29 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
         var start = _registering.IndexOf(feature);
         var path = new List<string>(_registering.Count - start + 1);
         FeatureDefinition? derived = null;
+        FeatureDefinition? keyed = null; // the first physical feature on the cycle: its entity's key reads the next one
+        var keyPart = -1;
         for (var i = start; i < _registering.Count; i++)
         {
-            path.Add(_registering[i].Name);
-            derived ??= _registering[i].IsDerived ? _registering[i] : null;
+            var on = _registering[i];
+            path.Add(on.Name);
+            derived ??= on.IsDerived ? on : null;
+            if (keyed is null && !on.IsDerived)
+            {
+                // A physical feature registers its key's features and nothing else, so the next on the path is one of them.
+                keyPart = on.Entity.KeyPartReading(i + 1 < _registering.Count ? _registering[i + 1] : feature);
+                keyed = keyPart >= 0 ? on : null;
+            }
         }
 
         path.Add(feature.Name);
-        if (derived is not null)
+        if (derived is not null && keyed is not null)
+        {
+            _diagnostics.Error("ENTITY_KEY_CYCLE", _artifact, keyed.Entity.KeyPointer(keyPart),
+                $"Key part '{keyed.Entity.Key[keyPart].Reference}' of '{keyed.Entity.Name}' leads to a key cycle through derived feature '{derived.Name}': {string.Join(" → ", path)}.",
+                $"key one of the entities on the cycle by something that does not depend on it, or compute '{derived.Name}' without it");
+        }
+        else if (derived is not null)
         {
             _diagnostics.Error("FEATURE_CYCLE", _artifact, derived.Pointer + "/expr",
                 $"Derived feature '{derived.Name}' depends on itself: {string.Join(" → ", path)}.",

@@ -78,9 +78,9 @@ public class SourceValuesTests
         request.Fetcher.Prefetch([clicks], CancellationToken.None);
         Assert.Equal((0, 0), values.Of("item.clicks")); // nothing read it yet
 
-        request.Fetcher.CountUnreadFetches();
+        request.Fetcher.EndRequest();
         Assert.Equal((3, 1), values.Of("item.clicks"));
-        request.Fetcher.CountUnreadFetches();
+        request.Fetcher.EndRequest();
         Assert.Equal((3, 1), values.Of("item.clicks")); // once
 
         held.SetResult(FetchStatus.Ok); // answering after the request ended counts nothing
