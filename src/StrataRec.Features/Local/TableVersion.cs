@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.IO.Hashing;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -106,7 +107,16 @@ public sealed class TableVersion
     private int _nextPageSize;
     private int _stringCount;
     private long _stringBytes;
+    private long _unreferencedStringBytes;
+    private int[] _references; // per code: references from current records, or Unreferenced; grown with _strings
     private readonly StringCodeMap _codes;
+
+    /// <summary>A code no current record references any more (its string counts in <see cref="UnreferencedStringBytes"/>);
+    /// a write that brings the value again references it anew.</summary>
+    private const int Unreferenced = -1;
+
+    /// <summary>Bytes a dictionary slot is charged: the string reference and its reference count.</summary>
+    private const int StringSlotBytes = 12;
 
     internal TableVersion(RecordLayout layout, StringKeyHasher hasher, int maxPageSize, long generation, int expectedKeys)
     {
@@ -117,10 +127,11 @@ public sealed class TableVersion
         _index = new IndexTable(IndexTable.SlotsFor(expectedKeys));
         _pages = new byte[InitialDirectoryLength][];
         _strings = new string[InitialStringsLength];
+        _references = new int[InitialStringsLength];
         _codes = new StringCodeMap();
         // Writes start with a small page and double from there; a compaction packs its pages instead (see Reserve).
         _nextPageSize = Math.Min(maxPageSize, MinPageSize);
-        _bytes = IndexBytes(_index) + (_pages.Length * 8L) + (_strings.Length * 8L) + _codes.Bytes;
+        _bytes = IndexBytes(_index) + (_pages.Length * 8L) + ((long)_strings.Length * StringSlotBytes) + _codes.Bytes;
     }
 
     /// <summary>Increases with every version a table installs (a compaction or reload); a compacted copy discarded for not
@@ -309,10 +320,10 @@ public sealed class TableVersion
     /// length than a <c>list&lt;E,N&gt;</c> target's: the table stores what its writer wrote, and a read applies the type.
     /// </returns>
     /// <remarks>
-    /// <para>Allocates nothing except where the column type requires it: a <c>text</c> value becomes a new string, and a
-    /// string column's dictionary grows by the strings it has not seen. When <paramref name="absent"/> is missing, the
-    /// target gets a validity bitmap (rented from its request memory) before the first row, even if every row turns out
-    /// present: the loop then never calls out, which keeps its state in registers.</para>
+    /// <para>Allocates nothing: a string (a scalar or a list's element) is the dictionary's instance, whatever its length, and a
+    /// list is copied into its column's rented arena. When <paramref name="absent"/> is missing, the target gets a validity
+    /// bitmap (rented from its request memory) before the first row, even if every row turns out present: the loop then
+    /// never calls out, which keeps its state in registers.</para>
     /// <para>The per-row loops are unchecked; see <see cref="FillCore"/> for what makes that safe whatever the caller's
     /// spans point at.</para>
     /// </remarks>
@@ -401,34 +412,21 @@ public sealed class TableVersion
 
         // The part of a record the reads touch: the header (validity bits) up to the end of the last field read.
         var readEnd = RecordLayout.ValidityOffset + _layout.ValidityBytes;
-        var stringReads = 0;
         foreach (var read in reads)
         {
             CheckTarget(read.Field, read.Target, maxRow);
             readEnd = Math.Max(readEnd, _layout.Offsets[read.Field] + _layout.Sizes[read.Field]);
-            stringReads += _layout.Kinds[read.Field] == StorageKind.String ? 1 : 0;
         }
 
-        // One memo per string read, up to MaxStringMemos; a read past those gets a fresh memo per block.
-        var memos = stringReads == 0 ? default : NewStringMemo(stackalloc int[Math.Min(stringReads, MaxStringMemos) * StringMemoLength]);
-        Span<int> blockMemo = stringReads > MaxStringMemos ? stackalloc int[StringMemoLength] : default;
         for (var start = 0; start < rows.Length; start += FillBlock)
         {
             var count = Math.Min(FillBlock, rows.Length - start);
             var blockRecords = records.Slice(start, count);
             var blockRows = rows.Slice(start, count);
             Touch(blockRecords, readEnd);
-            var stringRead = 0;
             for (var r = 0; r < reads.Length; r++)
             {
-                scoped Span<int> memo = default;
-                if (_layout.Kinds[reads[r].Field] == StorageKind.String)
-                {
-                    memo = stringRead < MaxStringMemos ? memos.Slice(stringRead * StringMemoLength, StringMemoLength) : NewStringMemo(blockMemo);
-                    stringRead++;
-                }
-
-                var replaced = FillField(reads[r].Field, blockRecords, blockRows, maxRow, reads[r].Target, reads[r].Absent, memo);
+                var replaced = FillField(reads[r].Field, blockRecords, blockRows, maxRow, reads[r].Target, reads[r].Absent);
                 if (!counts.IsEmpty)
                 {
                     counts[r] = new LocalFillCounts(counts[r].NonFinite + replaced.NonFinite, counts[r].OutOfRange + replaced.OutOfRange);
@@ -442,17 +440,6 @@ public sealed class TableVersion
     /// the headers and scalar values of 128 records (two or three cache lines each) fit the L1 data cache.
     /// </summary>
     internal const int FillBlock = 128;
-
-    private const int StringMemoSize = 256;
-    private const int StringMemoLength = 2 * StringMemoSize;
-    private const int MaxStringMemos = 4;
-
-    /// <summary>Clears a string memo (<see cref="StringMemoLength"/> ints per read): no table code is mapped yet.</summary>
-    private static Span<int> NewStringMemo(Span<int> memo)
-    {
-        memo.Fill(-1);
-        return memo;
-    }
 
     /// <summary>
     /// Reads one byte of every cache line of <c>[0, end)</c> of each record, and nothing depends on the bytes but the
@@ -485,7 +472,7 @@ public sealed class TableVersion
     }
 
     private LocalFillCounts FillField(
-        int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, int maxRow, ColumnBuffer target, in ScalarValue absent, Span<int> stringMemo)
+        int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, int maxRow, ColumnBuffer target, in ScalarValue absent)
     {
         switch (_layout.Kinds[field])
         {
@@ -494,8 +481,7 @@ public sealed class TableVersion
             case StorageKind.Int64: FillScalar<long>(field, records, rows, maxRow, (ScalarColumn<long>)target, absent); return default;
             case StorageKind.Float32: return new(FillFloat32(field, records, rows, maxRow, (ScalarColumn<float>)target, absent), 0);
             case StorageKind.Float64: return new(FillFloat64(field, records, rows, maxRow, (ScalarColumn<double>)target, absent), 0);
-            case StorageKind.String: FillString(field, records, rows, maxRow, (DictStringColumn)target, absent, stringMemo); return default;
-            case StorageKind.Text: FillText(field, records, rows, (TextColumn)target, absent); return default;
+            case StorageKind.String: FillString(field, records, rows, maxRow, (StringColumn)target, absent); return default;
             case StorageKind.List:
                 switch (_layout.Elements[field])
                 {
@@ -602,7 +588,7 @@ public sealed class TableVersion
 
     /// <summary>
     /// The field's stored value as a promoted scalar (int32 → int64, float32 → float64, list&lt;int32&gt; → list&lt;int64&gt;),
-    /// or missing. For cold paths (context features, replay recording, tests): lists and text are copied. Values
+    /// or missing. For cold paths (context features, replay recording, tests): lists are copied. Values
     /// are as stored: NaN and ±∞ are not replaced, and a list's length is not checked (the reader applies the type).
     /// </summary>
     internal ScalarValue Read(int field, in LocalRecordRef record)
@@ -622,7 +608,6 @@ public sealed class TableVersion
             case StorageKind.Float32: return ScalarValue.FromFloat32(BinaryPrimitives.ReadSingleLittleEndian(page.AsSpan(at)));
             case StorageKind.Float64: return ScalarValue.FromFloat64(BinaryPrimitives.ReadDoubleLittleEndian(page.AsSpan(at)));
             case StorageKind.String: return ScalarValue.FromString(StringOf(BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(at))));
-            case StorageKind.Text: return ScalarValue.FromText(new string(MemoryMarshal.Cast<byte, char>(VarBytes(page, record.Offset, field, 2))));
             case StorageKind.List when _layout.Elements[field] != StorageKind.String:
                 var elements = VarBytes(page, record.Offset, field, _layout.ElementSizes[field]);
                 return _layout.Elements[field] switch
@@ -913,27 +898,24 @@ public sealed class TableVersion
     }
 
     /// <summary>
-    /// String codes are translated from the table's dictionary to the column's. A small direct-mapped memo (table code to
-    /// column code, <see cref="StringMemoLength"/> ints from <see cref="NewStringMemo"/>) skips the column dictionary's hash
-    /// lookup for repeated values, the common case for low-cardinality strings. It belongs to one target column and lives
-    /// for the whole fill call, across blocks.
+    /// A string field: each row gets the dictionary's instance of its code, so a fill allocates nothing however long the
+    /// strings are, and every request shares the table's strings (a category, a title, a description alike). An absent row
+    /// gets the absent value's instance, the plan's.
     /// </summary>
     private void FillString(
-        int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, int maxRow, DictStringColumn column, in ScalarValue absent, Span<int> memo)
+        int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, int maxRow, StringColumn column, in ScalarValue absent)
     {
-        var memoTable = memo[..StringMemoSize];
-        var memoColumn = memo.Slice(StringMemoSize, StringMemoSize);
         var strings = Volatile.Read(ref _strings);
-        var codes = column.Codes;
-        RequireLength(codes.Length, maxRow + 1L);
-        ref var code0 = ref MemoryMarshal.GetArrayDataReference(codes);
+        var values = column.Values;
+        RequireLength(values.Length, maxRow + 1L);
+        ref var value0 = ref MemoryMarshal.GetArrayDataReference(values);
         ref var record0 = ref MemoryMarshal.GetReference(records);
         ref var row0 = ref MemoryMarshal.GetReference(rows);
         var words = TargetValidity(column, absent.IsMissing, maxRow);
         var at = _layout.Offsets[field];
         var validityAt = RecordLayout.ValidityOffset + (field >> 3);
         var bit = 1 << (field & 7);
-        var absentCode = absent.IsMissing ? -1 : column.GetOrAddCode(absent.AsString());
+        var fallback = absent.IsMissing ? null : absent.AsString();
         for (var i = 0; i < rows.Length; i++)
         {
             var row = Unsafe.Add(ref row0, i);
@@ -944,48 +926,25 @@ public sealed class TableVersion
                 if ((Unsafe.Add(ref start, validityAt) & bit) != 0)
                 {
                     var code = Unsafe.ReadUnaligned<int>(ref Unsafe.Add(ref start, at));
-                    var slot = code & (StringMemoSize - 1);
-                    if (memoTable[slot] != code)
+                    if ((uint)code >= (uint)strings.Length)
                     {
-                        if ((uint)code >= (uint)strings.Length)
-                        {
-                            strings = Volatile.Read(ref _strings); // grown after this call's first load; see StringOf
-                        }
-
-                        memoTable[slot] = code;
-                        memoColumn[slot] = column.GetOrAddCode(strings[code]);
+                        strings = Volatile.Read(ref _strings); // grown after this call's first load; see StringOf
                     }
 
-                    Unsafe.Add(ref code0, row) = memoColumn[slot];
+                    Unsafe.Add(ref value0, row) = strings[code];
                     MarkValid(words, row);
                     continue;
                 }
             }
 
-            if (absentCode < 0)
+            if (fallback is null)
             {
                 MarkMissing(words!, row);
             }
             else
             {
-                Unsafe.Add(ref code0, row) = absentCode;
+                Unsafe.Add(ref value0, row) = fallback;
                 MarkValid(words, row);
-            }
-        }
-    }
-
-    private void FillText(int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, TextColumn column, in ScalarValue absent)
-    {
-        for (var i = 0; i < rows.Length; i++)
-        {
-            var row = rows[i];
-            if (records[i].Page is { } page && IsValid(page, records[i].Offset, field))
-            {
-                column.Set(row, new string(MemoryMarshal.Cast<byte, char>(VarBytes(page, records[i].Offset, field, 2))));
-            }
-            else
-            {
-                WriteAbsent(column, row, absent);
             }
         }
     }
@@ -1149,6 +1108,16 @@ public sealed class TableVersion
 
     internal int StringCount => _stringCount;
 
+    /// <summary>What the dictionary's strings are charged (<see cref="StringObjectBytes"/> each), referenced or not.</summary>
+    internal long StringBytes => _stringBytes;
+
+    /// <summary>
+    /// What the dictionary's strings that no current record references are charged: values only superseded records held,
+    /// which a compaction drops with those records. A string costs a record only its 4-byte code, so a field rewritten with
+    /// long new values (a description) leaves most of what it superseded here, not in <see cref="SupersededBytes"/>.
+    /// </summary>
+    internal long UnreferencedStringBytes => _unreferencedStringBytes;
+
     internal int PageCount => _pageCount;
 
     internal long Hash(ReadOnlySpan<char> key) => (long)_hasher(key);
@@ -1304,15 +1273,16 @@ public sealed class TableVersion
         var bytes = objectBytes;
         for (long capacity = _strings.Length; _stringCount + (long)count > capacity; capacity *= 2)
         {
-            bytes += capacity * 8; // AddString: a full array is copied into one twice as long
+            bytes += capacity * StringSlotBytes; // AddString: full arrays are copied into ones twice as long
         }
 
         return bytes + _codes.GrowthBytes(count);
     }
 
     /// <summary>
-    /// Adds a string to the dictionary and returns its code. The element is stored before any record using the code is
-    /// published; a full dictionary is copied into a grown array that is published whole.
+    /// Adds a string to the dictionary and returns its code; the record that brings it references it next
+    /// (<see cref="Reference"/>). The element is stored before any record using the code is published; a full dictionary is
+    /// copied into a grown array that is published whole.
     /// </summary>
     internal int AddString(string value)
     {
@@ -1323,7 +1293,8 @@ public sealed class TableVersion
             Array.Copy(strings, grown, _stringCount);
             grown[_stringCount] = value;
             Volatile.Write(ref _strings, grown);
-            AddBytes(strings.Length * 8L);
+            Array.Resize(ref _references, grown.Length);
+            AddBytes((long)strings.Length * StringSlotBytes);
         }
         else
         {
@@ -1331,11 +1302,67 @@ public sealed class TableVersion
         }
 
         var code = _stringCount++;
+        _references[code] = 0;
         var mapBefore = _codes.Bytes;
         _codes.Add(code, value, _strings);
         _stringBytes += StringObjectBytes(value.Length);
         AddBytes(StringObjectBytes(value.Length) + _codes.Bytes - mapBefore);
         return code;
+    }
+
+    /// <summary>
+    /// Counts the string references of a record: <paramref name="delta"/> +1 when it becomes its key's current record
+    /// (after its codes are written), −1 when a newer record or a tombstone supersedes it. Records share strings (a category
+    /// many keys hold), so a string is unreferenced only when its count reaches 0, and referenced again when a later record
+    /// brings the value back. Only the writer calls it; readers never see the counts.
+    /// </summary>
+    internal void Reference(byte[] page, int offset, int delta)
+    {
+        foreach (var field in _layout.DictionaryFields)
+        {
+            foreach (var code in _layout.Codes(page, offset, field))
+            {
+                ref var count = ref _references[code];
+                if (delta > 0)
+                {
+                    if (count == Unreferenced)
+                    {
+                        count = 0;
+                        _unreferencedStringBytes -= StringObjectBytes(_strings[code].Length);
+                    }
+
+                    count++;
+                }
+                else
+                {
+                    Debug.Assert(count > 0, "A superseded record referenced a string no current record held.");
+                    if (--count == 0)
+                    {
+                        count = Unreferenced;
+                        _unreferencedStringBytes += StringObjectBytes(_strings[code].Length);
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// What dropping the record at <paramref name="offset"/> (a current record of this version) frees: its bytes, and for
+    /// each dictionary string it references, the string's charge divided by the references to it, so that dropping every
+    /// record of a string frees the whole string. Writer side, for choosing what to evict.
+    /// </summary>
+    internal long Footprint(byte[] page, int offset)
+    {
+        long bytes = BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(offset + RecordLayout.LengthOffset));
+        foreach (var field in _layout.DictionaryFields)
+        {
+            foreach (var code in _layout.Codes(page, offset, field))
+            {
+                bytes += StringObjectBytes(_strings[code].Length) / Math.Max(1, _references[code]);
+            }
+        }
+
+        return bytes;
     }
 
     private void AddPage(int size)

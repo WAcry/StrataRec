@@ -43,7 +43,7 @@ public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
         new("q", ColumnType.Int64),         // key << 32 | stamp
         new("q_f64", ColumnType.Float64),
         new("q_i32", ColumnType.Int32),
-        new("q_text", ColumnType.Text),
+        new("q_text", ColumnType.String), // distinct per write: the dictionary grows while readers read
         new("q_vec", ColumnType.List(StorageKind.Float32, fixedLength: 8)),
         new("q_li64", ColumnType.List(StorageKind.Int64)),
         new("q_ls", ColumnType.List(StorageKind.String)),
@@ -346,7 +346,7 @@ public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
         {
             Expect(key, "q_f64", ((ScalarColumn<double>)columns[QF64])[row] == q + 0.5);
             Expect(key, "q_i32", ((ScalarColumn<int>)columns[QI32])[row] == (int)q);
-            Expect(key, "q_text", ((TextColumn)columns[QText]).Get(row) == Text(key, q));
+            Expect(key, "q_text", ((StringColumn)columns[QText]).Get(row) == Text(key, q));
             var vector = ((ListColumn<float>)columns[QVec]).Get(row);
             Expect(key, "q_vec length", vector.Length == 8);
             for (var j = 0; j < vector.Length; j++)
@@ -373,7 +373,7 @@ public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
         {
             Expect(key, "p_f32", ((ScalarColumn<float>)columns[PF32])[row] == p % 1_000_000);
             Expect(key, "p_b", ((ScalarColumn<bool>)columns[PB])[row] == ((p & 1) == 1));
-            Expect(key, "p_s", ((DictStringColumn)columns[PS]).Get(row) == Word(p));
+            Expect(key, "p_s", ((StringColumn)columns[PS]).Get(row) == Word(p));
             var ints = ((ListColumn<int>)columns[PLi32]).Get(row);
             Expect(key, "p_li32 length", ints.Length == p % 4);
             for (var j = 0; j < ints.Length; j++)

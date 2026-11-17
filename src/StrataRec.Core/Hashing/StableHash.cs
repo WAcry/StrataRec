@@ -138,7 +138,7 @@ public static class StableHash
                 case Types.StorageKind.Int64: Add(value.AsInt64()); break;
                 case Types.StorageKind.Float64: Add(value.AsFloat64()); break;
                 case Types.StorageKind.Bool: Add(value.AsBool()); break;
-                case Types.StorageKind.String or Types.StorageKind.Text: Add(value.AsString()); break;
+                case Types.StorageKind.String: Add(value.AsString()); break;
                 default: throw new ArgumentException($"Value of kind {value.Kind} cannot be hashed.", nameof(value));
             }
         }

@@ -21,12 +21,12 @@ namespace StrataRec.Features.Runtime;
 /// waiting for it, while the other chunks are read. No two chunks ever write the same memory: fixed-size values and
 /// strings live in one array per field indexed by the fetch's key index, where chunks own disjoint ranges;
 /// each chunk's "written" bits start at a 64-bit word boundary, because two writers of one bitmap word lose each other's
-/// bits; and a list field gets one buffer per chunk, because its arena grows. Strings are staged as plain references and
-/// dictionary-encoded at backfill: a dictionary is not safe for concurrent writers either. A chunk's region is read only
+/// bits; and a list field gets one buffer per chunk, because its arena grows. Strings are staged as the references the
+/// connector wrote, and backfill copies the references. A chunk's region is read only
 /// after its call completed within its budget; a timed-out call may keep writing into its own region, which is never
 /// read and stays rented until the call really finishes.</para>
 /// <para>One area per fetch rather than one buffer per chunk: a fetch with a small <c>max_batch</c> has hundreds of
-/// chunks, and their column objects, string dictionaries and rents were most of a request's allocation.</para>
+/// chunks, and their column objects and rents were most of a request's allocation.</para>
 /// </remarks>
 internal sealed class StagingArea
 {
@@ -56,17 +56,13 @@ internal sealed class StagingArea
         {
             var type = fields[i].Type.AsNonNullable();
             ColumnBuffer? column = null;
-            switch (type.Kind)
+            if (type.IsList)
             {
-                case StorageKind.List:
-                    hasLists = true;
-                    break;
-                case StorageKind.String:
-                    column = new TextColumn(ColumnType.Text, rows, memory);
-                    break;
-                default:
-                    column = ColumnBuffer.Create(type, rows, memory);
-                    break;
+                hasLists = true;
+            }
+            else
+            {
+                column = ColumnBuffer.Create(type, rows, memory);
             }
 
             _fields[i] = new Field(type, column);
@@ -142,9 +138,7 @@ internal sealed class StagingArea
             return ColumnValues.Get(_lists![(fieldIndex * ChunkCount) + chunk]!, key - (chunk * ChunkSize));
         }
 
-        return field.Type.Kind == StorageKind.String
-            ? ScalarValue.FromString(((TextColumn)field.Column).Get(key))
-            : ColumnValues.Get(field.Column, key);
+        return ColumnValues.Get(field.Column, key);
     }
 
     /// <summary>
@@ -168,10 +162,6 @@ internal sealed class StagingArea
 
             target.CopyFrom(list, local, row);
         }
-        else if (field.Type.Kind == StorageKind.String && target is DictStringColumn strings)
-        {
-            strings.Set(row, ((TextColumn)field.Column).Get(key));
-        }
         else
         {
             target.CopyFrom(field.Column, key, row);
@@ -182,7 +172,7 @@ internal sealed class StagingArea
 
     internal ColumnType TypeOf(int fieldIndex) => _fields[CheckField(fieldIndex)].Type;
 
-    /// <summary>Storage of a fixed-size, string or text field, indexed by fetch key; null for a list field.</summary>
+    /// <summary>Storage of a fixed-size or string field, indexed by fetch key; null for a list field.</summary>
     internal ColumnBuffer? ColumnOf(int fieldIndex) => _fields[CheckField(fieldIndex)].Column;
 
     /// <summary>The list buffer of one chunk, created on its first write (from the chunk's own connector thread).</summary>
@@ -236,21 +226,15 @@ internal sealed class StagingArea
 /// </remarks>
 internal sealed class StagingBuffer : IFeatureBatchWriter, IStagedFeatureValues
 {
-    /// <summary>Distinct values a writer keeps for <c>string</c> fields at most; past it each value is a string of its own.</summary>
-    internal const int MaxInterned = 1024;
-
-    /// <summary>Below this many keys a span value is a string of its own: a table would cost more than it saves.</summary>
-    private const int InternFromKeys = 16;
-
     private readonly StagingArea _area;
     private int _chunk;
     private int _offset;
 
     /// <summary>
-    /// One string per distinct value written as characters to a <c>string</c> field, for every chunk this writer is bound
-    /// to: a writer is written by one call at a time, so it needs no lock.
+    /// The values <see cref="Intern"/> handed out, for every chunk this writer is bound to (a writer is written by one call
+    /// at a time, so it needs no lock); made by the first call, and dropped with the writer.
     /// </summary>
-    private Dictionary<string, string>? _interned;
+    private StringDedup? _strings;
 
     public StagingBuffer(StagingArea area)
     {
@@ -275,7 +259,7 @@ internal sealed class StagingBuffer : IFeatureBatchWriter, IStagedFeatureValues
     }
 
     /// <summary>
-    /// Storage of a field for this chunk (tests): fixed-size, string and text fields are shared by the fetch's
+    /// Storage of a field for this chunk (tests): fixed-size and string fields are shared by the fetch's
     /// chunks and indexed by the fetch key (<c>chunk × ChunkSize + key</c>, the key itself for a buffer of its own); a
     /// list field's buffer is this chunk's and indexed by the chunk-local key.
     /// </summary>
@@ -315,61 +299,20 @@ internal sealed class StagingBuffer : IFeatureBatchWriter, IStagedFeatureValues
     {
         CheckKey(keyIndex);
         var bit = _area.FirstBit(fieldIndex, _chunk) + keyIndex;
-        if (_area.ColumnOf(fieldIndex) is not TextColumn text)
+        if (_area.ColumnOf(fieldIndex) is not StringColumn strings)
         {
-            throw new InvalidOperationException($"Field {fieldIndex} is not a string or text field.");
+            throw new InvalidOperationException($"Field {fieldIndex} has type {_area.TypeOf(fieldIndex)}; SetString does not match it.");
         }
 
-        // A null would reach the table's string dictionary at backfill, on the request's thread; it is the connector's bug.
+        // A null would reach a request's column, read as an empty string where it should be missing; it is the connector's bug.
         ArgumentNullException.ThrowIfNull(value);
-        text.Set(_offset + keyIndex, value);
+        strings.Set(_offset + keyIndex, value);
         _area.SetBit(bit);
     }
 
-    public void SetString(int fieldIndex, int keyIndex, ReadOnlySpan<char> value)
-    {
-        CheckKey(keyIndex);
-        if (_area.ColumnOf(fieldIndex) is not TextColumn text)
-        {
-            throw new InvalidOperationException($"Field {fieldIndex} is not a string or text field.");
-        }
+    public string Intern(ReadOnlySpan<char> value) => (_strings ??= new StringDedup()).Intern(value);
 
-        var categorical = _area.TypeOf(fieldIndex).Kind == StorageKind.String && KeyCount >= InternFromKeys;
-        text.Set(_offset + keyIndex, categorical ? Intern(value) : value.ToString());
-        _area.SetBit(_area.FirstBit(fieldIndex, _chunk) + keyIndex);
-    }
-
-    public void SetStringUtf8(int fieldIndex, int keyIndex, ReadOnlySpan<byte> utf8)
-    {
-        const int OnStack = 256;
-        if (utf8.Length <= OnStack)
-        {
-            Span<char> chars = stackalloc char[OnStack]; // UTF-8 never decodes to more chars than bytes
-            SetString(fieldIndex, keyIndex, chars[..System.Text.Encoding.UTF8.GetChars(utf8, chars)]);
-        }
-        else
-        {
-            SetString(fieldIndex, keyIndex, System.Text.Encoding.UTF8.GetString(utf8)); // long: a text, a string of its own
-        }
-    }
-
-    private string Intern(ReadOnlySpan<char> value)
-    {
-        var table = _interned ??= new Dictionary<string, string>(StringComparer.Ordinal);
-        var lookup = table.GetAlternateLookup<ReadOnlySpan<char>>();
-        if (lookup.TryGetValue(value, out var known))
-        {
-            return known;
-        }
-
-        var created = value.ToString();
-        if (table.Count < MaxInterned)
-        {
-            table.Add(created, created);
-        }
-
-        return created;
-    }
+    public string InternUtf8(ReadOnlySpan<byte> utf8) => (_strings ??= new StringDedup()).InternUtf8(utf8);
 
     public void SetBoolList(int fieldIndex, int keyIndex, ReadOnlySpan<bool> value) =>
         SetList(fieldIndex, keyIndex, value, StorageKind.Bool, nameof(SetBoolList));
@@ -388,7 +331,7 @@ internal sealed class StagingBuffer : IFeatureBatchWriter, IStagedFeatureValues
 
     public void SetStringList(int fieldIndex, int keyIndex, ReadOnlySpan<string> value)
     {
-        // A null element would reach the table's string dictionary at backfill, on the request's thread; it is the connector's bug.
+        // A null element would reach a request's list column, where elements are never missing; it is the connector's bug.
         foreach (var item in value)
         {
             ArgumentNullException.ThrowIfNull(item, nameof(value));

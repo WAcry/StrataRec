@@ -1120,7 +1120,7 @@ internal sealed class Binder
         StorageKind.Float32 or StorageKind.Float64 => actual.IsNumeric,
         StorageKind.Int32 or StorageKind.Int64 => actual.Kind == TypeKind.Int,
         StorageKind.Bool => actual.Kind == TypeKind.Bool,
-        StorageKind.String or StorageKind.Text => actual.Kind == TypeKind.String,
+        StorageKind.String => actual.Kind == TypeKind.String,
         // A list of any length (or an expression whose length is not known) may be written to a fixed-length site, whose
         // writer checks each row's length; a list known to have another length cannot.
         StorageKind.List => actual.Kind == ExprType.FromColumnType(expected).Kind

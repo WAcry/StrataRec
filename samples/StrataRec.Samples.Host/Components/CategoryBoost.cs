@@ -88,21 +88,22 @@ public sealed class CategoryBoostFactory : IOperatorFactory
             ok = false;
         }
 
-        // Ordinal order, so the compiled operator does not depend on how the JSON object was written.
+        // Checked in ordinal order, so the errors do not depend on how the JSON object was written. The map is built once
+        // here and only read by requests, which a Dictionary allows from any number of threads.
         var names = new List<string>(config.Boosts.Keys);
         names.Sort(StringComparer.Ordinal);
-        var boosts = new (string Category, double Factor)[names.Count];
-        for (var i = 0; i < names.Count; i++)
+        var boosts = new Dictionary<string, double>(names.Count, StringComparer.Ordinal);
+        foreach (var name in names)
         {
-            var factor = config.Boosts[names[i]];
+            var factor = config.Boosts[name];
             if (!double.IsFinite(factor) || factor <= 0)
             {
-                context.Error("/boosts/" + JsonPointer.Escape(names[i]), "BOOST_INVALID", $"The boost of '{names[i]}' is {factor}; it must be finite and greater than 0.",
+                context.Error("/boosts/" + JsonPointer.Escape(name), "BOOST_INVALID", $"The boost of '{name}' is {factor}; it must be finite and greater than 0.",
                     "use 1.0 for no change, or remove the entry");
                 ok = false;
             }
 
-            boosts[i] = (names[i], factor);
+            boosts[name] = factor;
         }
 
         if (!ok || !context.TryWriteColumn(config.OutputCol, "/output_col", null, out var output))
@@ -119,7 +120,7 @@ public sealed class CategoryBoostFactory : IOperatorFactory
         return new CategoryBoost(score, category, output, boosts);
     }
 
-    private sealed class CategoryBoost(ColumnRef score, ColumnRef category, OutputColumn output, (string Category, double Factor)[] boosts) : Operator
+    private sealed class CategoryBoost(ColumnRef score, ColumnRef category, OutputColumn output, Dictionary<string, double> boosts) : Operator
     {
         public override ValueTask ExecuteAsync(OperatorContext context)
         {
@@ -135,22 +136,11 @@ public sealed class CategoryBoostFactory : IOperatorFactory
                 return ValueTask.CompletedTask;
             }
 
-            // A string column is dictionary-encoded: translate each listed category into the column's code once, then a row's
-            // factor is one array read by its code. A column not produced in this request has no categories: no row is boosted.
-            var categories = context.Read(category) as DictStringColumn;
+            // A string column holds a string reference per row, and the rows of one category usually share an instance (the
+            // local table's, or the one a connector interned), so a row holding the previous row's instance reuses its factor
+            // without a lookup. A column not produced in this request has no categories: no row is boosted.
+            var categories = context.Read(category) as StringColumn;
             var memory = context.Memory;
-            var factorByCode = memory.Rent<double>(categories?.Dictionary.Count ?? 1);
-            factorByCode.AsSpan().Fill(1.0);
-            if (categories is not null)
-            {
-                foreach (var (name, factor) in boosts)
-                {
-                    if (categories.FindCode(name) is var code and >= 0)
-                    {
-                        factorByCode[code] = factor;
-                    }
-                }
-            }
 
             // The boosted score of each live row, by rank position.
             var floats = scores as ScalarColumn<float>;
@@ -161,10 +151,24 @@ public sealed class CategoryBoostFactory : IOperatorFactory
             }
 
             var boosted = memory.Rent<double>(rows.Length);
+            string? last = null;
+            var lastFactor = 1.0;
             for (var i = 0; i < rows.Length; i++)
             {
                 var row = rows[i];
-                var factor = categories is not null && categories.IsValid(row) ? factorByCode[categories.Codes[row]] : 1.0;
+                var factor = 1.0;
+                if (categories is not null && categories.IsValid(row))
+                {
+                    var value = categories.Get(row);
+                    if (!ReferenceEquals(value, last))
+                    {
+                        last = value;
+                        lastFactor = boosts.TryGetValue(value, out var listed) ? listed : 1.0;
+                    }
+
+                    factor = lastFactor;
+                }
+
                 boosted[i] = factor * (floats is not null ? floats[row] : doubles![row]);
             }
 

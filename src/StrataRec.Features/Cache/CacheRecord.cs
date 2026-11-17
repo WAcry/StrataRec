@@ -38,13 +38,15 @@ internal enum CacheRecordHeader : byte
 /// 8   int64   write time      Unix milliseconds: when the fetch that produced the values started
 /// 16  uint64  fingerprint     XXH3-64 of the field set (<see cref="Fingerprint"/>)
 /// 24  uint8[V] validity       bit f set = field f has a value (V = ceil(fields / 8))
-/// …   values of the fields that have one, in field order: bool 1 byte; int32, float32 4; int64, float64 8; string and
-///     text int32 byte length + UTF-8; a list int32 count + its elements, each as the scalar of its element type is (a
+/// …   values of the fields that have one, in field order: bool 1 byte; int32, float32 4; int64, float64 8; string int32
+///     byte length + UTF-8; a list int32 count + its elements, each as the scalar of its element type is (a
 ///     bool 1 byte, 0 or 1; list&lt;string&gt; items int32 byte length + UTF-8), a fixed-length list included
 /// </code>
 /// <para>2026-11-16.1 removed the vector encoding (N float32 values without a count): a vector is a
 /// <c>list&lt;float32,N&gt;</c>, encoded as every list is, and a record holds what the connector wrote, whose length the
-/// reader checks against the type as it does a connector's answer.</para>
+/// reader checks against the type as it does a connector's answer. Folding <c>text</c> into <c>string</c> left the format
+/// as it was: both were already an int32 byte length and UTF-8, and a field once declared <c>text</c> is declared
+/// <c>string</c> now, a field set of another fingerprint, so its old records are misses rather than misread.</para>
 /// <para>The fingerprint covers the format, the key type and every field's name and storage type in field order (the
 /// table's order, by name), so two instances whose catalogs bind different fields to the source never decode each
 /// other's records: a reader that finds another fingerprint treats the record as a miss. Values are not aligned: the
@@ -199,7 +201,7 @@ internal static class CacheRecord
                     visitor.Float64(f, BinaryPrimitives.ReadDoubleLittleEndian(rest));
                     size = 8;
                     break;
-                case StorageKind.String or StorageKind.Text:
+                case StorageKind.String:
                     if (!TryLength(rest, 1, out var bytes))
                     {
                         return false;
@@ -397,7 +399,7 @@ internal interface ICacheRecordVisitor
 
     void Float64(int field, double value);
 
-    /// <summary>A <c>string</c> or <c>text</c> value.</summary>
+    /// <summary>A <c>string</c> value. The span is the record's own bytes.</summary>
     void String(int field, ReadOnlySpan<byte> utf8);
 
     /// <summary>A list of fixed-size elements: <c>bool</c>, <c>int</c>, <c>long</c>, <c>float</c> or <c>double</c>, as the
@@ -525,10 +527,9 @@ internal sealed class CacheRecordWriter
         BinaryPrimitives.WriteDoubleLittleEndian(Reserve(8), value);
     }
 
-    /// <summary>A <c>string</c> or <c>text</c> value.</summary>
     public void String(int field, string value)
     {
-        Present(field, _layout.Kinds[field] == StorageKind.Text ? StorageKind.Text : StorageKind.String);
+        Present(field, StorageKind.String);
         WriteString(value);
     }
 

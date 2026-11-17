@@ -135,7 +135,7 @@ public class CandidateTableTests
         long Appended()
         {
             var memory = new RequestMemory();
-            var table = new CandidateTable(new TableSchema(EntityKeyType.String, new[] { ColumnType.Text }), ids.Length, memory);
+            var table = new CandidateTable(new TableSchema(EntityKeyType.String, new[] { ColumnType.String }), ids.Length, memory);
             var before = GC.GetAllocatedBytesForCurrentThread();
             foreach (var keys in batches)
             {
@@ -159,7 +159,7 @@ public class CandidateTableTests
     public void Rollback_ReleasesKeysThatWereNeverLookedUp_ForStringKeysToo()
     {
         var memory = new RequestMemory();
-        var table = new CandidateTable(new TableSchema(EntityKeyType.String, new[] { ColumnType.Text }), 4, memory);
+        var table = new CandidateTable(new TableSchema(EntityKeyType.String, new[] { ColumnType.String }), 4, memory);
         table.AppendRows(new[] { "a", "b" });
         var checkpoint = table.Checkpoint();
         table.AppendRows(new[] { "c" });
@@ -265,7 +265,7 @@ public class CandidateTableTests
     public void ContainsKey_KnowsTheKeysACompactReleased_AcrossCompactions_ButNotWhatARollbackReleased(EntityKeyType keyType)
     {
         var memory = new RequestMemory();
-        var table = new CandidateTable(new TableSchema(keyType, new[] { keyType == EntityKeyType.Int64 ? ColumnType.Int64 : ColumnType.Text }), 8, memory);
+        var table = new CandidateTable(new TableSchema(keyType, new[] { keyType == EntityKeyType.Int64 ? ColumnType.Int64 : ColumnType.String }), 8, memory);
         EntityKey K(long n) => keyType == EntityKeyType.Int64 ? EntityKey.FromInt64(n) : EntityKey.FromString("k" + n);
         void Append(params long[] keys)
         {
@@ -308,7 +308,7 @@ public class CandidateTableTests
     public void FindRow_StringKeys()
     {
         var memory = new RequestMemory();
-        var table = new CandidateTable(new TableSchema(EntityKeyType.String, new[] { ColumnType.Text }), 8, memory);
+        var table = new CandidateTable(new TableSchema(EntityKeyType.String, new[] { ColumnType.String }), 8, memory);
         table.AppendRows(new[] { "a", "B", "a" });
         Assert.Equal(0, table.FindRow(EntityKey.FromString("a")));
         Assert.Equal(1, table.FindRow(EntityKey.FromString("B")));

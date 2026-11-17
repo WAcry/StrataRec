@@ -10,14 +10,13 @@ namespace StrataRec.UnitTests.Features.Local;
 
 /// <summary>
 /// Reading a local table on the request path allocates nothing (design 4.8, 6.6): the lookup writes into the caller's
-/// span, and filling writes into column buffers whose arrays come from the request memory. Two costs belong to the column
-/// types and are outside the claim: a <c>text</c> value becomes a string (until text columns store UTF-8, design 4.4), and
-/// a string column's dictionary grows by values it has not seen (here it is preset, as a plan could size it).
+/// span, and filling writes into column buffers whose arrays come from the request memory. Strings included, whatever
+/// their length: a row gets the table's dictionary instance.
 /// </summary>
 [Collection(AllocationMeasurement.Name)]
 public class LocalFeatureTableAllocationTests
 {
-    private static readonly LocalTableField[] Fields = AllTypes.Where(f => f.Type.Kind != StorageKind.Text).ToArray();
+    private static readonly LocalTableField[] Fields = AllTypes;
 
     [Theory]
     [InlineData(EntityKeyType.Int64, 500, false)]
@@ -30,9 +29,7 @@ public class LocalFeatureTableAllocationTests
         var table = new LocalFeatureTable(Schema(keyType, fields: Fields));
         for (var id = 1; id <= 20_000; id++)
         {
-            var values = Values(id);
-            values.Remove("t");
-            Write(table.Writer, Key(keyType, id), 1, values);
+            Write(table.Writer, Key(keyType, id), 1, Values(id));
         }
 
         // Every tenth key is absent; every field is read, with a default for half of them.
@@ -71,14 +68,6 @@ public class LocalFeatureTableAllocationTests
             {
                 columns[f] = ColumnBuffer.Create(Fields[f].Type, keyCount, memory);
                 filled[f] = new ulong[Bits.WordCount(keyCount)];
-                if (columns[f] is DictStringColumn strings)
-                {
-                    for (var c = 0; c < 5; c++)
-                    {
-                        strings.GetOrAddCode("cat-" + c);
-                    }
-                }
-
                 reads[f] = new LocalFieldRead(f, columns[f], absent[f]);
             }
 
@@ -108,5 +97,59 @@ public class LocalFeatureTableAllocationTests
         }
 
         Assert.Equal(0, best);
+    }
+
+    /// <summary>
+    /// A long string field, distinct per record (a description, what was <c>text</c>): a fill allocates nothing however
+    /// many rows it fills, and each row holds the table's own instance, the same in every request, so no request copies it.
+    /// </summary>
+    [Fact]
+    public void ALongStringField_FillsTheTablesInstances_WithoutAllocatingPerRow()
+    {
+        var fields = new[] { new LocalTableField("description", ColumnType.String) };
+        var table = new LocalFeatureTable(Schema(EntityKeyType.Int64, fields: fields));
+        for (var id = 1; id <= 20_000; id++)
+        {
+            var builder = table.Writer.Begin(id, 1);
+            builder.SetString(0, $"item {id}: " + new string((char)('a' + (id % 26)), 300));
+            Assert.True(builder.Commit());
+        }
+
+        var version = table.Pin();
+        long Filled(int keyCount, out StringColumn column)
+        {
+            var keys = new long[keyCount];
+            var rows = new int[keyCount];
+            for (var i = 0; i < keyCount; i++)
+            {
+                keys[i] = 1 + ((i * 7919) % 20_000);
+                rows[i] = i;
+            }
+
+            var records = new LocalRecordRef[keyCount];
+            version.Lookup(keys, records);
+            var memory = new RequestMemory();
+            column = (StringColumn)ColumnBuffer.Create(ColumnType.String.AsNullable(), keyCount, memory);
+            version.Fill(0, records, rows, column, ScalarValue.Missing); // warm
+            var best = long.MaxValue;
+            for (var round = 0; round < 3; round++)
+            {
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                version.Fill(0, records, rows, column, ScalarValue.Missing);
+                best = Math.Min(best, GC.GetAllocatedBytesForCurrentThread() - before);
+            }
+
+            for (var i = 0; i < keyCount; i++)
+            {
+                Assert.Same(version.Read(0, records[i]).AsString(), column.Get(i)); // the dictionary's instance
+            }
+
+            return best;
+        }
+
+        Assert.Equal(0, Filled(10_000, out var first));
+        Assert.Equal(0, Filled(500, out var second));
+        Assert.Same(first.Get(0), second.Get(0)); // another request, the same instance
+        Assert.StartsWith("item 1: ", first.Get(0), StringComparison.Ordinal);
     }
 }

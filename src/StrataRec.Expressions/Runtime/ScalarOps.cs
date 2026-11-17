@@ -551,8 +551,6 @@ internal static class ValueAccess
                 return ScalarValue.FromFloat64(value.AsInt64());
             case TypeKind.Int when value.Kind == StorageKind.Float64 && value.TryConvert(ColumnType.Int64, out var asInt):
                 return asInt;
-            case TypeKind.String when value.Kind == StorageKind.Text:
-                return ScalarValue.FromString(value.AsString());
             default:
                 throw new InvalidOperationException($"'{name}' is declared {type} but holds a {value.Kind} value ({value}).");
         }
@@ -606,8 +604,7 @@ internal static class ValueAccess
             (TypeKind.Int, ScalarColumn<long> c) => ScalarValue.FromInt64(c[row]),
             (TypeKind.Int, ScalarColumn<int> c) => ScalarValue.FromInt64(c[row]),
             (TypeKind.Bool, ScalarColumn<bool> c) => ScalarValue.FromBool(MemoryMarshal.AsBytes(c.Values.AsSpan(row, 1))[0] != 0),
-            (TypeKind.String, DictStringColumn c) => ScalarValue.FromString(c.Get(row)),
-            (TypeKind.String, TextColumn c) => ScalarValue.FromString(c.Get(row)),
+            (TypeKind.String, StringColumn c) => ScalarValue.FromString(c.Get(row)),
             (TypeKind.ListBool, ListColumn<bool> c) => ColumnValues.GetList(c, row),
             (TypeKind.ListInt, ListColumn<long> or ListColumn<int>) => ColumnValues.GetList((ListColumn)buffer, row),
             (TypeKind.ListFloat, ListColumn<double> or ListColumn<float>) => ColumnValues.GetList((ListColumn)buffer, row),

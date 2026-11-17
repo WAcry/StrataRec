@@ -233,42 +233,6 @@ internal static class BitKernels
         }
     }
 
-    /// <summary><c>dst bit i = codes[i] == code</c> over int32 dictionary codes.</summary>
-    public static void EqualsCode(ReadOnlySpan<int> codes, int code, Span<ulong> dst, int n)
-    {
-        ref var rc = ref MemoryMarshal.GetReference(codes);
-        var i = 0;
-        if (Vector256.IsHardwareAccelerated)
-        {
-            var vc = Vector256.Create(code);
-            for (; i + 64 <= n; i += 64)
-            {
-                ulong w = 0;
-                for (var j = 0; j < 64; j += 8)
-                {
-                    w |= (ulong)Vector256.Equals(Vector256.LoadUnsafe(ref rc, (nuint)(i + j)), vc).ExtractMostSignificantBits() << j;
-                }
-
-                dst[i >> 6] = w;
-            }
-        }
-
-        for (; i < n; i += 64)
-        {
-            ulong w = 0;
-            var count = Math.Min(64, n - i);
-            for (var j = 0; j < count; j++)
-            {
-                if (codes[i + j] == code)
-                {
-                    w |= 1UL << j;
-                }
-            }
-
-            dst[i >> 6] = w;
-        }
-    }
-
     /// <summary>Builds a bitmap from a per-lane predicate result array.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void SetBit(Span<ulong> dst, int lane, bool value)

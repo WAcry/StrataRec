@@ -124,7 +124,7 @@ public static class LlmAnswer
 
         switch (kind)
         {
-            case StorageKind.String or StorageKind.Text when categories is not null:
+            case StorageKind.String when categories is not null:
                 foreach (var category in categories)
                 {
                     if (text.SequenceEqual(category))
@@ -137,8 +137,6 @@ public static class LlmAnswer
                 return ScalarValue.Missing;
             case StorageKind.String:
                 return ScalarValue.FromString(text.Length == answer.Length ? answer : text.ToString());
-            case StorageKind.Text:
-                return ScalarValue.FromText(text.Length == answer.Length ? answer : text.ToString());
             case StorageKind.Bool:
                 if (text.Equals("true", StringComparison.OrdinalIgnoreCase) || text.Equals("false", StringComparison.OrdinalIgnoreCase))
                 {
@@ -150,7 +148,7 @@ public static class LlmAnswer
             case StorageKind.Int32 or StorageKind.Int64 or StorageKind.Float32 or StorageKind.Float64:
                 return ParseNumber(text, kind, memory, out unusable);
             default:
-                throw new ArgumentOutOfRangeException(nameof(kind), kind, "An answer is parsed as text, a string, a bool or a number.");
+                throw new ArgumentOutOfRangeException(nameof(kind), kind, "An answer is parsed as a string, a bool or a number.");
         }
     }
 

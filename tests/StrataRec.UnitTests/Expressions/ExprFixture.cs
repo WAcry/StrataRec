@@ -170,8 +170,7 @@ internal sealed class ExprFixture
         {
             switch (col)
             {
-                case DictStringColumn d when values[r] is { } s: d.Set(r, s); break;
-                case TextColumn t when values[r] is { } s: t.Set(r, s); break;
+                case StringColumn d when values[r] is { } s: d.Set(r, s); break;
                 default: col.SetMissing(r); break;
             }
         }
@@ -235,8 +234,7 @@ internal sealed class ExprFixture
             ScalarColumn<long> c => ScalarValue.FromInt64(c[row]),
             ScalarColumn<int> c => ScalarValue.FromInt64(c[row]),
             ScalarColumn<bool> c => ScalarValue.FromBool(c[row]),
-            DictStringColumn c => ScalarValue.FromString(c.Get(row)),
-            TextColumn c => ScalarValue.FromText(c.Get(row)),
+            StringColumn c => ScalarValue.FromString(c.Get(row)),
             ListColumn<long> c => ScalarValue.FromInt64List(c.Get(row).ToArray()),
             ListColumn<int> c => ScalarValue.FromInt64List(c.Get(row).ToArray().Select(v => (long)v).ToArray()),
             ListColumn<string> c => ScalarValue.FromStringList(c.Get(row).ToArray()),

@@ -239,7 +239,7 @@ internal static class Output
                 }
 
                 break;
-            case StorageKind.String or StorageKind.Text:
+            case StorageKind.String:
                 json.WriteStringValue(value.AsString());
                 break;
             case StorageKind.List:

@@ -210,7 +210,7 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
                     writer.GetValues<double>(field.FieldIndex).Span[keyIndex] = v.GetDouble();
                     writer.SetValid(field.FieldIndex, keyIndex);
                     break;
-                case StorageKind.String or StorageKind.Text: writer.SetString(field.FieldIndex, keyIndex, v.GetString()!); break;
+                case StorageKind.String: writer.SetString(field.FieldIndex, keyIndex, v.GetString()!); break;
                 case StorageKind.List:
                     WriteList(v, keyIndex, field, writer);
                     break;

@@ -28,9 +28,9 @@ public sealed class ReplayBundle
     /// A format version is the date its layout changed and that day's sequence (<c>2026-11-14.1</c>, then
     /// <c>2026-11-14.2</c>): it says when a bundle was laid out, and sorts as text.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-16.3";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-16.4";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-16.3\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-16.4\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }

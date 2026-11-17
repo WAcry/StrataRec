@@ -26,7 +26,7 @@ internal static class LlmFixture
     public static readonly string[] StringKeys = { "sku-c", "sku-a", "sku-e", "sku-b", "sku-d" };
 
     /// <summary>
-    /// The items: title (string), blurb (text?, missing for 20 and 40), price (float64), score (float32), stock (int64),
+    /// The items: title (string), blurb (a longer string, missing for 20 and 40), price (float64), score (float32), stock (int64),
     /// fresh (bool), tags (list&lt;string&gt;?, missing for 50), codes (list&lt;int64&gt;), rating (float32?, missing for
     /// 10), emb (list&lt;float32,2&gt;), extra (string, named only by some templates), weights (list&lt;float32&gt;, only 10)
     /// and clicks (list&lt;bool&gt;, only 10).
@@ -86,7 +86,7 @@ internal static class LlmFixture
                 "user": { "key": "ctx.request.user_id" } },
               "features": {
                 "item.title":  { "type": "string",         "source": "items", "field": "title",  "default": "" },
-                "item.blurb":  { "type": "text",           "source": "items", "field": "blurb" },
+                "item.blurb":  { "type": "string",         "source": "items", "field": "blurb" },
                 "item.price":  { "type": "float64",        "source": "items", "field": "price",  "default": 0.0 },
                 "item.score":  { "type": "float32",        "source": "items", "field": "score",  "default": 0.0 },
                 "item.stock":  { "type": "int64",          "source": "items", "field": "stock",  "default": 0 },

@@ -52,15 +52,15 @@ public sealed class LlmAnnotatorTests
         var result = await Run(plan);
 
         Assert.True(plan.Schema.TryGetColumn("llm.note", out var column));
-        Assert.Equal(ColumnType.Text.AsNullable(), column.Type);
+        Assert.Equal(ColumnType.String.AsNullable(), column.Type);
         Assert.Equal(7, models.Calls.Count); // all seven rows: fewer than the window
         Assert.All(models.Calls, c => Assert.Equal(64, c.MaxOutputTokens));
         Assert.All(Values(result, "note"), v => Assert.Equal("x" + v.Key, v.Value));
     }
 
     [Theory]
-    [InlineData("text?", "  Great for winter.\n", "Great for winter.")]
-    [InlineData("text?", "```\nA \"warm\" pick\n```", "A \"warm\" pick")]
+    [InlineData("string?", "  Great for winter.\n", "Great for winter.")]
+    [InlineData("string?", "```\nA \"warm\" pick\n```", "A \"warm\" pick")]
     [InlineData("string?", "sports", "sports")]
     [InlineData("bool?", "TRUE", true)]
     [InlineData("bool?", " false ", false)]
@@ -87,8 +87,8 @@ public sealed class LlmAnnotatorTests
 
     /// <summary>An answer that is not a value of the column leaves the row missing: never a guess, never a default.</summary>
     [Theory]
-    [InlineData("text?", " \n ", "\"\": it is empty")]
-    [InlineData("text?", "```\n```", "\"```\\n```\": it is empty")]
+    [InlineData("string?", " \n ", "\"\": it is empty")]
+    [InlineData("string?", "```\n```", "\"```\\n```\": it is empty")]
     [InlineData("string?", "", "\"\": it is empty")]
     [InlineData("bool?", "yes", "\"yes\": it is not true or false")]
     [InlineData("bool?", "\"true\"", "\"\\\"true\\\"\": it is not true or false")]
@@ -160,7 +160,7 @@ public sealed class LlmAnnotatorTests
             Values(result, "note"));
         Assert.Equal(NodeOutcomeKind.Degraded, Rank(result).Kind);
         Assert.Equal(
-            "model 'llm' annotated 1 of 5 rows; 3 call(s) failed, the first: overloaded; 1 answer(s) not usable as text?, the first \"\": it is empty; "
+            "model 'llm' annotated 1 of 5 rows; 3 call(s) failed, the first: overloaded; 1 answer(s) not usable as string?, the first \"\": it is empty; "
             + "the answer was cut at max_output_tokens (64): raise max_output_tokens or ask for a shorter answer",
             Rank(result).Detail);
     }
@@ -232,13 +232,13 @@ public sealed class LlmAnnotatorTests
     [InlineData("""{ "model": "llm", "output": "answer", "column": "llm.note", "categories": ["a "], "prompts": { "user": "x" } }""", "",
         "/categories/0", "LLM_CATEGORIES", "Category 'a ' starts or ends with whitespace, which an answer never does: answers are trimmed.")]
     [InlineData("""{ "model": "llm", "output": "answer", "column": "llm.note", "categories": ["a"], "prompts": { "user": "x" } }""",
-        """ "llm.note": { "type": "text?" } """, "/categories", "LLM_CATEGORIES", "'categories' are the answers a string? column allows, but column 'llm.note' is text?.")]
+        """ "llm.note": { "type": "bool?" } """, "/categories", "LLM_CATEGORIES", "'categories' are the answers a string? column allows, but column 'llm.note' is bool?.")]
     [InlineData("""{ "model": "llm", "output": "answer", "column": "llm.note", "prompts": { "user": "x" } }""", """ "llm.note": { "type": "int64", "default": 0 } """,
         "/column", "COLUMN_TYPE_MISMATCH",
-        "Column 'llm.note' is int64, but LlmAnnotator@1 writes only the window's rows whose answers it can use, so it must be text?, string?, bool?, int32?, int64?, float32? or float64?.")]
+        "Column 'llm.note' is int64, but LlmAnnotator@1 writes only the window's rows whose answers it can use, so it must be string?, bool?, int32?, int64?, float32? or float64?.")]
     [InlineData("""{ "model": "llm", "output": "answer", "column": "llm.note", "prompts": { "user": "x" } }""", """ "llm.note": { "type": "list<string>" } """,
         "/column", "COLUMN_TYPE_MISMATCH",
-        "Column 'llm.note' is list<string>, but LlmAnnotator@1 writes only the window's rows whose answers it can use, so it must be text?, string?, bool?, int32?, int64?, float32? or float64?.")]
+        "Column 'llm.note' is list<string>, but LlmAnnotator@1 writes only the window's rows whose answers it can use, so it must be string?, bool?, int32?, int64?, float32? or float64?.")]
     [InlineData("""{ "model": "llm", "output": "answer", "column": "item.title", "prompts": { "user": "x" } }""", "", "/column", "COLUMN_NOT_WRITABLE", null)]
     [InlineData("""{ "model": "llm", "version": "v1", "version_param": "llm_version", "output": "answer", "column": "llm.note", "prompts": { "user": "x" } }""", "",
         "/version", "MODEL_VERSION", "Set at most one of 'version' and 'version_param'.")]

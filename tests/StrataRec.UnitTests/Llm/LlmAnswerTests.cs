@@ -192,7 +192,7 @@ public sealed class LlmAnswerTests
         Parse(text, kind, new TableSchema(EntityKeyType.Int64, new[] { ColumnType.Int64 }), table => table.AppendRows(window), window.Length);
 
     private static (int[] Positions, AnswerCounts Counts, string? Error) Parse(string text, AnswerKind kind, params string[] window) =>
-        Parse(text, kind, new TableSchema(EntityKeyType.String, new[] { ColumnType.Text }), table => table.AppendRows(window), window.Length);
+        Parse(text, kind, new TableSchema(EntityKeyType.String, new[] { ColumnType.String }), table => table.AppendRows(window), window.Length);
 
     private static (int[] Positions, AnswerCounts Counts, string? Error) Parse(string text, AnswerKind kind, TableSchema schema, Func<CandidateTable, int> append, int n)
     {

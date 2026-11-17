@@ -22,7 +22,7 @@ namespace StrataRec.Features.Runtime;
 /// <see cref="TableVersion.Lookup(ReadOnlySpan{long}, Span{LocalRecordRef})"/> of them, and each row's record taken from
 /// it; then one multi-field <see cref="TableVersion.Fill(ReadOnlySpan{LocalRecordRef}, ReadOnlySpan{int}, ReadOnlySpan{LocalFieldRead}, Span{LocalFillCounts})"/>
 /// into the slots and one bitmap of the rows OR-ed into each slot's fill bits. Buffers are rented from the request
-/// memory and the key index is the fetcher's, so the read allocates nothing (a <c>text</c> value becomes a string).</para>
+/// memory and the key index is the fetcher's, so the read allocates nothing: strings are the table's own instances.</para>
 /// <para><b>One batch, one answer per key.</b> A pinned version still sees an update its writer makes in place (the
 /// index slot is re-pointed to the new record), so looking a key up twice can give two records. Every consumer of a
 /// read takes the records of its single lookup: rows that share a key (a foreign key) get the same record, and the

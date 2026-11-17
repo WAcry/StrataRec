@@ -253,8 +253,14 @@ internal sealed class Float32Lists
 }
 
 /// <summary>Constant membership set of an <c>x in [literal list]</c> test, prepared at compile time.</summary>
+/// <remarks>A test of a string allocates nothing: up to <see cref="ScanStrings"/> strings are compared in turn (an ordinal
+/// <see cref="string.Equals(string, string)"/> checks the reference and the length first, so most fail at once), and a
+/// larger set is a <see cref="HashSet{T}"/> built here, once per compiled expression, never per evaluation or row.</remarks>
 internal sealed class ConstSet
 {
+    /// <summary>Distinct strings scanned rather than hashed: hashing reads the whole value, a scan mostly stops at its length.</summary>
+    internal const int ScanStrings = 8;
+
     private readonly long[] _ints;
     private readonly double[] _floats;
     private readonly HashSet<string>? _strings;
@@ -265,7 +271,7 @@ internal sealed class ConstSet
         _ints = ints;
         _floats = floats;
         Strings = strings;
-        if (elementKind == TypeKind.String)
+        if (elementKind == TypeKind.String && strings.Length > ScanStrings)
         {
             _strings = new HashSet<string>(strings, StringComparer.Ordinal);
         }
@@ -313,7 +319,28 @@ internal sealed class ConstSet
 
     public bool Contains(double value) => !double.IsNaN(value) && Array.BinarySearch(_floats, value) >= 0;
 
-    public bool Contains(string? value) => value is not null && _strings!.Contains(value);
+    public bool Contains(string? value)
+    {
+        if (value is null)
+        {
+            return false;
+        }
+
+        if (_strings is { } set)
+        {
+            return set.Contains(value);
+        }
+
+        foreach (var s in Strings)
+        {
+            if (string.Equals(s, value, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }
 
 /// <summary>Validated knots of <c>piecewise_linear(x, xs, ys)</c>: strictly ascending finite xs, finite ys.</summary>

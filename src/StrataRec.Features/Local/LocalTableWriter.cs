@@ -20,9 +20,10 @@ namespace StrataRec.Features.Local;
 /// slot is pointed at them with one release write. Records are never modified, so a reader sees the old record or the new
 /// one, both complete. String values are encoded at commit, after any compaction the commit itself triggered, so a code
 /// always belongs to the dictionary of the version the record lands in.</para>
-/// <para>Compaction runs here, synchronously: when superseded records make up more than half of the record bytes (and at
-/// least <see cref="LocalFeatureTableOptions.CompactionMinBytes"/>), or when a write would pass <c>max_bytes</c> and
-/// superseded records could be freed. It copies the current record of every key, tombstones included, into a new version
+/// <para>Compaction runs here, synchronously: when superseded records and the dictionary strings only they referenced
+/// make up more than half of the record and string bytes (and at least
+/// <see cref="LocalFeatureTableOptions.CompactionMinBytes"/>), or when a write would pass <c>max_bytes</c> and superseded
+/// records could be freed. It copies the current record of every key, tombstones included, into a new version
 /// built aside (<see cref="BuildCompacted"/>), which is published whole only when it fits <c>max_bytes</c> (with the
 /// pending write, when the write asked for it); otherwise it is dropped and the table stays as it was. Updates wait
 /// while it runs.</para>
@@ -202,16 +203,18 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
     /// <summary>
     /// The write time to pass to <see cref="Compact"/> so that it drops the oldest-written records of a <c>cache</c> table
-    /// and frees at least <paramref name="recordBytes"/> of their bytes (records written at the same time go together);
-    /// <see cref="long.MaxValue"/> when even all of them hold less.
+    /// and frees at least <paramref name="bytes"/> (records written at the same time go together); <see cref="long.MaxValue"/>
+    /// when even all of them hold less. A record frees its own bytes and its share of the dictionary strings it references
+    /// (<see cref="TableVersion.Footprint"/>): a string costs its record only a code, so counting record bytes alone would
+    /// drop many times what is needed from a table of long strings.
     /// </summary>
-    internal long WriteTimeCutoff(long recordBytes)
+    internal long WriteTimeCutoff(long bytes)
     {
         var version = _version;
         var index = version.Index;
         var entries = index.Entries;
         var writtenAt = new long[index.Count];
-        var lengths = new int[index.Count];
+        var footprints = new long[index.Count];
         var count = 0;
         for (var s = 0; s < index.SlotCount; s++)
         {
@@ -229,15 +232,15 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             }
 
             writtenAt[count] = BinaryPrimitives.ReadInt64LittleEndian(page.AsSpan(offset + RecordLayout.VersionOffset));
-            lengths[count++] = BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(offset + RecordLayout.LengthOffset));
+            footprints[count++] = version.Footprint(page, offset);
         }
 
-        Array.Sort(writtenAt, lengths, 0, count);
+        Array.Sort(writtenAt, footprints, 0, count);
         long freed = 0;
         for (var i = 0; i < count; i++)
         {
-            freed += lengths[i];
-            if (freed >= recordBytes)
+            freed += footprints[i];
+            if (freed >= bytes)
             {
                 return writtenAt[i] == long.MaxValue ? long.MaxValue : writtenAt[i] + 1;
             }
@@ -264,14 +267,13 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         MarkWritten(field, valid: true);
     }
 
-    /// <summary>A <c>string</c> or <c>text</c> value. Kept as chars until commit; a string is created only for a value the
-    /// dictionary does not hold yet.</summary>
+    /// <summary>A <c>string</c> value. Kept as chars until commit; a string is created only for a value the dictionary does
+    /// not hold yet.</summary>
     internal void SetString(int token, int field, ReadOnlySpan<char> value)
     {
         CheckOpen(token);
         CheckField(field);
-        var kind = _layout.Kinds[field];
-        if (kind is not (StorageKind.String or StorageKind.Text))
+        if (_layout.Kinds[field] != StorageKind.String)
         {
             throw KindMismatch(field, "SetString");
         }
@@ -445,6 +447,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         // Release: everything above (record bytes, a new page in the directory, new dictionary strings) is visible to a
         // reader before it can see this position.
         _version.Publish(_slot, _indexKey, position, newKey);
+        _version.Reference(page, offset, +1); // before the old record lets go of the strings both hold
         Account(size, oldPage, newKey, tombstone: false);
         MaybeCompact();
         return true;
@@ -745,15 +748,18 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     }
 
     /// <summary>
-    /// The automatic compaction (design 6.6 local item 4): when superseded records are more than half of the record bytes.
-    /// It runs after a write that already succeeded, so a compacted copy that would not fit <c>max_bytes</c> is simply
-    /// discarded; it is tried again only once twice as many bytes are superseded, not after every write.
+    /// The automatic compaction (design 6.6 local item 4): when what a compaction would free, superseded records and the
+    /// dictionary strings only they referenced, is more than half of the records and strings. Strings count because a string
+    /// costs its record only a 4-byte code: a field rewritten with long new values (a description) supersedes small records
+    /// and leaves its old values in the dictionary, which the records alone would not show. It runs after a write that
+    /// already succeeded, so a compacted copy that would not fit <c>max_bytes</c> is simply discarded; it is tried again only
+    /// once twice as many bytes could be freed, not after every write.
     /// </summary>
     private void MaybeCompact()
     {
-        var superseded = _version.SupersededBytes;
-        if (superseded > 0 && superseded >= _options.CompactionMinBytes && superseded * 2 > _version.RecordBytes
-            && superseded >= 2 * _autoCompactionDeclined)
+        var freeable = _version.SupersededBytes + _version.UnreferencedStringBytes;
+        if (freeable > 0 && freeable >= _options.CompactionMinBytes && freeable * 2 > _version.RecordBytes + _version.StringBytes
+            && freeable >= 2 * _autoCompactionDeclined)
         {
             var next = BuildCompacted(long.MinValue);
             if (next.Bytes <= _options.MaxBytes)
@@ -762,7 +768,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             }
             else
             {
-                _autoCompactionDeclined = superseded;
+                _autoCompactionDeclined = freeable;
             }
         }
     }
@@ -825,6 +831,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             if (!tombstone)
             {
                 RemapStrings(copy, copyOffset, next, strings, codeMap);
+                next.Reference(copy, copyOffset, +1);
             }
 
             next.Index.InsertUnpublished(entries[2 * slots[i]], copyPosition);
@@ -854,27 +861,9 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
     private void RemapStrings(byte[] page, int offset, TableVersion next, string[] strings, int[] codeMap)
     {
-        for (var f = 0; f < _layout.FieldCount; f++)
+        foreach (var f in _layout.DictionaryFields)
         {
-            var kind = _layout.Kinds[f];
-            if (!_layout.IsCoded(f) || (page[offset + RecordLayout.ValidityOffset + (f >> 3)] & (1 << (f & 7))) == 0)
-            {
-                continue;
-            }
-
-            var at = offset + _layout.Offsets[f];
-            Span<int> codes;
-            if (kind == StorageKind.String)
-            {
-                codes = MemoryMarshal.Cast<byte, int>(page.AsSpan(at, 4));
-            }
-            else
-            {
-                var relative = BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(at));
-                var count = BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(at + 4));
-                codes = MemoryMarshal.Cast<byte, int>(page.AsSpan(offset + relative, 4 * count));
-            }
-
+            var codes = _layout.Codes(page, offset, f);
             for (var i = 0; i < codes.Length; i++)
             {
                 ref var mapped = ref codeMap[codes[i]];
@@ -891,7 +880,8 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     private TableVersion NewVersion(int expectedKeys) =>
         new(_layout, _version.Hasher, _options.PageSize, _generation + 1, expectedKeys);
 
-    /// <summary>Statistics of a published write: its bytes, the bytes of the record or tombstone it replaced, and counts.</summary>
+    /// <summary>Statistics of a published write: its bytes, the bytes of the record or tombstone it replaced (and the
+    /// string references the replaced record let go of), and counts.</summary>
     private void Account(int size, byte[]? oldPage, bool newKey, bool tombstone)
     {
         _version.AddRecordBytes(size);
@@ -899,6 +889,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         {
             var replaced = _version.PageOf(_oldPosition);
             _version.AddSuperseded(BinaryPrimitives.ReadInt32LittleEndian(replaced.AsSpan((int)_oldPosition + RecordLayout.LengthOffset)));
+            _version.Reference(replaced, (int)_oldPosition, -1); // a tombstone references nothing
         }
 
         var wasRecord = oldPage is not null;
@@ -1030,7 +1021,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             StorageKind.Int64 => "SetInt64",
             StorageKind.Float32 => "SetFloat32",
             StorageKind.Float64 => "SetFloat64",
-            StorageKind.String or StorageKind.Text => "SetString",
+            StorageKind.String => "SetString",
             _ => type.Element switch
             {
                 StorageKind.Bool => "SetBoolList or AddBoolItem",
@@ -1055,8 +1046,8 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     }
 
     /// <summary>
-    /// Where the record being built stages its variable-length values until commit: the chars of <c>string</c> and
-    /// <c>text</c> values and the elements of lists. Its cursor moves only in <see cref="Reserve"/>, which aligns it,
+    /// Where the record being built stages its variable-length values until commit: the chars of <c>string</c> values and
+    /// the elements of lists. Its cursor moves only in <see cref="Reserve"/>, which aligns it,
     /// makes room (growing, and so replacing, the array) and returns the reserved bytes. Callers write through that span
     /// and read back by offset, so none can hold the array across a growth or take an offset past its end.
     /// </summary>
@@ -1133,14 +1124,18 @@ public readonly struct RecordBuilder
 
     public void SetFloat64(int field, double value) => Writer.SetFixed(_token, field, StorageKind.Float64, value);
 
-    /// <summary>A <c>string</c> (dictionary-encoded) or <c>text</c> value.</summary>
+    /// <summary>
+    /// A <c>string</c> value, stored as a code into the table's string dictionary: a value the dictionary holds is not
+    /// stored again, and every read hands out the dictionary's instance, so a fill allocates no string, whatever the length.
+    /// </summary>
     public void SetString(int field, string value)
     {
         ArgumentNullException.ThrowIfNull(value);
         Writer.SetString(_token, field, value.AsSpan());
     }
 
-    /// <summary>A <c>string</c> or <c>text</c> value from chars, e.g. decoded into a reused buffer.</summary>
+    /// <summary>A <c>string</c> value from chars, e.g. decoded into a reused buffer: no string is made for a value the
+    /// dictionary already holds.</summary>
     public void SetString(int field, ReadOnlySpan<char> value) => Writer.SetString(_token, field, value);
 
     /// <summary>A <c>list&lt;bool&gt;</c> value.</summary>
@@ -1232,7 +1227,7 @@ public readonly struct RecordBuilder
             case StorageKind.Int64: SetInt64(field, value.AsInt64()); break;
             case StorageKind.Float32: SetFloat32(field, (float)value.AsFloat64()); break;
             case StorageKind.Float64: SetFloat64(field, value.AsFloat64()); break;
-            case StorageKind.String or StorageKind.Text: SetString(field, value.AsString()); break;
+            case StorageKind.String: SetString(field, value.AsString()); break;
             case StorageKind.List:
                 if (!ColumnValues.FitsLength(value.ListLength, type))
                 {

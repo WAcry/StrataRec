@@ -149,6 +149,29 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         Assert.StartsWith("    hint: ", lines[error + 3]); // after the source line and its caret: how to fix it
     }
 
+    /// <summary>There is one string type: <c>text</c> is refused wherever a type is declared, at its pointer, and the hint
+    /// is the string spelling meant.</summary>
+    [Theory]
+    [InlineData("catalog/home_feed.jsonc", "\"item.category\":       { \"type\": \"string\"", "\"item.category\":       { \"type\": \"text\"",
+        "FEATURE_BAD_TYPE", "/features/item.category/type", "string")]
+    [InlineData(Pipeline, "\"surface\":    { \"type\": \"string\" }", "\"surface\":    { \"type\": \"text?\" }",
+        "REQUEST_BAD_TYPE", "/request_schema/surface/type", "string?")]
+    [InlineData(Pipeline, "\"score.ctr\":    { \"type\": \"float32\", \"default\": 0.0 },",
+        "\"score.ctr\":    { \"type\": \"float32\", \"default\": 0.0 }, \"note\": { \"type\": \"list<text>?\" },",
+        "COLUMN_BAD_TYPE", "/columns/note/type", "list<string>?")]
+    public void Text_TheRemovedTextType_IsAnErrorAtItsPointer_WithTheStringSpelling(
+        string file, string old, string replacement, string code, string pointer, string meant)
+    {
+        var root = Workspace((file, old, replacement));
+
+        var lines = ValidateText(root, expectedErrors: 1);
+
+        var error = lines.FindIndex(l => l.Contains($" error {code} {pointer}: ", StringComparison.Ordinal));
+        Assert.True(error >= 0, string.Join('\n', lines));
+        Assert.Contains("there is one string type, string, for strings of any length", lines[error], StringComparison.Ordinal);
+        Assert.StartsWith($"    hint: did you mean '{meant}'?", lines[error + 3], StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Text_ASyntaxError_IsAtTheReadersPosition_WithoutAPointer()
     {

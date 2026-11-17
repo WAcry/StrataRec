@@ -78,7 +78,7 @@ public static class LogBatchJson
         json.WriteEndObject();
         WriteColumns(json, "float_cols", batch.Columns, static k => k is StorageKind.Float32 or StorageKind.Float64);
         WriteColumns(json, "int_cols", batch.Columns, static k => k is StorageKind.Int32 or StorageKind.Int64 or StorageKind.Bool);
-        WriteColumns(json, "string_cols", batch.Columns, static k => k is StorageKind.String or StorageKind.Text);
+        WriteColumns(json, "string_cols", batch.Columns, static k => k == StorageKind.String);
         WriteColumns(json, "nested_cols", batch.Columns, static k => k == StorageKind.List);
         json.WriteStartObject("missing");
         foreach (var column in batch.Columns)
@@ -139,7 +139,7 @@ public static class LogBatchJson
                 }
 
                 break;
-            case StorageKind.String or StorageKind.Text:
+            case StorageKind.String:
                 json.WriteStringValue(value.AsString());
                 break;
             default:
@@ -253,9 +253,6 @@ public static class LogBatchJson
                 return true;
             case StorageKind.String when json.ValueKind == JsonValueKind.String:
                 value = ScalarValue.FromString(json.GetString());
-                return true;
-            case StorageKind.Text when json.ValueKind == JsonValueKind.String:
-                value = ScalarValue.FromText(json.GetString());
                 return true;
             case StorageKind.List when json.ValueKind == JsonValueKind.Array:
                 return TryReadList(json, type, out value, out error, nonFiniteAsStrings);

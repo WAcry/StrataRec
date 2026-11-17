@@ -1590,7 +1590,7 @@ public sealed partial class FeatureFetcher
         {
             case ScalarColumn<long> l: key = EntityKey.FromInt64(l[row]); break;
             case ScalarColumn<int> i: key = EntityKey.FromInt64(i[row]); break;
-            case DictStringColumn s: key = EntityKey.FromString(s.Get(row)); break;
+            case StringColumn s: key = EntityKey.FromString(s.Get(row)); break;
             default: return KeyLookup.Missing;
         }
 

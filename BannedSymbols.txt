@@ -1,3 +1,5 @@
 N:System.Linq;LINQ is banned in production code (allocations on hot paths). Use explicit loops, arrays, List<T>, Dictionary/HashSet and Array.Sort. See AGENTS.md.
 T:System.Linq.Enumerable;LINQ is banned in production code (allocations on hot paths). Use explicit loops. See AGENTS.md.
 T:System.Linq.Queryable;LINQ is banned in production code. See AGENTS.md.
+M:System.String.Intern(System.String);string.Intern keeps a string for the life of the process and never releases it: for data values a memory leak. Use IFeatureBatchWriter.Intern (one call's scope) or a bounded pool the component owns.
+M:System.String.IsInterned(System.String);string.IsInterned looks into the process-wide intern pool, which never releases a string: data values do not belong there. Use IFeatureBatchWriter.Intern (one call's scope) or a bounded pool the component owns.

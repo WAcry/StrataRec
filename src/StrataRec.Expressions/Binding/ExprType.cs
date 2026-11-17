@@ -79,7 +79,6 @@ internal readonly record struct ExprType(TypeKind Kind, bool Nullable, int Lengt
         StorageKind.Int64 => TypeKind.Int,
         StorageKind.Float64 => TypeKind.Float,
         StorageKind.String => TypeKind.String,
-        StorageKind.Text => TypeKind.String, // text reads as string, as int32 reads as int64: storage, not a type of its own
         _ => TypeKind.Error,
     };
 

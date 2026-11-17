@@ -37,7 +37,6 @@ internal static class TableWrites
         StorageKind.Float32 => "float32",
         StorageKind.Float64 => "float64",
         StorageKind.String => "string",
-        StorageKind.Text => "text",
         _ => throw new NotSupportedException($"Add a column type of storage kind {kind} to the write contract tests."),
     };
 
@@ -48,7 +47,6 @@ internal static class TableWrites
         StorageKind.Int32 or StorageKind.Int64 => ScalarValue.FromInt64((3L * n) + 1),
         StorageKind.Float32 or StorageKind.Float64 => ScalarValue.FromFloat64(n + 0.5),
         StorageKind.String => ScalarValue.FromString("s" + n),
-        StorageKind.Text => ScalarValue.FromText("t" + n),
         StorageKind.List => type.Element switch
         {
             StorageKind.Bool => ScalarValue.FromBoolList(new[] { n % 2 == 0, true, false }),

@@ -11,7 +11,7 @@ namespace StrataRec.Pipeline.Operators.Standard;
 public sealed class GroupAggregateConfig
 {
     /// <summary>
-    /// Grouping column (int64, int32, string or text), e.g. <c>item.author_id</c>. Omitted, all rows form one group. A row whose
+    /// Grouping column (int64, int32 or string), e.g. <c>item.author_id</c>. Omitted, all rows form one group. A row whose
     /// key is missing is in no group: its outputs are missing.
     /// </summary>
     public string? GroupCol { get; init; }
@@ -89,9 +89,9 @@ public sealed class GroupAggregateFactory : IOperatorFactory
             {
                 groupFailed = true;
             }
-            else if (g.Type.Kind is not (StorageKind.Int64 or StorageKind.Int32 or StorageKind.String or StorageKind.Text))
+            else if (g.Type.Kind is not (StorageKind.Int64 or StorageKind.Int32 or StorageKind.String))
             {
-                context.Error("/group_col", "COLUMN_TYPE_MISMATCH", $"Group column '{config.GroupCol}' must be int64, int32, string or text, not {g.Type}.",
+                context.Error("/group_col", "COLUMN_TYPE_MISMATCH", $"Group column '{config.GroupCol}' must be int64, int32 or string, not {g.Type}.",
                     "group by a column that names a group, such as an id or a category (a float is a measurement, and equal values would be a coincidence)");
                 groupFailed = true;
             }

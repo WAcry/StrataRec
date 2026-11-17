@@ -317,8 +317,8 @@ public class ListElementFeatureTests
     public void ListOfText_SaysWhy()
     {
         Assert.False(ConfigTypes.TryParse("list<text>", TypeSite.Feature, out _, out _, out var message, out var hint));
-        Assert.Contains("plain strings of any length", message, StringComparison.Ordinal);
-        Assert.Contains("list<E> or list<E,N>", hint, StringComparison.Ordinal);
+        Assert.Contains("there is one string type, string, for strings of any length", message, StringComparison.Ordinal);
+        Assert.StartsWith("did you mean 'list<string>'?", hint, StringComparison.Ordinal);
         Assert.Contains("with E one of bool, int32, int64, float32, float64, string", hint, StringComparison.Ordinal);
     }
 

@@ -686,7 +686,7 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
             case StorageKind.Float64:
                 builder.SetFloat64(field, Float64(ref reader, field, -1, type));
                 break;
-            case StorageKind.String or StorageKind.Text:
+            case StorageKind.String:
                 if (reader.TokenType != JsonTokenType.String)
                 {
                     throw Mismatch(ref reader, field, -1, type);

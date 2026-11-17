@@ -346,7 +346,7 @@ public static class RecResultJson
             case StorageKind.Float64 when double.IsFinite(value.AsFloat64()):
                 json.WriteNumberValue(value.AsFloat64());
                 break;
-            case StorageKind.String or StorageKind.Text:
+            case StorageKind.String:
                 json.WriteStringValue(value.AsString());
                 break;
             case StorageKind.List:

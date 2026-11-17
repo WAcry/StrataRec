@@ -43,7 +43,7 @@ public readonly record struct CompiledFieldBinding(string Field, int FieldIndex,
 /// actually wrote are ever read. A key absent from the response needs no call. Values written through
 /// <see cref="GetValues{T}"/> count once <see cref="SetValid"/> is called for that field and key; call it after the
 /// value is fully decoded, so a record that fails half-way never exposes an unwritten (pooled) value.
-/// <see cref="SetString(int, int, string)"/> (and its span and UTF-8 forms) and the list setters (<see cref="SetInt64List"/> and its siblings) mark their value present
+/// <see cref="SetString"/> and the list setters (<see cref="SetInt64List"/> and its siblings) mark their value present
 /// themselves. A connector reporting <see cref="FetchOutcome.Partial"/> therefore needs no extra bookkeeping.</para>
 /// <para>A writer belongs to one connector call while that call runs (each <c>max_batch</c> chunk gets its own), so
 /// implementations may write from any one thread at a time without synchronization. The chunks of one fetch share
@@ -69,23 +69,34 @@ public interface IFeatureBatchWriter
     /// <summary>Marks one field of one key as absent (withdrawing a value set earlier, if any).</summary>
     void SetMissing(int fieldIndex, int keyIndex);
 
-    /// <summary>Writes a <c>string</c> or <c>text</c> field value.</summary>
+    /// <summary>Writes a <c>string</c> field value; never null. The request keeps the instance, it does not copy it.</summary>
     void SetString(int fieldIndex, int keyIndex, string value);
 
     /// <summary>
-    /// Writes a <c>string</c> or <c>text</c> field value from characters a connector decoded into a buffer of its own.
-    /// A <c>string</c> field is categorical, so its values repeat across keys: the writer keeps one string per distinct
-    /// value instead of one per key (5,000 keys of a few categories make a few strings, not 5,000). A <c>text</c> value
-    /// is a string of its own.
+    /// A string with the characters of <paramref name="value"/>, for <see cref="SetString"/> or a
+    /// <see cref="SetStringList"/> element: within this call, equal values return the same instance.
     /// </summary>
-    void SetString(int fieldIndex, int keyIndex, ReadOnlySpan<char> value);
+    /// <remarks>
+    /// <para>For a field whose values repeat across the keys of a call: a category, a brand, the tags of a
+    /// <c>list&lt;string&gt;</c>. A connector that decodes each key's value into a string of its own makes 5,000 strings for
+    /// 5,000 keys of three categories; through Intern it makes three. A value that differs per key (a title, an id) gains
+    /// nothing from it: decode that one directly.</para>
+    /// <para>The scope is the call: the table goes away with the writer, and nothing is kept process-wide, unlike
+    /// <c>string.Intern</c>, which never releases a string (it is banned in the engine for that reason). At
+    /// most 4,096 distinct values are kept; past that each call returns a new string. A lookup allocates nothing, and a
+    /// value seen before costs no string. A connector that wants reuse across requests holds its own pool, sized for its
+    /// data (for example CommunityToolkit.HighPerformance's <c>StringPool</c>), and passes its strings to
+    /// <see cref="SetString"/>: the engine has no process-wide string pool on purpose, since what is worth keeping, and
+    /// how much of it, depends on data only the connector knows.</para>
+    /// </remarks>
+    string Intern(ReadOnlySpan<char> value);
 
     /// <summary>
-    /// Writes a <c>string</c> or <c>text</c> field value from its UTF-8 bytes, as most stores return them, without a
-    /// string per key for a repeated value (as <see cref="SetString(int, int, ReadOnlySpan{char})"/>). Invalid UTF-8 is
-    /// replaced by U+FFFD, as <see cref="System.Text.Encoding.UTF8"/> decodes it.
+    /// <see cref="Intern"/> for a value as UTF-8 bytes, as most stores return them: decoded without a string of its own
+    /// when the value was seen before (on the stack up to 256 bytes, into a rented buffer beyond). Invalid UTF-8 becomes
+    /// U+FFFD, as <see cref="System.Text.Encoding.UTF8"/> decodes it.
     /// </summary>
-    void SetStringUtf8(int fieldIndex, int keyIndex, ReadOnlySpan<byte> utf8);
+    string InternUtf8(ReadOnlySpan<byte> utf8);
 
     /// <summary>Writes a <c>list&lt;bool&gt;</c> field value.</summary>
     /// <remarks>One setter per element type, named like the field's declared element type: the field's type decides the

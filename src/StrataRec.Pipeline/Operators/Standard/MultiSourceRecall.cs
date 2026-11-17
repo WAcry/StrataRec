@@ -275,7 +275,6 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
             var scores = memory.RentScratch<double>(capacity);
             var primaries = memory.RentScratch<int>(capacity);
             string[]? ids = null;
-            int[]? sourceCodes = null;
             try
             {
                 for (var s = 0; s < sinks.Length; s++)
@@ -346,26 +345,18 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 var maskColumn = (ScalarColumn<long>)context.Output(mask);
                 var rankColumn = (ScalarColumn<long>)context.Output(bestRank);
                 var scoreColumn = (ScalarColumn<double>)context.Output(bestScore);
-                var primaryColumn = (DictStringColumn)context.Output(primary);
+                var primaryColumn = (StringColumn)context.Output(primary);
                 var maskValues = maskColumn.Values;
                 var rankValues = rankColumn.Values;
                 var scoreValues = scoreColumn.Values;
-                var primaryCodes = primaryColumn.Codes;
-                sourceCodes = memory.RentScratch<int>(sources.Length); // a source's code, looked up once (−1: not yet)
-                sourceCodes.AsSpan(0, sources.Length).Fill(-1);
+                var primaryValues = primaryColumn.Values;
                 for (var i = 0; i < count; i++)
                 {
                     var row = first + i;
                     maskValues[row] = masks[i];
                     rankValues[row] = ranks[i];
                     scoreValues[row] = scores[i];
-                    ref var code = ref sourceCodes[primaries[i]];
-                    if (code < 0)
-                    {
-                        code = primaryColumn.GetOrAddCode(sources[primaries[i]].Name);
-                    }
-
-                    primaryCodes[row] = code;
+                    primaryValues[row] = sources[primaries[i]].Name; // the plan's instance: every row shares it
                 }
 
                 maskColumn.SetValid(first, count);
@@ -383,11 +374,6 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 if (ids is not null)
                 {
                     memory.ReturnScratch(ids);
-                }
-
-                if (sourceCodes is not null)
-                {
-                    memory.ReturnScratch(sourceCodes);
                 }
             }
         }

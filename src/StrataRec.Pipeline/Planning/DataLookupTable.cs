@@ -94,6 +94,13 @@ public sealed class DataLookupTable : ILookupTable
 
         type = default;
         var list = string.Join(", ", allowed);
+        if (ColumnType.TextAsString(text) == "string")
+        {
+            diagnostics.Error("TABLE_INVALID", label, pointer, $"'{text}' is not a {what} of a table: {ColumnType.NoTextType}.",
+                $"write 'string'; a table's {what} is one of: {list}");
+            return false;
+        }
+
         diagnostics.Error("TABLE_INVALID", label, pointer, $"'{text}' is not a {what} of a table.",
             NameSuggestions.DidYouMean(text, allowed) is { } suggestion ? $"{suggestion} A table's {what} is one of: {list}" : $"a table's {what} is one of: {list}");
         return false;

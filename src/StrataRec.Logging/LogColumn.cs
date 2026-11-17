@@ -109,7 +109,7 @@ public sealed class LogColumn
             ScalarColumn<bool> b => Scalars(b, rows, ref validity),
             ScalarColumn<long> l => Scalars(l, rows, ref validity),
             ScalarColumn<double> d => Scalars(d, rows, ref validity),
-            DictStringColumn or TextColumn => Strings(buffer, rows, ref validity),
+            StringColumn s => Strings(s, rows, ref validity),
             ListColumn<bool> b => Elements(b, rows, offsets = new int[rows.Length + 1], ref validity),
             ListColumn<long> l => Elements(l, rows, offsets = new int[rows.Length + 1], ref validity),
             ListColumn<double> d => Elements(d, rows, offsets = new int[rows.Length + 1], ref validity),
@@ -188,7 +188,7 @@ public sealed class LogColumn
         StorageKind.Bool => new bool[length],
         StorageKind.Int32 or StorageKind.Int64 => new long[length],
         StorageKind.Float32 or StorageKind.Float64 => new double[length],
-        StorageKind.String or StorageKind.Text => new string?[length],
+        StorageKind.String => new string?[length],
         _ => throw new NotSupportedException($"Unsupported log column kind {kind}."),
     };
 
@@ -224,10 +224,9 @@ public sealed class LogColumn
         return values;
     }
 
-    private static string?[] Strings(ColumnBuffer column, ReadOnlySpan<int> rows, ref ulong[]? validity)
+    private static string?[] Strings(StringColumn column, ReadOnlySpan<int> rows, ref ulong[]? validity)
     {
         var values = new string?[rows.Length];
-        var dictionary = column as DictStringColumn;
         for (var i = 0; i < rows.Length; i++)
         {
             var row = rows[i];
@@ -237,7 +236,7 @@ public sealed class LogColumn
                 continue;
             }
 
-            values[i] = dictionary is not null ? dictionary.Get(row) : ((TextColumn)column).Get(row);
+            values[i] = column.Get(row);
         }
 
         return values;

@@ -19,7 +19,7 @@ public class ConfigValuesTests
     [InlineData("\"0.02\"", "float32", "must be a number (float32), got the string \"0.02\"")]
     [InlineData("1", "bool", "must be true or false (bool), got the number 1")]
     [InlineData("3", "string", "must be a string, got the number 3")]
-    [InlineData("{}", "text", "must be a string (text), got an object")]
+    [InlineData("{}", "string?", "must be a string, got an object")]
     [InlineData("\"1,2\"", "list<int64>", "must be an array of integers (list<int64>), got the string \"1,2\"")]
     [InlineData("[1, \"x\"]", "list<int64>", "must be an array of integers (list<int64>); element 1 is the string \"x\"")]
     [InlineData("[1.5]", "list<int32>", "must be an array of integers (list<int32>); element 0 is the number 1.5")]
@@ -181,7 +181,7 @@ public class ConfigValuesTests
     [InlineData("[1, 2.5]", "list<int32>")]
     [InlineData("[0.25, 1, 2]", "list<float32,3>")]
     [InlineData("[\"a\", 1]", "list<string>")]
-    [InlineData("\"long text\"", "text")]
+    [InlineData("\"long text\"", "string")]
     [InlineData("1e400", "float64")]
     [InlineData("12345678901234567890", "int64")]
     public void AnElement_AndANode_ReadAlike(string json, string type)

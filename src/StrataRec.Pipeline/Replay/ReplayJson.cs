@@ -38,7 +38,6 @@ internal static class ReplayJson
         StorageKind.Bool => ColumnType.Bool,
         StorageKind.Int64 => ColumnType.Int64,
         StorageKind.Float64 => ColumnType.Float64,
-        StorageKind.Text => ColumnType.Text,
         StorageKind.List => ColumnType.List(value.ListElement),
         _ => ColumnType.String,
     };

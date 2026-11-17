@@ -48,6 +48,25 @@ public class ConfigTypesTests
         Assert.Equal($"did you mean '{replacement}'? Valid types: {ConfigTypes.Spellings(site)}", hint);
     }
 
+    [Theory]
+    [InlineData("text", TypeSite.Column, "string")]
+    [InlineData("text?", TypeSite.Column, "string?")]
+    [InlineData("list<text>?", TypeSite.Column, "list<string>?")]
+    [InlineData("text", TypeSite.Feature, "string")]
+    [InlineData("list<text>", TypeSite.Feature, "list<string>")]
+    [InlineData("list<text,3>", TypeSite.Feature, "list<string,3>")]
+    [InlineData("text", TypeSite.Parameter, "string")]
+    [InlineData("map<string,text>", TypeSite.Parameter, "map<string,string>")]
+    public void TheRemovedTextType_IsAnError_WhoseHintIsString(string written, TypeSite site, string replacement)
+    {
+        Assert.False(ConfigTypes.TryParse(written, site, out _, out _, out var message, out var hint));
+
+        var what = site == TypeSite.Parameter ? "Unknown parameter type" : "Unknown type";
+        Assert.Equal($"{what} '{written}': there is one string type, string, for strings of any length (a category, a title, a prompt).", message);
+        Assert.Equal($"did you mean '{replacement}'? Valid types: {ConfigTypes.Spellings(site)}", hint);
+        Assert.DoesNotContain("text", ConfigTypes.Spellings(site), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void AVectorParameter_IsAnError_ThatSaysParametersAreNotLists()
     {

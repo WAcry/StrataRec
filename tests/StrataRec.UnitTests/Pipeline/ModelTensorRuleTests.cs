@@ -40,7 +40,6 @@ public sealed class ModelTensorRuleTests
     [InlineData("list<string,2>", null)]
     [InlineData("list<float32>", null)]
     [InlineData("string", null)]
-    [InlineData("text", null)]
     [InlineData("list<int32>", null)]
     [InlineData("list<int64>", null)]
     [InlineData("list<string>", null)]

@@ -73,7 +73,7 @@ public class ListTypeTests
     [InlineData("list<float32,N>", "a whole number of at least 1, got 'N'")]
     [InlineData("list<float32,2147483648>", "a whole number of at least 1")]
     [InlineData("list<float32,>", "a list of any length is written list<float32>")]
-    [InlineData("list<text,4>", "write 'list<string>'")]
+    [InlineData("list<text,4>", "write 'list<string,4>'")]
     [InlineData("vec<float32,64>", "'list<float32,64>'")]
     [InlineData("vec<float32,64>?", "'list<float32,64>?'")]
     [InlineData("vec<float64,8>", "'list<float64,8>'")]
@@ -83,6 +83,27 @@ public class ListTypeTests
     {
         Assert.False(ColumnType.TryParse(text, out _, out var error));
         Assert.Contains(fix, error, StringComparison.Ordinal);
+    }
+
+    /// <summary>There is one string type: <c>text</c>, wherever it is written, is an error that names the spelling meant.</summary>
+    [Theory]
+    [InlineData("text", "string")]
+    [InlineData("text?", "string?")]
+    [InlineData(" text ? ", "string?")]
+    [InlineData("list<text>", "list<string>")]
+    [InlineData("list<text>?", "list<string>?")]
+    [InlineData("list<text?>", "list<string>?")] // a nullable element means a list that may be missing
+    [InlineData("list<text,4>", "list<string,4>")]
+    public void TheRemovedTextType_IsRejected_WithTheStringSpelling(string written, string meant)
+    {
+        Assert.False(ColumnType.TryParse(written, out _, out var error));
+
+        Assert.Equal($"Unknown type '{written}': there is one string type, string, for strings of any length (a category, a title, a prompt); "
+                     + $"write '{meant}'.", error);
+        Assert.Equal(meant, ColumnType.TextAsString(written));
+        Assert.Null(ColumnType.TextAsString("string"));
+        Assert.Null(ColumnType.TextAsString("list<string>"));
+        Assert.Null(ColumnType.TextAsString("texts"));
     }
 
     [Fact]
@@ -130,7 +151,7 @@ public class ListTypeTests
     [Fact]
     public void Constructor_RejectsAnElementKindOutsideALIst()
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => new ColumnType(StorageKind.List, element: StorageKind.Text));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ColumnType(StorageKind.List, element: StorageKind.List));
         Assert.Throws<ArgumentOutOfRangeException>(() => new ColumnType(StorageKind.List));
         Assert.Throws<ArgumentOutOfRangeException>(() => new ColumnType(StorageKind.Int64, element: StorageKind.Int64));
     }

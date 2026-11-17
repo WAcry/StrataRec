@@ -12,7 +12,7 @@ namespace StrataRec.UnitTests.Features.Cache;
 public class CacheTableTests
 {
     private static readonly LocalTableSchema Schema = new(
-        "item_store", "item", EntityKeyType.Int64, LocalTableMode.Cache, [new("clicks", ColumnType.Float64), new("name", ColumnType.Text)]);
+        "item_store", "item", EntityKeyType.Int64, LocalTableMode.Cache, [new("clicks", ColumnType.Float64), new("name", ColumnType.String)]);
 
     [Fact]
     public void AWriteBackPastTheQueuesBytes_IsDropped_AndCounted_AndTheQueueTakesBatchesAgainOnceDrained()
@@ -105,7 +105,7 @@ public class CacheTableTests
         [
             new("b", ColumnType.Bool), new("f32", ColumnType.Float32), new("f64", ColumnType.Float64), new("i32", ColumnType.Int32),
             new("i64", ColumnType.Int64), new("li32", ColumnType.List(StorageKind.Int32)), new("li64", ColumnType.List(StorageKind.Int64)), new("ls", ColumnType.List(StorageKind.String)),
-            new("s", ColumnType.String), new("t", ColumnType.Text), new("v", ColumnType.List(StorageKind.Float32, fixedLength: 3)),
+            new("s", ColumnType.String), new("t", ColumnType.String), new("v", ColumnType.List(StorageKind.Float32, fixedLength: 3)),
         ]);
         var layout = new CacheRecordLayout(schema);
         var writer = new CacheRecordWriter(layout, 8);
@@ -198,7 +198,7 @@ public class CacheTableTests
     public void Decoding_NeverThrows_OnBytesThatAreNotARecord()
     {
         var layout = new CacheRecordLayout(new LocalTableSchema("s", "e", EntityKeyType.Int64, LocalTableMode.Cache,
-            [new("ls", ColumnType.List(StorageKind.String)), new("t", ColumnType.Text), new("v", ColumnType.List(StorageKind.Float32, fixedLength: 2)), new("li64", ColumnType.List(StorageKind.Int64))]));
+            [new("ls", ColumnType.List(StorageKind.String)), new("t", ColumnType.String), new("v", ColumnType.List(StorageKind.Float32, fixedLength: 2)), new("li64", ColumnType.List(StorageKind.Int64))]));
         var random = new Random(7);
         for (var i = 0; i < 20_000; i++)
         {
@@ -250,7 +250,8 @@ public class CacheTableTests
 
     private static void Write(LocalFeatureTable table, LocalTableCache cache, long writtenMs, long key)
     {
-        Assert.True(cache.TryWriteBack(Batch(cache, writtenMs, new string('n', 2_000), key)));
+        // About 4 KiB of string per record, distinct per key: what the table's dictionary holds for it alone.
+        Assert.True(cache.TryWriteBack(Batch(cache, writtenMs, key + new string('n', 2_000), key)));
         cache.WriteQueued(table.Writer);
     }
 

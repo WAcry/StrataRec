@@ -61,9 +61,6 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
     public static ScalarValue FromString(string? value) =>
         value is null ? Missing : new(StorageKind.String, 0, value);
 
-    public static ScalarValue FromText(string? value) =>
-        value is null ? Missing : new(StorageKind.Text, 0, value);
-
     /// <summary>A list value over <paramref name="value"/>, which it keeps without copying: do not change the array afterwards.</summary>
     /// <remarks>A value is immutable, and one value may be shared by every request (a plan's default or parameter, an
     /// expression's constant), so the list accessors are read-only spans: no reader can change what another reads. Copy
@@ -117,7 +114,7 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
         _ => throw WrongKind(StorageKind.Float64),
     };
 
-    public string AsString() => Kind is StorageKind.String or StorageKind.Text ? (string)_ref! : throw WrongKind(StorageKind.String);
+    public string AsString() => Kind == StorageKind.String ? (string)_ref! : throw WrongKind(StorageKind.String);
 
     /// <summary>The list's elements, read-only (see <see cref="FromBoolList"/>).</summary>
     public ReadOnlySpan<bool> AsBoolList() => ListOf<bool>(StorageKind.Bool);
@@ -183,10 +180,6 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
                 }
 
                 return false;
-            case StorageKind.String when Kind == StorageKind.Text:
-            case StorageKind.Text when Kind == StorageKind.String:
-                converted = new ScalarValue(kind, 0, _ref);
-                return true;
             default:
                 return false;
         }
@@ -268,7 +261,7 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
             0 => true,
             StorageKind.Bool or StorageKind.Int64 => _bits == other._bits,
             StorageKind.Float64 => AsFloat64().Equals(other.AsFloat64()),
-            StorageKind.String or StorageKind.Text => string.Equals((string)_ref!, (string)other._ref!, StringComparison.Ordinal),
+            StorageKind.String => string.Equals((string)_ref!, (string)other._ref!, StringComparison.Ordinal),
             StorageKind.List => ListEquals(other),
             _ => false,
         };
@@ -331,7 +324,7 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
         {
             case StorageKind.Float64:
                 return HashCode.Combine(Kind, AsFloat64().GetHashCode());
-            case StorageKind.String or StorageKind.Text:
+            case StorageKind.String:
                 return HashCode.Combine(Kind, StringComparer.Ordinal.GetHashCode((string)_ref!));
             case StorageKind.List:
                 var hl = new HashCode();
@@ -386,7 +379,7 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
         StorageKind.Int64 => _bits.ToString(CultureInfo.InvariantCulture),
         StorageKind.Float64 when IsFloat32 => ((float)AsFloat64()).ToString("R", CultureInfo.InvariantCulture),
         StorageKind.Float64 => AsFloat64().ToString("R", CultureInfo.InvariantCulture),
-        StorageKind.String or StorageKind.Text => "'" + AsString() + "'",
+        StorageKind.String => "'" + AsString() + "'",
         StorageKind.List => ListText(),
         _ => "?",
     };

@@ -632,7 +632,7 @@ internal sealed class OverlapInstr(TypeKind listKind, ExprType type, Opnd first,
     }
 }
 
-/// <summary><c>startsWith</c> and <c>endsWith</c> per lane (a dictionary column with a constant affix takes <see cref="DictPredicateInstr"/>).</summary>
+/// <summary><c>startsWith</c> and <c>endsWith</c> per lane.</summary>
 internal sealed class AffixInstr(IrOp op, ExprType type, Opnd text, Opnd affix) : Instr(type, text, affix)
 {
     public override void Execute(ref Frame f)

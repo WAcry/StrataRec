@@ -104,14 +104,14 @@ public static class ConfigValues
 
                 value = ScalarValue.FromFloat64(number);
                 return true;
-            case StorageKind.String or StorageKind.Text when kind == JsonValueKind.String:
+            case StorageKind.String when kind == JsonValueKind.String:
                 if (!JsonWords.TryText(element, out var text))
                 {
                     error = Expected(type, JsonWords.Value(element));
                     return false;
                 }
 
-                value = type.Kind == StorageKind.String ? ScalarValue.FromString(text) : ScalarValue.FromText(text);
+                value = ScalarValue.FromString(text);
                 return true;
             case StorageKind.List when kind == JsonValueKind.Array:
                 return TryList(element, type, out value, out error);
@@ -290,7 +290,6 @@ public static class ConfigValues
             StorageKind.Int32 or StorageKind.Int64 => "an integer",
             StorageKind.Float32 or StorageKind.Float64 => "a number",
             StorageKind.String => "a string",
-            StorageKind.Text => "a string",
             StorageKind.List => (type.IsFixedLength ? $"an array of {type.FixedLength} " : "an array of ") + type.Element switch
             {
                 StorageKind.Bool => type.IsFixedLength ? "true/false values" : "true or false",
@@ -365,7 +364,7 @@ public static class ConfigValues
         StorageKind.Bool => value.AsBool() ? "true" : "false",
         StorageKind.Int64 => "the number " + value.AsInt64().ToString(CultureInfo.InvariantCulture),
         StorageKind.Float64 => "the number " + value.AsFloat64().ToString("R", CultureInfo.InvariantCulture),
-        StorageKind.String or StorageKind.Text => "the string " + JsonWords.Quote(value.AsString()),
+        StorageKind.String => "the string " + JsonWords.Quote(value.AsString()),
         _ => "an array",
     };
 

@@ -36,11 +36,11 @@ internal enum TensorLayout
 /// values; a fixed-length list <c>list&lt;E,N&gt;</c> (an embedding, a window of ids) as its element would be, with a
 /// trailing dimension N, row-major. A bool is an int64 because it is a category, not a measurement: an exact 0/1 that a
 /// model embeds or compares, as it does int ids, and every non-float element type then goes the same way. This is the
-/// built-in operators' mapping; an operator or model client of one's own may
-/// convert differently. Nullable types, strings, text and lists of any length cannot be sent: a model needs a value in
-/// every row, a tensor has no place for the others, and its trailing dimension must be the same in every row. The layout
-/// (<see cref="TensorLayout"/>) adds the leading dimensions: <c>[rows]</c>, <c>[pairs, 2]</c> or <c>[1, rows]</c> for a
-/// column, <c>[rows]</c>, <c>[pairs]</c> or <c>[1]</c> for a context value, which is broadcast to every batch entry.</para>
+/// built-in operators' mapping; an operator or model client of one's own may convert differently. Nullable types,
+/// strings and lists of any length cannot be sent: a model needs a value in every row, a tensor has no place for the
+/// others, and its trailing dimension must be the same in every row. The layout (<see cref="TensorLayout"/>) adds the
+/// leading dimensions: <c>[rows]</c>, <c>[pairs, 2]</c> or <c>[1, rows]</c> for a column, <c>[rows]</c>, <c>[pairs]</c>
+/// or <c>[1]</c> for a context value, which is broadcast to every batch entry.</para>
 /// <para>The column decides, never the model's signature: replay records a digest of the inputs, element type and shape
 /// included, and replay engines and <c>stratarec validate</c> compile plans without loading clients, so they have no
 /// signature. If the signature decided, the same configuration would build different tensors depending on whether the

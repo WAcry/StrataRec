@@ -472,7 +472,7 @@
                   "type": "object",
                   "properties": {
                     "group_col": {
-                      "description": "Grouping column (int64, int32, string or text), e.g. item.author_id. Omitted, all rows form one group. A row whose key is missing is in no group: its outputs are missing.",
+                      "description": "Grouping column (int64, int32 or string), e.g. item.author_id. Omitted, all rows form one group. A row whose key is missing is in no group: its outputs are missing.",
                       "type": [
                         "string",
                         "null"
@@ -634,7 +634,7 @@
                       "type": "string"
                     },
                     "column": {
-                      "description": "The column written: nullable, since the rows after the window and the rows whose answer is not usable have no value. text?, string?, bool?, int32?, int64?, float32? or float64?; an undeclared column is text?, or string? with categories.",
+                      "description": "The column written: nullable, since the rows after the window and the rows whose answer is not usable have no value. string?, bool?, int32?, int64?, float32? or float64?; an undeclared column is string?.",
                       "type": "string"
                     },
                     "categories": {
@@ -1013,7 +1013,7 @@
                   "type": "object",
                   "properties": {
                     "group_col": {
-                      "description": "Grouping column (int64, int32, string or text), e.g. item.creator_id. Missing values are never limited.",
+                      "description": "Grouping column (int64, int32 or string), e.g. item.creator_id. Missing values are never limited.",
                       "type": "string"
                     },
                     "window": {

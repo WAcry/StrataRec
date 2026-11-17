@@ -17,7 +17,7 @@ public sealed class LogValueReadTests
         { "float32", ScalarValue.FromFloat64(0.1f) }, // the promoted float32 survives exactly
         { "float64", ScalarValue.FromFloat64(Math.PI) },
         { "string", ScalarValue.FromString("ü \"quoted\"") },
-        { "text", ScalarValue.FromText("long text") },
+        { "string", ScalarValue.FromString(new string('x', 10_000)) }, // a long one
         { "list<float32,3>", ScalarValue.FromFloat32List(new[] { 0.5f, -1f, 0.1f }) },
         { "list<int32,2>", ScalarValue.FromInt64List(new long[] { 7, -1 }) },
         { "list<bool,1>?", ScalarValue.FromBoolList(new[] { true }) },

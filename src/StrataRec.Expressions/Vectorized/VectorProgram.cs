@@ -176,9 +176,6 @@ internal sealed class VectorProgram
             return result;
         }
 
-        /// <summary>A column stored dictionary-encoded (a string column; a text column reads as a string but is stored plainly).</summary>
-        private static bool IsDictColumn(IrNode node) => node.Op == IrOp.Column && node.Symbol.Type.Kind == StorageKind.String;
-
         private Instr Lower(IrNode node)
         {
             var t = node.Type;
@@ -201,10 +198,6 @@ internal sealed class VectorProgram
                     return new IntBinaryInstr(node.Op, t, Visit(a[0]), Visit(a[1]));
                 case IrOp.Add or IrOp.Sub or IrOp.Mul or IrOp.Div or IrOp.Pow or IrOp.Min or IrOp.Max:
                     return new FloatBinaryInstr(node.Op, t, Visit(a[0]), Visit(a[1]));
-                case IrOp.Eq or IrOp.Ne when IsDictColumn(a[0]) && a[1].IsInvariant:
-                    return new DictEqualsInstr(node.Op, a[0].Symbol, a[0].Type, t, Visit(a[1]));
-                case IrOp.Eq or IrOp.Ne when IsDictColumn(a[1]) && a[0].IsInvariant:
-                    return new DictEqualsInstr(node.Op, a[1].Symbol, a[1].Type, t, Visit(a[0]));
                 case IrOp.Eq or IrOp.Ne or IrOp.Lt or IrOp.Le or IrOp.Gt or IrOp.Ge:
                     return new CompareInstr(node.Op, a[0].Type.Kind, t, Visit(a[0]), Visit(a[1]));
                 case IrOp.And or IrOp.Or:
@@ -221,16 +214,10 @@ internal sealed class VectorProgram
                     return new HasInstr(t, Visit(a[0]));
                 case IrOp.Size:
                     return new SizeInstr(a[0].Type.Kind, t, Visit(a[0]));
-                case IrOp.Contains when a[0].Type.Kind == TypeKind.ListString && a[0].IsInvariant && IsDictColumn(a[1]):
-                    return new DictPredicateInstr(IrOp.Contains, a[1].Symbol, a[1].Type, t, null, new[] { Visit(a[0]) });
                 case IrOp.Contains:
                     return new ContainsInstr(a[0].Type.Kind, t, Visit(a[0]), Visit(a[1]));
-                case IrOp.InSet when IsDictColumn(a[0]):
-                    return new DictPredicateInstr(IrOp.InSet, a[0].Symbol, a[0].Type, t, (ConstSet)node.Data!, Array.Empty<Opnd>());
                 case IrOp.InSet:
                     return new InSetInstr((ConstSet)node.Data!, t, Visit(a[0]));
-                case IrOp.StartsWith or IrOp.EndsWith when IsDictColumn(a[0]) && a[1].IsInvariant:
-                    return new DictPredicateInstr(node.Op, a[0].Symbol, a[0].Type, t, null, new[] { Visit(a[1]) });
                 case IrOp.StartsWith or IrOp.EndsWith:
                     return new AffixInstr(node.Op, t, Visit(a[0]), Visit(a[1]));
                 case IrOp.Overlap:
@@ -363,7 +350,7 @@ internal static class DestinationWriter
             (TypeKind.Float, ScalarColumn<double> or ScalarColumn<float>) => true,
             (TypeKind.Int, ScalarColumn<long> or ScalarColumn<int> or ScalarColumn<double> or ScalarColumn<float>) => true,
             (TypeKind.Bool, ScalarColumn<bool>) => true,
-            (TypeKind.String, DictStringColumn or TextColumn) => true,
+            (TypeKind.String, StringColumn) => true,
             (TypeKind.ListBool, ListColumn<bool>) => true,
             (TypeKind.ListInt, ListColumn<long> or ListColumn<int>) => true,
             (TypeKind.ListFloat, ListColumn<double> or ListColumn<float>) => true,
@@ -579,10 +566,7 @@ internal static class DestinationWriter
 
             switch (destination)
             {
-                case DictStringColumn d:
-                    d.Set(row, Lanes.String(ref f, node, lane));
-                    break;
-                case TextColumn d:
+                case StringColumn d:
                     d.Set(row, Lanes.String(ref f, node, lane));
                     break;
                 case ListColumn when fixedLength > 0 && Lanes.ListLength(ref f, node, lane, kind) != fixedLength:
@@ -737,8 +721,7 @@ internal static class DestinationWriter
                 case ScalarColumn<long> d: d.Set(row, write.AsInt64()); break;
                 case ScalarColumn<int> d: d.Set(row, (int)write.AsInt64()); break; // checked by Fits above
                 case ScalarColumn<bool> d: d.Set(row, write.AsBool()); break;
-                case DictStringColumn d: d.Set(row, write.AsString()); break;
-                case TextColumn d: d.Set(row, write.AsString()); break;
+                case StringColumn d: d.Set(row, write.AsString()); break;
                 case ListColumn<long> d: d.Set(row, write.AsInt64List()); break;
                 case ListColumn<int> d:
                 {

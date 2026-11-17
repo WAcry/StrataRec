@@ -19,9 +19,7 @@ public sealed class TableSchema
             throw new ArgumentException("Slot 0 must be the entity id column.", nameof(slotTypes));
         }
 
-        // String ids are stored plainly, one string per row: they are distinct, so a dictionary would hold each once more
-        // and duplicate the key index (5,000 ids: 200 KB a request, not pooled).
-        var expected = keyType == EntityKeyType.Int64 ? ColumnType.Int64 : ColumnType.Text;
+        var expected = keyType == EntityKeyType.Int64 ? ColumnType.Int64 : ColumnType.String;
         if (slotTypes[0] != expected)
         {
             throw new ArgumentException($"Slot 0 must have type {expected}, got {slotTypes[0]}.", nameof(slotTypes));
@@ -159,7 +157,7 @@ public sealed class CandidateTable
     public ScalarColumn<long> Int64Ids => (ScalarColumn<long>)_slots[TableSchema.EntityIdSlot]!;
 
     /// <summary>The primary key column for string-keyed tables.</summary>
-    public TextColumn StringIds => (TextColumn)_slots[TableSchema.EntityIdSlot]!;
+    public StringColumn StringIds => (StringColumn)_slots[TableSchema.EntityIdSlot]!;
 
     /// <summary>Ratio of live rows to physical rows (1.0 when empty).</summary>
     public double LiveRatio => PhysicalRowCount == 0 ? 1.0 : (double)Rows.Count / PhysicalRowCount;

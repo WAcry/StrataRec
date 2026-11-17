@@ -27,7 +27,7 @@ public static class ConfigTypes
 {
     private static readonly string[] ColumnSpellings =
     {
-        "bool", "int32", "int64", "float32", "float64", "string", "text", "list<E>",
+        "bool", "int32", "int64", "float32", "float64", "string", "list<E>",
     };
 
     /// <summary>A list's element types (<see cref="ColumnType.IsListElement"/>), as written.</summary>
@@ -107,7 +107,17 @@ public static class ConfigTypes
         }
 
         message = site == TypeSite.Parameter ? $"Unknown parameter type '{written}'." : $"Unknown type '{written}'.";
-        if (ColumnType.VectorAsList(leaf) is not null)
+        if (ColumnType.TextAsString(leaf) is not null)
+        {
+            // One string type: Suggest spells the type meant with string (text? → string?, list<text> → list<string>).
+            message = $"{message[..^1]}: {ColumnType.NoTextType}.";
+            if (site == TypeSite.Parameter && leaf.StartsWith("list<", StringComparison.Ordinal))
+            {
+                hint = "a parameter is never a list; parameter types: " + Spellings(site);
+                return false;
+            }
+        }
+        else if (ColumnType.VectorAsList(leaf) is not null)
         {
             // There is no vector type: a vector (an embedding) is a list of fixed length, which Suggest spells with the
             // element and length written. A parameter is never a list.
@@ -118,10 +128,9 @@ public static class ConfigTypes
                 return false;
             }
         }
-
-        if (site != TypeSite.Parameter && leaf.StartsWith("list<", StringComparison.Ordinal) && !ColumnType.TryParse(leaf, out _, out var why))
+        else if (site != TypeSite.Parameter && leaf.StartsWith("list<", StringComparison.Ordinal) && !ColumnType.TryParse(leaf, out _, out var why))
         {
-            // Why a list cannot hold what was written (text, a nested list, a nullable element). A feature is never
+            // Why a list cannot hold what was written (a nested list, a nullable element, a length). A feature is never
             // written with '?', so there the fix for a nullable element is the plain list, without a default.
             message = site == TypeSite.Feature && leaf.EndsWith("?>", StringComparison.Ordinal)
                 ? $"Unknown type '{written}': a list's elements are never missing, and a feature without 'default' is the one that may be missing."
@@ -150,7 +159,7 @@ public static class ConfigTypes
 
         if (suggestion is null && site != TypeSite.Parameter && ListInner(core) is { } listInner)
         {
-            // Keep the element written, in this place's spelling: list<double> → list<float64>, array<text> → list<string>;
+            // Keep the element written, in this place's spelling: list<double> → list<float64>, array<str> → list<string>;
             // and a valid length: list<double,64> → list<float64,64>.
             var inner = listInner;
             var length = string.Empty;
@@ -163,7 +172,7 @@ public static class ConfigTypes
             }
 
             var element = inner.EndsWith('?') ? inner[..^1].Trim() : inner;
-            var meant = element == "text" ? "string" : Alias(element, site) ?? (Array.IndexOf(ElementSpellings, element) >= 0 ? element : NameSuggestions.Closest(element, ElementSpellings));
+            var meant = Alias(element, site) ?? (Array.IndexOf(ElementSpellings, element) >= 0 ? element : NameSuggestions.Closest(element, ElementSpellings));
             // A nullable element means a list that may be missing: list<E>? where '?' is written, a plain list elsewhere.
             suggestion = meant is null ? null : $"list<{meant}{length}>" + (inner.EndsWith('?') && !nullable && site == TypeSite.Column ? "?" : string.Empty);
         }
@@ -185,7 +194,7 @@ public static class ConfigTypes
         "float" => site == TypeSite.Parameter ? "float64" : "float32",
         "double" or "decimal" or "number" => "float64",
         "boolean" => "bool",
-        "str" or "char" => "string",
+        "str" or "char" or "text" => "string",
         _ => null,
     };
 

@@ -26,7 +26,7 @@ public class BackendTests
         var x = f.Scalar<float>("col.x");
         var y = f.Scalar<double>("col.y");
         var k = f.Scalar<int>("col.k");
-        var s = f.Buffer<DictStringColumn>("col.s");
+        var s = f.Buffer<StringColumn>("col.s");
         for (var r = 0; r < rows; r++)
         {
             if (random.Next(5) == 0)
@@ -182,7 +182,7 @@ public class BackendTests
         Assert.True(missing.IsValid(1));
         Assert.False(missing.IsValid(2));
 
-        var s = (DictStringColumn)ColumnBuffer.Create(ColumnType.String, f.Capacity, f.Memory);
+        var s = (StringColumn)ColumnBuffer.Create(ColumnType.String, f.Capacity, f.Memory);
         f.Compile("ctx.s").Evaluate(f.Context, new[] { 2 }, s);
         Assert.Equal("x", s.Get(2));
 
@@ -204,7 +204,7 @@ public class BackendTests
     [Fact]
     public void MissingColumns_ReadAsMissing_OrThrowWhenDeclaredNonNullable()
     {
-        var f = new ExprFixture().Col("col.opt", "float64?").Col("col.req", "float64").Col("col.text", "text?").Col("col.list", "list<int64>?").Build(4);
+        var f = new ExprFixture().Col("col.opt", "float64?").Col("col.req", "float64").Col("col.text", "string?").Col("col.list", "list<int64>?").Build(4);
 
         // Never written (no buffer).
         ExprAssert.Rows(f, "col.opt + 1.0", null, null, null, null);
@@ -272,7 +272,7 @@ public class BackendTests
             f.Scalar<float>("col.item.age_hours").Set(r, 10 * r);
             f.Scalar<float>("col.item.report_rate").Set(r, 0.01f * r);
             f.Scalar<bool>("col.item.is_policy_safe").Set(r, r % 2 == 0);
-            f.Buffer<DictStringColumn>("col.recall.primary_source").Set(r, r % 3 == 0 ? "two_tower" : "cf");
+            f.Buffer<StringColumn>("col.recall.primary_source").Set(r, r % 3 == 0 ? "two_tower" : "cf");
         }
 
         var expressions = new[]

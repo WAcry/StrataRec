@@ -39,8 +39,8 @@ public sealed class LlmAnnotatorConfig
 
     /// <summary>
     /// The column written: nullable, since the rows after the window and the rows whose answer is not usable have no value.
-    /// <c>text?</c>, <c>string?</c>, <c>bool?</c>, <c>int32?</c>, <c>int64?</c>, <c>float32?</c> or <c>float64?</c>; an
-    /// undeclared column is <c>text?</c>, or <c>string?</c> with <see cref="Categories"/>.
+    /// <c>string?</c>, <c>bool?</c>, <c>int32?</c>, <c>int64?</c>, <c>float32?</c> or <c>float64?</c>; an undeclared column
+    /// is <c>string?</c>.
     /// </summary>
     public required string Column { get; init; }
 
@@ -63,7 +63,7 @@ public sealed class LlmAnnotatorConfig
 /// call's row, so a recording keys the answer by the row's entity and a replay answers each entity whatever window it is
 /// in; the request's seed and <c>max_output_tokens</c>. A row's prompt depends only on that row and the request, so its
 /// answer can be reused per entity; a prompt over several rows would tie every answer to the window.</para>
-/// <para>Each answer is parsed by the column's type (<see cref="LlmAnswer"/>): text and strings trimmed, with one outer
+/// <para>Each answer is parsed by the column's type (<see cref="LlmAnswer"/>): strings trimmed, with one outer
 /// code fence unwrapped, and not empty; a string one of <c>categories</c> when given; a bool <c>true</c> or <c>false</c>;
 /// a number in JSON's syntax that is finite and fits. A row whose call failed (or threw, or returned no text) or whose
 /// answer is not usable keeps no value: missing is explicit, and never a guess. Each row is counted
@@ -158,36 +158,35 @@ public sealed class LlmAnnotatorFactory : IOperatorFactory
         return categories.ToArray();
     }
 
-    /// <summary>The nullable column of a type an answer can be parsed as; an undeclared one is text?, or string? with categories.</summary>
+    /// <summary>The nullable column of a type an answer can be parsed as; an undeclared one is string?.</summary>
     private OutputColumn? CompileColumn(OperatorCompileContext context, string? name, bool categories, ref bool ok)
     {
         if (string.IsNullOrEmpty(name))
         {
             context.Error("/column", "LLM_COLUMN", $"{Descriptor.Id} needs 'column': the column the answers are written to.",
-                "set \"column\" to a column name, e.g. \"llm.reason\"; an undeclared column is text?, or string? with 'categories'");
+                "set \"column\" to a column name, e.g. \"llm.reason\"; an undeclared column is string?");
             ok = false;
             return null;
         }
 
-        var implicitType = categories ? ColumnType.String.AsNullable() : ColumnType.Text.AsNullable();
-        if (!context.TryWriteColumn(name, "/column", implicitType, out var written))
+        if (!context.TryWriteColumn(name, "/column", ColumnType.String.AsNullable(), out var written))
         {
             ok = false;
             return null;
         }
 
         var type = written.Type;
-        if (!type.Nullable || type.Kind is not (StorageKind.Text or StorageKind.String or StorageKind.Bool or StorageKind.Int32 or StorageKind.Int64
+        if (!type.Nullable || type.Kind is not (StorageKind.String or StorageKind.Bool or StorageKind.Int32 or StorageKind.Int64
                 or StorageKind.Float32 or StorageKind.Float64))
         {
-            var parsable = type.Kind is StorageKind.Text or StorageKind.String or StorageKind.Bool or StorageKind.Int32 or StorageKind.Int64
+            var parsable = type.Kind is StorageKind.String or StorageKind.Bool or StorageKind.Int32 or StorageKind.Int64
                 or StorageKind.Float32 or StorageKind.Float64;
             context.Error("/column", "COLUMN_TYPE_MISMATCH",
-                $"Column '{name}' is {type}, but {Descriptor.Id} writes only the window's rows whose answers it can use, so it must be text?, string?, bool?, "
+                $"Column '{name}' is {type}, but {Descriptor.Id} writes only the window's rows whose answers it can use, so it must be string?, bool?, "
                 + "int32?, int64?, float32? or float64?.",
                 parsable
                     ? $"declare '{name}' as {type.AsNullable()}: the rows after the window and the rows whose answer is not usable have no value"
-                    : $"declare '{name}' as one of those types, or leave it undeclared to write text?");
+                    : $"declare '{name}' as one of those types, or leave it undeclared to write string?");
             ok = false;
             return null;
         }

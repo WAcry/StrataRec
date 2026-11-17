@@ -19,7 +19,7 @@ internal static class LocalTableTestSupport
         new("f32", ColumnType.Float32),
         new("f64", ColumnType.Float64),
         new("s", ColumnType.String),
-        new("t", ColumnType.Text),
+        new("t", ColumnType.String), // a long value, distinct per record
         new("v", ColumnType.List(StorageKind.Float32, fixedLength: 4)),
         new("li32", ColumnType.List(StorageKind.Int32)),
         new("li64", ColumnType.List(StorageKind.Int64)),
@@ -49,7 +49,7 @@ internal static class LocalTableTestSupport
         ["f32"] = ScalarValue.FromFloat64((float)(seed * 0.25)),
         ["f64"] = ScalarValue.FromFloat64(seed / 3.0),
         ["s"] = ScalarValue.FromString("cat-" + (seed % 5)),
-        ["t"] = ScalarValue.FromText("text " + seed + " é中😀"),
+        ["t"] = ScalarValue.FromString("text " + seed + " é中😀"),
         ["v"] = ScalarValue.FromFloat32List(new[] { seed, seed + 0.5f, -seed, 1e-3f * seed }),
         ["li32"] = ScalarValue.FromInt64List(new long[] { seed, int.MaxValue, int.MinValue, -seed }[..(int)(seed % 4)]),
         ["li64"] = ScalarValue.FromInt64List(new[] { seed, long.MinValue, seed * 7 }),
@@ -155,7 +155,6 @@ internal static class LocalTableTestSupport
         : type.Kind switch
         {
             StorageKind.Float32 => ScalarValue.FromFloat64((float)value.AsFloat64()),
-            StorageKind.Text => ScalarValue.FromText(value.AsString()),
             StorageKind.List when type.Element == StorageKind.Float32 =>
                 ScalarValue.FromFloat64List(value.AsFloat64List().ToArray().Select(x => (double)(float)x).ToArray()),
             _ => value,

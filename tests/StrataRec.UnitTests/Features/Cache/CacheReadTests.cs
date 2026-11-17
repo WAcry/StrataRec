@@ -553,6 +553,54 @@ public class CacheReadTests
 
     private static ScriptedConnector Clicks() => ScriptedConnector.Values((key, _) => key * 1.0);
 
+    /// <summary>
+    /// A connector's answer is encoded into records and decoded into the slots, as a distributed hit is; each read decodes
+    /// a distinct string once, so a value that repeats across keys (a category, a tag) is one instance in the column, not
+    /// one string per key.
+    /// </summary>
+    [Fact]
+    public async Task StringsDecodedFromRecords_AreOneInstancePerValue_AcrossTheKeysOfARead()
+    {
+        const string Json = """
+            {
+              "1": { "s": "music", "ls": ["red", "shoe"] },
+              "2": { "s": "food", "ls": ["red"] },
+              "3": { "s": "music", "ls": ["shoe", "red"] },
+              "4": { "s": "music", "ls": [] }
+            }
+            """;
+        var store = new FakeCacheStore();
+        (FeatureTestRig Rig, int S, int Ls) Setup()
+        {
+            var rig = new FeatureTestRig().MemoryCacheSource("item_store", Json, distributed: store);
+            var s = rig.Physical("item.s", FeatureTestRig.Item, ColumnType.String, "item_store");
+            var ls = rig.Physical("item.ls", FeatureTestRig.Item, ColumnType.List(StorageKind.String), "item_store");
+            rig.Build();
+            return (rig, s, ls);
+        }
+
+        static async Task Check((FeatureTestRig Rig, int S, int Ls) setup)
+        {
+            var request = setup.Rig.NewRequest([1, 2, 3, 4]);
+            Assert.Equal(FeatureState.Ok, (await request.EnsureAsync(setup.S, setup.Ls)).State);
+            var s = (StringColumn)request.Table.TryGetSlot(request.Plan.Features[setup.S].Slot)!;
+            var ls = (ListColumn<string>)request.Table.TryGetSlot(request.Plan.Features[setup.Ls].Slot)!;
+            Assert.Equal(["music", "food", "music", "music"], new[] { s.Get(0), s.Get(1), s.Get(2), s.Get(3) });
+            Assert.Same(s.Get(0), s.Get(2));
+            Assert.Same(s.Get(0), s.Get(3));
+            Assert.Equal(["shoe", "red"], ls.Get(2).ToArray());
+            Assert.Same(ls.Get(0)[0], ls.Get(1)[0]);
+            Assert.Same(ls.Get(0)[0], ls.Get(2)[1]);
+            Assert.Same(ls.Get(0)[1], ls.Get(2)[0]);
+        }
+
+        var missed = Setup();
+        await Check(missed); // a miss: the connector's answer, through its records
+        missed.Rig.WriteBack("item_store");
+        await store.WhenWrittenAsync(4);
+        await Check(Setup()); // another instance's distributed hit
+    }
+
     private static double[] Values(TestRequest request, int feature, int rows) =>
         Enumerable.Range(0, rows).Select(r => request.Value(feature, r).AsFloat64()).ToArray();
 
@@ -594,7 +642,7 @@ public class CacheReadTests
             rig.Physical("item.f32", FeatureTestRig.Item, ColumnType.Float32, "item_store", ScalarValue.FromFloat64(0.5)),
             rig.Physical("item.f64", FeatureTestRig.Item, ColumnType.Float64, "item_store"),
             rig.Physical("item.s", FeatureTestRig.Item, ColumnType.String, "item_store", ScalarValue.FromString("unknown")),
-            rig.Physical("item.t", FeatureTestRig.Item, ColumnType.Text, "item_store"),
+            rig.Physical("item.t", FeatureTestRig.Item, ColumnType.String, "item_store"),
             rig.Physical("item.v", FeatureTestRig.Item, ColumnType.List(StorageKind.Float32, fixedLength: 4), "item_store"),
             rig.Physical("item.li32", FeatureTestRig.Item, ColumnType.List(StorageKind.Int32), "item_store"),
             rig.Physical("item.li64", FeatureTestRig.Item, ColumnType.List(StorageKind.Int64), "item_store"),

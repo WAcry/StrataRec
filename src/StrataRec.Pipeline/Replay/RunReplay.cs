@@ -587,8 +587,8 @@ internal sealed class RunReplay : IFeatureCallHook
     /// <summary>
     /// Writes a recorded value into a staging field; false (nothing written) when it does not fit. The value was decoded
     /// with its recorded type; a field whose type changed takes it only when it converts without loss of meaning: numeric
-    /// widening, rounding to float32 as the source itself would, string ↔ text. A value outside the new type's range (an
-    /// integer beyond int32, a finite number beyond float32) does not fit: storing it would publish a wrapped value or an
+    /// widening, rounding to float32 as the source itself would. A value outside the new type's range (an integer beyond
+    /// int32, a finite number beyond float32) does not fit: storing it would publish a wrapped value or an
     /// infinity the recording never had. Exact and synthesized calls both write through here, so they apply one rule.
     /// </summary>
     private static bool TryWrite(IFeatureBatchWriter writer, int field, int key, ColumnType type, in ScalarValue value)
@@ -610,7 +610,7 @@ internal sealed class RunReplay : IFeatureCallHook
             case StorageKind.Float64 when value.Kind is StorageKind.Float64 or StorageKind.Int64:
                 writer.GetValues<double>(field).Span[key] = value.AsFloat64();
                 break;
-            case StorageKind.String or StorageKind.Text when value.Kind is StorageKind.String or StorageKind.Text:
+            case StorageKind.String when value.Kind == StorageKind.String:
                 writer.SetString(field, key, value.AsString());
                 return true;
             case StorageKind.List when value.Kind == StorageKind.List:

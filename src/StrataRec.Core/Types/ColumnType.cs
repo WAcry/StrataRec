@@ -11,10 +11,12 @@ public enum StorageKind : byte
     Int64,
     Float32,
     Float64,
-    /// <summary>Dictionary-encoded low-cardinality string.</summary>
+    /// <summary>
+    /// A string of any length: a category, an id, a title, a prompt or a generated reason. One type, stored as one
+    /// reference per row: how many distinct instances a column holds depends on where its values come from (a local
+    /// table's dictionary, a connector's deduplication), not on the type.
+    /// </summary>
     String,
-    /// <summary>Long text (prompts, generated reasons).</summary>
-    Text,
 
     /// <summary>
     /// <c>list&lt;E&gt;</c> of one element kind (<see cref="ColumnType.Element"/>): <c>bool</c>, <c>int32</c>, <c>int64</c>,
@@ -108,9 +110,8 @@ public readonly struct ColumnType : IEquatable<ColumnType>
     /// whose non-finite values a writer replaces (design 4.3).</summary>
     public bool IsFloatStorage => ValueKind is StorageKind.Float32 or StorageKind.Float64;
 
-    /// <summary>The kinds a list may hold: the fixed-size scalars and <c>string</c>. Not <c>text</c>: a list's strings are
-    /// never dictionary-encoded in a request, so the scalar string/text split has nothing to choose between; not lists,
-    /// which would make every layer handle nested variable-length data.</summary>
+    /// <summary>The kinds a list may hold: the fixed-size scalars and <c>string</c>. Not lists, which would make every layer
+    /// handle nested variable-length data.</summary>
     public static bool IsListElement(StorageKind kind) =>
         kind is StorageKind.Bool or StorageKind.Int32 or StorageKind.Int64 or StorageKind.Float32 or StorageKind.Float64 or StorageKind.String;
 
@@ -125,8 +126,6 @@ public readonly struct ColumnType : IEquatable<ColumnType>
     public static ColumnType Float64 => new(StorageKind.Float64);
 
     public static ColumnType String => new(StorageKind.String);
-
-    public static ColumnType Text => new(StorageKind.Text);
 
     /// <summary><c>list&lt;E&gt;</c> of <paramref name="element"/> (<see cref="IsListElement"/>), or <c>list&lt;E,N&gt;</c>
     /// with a <paramref name="fixedLength"/>.</summary>
@@ -189,6 +188,12 @@ public readonly struct ColumnType : IEquatable<ColumnType>
             return true;
         }
 
+        if (TextAsString(text) is { } meant)
+        {
+            error = $"Unknown type '{text}': {NoTextType}; write '{meant}'.";
+            return false;
+        }
+
         if (s.StartsWith("list<", StringComparison.Ordinal) && s.EndsWith('>'))
         {
             var inner = s[5..^1];
@@ -223,7 +228,7 @@ public readonly struct ColumnType : IEquatable<ColumnType>
             return false;
         }
 
-        error = $"Unknown type '{text}'. Expected one of: bool, int32, int64, float32, float64, string, text, " +
+        error = $"Unknown type '{text}'. Expected one of: bool, int32, int64, float32, float64, string, " +
                 "list<E> or list<E,N> (E: bool, int32, int64, float32, float64 or string; N: its fixed length), optionally followed by '?'.";
         return false;
     }
@@ -266,6 +271,46 @@ public readonly struct ColumnType : IEquatable<ColumnType>
         return $"list<{element},{length}>";
     }
 
+    /// <summary>Why <c>text</c> is not a type, for the errors of every place a type is written.</summary>
+    public const string NoTextType = "there is one string type, string, for strings of any length (a category, a title, a prompt)";
+
+    /// <summary>
+    /// The spelling meant by a type written with <c>text</c> (<c>text</c>, <c>text?</c>, <c>list&lt;text&gt;</c>,
+    /// <c>list&lt;text,4&gt;?</c>): the same with <c>string</c>; null when <paramref name="written"/> does not use it. There is
+    /// one string type: a separate long-text type differed only in how a request stored it, and nothing it stored differently
+    /// was worth a second type (design 4.3).
+    /// </summary>
+    public static string? TextAsString(string written)
+    {
+        ArgumentNullException.ThrowIfNull(written);
+        var core = written.Trim();
+        var nullable = core.EndsWith('?');
+        if (nullable)
+        {
+            core = core[..^1].TrimEnd();
+        }
+
+        string? meant = null;
+        if (core == "text")
+        {
+            meant = "string";
+        }
+        else if (core.StartsWith("list<", StringComparison.Ordinal) && core.EndsWith('>'))
+        {
+            var inner = core[5..^1];
+            var comma = inner.IndexOf(',', StringComparison.Ordinal);
+            var element = (comma < 0 ? inner : inner[..comma]).Trim();
+            if (element is "text" or "text?")
+            {
+                // A nullable element means a list that may be missing, as for every element type (ListElementError).
+                meant = "list<string" + (comma < 0 ? string.Empty : "," + inner[(comma + 1)..].Trim()) + ">";
+                nullable |= element == "text?";
+            }
+        }
+
+        return meant is null ? null : nullable ? meant + "?" : meant;
+    }
+
     /// <summary>Why <paramref name="element"/> is not a list's element type, and what to write instead.</summary>
     private static string ListElementError(string element)
     {
@@ -277,7 +322,6 @@ public readonly struct ColumnType : IEquatable<ColumnType>
 
         return element switch
         {
-            "text" => "a list's elements are plain strings of any length, never dictionary-encoded in a request: write 'list<string>'.",
             _ when element.StartsWith("list<", StringComparison.Ordinal) || element.StartsWith("vec", StringComparison.Ordinal) =>
                 "a list's elements are scalars (bool, int32, int64, float32, float64 or string); lists do not nest.",
             _ => "a list's elements are bool, int32, int64, float32, float64 or string.",
@@ -294,7 +338,6 @@ public readonly struct ColumnType : IEquatable<ColumnType>
             "float32" => StorageKind.Float32,
             "float64" => StorageKind.Float64,
             "string" => StorageKind.String,
-            "text" => StorageKind.Text,
             _ => 0,
         };
         return kind != 0;
@@ -308,7 +351,6 @@ public readonly struct ColumnType : IEquatable<ColumnType>
         StorageKind.Float32 => "float32",
         StorageKind.Float64 => "float64",
         StorageKind.String => "string",
-        StorageKind.Text => "text",
         _ => "<unknown>",
     };
 

@@ -28,8 +28,7 @@ public static class ColumnValues
             ScalarColumn<long> l => ScalarValue.FromInt64(l[row]),
             ScalarColumn<float> f => ScalarValue.FromFloat32(f[row]),
             ScalarColumn<double> d => ScalarValue.FromFloat64(d[row]),
-            DictStringColumn s => ScalarValue.FromString(s.Get(row)),
-            TextColumn t => ScalarValue.FromText(t.Get(row)),
+            StringColumn s => ScalarValue.FromString(s.Get(row)),
             ListColumn list => GetList(list, row),
             _ => throw new NotSupportedException($"Unsupported column {column.GetType().Name}."),
         };
@@ -144,8 +143,7 @@ public static class ColumnValues
             case ScalarColumn<long> l: l.Set(row, value.AsInt64()); break;
             case ScalarColumn<float> f: f.Set(row, (float)value.AsFloat64()); break;
             case ScalarColumn<double> d: d.Set(row, value.AsFloat64()); break;
-            case DictStringColumn s: s.Set(row, value.AsString()); break;
-            case TextColumn t: t.Set(row, value.AsString()); break;
+            case StringColumn s: s.Set(row, value.AsString()); break;
             case ListColumn list: return TrySetList(list, row, value);
             default: throw new NotSupportedException($"Unsupported column {column.GetType().Name}.");
         }

@@ -257,7 +257,7 @@ public sealed class EffectivePlan
             case StorageKind.Float64:
                 var d = value.AsFloat64();
                 return double.IsFinite(d) ? d : d.ToString(CultureInfo.InvariantCulture);
-            case StorageKind.String or StorageKind.Text:
+            case StorageKind.String:
                 return value.AsString();
             case StorageKind.List:
                 var list = new JsonArray();

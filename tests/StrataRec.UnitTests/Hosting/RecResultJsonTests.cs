@@ -82,7 +82,7 @@ public sealed class RecResultJsonTests
             ["nan"] = ScalarValue.FromFloat64(double.NaN),
             ["inf"] = ScalarValue.FromFloat64(double.NegativeInfinity),
             ["string"] = ScalarValue.FromString("a \"quoted\" é"),
-            ["text"] = ScalarValue.FromText("line\nbreak"),
+            ["text"] = ScalarValue.FromString("line\nbreak"),
             ["vector"] = ScalarValue.FromFloat32List(new[] { 0.5f, float.NaN, float.PositiveInfinity }), // an embedding, list<float32,3>
             ["ints"] = ScalarValue.FromInt64List(new[] { long.MinValue, 2L }),
             ["strings"] = ScalarValue.FromStringList(new[] { "x", string.Empty }),

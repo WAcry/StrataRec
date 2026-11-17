@@ -275,31 +275,71 @@ public class SemanticsTests
     }
 
     /// <summary>
-    /// A text column reads as a string, as an int32 column reads as int64 (audit C3): every string operation works on
-    /// both, and they compare with each other. Text and string differed only in storage (a dictionary for string), but
-    /// the draft gave them disjoint operations, so a text could not be compared, tested for a prefix or checked for '',
-    /// and a string had no size() or contains().
+    /// A string column holds one reference per row (no dictionary codes): every string operation reads it the same way in
+    /// both backends, short values and long ones, shared instances and equal copies alike. ==, != and 'in' compare by
+    /// value (an equal string that is another instance matches); 'in' scans a small constant set and hashes a large one.
     /// </summary>
     [Fact]
-    public void Text_ReadsAsString_WithEveryStringOperation()
+    public void Strings_EveryOperation_OnThePlainColumn()
     {
-        var f = new ExprFixture().Col("col.t", "text?").Col("col.s", "string").Ctx("ctx.q", "text", ScalarValue.FromText("lo")).Build(4);
-        f.FillStrings("col.t", "héllo 😀", string.Empty, null, "abc");
+        var copy = new string("abc".AsSpan()); // equal to the literal, another instance
+        var large = string.Join(", ", Enumerable.Range(0, 20).Select(i => $"'v{i}'")) + ", 'abc'";
+        var f = new ExprFixture().Col("col.t", "string?").Col("col.s", "string").Ctx("ctx.q", "string", ScalarValue.FromString("lo")).Build(4);
+        f.FillStrings("col.t", "héllo 😀", string.Empty, null, copy);
         f.FillStrings("col.s", "héllo", "x", "y", "abc");
         ExprAssert.Rows(f, "size(col.t)", 7L, 0L, null, 3L);
         ExprAssert.Rows(f, "contains(col.t, 'll')", true, false, null, false);
         ExprAssert.Rows(f, "col.t.contains(ctx.q)", true, false, null, false);
         ExprAssert.Rows(f, "col.t ?? ctx.q", "héllo 😀", string.Empty, "lo", "abc");
         ExprAssert.Rows(f, "col.t == ''", false, true, null, false);
+        ExprAssert.Rows(f, "col.t == 'abc'", false, false, null, true);
+        ExprAssert.Rows(f, "'abc' != col.t", true, true, null, false);
         ExprAssert.Rows(f, "col.t == col.s", false, false, null, true);
+        ExprAssert.Rows(f, "col.s != 'x'", true, false, true, true);
         ExprAssert.Rows(f, "col.t in ['abc', 'x']", false, false, null, true);
+        ExprAssert.Rows(f, $"col.t in [{large}]", false, false, null, true);
+        ExprAssert.Rows(f, $"col.s in [{large}, 'y']", false, false, true, true);
+        ExprAssert.Rows(f, "col.s in ['nope']", false, false, false, false);
         ExprAssert.Rows(f, "col.t.startsWith(col.s)", true, false, null, true);
+        ExprAssert.Rows(f, "col.s.startsWith('hé')", true, false, false, false);
+        ExprAssert.Rows(f, "col.t.endsWith('😀')", true, false, null, false);
         ExprAssert.Rows(f, "size(col.s)", 5L, 1L, 1L, 3L);
         ExprAssert.Rows(f, "col.s.contains('ll')", true, false, false, false);
         Assert.Equal("string?", f.Compile("col.t", new CompileOptions { AllowNullableResult = true }).ResultType.ToString());
 
         var error = Assert.Single(f.Errors("'b' in col.s"));
         Assert.Equal("'in' tests list membership; use contains(s, part) for a substring", error.Hint);
+    }
+
+    /// <summary>An 'in' over constants allocates nothing per row, whether its set is scanned (small) or hashed (large).</summary>
+    [Theory]
+    [InlineData(3)]
+    [InlineData(40)]
+    public void InConstants_OnAStringColumn_DoesNotAllocatePerRow(int constants)
+    {
+        var set = string.Join(", ", Enumerable.Range(0, constants).Select(i => $"'c{i}'"));
+        long Allocated(int rows)
+        {
+            var f = new ExprFixture(rows).Col("col.s", "string").Build(rows);
+            var values = Enumerable.Range(0, rows).Select(i => "c" + (i % (2 * constants))).ToArray();
+            f.FillStrings("col.s", values);
+            var compiled = f.Compile($"col.s in [{set}]");
+            var destination = ColumnBuffer.Create(ColumnType.Bool, f.Capacity, f.Memory);
+            compiled.Evaluate(f.Context, f.Table.Rows.Order, destination);
+            var best = long.MaxValue;
+            for (var round = 0; round < 3; round++)
+            {
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                compiled.Evaluate(f.Context, f.Table.Rows.Order, destination);
+                best = Math.Min(best, GC.GetAllocatedBytesForCurrentThread() - before);
+            }
+
+            var bools = (ScalarColumn<bool>)destination;
+            Assert.True(bools[0] && !bools[constants]); // c0 is in the set, c{constants} is not
+            return best;
+        }
+
+        Assert.Equal(0, Allocated(50_000) - Allocated(500));
     }
 
     [Fact]

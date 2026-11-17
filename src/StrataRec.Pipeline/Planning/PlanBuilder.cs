@@ -748,7 +748,7 @@ public sealed class PlanBuilder
                     }
 
                     if (key.ResultType.Kind is not (StorageKind.Bool or StorageKind.Int32 or StorageKind.Int64 or StorageKind.Float32
-                        or StorageKind.Float64 or StorageKind.String or StorageKind.Text))
+                        or StorageKind.Float64 or StorageKind.String))
                     {
                         // Sampling hashes the key with the canonical scalar encoding (design 5.7, 8.2).
                         _diagnostics.Error("FUNNEL_KEY_TYPE", artifact, pointer + "/key/" + i,

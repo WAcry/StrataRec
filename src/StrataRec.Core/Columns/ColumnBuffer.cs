@@ -9,8 +9,8 @@ namespace StrataRec.Core.Columns;
 /// <remarks>
 /// <para>Rows are physical row indices in <c>[0, Capacity)</c>. A row's value is meaningful only when the row is
 /// valid (<see cref="IsValid"/>) and, for feature slots, filled. Other rows may hold arbitrary data, but every
-/// buffer guarantees <em>structural</em> validity for all rows: dictionary codes are in range, list extents are
-/// inside the arena. Vectorized code may therefore scan whole physical ranges without bounds failures.</para>
+/// buffer guarantees <em>structural</em> validity for all rows: a string row holds a string or null, list extents
+/// are inside the arena. Vectorized code may therefore scan whole physical ranges without bounds failures.</para>
 /// <para>A buffer made directly starts with no validity bitmap, meaning every row is valid: scratch buffers are read
 /// only on the rows their writer wrote. A slot of a <see cref="Tables.CandidateTable"/> always has a bitmap, and every
 /// row in it is missing until something writes it (the table's rule); writers mark what they write, through the
@@ -154,8 +154,7 @@ public abstract class ColumnBuffer
         StorageKind.Int64 => new ScalarColumn<long>(type, capacity, memory),
         StorageKind.Float32 => new ScalarColumn<float>(type, capacity, memory),
         StorageKind.Float64 => new ScalarColumn<double>(type, capacity, memory),
-        StorageKind.String => new DictStringColumn(type, capacity, memory),
-        StorageKind.Text => new TextColumn(type, capacity, memory),
+        StorageKind.String => new StringColumn(type, capacity, memory),
         StorageKind.List => ListColumn.CreateList(type, capacity, memory),
         _ => throw new ArgumentException($"Unsupported column type {type}.", nameof(type)),
     };

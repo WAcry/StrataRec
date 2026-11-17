@@ -8,82 +8,103 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>
-/// String values a connector writes as characters or UTF-8 (audit B5): a <c>string</c> field keeps one string per distinct
-/// value, a <c>text</c> value is its own string.
+/// Strings a connector writes (design 6.5): <see cref="IFeatureBatchWriter.SetString"/> keeps the connector's instance, and
+/// <see cref="IFeatureBatchWriter.Intern"/> / <see cref="IFeatureBatchWriter.InternUtf8"/> give one instance per distinct
+/// value within the call, so a field whose values repeat across keys costs a string per value, not per key.
 /// </summary>
 public sealed class StagingStringTests
 {
     private static readonly CompiledFieldBinding[] Fields =
     [
         new("category", 0, ColumnType.String),
-        new("title", 1, ColumnType.Text),
+        new("title", 1, ColumnType.String),
+        new("tags", 2, ColumnType.List(StorageKind.String)),
     ];
 
     [Fact]
-    public void AStringFieldWrittenAsCharacters_KeepsOneStringPerDistinctValue()
+    public void Intern_GivesOneInstancePerDistinctValue_AcrossTheKeysOfACall()
     {
         var staging = new StagingBuffer(Fields, 100, new RequestMemory());
         for (var key = 0; key < 100; key++)
         {
-            staging.SetString(0, key, (key % 2 == 0 ? "music" : "sports").AsSpan());
-            staging.SetString(1, key, "same title".AsSpan());
+            staging.SetString(0, key, staging.Intern((key % 2 == 0 ? "music" : "sports").AsSpan()));
+            staging.SetString(1, key, "title " + key); // distinct per key: a string of its own, not interned
+            staging.SetStringList(2, key, [staging.InternUtf8("red"u8), staging.InternUtf8(key % 2 == 0 ? "shoe"u8 : "hat"u8)]);
         }
 
-        var category = (TextColumn)staging.Field(0);
-        var title = (TextColumn)staging.Field(1);
+        var category = (StringColumn)staging.Field(0);
+        var tags = (ListColumn<string>)staging.Field(2);
         Assert.Equal("music", category.Get(0));
         Assert.Equal("sports", category.Get(1));
         Assert.Same(category.Get(0), category.Get(98));
         Assert.Same(category.Get(1), category.Get(99));
-        Assert.Equal("same title", title.Get(0));
-        Assert.NotSame(title.Get(0), title.Get(1)); // text is high-cardinality: no table for it
-        Assert.True(staging.HasValue(0, 99) && staging.HasValue(1, 99));
+        Assert.Equal(["red", "hat"], tags.Get(99).ToArray());
+        Assert.Same(tags.Get(0)[0], tags.Get(99)[0]);
+        Assert.Same(tags.Get(0)[1], tags.Get(98)[1]);
+        Assert.Equal("title 7", staging.Get(1, 7).AsString());
+        Assert.True(staging.HasValue(0, 99) && staging.HasValue(1, 99) && staging.HasValue(2, 99));
     }
 
     [Fact]
-    public void Utf8_IsDecoded_InvalidBytesAsReplacementCharacters_AndLongValuesAsWell()
+    public void Intern_IsScopedToTheWriter_NotTheProcess()
     {
-        var staging = new StagingBuffer(Fields, 20, new RequestMemory());
-        staging.SetStringUtf8(0, 0, "café"u8);
-        staging.SetStringUtf8(0, 1, [0x61, 0xFF, 0x62]);
-        var longText = new string('x', 1000) + "é";
-        staging.SetStringUtf8(1, 0, Encoding.UTF8.GetBytes(longText));
-        staging.SetStringUtf8(0, 2, "café"u8);
+        var first = new StagingBuffer(Fields, 4, new RequestMemory());
+        var second = new StagingBuffer(Fields, 4, new RequestMemory());
 
-        var category = (TextColumn)staging.Field(0);
+        var a = first.Intern("music".AsSpan());
+        var b = second.InternUtf8("music"u8);
+
+        Assert.Equal(a, b);
+        Assert.NotSame(a, b); // another call's writer: another table, and nothing kept beyond it
+        Assert.Same(a, first.InternUtf8("music"u8));
+    }
+
+    [Fact]
+    public void SetString_KeepsTheConnectorsInstance_AndRefusesNullAndAnotherFieldType()
+    {
+        var staging = new StagingBuffer(Fields, 4, new RequestMemory());
+        var decodedAtLoad = new string("a title".AsSpan());
+
+        staging.SetString(1, 0, decodedAtLoad);
+
+        Assert.Same(decodedAtLoad, ((StringColumn)staging.Field(1)).Get(0));
+        Assert.Throws<ArgumentNullException>(() => staging.SetString(0, 1, null!));
+        var mismatch = Assert.Throws<InvalidOperationException>(() => staging.SetString(2, 1, "x"));
+        Assert.Contains("list<string>", mismatch.Message, StringComparison.Ordinal);
+        Assert.False(staging.HasValue(0, 1));
+        Assert.False(staging.HasValue(2, 1));
+    }
+
+    [Fact]
+    public void UTF8_IsDecodedAsEncodingUtf8Does_InvalidBytesAsReplacementCharacters_AndLongValuesToo()
+    {
+        var staging = new StagingBuffer(Fields, 4, new RequestMemory());
+        var longValue = new string('x', 1000) + "é";
+
+        staging.SetString(0, 0, staging.InternUtf8("café"u8));
+        staging.SetString(0, 1, staging.InternUtf8([0x61, 0xFF, 0x62]));
+        staging.SetString(1, 0, staging.InternUtf8(Encoding.UTF8.GetBytes(longValue)));
+        staging.SetString(0, 2, staging.InternUtf8("café"u8));
+
+        var category = (StringColumn)staging.Field(0);
         Assert.Equal("café", category.Get(0));
         Assert.Equal("a�b", category.Get(1));
         Assert.Same(category.Get(0), category.Get(2));
-        Assert.Equal(longText, ((TextColumn)staging.Field(1)).Get(0));
+        Assert.Equal(longValue, ((StringColumn)staging.Field(1)).Get(0));
     }
 
+    /// <summary>
+    /// A connector writing a 3-value category and two tags of five per key through Intern: 50,000 keys allocate what 5,000
+    /// do, so nothing is allocated per key (a string per key would be about 1.6 MB more). The difference, not an absolute
+    /// count, is checked: the constant part (the writer's table, the tags' list buffer) is not what this test is about.
+    /// </summary>
     [Fact]
-    public void ACallOfFewKeys_DoesNotBuildATable_AndTheTableStopsGrowingAtItsCap()
+    public void ACategoryAndTags_ThroughIntern_AllocateNothingPerKey()
     {
-        var single = new StagingBuffer(Fields, 1, new RequestMemory()); // a context fetch: one key
-        single.SetString(0, 0, "music".AsSpan());
-        Assert.Equal("music", ((TextColumn)single.Field(0)).Get(0));
-
-        var keys = StagingBuffer.MaxInterned + 10;
-        var staging = new StagingBuffer(Fields, keys, new RequestMemory());
-        for (var key = 0; key < keys; key++)
-        {
-            staging.SetString(0, key, ("v" + key).AsSpan());
-        }
-
-        staging.SetString(0, 0, "v1".AsSpan()); // interned before the cap
-        staging.SetString(0, keys - 1, ("v" + (keys - 5)).AsSpan()); // past the cap: a string of its own, the same text
-        var category = (TextColumn)staging.Field(0);
-        Assert.Same(category.Get(1), category.Get(0));
-        Assert.Equal("v" + (keys - 5), category.Get(keys - 1));
-        Assert.NotSame(category.Get(keys - 5), category.Get(keys - 1));
-    }
-
-    [Fact]
-    public void RepeatedCategories_AllocateAboutTheirDistinctValues_NotAStringPerKey()
-    {
-        // Measured on this thread, which runs the code under test alone; the first round warms the pools.
-        byte[][] values = ["music"u8.ToArray(), "sports"u8.ToArray(), "news"u8.ToArray()];
+        // Measured on this thread, which runs the code under test alone; a first round warms the pools at each size.
+        byte[][] categories = ["music"u8.ToArray(), "sports"u8.ToArray(), "news"u8.ToArray()];
+        byte[][] tagValues = ["red"u8.ToArray(), "blue"u8.ToArray(), "shoe"u8.ToArray(), "hat"u8.ToArray(), "sale"u8.ToArray()];
+        var pair = new string[2];
         long Written(int keys)
         {
             var memory = new RequestMemory();
@@ -91,17 +112,23 @@ public sealed class StagingStringTests
             var before = GC.GetAllocatedBytesForCurrentThread();
             for (var key = 0; key < keys; key++)
             {
-                staging.SetStringUtf8(0, key, values[key % values.Length]);
+                staging.SetString(0, key, staging.InternUtf8(categories[key % categories.Length]));
+                pair[0] = staging.InternUtf8(tagValues[key % tagValues.Length]);
+                pair[1] = staging.InternUtf8(tagValues[(key / 7) % tagValues.Length]);
+                staging.SetStringList(2, key, pair);
             }
 
             var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Equal("sports", staging.Get(0, keys - 1).AsString()); // 4,999 and 49,999: 1 mod 3
             memory.Release();
             return allocated;
         }
 
-        Written(5000);
-        var allocated = Written(5000);
+        Written(5_000);
+        Written(50_000);
+        var few = Written(5_000);
+        var many = Written(50_000);
 
-        Assert.True(allocated < 2048, $"{allocated} B for 5,000 keys of 3 categories (a string per key is about 160 KB)");
+        Assert.True(many - few < 1024, $"5,000 keys: {few} B; 50,000 keys: {many} B");
     }
 }

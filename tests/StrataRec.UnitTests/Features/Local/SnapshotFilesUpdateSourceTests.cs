@@ -44,7 +44,7 @@ public class SnapshotFilesUpdateSourceTests
             ["f32"] = ScalarValue.FromFloat64(0.25),
             ["f64"] = ScalarValue.FromFloat64(-1e300),
             ["s"] = ScalarValue.FromString("cat"),
-            ["t"] = ScalarValue.FromText("multi\nline é"),
+            ["t"] = ScalarValue.FromString("multi\nline é"),
             ["v"] = ScalarValue.FromFloat32List(new[] { 1f, 2.5f, -3f, 4e-3f }),
             ["li32"] = ScalarValue.FromInt64List(new long[] { 1, int.MaxValue }),
             ["li64"] = ScalarValue.FromInt64List(new[] { long.MinValue }),

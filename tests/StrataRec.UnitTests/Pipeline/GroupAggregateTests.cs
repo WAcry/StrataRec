@@ -200,15 +200,14 @@ public sealed class GroupAggregateTests
     }
 
     /// <summary>
-    /// Review 71: a string entity_id is stored as text (audit 4e), and both grouping operators refused it as their group
-    /// column ("must be int64, int32 or string, not text"), which they took before. Text groups by string equality,
-    /// numbered as they first appear; a missing value is in no group.
+    /// Review 71: both grouping operators group by a string entity_id. A string column groups by string equality (equal
+    /// values that are other instances are one group), numbered as they first appear; a missing value is in no group.
     /// </summary>
     [Fact]
-    public void TextGroups_AreEqualStrings_InTheOrderTheyFirstAppear_AndAMissingOneIsInNone()
+    public void StringGroups_AreEqualStrings_InTheOrderTheyFirstAppear_AndAMissingOneIsInNone()
     {
         var memory = new StrataRec.Core.Memory.RequestMemory();
-        var text = new StrataRec.Core.Columns.TextColumn(StrataRec.Core.Types.ColumnType.Text.AsNullable(), 6, memory);
+        var text = new StrataRec.Core.Columns.StringColumn(StrataRec.Core.Types.ColumnType.String.AsNullable(), 6, memory);
         string?[] values = ["b", "a", "b", null, "c", "a"];
         for (var row = 0; row < values.Length; row++)
         {

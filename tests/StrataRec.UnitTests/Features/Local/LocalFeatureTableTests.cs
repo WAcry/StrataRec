@@ -49,7 +49,7 @@ public class LocalFeatureTableTests
             ["f32"] = ScalarValue.FromFloat64(float.Epsilon),
             ["f64"] = ScalarValue.FromFloat64(-0.0),
             ["s"] = ScalarValue.FromString(string.Empty),
-            ["t"] = ScalarValue.FromText("lone surrogate \ud800 kept"),
+            ["t"] = ScalarValue.FromString("lone surrogate \ud800 kept"),
             ["v"] = ScalarValue.FromFloat32List(new[] { float.MaxValue, float.MinValue, 0f, -0f }),
             ["li32"] = ScalarValue.FromInt64List(Array.Empty<long>()),
             ["li64"] = ScalarValue.FromInt64List(Array.Empty<long>()),
@@ -460,9 +460,14 @@ public class LocalFeatureTableTests
             Write(table.Writer, EntityKey.FromInt64(id), 1, values);
         }
 
-        // A text far larger than a page gets a page of its own.
+        // A record far larger than a page (a long list) gets a page of its own; a long string is in the dictionary.
         var big = new string('x', 10_000);
-        Write(table.Writer, EntityKey.FromInt64(5000), 1, new Dictionary<string, ScalarValue> { ["t"] = ScalarValue.FromText(big) });
+        var longList = Enumerable.Range(0, 2_000).Select(i => (long)i).ToArray();
+        Write(table.Writer, EntityKey.FromInt64(5000), 1, new Dictionary<string, ScalarValue>
+        {
+            ["t"] = ScalarValue.FromString(big),
+            ["li64"] = ScalarValue.FromInt64List(longList),
+        });
 
         var version = table.Pin();
         Assert.True(version.PageCount > 1000);
@@ -475,6 +480,7 @@ public class LocalFeatureTableTests
         }
 
         Assert.Equal(big, ReadRecord(version, table.Schema, EntityKey.FromInt64(5000))!["t"].AsString());
+        Assert.Equal(longList, ReadRecord(version, table.Schema, EntityKey.FromInt64(5000))!["li64"].AsInt64List().ToArray());
     }
 
     [Fact]
@@ -917,7 +923,7 @@ public class LocalFeatureTableTests
                 case StorageKind.Int64: writer.GetValues<long>(i).Span[k] = value.AsInt64(); writer.SetValid(i, k); break;
                 case StorageKind.Float32: writer.GetValues<float>(i).Span[k] = (float)value.AsFloat64(); writer.SetValid(i, k); break;
                 case StorageKind.Float64: writer.GetValues<double>(i).Span[k] = value.AsFloat64(); writer.SetValid(i, k); break;
-                case StorageKind.String or StorageKind.Text: writer.SetString(i, k, value.AsString()); break;
+                case StorageKind.String: writer.SetString(i, k, value.AsString()); break;
                 case StorageKind.List:
                     switch (field.Type.Element)
                     {

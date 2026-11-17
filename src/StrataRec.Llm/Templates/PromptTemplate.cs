@@ -40,7 +40,7 @@ public enum PromptScope : byte
 /// did-you-mean, and recorded as a read of the node, so the fetch planner fetches its features before the node runs.
 /// Mustache has no logic: a value the prompt needs computed is a derived feature, one definition for training and
 /// serving, not a second expression language.</para>
-/// <para><b>Values.</b> Strings and text verbatim; integers in invariant culture; floats in their shortest round-trip
+/// <para><b>Values.</b> Strings verbatim; integers in invariant culture; floats in their shortest round-trip
 /// form (a <c>float32</c> as float32, so 0.1 renders as <c>0.1</c>); bools as <c>true</c> / <c>false</c>. A list renders
 /// only as a section, one item at a time (<c>{{#ctx.tags}}{{.}}, {{/ctx.tags}}</c>), a fixed-length one too.</para>
 /// <para><b>Sections.</b> Over <c>rows</c> and lists: once per item. Over a bool: once when true. Over a nullable value:
@@ -672,11 +672,8 @@ public sealed class PromptTemplate
                     case ScalarColumn<double> doubles:
                         PromptValues.Append(output, doubles[_row]);
                         return;
-                    case DictStringColumn strings:
+                    case StringColumn strings:
                         output.Append(strings.Get(_row));
-                        return;
-                    case TextColumn texts:
-                        output.Append(texts.Get(_row));
                         return;
                     case var other:
                         throw Unexpected(reference, other);
@@ -699,7 +696,7 @@ public sealed class PromptTemplate
                 case StorageKind.Float64:
                     PromptValues.Append(output, value.AsFloat64());
                     break;
-                case StorageKind.String or StorageKind.Text:
+                case StorageKind.String:
                     output.Append(value.AsString());
                     break;
                 default:

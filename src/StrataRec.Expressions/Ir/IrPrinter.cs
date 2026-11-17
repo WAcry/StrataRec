@@ -202,7 +202,7 @@ internal static class IrPrinter
                 return (text, text.StartsWith('(') ? PrecPrimary : d < 0 || (d == 0 && double.IsNegative(d)) ? PrecUnary : PrecPrimary);
             }
 
-            case StorageKind.String or StorageKind.Text:
+            case StorageKind.String:
                 return (Quote(v.AsString()), PrecPrimary);
             case StorageKind.List:
                 return (v.ListElement switch

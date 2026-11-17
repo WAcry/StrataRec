@@ -42,7 +42,7 @@ public class DifferentialTests(ITestOutputHelper output)
         ("col.b2", "bool?", K.Bool),
         ("col.s1", "string", K.Str),
         ("col.s2", "string?", K.Str),
-        ("col.t1", "text?", K.Text),
+        ("col.t1", "string?", K.Text), // a string column of longer, non-ASCII values
         ("col.v1", "list<float32,4>?", K.Vec),
         ("col.v2", "list<float32,4>", K.Vec),
         ("col.v3", "list<float64,4>?", K.Vec),
@@ -70,7 +70,7 @@ public class DifferentialTests(ITestOutputHelper output)
         ("ctx.ls", "list<string>?", K.ListStr),
         ("ctx.lf", "list<float32>?", K.ListFloat),
         ("ctx.lb", "list<bool>", K.ListBool),
-        ("ctx.t", "text?", K.Text),
+        ("ctx.t", "string?", K.Text),
         ("param.w", "float64", K.Float),
         ("param.k", "int64", K.Int),
     };
@@ -261,7 +261,7 @@ public class DifferentialTests(ITestOutputHelper output)
             return e.Equals(a) || Math.Abs(e - a) <= 1e-12 * Math.Max(Math.Abs(e), Math.Abs(a));
         }
 
-        if (expected.Kind is StorageKind.String or StorageKind.Text)
+        if (expected.Kind == StorageKind.String)
         {
             return expected.AsString() == actual.AsString();
         }
@@ -348,8 +348,8 @@ public class DifferentialTests(ITestOutputHelper output)
             case ScalarColumn<long> c: c.Set(row, garbage ? (random.Next(2) == 0 ? long.MinValue : 0) : RandomInt(random)); break;
             case ScalarColumn<int> c: c.Set(row, garbage ? int.MinValue : (int)Math.Clamp(RandomInt(random), int.MinValue, int.MaxValue)); break;
             case ScalarColumn<bool> c: c.Set(row, random.Next(2) == 0); break;
-            case DictStringColumn c: c.Set(row, Strings[random.Next(Strings.Length)]); break;
-            case TextColumn c: c.Set(row, Texts[random.Next(Texts.Length)]); break;
+            case StringColumn c when kind == K.Text: c.Set(row, Texts[random.Next(Texts.Length)]); break;
+            case StringColumn c: c.Set(row, Strings[random.Next(Strings.Length)]); break;
             // A fixed-length column holds rows of its length, as its writers keep it (design 4.3).
             case ListColumn<float> c when kind == K.Vec: c.Set(row, RandomVector(random, garbage)); break;
             case ListColumn<double> c when kind == K.Vec: c.Set(row, RandomVector(random, garbage).Select(v => (double)v).ToArray()); break;
@@ -439,7 +439,7 @@ public class DifferentialTests(ITestOutputHelper output)
         K.Int => ScalarValue.FromInt64(RandomInt(random)),
         K.Bool => ScalarValue.FromBool(random.Next(2) == 0),
         K.Str => ScalarValue.FromString(Strings[random.Next(Strings.Length)]),
-        K.Text => ScalarValue.FromText(Texts[random.Next(Texts.Length)]),
+        K.Text => ScalarValue.FromString(Texts[random.Next(Texts.Length)]),
         K.Vec => ScalarValue.FromFloat32List(RandomVector(random, garbage: false)),
         K.ListInt => ScalarValue.FromInt64List(RandomLongs(random)),
         K.ListFloat => ScalarValue.FromFloat64List(RandomDoubles(random)),
@@ -609,7 +609,7 @@ public class DifferentialTests(ITestOutputHelper output)
 
         private K Pick(params K[] options) => options[random.Next(options.Length)];
 
-        /// <summary>A text value reads as a string (audit C3), so either stands where the other is wanted.</summary>
+        /// <summary>Both are strings, drawn from different value sets, so either stands where the other is wanted.</summary>
         private static bool Reads(K value, K wanted) => value == wanted || (value, wanted) is (K.Text, K.Str) or (K.Str, K.Text);
 
         private string Leaf(K kind)

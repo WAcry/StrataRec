@@ -649,7 +649,7 @@ public sealed partial class FeatureFetcher
                 case StorageKind.Int64: writer.Int64(t, ((ScalarColumn<long>)staging.ColumnOf(m)!)[key]); break;
                 case StorageKind.Float32: writer.Float32(t, ((ScalarColumn<float>)staging.ColumnOf(m)!)[key]); break;
                 case StorageKind.Float64: writer.Float64(t, ((ScalarColumn<double>)staging.ColumnOf(m)!)[key]); break;
-                case StorageKind.String or StorageKind.Text: writer.String(t, ((TextColumn)staging.ColumnOf(m)!).Get(key)); break;
+                case StorageKind.String: writer.String(t, ((StringColumn)staging.ColumnOf(m)!).Get(key)); break;
                 case StorageKind.List: writer.List(t, (ListColumn)staging.ListBuffer(m, chunk)!, inChunk); break;
                 default: throw new InvalidOperationException($"Unsupported field kind {layout.Kinds[t]}.");
             }
@@ -914,7 +914,7 @@ public sealed partial class FeatureFetcher
         var stale = 0;
         var staleRows = _memory.Rent<int>(read.RowCount);
         var staleRecords = _memory.Rent<LocalRecordRef>(read.RowCount);
-        var fill = new ColumnFill(this, targets, starts);
+        var fill = new ColumnFill(this, targets, starts, read.Strings);
         for (var i = 0; i < read.RowCount; i++)
         {
             var m = read.RowMiss[i];
@@ -1082,6 +1082,15 @@ public sealed partial class FeatureFetcher
 
         public CacheRead? Next { get; set; }
 
+        /// <summary>
+        /// The strings decoded from the read's record bytes, deduplicated across its keys (a category repeated across them
+        /// is one string); made by the first one. A read is filled, recorded and read for its context values on one
+        /// thread at a time, once it has resolved.
+        /// </summary>
+        public StringDedup Strings => _strings ??= new StringDedup();
+
+        private StringDedup? _strings;
+
         /// <summary>The recorded call's keys.</summary>
         public EntityKeyBatch Batch => IsContext
             ? new EntityKeyBatch { Shape = Group.Shape, ContextKey = Keys[0] }
@@ -1125,7 +1134,7 @@ public sealed partial class FeatureFetcher
             switch (Sources[m])
             {
                 case CacheSource.Distributed or CacheSource.Origin or CacheSource.OriginPartial or CacheSource.StaleDistributed:
-                    var value = new FieldValue(tableField, Cache.Layout);
+                    var value = new FieldValue(tableField, Strings);
                     CacheRecord.Read(Bytes[m].Span, Cache.Layout, ref value);
                     return value.Value;
                 case CacheSource.StaleLocal:
@@ -1148,21 +1157,24 @@ public sealed partial class FeatureFetcher
     /// <summary>
     /// Writes one record's fields into the slots of a row (<see cref="CacheRecord.Read"/> walks the record once for all of
     /// them). Like a backfill: a non-finite float is counted and takes the absent value, a missing field takes it too, and a
-    /// slot already filled on the row is left as it is.
+    /// slot already filled on the row is left as it is. Strings are decoded through the read's deduplication, so a value
+    /// repeated across the read's keys is one string.
     /// </summary>
     private struct ColumnFill : ICacheRecordVisitor
     {
         private readonly FeatureFetcher _owner;
         private readonly CacheTarget[] _targets;
         private readonly int[] _starts; // the targets of table field t are [_starts[t], _starts[t + 1])
+        private readonly StringDedup _strings;
         private string[]? _items;
         private int _itemCount;
 
-        public ColumnFill(FeatureFetcher owner, CacheTarget[] targets, int[] starts)
+        public ColumnFill(FeatureFetcher owner, CacheTarget[] targets, int[] starts, StringDedup strings)
         {
             _owner = owner;
             _targets = targets;
             _starts = starts;
+            _strings = strings;
         }
 
         public int Row { get; set; }
@@ -1226,18 +1238,13 @@ public sealed partial class FeatureFetcher
                     continue;
                 }
 
-                value ??= Encoding.UTF8.GetString(utf8);
-                switch (_targets[i].Column)
+                value ??= _strings.InternUtf8(utf8);
+                if (_targets[i].Column is not StringColumn strings)
                 {
-                    case DictStringColumn strings:
-                        strings.Set(Row, value);
-                        break;
-                    case TextColumn text:
-                        text.Set(Row, value);
-                        break;
-                    default:
-                        throw new InvalidOperationException($"A string field fills a {_targets[i].Column.Type} slot.");
+                    throw new InvalidOperationException($"A string field fills a {_targets[i].Column.Type} slot.");
                 }
+
+                strings.Set(Row, value);
             }
         }
 
@@ -1256,7 +1263,7 @@ public sealed partial class FeatureFetcher
             _itemCount = 0;
         }
 
-        public void StringListItem(int field, ReadOnlySpan<byte> utf8) => _items![_itemCount++] = Encoding.UTF8.GetString(utf8);
+        public void StringListItem(int field, ReadOnlySpan<byte> utf8) => _items![_itemCount++] = _strings.InternUtf8(utf8);
 
         public void StringListEnd(int field)
         {
@@ -1335,10 +1342,12 @@ public sealed partial class FeatureFetcher
         }
     }
 
-    /// <summary>Reads one field of a record as a promoted scalar, as <see cref="TableVersion.Read"/> does for a table record.</summary>
-    private struct FieldValue(int field, CacheRecordLayout layout) : ICacheRecordVisitor
+    /// <summary>Reads one field of a record as a promoted scalar, as <see cref="TableVersion.Read"/> does for a table record;
+    /// strings through the read's deduplication.</summary>
+    private struct FieldValue(int field, StringDedup strings) : ICacheRecordVisitor
     {
-        private List<string>? _items;
+        private string[]? _items;
+        private int _itemCount;
 
         public ScalarValue Value { get; private set; } = ScalarValue.Missing;
 
@@ -1360,8 +1369,7 @@ public sealed partial class FeatureFetcher
         {
             if (f == field)
             {
-                var value = Encoding.UTF8.GetString(utf8);
-                Value = layout.Kinds[f] == StorageKind.Text ? ScalarValue.FromText(value) : ScalarValue.FromString(value);
+                Value = ScalarValue.FromString(strings.InternUtf8(utf8));
             }
         }
 
@@ -1374,15 +1382,26 @@ public sealed partial class FeatureFetcher
             }
         }
 
-        public void StringListStart(int f, int count) => _items = f == field ? new List<string>(count) : null;
+        public void StringListStart(int f, int count)
+        {
+            // The value's own array, filled in place: the record says how many items there are.
+            _items = f == field ? new string[count] : null;
+            _itemCount = 0;
+        }
 
-        public readonly void StringListItem(int f, ReadOnlySpan<byte> utf8) => _items?.Add(Encoding.UTF8.GetString(utf8));
+        public void StringListItem(int f, ReadOnlySpan<byte> utf8)
+        {
+            if (_items is not null)
+            {
+                _items[_itemCount++] = strings.InternUtf8(utf8);
+            }
+        }
 
         public void StringListEnd(int f)
         {
             if (_items is not null)
             {
-                Value = ScalarValue.FromStringList(_items.ToArray());
+                Value = ScalarValue.FromStringList(_items);
                 _items = null;
             }
         }
