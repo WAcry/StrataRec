@@ -34,6 +34,7 @@ public static class StrataRecMetrics
         public const string ArmRequestDegraded = "stratarec.arm.request.degraded";
         public const string RequestArmsIgnored = "stratarec.request.arms.ignored";
         public const string RequestMemoryRented = "stratarec.request.memory.rented";
+        public const string RequestMemoryAllocated = "stratarec.request.memory.allocated";
         public const string AbandonedIo = "stratarec.io.abandoned";
         public const string CancellationCallbackErrors = "stratarec.cancellation.callback_errors";
         public const string NodeDuration = "stratarec.node.duration";
@@ -133,6 +134,16 @@ public static class StrataRecMetrics
     /// <summary>Bytes a pipeline execution rented from the buffer pool (design 4.8). Tags: <c>stratarec.pipeline</c>.</summary>
     public static readonly Histogram<long> RequestMemoryRented = Meter.CreateHistogram<long>(Names.RequestMemoryRented, "By",
         "Bytes rented from the buffer pool per pipeline execution.", null, new InstrumentAdvice<long> { HistogramBucketBoundaries = ByteBuckets });
+
+    /// <summary>
+    /// Bytes the buffer pool allocated for a pipeline execution's rents because it had no array of the size to give
+    /// (<see cref="Memory.RequestMemory.PoolAllocatedBytes"/>, design 4.8). Near zero once the pool is warm; growing with
+    /// the requests in flight, the shared pool keeps too few arrays per size for this load (it keeps 32 per size and core
+    /// by default; DOTNET_SYSTEM_BUFFERS_SHAREDARRAYPOOL_MAXARRAYSPERPARTITION raises it). Tags: <c>stratarec.pipeline</c>.
+    /// </summary>
+    public static readonly Histogram<long> RequestMemoryAllocated = Meter.CreateHistogram<long>(Names.RequestMemoryAllocated, "By",
+        "Bytes the buffer pool allocated per pipeline execution because it had no array to give.", null,
+        new InstrumentAdvice<long> { HistogramBucketBoundaries = ByteBuckets });
 
     /// <summary>
     /// External operations (connector, candidate source and model calls, the context prefetch) still running when their

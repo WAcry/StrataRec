@@ -462,11 +462,13 @@ internal sealed class PipelineExecutor
             // In-flight connector calls hold the memory themselves; buffers return when the last one finishes. Those
             // still running now outlive the request (design 4.8).
             var rented = memory.RentedBytes;
+            var poolAllocated = memory.PoolAllocatedBytes;
             var abandoned = memory.Release();
             if (replay is null)
             {
                 var tags = plan.Telemetry.Pipeline;
                 StrataRecMetrics.RequestMemoryRented.Record(rented, tags);
+                StrataRecMetrics.RequestMemoryAllocated.Record(poolAllocated, tags);
                 if (abandoned > 0)
                 {
                     StrataRecMetrics.AbandonedIo.Add(abandoned, tags);

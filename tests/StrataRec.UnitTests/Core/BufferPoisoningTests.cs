@@ -53,6 +53,34 @@ public sealed class BufferPoisoningTests
         Assert.Equal(new Array[] { scratch, held }, pool.Returned);
     }
 
+    /// <summary>
+    /// What the pool allocates for a request's rents is counted (metric stratarec.request.memory.allocated): an array it
+    /// had to create, ledger or scratch, and nothing for one it had.
+    /// </summary>
+    [Fact]
+    public void WhatThePoolAllocates_IsCounted_AndAnArrayItHadIsNot()
+    {
+        var kept = new long[1024];
+        var reusing = new RequestMemory(new ReusingPool(kept));
+        reusing.Rent<long>(1024);
+        reusing.RentScratch<long>(1024);
+        Assert.Equal(0, reusing.PoolAllocatedBytes);
+
+        var creating = new RequestMemory(new KeepingPool());
+        creating.Rent<long>(1024);
+        creating.RentScratch<int>(1024);
+        Assert.InRange(creating.PoolAllocatedBytes, (1024 * 8) + (1024 * 4), (1024 * 8) + (1024 * 4) + 256); // the arrays and their headers
+    }
+
+    private sealed class ReusingPool(long[] array) : IBufferPool
+    {
+        public T[] Rent<T>(int minimumLength) => (T[])(object)array;
+
+        public void Return<T>(T[] array, bool clearArray)
+        {
+        }
+    }
+
     private sealed class KeepingPool : IBufferPool
     {
         public List<Array> Returned { get; } = new();

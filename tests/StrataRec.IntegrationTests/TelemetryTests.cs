@@ -119,6 +119,7 @@ public sealed class MetricsTests
 
         // Memory.
         Assert.True(Assert.Single(capture.Of(StrataRecMetrics.Names.RequestMemoryRented)).Value > 0);
+        Assert.True(Assert.Single(capture.Of(StrataRecMetrics.Names.RequestMemoryAllocated)).Value >= 0);
     }
 
     [Fact]
