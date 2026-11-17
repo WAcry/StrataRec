@@ -17,7 +17,8 @@ namespace StrataRec.Models;
 /// <remarks>
 /// <para>The settings declare the signature it mimics, so the calling operator's load-time signature check passes as it
 /// would against the real model. The short form names the tensors, every one float32 <c>[-1]</c>: what
-/// <c>ModelScorer@1</c> reads, and sends for float32, float64 and bool columns:</para>
+/// <c>ModelScorer@1</c> reads, and sends for float32 and float64 columns. It sends bool, int32 and int64 columns as int64
+/// <c>[-1]</c>, so an input mapped to one of those needs the full form's <c>"type": "int64"</c>:</para>
 /// <code>
 /// { "client": "random@1",
 ///   "inputs": ["smoothed_ctr", "log_followers"],   // the model's input names
