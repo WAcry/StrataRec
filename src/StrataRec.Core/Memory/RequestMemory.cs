@@ -80,7 +80,6 @@ public sealed class RequestMemory
     private int _leaseCount;
     private int _holders = 1;
     private bool _returned;
-    private long _poolAllocated;
 
     /// <param name="ended">Told once, after the last <see cref="Release"/> has returned every buffer.</param>
     /// <param name="events">Told of buffers the pool would not take back; null reports nothing.</param>
@@ -99,14 +98,6 @@ public sealed class RequestMemory
     /// <summary>Total bytes currently rented (approximate, for metrics).</summary>
     public long RentedBytes { get; private set; }
 
-    /// <summary>
-    /// Bytes the pool allocated for this request's rents (<see cref="Rent{T}"/> and <see cref="RentScratch{T}"/>) because it
-    /// had no array of the size: what the request cost the GC on top of what it allocates itself. Measured on the renting
-    /// thread around each rent (a pool hit allocates nothing), so a pool that keeps too few arrays for the requests in
-    /// flight shows here (metric <c>stratarec.request.memory.allocated</c>, design 4.8).
-    /// </summary>
-    public long PoolAllocatedBytes => Volatile.Read(ref _poolAllocated);
-
     /// <summary>Rents an array of at least <paramref name="minimumLength"/> elements. Contents are unspecified.</summary>
     public T[] Rent<T>(int minimumLength)
     {
@@ -115,7 +106,7 @@ public sealed class RequestMemory
             ObjectDisposedException.ThrowIf(_returned, this);
         }
 
-        var array = RentFromPool<T>(minimumLength);
+        var array = _pool.Rent<T>(minimumLength);
         lock (_gate)
         {
             if (_returned)
@@ -159,21 +150,7 @@ public sealed class RequestMemory
     /// buffer nothing else can still reference once it is given back: nothing an operator writes into the table, hands
     /// to a client or keeps across an external call. One never given back (an exception between the two) is only lost to the
     /// pool.</remarks>
-    public T[] RentScratch<T>(int minimumLength) => RentFromPool<T>(minimumLength);
-
-    /// <summary>Rents from the pool and counts what it allocated (<see cref="PoolAllocatedBytes"/>).</summary>
-    private T[] RentFromPool<T>(int minimumLength)
-    {
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        var array = _pool.Rent<T>(minimumLength);
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        if (allocated > 0)
-        {
-            Interlocked.Add(ref _poolAllocated, allocated); // rents run on the request's thread and on connectors'
-        }
-
-        return array;
-    }
+    public T[] RentScratch<T>(int minimumLength) => _pool.Rent<T>(minimumLength);
 
     /// <summary>Gives back a buffer of <see cref="RentScratch{T}"/>: poisoned when <see cref="PoisonReturnedBuffers"/> is on,
     /// so a use after this fails in tests.</summary>
