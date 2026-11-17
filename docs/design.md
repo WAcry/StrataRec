@@ -674,8 +674,8 @@ internal sealed class RequestMemory
 | 实体类别 | 例子 | 主键 | 存储位置 | 表达式中的写法 |
 | :--- | :--- | :--- | :--- | :--- |
 | 请求输入 | `request` | 无 | 请求上下文 | `ctx.request.country` |
-| 上下文实体 | `user`、`segment` | 1–8 个请求输入，例如 `ctx.request.user_id`，或 `["ctx.request.country", "ctx.request.age_bucket"]` | 请求上下文，每请求一份 | `ctx.user.tenure_days` |
-| 候选范围的实体 | `item`、`creator`、`user_item`、`game_ad` | 1–8 个部分，至少一个随行变化：`col.entity_id`、候选特征（如 `col.item.creator_id`），可以加请求输入（如 `["ctx.request.user_id", "col.entity_id"]`） | 候选表的列（按键去重拉取，再回填到每行） | `col.item.clicks_7d`、`col.creator.follower_count`、`col.user_item.engagements_30d` |
+| 上下文实体 | `user`、`segment` | 1–8 个请求输入或上下文特征，例如 `ctx.request.user_id`、`["ctx.request.country", "ctx.request.age_bucket"]`，或由另一个上下文实体查出的 `ctx.identity.user_id` | 请求上下文，每请求一份 | `ctx.user.tenure_days` |
+| 候选范围的实体 | `item`、`creator`、`user_item`、`game_ad` | 1–8 个部分，至少一个随行变化：`col.entity_id`、候选特征（如 `col.item.creator_id`），可以加请求输入或上下文特征（如 `["ctx.request.user_id", "col.entity_id"]`） | 候选表的列（按键去重拉取，再回填到每行） | `col.item.clicks_7d`、`col.creator.follower_count`、`col.user_item.engagements_30d` |
 
 目录里的特征名统一写成 `<实体>.<特征>`，例如 `item.clicks_7d`。表达式根据实体所在的范围加上前缀：上下文范围用 `ctx.`，候选范围用 `col.`。节点产出的列放在 `score.*`、`recall.*` 等保留实体下，`col.entity_id` 是保留的主键列。同一个特征名在不同实体下是不同的特征：`item.engagements_30d` 是物品在 30 天内的总互动数，`user_item.engagements_30d` 是当前用户与这个物品的互动数。
 
@@ -718,7 +718,7 @@ internal sealed class RequestMemory
 3. 声明了 `default` 的特征类型为 `T`，没有声明的为 `T?`。`item.age_hours` 的类型是 `float32?`，用它打分或过滤的表达式必须写 `??`；`user.embedding` 和 `item.embedding` 也是可空的，所以 `dot` 的结果是 `float64?`，`user_item.embedding_dot` 用 `?? 0.0` 把它消解为非可空值（第 7.4 节）。
 4. 衍生特征的可空性由表达式推导：`item.smoothed_ctr_7d` 的输入都有默认值，结果是 `T`。衍生特征也可以显式声明 `default`：例如 `clicks / impressions` 在曝光为 0 时得到非有限值，声明 `"default": 0.0` 之后这些行取默认值并计数，特征类型为 `T`。
 5. `creator` 的主键来自候选表中的 `item.creator_id`，引擎由此知道依赖关系：拉取创作者特征之前，必须先有 `item.creator_id`。键里引用的特征可以再挂在别的实体上（链式），成环是配置错误（`ENTITY_KEY_CYCLE`）。
-6. 实体只声明 `key`：一个引用，或 1–8 个引用的数组（有序元组）。每个部分是 `ctx.request.<输入>`、`col.entity_id` 或候选特征 `col.<实体>.<特征>`（物理或衍生），类型是 `int64`（`int32` 按 `int64`）或 `string`，可以可空；键的类型就是各部分类型的元组（`col.entity_id` 是流水线的 `entity_key_type`）。全部部分都是 `ctx.*` 的是上下文实体，每请求一个键；否则是候选范围的实体，每行一个键。其他类型、重复的部分、超过 8 个部分报 `ENTITY_BAD_KEY`，指向 `/entities/<名>/key/<i>`。任一部分缺失时这个键不查找，它的特征按缺失处理（有默认值取默认值）；请求输入的部分缺失时整批都不发请求。上下文特征（`ctx.<实体>.<特征>`）暂不能做键的一部分。
+6. 实体只声明 `key`：一个引用，或 1–8 个引用的数组（有序元组）。每个部分是 `ctx.request.<输入>`、`col.entity_id`、候选特征 `col.<实体>.<特征>` 或上下文特征 `ctx.<实体>.<特征>`（都可以是物理或衍生），类型是 `int64`（`int32` 按 `int64`）或 `string`，可以可空；键的类型就是各部分类型的元组（`col.entity_id` 是流水线的 `entity_key_type`）。全部部分都是 `ctx.*` 的是上下文实体，每请求一个键；否则是候选范围的实体，每行一个键。其他类型、重复的部分、超过 8 个部分报 `ENTITY_BAD_KEY`，指向 `/entities/<名>/key/<i>`。任一部分缺失时这个键不查找，它的特征按缺失处理（有默认值取默认值）；共享部分（请求输入或上下文特征）缺失时整批都不发请求。上下文特征做键的部分就是链式的上下文键：`identity` 按 `ctx.request.user_key` 查出 `identity.user_id`，`user` 的键写 `ctx.identity.user_id`；它和请求输入一样是共享部分。上游没有值时这个键不查找；上游失败时依赖它的特征失败、不发请求，上游降级时它们降级，与候选特征做键时相同（第 6.7 节）。经过衍生特征回到自己实体的环也报 `ENTITY_KEY_CYCLE`，在计划编译时指向那个键部分并带上路径。
 7. 衍生特征用 `ColumnExpr` 定义。只引用上下文特征的衍生特征每个请求算一次，引用候选列的按列计算。衍生特征被多个节点使用时只计算一次，结果写入候选表。
 8. 一份特征目录由多条流水线共用，计划只包含它读到的特征。编译时某个名字第一次解析到目录特征，才把它加入计划（分配槽位或上下文位置）：衍生特征这时编译，它读的特征随之加入；实体的特征先加入它的键读到的每个特征；`cache` 数据源的特征把同一张表的全部特征一起加入（第 6.6 节）。节点（含后备节点和所有臂的变体）、`when`、探针、输出、漏斗组的键和模型输入都经过同一个名字解析，没有遗漏的引用路径。请求期按特征、槽位和上下文字段计的开销只随计划读到的特征增长，与目录大小无关；绑定也只解析计划读到的数据源，目录里只有别的环境才绑定的数据源不影响这条流水线。目录内容仍然整体检查：每个衍生特征都编译一次，不论是否被读，表达式错误和依赖环（`FEATURE_CYCLE`）照常报告；读一个有错误的衍生特征不再重复报错。
 
@@ -785,7 +785,7 @@ internal sealed class RequestMemory
 
 ### 6.5 实体键与批量
 
-一次特征拉取发出一批已去重的键，每个键是实体声明的元组。最常见的是单部分键：一个用户 ID、一批物品 ID。请求输入的部分对整批都相同（例如 `user_item` 的用户、`item_country` 的国家），在批里只出现一次并标为共享（`IsShared`）：存储端可以按它分区一次读取，“一个用户 × 500 个物品”是一次批量请求。键的每个部分支持 `int64` 和 `string`。请求输入的部分缺失时（例如匿名用户没有 `user_id`），引擎不发起请求，相关特征全部视为缺失：有默认值的取默认值，没有默认值的由表达式处理。连接器在加载时用 `Supports(EntityKeyLayout)` 声明自己支持哪些键布局（各部分的引用、类型和是否共享），不支持时报 `CONNECTOR_KEY`。
+一次特征拉取发出一批已去重的键，每个键是实体声明的元组。最常见的是单部分键：一个用户 ID、一批物品 ID。请求输入和上下文特征的部分对整批都相同（例如 `user_item` 的用户、`item_country` 的国家、按 `ctx.user.segment` 分的人群），在批里只出现一次并标为共享（`IsShared`）：存储端可以按它分区一次读取，“一个用户 × 500 个物品”是一次批量请求。键的每个部分支持 `int64` 和 `string`。共享部分缺失时（例如匿名用户没有 `user_id`，或上游没有查出 `identity.user_id`），引擎不发起请求，相关特征全部视为缺失：有默认值的取默认值，没有默认值的由表达式处理。连接器在加载时用 `Supports(EntityKeyLayout)` 声明自己支持哪些键布局（各部分的引用、类型和是否共享），不支持时报 `CONNECTOR_KEY`。
 
 ```csharp
 public readonly record struct EntityKey(long Int64Value, string? StringValue);
@@ -794,7 +794,7 @@ public readonly struct EntityKeyBatch                  // 结构体：每个分�
 {
     public int Count { get; }                          // 键的个数（暂存区的行数），已按元组去重
     public int PartCount { get; }
-    public bool IsShared(int part);                    // 整批同一个值的部分（请求输入）
+    public bool IsShared(int part);                    // 整批同一个值的部分（请求输入或上下文特征）
     public ReadOnlyMemory<EntityKey> Part(int part);   // 每个键的这一部分；共享部分只有 1 条
     public ReadOnlyMemory<EntityKey> Keys { get; }     // 单部分键的全部键
     public EntityKey Key(int index, int part);
@@ -1001,7 +1001,7 @@ flowchart LR
 2. **只拉命中的实验**：实验桶独有的特征，只在请求命中该桶、并且节点即将执行时才拉取。
 3. **请求合并**：同一次发起中同一数据源的字段合并成一次批量请求。
 4. **外键去重**：500 个物品通常只来自一两百个创作者，创作者特征按唯一键请求后回填。
-5. **上下文预取**：请求开始时实验分配已知，本请求所有节点变体需要的上下文特征在第一时间与召回并发拉取。键里有候选列的实体（例如 `user_item`）要等候选确定，不在预取之列；按用户存的交互列表（第 6.5 节）是上下文特征，随预取一起拉取。读取上下文特征的节点只等它读的那些数据源：召回读用户向量时，不等另一个更慢的用户特征源；上下文衍生特征和本地读取的上下文特征最后算出，读它们的节点等整个预取完成。
+5. **上下文预取**：请求开始时实验分配已知，本请求所有节点变体需要的上下文特征在第一时间与召回并发拉取。键里有候选列的实体（例如 `user_item`）要等候选确定，不在预取之列；按用户存的交互列表（第 6.5 节）是上下文特征，随预取一起拉取。预取按依赖顺序进行：只由请求输入作键的分组立即发出（先发远程分组，在它们在途时读本地和缓存分组）；键里有上下文特征的分组在这些特征写入后立即发出，只等它们所在的分组（和作为键的衍生特征的输入），在写入最后一个键特征的线程上发出；作为键的衍生特征在输入就绪时立即算出。每个分组有自己的预算（数据源超时或发出时距截止时间的剩余），链的后一级用剩下的时间。读取上下文特征的节点只等它读的那些特征：召回读用户向量时，不等另一个更慢的用户特征源，本地读取的上下文分组同样按分组就绪；不被键读取的上下文衍生特征最后算出，读它们的节点等整个预取完成。键里有上下文特征的候选范围实体，在候选列就绪、上下文部分写入之后拉取。
 
 这套规则有可预期的少量多拉：上下文预取会覆盖之后因为 `when`、截止时间或失败而被跳过的节点；后备节点的特征和主节点一起拉取，主节点成功时这些特征没有用到；非屏障过滤节点之前发起的拉取会包含它随后淘汰的行。这三种多拉换来的是更少的串行往返，规模由配置显式控制。
 
