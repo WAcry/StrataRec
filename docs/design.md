@@ -674,10 +674,8 @@ internal sealed class RequestMemory
 | 实体类别 | 例子 | 主键 | 存储位置 | 表达式中的写法 |
 | :--- | :--- | :--- | :--- | :--- |
 | 请求输入 | `request` | 无 | 请求上下文 | `ctx.request.country` |
-| 上下文实体 | `user`、`session` | 请求输入，例如 `ctx.request.user_id` | 请求上下文，每请求一份 | `ctx.user.tenure_days` |
-| 候选实体 | `item` | `col.entity_id` | 候选表的列 | `col.item.clicks_7d` |
-| 外键实体 | `creator`、`category` | 候选表中的另一列，例如 `col.item.creator_id` | 候选表的列（拉取时去重，再回填到每行） | `col.creator.follower_count` |
-| 交叉实体 | `user_item` | 上下文键 + 候选键 | 候选表的列 | `col.user_item.engagements_30d` |
+| 上下文实体 | `user`、`segment` | 1–8 个请求输入，例如 `ctx.request.user_id`，或 `["ctx.request.country", "ctx.request.age_bucket"]` | 请求上下文，每请求一份 | `ctx.user.tenure_days` |
+| 候选范围的实体 | `item`、`creator`、`user_item`、`game_ad` | 1–8 个部分，至少一个随行变化：`col.entity_id`、候选特征（如 `col.item.creator_id`），可以加请求输入（如 `["ctx.request.user_id", "col.entity_id"]`） | 候选表的列（按键去重拉取，再回填到每行） | `col.item.clicks_7d`、`col.creator.follower_count`、`col.user_item.engagements_30d` |
 
 目录里的特征名统一写成 `<实体>.<特征>`，例如 `item.clicks_7d`。表达式根据实体所在的范围加上前缀：上下文范围用 `ctx.`，候选范围用 `col.`。节点产出的列放在 `score.*`、`recall.*` 等保留实体下，`col.entity_id` 是保留的主键列。同一个特征名在不同实体下是不同的特征：`item.engagements_30d` 是物品在 30 天内的总互动数，`user_item.engagements_30d` 是当前用户与这个物品的互动数。
 
@@ -719,10 +717,10 @@ internal sealed class RequestMemory
 2. `field` 把存储中的物理字段名和配置中的语义名分开。
 3. 声明了 `default` 的特征类型为 `T`，没有声明的为 `T?`。`item.age_hours` 的类型是 `float32?`，用它打分或过滤的表达式必须写 `??`；`user.embedding` 和 `item.embedding` 也是可空的，所以 `dot` 的结果是 `float64?`，`user_item.embedding_dot` 用 `?? 0.0` 把它消解为非可空值（第 7.4 节）。
 4. 衍生特征的可空性由表达式推导：`item.smoothed_ctr_7d` 的输入都有默认值，结果是 `T`。衍生特征也可以显式声明 `default`：例如 `clicks / impressions` 在曝光为 0 时得到非有限值，声明 `"default": 0.0` 之后这些行取默认值并计数，特征类型为 `T`。
-5. `creator` 的主键来自候选表中的 `item.creator_id`，引擎由此识别出外键关系：拉取创作者特征之前，必须先有 `item.creator_id`。
-6. 实体只声明 `key`，类别和键的类型都由它决定（第 6.2 节的表）：请求输入做键是上下文实体，键的类型是该输入在 `request_schema` 中的类型；`col.entity_id` 做键是候选实体，键的类型是流水线的 `entity_key_type`；候选表的另一列做键是外键实体，键的类型是那个特征的类型；一个请求输入加一个候选列是交叉实体。键必须是 `int64` 或 `string`（`int32` 按 `int64`）。
+5. `creator` 的主键来自候选表中的 `item.creator_id`，引擎由此知道依赖关系：拉取创作者特征之前，必须先有 `item.creator_id`。键里引用的特征可以再挂在别的实体上（链式），成环是配置错误（`ENTITY_KEY_CYCLE`）。
+6. 实体只声明 `key`：一个引用，或 1–8 个引用的数组（有序元组）。每个部分是 `ctx.request.<输入>`、`col.entity_id` 或候选特征 `col.<实体>.<特征>`（物理或衍生），类型是 `int64`（`int32` 按 `int64`）或 `string`，可以可空；键的类型就是各部分类型的元组（`col.entity_id` 是流水线的 `entity_key_type`）。全部部分都是 `ctx.*` 的是上下文实体，每请求一个键；否则是候选范围的实体，每行一个键。其他类型、重复的部分、超过 8 个部分报 `ENTITY_BAD_KEY`，指向 `/entities/<名>/key/<i>`。任一部分缺失时这个键不查找，它的特征按缺失处理（有默认值取默认值）；请求输入的部分缺失时整批都不发请求。上下文特征（`ctx.<实体>.<特征>`）暂不能做键的一部分。
 7. 衍生特征用 `ColumnExpr` 定义。只引用上下文特征的衍生特征每个请求算一次，引用候选列的按列计算。衍生特征被多个节点使用时只计算一次，结果写入候选表。
-8. 一份特征目录由多条流水线共用，计划只包含它读到的特征。编译时某个名字第一次解析到目录特征，才把它加入计划（分配槽位或上下文位置）：衍生特征这时编译，它读的特征随之加入；外键实体的特征先加入它的键；`cache` 数据源的特征把同一张表的全部特征一起加入（第 6.6 节）。节点（含后备节点和所有臂的变体）、`when`、探针、输出、漏斗组的键和模型输入都经过同一个名字解析，没有遗漏的引用路径。请求期按特征、槽位和上下文字段计的开销只随计划读到的特征增长，与目录大小无关；绑定也只解析计划读到的数据源，目录里只有别的环境才绑定的数据源不影响这条流水线。目录内容仍然整体检查：每个衍生特征都编译一次，不论是否被读，表达式错误和依赖环（`FEATURE_CYCLE`）照常报告；读一个有错误的衍生特征不再重复报错。
+8. 一份特征目录由多条流水线共用，计划只包含它读到的特征。编译时某个名字第一次解析到目录特征，才把它加入计划（分配槽位或上下文位置）：衍生特征这时编译，它读的特征随之加入；实体的特征先加入它的键读到的每个特征；`cache` 数据源的特征把同一张表的全部特征一起加入（第 6.6 节）。节点（含后备节点和所有臂的变体）、`when`、探针、输出、漏斗组的键和模型输入都经过同一个名字解析，没有遗漏的引用路径。请求期按特征、槽位和上下文字段计的开销只随计划读到的特征增长，与目录大小无关；绑定也只解析计划读到的数据源，目录里只有别的环境才绑定的数据源不影响这条流水线。目录内容仍然整体检查：每个衍生特征都编译一次，不论是否被读，表达式错误和依赖环（`FEATURE_CYCLE`）照常报告；读一个有错误的衍生特征不再重复报错。
 
 ### 6.4 数据源绑定：`SourceBindingArtifact`
 
@@ -785,34 +783,27 @@ internal sealed class RequestMemory
 
 每种绑定类型的工厂声明自己设置的 C# 类型（`SettingsType`；内置基类 `ModelClientFactory<T>`、`CandidateSourceFactory<T>`、`FeatureConnectorFactory<T>`、`FeatureCacheStoreFactory<T>`、`FeatureUpdateSourceFactory<T>` 以类型参数声明）。调用工厂之前，引擎用和算子配置相同的严格规则把绑定自己的设置绑定到这个类型：未知或拼错的键（附相近的名字）、类型不符、缺少必填成员，都报在设置的 JSON 指针处并给出提示；工厂只检查类型表达不了的约束（取值范围、两者择一）。本地文件和密钥引用是设置类型里的 `LocalFile`、`SecretReference` 成员：相对路径按配置根目录解析，`file://` URI 和绝对路径等价，非本地 URI 是配置错误；密钥只以 `secret://名字` 引用，报错不回显它的值。更新来源的工厂同样接收 `BindingContext`，设置错误报在 `bootstrap` 内。上例的 `grpc_tensor@1`、`redis_hash@1`、`kafka@1` 等是宿主注册的类型；内置的模型客户端只有 `linear@1`、`random@1`、`fixed_text@1`。
 
-### 6.5 实体键与批量形态
+### 6.5 实体键与批量
 
-特征拉取有三种键的形态：
-
-| 形态 | 用于 | 键 |
-| :--- | :--- | :--- |
-| `Single` | 上下文实体 | 一个键，例如用户 ID |
-| `Many` | 候选实体、外键实体 | 一批已去重的键 |
-| `Cross` | 交叉实体 | 一个上下文键 × 一批候选键 |
-
-`Cross` 形态让“一个用户 × 500 个物品”的交叉特征以一次批量请求发出，存储端可以按用户分区一次读取。键支持 `int64` 和 `string`。上下文键为空时（例如匿名用户没有 `user_id`），引擎不发起请求，相关特征全部视为缺失：有默认值的取默认值，没有默认值的由表达式处理。
+一次特征拉取发出一批已去重的键，每个键是实体声明的元组。最常见的是单部分键：一个用户 ID、一批物品 ID。请求输入的部分对整批都相同（例如 `user_item` 的用户、`item_country` 的国家），在批里只出现一次并标为共享（`IsShared`）：存储端可以按它分区一次读取，“一个用户 × 500 个物品”是一次批量请求。键的每个部分支持 `int64` 和 `string`。请求输入的部分缺失时（例如匿名用户没有 `user_id`），引擎不发起请求，相关特征全部视为缺失：有默认值的取默认值，没有默认值的由表达式处理。连接器在加载时用 `Supports(EntityKeyLayout)` 声明自己支持哪些键布局（各部分的引用、类型和是否共享），不支持时报 `CONNECTOR_KEY`。
 
 ```csharp
-public enum KeyShape { Single, Many, Cross }
-
 public readonly record struct EntityKey(long Int64Value, string? StringValue);
 
-public readonly struct EntityKeyBatch                          // 结构体：每个分批一次调用，不为它分配对象
+public readonly struct EntityKeyBatch                  // 结构体：每个分批一次调用，不为它分配对象
 {
-    public KeyShape Shape { get; init; }
-    public EntityKey ContextKey { get; init; }                    // Single、Cross 使用
-    public ReadOnlyMemory<EntityKey> CandidateKeys { get; init; } // Many、Cross 使用；已去重
+    public int Count { get; }                          // 键的个数（暂存区的行数），已按元组去重
+    public int PartCount { get; }
+    public bool IsShared(int part);                    // 整批同一个值的部分（请求输入）
+    public ReadOnlyMemory<EntityKey> Part(int part);   // 每个键的这一部分；共享部分只有 1 条
+    public ReadOnlyMemory<EntityKey> Keys { get; }     // 单部分键的全部键
+    public EntityKey Key(int index, int part);
 }
 
 public interface IFeatureSourceConnector
 {
     string ConnectorType { get; }                     // 例如 "grpc_feature_store@1"
-    bool Supports(KeyShape shape);
+    bool Supports(EntityKeyLayout layout);           // 加载时对每个（数据源, 实体）问一次
 
     ValueTask<FetchStatus> FetchAsync(
         EntityKeyBatch keys,
@@ -845,14 +836,14 @@ public interface IFeatureBatchWriter
 
 **解码不生成对象。** 连接器直接把响应字节解码进 `IFeatureBatchWriter`：数值按原生类型写入暂存区，字符串和文本按字节或字符写入，中间不生成 Protobuf 消息或 JSON 对象。存储返回按行还是按列组织都可以，行转列在暂存区里完成，代价很小；贵的是为每个值或每条消息分配对象。能控制存储格式时，推荐每个实体一条定长二进制记录（小端序的原生值，带 schema 版本号），解码只是把字节解释成数组。
 
-**稀疏的交叉特征。** 需要存储的交叉特征几乎都是交互类特征，天然稀疏：一个用户只和几十到几百个物品有过交互。只关心“有没有交互过”时，把它存成上下文实体的列表特征，例如 `user.engaged_items: list<int64>`，在请求开始时与召回并发拉取（第 6.8 节），用 `col.entity_id in ctx.user.engaged_items` 读取；存储端应限制每个用户保留的条目数，例如最近 1,000 次交互。每个交互带值（次数、时间）时用 `Cross` 形态：一次请求发出上下文键和这批候选键，存储端按用户分区一次读取，没有交互的候选按合法缺失处理（第 6.7 节）。稠密的交叉信号（例如向量点积）用衍生特征计算，不需要存储。
+**稀疏的交叉特征。** 需要存储的交叉特征几乎都是交互类特征，天然稀疏：一个用户只和几十到几百个物品有过交互。只关心“有没有交互过”时，把它存成上下文实体的列表特征，例如 `user.engaged_items: list<int64>`，在请求开始时与召回并发拉取（第 6.8 节），用 `col.entity_id in ctx.user.engaged_items` 读取；存储端应限制每个用户保留的条目数，例如最近 1,000 次交互。每个交互带值（次数、时间）时用组合键 `["ctx.request.user_id", "col.entity_id"]`：用户 ID 每批只发一次（共享部分），物品键随批发出，存储端按用户分区一次读取，没有交互的候选按合法缺失处理（第 6.7 节）。稠密的交叉信号（例如向量点积）用衍生特征计算，不需要存储。
 
 **读 Redis 的连接器。** 特征存在 Redis 里时，读取它的连接器由使用方按自己的存储格式实现（例如 `redis_hash@1`、`redis_blob@1`）；框架内置的 Redis 只用作 `cache` 的分布式层（第 6.6 节）。基于 StackExchange.Redis 实现时：
 
 1. 每个 endpoint 一个 `ConnectionMultiplexer`，进程启动时创建，所有请求共享。它在一条连接上多路复用全部命令，同时发出的命令自动合成流水线。
 2. **一批键用 `MGET`。** 每条命令最多 100 个键，超出时拆成多条并发发出，拆分本身几乎没有额外开销。逐键发送 `GET` 时，客户端要为每个键创建一条命令和一个 `Task`，服务端也要逐条分派。一次本机测量中，每批 500 个键：值为 150 字节时，逐键 `GET` 的客户端 CPU 约为 `MGET` 的 15 倍，Redis 的 CPU 约为 2.8 倍；值为 2 KB 时，客户端 CPU 约为 4 倍。`redis_hash@1` 对每个实体发一条 `HMGET`，同一批实体的命令一起发出。
 3. **Redis Cluster。** 一条 `MGET` 的键必须落在同一个 slot。经过集群代理时可以直接发送任意键，例如 Envoy 的 Redis 代理会把 `MGET` 拆成发往各分片的 `GET`；分片收到的仍是逐键命令，客户端和代理之间仍然只有一条命令。客户端直连集群时，连接器按 slot 分组，每组一条 `MGET`。键随机分布时每组通常只有一个键，写入方可以用 hash tag 让总是一起读取的键落在同一个 slot。
-4. **单个大值用租约读取。** `Single` 形态（例如用户的交互列表）只读一个键，值可能有几十 KB，用 `StringGetLeaseAsync` 读取：值放在池化的缓冲区里，解码进暂存区后立即释放，不分配新的 `byte[]`。`MGET` 没有租约接口，批量读取时每个值仍会分配一个 `byte[]`；批量读取的值通常是几百字节的定长记录，这部分开销可以接受。
+4. **单个大值用租约读取。** 上下文实体（例如用户的交互列表）只读一个键，值可能有几十 KB，用 `StringGetLeaseAsync` 读取：值放在池化的缓冲区里，解码进暂存区后立即释放，不分配新的 `byte[]`。`MGET` 没有租约接口，批量读取时每个值仍会分配一个 `byte[]`；批量读取的值通常是几百字节的定长记录，这部分开销可以接受。
 5. 共享连接上的大值会阻塞排在它后面的命令。单个值应控制在几十 KB 以内，更大的值使用单独的 multiplexer。
 6. 命令发出后不能撤回。超时之后才到达的响应不再写入暂存区，连接器只释放它占用的缓冲区（第 4.8 节）。
 
@@ -868,7 +859,7 @@ Redis 在这里是特征存储，由离线任务或流式任务写入，引擎�
 | `cache` | 未命中时先查可选的分布式层（Redis），再向远程数据源拉取，结果写回，按 TTL 过期 | 只在本地未命中时 | 落后不超过 `ttl_ms` | 同一个键在短时间内被反复读取，例如热门物品、同一用户的连续请求 |
 | `local` | 后台加载快照、消费更新流，写进本地特征表 | 无 | 取决于更新流的延迟 | 实体集合有限、能整体放进内存，例如物品和创作者 |
 
-交叉实体只能用 `fetch`：本地表的一条记录只有一个键，而交叉实体的键是上下文键 × 候选键，键空间没有上限；绑定成 `local` 或 `cache` 时编译报错（`LOCAL_CROSS_ENTITY`），提示改用 `fetch` 或上下文实体的列表特征。供给方式只影响值从哪里来、有多新。特征的类型、默认值和缺失语义都由特征目录决定，节点、表达式和探针看到的值与供给方式无关。所以性能优化是绑定层面的决定：数据源先以 `fetch` 上线，再根据指标（每个数据源的耗时、每请求的键数、`cache` 的命中率）把热点数据源改成 `cache` 或 `local`，流水线和实验都不需要修改。
+任何实体都可以绑成 `local` 或 `cache`，表的键就是实体键的元组：例如按（物品, 国家）统计的特征集合有界，适合 `local`；（用户, 物品）的键空间没有上限，用 `fetch`，或者用 `cache` 让同一用户的连续请求命中，内存由 `max_bytes` 限制。供给方式只影响值从哪里来、有多新。特征的类型、默认值和缺失语义都由特征目录决定，节点、表达式和探针看到的值与供给方式无关。所以性能优化是绑定层面的决定：数据源先以 `fetch` 上线，再根据指标（每个数据源的耗时、每请求的键数、`cache` 的命中率）把热点数据源改成 `cache` 或 `local`，流水线和实验都不需要修改。
 
 **本地特征表的结构。** `cache` 和 `local` 使用同一种进程内结构，每个（数据源，实体）一张表：
 
@@ -880,14 +871,14 @@ public sealed class LocalFeatureTable
 
 internal sealed class TableVersion
 {
-    public long[] IndexKeys;        // 开放寻址索引：实体键（字符串键用 64 位哈希）
+    public long[] IndexKeys;        // 开放寻址索引：单个 int64 部分的键直接存值，其余的键存规范字节的 XXH3-64
     public long[] IndexPositions;   // 开放寻址索引：记录位置
     public byte[][] Pages;          // 定长记录，只在末尾追加
     public int RecordSize;          // 头部（写入时间或事件版本、有效位）+ 各特征的原生值
 }
 ```
 
-1. **记录是定长的原生值。** 记录布局由特征目录中绑定到这个数据源和实体的全部物理特征决定，与计划读哪些特征无关（读同一数据源不同特征的计划共用一张表，流水线或实验开始读另一个特征也不会重新加载）：头部是写入时间（`cache`）或事件版本（`local`）以及有效位，后面依次是各特征的原生值。字符串和 `list<string>` 的元素存表内字典的编码，回填直接取字典里的实例，每个请求不新建字符串；`list`（包括定长列表）放在页内的变长区。字符串键按 64 位哈希建索引，记录里保存原键用于比对。表中没有“一条记录一个对象”：几百万条记录对垃圾回收器来说只是几十个大数组，回收器不扫描数组的内容；唯一的小对象是字典里每个不同字符串一个。
+1. **记录是定长的原生值。** 记录布局由特征目录中绑定到这个数据源和实体的全部物理特征决定，与计划读哪些特征无关（读同一数据源不同特征的计划共用一张表，流水线或实验开始读另一个特征也不会重新加载）：头部是写入时间（`cache`）或事件版本（`local`）以及有效位，后面依次是各特征的原生值。字符串和 `list<string>` 的元素存表内字典的编码，回填直接取字典里的实例，每个请求不新建字符串；`list`（包括定长列表）放在页内的变长区。单个 int64 部分的键直接进索引；其余的键（字符串、多个部分）在记录里保存规范字节，索引存它的 XXH3-64，查找时比对原字节。规范字节按部分顺序排列：int64 是 8 字节小端序，string 是 UTF-16 码元，不是最后一部分时前面加 int32 的长度，所以同一布局下两个元组的字节不会相同；单个字符串键的字节就是它的 UTF-16 码元。批量查找每 64 个键一块，先读完一块的主槽位再探测。表中没有“一条记录一个对象”：几百万条记录对垃圾回收器来说只是几十个大数组，回收器不扫描数组的内容；唯一的小对象是字典里每个不同字符串一个。
 2. **按实体组织记录。** 候选表按列存放，因为节点按列扫描。本地特征表的访问方式是用几百个随机的键去查，所以一个实体的全部特征放在一起：读一个候选的 30 个特征只碰两三个缓存行，按列存放则要碰 30 个。运行示例中 500 个候选大约是 1,500 次和 15,000 次缓存未命中的差别（估算）。快照文件仍然可以用 Arrow 等列式格式，加载时转置一次。
 3. **记录从不原地修改。** 更新在页的末尾追加一条新记录，再用一次原子写把索引指向它。读取不加锁，读到的要么是旧记录，要么是新记录，两者都完整。每张表只有一个写线程：`local` 是更新流的消费线程；`cache` 是一个后台写线程，请求把拉回的值放进它的有界队列，队列满时直接丢弃，下次未命中时再拉。
 4. **压实与回收。** 被替代的旧记录（以及 `cache` 中过期的记录），加上只有它们引用过的字典字符串，超过记录和字典总量的一半时，写线程把有效记录复制到新的页，建好新索引，再替换当前版本。请求开始时固定每张表的当前版本，旧版本的数组在最后一个使用它的请求结束后由垃圾回收释放，和计划的切换方式相同（第 4.8 节）。固定版本只是为了内存安全：同一个请求读到的不同键，可以来自不同时刻的更新，这和远程拉取时一样。
@@ -922,11 +913,15 @@ public interface IFeatureUpdateSource
 
 public interface IFeatureTableWriter
 {
-    RecordBuilder Begin(EntityKey key, long version);   // 按字段写入原生值；没写的字段沿用旧值
+    RecordBuilder Begin(EntityKey key, long version);                  // 按字段写入原生值；没写的字段沿用旧值
+    RecordBuilder Begin(ReadOnlySpan<EntityKey> key, long version);    // 多部分键：各部分按声明顺序
     void Delete(EntityKey key, long version);
-    void Checkpoint(UpdatePosition position);           // 这个位置之前的更新都已写入
+    bool Delete(ReadOnlySpan<EntityKey> key, long version);
+    void Checkpoint(UpdatePosition position);                          // 这个位置之前的更新都已写入
 }
 ```
+
+快照和更新流里的键是 JSON：单部分键写成值，多部分键写成按声明顺序的数组，例如 `{"key": [10042, "US"], "version": 3, "fields": {…}}`；段数或类型不对时报错，指出行和指针。
 
 ### 6.7 缺失与失败的三层语义
 
@@ -973,7 +968,7 @@ flowchart LR
     end
     subgraph P2["coarse_top_k 之后：500 行"]
         I2["item_store<br/>item.creator_id、item.impressions_7d、item.embedding、<br/>item.age_hours、item.report_rate、item.engagements_30d"]
-        X["interaction_store（Cross）<br/>user_item.engagements_30d"]
+        X["interaction_store（用户, 物品）<br/>user_item.engagements_30d"]
         C["creator_store<br/>约 120 个创作者，回填到 500 行"]
         D["衍生特征按列计算<br/>item.smoothed_ctr_7d、user_item.embedding_dot"]
     end
@@ -998,7 +993,7 @@ flowchart LR
 
 用户画像在请求开始时与召回并发拉取，通常不在关键路径上。如果 `safety_filter` 保持默认的屏障行为，`item.clicks_7d` 要等过滤完成后再拉，关键路径上就是 5 次往返。`safety_filter` 只淘汰很少的行，提前为全部 5,000 行拉一个浮点特征的代价很小，所以示例把它声明为非屏障；`coarse_top_k` 淘汰 90% 的行，保持屏障，重型特征只为 500 行拉取。
 
-第 6.4 节的生产绑定把 `item_store` 和 `creator_store` 设为 `local`，上表第 1、3 次往返和第 2 次里 `item_store` 的部分都变成本地读取。`interaction_store` 是交叉实体，键里有候选，只能在 `coarse_top_k` 之后按 `Cross` 形态远程拉取（交叉实体不能放进本地表或缓存，见第 6.6 节），所以召回之后关键路径上剩两次往返：交叉特征和模型调用。只关心“有没有交互过”时，改成上下文实体的列表特征（第 6.5 节“稀疏的交叉特征”），它随上下文预取与召回并发取回，关键路径上就只剩模型调用。流水线和实验都没有改动。
+第 6.4 节的生产绑定把 `item_store` 和 `creator_store` 设为 `local`，上表第 1、3 次往返和第 2 次里 `item_store` 的部分都变成本地读取。`user_item` 的键是（用户, 物品），里面有候选，只能在 `coarse_top_k` 之后发出；示例保持 `fetch`（键空间没有上限），召回之后关键路径上剩两次往返：交叉特征和模型调用。同一用户连续请求多时可以绑成 `cache`，命中时这次往返也省掉。只关心“有没有交互过”时，改成上下文实体的列表特征（第 6.5 节“稀疏的交叉特征”），它随上下文预取与召回并发取回，关键路径上就只剩模型调用。流水线和实验都没有改动。
 
 这套规划带来以下结果：
 
@@ -1006,7 +1001,7 @@ flowchart LR
 2. **只拉命中的实验**：实验桶独有的特征，只在请求命中该桶、并且节点即将执行时才拉取。
 3. **请求合并**：同一次发起中同一数据源的字段合并成一次批量请求。
 4. **外键去重**：500 个物品通常只来自一两百个创作者，创作者特征按唯一键请求后回填。
-5. **上下文预取**：请求开始时实验分配已知，本请求所有节点变体需要的上下文特征在第一时间与召回并发拉取。交叉实体的键里有候选，不在预取之列；按用户存的交互列表（第 6.5 节）是上下文特征，随预取一起拉取。读取上下文特征的节点只等它读的那些数据源：召回读用户向量时，不等另一个更慢的用户特征源；上下文衍生特征和本地读取的上下文特征最后算出，读它们的节点等整个预取完成。
+5. **上下文预取**：请求开始时实验分配已知，本请求所有节点变体需要的上下文特征在第一时间与召回并发拉取。键里有候选列的实体（例如 `user_item`）要等候选确定，不在预取之列；按用户存的交互列表（第 6.5 节）是上下文特征，随预取一起拉取。读取上下文特征的节点只等它读的那些数据源：召回读用户向量时，不等另一个更慢的用户特征源；上下文衍生特征和本地读取的上下文特征最后算出，读它们的节点等整个预取完成。
 
 这套规则有可预期的少量多拉：上下文预取会覆盖之后因为 `when`、截止时间或失败而被跳过的节点；后备节点的特征和主节点一起拉取，主节点成功时这些特征没有用到；非屏障过滤节点之前发起的拉取会包含它随后淘汰的行。这三种多拉换来的是更少的串行往返，规模由配置显式控制。
 
@@ -1092,7 +1087,7 @@ public sealed class ModelCall
 
 ### 6.10 特征治理
 
-每个特征可以声明 `owner`、`description` 和 `deprecated`。流水线读取已弃用的特征时（直接读，经过衍生特征读，或作为外键实体的键被读），编译给出 `FEATURE_DEPRECATED` 警告，每条流水线每个特征一次，位置在特征的声明处；`stratarec explain-plan` 列出每个节点读哪些列，方便找到读取的地方。`cache` 数据源因为整表写回而一起注册的成员不算读取。
+每个特征可以声明 `owner`、`description` 和 `deprecated`。流水线读取已弃用的特征时（直接读，经过衍生特征读，或作为实体键的一部分被读），编译给出 `FEATURE_DEPRECATED` 警告，每条流水线每个特征一次，位置在特征的声明处；`stratarec explain-plan` 列出每个节点读哪些列，方便找到读取的地方。`cache` 数据源因为整表写回而一起注册的成员不算读取。
 
 ## 7. ColumnExpr 表达式语言
 
@@ -1125,7 +1120,7 @@ public sealed class ModelCall
 | `ctx.<实体>.*` | 上下文实体特征 | `ctx.user.tenure_days` |
 | `param.*` | 本请求生效的参数（含实验覆盖） | `param.w_click`、`param.recall_quotas.cf` |
 | `col.entity_id` | 候选主键 | |
-| `col.<实体>.*` | 候选、外键和交叉实体特征 | `col.item.clicks_7d`、`col.creator.follower_count` |
+| `col.<实体>.*` | 候选范围实体的特征 | `col.item.clicks_7d`、`col.creator.follower_count` |
 | `col.score.*`、`col.recall.*` | 节点产出的列 | `col.score.p_click`、`col.score.final@fusion` |
 
 ### 7.3 示例
