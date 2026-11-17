@@ -86,7 +86,7 @@ public sealed class ReviewRegressionTests
                   "arms": { "control": {}, "more": { "params": { "recall_quotas": { "two_tower": 80 } } } } }
                 """), "quota"),
         });
-        var plan = PlanCompiler.Compile(request, host.Environment).GetPlanOrThrow();
+        var plan = host.Compile(request).GetPlanOrThrow(); // with its tables loaded, as the engine serves it
 
         foreach (var arm in new[] { "exp_quota/control", "exp_quota/more" })
         {
@@ -118,7 +118,7 @@ public sealed class ReviewRegressionTests
                   "arms": { "control": {}, "t": { "nodes": { "author_cap": { "when": "ctx.request.surface == 'search'" } } } } }
                 """), "cap_search"),
         });
-        var plan = PlanCompiler.Compile(request, host.Environment).GetPlanOrThrow();
+        var plan = host.Compile(request).GetPlanOrThrow(); // with its tables loaded, as the engine serves it
 
         foreach (var search in new[] { "control", "t" })
         {

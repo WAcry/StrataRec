@@ -663,11 +663,12 @@ public sealed class EventLogTests
         });
         Assert.False(engine.Load(broken.Request).Applied);
 
-        // The sample's local author table is loaded once, before the first plan is applied; the second load takes it over.
+        // The sample's local tables (author_store, item_country_store) are loaded once each, before the first plan is
+        // applied; the second load takes them over.
         var entries = logging.Entries.ToList();
-        Assert.Equal(new[] { 1201, 1001, 1004, 1002 }, entries.Select(e => e.EventId.Id));
-        Assert.Equal(LogLevel.Error, entries[3].Level);
-        Assert.Contains("no_such_feature", (string)entries[3].State["FirstError"]!);
+        Assert.Equal(new[] { 1201, 1201, 1001, 1004, 1002 }, entries.Select(e => e.EventId.Id));
+        Assert.Equal(LogLevel.Error, entries[4].Level);
+        Assert.Contains("no_such_feature", (string)entries[4].State["FirstError"]!);
     }
 
     private static string? Event(LogEntry entry) => entry.State.TryGetValue("Event", out var value) ? value?.ToString() : null;

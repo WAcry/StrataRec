@@ -311,7 +311,7 @@ public class LocalFeatureTableTests
     public void StringKeys_WithCollidingHashes_AreToldApart()
     {
         // Every key hashes to the same value: the index must compare the stored keys.
-        var table = Table(EntityKeyType.String, new LocalFeatureTableOptions { StringKeyHasher = static _ => 42 });
+        var table = Table(EntityKeyType.String, new LocalFeatureTableOptions { KeyHasher = static _ => 42 });
         var keys = new List<EntityKey>();
         for (var id = 1; id <= 100; id++)
         {
@@ -350,7 +350,7 @@ public class LocalFeatureTableTests
         // Four hash values for 2,000 keys: long probe chains, several index growths, then a compaction.
         var table = Table(EntityKeyType.String, new LocalFeatureTableOptions
         {
-            StringKeyHasher = static key => (ulong)(key[^1] % 4),
+            KeyHasher = static key => (ulong)(key[^2] % 4), // the low byte of the last UTF-16 code unit
             PageSize = 4096,
         });
         for (var id = 1; id <= 2000; id++)
@@ -876,8 +876,9 @@ public class LocalFeatureTableTests
         Assert.Equal(EntityKeyType.String, users.KeyType);
         Assert.Equal(ColumnType.List(StorageKind.Float32, fixedLength: 8), users.Fields[0].Type);
 
-        var cross = Assert.Throws<ArgumentException>(() => LocalTableSchema.FromCatalog(catalog, "ui", "user_item", LocalTableMode.Cache));
-        Assert.Contains("fetch", cross.Message, StringComparison.Ordinal);
+        var cross = LocalTableSchema.FromCatalog(catalog, "ui", "user_item", LocalTableMode.Cache); // a key of two parts is a table's too
+        Assert.Null(cross.KeyType);
+        Assert.Equal("(string,int64)", cross.Key.TypeText);
         Assert.Contains("did you mean 'i_clk'", Assert.Throws<KeyNotFoundException>(() => items.FieldIndex("i_clck")).Message, StringComparison.Ordinal);
     }
 
@@ -886,7 +887,7 @@ public class LocalFeatureTableTests
     {
         public string ConnectorType => TestConnectorFactory.Type;
 
-        public bool Supports(KeyShape shape) => shape == KeyShape.Many;
+        public bool Supports(EntityKeyLayout layout) => layout.PartCount == 1 && !layout[0].IsShared;
 
         public ValueTask<StrataRec.Features.Connectors.FetchStatus> FetchAsync(
             StrataRec.Features.Connectors.EntityKeyBatch keys,
@@ -894,9 +895,9 @@ public class LocalFeatureTableTests
             StrataRec.Features.Connectors.IFeatureBatchWriter writer,
             CancellationToken cancellationToken)
         {
-            for (var k = 0; k < keys.CandidateKeys.Length; k++)
+            for (var k = 0; k < keys.Keys.Length; k++)
             {
-                if (data(keys.CandidateKeys.Span[k].Int64Value) is not { } values)
+                if (data(keys.Keys.Span[k].Int64Value) is not { } values)
                 {
                     continue;
                 }

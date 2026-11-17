@@ -8,6 +8,7 @@ using StrataRec.Core.Bindings;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
+using StrataRec.Features.Runtime;
 
 namespace StrataRec.Features.Local;
 
@@ -344,6 +345,8 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
     private byte[] _buffer;
     private char[] _chars = new char[256];
     private char[] _key = new char[64];
+    private readonly EntityKey[] _parts; // a key of several parts, as the line wrote it
+    private readonly StringDedup _keyStrings = new(); // string parts of such keys: a country is one instance per load
     private string _path = string.Empty;
     private long _line;
     private int _cursor;
@@ -359,6 +362,7 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
         }
 
         _seen = new bool[_schema.FieldCount];
+        _parts = new EntityKey[_schema.Key.PartCount];
         _buffer = ArrayPool<byte>.Shared.Rent(1 << 16);
     }
 
@@ -493,7 +497,11 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
                 Once(hasKey, "/key");
                 reader.Read();
                 hasKey = true;
-                if (_schema.KeyType == EntityKeyType.Int64)
+                if (_schema.Key.PartCount > 1)
+                {
+                    KeyParts(ref reader);
+                }
+                else if (_schema.KeyType == EntityKeyType.Int64)
                 {
                     if (reader.TokenType != JsonTokenType.Number || !reader.TryGetInt64(out intKey))
                     {
@@ -590,7 +598,9 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
                 throw Error("/fields", "A tombstone (\"deleted\": true) has no fields.", "drop 'fields', or drop 'deleted' to write values");
             }
 
-            _ = _schema.KeyType == EntityKeyType.Int64 ? _writer.Delete(intKey, recordVersion) : _writer.Delete(_key.AsSpan(0, keyLength), recordVersion);
+            _ = _schema.Key.PartCount > 1 ? _writer.Delete(_parts, recordVersion)
+                : _schema.KeyType == EntityKeyType.Int64 ? _writer.Delete(intKey, recordVersion)
+                : _writer.Delete(_key.AsSpan(0, keyLength), recordVersion);
             return;
         }
 
@@ -608,9 +618,65 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
         builder.Commit();
     }
 
-    private RecordBuilder Begin(long intKey, int keyLength, long version) => _schema.KeyType == EntityKeyType.Int64
-        ? _writer.Begin(intKey, version)
+    private RecordBuilder Begin(long intKey, int keyLength, long version) =>
+        _schema.Key.PartCount > 1 ? _writer.Begin(_parts, version)
+        : _schema.KeyType == EntityKeyType.Int64 ? _writer.Begin(intKey, version)
         : _writer.Begin(_key.AsSpan(0, keyLength), version);
+
+    /// <summary>
+    /// Decodes a key of several parts, an array of them in declared order, into <see cref="_parts"/>: an int64 part a JSON
+    /// number, a string part a JSON string. Another shape is an error at <c>/key</c> (not an array, or another number of
+    /// parts) or <c>/key/&lt;i&gt;</c> (a part of another type), whose hint writes the key the table expects.
+    /// </summary>
+    private void KeyParts(ref Utf8JsonReader reader)
+    {
+        var layout = _schema.Key;
+        if (reader.TokenType != JsonTokenType.StartArray)
+        {
+            throw Error("/key", $"The key must be an array of its {layout.PartCount} parts, got {Raw(ref reader)}.", KeyHint());
+        }
+
+        var p = 0;
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+        {
+            if (p == layout.PartCount)
+            {
+                throw Error("/key", $"The key has more than {layout.PartCount} parts.", KeyHint());
+            }
+
+            if (layout[p].Type == EntityKeyType.Int64)
+            {
+                if (reader.TokenType != JsonTokenType.Number || !reader.TryGetInt64(out var value))
+                {
+                    throw Error("/key/" + p.ToString(CultureInfo.InvariantCulture),
+                        $"Key part {p} ({layout[p].Reference}) must be an int64 number, got {Raw(ref reader)}.", KeyHint());
+                }
+
+                _parts[p] = EntityKey.FromInt64(value);
+            }
+            else
+            {
+                if (reader.TokenType != JsonTokenType.String)
+                {
+                    throw Error("/key/" + p.ToString(CultureInfo.InvariantCulture),
+                        $"Key part {p} ({layout[p].Reference}) must be a string, got {Raw(ref reader)}.", KeyHint());
+                }
+
+                var length = CopyString(ref reader, ref _key);
+                _parts[p] = EntityKey.FromString(_keyStrings.Intern(_key.AsSpan(0, length)));
+            }
+
+            p++;
+        }
+
+        if (p != layout.PartCount)
+        {
+            throw Error("/key", $"The key has {p} part(s); the table is keyed by {layout.PartCount}.", KeyHint());
+        }
+    }
+
+    private string KeyHint() =>
+        $"table {_schema.Source}/{_schema.Entity} is keyed by {_schema.Key.TypeText}: write the key as {_schema.KeyHint()}";
 
     /// <summary>Decodes a fields object; <paramref name="reader"/> is on its start and is left on its end.</summary>
     private void Fields(ref Utf8JsonReader reader, RecordBuilder builder)

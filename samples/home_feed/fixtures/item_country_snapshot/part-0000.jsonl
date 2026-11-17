@@ -1,0 +1,6 @@
+{"key": [1, "US"], "version": 1, "fields": {"boost": 0.5}}
+{"key": [2, "US"], "version": 1, "fields": {"boost": 1.5}}
+{"key": [3, "US"], "version": 1, "fields": {"boost": 2.0}}
+{"key": [1, "DE"], "version": 1, "fields": {"boost": 1.2}}
+{"key": [4, "DE"], "version": 1, "fields": {"boost": 0.8}}
+{"key": [5, "FR"], "version": 1, "fields": {"boost": 1.1}}

@@ -220,7 +220,7 @@ public class FeatureCallHookTests
 
         public void Record(in FeatureCallInfo call, IStagedFeatureValues? values)
         {
-            var keys = call.Batch.CandidateKeys.ToArray().Select(k => k.Int64Value).ToArray();
+            var keys = call.Batch.Keys.ToArray().Select(k => k.Int64Value).ToArray();
             double?[]? recorded = null;
             if (values is not null)
             {

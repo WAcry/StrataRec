@@ -13,6 +13,7 @@ using StrataRec.Core.Values;
 using StrataRec.Expressions;
 using StrataRec.Features.Catalog;
 using StrataRec.Features.Connectors;
+using StrataRec.Features.Local;
 
 namespace StrataRec.Features.Runtime;
 
@@ -116,7 +117,7 @@ public sealed partial class FeatureFetcher
         _errors = new string?[plan.Features.Count];
         if (plan.HasTables && hook is not { Replays: true })
         {
-            _localKeys = new EntityKeyIndex(EntityKeyType.Int64, 0, memory); // reset by each local read, so no read costs an object
+            _localKeys = FetchKeys.Prepared(memory, plan.TableTupleParts); // reset by each local read, so no read costs an object
         }
     }
 
@@ -186,7 +187,7 @@ public sealed partial class FeatureFetcher
                 continue;
             }
 
-            if (group.KeyFeatureIndex >= 0 && !_table.IsFilledForLiveRows(_plan.Features[group.KeyFeatureIndex].Slot))
+            if (!KeyFeaturesFilled(group))
             {
                 continue;
             }
@@ -447,16 +448,52 @@ public sealed partial class FeatureFetcher
     /// </summary>
     private bool FailIfKeyFailed(FetchGroup group, ReadOnlySpan<int> features)
     {
-        if (group.KeyFeatureIndex < 0 || _state[group.KeyFeatureIndex] != FeatureState.Failed)
+        if (KeyState(group, out var error) != FeatureState.Failed)
         {
             return false;
         }
 
-        var error = _errors[group.KeyFeatureIndex] ?? $"key feature '{_plan.Features[group.KeyFeatureIndex].Definition.Name}' failed";
         foreach (var f in features)
         {
             _state[f] = FeatureState.Failed;
             _errors[f] = error;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The worst state of the group's key features (design 6.7: the key's state is its parts'), and the error of the first
+    /// key feature in it; <see cref="FeatureState.Ok"/> for a key that reads no feature.
+    /// </summary>
+    private FeatureState KeyState(FetchGroup group, out string? error)
+    {
+        var worst = FeatureState.Ok;
+        error = null;
+        foreach (var k in group.KeyFeatures)
+        {
+            var state = _state[k];
+            if ((state == FeatureState.Failed && worst != FeatureState.Failed) || (state == FeatureState.Degraded && worst == FeatureState.Ok))
+            {
+                worst = state;
+                error = _errors[k] ?? (state == FeatureState.Failed
+                    ? $"key feature '{_plan.Features[k].Definition.Name}' failed"
+                    : $"key feature '{_plan.Features[k].Definition.Name}' is {state}");
+            }
+        }
+
+        return worst;
+    }
+
+    /// <summary>Whether every key feature of the group is filled for the live rows (a prefetch finds no keys otherwise).</summary>
+    private bool KeyFeaturesFilled(FetchGroup group)
+    {
+        foreach (var k in group.KeyFeatures)
+        {
+            if (!_table.IsFilledForLiveRows(_plan.Features[k].Slot))
+            {
+                return false;
+            }
         }
 
         return true;
@@ -472,45 +509,37 @@ public sealed partial class FeatureFetcher
         // request, but each call holds the memory from before FetchAsync until the connector really completes and the call
         // has been recorded (ConnectorCall, IoLease), so the keys cannot return to the pool while a connector or a
         // recording can still read them.
-        EntityKeyIndex? index = null;
-        EntityKey[]? keys = null;
+        // A key part that is a request input has one value for the whole fetch: a missing one leaves every row without a
+        // key, so nothing is fetched and the features take their absent values.
+        var index = default(FetchKeys);
         var keyCount = 0;
-        var contextKey = default(EntityKey);
-        var noContextKey = false;
-        if (group.ContextKeyId >= 0)
-        {
-            var v = _context[group.ContextKeyId];
-            if (v.IsMissing)
-            {
-                noContextKey = true;
-            }
-            else
-            {
-                contextKey = ToKey(v);
-            }
-        }
-
-        if (!noContextKey)
+        var layout = group.KeyLayout;
+        var sharedBuffer = default(KeyPartBuffer);
+        Span<EntityKey> shared = sharedBuffer;
+        var noSharedKey = !TrySharedKey(group, shared);
+        if (!noSharedKey)
         {
             var live = _table.Rows.Order;
+            var varyingBuffer = default(KeyPartBuffer);
+            Span<EntityKey> varying = varyingBuffer;
+            varying = varying[..layout.VaryingCount];
+            var one = group.OneVaryingFeature;
             foreach (var row in live)
             {
-                if (NeedsFill(features, row) && TryCandidateKey(group, row, out var key) == KeyLookup.Found)
+                EntityKey key = default;
+                if (NeedsFill(features, row) && (one != int.MinValue ? PartKey(one, row, out key) : RowKey(group, row, varying)) == KeyLookup.Found)
                 {
-                    if (index is null)
+                    if (!index.IsSet)
                     {
-                        // Sized to the live rows, an upper bound on the distinct keys: the index never grows. All keys
-                        // of a group have one type (the key column's).
-                        index = new EntityKeyIndex(key.IsString ? EntityKeyType.String : EntityKeyType.Int64, live.Length, _memory);
-                        keys = _memory.Rent<EntityKey>(live.Length);
+                        // Sized to the live rows, an upper bound on the distinct keys: the index never grows.
+                        index.Reset(_memory, layout, shared[..(layout.PartCount - layout.VaryingCount)], live.Length, key);
                     }
 
-                    if (index.TryAdd(key, keyCount))
-                    {
-                        keys![keyCount++] = key;
-                    }
+                    _ = one != int.MinValue ? index.GetOrAdd(key) : index.GetOrAdd(varying);
                 }
             }
+
+            keyCount = index.IsSet ? index.Count : 0;
         }
 
         // Each max_batch chunk is an independent call, and chunks run concurrently. They share the fetch's staging area
@@ -519,10 +548,10 @@ public sealed partial class FeatureFetcher
         var chunkCount = Batching.Count(keyCount, chunkSize);
         if (chunkCount == 0)
         {
-            return new PendingFetch(group, features, index, chunkSize, 0, null, Array.Empty<ValueTask<FetchStatus>>(), Array.Empty<bool>(), noContextKey);
+            return new PendingFetch(group, features, index, chunkSize, 0, null, Array.Empty<ValueTask<FetchStatus>>(), Array.Empty<bool>(), noSharedKey);
         }
 
-        var all = keys!;
+        var all = index.Batch(_memory);
         var calls = _memory.Rent<ValueTask<FetchStatus>>(chunkCount);
         var chunkFailed = _memory.RentCleared<bool>(chunkCount);
         var budget = BudgetMs(group);
@@ -531,11 +560,10 @@ public sealed partial class FeatureFetcher
             for (var c = 0; c < chunkCount; c++)
             {
                 calls[c] = new ValueTask<FetchStatus>(NoTimeLeft);
-                RecordUnsent(group, new EntityKeyBatch { Shape = group.Shape, ContextKey = contextKey, CandidateKeys = ChunkKeys(all, keyCount, chunkSize, c) }, fields,
-                    NoTimeLeft, IoOutcome.Timeout);
+                RecordUnsent(group, ChunkKeys(all, chunkSize, c), fields, NoTimeLeft, IoOutcome.Timeout);
             }
 
-            return new PendingFetch(group, features, index, chunkSize, chunkCount, null, calls, chunkFailed, noContextKey);
+            return new PendingFetch(group, features, index, chunkSize, chunkCount, null, calls, chunkFailed, noSharedKey);
         }
 
         var staging = new StagingArea(fields, keyCount, chunkSize, _memory);
@@ -545,7 +573,7 @@ public sealed partial class FeatureFetcher
         {
             for (var c = 0; c < chunkCount; c++)
             {
-                var batch = new EntityKeyBatch { Shape = group.Shape, ContextKey = contextKey, CandidateKeys = ChunkKeys(all, keyCount, chunkSize, c) };
+                var batch = ChunkKeys(all, chunkSize, c);
 
                 // A connector's synchronous part runs here, unbounded (see IFeatureSourceConnector.FetchAsync): once the
                 // fetch's time is up or the caller has cancelled, the chunks not sent yet are not sent (external review:
@@ -573,13 +601,13 @@ public sealed partial class FeatureFetcher
             cancellation?.Release(); // the fetch's own reference; every sent chunk holds one until its connector completes
         }
 
-        return new PendingFetch(group, features, index, chunkSize, chunkCount, staging, calls, chunkFailed, noContextKey);
+        return new PendingFetch(group, features, index, chunkSize, chunkCount, staging, calls, chunkFailed, noSharedKey);
     }
 
-    private static ReadOnlyMemory<EntityKey> ChunkKeys(EntityKey[] keys, int keyCount, int chunkSize, int chunk)
+    private static EntityKeyBatch ChunkKeys(in EntityKeyBatch keys, int chunkSize, int chunk)
     {
         var offset = chunk * chunkSize;
-        return keys.AsMemory(offset, Math.Min(chunkSize, keyCount - offset));
+        return keys.Slice(offset, Math.Min(chunkSize, keys.Count - offset));
     }
 
     /// <summary>
@@ -791,7 +819,7 @@ public sealed partial class FeatureFetcher
             _ => IoOutcome.Ok,
         };
         var duration = _hook is null ? TimeSpan.Zero : io.Elapsed;
-        io.Complete(result, batch.KeyCount, _requestId, status.Error, _events);
+        io.Complete(result, batch.Count, _requestId, status.Error, _events);
         if (sequence != NotRecorded)
         {
             _hook?.Record(
@@ -907,14 +935,28 @@ public sealed partial class FeatureFetcher
 
     private int FetchKeyOf(PendingFetch pending, int row)
     {
-        if (pending.NoContextKey)
+        if (pending.NoSharedKey)
         {
             return NoFetchKey;
         }
 
-        return TryCandidateKey(pending.Group, row, out var key) switch
+        var one = pending.Group.OneVaryingFeature;
+        if (one != int.MinValue)
         {
-            KeyLookup.Found => pending.Index is not null && pending.Index.TryGetValue(key, out var keyIndex) ? keyIndex : NotThisFetch,
+            return PartKey(one, row, out var key) switch
+            {
+                KeyLookup.Found => pending.Keys.IsSet && pending.Keys.TryGetValue(key, out var keyIndex) ? keyIndex : NotThisFetch,
+                KeyLookup.NotReady => NotThisFetch, // a later fetch fills it
+                _ => NoFetchKey,
+            };
+        }
+
+        var varyingBuffer = default(KeyPartBuffer);
+        Span<EntityKey> varying = varyingBuffer;
+        varying = varying[..pending.Group.KeyLayout.VaryingCount];
+        return RowKey(pending.Group, row, varying) switch
+        {
+            KeyLookup.Found => pending.Keys.IsSet && pending.Keys.TryGetValue(varying, out var keyIndex) ? keyIndex : NotThisFetch,
             KeyLookup.NotReady => NotThisFetch, // a later fetch fills it
             _ => NoFetchKey,
         };
@@ -1016,10 +1058,10 @@ public sealed partial class FeatureFetcher
     /// </summary>
     private bool SettleKey(FetchGroup group, int[] features, bool failed, ref bool degraded, ref string? error)
     {
-        var keyState = group.KeyFeatureIndex >= 0 ? _state[group.KeyFeatureIndex] : FeatureState.Ok;
+        var keyState = KeyState(group, out var keyError);
         if (keyState is FeatureState.Failed or FeatureState.Degraded)
         {
-            error ??= _errors[group.KeyFeatureIndex] ?? $"key feature '{_plan.Features[group.KeyFeatureIndex].Definition.Name}' is {keyState}";
+            error ??= keyError;
         }
 
         if (failed || keyState == FeatureState.Failed)
@@ -1307,16 +1349,14 @@ public sealed partial class FeatureFetcher
 
                     seenGroup[info.GroupIndex] = true;
                     var features = RequestedMembers(group, member);
-                    var v = group.ContextKeyId >= 0 ? _context[group.ContextKeyId] : ScalarValue.Missing;
                     ContextFetch fetch;
-                    if (v.IsMissing)
+                    if (!TryContextKey(group, out var batch))
                     {
                         fetch = new ContextFetch(features, null, new ValueTask<FetchStatus>(FetchStatus.Ok));
                     }
                     else
                     {
                         var fields = FieldBindings(group, features);
-                        var batch = new EntityKeyBatch { Shape = group.Shape, ContextKey = ToKey(v) };
                         var budget = BudgetMs(group);
                         var cancellation = budget <= 0 || _hook is { Replays: true } ? null : new FetchCancellation(cancellationToken, budget, _events, _requestId);
                         if (budget <= 0)
@@ -1561,20 +1601,93 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>
-    /// Resolves a row's candidate key. A foreign key that is not filled yet for the row is <see cref="KeyLookup.NotReady"/>,
-    /// which is not the same as a key that is legitimately missing: treating it as missing would publish default values
-    /// for rows whose key is merely not computed yet.
+    /// Resolves the parts of a row's key that vary per row (<see cref="FetchGroup.VaryingParts"/>, in part order) into
+    /// <paramref name="varying"/>. A part that is missing makes the key missing (it is not looked up: the features take
+    /// their absent values); otherwise a part not computed yet for the row makes it <see cref="KeyLookup.NotReady"/>,
+    /// which is not the same as a missing key: treating it as missing would publish default values for rows whose key is
+    /// merely not computed yet.
     /// </summary>
-    private KeyLookup TryCandidateKey(FetchGroup group, int row, out EntityKey key)
+    private KeyLookup RowKey(FetchGroup group, int row, Span<EntityKey> varying)
     {
-        key = default;
-        if (group.KeyFeatureIndex < 0)
+        var result = KeyLookup.Found;
+        var parts = group.VaryingParts;
+        for (var v = 0; v < parts.Length; v++)
+        {
+            var part = PartKey(group.KeyParts[parts[v]].Feature, row, out varying[v]);
+            if (part == KeyLookup.Missing)
+            {
+                return KeyLookup.Missing;
+            }
+
+            if (part == KeyLookup.NotReady)
+            {
+                result = KeyLookup.NotReady;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// The values of the group's shared key parts (request inputs; later context features), in part order. False when one
+    /// is missing: then no row has a key.
+    /// </summary>
+    private bool TrySharedKey(FetchGroup group, Span<EntityKey> shared)
+    {
+        var s = 0;
+        foreach (var part in group.KeyParts)
+        {
+            if (!part.IsContext)
+            {
+                continue;
+            }
+
+            var value = _context[part.Context];
+            if (value.IsMissing)
+            {
+                return false;
+            }
+
+            shared[s++] = ToKey(value);
+        }
+
+        return true;
+    }
+
+    /// <summary>The one key of a context-scoped group, every part shared, in a buffer rented from the request memory;
+    /// false when a part is missing, which leaves the features absent.</summary>
+    private bool TryContextKey(FetchGroup group, out EntityKeyBatch batch)
+    {
+        var layout = group.KeyLayout;
+        var buffer = _memory.Rent<EntityKey>(layout.PartCount);
+        if (!TrySharedKey(group, buffer))
+        {
+            batch = default;
+            return false;
+        }
+
+        batch = new EntityKeyBatch(buffer, 1, 0, 1, layout.PartCount, layout.SharedMask);
+        return true;
+    }
+
+    /// <summary>One key part read from a key feature's column for a row.</summary>
+    /// <summary>A row's value of one varying key part: the candidate's entity id (<paramref name="feature"/> -1) or the
+    /// value of key feature <paramref name="feature"/> (<see cref="ColumnKey"/>).</summary>
+    private KeyLookup PartKey(int feature, int row, out EntityKey key)
+    {
+        if (feature < 0)
         {
             key = _table.GetKey(row);
             return KeyLookup.Found;
         }
 
-        var keyFeature = _plan.Features[group.KeyFeatureIndex];
+        return ColumnKey(feature, row, out key);
+    }
+
+    private KeyLookup ColumnKey(int feature, int row, out EntityKey key)
+    {
+        key = default;
+        var keyFeature = _plan.Features[feature];
         var column = _table.TryGetSlot(keyFeature.Slot);
         if (column is null || !Bits.Get(_table.GetFilled(keyFeature.Slot), row))
         {
@@ -1627,21 +1740,21 @@ public sealed partial class FeatureFetcher
     private sealed class PendingFetch(
         FetchGroup group,
         int[] features,
-        EntityKeyIndex? index,
+        FetchKeys keys,
         int chunkSize,
         int chunkCount,
         StagingArea? staging,
         ValueTask<FetchStatus>[] calls,
         bool[] chunkFailed,
-        bool noContextKey)
+        bool noSharedKey)
     {
         public FetchGroup Group { get; } = group;
 
         /// <summary>Fetched features; staging field i holds <c>Features[i]</c>.</summary>
         public int[] Features { get; } = features;
 
-        /// <summary>Key → key index; key index k belongs to chunk k / ChunkSize. Null when no live row had a key.</summary>
-        public EntityKeyIndex? Index { get; } = index;
+        /// <summary>Key → key index; key index k belongs to chunk k / ChunkSize. Not set when no live row had a key.</summary>
+        public FetchKeys Keys { get; } = keys;
 
         public int ChunkSize { get; } = chunkSize;
 
@@ -1657,7 +1770,8 @@ public sealed partial class FeatureFetcher
         /// <summary>Set on completion: chunks whose staging must not be read.</summary>
         public bool[] ChunkFailed { get; } = chunkFailed;
 
-        public bool NoContextKey { get; } = noContextKey;
+        /// <summary>A shared key part (a request input) is missing: no row has a key.</summary>
+        public bool NoSharedKey { get; } = noSharedKey;
     }
 
     /// <summary>Feature or group indices in an array rented from the request memory, valid up to <see cref="Count"/>.</summary>

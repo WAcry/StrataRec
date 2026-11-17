@@ -94,7 +94,7 @@ public sealed class RunReplayTests
         var partial = Feature(1, "[1, 2]", ("a", "int64", "[null, 5]"));
         run.FeatureCalls.Add(new ReplayFeatureCall
         {
-            Seq = partial.Seq, Source = partial.Source, Entity = partial.Entity, Shape = partial.Shape, Keys = partial.Keys, Status = "partial",
+            Seq = partial.Seq, Source = partial.Source, Entity = partial.Entity, Keys = partial.Keys, Status = "partial",
             FailedKeys = 1, Fields = partial.Fields, Values = partial.Values,
         });
         var replay = RunReplay.Create(run, "/runs/0");
@@ -420,7 +420,7 @@ public sealed class RunReplayTests
 
         return new ReplayFeatureCall
         {
-            Seq = seq, Source = "s", Entity = "item", Shape = "many", Keys = Json(keys), Status = "ok", Fields = bindings, Values = values,
+            Seq = seq, Source = "s", Entity = "item", Keys = Json(keys), Status = "ok", Fields = bindings, Values = values,
         };
     }
 
@@ -439,12 +439,12 @@ public sealed class RunReplayTests
             SourceName = "s",
             Entity = FeatureTestRig.Item,
             Supply = GroupSupply.Fetch(ScriptedConnector.Values((_, _) => throw new InvalidOperationException("a replay never calls the connector")), 50, 1000),
-            Shape = KeyShape.Many,
+            KeyFeatures = [],
             FeatureIndices = [.. new int[fields.Length]],
             Fields = [.. bindings],
         };
         var staging = new StagingBuffer(bindings, keys.Length, new RequestMemory());
-        var batch = new EntityKeyBatch { Shape = KeyShape.Many, CandidateKeys = keys.Select(EntityKey.FromInt64).ToArray() };
+        var batch = new EntityKeyBatch(keys.Select(EntityKey.FromInt64).ToArray());
         return (replay.Replay(group, batch, [.. bindings], staging), staging);
     }
 

@@ -63,9 +63,7 @@ internal sealed class RunRecorder : IFeatureCallHook
             Seq = sequence,
             Source = group.SourceName,
             Entity = group.Entity.Name,
-            Shape = ReplayJson.ShapeName(batch.Shape),
-            ContextKey = batch.Shape == KeyShape.Many ? null : ReplayJson.Key(batch.ContextKey),
-            Keys = batch.Shape == KeyShape.Single ? null : ReplayJson.Keys(batch.CandidateKeys.Span),
+            Keys = ReplayJson.Keys(batch),
             Status = ReplayJson.Outstanding,
             Error = ReplayJson.OutstandingError,
             Fields = requested,
@@ -84,7 +82,7 @@ internal sealed class RunRecorder : IFeatureCallHook
         if (values is not null)
         {
             recorded = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-            var row = new ScalarValue[call.Batch.KeyCount];
+            var row = new ScalarValue[call.Batch.Count];
             for (var f = 0; f < call.Fields.Length; f++)
             {
                 for (var k = 0; k < row.Length; k++)
@@ -101,8 +99,6 @@ internal sealed class RunRecorder : IFeatureCallHook
             Seq = begun.Seq,
             Source = begun.Source,
             Entity = begun.Entity,
-            Shape = begun.Shape,
-            ContextKey = begun.ContextKey,
             Keys = begun.Keys,
             Sent = call.Sent,
             Status = IoCall.OutcomeName(call.Outcome),

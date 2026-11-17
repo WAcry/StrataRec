@@ -41,9 +41,10 @@ public class CacheAllocationTests(ITestOutputHelper output)
         output.WriteLine($"L1 miss, connector: 100 keys {fromOrigin[0]} B, 1000 keys {fromOrigin[1]} B ({(fromOrigin[1] - fromOrigin[0]) / 900.0:F1} B/key)");
 
         // The write-back is the per-key cost: a key and a record reference for the table's writer (32 B), and from the
-        // connector the encoded record (33 B here; the distributed tier, when there is one, adds its entry). Bounded, so a regression that
-        // allocates per field or per row shows.
-        Assert.True((fromStore[1] - fromStore[0]) / 900.0 < 64, $"{fromStore[0]} B, {fromStore[1]} B");
+        // connector the encoded record (33 B here; the distributed tier, when there is one, adds its entry). With a
+        // distributed tier, each miss's key text too (32 B for these int64 keys; formatted once, for its read and its
+        // write-back, where a store used to format it itself). Bounded, so a regression that allocates per field or per row shows.
+        Assert.True((fromStore[1] - fromStore[0]) / 900.0 < 96, $"{fromStore[0]} B, {fromStore[1]} B");
         Assert.True((fromOrigin[1] - fromOrigin[0]) / 900.0 < 96, $"{fromOrigin[0]} B, {fromOrigin[1]} B");
     }
 
@@ -138,12 +139,12 @@ public class CacheAllocationTests(ITestOutputHelper output)
     {
         public string ConnectorType => TestConnectorFactory.Type;
 
-        public bool Supports(KeyShape shape) => shape == KeyShape.Many;
+        public bool Supports(EntityKeyLayout layout) => layout.PartCount == 1 && !layout[0].IsShared;
 
         public ValueTask<FetchStatus> FetchAsync(
             EntityKeyBatch keys, ReadOnlyMemory<CompiledFieldBinding> fields, IFeatureBatchWriter writer, CancellationToken cancellationToken)
         {
-            var span = keys.CandidateKeys.Span;
+            var span = keys.Keys.Span;
             foreach (var field in fields.Span)
             {
                 for (var k = 0; k < span.Length; k++)
@@ -187,13 +188,13 @@ public class CacheAllocationTests(ITestOutputHelper output)
             _records = spans.Select(s => (ReadOnlyMemory<byte>)writer.Bytes.AsMemory(s.Offset, s.Length)).ToArray();
         }
 
-        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<EntityKey> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
+        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
         {
             var span = keys.Span;
             var into = records.Span;
             for (var i = 0; i < span.Length; i++)
             {
-                into[i] = _records[span[i].Int64Value];
+                into[i] = _records[int.Parse(span[i], System.Globalization.CultureInfo.InvariantCulture)]; // the key's text: its decimal
             }
 
             return ValueTask.CompletedTask;

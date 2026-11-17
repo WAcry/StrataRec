@@ -9,11 +9,13 @@ using StrataRec.Core.Columns;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
+using StrataRec.Features.Connectors;
 
 namespace StrataRec.Features.Local;
 
-/// <summary>Hashes a string key to the 64-bit value the index stores (injectable so tests can force collisions).</summary>
-internal delegate ulong StringKeyHasher(ReadOnlySpan<char> key);
+/// <summary>Hashes a key's canonical bytes (<see cref="TableKeys"/>) to the 64-bit value the index stores (injectable so tests
+/// can force collisions).</summary>
+internal delegate ulong KeyHasher(ReadOnlySpan<byte> key);
 
 /// <summary>
 /// A found record of a pinned <see cref="TableVersion"/>, or none (<see cref="Found"/> false). It points straight at
@@ -84,7 +86,7 @@ public sealed class TableVersion
     private const int MinPageSize = 4096;
 
     private readonly RecordLayout _layout;
-    private readonly StringKeyHasher _hasher;
+    private readonly KeyHasher _hasher;
     private readonly int _maxPageSize;
 
     // Published state: replaced (index, directory, dictionary on growth) or extended (a new slot, page or string) by the
@@ -118,7 +120,7 @@ public sealed class TableVersion
     /// <summary>Bytes a dictionary slot is charged: the string reference and its reference count.</summary>
     private const int StringSlotBytes = 12;
 
-    internal TableVersion(RecordLayout layout, StringKeyHasher hasher, int maxPageSize, long generation, int expectedKeys)
+    internal TableVersion(RecordLayout layout, KeyHasher hasher, int maxPageSize, long generation, int expectedKeys)
     {
         _layout = layout;
         _hasher = hasher;
@@ -159,10 +161,10 @@ public sealed class TableVersion
     // Reader API
     // ---------------------------------------------------------------------------------------------------------------
 
-    /// <summary>The record of an int64 key, or none. A string-keyed table never finds an int64 key.</summary>
+    /// <summary>The record of a one-part int64 key, or none. A table of another key layout never finds one.</summary>
     internal LocalRecordRef Find(long key)
     {
-        if (_layout.StringKeys)
+        if (_layout.HashedKeys)
         {
             return default;
         }
@@ -172,20 +174,56 @@ public sealed class TableVersion
         return position == 0 ? default : Resolve(position, ref pages);
     }
 
-    /// <summary>The record of a string key, or none. An int64-keyed table never finds a string key.</summary>
-    internal LocalRecordRef Find(ReadOnlySpan<char> key)
+    /// <summary>The record of a one-part string key, or none. A table of another key layout never finds one.</summary>
+    internal LocalRecordRef Find(ReadOnlySpan<char> key) =>
+        _layout.Schema.Key.PartCount == 1 && _layout.HashedKeys ? FindEncoded(MemoryMarshal.AsBytes(key)) : default;
+
+    /// <summary>The record of a one-part key, or none.</summary>
+    internal LocalRecordRef Find(in EntityKey key) => key.StringValue is { } s ? Find(s.AsSpan()) : Find(key.Int64Value);
+
+    /// <summary>The record of a key given by its parts (any layout), or none; a key that is not one of the table's layout is
+    /// not found.</summary>
+    internal LocalRecordRef Find(ReadOnlySpan<EntityKey> parts)
     {
-        if (!_layout.StringKeys)
+        var layout = _layout.Schema.Key;
+        if (TableKeys.Check(layout, parts) is not null)
+        {
+            return default;
+        }
+
+        if (!_layout.HashedKeys)
+        {
+            return Find(parts[0].Int64Value);
+        }
+
+        var length = TableKeys.Length(parts);
+        byte[]? rented = null;
+        var bytes = length <= TableKeys.StackBytes ? stackalloc byte[TableKeys.StackBytes] : rented = ArrayPool<byte>.Shared.Rent(length);
+        try
+        {
+            return FindEncoded(bytes[..TableKeys.Encode(parts, bytes)]);
+        }
+        finally
+        {
+            if (rented is not null)
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
+    }
+
+    /// <summary>The record of a hashed key given by its canonical bytes (<see cref="TableKeys"/>), or none.</summary>
+    internal LocalRecordRef FindEncoded(ReadOnlySpan<byte> key)
+    {
+        if (!_layout.HashedKeys)
         {
             return default;
         }
 
         var pages = Volatile.Read(ref _pages);
-        var position = ProbeString(Volatile.Read(ref _index), _hasher(key), key, ref pages, out _);
+        var position = ProbeHashed(Volatile.Read(ref _index), _hasher(key), key, ref pages, out _);
         return position == 0 ? default : Resolve(position, ref pages);
     }
-
-    internal LocalRecordRef Find(in EntityKey key) => key.StringValue is { } s ? Find(s.AsSpan()) : Find(key.Int64Value);
 
     /// <summary>
     /// Looks every key up once: <c>records[i]</c> becomes the record of <c>keys[i]</c> or none. All features of the
@@ -200,7 +238,7 @@ public sealed class TableVersion
     internal int Lookup(ReadOnlySpan<long> keys, Span<LocalRecordRef> records)
     {
         records = records[..keys.Length];
-        if (_layout.StringKeys)
+        if (_layout.HashedKeys)
         {
             records.Clear();
             return 0;
@@ -252,12 +290,74 @@ public sealed class TableVersion
     /// independent home-slot misses to keep the core's miss buffers busy, little enough stack.</summary>
     private const int LookupBlock = 64;
 
-    /// <summary>String-key form of <see cref="Lookup(ReadOnlySpan{long}, Span{LocalRecordRef})"/>; a null key (a row with
-    /// no key) is not found.</summary>
+    /// <summary>One-string-part form of <see cref="Lookup(ReadOnlySpan{long}, Span{LocalRecordRef})"/>; a null key (a row
+    /// with no key) is not found. A one-string key's canonical bytes are its UTF-16 code units, so nothing is encoded.
+    /// Blocked as the int64 form is (<see cref="ProbeBlock"/>).</summary>
     internal int Lookup(ReadOnlySpan<string?> keys, Span<LocalRecordRef> records)
     {
         records = records[..keys.Length];
-        if (!_layout.StringKeys)
+        if (!_layout.HashedKeys || _layout.Schema.Key.PartCount != 1)
+        {
+            records.Clear();
+            return 0;
+        }
+
+        var index = Volatile.Read(ref _index);
+        var pages = Volatile.Read(ref _pages);
+        Span<ulong> hashes = stackalloc ulong[LookupBlock];
+        var found = 0;
+        for (var start = 0; start < keys.Length; start += LookupBlock)
+        {
+            var block = keys.Slice(start, Math.Min(LookupBlock, keys.Length - start));
+            for (var i = 0; i < block.Length; i++)
+            {
+                hashes[i] = block[i] is { } key ? _hasher(MemoryMarshal.AsBytes(key.AsSpan())) : 0;
+            }
+
+            found += ProbeBlock(index, ref pages, new StringKeyBlock(block), hashes[..block.Length], records.Slice(start, block.Length));
+        }
+
+        return found;
+    }
+
+    /// <summary>One-part form, for keys already held as <see cref="EntityKey"/>s; a key of the other type is not found.</summary>
+    internal int Lookup(ReadOnlySpan<EntityKey> keys, Span<LocalRecordRef> records)
+    {
+        records = records[..keys.Length];
+        var index = Volatile.Read(ref _index);
+        var pages = Volatile.Read(ref _pages);
+        var oneString = _layout.HashedKeys && _layout.Schema.Key.PartCount == 1;
+        var found = 0;
+        for (var i = 0; i < keys.Length; i++)
+        {
+            long position;
+            if (keys[i].StringValue is { } s)
+            {
+                var key = MemoryMarshal.AsBytes(s.AsSpan());
+                position = oneString ? ProbeHashed(index, _hasher(key), key, ref pages, out _) : 0;
+            }
+            else
+            {
+                position = _layout.HashedKeys ? 0 : ProbeInt64(index, keys[i].Int64Value);
+            }
+
+            records[i] = position == 0 ? default : Resolve(position, ref pages);
+            found += records[i].Found ? 1 : 0;
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// Form for keys of any layout, as a batch hands them over (a shared part once for every key): a block's keys are
+    /// encoded into one scratch buffer (on the stack while they fit, else rented), hashed, then probed together
+    /// (<see cref="ProbeBlock"/>); a key not of the table's layout is not found.
+    /// </summary>
+    internal int Lookup(in EntityKeyBatch keys, Span<LocalRecordRef> records)
+    {
+        records = records[..keys.Count];
+        var layout = _layout.Schema.Key;
+        if (keys.PartCount != layout.PartCount)
         {
             records.Clear();
             return 0;
@@ -266,10 +366,125 @@ public sealed class TableVersion
         var index = Volatile.Read(ref _index);
         var pages = Volatile.Read(ref _pages);
         var found = 0;
-        for (var i = 0; i < keys.Length; i++)
+        if (!_layout.HashedKeys)
         {
-            var key = keys[i];
-            var position = key is null ? 0 : ProbeString(index, _hasher(key), key, ref pages, out _);
+            for (var i = 0; i < records.Length; i++)
+            {
+                var key = keys.Key(i, 0);
+                var position = key.IsString ? 0 : ProbeInt64(index, key.Int64Value);
+                records[i] = position == 0 ? default : Resolve(position, ref pages);
+                found += records[i].Found ? 1 : 0;
+            }
+
+            return found;
+        }
+
+        // Where each part of key 0 is in the batch's buffer, and the distance between keys (0 for a shared part): one
+        // index computation per part and key, instead of a slice of the batch.
+        var partCount = layout.PartCount;
+        var buffer = keys.Buffer;
+        Span<int> at = stackalloc int[partCount];
+        Span<int> step = stackalloc int[partCount];
+        for (var p = 0; p < partCount; p++)
+        {
+            (at[p], step[p]) = keys.PartAt(p);
+        }
+
+        var stringMask = TableKeys.StringMask(layout);
+        var tuple = default(KeyPartBuffer);
+        Span<EntityKey> parts = tuple;
+        parts = parts[..partCount];
+        Span<ulong> hashes = stackalloc ulong[LookupBlock];
+        Span<int> starts = stackalloc int[LookupBlock];
+        Span<int> lengths = stackalloc int[LookupBlock];
+        byte[]? rented = null;
+        Span<byte> arena = stackalloc byte[LookupBlock * 32];
+        try
+        {
+            for (var start = 0; start < records.Length; start += LookupBlock)
+            {
+                var count = Math.Min(LookupBlock, records.Length - start);
+                var used = 0;
+                for (var i = 0; i < count; i++)
+                {
+                    for (var p = 0; p < partCount; p++)
+                    {
+                        parts[p] = buffer[at[p] + (step[p] * (start + i))];
+                    }
+
+                    if (!TableKeys.Matches(stringMask, parts))
+                    {
+                        (starts[i], lengths[i], hashes[i]) = (-1, 0, 0);
+                        continue;
+                    }
+
+                    var length = TableKeys.Length(parts);
+                    if (used + length > arena.Length)
+                    {
+                        // Long string parts: a larger arena, with the block's keys so far.
+                        var larger = ArrayPool<byte>.Shared.Rent(Math.Max(2 * arena.Length, used + length));
+                        arena[..used].CopyTo(larger);
+                        if (rented is not null)
+                        {
+                            ArrayPool<byte>.Shared.Return(rented);
+                        }
+
+                        arena = rented = larger;
+                    }
+
+                    var key = arena.Slice(used, TableKeys.Encode(parts, arena[used..]));
+                    (starts[i], lengths[i], hashes[i]) = (used, key.Length, _hasher(key));
+                    used += key.Length;
+                }
+
+                found += ProbeBlock(index, ref pages, new EncodedKeyBlock(arena, starts, lengths), hashes[..count], records.Slice(start, count));
+            }
+        }
+        finally
+        {
+            if (rented is not null)
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// Finishes a block of hashed-key lookups (at most <see cref="LookupBlock"/> keys, each hashed by the caller) in the
+    /// int64 form's two passes: every key's home slot first, so the block's index misses overlap, then each probe and
+    /// its record. Returns the number of keys found.
+    /// </summary>
+    private int ProbeBlock<TKeys>(IndexTable index, ref byte[][] pages, in TKeys keys, ReadOnlySpan<ulong> hashes, Span<LocalRecordRef> records)
+        where TKeys : IKeyBlock, allows ref struct
+    {
+        var entries = index.Entries;
+        Span<long> homePositions = stackalloc long[LookupBlock];
+        Span<long> homeHashes = stackalloc long[LookupBlock];
+        for (var i = 0; i < hashes.Length; i++)
+        {
+            var slot = index.Home(hashes[i]);
+            // Acquire, then the hash: the same order as ProbeHashed.
+            homePositions[i] = Volatile.Read(ref entries[(2 * slot) + 1]);
+            homeHashes[i] = entries[2 * slot];
+        }
+
+        var found = 0;
+        for (var i = 0; i < hashes.Length; i++)
+        {
+            if (!keys.TryGet(i, out var key))
+            {
+                records[i] = default;
+                continue;
+            }
+
+            var position = homePositions[i];
+            if (position != 0 && (homeHashes[i] != (long)hashes[i] || !KeyOf(PageOf(position, ref pages), (int)position).SequenceEqual(key)))
+            {
+                position = ProbeHashed(index, hashes[i], key, ref pages, out _); // past the home slot (read again: cached now)
+            }
+
             records[i] = position == 0 ? default : Resolve(position, ref pages);
             found += records[i].Found ? 1 : 0;
         }
@@ -277,30 +492,39 @@ public sealed class TableVersion
         return found;
     }
 
-    /// <summary>Mixed-key form, for keys already held as <see cref="EntityKey"/>s; a key of the other type is not found.</summary>
-    internal int Lookup(ReadOnlySpan<EntityKey> keys, Span<LocalRecordRef> records)
+    /// <summary>The canonical bytes of the keys of one block of a hashed lookup (<see cref="ProbeBlock"/>).</summary>
+    private interface IKeyBlock
     {
-        records = records[..keys.Length];
-        var index = Volatile.Read(ref _index);
-        var pages = Volatile.Read(ref _pages);
-        var found = 0;
-        for (var i = 0; i < keys.Length; i++)
+        /// <summary>Key <paramref name="i"/>'s bytes; false when it has none (no key, or not of the table's layout), which
+        /// is not found.</summary>
+        bool TryGet(int i, out ReadOnlySpan<byte> key);
+    }
+
+    /// <summary>One-string keys: each its own UTF-16 code units.</summary>
+    private readonly ref struct StringKeyBlock(ReadOnlySpan<string?> keys) : IKeyBlock
+    {
+        private readonly ReadOnlySpan<string?> _keys = keys;
+
+        public bool TryGet(int i, out ReadOnlySpan<byte> key)
         {
-            long position;
-            if (keys[i].StringValue is { } s)
-            {
-                position = _layout.StringKeys ? ProbeString(index, _hasher(s), s, ref pages, out _) : 0;
-            }
-            else
-            {
-                position = _layout.StringKeys ? 0 : ProbeInt64(index, keys[i].Int64Value);
-            }
-
-            records[i] = position == 0 ? default : Resolve(position, ref pages);
-            found += records[i].Found ? 1 : 0;
+            key = MemoryMarshal.AsBytes(_keys[i].AsSpan());
+            return _keys[i] is not null;
         }
+    }
 
-        return found;
+    /// <summary>Keys encoded into one arena: key i at <c>starts[i]</c> (-1 for none), <c>lengths[i]</c> bytes long.</summary>
+    private readonly ref struct EncodedKeyBlock(ReadOnlySpan<byte> arena, ReadOnlySpan<int> starts, ReadOnlySpan<int> lengths) : IKeyBlock
+    {
+        private readonly ReadOnlySpan<byte> _arena = arena;
+        private readonly ReadOnlySpan<int> _starts = starts;
+        private readonly ReadOnlySpan<int> _lengths = lengths;
+
+        public bool TryGet(int i, out ReadOnlySpan<byte> key)
+        {
+            var start = _starts[i];
+            key = start < 0 ? default : _arena.Slice(start, _lengths[i]);
+            return start >= 0;
+        }
     }
 
     /// <summary>
@@ -656,11 +880,11 @@ public sealed class TableVersion
     }
 
     /// <summary>
-    /// Position of a string key (0 = none) and the slot it was found in, or the empty slot that ends its probe sequence.
-    /// The index holds the key's 64-bit hash; a hash match is confirmed against the key stored in the record, so two keys
-    /// with the same hash are told apart.
+    /// Position of a hashed key (0 = none) given by its canonical bytes, and the slot it was found in, or the empty slot that
+    /// ends its probe sequence. The index holds the key's 64-bit hash; a hash match is confirmed against the bytes stored in
+    /// the record, so two keys with the same hash are told apart.
     /// </summary>
-    internal long ProbeString(IndexTable index, ulong hash, ReadOnlySpan<char> key, ref byte[][] pages, out int slot)
+    internal long ProbeHashed(IndexTable index, ulong hash, ReadOnlySpan<byte> key, ref byte[][] pages, out int slot)
     {
         var entries = index.Entries;
         var mask = index.Mask;
@@ -716,13 +940,13 @@ public sealed class TableVersion
         return pages[pageIndex];
     }
 
-    /// <summary>The UTF-16 key stored in a string-keyed table's record or tombstone.</summary>
-    internal ReadOnlySpan<char> KeyOf(byte[] page, int offset)
+    /// <summary>The canonical key bytes stored in a hashed-key table's record or tombstone (<see cref="TableKeys"/>).</summary>
+    internal ReadOnlySpan<byte> KeyOf(byte[] page, int offset)
     {
         var refAt = offset + _layout.KeyRefOffset;
         var keyOffset = BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(refAt));
         var keyLength = BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(refAt + 4));
-        return MemoryMarshal.Cast<byte, char>(page.AsSpan(offset + keyOffset, keyLength * 2));
+        return page.AsSpan(offset + keyOffset, keyLength);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1120,21 +1344,21 @@ public sealed class TableVersion
 
     internal int PageCount => _pageCount;
 
-    internal long Hash(ReadOnlySpan<char> key) => (long)_hasher(key);
+    internal long Hash(ReadOnlySpan<byte> key) => (long)_hasher(key);
 
-    internal StringKeyHasher Hasher => _hasher;
+    internal KeyHasher Hasher => _hasher;
 
     internal int MaxPageSize => _maxPageSize;
 
     /// <summary>Writer-side probe of the current index: the key's position (0 = none) and its slot, or the empty slot
     /// where it would go.</summary>
-    internal long ProbeForWrite(long indexKey, ReadOnlySpan<char> stringKey, out int slot)
+    internal long ProbeForWrite(long indexKey, ReadOnlySpan<byte> hashedKey, out int slot)
     {
         var index = _index;
-        if (_layout.StringKeys)
+        if (_layout.HashedKeys)
         {
             var pages = _pages;
-            return ProbeString(index, (ulong)indexKey, stringKey, ref pages, out slot);
+            return ProbeHashed(index, (ulong)indexKey, hashedKey, ref pages, out slot);
         }
 
         var entries = index.Entries;
@@ -1541,7 +1765,7 @@ internal sealed class StringCodeMap
 }
 
 /// <summary>The default string-key hash: XXH3-64 of the key's UTF-16 code units.</summary>
-internal static class StringKeyHashes
+internal static class KeyHashes
 {
-    public static readonly StringKeyHasher Default = static key => XxHash3.HashToUInt64(MemoryMarshal.AsBytes(key));
+    public static readonly KeyHasher Default = static key => XxHash3.HashToUInt64(key);
 }

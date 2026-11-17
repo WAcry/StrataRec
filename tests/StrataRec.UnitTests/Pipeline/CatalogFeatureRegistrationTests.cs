@@ -117,7 +117,7 @@ public sealed class CatalogFeatureRegistrationTests
 
         Assert.Equal(["author.followers", "item.author_id"], Names(plan));
         var author = plan.Features.Groups.Single(g => g.SourceName == "author_store");
-        Assert.Equal(plan.Features.Features.Single(f => f.Definition.Name == "item.author_id").Index, author.KeyFeatureIndex);
+        Assert.Equal([plan.Features.Features.Single(f => f.Definition.Name == "item.author_id").Index], author.KeyFeatures);
     }
 
     [Fact]

@@ -171,20 +171,17 @@ public class CacheBindingTests
     }
 
     [Fact]
-    public void ACacheBinding_ForACrossEntity_IsAnErrorAtTheMode()
+    public void ACacheBinding_ForAnEntityOfSeveralKeyParts_HasATableOfThatLayout()
     {
-        var cross = new EntityDefinition
-        {
-            Name = "user_item", Kind = EntityKind.Cross, ContextKeyInput = "user_id", ContextKeyType = EntityKeyType.Int64,
-            CandidateKeyColumn = "entity_id", CandidateKeyType = EntityKeyType.Int64,
-        };
+        var userItem = EntityDefinition.Of(
+            "user_item", EntityKeyPartDefinition.RequestInput("user_id", EntityKeyType.Int64), EntityKeyPartDefinition.EntityId(EntityKeyType.Int64));
         var rig = new FeatureTestRig().CacheSource("item_store", ScriptedConnector.Values((_, _) => 1.0));
-        rig.Physical("user_item.clicks", cross, ColumnType.Float64, "item_store");
+        rig.Physical("user_item.clicks", userItem, ColumnType.Float64, "item_store");
 
-        var error = Assert.Single(Errors(rig.TryBuild()));
+        Assert.Empty(Errors(rig.TryBuild()));
 
-        Assert.Equal(("LOCAL_CROSS_ENTITY", "/sources/item_store/mode"), (error.Code, error.Pointer));
-        Assert.Contains("mode 'cache'", error.Message);
+        Assert.Equal("(int64,int64)", rig.Tables["item_store"].Schema.Key.TypeText);
+        Assert.Equal("(int64,int64)", rig.Tables["item_store"].Cache!.Keyspace.Key.TypeText);
     }
 
     private static DiagnosticBag Build(string binding, bool redis = true)

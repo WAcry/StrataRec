@@ -10,7 +10,8 @@ namespace StrataRec.Redis;
 /// <summary>
 /// <c>redis@1</c>: the distributed tier of <c>cache</c> sources in Redis (design 6.6 <c>cache</c>, tier 2), through
 /// StackExchange.Redis. One string value per (source, entity, key) under
-/// <c>{key_prefix}{source}:{entity}:{key}</c>, holding the engine's encoded record, with the time to live the engine
+/// <c>{key_prefix}{source}:{entity}:{key}</c> (the key's text, <see cref="CacheKeyspace.KeyText"/>: <c>10042</c>, or
+/// <c>10042:US</c> for a key of two parts), holding the engine's encoded record, with the time to live the engine
 /// gives (the record's lifetime and its <c>stale_if_error_ms</c> window).
 /// </summary>
 /// <remarks>
@@ -246,7 +247,7 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
     }
 
     public async ValueTask GetAsync(
-        CacheKeyspace keyspace, ReadOnlyMemory<EntityKey> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
+        CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
     {
         var database = _database ?? throw new InvalidOperationException("redis@1 is not loaded.");
         var redisKeys = Keys(keyspace, keys.Span);
@@ -282,7 +283,7 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
         var sets = new Task<bool>[entries.Length];
         for (var i = 0; i < entries.Length; i++)
         {
-            sets[i] = batch.StringSetAsync(prefix + KeyText(entries[i].Key), entries[i].Record, entries[i].TimeToLive, When.Always);
+            sets[i] = batch.StringSetAsync(prefix + entries[i].Key, entries[i].Record, entries[i].TimeToLive, When.Always);
         }
 
         batch.Execute();
@@ -314,19 +315,17 @@ public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDispo
         await connection.DisposeAsync().ConfigureAwait(false);
     }
 
-    private RedisKey[] Keys(CacheKeyspace keyspace, ReadOnlySpan<EntityKey> keys)
+    private RedisKey[] Keys(CacheKeyspace keyspace, ReadOnlySpan<string> keys)
     {
         var prefix = _settings.KeyPrefix + keyspace.Prefix;
         var redisKeys = new RedisKey[keys.Length];
         for (var i = 0; i < keys.Length; i++)
         {
-            redisKeys[i] = prefix + KeyText(keys[i]);
+            redisKeys[i] = prefix + keys[i];
         }
 
         return redisKeys;
     }
-
-    private static string KeyText(in EntityKey key) => key.StringValue ?? key.Int64Value.ToString(CultureInfo.InvariantCulture);
 
     private static void Copy(Task<RedisValue>[] gets, Span<ReadOnlyMemory<byte>> records)
     {

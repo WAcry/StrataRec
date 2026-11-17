@@ -64,7 +64,7 @@ internal sealed class HomeFeedTestHost
 
     /// <summary>
     /// What the plans this host compiles bind (the sample binds <c>author_store</c> locally). Plans compiled by
-    /// <see cref="Compile"/> keep their tables and clients loaded for the life of the test.
+    /// <see cref="Compile()"/> keep their tables and clients loaded for the life of the test.
     /// </summary>
     public BindingHost Bindings { get; } = new();
 
@@ -90,16 +90,19 @@ internal sealed class HomeFeedTestHost
     }
 
     /// <summary>Compiles the plan and loads what it binds, as the engine does before serving it.</summary>
-    public PlanCompilation Compile()
+    public PlanCompilation Compile() => Compile(Request);
+
+    /// <summary>Compiles <paramref name="request"/> (this host's, changed: experiments added) and loads what it binds.</summary>
+    public PlanCompilation Compile(PlanCompileRequest request)
     {
         var lease = Bindings.OpenLease();
-        var compilation = lease.CompileAsync(bindings => PlanCompiler.Compile(Request, Environment, bindings)).GetAwaiter().GetResult();
+        var compilation = lease.CompileAsync(bindings => PlanCompiler.Compile(request, Environment, bindings)).GetAwaiter().GetResult();
         var failures = lease.WaitLoadedAsync().GetAwaiter().GetResult();
         Assert.True(failures.Count == 0, string.Join("\n", failures.Select(f => f.Message)));
         return compilation;
     }
 
-    /// <summary><see cref="PlanCompiler.CompileMerged"/> with the local tables loaded, like <see cref="Compile"/>.</summary>
+    /// <summary><see cref="PlanCompiler.CompileMerged"/> with the local tables loaded, like <see cref="Compile()"/>.</summary>
     public PlanCompilation CompileMerged(IReadOnlyList<string> arms)
     {
         var lease = Bindings.OpenLease();

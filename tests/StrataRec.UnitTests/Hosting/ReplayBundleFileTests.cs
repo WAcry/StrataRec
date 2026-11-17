@@ -10,14 +10,14 @@ public sealed class ReplayBundleFileTests
 {
     private const string Minimal = """
         {
-          "format": "stratarec.replay_bundle/2026-11-16.4",
+          "format": "stratarec.replay_bundle/2026-11-16.5",
           "request": { "pipeline_id": "p", "request_id": "r", "seed": 1, "time_ms": 0, "deadline_ms": 100, "assignment": { "source": "none" } },
           "manifest": { "id": "m" },
           "runs": [
             {
               "pipeline_id": "p", "manifest_id": "m", "role": "primary",
               "feature_calls": [
-                { "seq": 0, "source": "item_store", "entity": "item", "shape": "many", "keys": [1, 2], "status": "ok",
+                { "seq": 0, "source": "item_store", "entity": "item", "keys": [1, 2], "status": "ok",
                   "fields": [{ "name": "score", "type": "float64" }], "values": { "score": [0.5, null] } }
               ],
               "sampling": { "logs": "none" },
@@ -31,12 +31,12 @@ public sealed class ReplayBundleFileTests
     [Fact]
     public void ABundleOfThePreviousFormat_IsRejectedAtTheFormat()
     {
-        // 2026-11-16.4: there is one string type, so no recorded type (a feature's, an input's, a column's) is written
-        // text; there are no old readers.
-        var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(Minimal.Replace("2026-11-16.4", "2026-11-16.3", StringComparison.Ordinal)));
+        // 2026-11-16.5: a feature call records its keys as values or arrays of parts, with no shape or context key; there
+        // are no old readers.
+        var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(Minimal.Replace("2026-11-16.5", "2026-11-16.4", StringComparison.Ordinal)));
 
         Assert.Equal("/format", error.Pointer);
-        Assert.Equal("stratarec.replay_bundle/2026-11-16.4", ReplayBundle.CurrentFormat);
+        Assert.Equal("stratarec.replay_bundle/2026-11-16.5", ReplayBundle.CurrentFormat);
     }
 
     [Fact]
@@ -171,7 +171,7 @@ public sealed class ReplayBundleFileTests
         // Review 32 #4: "\uD800" (an unpaired surrogate escape) escaped as InvalidOperationException.
         var unpaired = "\"" + (char)92 + "uD800\"";
         var json = member == "seed"
-            ? """{"format":"stratarec.replay_bundle/2026-11-16.4","request":{"seed":""" + unpaired + "}}"
+            ? """{"format":"stratarec.replay_bundle/2026-11-16.5","request":{"seed":""" + unpaired + "}}"
             : """{"format":""" + unpaired + ""","request":{}}""";
 
         var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(json));

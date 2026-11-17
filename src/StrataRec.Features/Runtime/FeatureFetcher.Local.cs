@@ -34,13 +34,13 @@ namespace StrataRec.Features.Runtime;
 /// <para><b>Replay</b> (design 13.4). A recording request records each read as a feature call through the
 /// <see cref="IFeatureCallHook"/>, with the keys and the values it read; a replaying request answers local groups like
 /// fetched ones, from the recording through the staging path, so a replay never reads the table. Both sides take the
-/// keys of the same rows, in live-row order and deduplicated by an <see cref="EntityKeyIndex"/> (first-seen order), so a
+/// keys of the same rows, in live-row order and deduplicated by a <see cref="FetchKeys"/> (first-seen order), so a
 /// replay on the same configuration matches the recorded call exactly.</para>
 /// </remarks>
 public sealed partial class FeatureFetcher
 {
     private TableVersion?[]? _pins; // by group index, rented on the first local read
-    private readonly EntityKeyIndex? _localKeys; // the distinct keys of the current local read; null if no group is read locally
+    private FetchKeys _localKeys; // the distinct keys of the current local read; prepared when a group may be read locally
 
     /// <summary>
     /// Whether this request reads the group from its table. A replay answers a local group through the fetch path instead,
@@ -141,17 +141,27 @@ public sealed partial class FeatureFetcher
     /// <summary>
     /// The batch of one read: the live rows that miss any of <paramref name="features"/> and whose key is computed, their
     /// distinct keys in first-seen order, one lookup of those keys, and each row's record from that lookup. A row without
-    /// a key (a missing foreign key) gets no record, so every field takes its absent value; a key of the other type than
-    /// the table's is looked up and not found. A row whose key is not computed yet is left for a later read, as with a
-    /// fetch.
+    /// a key (a part missing: a missing foreign key, a missing request input) gets no record, so every field takes its
+    /// absent value; a key of another type than the table's is looked up and not found. A row whose key is not computed
+    /// yet is left for a later read, as with a fetch.
     /// </summary>
+    /// <remarks>A one-part key is looked up as the index holds it (one <c>long</c> or string per key); any other key through
+    /// its batch, whose shared parts are read once (<see cref="TableVersion.Lookup(in EntityKeyBatch, Span{LocalRecordRef})"/>).</remarks>
     private LocalReadBatch LookUp(FetchGroup group, ReadOnlySpan<int> features, TableVersion version)
     {
         var live = _table.Rows.Order;
         var capacity = Math.Max(1, live.Length);
         var rows = _memory.Rent<int>(capacity);
         var entries = _memory.Rent<int>(capacity); // per row: its key's entry in the index, or -1 without a key
-        var keys = _localKeys!;
+        ref var keys = ref _localKeys;
+        var layout = group.KeyLayout;
+        var sharedBuffer = default(KeyPartBuffer);
+        Span<EntityKey> shared = sharedBuffer;
+        var hasShared = TrySharedKey(group, shared);
+        var varyingBuffer = default(KeyPartBuffer);
+        Span<EntityKey> varying = varyingBuffer;
+        varying = varying[..layout.VaryingCount];
+        var one = group.OneVaryingFeature;
         var indexed = false;
         var count = 0;
         foreach (var row in live)
@@ -161,7 +171,8 @@ public sealed partial class FeatureFetcher
                 continue;
             }
 
-            var lookup = TryCandidateKey(group, row, out var key);
+            EntityKey key = default;
+            var lookup = !hasShared ? KeyLookup.Missing : one != int.MinValue ? PartKey(one, row, out key) : RowKey(group, row, varying);
             if (lookup == KeyLookup.NotReady)
             {
                 continue;
@@ -172,13 +183,12 @@ public sealed partial class FeatureFetcher
             {
                 if (!indexed)
                 {
-                    // Sized to the live rows, an upper bound on the distinct keys: the index never grows. All keys of a
-                    // group have one type (the key column's).
-                    keys.Reset(key.IsString ? EntityKeyType.String : EntityKeyType.Int64, live.Length);
+                    // Sized to the live rows, an upper bound on the distinct keys: the index never grows.
+                    keys.Reset(_memory, layout, shared[..(layout.PartCount - layout.VaryingCount)], live.Length, key);
                     indexed = true;
                 }
 
-                entry = keys.GetOrAdd(key, keys.Count, out _);
+                entry = one != int.MinValue ? keys.GetOrAdd(key) : keys.GetOrAdd(varying);
             }
 
             rows[count] = row;
@@ -188,15 +198,16 @@ public sealed partial class FeatureFetcher
         var keyCount = indexed ? keys.Count : 0;
         var keyRecords = _memory.Rent<LocalRecordRef>(Math.Max(1, keyCount)).AsSpan(0, keyCount);
         var found = keyCount == 0 ? 0
-            : keys.KeyType == EntityKeyType.String ? version.Lookup(keys.StringKeys!, keyRecords) // non-null keys where nullable ones are accepted
-            : version.Lookup(keys.Int64Keys, keyRecords);
+            : keys.Plain is not { } plain ? version.Lookup(keys.Batch(_memory), keyRecords)
+            : plain.KeyType == EntityKeyType.String ? version.Lookup(plain.StringKeys!, keyRecords) // non-null keys where nullable ones are accepted
+            : version.Lookup(plain.Int64Keys, keyRecords);
         var rowRecords = _memory.Rent<LocalRecordRef>(capacity).AsSpan(0, count);
         for (var i = 0; i < count; i++)
         {
             rowRecords[i] = entries[i] < 0 ? default : keyRecords[entries[i]];
         }
 
-        return new LocalReadBatch(rows.AsSpan(0, count), entries.AsSpan(0, count), rowRecords, indexed ? keys : null, keyRecords, found);
+        return new LocalReadBatch(rows.AsSpan(0, count), entries.AsSpan(0, count), rowRecords, indexed ? keys : default, keyRecords, found);
     }
 
     /// <summary>
@@ -293,10 +304,7 @@ public sealed partial class FeatureFetcher
     /// <summary>The features' state after a read: degraded with a degraded key (design 6.7), otherwise ok.</summary>
     private void SetReadState(FetchGroup group, ReadOnlySpan<int> features)
     {
-        var keyState = group.KeyFeatureIndex >= 0 ? _state[group.KeyFeatureIndex] : FeatureState.Ok;
-        var error = keyState == FeatureState.Degraded
-            ? _errors[group.KeyFeatureIndex] ?? $"key feature '{_plan.Features[group.KeyFeatureIndex].Definition.Name}' is {keyState}"
-            : null;
+        var error = KeyState(group, out var keyError) == FeatureState.Degraded ? keyError : null;
         foreach (var f in features)
         {
             if (_state[f] == FeatureState.Failed)
@@ -380,8 +388,7 @@ public sealed partial class FeatureFetcher
             return null;
         }
 
-        var value = group.ContextKeyId >= 0 ? _context[group.ContextKeyId] : ScalarValue.Missing;
-        if (value.IsMissing)
+        if (!TryContextKey(group, out var key))
         {
             foreach (var f in features)
             {
@@ -394,8 +401,8 @@ public sealed partial class FeatureFetcher
 
         var started = _hook is null ? 0 : Stopwatch.GetTimestamp();
         var version = Pin(group);
-        var key = ToKey(value);
-        var record = version.Find(key); // a key of the other type is not found
+        var record = default(LocalRecordRef);
+        version.Lookup(key, new Span<LocalRecordRef>(ref record)); // a key of another type is not found
         if (cache is not null)
         {
             return ReadCachedContext(group, features, version, key, record, started, cancellationToken);
@@ -412,7 +419,7 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>Publishes the values of a context key's record (or of no record) and records the read.</summary>
-    private void StoreLocalContext(FetchGroup group, ReadOnlySpan<int> features, TableVersion version, in EntityKey key, in LocalRecordRef record, long started)
+    private void StoreLocalContext(FetchGroup group, ReadOnlySpan<int> features, TableVersion version, in EntityKeyBatch key, in LocalRecordRef record, long started)
     {
         var local = group.Supply.Table!;
         foreach (var f in features)
@@ -426,8 +433,7 @@ public sealed partial class FeatureFetcher
         {
             var array = features.ToArray();
             var fields = FieldBindings(group, array);
-            var batch = new EntityKeyBatch { Shape = group.Shape, ContextKey = key };
-            Record(recorder, group, batch, fields, new LocalReadValues(version, new[] { record }, TableFields(group, array)), started);
+            Record(recorder, group, key.Copy(), fields, new LocalReadValues(version, new[] { record }, TableFields(group, array)), started);
         }
     }
 
@@ -481,14 +487,8 @@ public sealed partial class FeatureFetcher
     private void RecordRead(
         IFeatureCallHook recorder, FetchGroup group, ReadOnlySpan<int> features, TableVersion version, in LocalReadBatch batch, long started)
     {
-        var keys = new EntityKey[batch.KeyRecords.Length];
-        for (var k = 0; k < keys.Length; k++)
-        {
-            keys[k] = batch.Keys!.KeyAt(k);
-        }
-
         var array = features.ToArray();
-        var call = new EntityKeyBatch { Shape = group.Shape, CandidateKeys = keys };
+        var call = batch.Keys.Copy();
         Record(recorder, group, call, FieldBindings(group, array), new LocalReadValues(version, batch.KeyRecords.ToArray(), TableFields(group, array)), started);
     }
 
@@ -528,13 +528,13 @@ public sealed partial class FeatureFetcher
 
     /// <summary>
     /// One local read (see the type's remarks): the rows to fill and the record of each, the distinct keys
-    /// (<see cref="Keys"/>, null when no row has a key; entry <c>k</c> is the key of <see cref="KeyRecords"/>[k]) and what
+    /// (<see cref="Keys"/>, not set when no row has a key; entry <c>k</c> is the key of <see cref="KeyRecords"/>[k]) and what
     /// their single lookup returned, <see cref="Found"/> of them held by the table.
     /// </summary>
     private readonly ref struct LocalReadBatch
     {
         public LocalReadBatch(
-            ReadOnlySpan<int> rows, ReadOnlySpan<int> rowKeys, ReadOnlySpan<LocalRecordRef> rowRecords, EntityKeyIndex? keys,
+            ReadOnlySpan<int> rows, ReadOnlySpan<int> rowKeys, ReadOnlySpan<LocalRecordRef> rowRecords, FetchKeys keys,
             ReadOnlySpan<LocalRecordRef> keyRecords, int found)
         {
             Rows = rows;
@@ -552,7 +552,7 @@ public sealed partial class FeatureFetcher
 
         public ReadOnlySpan<LocalRecordRef> RowRecords { get; }
 
-        public EntityKeyIndex? Keys { get; }
+        public FetchKeys Keys { get; }
 
         public ReadOnlySpan<LocalRecordRef> KeyRecords { get; }
 

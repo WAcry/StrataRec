@@ -35,15 +35,9 @@ internal sealed class FeatureTestRig
     /// </summary>
     public const int UntimedMs = 60_000;
 
-    public static readonly EntityDefinition Item = new()
-    {
-        Name = "item", Kind = EntityKind.Candidate, CandidateKeyColumn = "entity_id", CandidateKeyType = EntityKeyType.Int64,
-    };
+    public static readonly EntityDefinition Item = EntityDefinition.Of("item", EntityKeyPartDefinition.EntityId(EntityKeyType.Int64));
 
-    public static readonly EntityDefinition User = new()
-    {
-        Name = "user", Kind = EntityKind.Context, ContextKeyInput = "user_id", ContextKeyType = EntityKeyType.Int64,
-    };
+    public static readonly EntityDefinition User = EntityDefinition.Of("user", EntityKeyPartDefinition.RequestInput("user_id", EntityKeyType.Int64));
 
     private readonly List<FeatureRuntimeInfo> _features = new();
     private readonly List<ColumnType> _slots = new() { ColumnType.Int64 };
@@ -60,6 +54,7 @@ internal sealed class FeatureTestRig
     /// <summary>The distributed cache stores the plan's cache bindings may name: <c>test_cache@1</c>, and what a test adds.</summary>
     public FeatureCacheStoreRegistry CacheStores { get; }
     private int _contextCount = 1; // context id 0 is the request input user_id
+    private readonly Dictionary<string, int> _inputs = new(StringComparer.Ordinal) { ["user_id"] = UserIdContext };
 
     public FeaturePlan Plan { get; private set; } = null!;
 
@@ -69,10 +64,8 @@ internal sealed class FeatureTestRig
     /// <summary>The clock of the plan's cache tables: it moves only when a test moves it.</summary>
     public ManualClock Clock { get; } = new();
 
-    public static EntityDefinition ForeignKey(string name, string keyFeature) => new()
-    {
-        Name = name, Kind = EntityKind.ForeignKey, CandidateKeyColumn = keyFeature, CandidateKeyType = EntityKeyType.Int64,
-    };
+    public static EntityDefinition ForeignKey(string name, string keyFeature) =>
+        EntityDefinition.Of(name, EntityKeyPartDefinition.Feature(keyFeature, EntityKeyType.Int64));
 
     /// <summary>Binds a source to a test connector instance.</summary>
     public FeatureTestRig Source(string name, IFeatureSourceConnector connector, int timeoutMs = UntimedMs, int? maxBatch = null)
@@ -218,6 +211,14 @@ internal sealed class FeatureTestRig
         return Add(definition, finalType, expression, dependencies);
     }
 
+    /// <summary>Declares a request input besides user_id, which a key part may read; returns its context id (set its value in
+    /// <see cref="TestRequest.Context"/> before the fetch).</summary>
+    public int RequestInput(string name)
+    {
+        _inputs[name] = _contextCount;
+        return _contextCount++;
+    }
+
     public int SlotOf(int feature) => _features[feature].Slot;
 
     public int ContextIdOf(int feature) => _features[feature].ContextId;
@@ -239,7 +240,7 @@ internal sealed class FeatureTestRig
             _features,
             new SourceBindingArtifact { Environment = "test", Sources = _sources },
             registry,
-            input => input == "user_id" ? UserIdContext : -1,
+            input => _inputs.TryGetValue(input, out var id) ? id : -1,
             diagnostics,
             baseDirectory,
             updateSources,
@@ -406,7 +407,7 @@ internal sealed class FakeCacheStore : IFeatureCacheStore
 
     public int Written => Volatile.Read(ref _written);
 
-    public async ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<EntityKey> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
+    public async ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
     {
         var names = Names(keyspace, keys.Span);
         Gets.Enqueue(names);
@@ -428,7 +429,7 @@ internal sealed class FakeCacheStore : IFeatureCacheStore
     {
         foreach (var entry in entries.Span)
         {
-            _records[keyspace.Prefix + Text(entry.Key)] = (entry.Record.ToArray(), entry.TimeToLive);
+            _records[keyspace.Prefix + entry.Key] = (entry.Record.ToArray(), entry.TimeToLive);
         }
 
         lock (_gate)
@@ -474,18 +475,16 @@ internal sealed class FakeCacheStore : IFeatureCacheStore
 
     public void Put(string name, byte[] record) => _records[name] = (record, TimeSpan.FromMinutes(1));
 
-    private static string[] Names(CacheKeyspace keyspace, ReadOnlySpan<EntityKey> keys)
+    private static string[] Names(CacheKeyspace keyspace, ReadOnlySpan<string> keys)
     {
         var names = new string[keys.Length];
         for (var i = 0; i < keys.Length; i++)
         {
-            names[i] = keyspace.Prefix + Text(keys[i]);
+            names[i] = keyspace.Prefix + keys[i];
         }
 
         return names;
     }
-
-    private static string Text(in EntityKey key) => key.StringValue ?? key.Int64Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
 }
 
 /// <summary><c>test_updates@1</c>: an update source with nothing to load (the rig loads its tables directly).</summary>
@@ -522,13 +521,23 @@ internal sealed class ScriptedConnector(ScriptedConnector.Handler handler) : IFe
 
     public string ConnectorType => TestConnectorFactory.Type;
 
-    public bool Supports(KeyShape shape) => true;
+    /// <summary>The layouts the plan asked about, in order.</summary>
+    public ConcurrentQueue<EntityKeyLayout> Layouts { get; } = new();
+
+    /// <summary>Whether a layout is supported; every one by default.</summary>
+    public Func<EntityKeyLayout, bool> SupportsLayout { get; init; } = static _ => true;
+
+    public bool Supports(EntityKeyLayout layout)
+    {
+        Layouts.Enqueue(layout);
+        return SupportsLayout(layout);
+    }
 
     public ValueTask<FetchStatus> FetchAsync(
         EntityKeyBatch keys, ReadOnlyMemory<CompiledFieldBinding> fields, IFeatureBatchWriter writer, CancellationToken cancellationToken)
     {
         var bindings = fields.ToArray();
-        Calls.Enqueue(new RecordedCall(keys.CandidateKeys.ToArray(), keys.ContextKey, bindings.Select(f => f.Field).ToArray(), writer));
+        Calls.Enqueue(RecordedCall.Of(keys, bindings.Select(f => f.Field).ToArray(), writer));
         return handler(keys, bindings, writer, cancellationToken);
     }
 
@@ -543,7 +552,7 @@ internal sealed class ScriptedConnector(ScriptedConnector.Handler handler) : IFe
     {
         for (var k = 0; k < writer.KeyCount; k++)
         {
-            var key = keys.Shape == KeyShape.Single ? keys.ContextKey.Int64Value : keys.CandidateKeys.Span[k].Int64Value;
+            var key = keys.Key(k, 0).Int64Value;
             foreach (var field in fields)
             {
                 Write(writer, field, k, valueOf(key, field.Field));
@@ -583,7 +592,33 @@ internal sealed class ScriptedConnector(ScriptedConnector.Handler handler) : IFe
     }
 }
 
-internal sealed record RecordedCall(EntityKey[] Keys, EntityKey ContextKey, string[] Fields, IFeatureBatchWriter Writer);
+/// <summary>
+/// One connector call: for a one-part key, <see cref="Keys"/> are the candidate keys (empty for a context key, which is
+/// <see cref="ContextKey"/>), as calls had them before keys had parts; <see cref="Tuples"/> are every key's parts.
+/// </summary>
+internal sealed record RecordedCall(EntityKey[] Keys, EntityKey ContextKey, string[] Fields, IFeatureBatchWriter Writer, EntityKey[][] Tuples)
+{
+    public static RecordedCall Of(in EntityKeyBatch batch, string[] fields, IFeatureBatchWriter writer)
+    {
+        var tuples = new EntityKey[batch.Count][];
+        for (var i = 0; i < tuples.Length; i++)
+        {
+            tuples[i] = new EntityKey[batch.PartCount];
+            for (var p = 0; p < batch.PartCount; p++)
+            {
+                tuples[i][p] = batch.Key(i, p);
+            }
+        }
+
+        var context = batch.PartCount == 1 && batch.IsShared(0);
+        return new RecordedCall(
+            context || batch.PartCount != 1 ? Array.Empty<EntityKey>() : batch.Part(0).ToArray(),
+            context ? batch.Key(0, 0) : default,
+            fields,
+            writer,
+            tuples);
+    }
+}
 
 /// <summary>
 /// Buffer pool that behaves like a busy shared pool in every build configuration: rented unmanaged arrays are full of a

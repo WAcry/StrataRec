@@ -17,7 +17,7 @@ public sealed class PlanFeatureClosureTests
     private static readonly string[] SampleFeatures =
     [
         "author.followers", "author.log_followers", "item.age_hours", "item.author_id", "item.category", "item.clicks_7d", "item.embedding",
-        "item.impressions_7d", "item.is_policy_safe", "item.report_rate", "item.smoothed_ctr",
+        "item.impressions_7d", "item.is_policy_safe", "item.report_rate", "item.smoothed_ctr", "item_country.boost",
     ];
 
     [Fact]
@@ -26,7 +26,7 @@ public sealed class PlanFeatureClosureTests
         var plan = HomeFeedTestHost.Load().Plan();
 
         Assert.Equal(SampleFeatures, Names(plan));
-        Assert.Equal(["author_store", "item_store"], plan.Features.Groups.Select(g => g.SourceName).Order(StringComparer.Ordinal));
+        Assert.Equal(["author_store", "item_country_store", "item_store"], plan.Features.Groups.Select(g => g.SourceName).Order(StringComparer.Ordinal));
         Assert.DoesNotContain(plan.Schema.ContextFields, f => f.Kind == ContextFieldKind.Feature);
 
         // Features are registered in the order the compile first reads them: the same for the same configuration.

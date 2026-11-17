@@ -89,7 +89,7 @@ internal static class CacheRecord
         using var hash = new StableHash.Builder();
         hash.Add("stratarec.cache.record");
         hash.Add((long)Format);
-        hash.Add(schema.KeyType == EntityKeyType.String ? "string" : "int64");
+        hash.Add(schema.Key.TypeText); // "int64" or "string" for one part, as before keys had parts; "(int64,string)" for several
         hash.Add((long)schema.Fields.Count);
         foreach (var field in schema.Fields)
         {

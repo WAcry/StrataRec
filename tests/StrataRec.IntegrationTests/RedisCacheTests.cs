@@ -33,24 +33,34 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
 
         await store.SetAsync(items, new[]
         {
-            new CacheStoreEntry(EntityKey.FromInt64(1), new byte[] { 1, 2, 3 }, TimeSpan.FromMinutes(10)),
-            new CacheStoreEntry(EntityKey.FromInt64(2), new byte[] { 4 }, TimeSpan.FromSeconds(30)),
+            new CacheStoreEntry("1", new byte[] { 1, 2, 3 }, TimeSpan.FromMinutes(10)),
+            new CacheStoreEntry("2", new byte[] { 4 }, TimeSpan.FromSeconds(30)),
         }, CancellationToken.None);
-        await store.SetAsync(users, new[] { new CacheStoreEntry(EntityKey.FromString("u:7"), new byte[] { 5, 6 }, TimeSpan.FromMinutes(1)) }, CancellationToken.None);
+        await store.SetAsync(users, new[] { new CacheStoreEntry("u:7", new byte[] { 5, 6 }, TimeSpan.FromMinutes(1)) }, CancellationToken.None);
 
         var records = new ReadOnlyMemory<byte>[3];
-        await store.GetAsync(items, new[] { EntityKey.FromInt64(2), EntityKey.FromInt64(3), EntityKey.FromInt64(1) }, records, CancellationToken.None);
+        await store.GetAsync(items, new[] { "2", "3", "1" }, records, CancellationToken.None);
         Assert.Equal(new byte[] { 4 }, records[0].ToArray());
         Assert.True(records[1].IsEmpty); // never written
         Assert.Equal(new byte[] { 1, 2, 3 }, records[2].ToArray());
         var user = new ReadOnlyMemory<byte>[1];
-        await store.GetAsync(users, new[] { EntityKey.FromString("u:7") }, user, CancellationToken.None);
+        await store.GetAsync(users, new[] { "u:7" }, user, CancellationToken.None);
         Assert.Equal(new byte[] { 5, 6 }, user[0].ToArray());
 
         var redis = server.Connection.GetDatabase();
         Assert.InRange((await redis.KeyTimeToLiveAsync(prefix + "item%3Astore:item:1"))!.Value, TimeSpan.FromMinutes(9), TimeSpan.FromMinutes(10));
         Assert.InRange((await redis.KeyTimeToLiveAsync(prefix + "item%3Astore:item:2"))!.Value, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30));
         Assert.Equal(new byte[] { 5, 6 }, (byte[])(await redis.StringGetAsync(prefix + "users:user:u:7"))!);
+
+        // A key of several parts: its text, the parts joined by ':' with a string part's ':' and '%' escaped.
+        var byCountry = new CacheKeyspace("item_country_store", "item_country", EntityKeyLayout.OfTypes(EntityKeyType.Int64, EntityKeyType.String));
+        var text = CacheKeyspace.KeyText([EntityKey.FromInt64(10042), EntityKey.FromString("U:S%")]);
+        Assert.Equal("10042:U%3AS%25", text);
+        await store.SetAsync(byCountry, new[] { new CacheStoreEntry(text, new byte[] { 9 }, TimeSpan.FromMinutes(1)) }, CancellationToken.None);
+        var composite = new ReadOnlyMemory<byte>[1];
+        await store.GetAsync(byCountry, new[] { text }, composite, CancellationToken.None);
+        Assert.Equal(new byte[] { 9 }, composite[0].ToArray());
+        Assert.Equal(new byte[] { 9 }, (byte[])(await redis.StringGetAsync(prefix + "item_country_store:item_country:10042:U%3AS%25"))!);
     }
 
     [RedisFact]
@@ -114,9 +124,9 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
             await using var accepted = Create(server.Endpoint, prefix, user, secrets);
             await accepted.LoadAsync(CancellationToken.None);
             var items = new CacheKeyspace("item_store", "item", EntityKeyType.Int64);
-            await accepted.SetAsync(items, new[] { new CacheStoreEntry(EntityKey.FromInt64(1), new byte[] { 7 }, TimeSpan.FromMinutes(1)) }, CancellationToken.None);
+            await accepted.SetAsync(items, new[] { new CacheStoreEntry("1", new byte[] { 7 }, TimeSpan.FromMinutes(1)) }, CancellationToken.None);
             var record = new ReadOnlyMemory<byte>[1];
-            await accepted.GetAsync(items, new[] { EntityKey.FromInt64(1) }, record, CancellationToken.None);
+            await accepted.GetAsync(items, new[] { "1" }, record, CancellationToken.None);
             Assert.Equal(new byte[] { 7 }, record[0].ToArray());
         }
         finally
@@ -153,7 +163,7 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         await using var right = Create(endpoint, RedisServer.UniquePrefix(), secrets: secrets);
         await right.LoadAsync(CancellationToken.None);
         var record = new ReadOnlyMemory<byte>[1];
-        await right.GetAsync(new CacheKeyspace("item_store", "item", EntityKeyType.Int64), new[] { EntityKey.FromInt64(1) }, record, CancellationToken.None);
+        await right.GetAsync(new CacheKeyspace("item_store", "item", EntityKeyType.Int64), new[] { "1" }, record, CancellationToken.None);
         Assert.True(record[0].IsEmpty);
     }
 
@@ -275,7 +285,7 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         try
         {
             var record = new ReadOnlyMemory<byte>[1];
-            await store.GetAsync(new CacheKeyspace("item_store", "item", EntityKeyType.Int64), new[] { EntityKey.FromInt64(1) }, record, CancellationToken.None);
+            await store.GetAsync(new CacheKeyspace("item_store", "item", EntityKeyType.Int64), new[] { "1" }, record, CancellationToken.None);
             answer = "the read succeeded";
         }
         catch (Exception ex)
@@ -692,8 +702,7 @@ internal sealed class RecordedStores(IFeatureCacheStoreFactory inner) : IFeature
         return new Store(inner.Create(context), this);
     }
 
-    private static string Name(CacheKeyspace keyspace, in EntityKey key) =>
-        keyspace.Prefix + (key.StringValue ?? key.Int64Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    private static string Name(CacheKeyspace keyspace, string key) => keyspace.Prefix + key;
 
     private sealed class Store(IFeatureCacheStore store, RecordedStores recorded) : IFeatureCacheStore, ILoadable, IAsyncDisposable
     {
@@ -702,7 +711,7 @@ internal sealed class RecordedStores(IFeatureCacheStoreFactory inner) : IFeature
         public ValueTask LoadAsync(CancellationToken cancellationToken) =>
             store is ILoadable loadable ? loadable.LoadAsync(cancellationToken) : ValueTask.CompletedTask;
 
-        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<EntityKey> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
+        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
         {
             foreach (var key in keys.Span)
             {

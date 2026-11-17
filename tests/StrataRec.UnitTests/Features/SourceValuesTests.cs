@@ -61,7 +61,7 @@ public class SourceValuesTests
         var held = new TaskCompletionSource<FetchStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
-            if (keys.CandidateKeys.Span[0].Int64Value == 5)
+            if (keys.Keys.Span[0].Int64Value == 5)
             {
                 return new ValueTask<FetchStatus>(held.Task);
             }
@@ -94,7 +94,7 @@ public class SourceValuesTests
         // Chunks [1, 2], [3, 4], [5]: the first answers, the second fails, the third answers in part, with nothing for 5.
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
-            switch (keys.CandidateKeys.Span[0].Int64Value)
+            switch (keys.Keys.Span[0].Int64Value)
             {
                 case 3:
                     return ValueTask.FromResult(FetchStatus.Failed("values_partial is down"));

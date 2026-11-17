@@ -327,7 +327,7 @@ public class ListElementFeatureTests
         using var document = JsonDocument.Parse(json);
         var connector = new MemoryFeatureConnector(document.RootElement);
         var staging = new StagingBuffer(fields, keys.Length, new RequestMemory());
-        var batch = new EntityKeyBatch { Shape = KeyShape.Many, CandidateKeys = keys.Select(EntityKey.FromInt64).ToArray() };
+        var batch = new EntityKeyBatch(keys.Select(EntityKey.FromInt64).ToArray());
         var status = connector.FetchAsync(batch, fields, staging, CancellationToken.None).AsTask().GetAwaiter().GetResult();
         Assert.Equal(FetchOutcome.Ok, status.Outcome);
         return staging;

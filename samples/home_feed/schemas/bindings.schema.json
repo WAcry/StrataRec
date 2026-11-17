@@ -244,7 +244,7 @@
                 "bootstrap": {},
                 "cache": {},
                 "data": {
-                  "description": "The records, by entity key: { \"10042\": { \"i_clk_7d\": 12.0 } }, or for a cross entity, context key to candidate key to fields. Not with data_file; without either, there are none."
+                  "description": "The records, by entity key: { \"10042\": { \"i_clk_7d\": 12.0 } }; for a key of several parts, one object level per part in the entity's key order, e.g. item, then country, then fields. Not with data_file; without either, there are none."
                 },
                 "data_file": {
                   "description": "A JSON file of the records, as data holds them: a path relative to the configuration directory, an absolute path or a file:// URI.",

@@ -6,7 +6,8 @@
   "request_schema": {
     "user_id":    { "type": "int64?" },
     "session_id": { "type": "string?" },
-    "surface":    { "type": "string" }
+    "surface":    { "type": "string" },
+    "country":    { "type": "string?" }
   },
   "columns": {
     "score.coarse": { "type": "float32", "default": 0.0 },
@@ -59,7 +60,10 @@
       "config": {
         "output_col": "score.final",
         "base_expr": "col.score.ctr",
-        "multipliers": { "quality": "1.0 + param.quality_weight * (1.0 - col.item.report_rate * 10.0)" }
+        "multipliers": {
+          "quality": "1.0 + param.quality_weight * (1.0 - col.item.report_rate * 10.0)",
+          "locale": "col.item_country.boost"
+        }
       }
     },
     "rank_sort": {

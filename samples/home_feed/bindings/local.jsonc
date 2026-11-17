@@ -13,6 +13,12 @@
       "mode": "local",
       "max_bytes": "16MiB",
       "bootstrap": { "source": "snapshot_files@1", "uri": "fixtures/author_snapshot" }
+    },
+    // Per-country boosts of items, keyed by [item, country]: a snapshot line's key is the array of both parts.
+    "item_country_store": {
+      "mode": "local",
+      "max_bytes": "4MiB",
+      "bootstrap": { "source": "snapshot_files@1", "uri": "fixtures/item_country_snapshot" }
     }
   },
   "models": {

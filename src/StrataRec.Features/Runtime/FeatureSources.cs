@@ -235,33 +235,40 @@ internal sealed class FeatureSourceResolver
 
     /// <summary>
     /// The supply of one (source, entity) group of <paramref name="supply"/>'s source; null (diagnosed) when the group
-    /// cannot be supplied that way: a connector without the group's key shape, an entity a local table cannot hold.
+    /// cannot be supplied that way: a connector that does not support the entity's key layout, fields a table cannot hold.
+    /// A table holds any key layout (design 6.6): <c>max_bytes</c> bounds its memory, and a cache's TTL and eviction its churn.
     /// </summary>
-    public GroupSupply? Group(SourceSupply supply, EntityDefinition entity, FeatureRuntimeInfo[] members, KeyShape shape) => supply.Mode switch
+    public GroupSupply? Group(SourceSupply supply, EntityDefinition entity, FeatureRuntimeInfo[] members) => supply.Mode switch
     {
-        SupplyMode.Fetch => SupportsShape(supply, entity, shape) ? GroupSupply.Fetch(supply.Connector!, supply.TimeoutMs, supply.MaxBatch) : null,
+        SupplyMode.Fetch => SupportsKey(supply, entity) ? GroupSupply.Fetch(supply.Connector!, supply.TimeoutMs, supply.MaxBatch) : null,
         SupplyMode.Local => LocalTable(supply, entity, members) is { } table ? GroupSupply.Local(table) : null,
-        SupplyMode.Cache => CacheGroup(supply, entity, members, shape),
+        SupplyMode.Cache => CacheGroup(supply, entity, members),
     };
 
-    private bool SupportsShape(SourceSupply supply, EntityDefinition entity, KeyShape shape)
+    /// <summary>
+    /// Whether the connector supports the entity's key layout (asked once, here): a connector that does not is a
+    /// <c>CONNECTOR_KEY</c> error at the binding, naming the layout, rather than a failure on the request path.
+    /// </summary>
+    private bool SupportsKey(SourceSupply supply, EntityDefinition entity)
     {
         var connector = supply.Connector!;
-        if (!connector.Supports(shape))
+        var layout = entity.KeyLayout;
+        if (!connector.Supports(layout))
         {
-            _diagnostics.Error("CONNECTOR_SHAPE", _artifact, supply.Pointer,
-                $"Connector '{connector.ConnectorType}' does not support {shape} lookups needed by entity '{entity.Name}'.");
+            _diagnostics.Error("CONNECTOR_KEY", _artifact, supply.Pointer,
+                $"Connector '{connector.ConnectorType}' of source '{supply.Name}' does not support the key of entity '{entity.Name}': {layout}.",
+                "bind the source to a connector that supports this key, or key the entity the way the connector reads it");
             return false;
         }
 
         return true;
     }
 
-    /// <summary>A cache group: its table (which also rejects a cross entity), its connector's key shape, and where a miss's
-    /// record takes each table field from.</summary>
-    private GroupSupply? CacheGroup(SourceSupply supply, EntityDefinition entity, FeatureRuntimeInfo[] members, KeyShape shape)
+    /// <summary>A cache group: its table, its connector's support of the key, and where a miss's record takes each table
+    /// field from.</summary>
+    private GroupSupply? CacheGroup(SourceSupply supply, EntityDefinition entity, FeatureRuntimeInfo[] members)
     {
-        if (LocalTable(supply, entity, members) is not { } table || !SupportsShape(supply, entity, shape))
+        if (LocalTable(supply, entity, members) is not { } table || !SupportsKey(supply, entity))
         {
             return null;
         }
@@ -279,20 +286,11 @@ internal sealed class FeatureSourceResolver
 
     /// <summary>
     /// The table of one (source, entity) group of a local or cache source and the table field of each member; null
-    /// (diagnosed) when the entity cannot be held in a table or the features disagree on a field's type.
+    /// (diagnosed) when the features disagree on a field's type.
     /// </summary>
     private LocalGroupTable? LocalTable(SourceSupply supply, EntityDefinition entity, FeatureRuntimeInfo[] members)
     {
         var pointer = supply.Pointer;
-        var mode = ModeName(supply.Mode);
-        if (entity.Kind == EntityKind.Cross)
-        {
-            _diagnostics.Error("LOCAL_CROSS_ENTITY", _artifact, pointer + "/mode",
-                $"Source '{supply.Name}' is bound with mode '{mode}', but feature '{members[0].Definition.Name}' reads it for cross entity '{entity.Name}'. " +
-                LocalTableSchema.CrossEntityMessage(entity.Name), "bind the source with mode 'fetch'");
-            return null;
-        }
-
         var tableMode = supply.Mode switch
         {
             SupplyMode.Local => LocalTableMode.Local,

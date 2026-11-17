@@ -119,10 +119,10 @@ internal sealed class RunReplay : IFeatureCallHook
         lock (_gate)
         {
             var source = group.SourceName;
-            var keys = batch.CandidateKeys.Span;
-            var context = batch.Shape == KeyShape.Many ? default : batch.ContextKey;
-            var rows = batch.KeyCount;
-            var entry = TakeFeatureCall(source, group.Entity.Name, batch.Shape, context, keys, fields);
+            var parts = batch.PartCount;
+            var keys = Flatten(batch);
+            var rows = batch.Count;
+            var entry = TakeFeatureCall(source, group.Entity.Name, parts, keys, fields);
             if (entry is not null)
             {
                 return ReplayExact(entry, batch, fields, writer);
@@ -137,7 +137,7 @@ internal sealed class RunReplay : IFeatureCallHook
                 GapCounter? gap = null;
                 for (var r = 0; r < rows; r++)
                 {
-                    var rowKey = RowKeyOf(batch.Shape, context, keys, r);
+                    var rowKey = RowKeyOf(parts, keys, r);
                     if (store is not null && store.TryGetValue(rowKey, out var byField) && byField.TryGetValue(name, out var value))
                     {
                         if (value.IsMissing)
@@ -294,7 +294,7 @@ internal sealed class RunReplay : IFeatureCallHook
     private FetchStatus ReplayExact(FeatureEntry entry, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields, IFeatureBatchWriter writer)
     {
         var source = entry.Source;
-        var rows = batch.KeyCount;
+        var rows = batch.Count;
         if (entry.Outcome is not (IoOutcome.Ok or IoOutcome.Partial))
         {
             foreach (var field in fields)
@@ -316,7 +316,7 @@ internal sealed class RunReplay : IFeatureCallHook
                 var gap = Gap("feature", source, name, "not_recorded");
                 for (var r = 0; r < rows; r++)
                 {
-                    gap.Add(1, RowKeyOf(entry.Shape, entry.Context, entry.Keys, r).ToString());
+                    gap.Add(1, RowKeyOf(entry.PartCount, entry.Keys, r).ToString());
                 }
             }
             else
@@ -331,7 +331,7 @@ internal sealed class RunReplay : IFeatureCallHook
                     else if (!TryWrite(writer, f, r, fields[f].Type, values[r]))
                     {
                         missing++;
-                        AddGap("feature", source, name, "type_changed", 1, RowKeyOf(entry.Shape, entry.Context, entry.Keys, r).ToString());
+                        AddGap("feature", source, name, "type_changed", 1, RowKeyOf(entry.PartCount, entry.Keys, r).ToString());
                     }
                 }
             }
@@ -343,20 +343,20 @@ internal sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// The first unconsumed recorded call with the same source, entity, shape and keys that carries every requested
+    /// The first unconsumed recorded call with the same source, entity and keys (tuple by tuple) that carries every requested
     /// field. A call carrying only some is not this call: its other fields may well be in other successful calls (the
     /// configuration regrouped the fetch), so the call is synthesized value by value instead, and nothing is consumed.
     /// </summary>
-    private FeatureEntry? TakeFeatureCall(string source, string entity, KeyShape shape, in EntityKey context, ReadOnlySpan<EntityKey> keys, ImmutableArray<CompiledFieldBinding> fields)
+    private FeatureEntry? TakeFeatureCall(string source, string entity, int partCount, ReadOnlySpan<EntityKey> keys, ImmutableArray<CompiledFieldBinding> fields)
     {
-        if (!_featureCalls.TryGetValue(Signature(source, entity, shape, context, keys), out var candidates))
+        if (!_featureCalls.TryGetValue(Signature(source, entity, partCount, keys), out var candidates))
         {
             return null;
         }
 
         foreach (var entry in candidates)
         {
-            if (entry.Consumed || entry.Source != source || entry.Entity != entity || entry.Shape != shape || entry.Context != context
+            if (entry.Consumed || entry.Source != source || entry.Entity != entity || entry.PartCount != partCount
                 || !entry.Keys.AsSpan().SequenceEqual(keys) || !HasFields(entry, fields))
             {
                 continue;
@@ -676,22 +676,31 @@ internal sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    private static RowKey RowKeyOf(KeyShape shape, in EntityKey context, ReadOnlySpan<EntityKey> keys, int row) => shape switch
-    {
-        KeyShape.Single => new RowKey(context, default),
-        KeyShape.Many => new RowKey(default, keys[row]),
-        _ => new RowKey(context, keys[row]),
-    };
+    private static RowKey RowKeyOf(int partCount, EntityKey[] keys, int row) => new(keys.AsSpan(row * partCount, partCount));
 
-    private static ulong Signature(string source, string entity, KeyShape shape, in EntityKey context, ReadOnlySpan<EntityKey> keys)
+    /// <summary>A batch's keys flattened, key r's parts at <c>r * PartCount</c>: as a recording holds them.</summary>
+    private static EntityKey[] Flatten(in EntityKeyBatch batch)
+    {
+        var keys = new EntityKey[batch.Count * batch.PartCount];
+        for (var r = 0; r < batch.Count; r++)
+        {
+            for (var p = 0; p < batch.PartCount; p++)
+            {
+                keys[(r * batch.PartCount) + p] = batch.Key(r, p);
+            }
+        }
+
+        return keys;
+    }
+
+    private static ulong Signature(string source, string entity, int partCount, ReadOnlySpan<EntityKey> keys)
     {
         var builder = default(StableHash.Builder);
         try
         {
             builder.Add(source);
             builder.Add(entity);
-            builder.AddIndex((int)shape);
-            AddKey(ref builder, context);
+            builder.AddIndex(partCount);
             builder.AddIndex(keys.Length);
             foreach (var key in keys)
             {
@@ -780,16 +789,8 @@ internal sealed class RunReplay : IFeatureCallHook
         {
             var call = run.FeatureCalls[c];
             var at = $"{pointer}/feature_calls/{c}";
-            var shape = call.Shape switch
-            {
-                "single" => KeyShape.Single,
-                "many" => KeyShape.Many,
-                "cross" => KeyShape.Cross,
-                _ => throw new ReplayBundleException(at + "/shape", $"unknown shape '{call.Shape}'", "use single, many or cross"),
-            };
-            var context = shape == KeyShape.Many || call.ContextKey is not { } contextKey ? default : ReplayJson.Key(contextKey, at + "/context_key");
-            var keys = shape == KeyShape.Single ? Array.Empty<EntityKey>() : ReplayJson.Keys(call.Keys, at + "/keys");
-            var rows = shape == KeyShape.Single ? 1 : keys.Length;
+            var keys = ReplayJson.KeyTuples(call.Keys, at + "/keys", out var parts);
+            var rows = keys.Length / parts;
             var names = new string[call.Fields.Count];
             var types = new ColumnType[call.Fields.Count];
             for (var f = 0; f < names.Length; f++)
@@ -819,8 +820,8 @@ internal sealed class RunReplay : IFeatureCallHook
                 }
             }
 
-            var entry = new FeatureEntry(call.Source, call.Entity, shape, context, keys, outcome, call.Error, call.FailedKeys, names, values);
-            var signature = Signature(call.Source, call.Entity, shape, context, keys);
+            var entry = new FeatureEntry(call.Source, call.Entity, parts, keys, outcome, call.Error, call.FailedKeys, names, values);
+            var signature = Signature(call.Source, call.Entity, parts, keys);
             if (!_featureCalls.TryGetValue(signature, out var list))
             {
                 list = new List<FeatureEntry>();
@@ -841,7 +842,7 @@ internal sealed class RunReplay : IFeatureCallHook
 
             for (var r = 0; r < rows; r++)
             {
-                var rowKey = RowKeyOf(shape, context, keys, r);
+                var rowKey = RowKeyOf(parts, keys, r);
                 if (!store.TryGetValue(rowKey, out var byField))
                 {
                     byField = new Dictionary<string, ScalarValue>(StringComparer.Ordinal);
@@ -917,25 +918,47 @@ internal sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    /// <summary>The staging row a recorded value belongs to: context key, candidate key, or both (cross shapes).</summary>
-    private readonly record struct RowKey(EntityKey Context, EntityKey Candidate)
+    /// <summary>The staging row a recorded value belongs to: its key's parts, compared part by part.</summary>
+    private readonly struct RowKey : IEquatable<RowKey>
     {
-        public override string ToString() =>
-            Context == default ? Candidate.ToString() : Candidate == default ? Context.ToString() : Context + "/" + Candidate;
+        private readonly EntityKey[] _parts;
+
+        public RowKey(ReadOnlySpan<EntityKey> parts)
+        {
+            _parts = parts.ToArray();
+        }
+
+        public bool Equals(RowKey other) => _parts.AsSpan().SequenceEqual(other._parts);
+
+        public override bool Equals(object? obj) => obj is RowKey other && Equals(other);
+
+        public override int GetHashCode()
+        {
+            var hash = default(HashCode);
+            foreach (var part in _parts)
+            {
+                hash.Add(part);
+            }
+
+            return hash.ToHashCode();
+        }
+
+        /// <summary>A one-part key's value, or the parts joined by <c>/</c>.</summary>
+        public override string ToString() => string.Join('/', _parts);
     }
 
     private sealed class FeatureEntry(
-        string source, string entity, KeyShape shape, EntityKey context, EntityKey[] keys, IoOutcome outcome, string? error, int failedKeys,
+        string source, string entity, int partCount, EntityKey[] keys, IoOutcome outcome, string? error, int failedKeys,
         string[] fieldNames, ScalarValue[][]? values)
     {
         public string Source { get; } = source;
 
         public string Entity { get; } = entity;
 
-        public KeyShape Shape { get; } = shape;
+        /// <summary>Parts of every key.</summary>
+        public int PartCount { get; } = partCount;
 
-        public EntityKey Context { get; } = context;
-
+        /// <summary>The keys flattened: key r's parts at <c>r * PartCount</c>.</summary>
         public EntityKey[] Keys { get; } = keys;
 
         public IoOutcome Outcome { get; } = outcome;

@@ -211,8 +211,13 @@ public sealed class EngineLifecycleTests
     }
 
     /// <summary>A copy of the sample whose <c>author_store</c> is loaded by <see cref="GatedSources"/>.</summary>
-    private static string Workspace() => HomeFeedTestHost.LoadModified(root => SampleBindings.Rebind(root, "author_store",
-        $$"""{ "mode": "local", "max_bytes": "16MiB", "bootstrap": { "source": "{{GatedSources.Type}}" } }""")).Root;
+    /// <summary>The sample with its author table loaded by <see cref="GatedSources"/>, and its other table's source,
+    /// item_country_store, fetched instead (from no records): these tests are about one table's lifecycle.</summary>
+    private static string Workspace() => HomeFeedTestHost.LoadModified(root =>
+    {
+        SampleBindings.Rebind(root, "author_store", $$"""{ "mode": "local", "max_bytes": "16MiB", "bootstrap": { "source": "{{GatedSources.Type}}" } }""");
+        SampleBindings.Rebind(root, "item_country_store", $$"""{ "connector": "memory@1", "timeout_ms": {{HomeFeedTestHost.UntimedMs}} }""");
+    }).Root;
 
     /// <summary>Author 100's followers in the table the engine's served plan reads.</summary>
     private static double Followers(RecEngine engine)

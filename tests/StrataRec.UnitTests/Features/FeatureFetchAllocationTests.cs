@@ -3,6 +3,7 @@ using StrataRec.Core.Columns;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
+using StrataRec.Features.Catalog;
 using StrataRec.Features.Connectors;
 using StrataRec.Features.Runtime;
 
@@ -91,14 +92,92 @@ public class FeatureFetchAllocationTests
         Assert.True(small <= 0 && large <= 0, $"100 keys: {small} B, {Items} keys: {large} B beyond an ensure with nothing to read");
     }
 
+    [Fact]
+    public void CompositeKeyLocalRead_AllocatesNothing_AtAnyKeyCount()
+    {
+        // Keys of two parts, both ways their parts can vary: [entity_id, ctx.request.country] (a shared request part beside
+        // one column: one value per row deduplicated) and [entity_id, item.category] (two varying parts: the tuple index,
+        // encoded, hashed and compared per key). Neither may cost an object per key.
+        const int Items = 4_000;
+        var byCountry = EntityDefinition.Of(
+            "item_country", EntityKeyPartDefinition.EntityId(EntityKeyType.Int64), EntityKeyPartDefinition.RequestInput("country", EntityKeyType.String));
+        var byCategory = EntityDefinition.Of(
+            "item_category", EntityKeyPartDefinition.EntityId(EntityKeyType.Int64), EntityKeyPartDefinition.Feature("item.category", EntityKeyType.String));
+        var rig = new FeatureTestRig().LocalSource("item_store", writer =>
+        {
+            for (var id = 1; id <= Items; id++)
+            {
+                var builder = writer.Begin(id, 1);
+                builder.Set(writer.Schema.FieldIndex("category"), ScalarValue.FromString("c" + (id % 5)));
+                builder.Commit();
+            }
+        }).LocalSource("ic_store", writer =>
+        {
+            for (var id = 1; id <= Items; id += 2) // odd items only: half the keys miss
+            {
+                var builder = writer.Begin([EntityKey.FromInt64(id), EntityKey.FromString("US")], 1);
+                builder.Set(writer.Schema.FieldIndex("boost"), ScalarValue.FromFloat64(id));
+                builder.Commit();
+            }
+        }).LocalSource("icat_store", writer =>
+        {
+            for (var id = 1; id <= Items; id++)
+            {
+                var builder = writer.Begin([EntityKey.FromInt64(id), EntityKey.FromString("c" + (id % 5))], 1);
+                builder.Set(writer.Schema.FieldIndex("score"), ScalarValue.FromFloat64(id * 0.5));
+                builder.Commit();
+            }
+        });
+        var country = rig.RequestInput("country");
+        var features = new[]
+        {
+            rig.Physical("item_category.score", byCategory, ColumnType.Float64, "icat_store"),
+            rig.Physical("item.category", FeatureTestRig.Item, ColumnType.String, "item_store"),
+            rig.Physical("item_country.boost", byCountry, ColumnType.Float64, "ic_store", ScalarValue.FromFloat64(-1)),
+        };
+        rig.Build();
+
+        void Check(TestRequest request)
+        {
+            Assert.Equal(0.5, request.Value(features[0], 0).AsFloat64()); // item 1, category c1
+            Assert.Equal(1.0, request.Value(features[2], 0).AsFloat64()); // item 1 in US
+            Assert.Equal(-1.0, request.Value(features[2], 1).AsFloat64()); // item 2 has no US record
+        }
+
+        var small = MeasureLocalRead(rig, features, 100, request => request.Context[country] = ScalarValue.FromString("US"), Check);
+        var large = MeasureLocalRead(rig, features, Items, request => request.Context[country] = ScalarValue.FromString("US"), Check);
+
+        Assert.True(small <= 0 && large <= 0, $"100 keys: {small} B, {Items} keys: {large} B beyond an ensure with nothing to read");
+    }
+
+    [Fact]
+    public void CompositeKeyFetch_AllocationDoesNotGrowWithTheKeyCount()
+    {
+        // [entity_id, ctx.request.country]: the batch carries the country once, the rows' ids deduplicated as one part.
+        var byCountry = EntityDefinition.Of(
+            "item_country", EntityKeyPartDefinition.EntityId(EntityKeyType.Int64), EntityKeyPartDefinition.RequestInput("country", EntityKeyType.String));
+        var rig = new FeatureTestRig().Source("ic_store", new SynchronousConnector(), maxBatch: 10_000);
+        var country = rig.RequestInput("country");
+        var score = rig.Physical("item_country.score", byCountry, ColumnType.Float64, "ic_store");
+        var clicks = rig.Physical("item_country.clicks", byCountry, ColumnType.Float32, "ic_store", ScalarValue.FromFloat64(0));
+        rig.Build();
+
+        var smallBytes = Measure(rig, [score, clicks], 100, request => request.Context[country] = ScalarValue.FromString("US"));
+        var largeBytes = Measure(rig, [score, clicks], 4_000, request => request.Context[country] = ScalarValue.FromString("US"));
+
+        Assert.True(largeBytes - smallBytes < 1024, $"100 keys: {smallBytes} B, 4000 keys: {largeBytes} B");
+    }
+
     /// <summary>Bytes the first ensure of <paramref name="features"/> allocates beyond a second one: best of three after a warm-up.</summary>
-    private static long MeasureLocalRead(FeatureTestRig rig, int[] features, int keys)
+    private static long MeasureLocalRead(
+        FeatureTestRig rig, int[] features, int keys, Action<TestRequest>? setup = null, Action<TestRequest>? check = null)
     {
         var candidates = Enumerable.Range(1, keys).Select(i => (long)i).ToArray();
         var best = long.MaxValue;
         for (var round = 0; round < 4; round++)
         {
             var request = rig.NewRequest(candidates);
+            setup?.Invoke(request);
             foreach (var feature in features)
             {
                 request.Table.GetOrCreateSlot(rig.SlotOf(feature)); // the columns exist before any read, as after a fetch
@@ -113,10 +192,18 @@ public class FeatureFetchAllocationTests
 
             Assert.True(read.IsCompletedSuccessfully && again.IsCompletedSuccessfully);
             Assert.Equal(FeatureState.Ok, read.Result.State);
-            Assert.Equal(0.5, request.Value(features[0], 0).AsFloat64());
-            Assert.True(request.Value(features[0], 1).IsMissing); // item 2 has no record
-            Assert.Equal(-1.0, request.Value(features[4], 1).AsFloat64()); // item 2 has no record, so no author
-            Assert.Equal(10.0, request.Value(features[4], 0).AsFloat64()); // item 1: author 1
+            if (check is not null)
+            {
+                check(request);
+            }
+            else
+            {
+                Assert.Equal(0.5, request.Value(features[0], 0).AsFloat64());
+                Assert.True(request.Value(features[0], 1).IsMissing); // item 2 has no record
+                Assert.Equal(-1.0, request.Value(features[4], 1).AsFloat64()); // item 2 has no record, so no author
+                Assert.Equal(10.0, request.Value(features[4], 0).AsFloat64()); // item 1: author 1
+            }
+
             request.Memory.Release();
             if (round > 0)
             {
@@ -163,7 +250,7 @@ public class FeatureFetchAllocationTests
     /// the best of three rounds after a warm-up. The first rents fill the array pool and JIT-compile the path; an
     /// allocation per key or per chunk shows up in every round.
     /// </summary>
-    private static long Measure(FeatureTestRig rig, int[] features, int keys)
+    private static long Measure(FeatureTestRig rig, int[] features, int keys, Action<TestRequest>? setup = null)
     {
         var candidates = Enumerable.Range(1, keys).Select(i => (long)i).ToArray();
         var best = long.MaxValue;
@@ -171,6 +258,7 @@ public class FeatureFetchAllocationTests
         {
             var before = GC.GetAllocatedBytesForCurrentThread();
             var request = rig.NewRequest(candidates);
+            setup?.Invoke(request);
             var fill = request.Fetcher.EnsureAsync(features, CancellationToken.None);
             var completed = fill.IsCompletedSuccessfully; // memory@1 without latency: everything ran on this thread
             var state = completed ? fill.Result.State : FeatureState.Failed;
@@ -195,12 +283,12 @@ public class FeatureFetchAllocationTests
     {
         public string ConnectorType => TestConnectorFactory.Type;
 
-        public bool Supports(KeyShape shape) => shape == KeyShape.Many;
+        public bool Supports(EntityKeyLayout layout) => !layout[0].IsShared; // keyed by the first part
 
         public ValueTask<FetchStatus> FetchAsync(
             EntityKeyBatch keys, ReadOnlyMemory<CompiledFieldBinding> fields, IFeatureBatchWriter writer, CancellationToken cancellationToken)
         {
-            var span = keys.CandidateKeys.Span;
+            var span = keys.Part(0).Span;
             foreach (var field in fields.Span)
             {
                 for (var k = 0; k < span.Length; k++)

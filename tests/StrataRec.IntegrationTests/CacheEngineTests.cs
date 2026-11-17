@@ -97,7 +97,7 @@ public sealed class CacheEngineTests
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Same(table, ItemTable(engine));
-        Assert.Equal(2, engine.Bindings.TableCount); // item_store's and the sample's local author_store, none left over
+        Assert.Equal(3, engine.Bindings.TableCount); // item_store's and the sample's local author_store and item_country_store, none left over
         Assert.True(read.Keys("local", "miss") == 0 && read.Keys("local", "hit") > 0, read.ToString());
         Assert.Equal(0, read.ConnectorKeys);
     }
@@ -122,7 +122,7 @@ public sealed class CacheEngineTests
         Assert.True(result.Succeeded, result.Error);
         Assert.True(read.Keys("local", "miss") >= 1 && read.ConnectorKeys >= 1, read.ToString());
         Assert.NotSame(ItemTable(first), ItemTable(second));
-        Assert.Equal(4, host.TableCount); // item_store's and the sample's local author_store, for each engine
+        Assert.Equal(6, host.TableCount); // item_store's and the sample's local author_store and item_country_store, for each engine
     }
 
     [Fact]
@@ -336,7 +336,7 @@ internal sealed class SharedStores : IFeatureCacheStoreFactory
             return ValueTask.CompletedTask;
         }
 
-        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<EntityKey> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
+        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
         {
             for (var i = 0; i < keys.Length; i++)
             {
@@ -368,7 +368,6 @@ internal sealed class SharedStores : IFeatureCacheStoreFactory
             return ValueTask.CompletedTask;
         }
 
-        private static string Name(CacheKeyspace keyspace, in EntityKey key) =>
-            keyspace.Prefix + (key.StringValue ?? key.Int64Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        private static string Name(CacheKeyspace keyspace, string key) => keyspace.Prefix + key;
     }
 }

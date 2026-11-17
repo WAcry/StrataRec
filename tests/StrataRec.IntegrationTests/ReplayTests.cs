@@ -81,8 +81,8 @@ public sealed class ReplayTests
         Assert.All(run.CandidateCalls, c => Assert.Equal("ok", c.Status));
         var items = run.FeatureCalls.Where(c => c.Source == "item_store").ToList();
         Assert.True(items.Count >= 3, "max_batch 25 splits the 59 recalled items into chunks");
-        Assert.All(items, c => Assert.InRange(c.Keys!.Value.GetArrayLength(), 1, 25));
-        Assert.All(items, c => Assert.All(c.Values!, v => Assert.Equal(c.Keys!.Value.GetArrayLength(), v.Value.GetArrayLength())));
+        Assert.All(items, c => Assert.InRange(c.Keys.GetArrayLength(), 1, 25));
+        Assert.All(items, c => Assert.All(c.Values!, v => Assert.Equal(c.Keys.GetArrayLength(), v.Value.GetArrayLength())));
         Assert.Equal(Enumerable.Range(0, run.FeatureCalls.Count + run.CandidateCalls.Count + run.ModelCalls.Count),
             run.FeatureCalls.Select(c => c.Seq).Concat(run.CandidateCalls.Select(c => c.Seq)).Concat(run.ModelCalls.Select(c => c.Seq)).Order());
         var model = Assert.Single(run.ModelCalls);
@@ -173,8 +173,8 @@ public sealed class ReplayTests
         Assert.All(recorded.Items, i => Assert.True(double.IsNaN(i.Columns["undefined"].AsFloat64())));
 
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!));
-        var embedding = bundle.Runs[0].FeatureCalls.Single(c => c.Fields.Any(f => f.Name == "i_emb") && c.Keys!.Value.EnumerateArray().Any(k => k.GetInt64() == 1));
-        var row = embedding.Keys!.Value.EnumerateArray().Select(k => k.GetInt64()).ToList().IndexOf(1);
+        var embedding = bundle.Runs[0].FeatureCalls.Single(c => c.Fields.Any(f => f.Name == "i_emb") && c.Keys.EnumerateArray().Any(k => k.GetInt64() == 1));
+        var row = embedding.Keys.EnumerateArray().Select(k => k.GetInt64()).ToList().IndexOf(1);
         Assert.Equal("\"Infinity\"", embedding.Values!["i_emb"][row][0].GetRawText());
         Assert.All(bundle.Result.Items, i => Assert.Equal("\"NaN\"", i.Columns["undefined"]!.Value.GetRawText()));
 

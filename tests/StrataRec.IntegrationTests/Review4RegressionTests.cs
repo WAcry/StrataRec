@@ -103,7 +103,7 @@ public sealed class Review4RegressionTests
             { "experiment_id": "exp_inputs", "pipeline_id": "home_feed", "owner": "t", "description": "d", "expires_at": "2099-01-01",
               "arms": { "control": {}, "swap": { "nodes": { "ctr_ranker": { "config": { "inputs": { "log_followers": "col.item.smoothed_ctr" } } } } } } }
             """), "inputs");
-        var compilation = PlanCompiler.Compile(With(host.Request, swap), host.Environment);
+        var compilation = host.Compile(With(host.Request, swap)); // with its tables loaded, as the engine serves it
         Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
         var plan = compilation.Plan!;
         var executor = new PipelineExecutor();

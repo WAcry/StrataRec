@@ -45,7 +45,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     private bool _ignored;
     private long _recordVersion;
     private long _indexKey;
-    private char[] _key = new char[32];
+    private byte[] _key = new byte[64]; // a hashed key's canonical bytes (TableKeys); empty for a one-part int64 key
     private int _keyLength;
     private TableVersion? _probedVersion;
     private IndexTable? _probedIndex;
@@ -99,12 +99,13 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     public RecordBuilder Begin(ReadOnlySpan<char> key, long version)
     {
         RequireKeyType(EntityKeyType.String);
-        SetKey(key);
-        return BeginCore(_version.Hash(key), version);
+        return BeginCore(SetKey(MemoryMarshal.AsBytes(key)), version);
     }
 
     public RecordBuilder Begin(in EntityKey key, long version) =>
         key.StringValue is { } s ? Begin(s.AsSpan(), version) : Begin(key.Int64Value, version);
+
+    public RecordBuilder Begin(ReadOnlySpan<EntityKey> key, long version) => BeginCore(SetKey(key), version);
 
     public bool Delete(long key, long version)
     {
@@ -116,12 +117,13 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     public bool Delete(ReadOnlySpan<char> key, long version)
     {
         RequireKeyType(EntityKeyType.String);
-        SetKey(key);
-        return DeleteCore(_version.Hash(key), version);
+        return DeleteCore(SetKey(MemoryMarshal.AsBytes(key)), version);
     }
 
     public bool Delete(in EntityKey key, long version) =>
         key.StringValue is { } s ? Delete(s.AsSpan(), version) : Delete(key.Int64Value, version);
+
+    public bool Delete(ReadOnlySpan<EntityKey> key, long version) => DeleteCore(SetKey(key), version);
 
     public void Checkpoint(UpdatePosition position)
     {
@@ -441,7 +443,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             cursor += RecordLayout.Align(count * elementSize, 8);
         }
 
-        if (_layout.StringKeys)
+        if (_layout.HashedKeys)
         {
             WriteKey(page, offset, cursor);
         }
@@ -498,7 +500,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         }
 
         var newKey = _oldPosition == 0;
-        var size = _layout.HeaderSize + (_layout.StringKeys ? RecordLayout.Align(2 * _keyLength, 8) : 0);
+        var size = _layout.HeaderSize + (_layout.HashedKeys ? RecordLayout.Align(_keyLength, 8) : 0);
         EnsureBudget(size, newKey, strings: false);
         ReprobeIfMoved(newKey);
         var oldPage = OldRecord(out var oldOffset);
@@ -510,7 +512,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         BinaryPrimitives.WriteInt64LittleEndian(header, version);
         BinaryPrimitives.WriteInt32LittleEndian(header[RecordLayout.LengthOffset..], size);
         header[RecordLayout.FlagsOffset] = RecordLayout.TombstoneFlag;
-        if (_layout.StringKeys)
+        if (_layout.HashedKeys)
         {
             WriteKey(page, offset, _layout.HeaderSize);
         }
@@ -595,9 +597,9 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             size += RecordLayout.Align(count * _layout.ElementSizes[f], 8);
         }
 
-        if (_layout.StringKeys)
+        if (_layout.HashedKeys)
         {
-            size += RecordLayout.Align(2L * _keyLength, 8);
+            size += RecordLayout.Align((long)_keyLength, 8);
         }
 
         if (size > int.MaxValue / 2)
@@ -906,7 +908,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         var refAt = offset + _layout.KeyRefOffset;
         BinaryPrimitives.WriteInt32LittleEndian(page.AsSpan(refAt), cursor);
         BinaryPrimitives.WriteInt32LittleEndian(page.AsSpan(refAt + 4), _keyLength);
-        _key.AsSpan(0, _keyLength).CopyTo(MemoryMarshal.Cast<byte, char>(page.AsSpan(offset + cursor, 2 * _keyLength)));
+        _key.AsSpan(0, _keyLength).CopyTo(page.AsSpan(offset + cursor, _keyLength));
     }
 
     private int Encode(ReadOnlySpan<char> value)
@@ -926,15 +928,45 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         }
     }
 
-    private void SetKey(ReadOnlySpan<char> key)
+    /// <summary>Holds a hashed key's canonical bytes for the record being written; returns their hash, the index key.</summary>
+    private long SetKey(ReadOnlySpan<byte> key)
     {
-        if (key.Length > _key.Length)
-        {
-            _key = new char[Math.Max(key.Length, _key.Length * 2)];
-        }
-
+        EnsureKeyRoom(key.Length);
         key.CopyTo(_key);
         _keyLength = key.Length;
+        return _version.Hash(key);
+    }
+
+    /// <summary>
+    /// Holds a key given by its parts: its canonical bytes for a hashed key, nothing for a one-part int64 key. Returns the
+    /// index key (the int64 itself, or the bytes' hash).
+    /// </summary>
+    /// <exception cref="ArgumentException">The parts are not a key of the table's layout: wrong count or a part's type.</exception>
+    private long SetKey(ReadOnlySpan<EntityKey> key)
+    {
+        var layout = Schema.Key;
+        if (TableKeys.Check(layout, key) is { } problem)
+        {
+            throw new ArgumentException($"Local table {Schema.Source}/{Schema.Entity}: {problem}.", nameof(key));
+        }
+
+        if (!_layout.HashedKeys)
+        {
+            _keyLength = 0;
+            return key[0].Int64Value;
+        }
+
+        EnsureKeyRoom(TableKeys.Length(key));
+        _keyLength = TableKeys.Encode(key, _key);
+        return _version.Hash(_key.AsSpan(0, _keyLength));
+    }
+
+    private void EnsureKeyRoom(int length)
+    {
+        if (length > _key.Length)
+        {
+            _key = new byte[Math.Max(length, _key.Length * 2)];
+        }
     }
 
     private int AppendChars(ReadOnlySpan<char> value)
@@ -1042,8 +1074,8 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         if (Schema.KeyType != keyType)
         {
             throw new InvalidOperationException(
-                $"Local table {Schema.Source}/{Schema.Entity} is keyed by {(Schema.KeyType == EntityKeyType.Int64 ? "int64" : "string")}, not " +
-                $"{(keyType == EntityKeyType.Int64 ? "int64" : "string")}.");
+                $"Local table {Schema.Source}/{Schema.Entity} is keyed by {Schema.Key.TypeText}, not {EntityKeyLayout.TypeName(keyType)}" +
+                (Schema.Key.PartCount > 1 ? "; write a key of several parts with Begin/Delete(ReadOnlySpan<EntityKey>, long)." : "."));
         }
     }
 

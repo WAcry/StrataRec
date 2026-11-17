@@ -93,8 +93,8 @@ public sealed class RowSourceFallbackTests
         var run = failing.Recording!.Runs[0];
         var attempt = run.CandidateCalls.Single(c => c.Source == "extra_primary").Seq;
         var items = run.FeatureCalls.Where(c => c.Source == "item_store").ToList();
-        var prefetched = items.Where(c => c.Seq < attempt).SelectMany(c => c.Keys!.Value.EnumerateArray().Select(k => k.GetInt64())).ToList();
-        var after = items.Where(c => c.Seq > attempt).SelectMany(c => c.Keys!.Value.EnumerateArray().Select(k => k.GetInt64())).ToList();
+        var prefetched = items.Where(c => c.Seq < attempt).SelectMany(c => c.Keys.EnumerateArray().Select(k => k.GetInt64())).ToList();
+        var after = items.Where(c => c.Seq > attempt).SelectMany(c => c.Keys.EnumerateArray().Select(k => k.GetInt64())).ToList();
         Assert.Equal(47, prefetched.Count); // recall's candidates
         Assert.Empty(prefetched.Intersect(new long[] { 42, 43, 45, 48, 49 }));
         Assert.Subset(after.ToHashSet(), new HashSet<long> { 43, 45, 48, 49 });

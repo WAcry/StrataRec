@@ -532,7 +532,7 @@ internal static class TimerFaultChild
         {
             public string ConnectorType => Type;
 
-            public bool Supports(KeyShape shape) => inner.Supports(shape);
+            public bool Supports(EntityKeyLayout layout) => inner.Supports(layout);
 
             public ValueTask<FetchStatus> FetchAsync(EntityKeyBatch keys, ReadOnlyMemory<CompiledFieldBinding> fields, IFeatureBatchWriter writer,
                 CancellationToken cancellationToken) => new(Hang<FetchStatus>(cancellationToken));

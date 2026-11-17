@@ -359,7 +359,7 @@ public class FeatureRuntimeReviewRegressionTests
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
             ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 10.0);
-            if (keys.CandidateKeys.Span[0].Int64Value == 1)
+            if (keys.Keys.Span[0].Int64Value == 1)
             {
                 throw new InvalidOperationException("connection reset after the first record");
             }
@@ -603,7 +603,7 @@ public class FeatureRuntimeReviewRegressionTests
         var release = new TaskCompletionSource();
         var connector = new ScriptedConnector(async (keys, fields, writer, _) =>
         {
-            if (keys.CandidateKeys.Span[0].Int64Value == 1)
+            if (keys.Keys.Span[0].Int64Value == 1)
             {
                 await release.Task;
             }

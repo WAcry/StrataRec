@@ -24,7 +24,7 @@
         "type": "object",
         "properties": {
           "key": {
-            "description": "What keys the entity: a request input (ctx.request.user_id), the candidate id (col.entity_id), a candidate feature (col.item.creator_id), or for a cross entity a list of a request input and a candidate column. Each key is an int64 or a string."
+            "description": "What keys the entity: one reference, or a list of 1 to 8 distinct ones in the order of the key's parts. A part is a request input (ctx.request.user_id), the candidate id (col.entity_id) or a candidate feature (col.item.creator_id), of type int64 or string, e.g. [\"col.entity_id\", \"ctx.request.country\"]. A key of request inputs only is one per request; a key with a missing part is not looked up."
           },
           "description": {
             "type": [

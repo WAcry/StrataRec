@@ -188,7 +188,7 @@ public class CacheStoreCallTests
             _record = writer.Bytes.AsMemory(offset, length);
         }
 
-        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<EntityKey> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
+        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _calls);
             whileSending();
@@ -222,7 +222,7 @@ public class CacheStoreCallTests
             _record = writer.Bytes.AsMemory(offset, length);
         }
 
-        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<EntityKey> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
+        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _calls);
             var until = System.Diagnostics.Stopwatch.GetTimestamp() + (blockMs * System.Diagnostics.Stopwatch.Frequency / 1000);
@@ -250,7 +250,7 @@ public class CacheStoreCallTests
     {
         public string StoreType => TestCacheStoreFactory.Type;
 
-        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<EntityKey> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken) =>
+        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken) =>
             get();
 
         public ValueTask SetAsync(CacheKeyspace keyspace, ReadOnlyMemory<CacheStoreEntry> entries, CancellationToken cancellationToken) =>

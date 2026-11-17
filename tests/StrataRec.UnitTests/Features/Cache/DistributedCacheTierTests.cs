@@ -100,7 +100,7 @@ public class DistributedCacheTierTests
     private static LocalTableCache Cache() =>
         new LocalFeatureTable(Schema, new LocalFeatureTableOptions { MaxBytes = 1 << 20, Cache = new CacheTableOptions { TtlMs = 60_000 } }).Cache!;
 
-    private static CacheStoreEntry[] Entries(long key) => [new(EntityKey.FromInt64(key), new byte[] { 1, 2, 3 }, TimeSpan.FromMinutes(1))];
+    private static CacheStoreEntry[] Entries(long key) => [new(key.ToString(System.Globalization.CultureInfo.InvariantCulture), new byte[] { 1, 2, 3 }, TimeSpan.FromMinutes(1))];
 
     /// <summary>
     /// A store whose call number <c>holdCall</c> waits for <see cref="Release"/> (other calls return at once), and which
@@ -130,7 +130,7 @@ public class DistributedCacheTierTests
 
         public void Release() => _release.TrySetResult();
 
-        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<EntityKey> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken) =>
+        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken) =>
             ValueTask.CompletedTask;
 
         public async ValueTask SetAsync(CacheKeyspace keyspace, ReadOnlyMemory<CacheStoreEntry> entries, CancellationToken cancellationToken)

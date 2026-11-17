@@ -28,9 +28,9 @@ public sealed class ReplayBundle
     /// A format version is the date its layout changed and that day's sequence (<c>2026-11-14.1</c>, then
     /// <c>2026-11-14.2</c>): it says when a bundle was laid out, and sorts as text.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-16.4";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-16.5";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-16.4\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-16.5\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -220,14 +220,8 @@ public sealed class ReplayFeatureCall
 
     public required string Entity { get; init; }
 
-    [Description("single, many or cross (design 6.5).")]
-    public required string Shape { get; init; }
-
-    [Description("Context key for single and cross shapes.")]
-    public JsonElement? ContextKey { get; init; }
-
-    [Description("Candidate (or foreign) keys in staging order, for many and cross shapes.")]
-    public JsonElement? Keys { get; init; }
+    [Description("The call's keys in staging order (design 6.5): each an int64 number or a string for a one-part key, or an array of its parts in the entity's key order (a request input repeated in every key).")]
+    public required JsonElement Keys { get; init; }
 
     [Description("False when the request had no time left to send the call.")]
     public bool Sent { get; init; } = true;

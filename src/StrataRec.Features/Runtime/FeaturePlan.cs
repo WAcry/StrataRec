@@ -89,8 +89,8 @@ public sealed class FeatureRuntimeInfo
     /// <summary>Set once <see cref="FeaturePlan.Create"/> has taken the info for a plan.</summary>
     internal bool Planned { get; set; }
 
-    /// <summary>A physical feature of an entity keyed by a feature depends on that key feature alone.</summary>
-    internal void DependOnKey(int keyFeature) => _dependencies = [keyFeature];
+    /// <summary>A physical feature of an entity whose key reads features depends on those key features alone.</summary>
+    internal void DependOnKey(ImmutableArray<int> keyFeatures) => _dependencies = keyFeatures;
 }
 
 /// <summary>The two tag sets of <see cref="StrataRecMetrics.SourceValues"/> for one feature of a source.</summary>
@@ -128,13 +128,26 @@ public sealed class FetchGroup
     /// <summary>The mode and what it holds (a connector, a table), as the bindings resolved it.</summary>
     public required GroupSupply Supply { get; init; }
 
-    public required KeyShape Shape { get; init; }
+    /// <summary>The entity's key layout: what a fetch's keys are, and what the connector was checked to support.</summary>
+    public EntityKeyLayout KeyLayout => Entity.KeyLayout;
 
-    /// <summary>Feature providing the candidate key (foreign keys), or -1 for <c>entity_id</c>.</summary>
-    public int KeyFeatureIndex { get; init; } = -1;
+    /// <summary>Where a request reads each key part, in part order (<see cref="KeyPartSource"/>).</summary>
+    internal KeyPartSource[] KeyParts { get; init; } = [];
 
-    /// <summary>Context value providing the context key (context and cross entities), or -1.</summary>
-    public int ContextKeyId { get; init; } = -1;
+    /// <summary>The parts read per row (candidate parts), in part order; empty for a context-scoped entity, whose key is
+    /// the request's.</summary>
+    internal int[] VaryingParts { get; init; } = [];
+
+    /// <summary>The features the key reads (its feature parts, each once): fetched before the group, and the group fails
+    /// with any of them (design 6.7).</summary>
+    public required ImmutableArray<int> KeyFeatures { get; init; }
+
+    /// <summary>
+    /// The feature read as the key's only varying part (-1 for the candidate's entity id), or <see cref="int.MinValue"/>
+    /// when several parts vary. One varying part (every one-part key, and one column beside request inputs) is resolved,
+    /// deduplicated and looked up as one value per row, without a tuple: the per-row cost one-part keys always had.
+    /// </summary>
+    internal int OneVaryingFeature => VaryingParts.Length == 1 ? KeyParts[VaryingParts[0]].Feature : int.MinValue;
 
     /// <summary>Feature indices of the group's members, in field order (by feature name).</summary>
     public required ImmutableArray<int> FeatureIndices { get; init; }
@@ -159,6 +172,16 @@ public sealed class FetchGroup
     private IoTarget? _io;
 }
 
+/// <summary>Where a request reads one key part of a <see cref="FetchGroup"/>.</summary>
+/// <param name="Context">The request's context value it is (a request input; later a context feature), or -1.</param>
+/// <param name="Feature">The feature column it is (a key feature), or -1; both -1 for <c>col.entity_id</c>.</param>
+internal readonly record struct KeyPartSource(int Context, int Feature)
+{
+    public static KeyPartSource EntityId => new(-1, -1);
+
+    public bool IsContext => Context >= 0;
+}
+
 /// <summary>
 /// Immutable, plan-level feature layout: runtime info per feature and the fetch groups (design 6.8). Built once when a
 /// plan is compiled and shared by all its requests.
@@ -174,6 +197,11 @@ public sealed class FeaturePlan
         {
             MaxWave = Math.Max(MaxWave, g.Wave);
             HasTables |= g.Supply.Table is not null;
+            if (g.Supply.Table is not null && g.KeyLayout.VaryingCount >= 2)
+            {
+                TableTupleParts = Math.Max(TableTupleParts, g.KeyLayout.VaryingCount);
+            }
+
             _ = g.Io; // build the source's metric tags with the plan, not on its first request
         }
     }
@@ -191,10 +219,14 @@ public sealed class FeaturePlan
     /// <summary>Whether a group holds a table, which a request may read: it then readies the buffers of its reads up front.</summary>
     public bool HasTables { get; }
 
+    /// <summary>The most varying parts of a key of a group that holds a table (0 when none has two or more): a request
+    /// readies a tuple index for its reads up front.</summary>
+    internal int TableTupleParts { get; }
+
     /// <summary>
     /// Builds the plan: groups physical features by (source, entity), resolves each group's supply from the bindings
     /// (<see cref="FeatureSourceResolver"/>: a connector, or a local table from <paramref name="localTables"/>) and
-    /// computes fetch waves. Problems (unbound sources, wrong settings, unsupported key shapes) are reported to
+    /// computes fetch waves. Problems (unbound sources, wrong settings, unsupported key layouts) are reported to
     /// <paramref name="diagnostics"/>.
     /// </summary>
     /// <param name="updateSources">Update-source factories for local bindings; null has the built-in ones.</param>
@@ -276,27 +308,10 @@ public sealed class FeaturePlan
                 continue;
             }
 
-            var shape = entity.Kind switch
-            {
-                EntityKind.Context => KeyShape.Single,
-                EntityKind.Cross => KeyShape.Cross,
-                _ => KeyShape.Many,
-            };
-            if (resolver.Group(supply, entity, members, shape) is not { } groupSupply)
+            if (resolver.Group(supply, entity, members) is not { } groupSupply
+                || !TryKeyParts(entity, byName, contextIdOfRequestInput, diagnostics, catalogArtifact, out var keyParts, out var varying, out var keyFeatures))
             {
                 continue;
-            }
-
-            var keyFeature = -1;
-            if (entity.KeyIsFeature)
-            {
-                if (!byName.TryGetValue(entity.CandidateKeyColumn!, out var kf))
-                {
-                    diagnostics.Error("ENTITY_BAD_KEY", catalogArtifact, "/entities/" + JsonPointer.Escape(entity.Name), $"Key feature '{entity.CandidateKeyColumn}' is not available.");
-                    continue;
-                }
-
-                keyFeature = kf.Index;
             }
 
             var featureIndices = new int[members.Length];
@@ -313,9 +328,9 @@ public sealed class FeaturePlan
                 SourceName = sourceName,
                 Entity = entity,
                 Supply = groupSupply,
-                Shape = shape,
-                KeyFeatureIndex = keyFeature,
-                ContextKeyId = entity.ContextKeyInput is null ? -1 : contextIdOfRequestInput(entity.ContextKeyInput),
+                KeyParts = keyParts,
+                VaryingParts = varying,
+                KeyFeatures = keyFeatures,
                 FeatureIndices = ImmutableCollectionsMarshal.AsImmutableArray(featureIndices),
                 Fields = ImmutableCollectionsMarshal.AsImmutableArray(fields),
             };
@@ -323,9 +338,9 @@ public sealed class FeaturePlan
             {
                 members[i].GroupIndex = group.Index;
                 members[i].FieldIndex = i;
-                if (keyFeature >= 0)
+                if (keyFeatures.Length > 0)
                 {
-                    members[i].DependOnKey(keyFeature);
+                    members[i].DependOnKey(keyFeatures);
                 }
             }
 
@@ -342,6 +357,58 @@ public sealed class FeaturePlan
         var derivedOrder = TopologicalDerivedOrder(all, diagnostics, catalogArtifact);
         AssignWaves(all, groups);
         return new FeaturePlan(all, groups.ToArray(), derivedOrder);
+    }
+
+    /// <summary>
+    /// Where a request reads each part of <paramref name="entity"/>'s key (design 6.8): a request input from the request's
+    /// context values, <c>col.entity_id</c>, or a key feature of the plan, which the group's members then depend on. False
+    /// (diagnosed) when a key feature is not in the plan.
+    /// </summary>
+    /// <remarks>The one place a part's kind becomes a source: a context feature as a part would be one more case here, read
+    /// from its context id like a request input.</remarks>
+    private static bool TryKeyParts(
+        EntityDefinition entity, Dictionary<string, FeatureRuntimeInfo> byName, Func<string, int> contextIdOfRequestInput, DiagnosticBag diagnostics,
+        string catalogArtifact, out KeyPartSource[] parts, out int[] varying, out ImmutableArray<int> keyFeatures)
+    {
+        parts = new KeyPartSource[entity.Key.Count];
+        var varyingList = new List<int>(parts.Length);
+        var features = new List<int>();
+        for (var p = 0; p < parts.Length; p++)
+        {
+            var part = entity.Key[p];
+            switch (part.Kind)
+            {
+                case EntityKeyPartKind.RequestInput:
+                    parts[p] = new KeyPartSource(contextIdOfRequestInput(part.Name), -1);
+                    continue;
+                case EntityKeyPartKind.EntityId:
+                    parts[p] = KeyPartSource.EntityId;
+                    break;
+                case EntityKeyPartKind.Feature:
+                    if (!byName.TryGetValue(part.Name, out var keyFeature))
+                    {
+                        diagnostics.Error("ENTITY_BAD_KEY", catalogArtifact, FeatureCatalog.KeyPointer(entity, p),
+                            $"Key feature '{part.Name}' is not available.", "a key feature is compiled with the features keyed by it; check its declaration");
+                        varying = Array.Empty<int>();
+                        keyFeatures = [];
+                        return false;
+                    }
+
+                    parts[p] = new KeyPartSource(-1, keyFeature.Index);
+                    if (!features.Contains(keyFeature.Index))
+                    {
+                        features.Add(keyFeature.Index);
+                    }
+
+                    break;
+            }
+
+            varyingList.Add(p);
+        }
+
+        varying = varyingList.ToArray();
+        keyFeatures = [.. features];
+        return true;
     }
 
     /// <summary>
@@ -440,7 +507,19 @@ public sealed class FeaturePlan
 
         foreach (var group in groups)
         {
-            group.Wave = group.KeyFeatureIndex < 0 ? 0 : Math.Max(0, ReadyWave(group.KeyFeatureIndex) + 1);
+            group.Wave = GroupWave(group);
+        }
+
+        // A group is fetched in the wave after the latest of its key features (0 without any).
+        int GroupWave(FetchGroup group)
+        {
+            var wave = 0;
+            foreach (var key in group.KeyFeatures)
+            {
+                wave = Math.Max(wave, ReadyWave(key) + 1);
+            }
+
+            return wave;
         }
 
         int ReadyWave(int f)
@@ -472,8 +551,7 @@ public sealed class FeaturePlan
             }
             else
             {
-                var key = info.GroupIndex >= 0 ? groups[info.GroupIndex].KeyFeatureIndex : -1;
-                wave = key < 0 ? 0 : Math.Max(0, ReadyWave(key) + 1);
+                wave = info.GroupIndex >= 0 ? GroupWave(groups[info.GroupIndex]) : 0;
             }
 
             visiting[f] = false;

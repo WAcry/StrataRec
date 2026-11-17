@@ -652,7 +652,7 @@ public sealed class BindingLifetimeTests
 
             public string ConnectorType => Type;
 
-            public bool Supports(KeyShape shape) => inner.Supports(shape);
+            public bool Supports(EntityKeyLayout layout) => inner.Supports(layout);
 
             public async ValueTask<FetchStatus> FetchAsync(EntityKeyBatch keys, ReadOnlyMemory<CompiledFieldBinding> fields, IFeatureBatchWriter writer,
                 CancellationToken cancellationToken)

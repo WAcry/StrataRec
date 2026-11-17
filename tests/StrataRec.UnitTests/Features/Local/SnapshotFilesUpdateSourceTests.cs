@@ -459,11 +459,19 @@ public class SnapshotFilesUpdateSourceTests
             return inner.Begin(key, version);
         }
 
+        public RecordBuilder Begin(ReadOnlySpan<EntityKey> key, long version)
+        {
+            Count();
+            return inner.Begin(key, version);
+        }
+
         public bool Delete(long key, long version) => inner.Delete(key, version);
 
         public bool Delete(ReadOnlySpan<char> key, long version) => inner.Delete(key, version);
 
         public bool Delete(in EntityKey key, long version) => inner.Delete(key, version);
+
+        public bool Delete(ReadOnlySpan<EntityKey> key, long version) => inner.Delete(key, version);
 
         public void Checkpoint(UpdatePosition position) => inner.Checkpoint(position);
 

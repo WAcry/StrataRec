@@ -3,6 +3,7 @@ using System.Threading.Channels;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Hashing;
 using StrataRec.Core.Keys;
+using StrataRec.Features.Connectors;
 using StrataRec.Features.Local;
 
 namespace StrataRec.Features.Cache;
@@ -82,9 +83,16 @@ internal enum CacheWriteOutcome : byte
 
 /// <summary>Records a read hands the table's writer: each key's encoded record (<see cref="CacheRecord"/>), whose header
 /// carries its write time, the version the table writes it at.</summary>
-internal sealed class CacheWriteBatch(EntityKey[] keys, ReadOnlyMemory<byte>[] records, int count)
+/// <param name="keys">Key i's parts at <c>i * partCount</c>, in part order.</param>
+internal sealed class CacheWriteBatch(EntityKey[] keys, ReadOnlyMemory<byte>[] records, int count, int partCount = 1)
 {
     public EntityKey[] Keys { get; } = keys;
+
+    /// <summary>Parts of every key.</summary>
+    public int PartCount { get; } = partCount;
+
+    /// <summary>The parts of key <paramref name="index"/>.</summary>
+    public ReadOnlySpan<EntityKey> Key(int index) => Keys.AsSpan(index * PartCount, PartCount);
 
     public ReadOnlyMemory<byte>[] Records { get; } = records;
 
@@ -153,7 +161,7 @@ public sealed class LocalTableCache
         Options = options;
         Clock = options.Clock;
         Layout = new CacheRecordLayout(table.Schema);
-        Keyspace = new CacheKeyspace(table.Schema.Source, table.Schema.Entity, table.Schema.KeyType);
+        Keyspace = new CacheKeyspace(table.Schema.Source, table.Schema.Entity, table.Schema.Key);
         _queueLimit = options.WriteQueueBytes > 0 ? options.WriteQueueBytes : Math.Clamp(table.Options.MaxBytes / 16, 1L << 20, 64L << 20);
         MaxLifetimeMs = MaxLifetime(options.TtlMs);
         var tags = table.MetricTags.ToArray();
@@ -189,14 +197,14 @@ public sealed class LocalTableCache
     /// <summary>Now, in Unix milliseconds: the version of a record a fetch starting now writes.</summary>
     internal long NowMs() => Clock.GetUtcNow().ToUnixTimeMilliseconds();
 
-    /// <summary>How long the record of <paramref name="key"/> is served: the TTL ±10% by the key's hash, the same on every instance.</summary>
-    internal long LifetimeMs(in EntityKey key)
-    {
-        return (long)(Options.TtlMs * (1 - Jitter + (2 * Jitter * StableHash.ToUnit(KeyHash(key)))));
-    }
+    /// <summary>How long the record of a one-part <paramref name="key"/> is served: the TTL ±10% by the key's hash, the same on every instance.</summary>
+    internal long LifetimeMs(in EntityKey key) => LifetimeMs(KeyHash(key));
 
-    /// <summary>The canonical hash of a key (design 5.7 encoding): what its jitter derives from, so every instance agrees.</summary>
-    private static ulong KeyHash(in EntityKey key)
+    /// <summary>How long the record of the key with hash <paramref name="keyHash"/> (<see cref="KeyHash(in EntityKeyBatch, int)"/>) is served.</summary>
+    internal long LifetimeMs(ulong keyHash) => (long)(Options.TtlMs * (1 - Jitter + (2 * Jitter * StableHash.ToUnit(keyHash))));
+
+    /// <summary>The canonical hash of a one-part key (design 5.7 encoding): what its jitter derives from, so every instance agrees.</summary>
+    internal static ulong KeyHash(in EntityKey key)
     {
         if (key.StringValue is not { } s)
         {
@@ -208,19 +216,50 @@ public sealed class LocalTableCache
         return builder.Finish();
     }
 
-    /// <summary>How a record of <paramref name="key"/> written at <paramref name="writtenMs"/> stands at <paramref name="nowMs"/>.</summary>
+    /// <summary>
+    /// The canonical hash of key <paramref name="index"/> of <paramref name="keys"/>: a one-part key's as above (as before
+    /// keys had parts), several parts each added in order to one tagged, length-prefixed encoding.
+    /// </summary>
+    internal static ulong KeyHash(in EntityKeyBatch keys, int index)
+    {
+        if (keys.PartCount == 1)
+        {
+            return KeyHash(keys.Key(index, 0));
+        }
+
+        using var builder = new StableHash.Builder();
+        for (var p = 0; p < keys.PartCount; p++)
+        {
+            var part = keys.Key(index, p);
+            if (part.StringValue is { } s)
+            {
+                builder.Add(s);
+            }
+            else
+            {
+                builder.Add(part.Int64Value);
+            }
+        }
+
+        return builder.Finish();
+    }
+
+    /// <summary>How a record of a one-part <paramref name="key"/> written at <paramref name="writtenMs"/> stands at <paramref name="nowMs"/>.</summary>
+    internal CacheFreshness Classify(long writtenMs, in EntityKey key, long nowMs) => Classify(writtenMs, KeyHash(key), nowMs);
+
+    /// <summary>How a record of the key with hash <paramref name="keyHash"/> written at <paramref name="writtenMs"/> stands at <paramref name="nowMs"/>.</summary>
     /// <remarks>A write time ahead of the clock (another instance's clock runs ahead) counts as written now.</remarks>
-    internal CacheFreshness Classify(long writtenMs, in EntityKey key, long nowMs)
+    internal CacheFreshness Classify(long writtenMs, ulong keyHash, long nowMs)
     {
         var age = Math.Max(0, nowMs - writtenMs);
-        var lifetime = LifetimeMs(key);
+        var lifetime = LifetimeMs(keyHash);
         return age <= lifetime ? CacheFreshness.Fresh : age <= lifetime + Options.StaleIfErrorMs ? CacheFreshness.Stale : CacheFreshness.Expired;
     }
 
     /// <summary>How long the distributed tier should keep a record written at <paramref name="writtenMs"/>: until no reader
     /// could use it, even stale.</summary>
     /// <remarks>
-    /// The retention less the record's age, at least 1 ms. The age is judged as <see cref="Classify"/> judges it: a write
+    /// The retention less the record's age, at least 1 ms. The age is judged as <see cref="Classify(long, ulong, long)"/> judges it: a write
     /// time ahead of the clock (the clock stepped back during the fetch, say) counts as written now, so the result is at
     /// most <see cref="RetentionMs"/>, which the binding checked against <see cref="MaxRetentionMs"/>; at that bound a
     /// write time 1 ms ahead used to overflow the ticks to a negative time to live (review 21 #1). In ticks, so no
@@ -301,11 +340,11 @@ public sealed class LocalTableCache
         int written = 0, failed = 0;
         for (var i = 0; i < batch.Count; i++)
         {
-            var result = WriteOne(writer, batch.Keys[i], batch.Records[i].Span);
+            var result = WriteOne(writer, batch.Key(i), batch.Records[i].Span);
             if (result == WriteResult.Full)
             {
                 Evict(writer);
-                result = WriteOne(writer, batch.Keys[i], batch.Records[i].Span);
+                result = WriteOne(writer, batch.Key(i), batch.Records[i].Span);
             }
 
             switch (result)
@@ -325,7 +364,7 @@ public sealed class LocalTableCache
         CountWrites(CacheTier.Local, CacheWriteOutcome.Failed, failed);
     }
 
-    private WriteResult WriteOne(LocalTableWriter writer, in EntityKey key, ReadOnlySpan<byte> record)
+    private WriteResult WriteOne(LocalTableWriter writer, ReadOnlySpan<EntityKey> key, ReadOnlySpan<byte> record)
     {
         if (CacheRecord.ReadHeader(record, Layout.FieldCount, Layout.Fingerprint, out var writtenMs, out _) != CacheRecordHeader.Ok
             || !CacheRecord.IsWellFormed(record, Layout))
@@ -335,7 +374,7 @@ public sealed class LocalTableCache
 
         try
         {
-            var builder = writer.Begin(key, writtenMs);
+            var builder = key.Length == 1 ? writer.Begin(key[0], writtenMs) : writer.Begin(key, writtenMs);
             if (builder.IsIgnored)
             {
                 return WriteResult.Ignored;

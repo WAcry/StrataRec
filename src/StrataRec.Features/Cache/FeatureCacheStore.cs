@@ -1,3 +1,4 @@
+using System.Globalization;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 
@@ -7,17 +8,30 @@ namespace StrataRec.Features.Cache;
 /// The keys of one (source, entity) in a distributed cache store: what a store prefixes to every key so that the records
 /// of different sources and entities never collide. Built once per table, so a read builds no prefix.
 /// </summary>
-/// <remarks>The name is <c>{source}:{entity}:</c>. Entity names are identifiers; a source name is escaped (<c>%</c> as
-/// <c>%25</c>, <c>:</c> as <c>%3A</c>) so that no source and entity pair can spell another's prefix.</remarks>
+/// <remarks>
+/// <para>The name is <c>{source}:{entity}:</c>. Entity names are identifiers; a source name is escaped (<c>%</c> as
+/// <c>%25</c>, <c>:</c> as <c>%3A</c>) so that no source and entity pair can spell another's prefix.</para>
+/// <para>A store sees each key as its text (<see cref="KeyText"/>), the same in every process and every run, so instances
+/// share records: one part is the value as before keys had parts (an int64 in invariant decimal, a string as is), several
+/// parts are their texts joined by <c>:</c>. A key's layout is not in its text: records carry a fingerprint of the layout
+/// and the fields, so a record written for another layout whose text happens to match is a miss, never misread.</para>
+/// </remarks>
 public sealed class CacheKeyspace
 {
+    /// <summary>A keyspace of one-part keys of <paramref name="keyType"/>.</summary>
     public CacheKeyspace(string source, string entity, EntityKeyType keyType)
+        : this(source, entity, EntityKeyLayout.Single(keyType))
+    {
+    }
+
+    public CacheKeyspace(string source, string entity, EntityKeyLayout key)
     {
         ArgumentException.ThrowIfNullOrEmpty(source);
         ArgumentException.ThrowIfNullOrEmpty(entity);
+        ArgumentNullException.ThrowIfNull(key);
         Source = source;
         Entity = entity;
-        KeyType = keyType;
+        Key = key;
         Prefix = Escape(source) + ":" + Escape(entity) + ":";
     }
 
@@ -25,17 +39,86 @@ public sealed class CacheKeyspace
 
     public string Entity { get; }
 
-    /// <summary>Every key of the keyspace has this type.</summary>
-    public EntityKeyType KeyType { get; }
+    /// <summary>Every key of the keyspace has this layout.</summary>
+    public EntityKeyLayout Key { get; }
 
     /// <summary><c>{source}:{entity}:</c>, escaped; the store puts its own prefix (e.g. <c>key_prefix</c>) before it and the key after it.</summary>
     public string Prefix { get; }
 
+    /// <summary>
+    /// The text of a key given by its parts, as a store sees it: for one part, the int64 in invariant decimal or the string
+    /// as is (not copied); for several, each part's text in order joined by <c>:</c>, a string part escaped (<c>%</c> as
+    /// <c>%25</c>, <c>:</c> as <c>%3A</c>), e.g. <c>10042:US</c>.
+    /// </summary>
+    /// <remarks>Unambiguous among keys of one layout: no part's text holds a <c>:</c>, so a text splits back into its parts,
+    /// and each position has one type. A one-part string is not escaped, as before keys had parts: nothing follows it.</remarks>
+    public static string KeyText(ReadOnlySpan<EntityKey> parts)
+    {
+        if (parts.Length == 1)
+        {
+            return parts[0].StringValue ?? parts[0].Int64Value.ToString(CultureInfo.InvariantCulture);
+        }
+
+        if (parts.IsEmpty)
+        {
+            throw new ArgumentException("A key has at least one part.", nameof(parts));
+        }
+
+        var length = parts.Length - 1;
+        Span<char> digits = stackalloc char[20];
+        foreach (ref readonly var part in parts)
+        {
+            if (part.StringValue is { } s)
+            {
+                length += s.Length + (2 * (s.AsSpan().Count('%') + s.AsSpan().Count(':')));
+            }
+            else
+            {
+                part.Int64Value.TryFormat(digits, out var written, provider: CultureInfo.InvariantCulture);
+                length += written;
+            }
+        }
+
+        return string.Create(length, parts, static (span, parts) =>
+        {
+            var at = 0;
+            for (var p = 0; p < parts.Length; p++)
+            {
+                if (p > 0)
+                {
+                    span[at++] = ':';
+                }
+
+                if (parts[p].StringValue is not { } value)
+                {
+                    parts[p].Int64Value.TryFormat(span[at..], out var written, provider: CultureInfo.InvariantCulture);
+                    at += written;
+                    continue;
+                }
+
+                foreach (var c in value)
+                {
+                    if (c is '%' or ':')
+                    {
+                        span[at++] = '%';
+                        span[at++] = c == '%' ? '2' : '3';
+                        span[at++] = c == '%' ? '5' : 'A';
+                    }
+                    else
+                    {
+                        span[at++] = c;
+                    }
+                }
+            }
+        });
+    }
+
     private static string Escape(string name) => name.Replace("%", "%25", StringComparison.Ordinal).Replace(":", "%3A", StringComparison.Ordinal);
 }
 
-/// <summary>One record to write: its key, its bytes (opaque to the store) and how long the store should keep it.</summary>
-public readonly record struct CacheStoreEntry(EntityKey Key, ReadOnlyMemory<byte> Record, TimeSpan TimeToLive);
+/// <summary>One record to write: its key's text (<see cref="CacheKeyspace.KeyText"/>), its bytes (opaque to the store) and
+/// how long the store should keep it.</summary>
+public readonly record struct CacheStoreEntry(string Key, ReadOnlyMemory<byte> Record, TimeSpan TimeToLive);
 
 /// <summary>
 /// A distributed cache shared by a service's instances (design 6.6 <c>cache</c>, tier 2): the engine reads it for the keys
@@ -58,7 +141,8 @@ public interface IFeatureCacheStore
 
     /// <summary>
     /// Reads the records of <paramref name="keys"/> in one round trip: <c>records[i]</c> receives the bytes stored for
-    /// <c>keys[i]</c>, or stays empty when the store has none. Throws when the read failed.
+    /// <c>keys[i]</c>, or stays empty when the store has none. Throws when the read failed. A key is its text
+    /// (<see cref="CacheKeyspace.KeyText"/>), stored under the keyspace's <see cref="CacheKeyspace.Prefix"/>.
     /// </summary>
     /// <remarks>
     /// <para>Called inline on the request's thread, like a connector's fetch: the synchronous part (up to the first
@@ -72,7 +156,7 @@ public interface IFeatureCacheStore
     /// <paramref name="records"/> after completing; the bytes it points at must stay unchanged (a fresh array per value, or
     /// memory the store never reuses).</para>
     /// </remarks>
-    ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<EntityKey> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken);
+    ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken);
 
     /// <summary>Writes records, each with its time to live, in one round trip; off the request path. Throws when the write failed.</summary>
     ValueTask SetAsync(CacheKeyspace keyspace, ReadOnlyMemory<CacheStoreEntry> entries, CancellationToken cancellationToken);

@@ -502,7 +502,7 @@ public class CacheReadTests
         var store = new CapturingStore();
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
-            if (keys.CandidateKeys.Span[0].Int64Value != 1)
+            if (keys.Keys.Span[0].Int64Value != 1)
             {
                 return ValueTask.FromResult(FetchStatus.Failed("item_store is down"));
             }
@@ -529,7 +529,7 @@ public class CacheReadTests
 
         public TaskCompletionSource<(long Records, long Held)> Written { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<EntityKey> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken) =>
+        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken) =>
             ValueTask.CompletedTask;
 
         public ValueTask SetAsync(CacheKeyspace keyspace, ReadOnlyMemory<CacheStoreEntry> entries, CancellationToken cancellationToken)
@@ -666,7 +666,7 @@ public class CacheReadTests
 
         public void Record(in FeatureCallInfo call, IStagedFeatureValues? values)
         {
-            var keys = call.Batch.CandidateKeys.ToArray().Select(k => k.Int64Value).ToArray();
+            var keys = call.Batch.Keys.ToArray().Select(k => k.Int64Value).ToArray();
             double?[]? recorded = null;
             if (values is not null)
             {
@@ -698,7 +698,7 @@ public class CacheReadTests
 
             public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields, IFeatureBatchWriter writer)
             {
-                var keys = batch.CandidateKeys.ToArray().Select(k => k.Int64Value).ToArray();
+                var keys = batch.Keys.ToArray().Select(k => k.Int64Value).ToArray();
                 var call = recording.Calls.Single(c => c.Keys.SequenceEqual(keys));
                 if (call.Outcome is not (IoOutcome.Ok or IoOutcome.Partial))
                 {

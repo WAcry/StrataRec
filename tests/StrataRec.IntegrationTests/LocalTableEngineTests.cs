@@ -37,8 +37,8 @@ public sealed class LocalTableEngineTests
         var second = AuthorTable(Load(engine, host.Root));
 
         Assert.Same(first, second);
-        Assert.Equal(1, engine.Bindings.TableCount);
-        Assert.Single(logs.Entries, e => e.EventId.Id == 1201); // loaded once
+        Assert.Equal(2, engine.Bindings.TableCount); // author_store's and item_country_store's
+        Assert.Equal(2, logs.Entries.Count(e => e.EventId.Id == 1201)); // each loaded once
         Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-reuse"), TestContext.Current.CancellationToken)).Succeeded);
     }
 
@@ -55,7 +55,7 @@ public sealed class LocalTableEngineTests
         Assert.NotSame(first, second);
         Assert.True(second.IsLoaded);
         Assert.Equal(32L << 20, second.Options.MaxBytes);
-        Assert.Equal(1, engine.Bindings.TableCount); // the replaced plan's table is no longer held
+        Assert.Equal(2, engine.Bindings.TableCount); // the replaced plan's author table is no longer held (item_country_store's is shared)
         Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-rebuilt"), TestContext.Current.CancellationToken)).Succeeded);
     }
 
@@ -105,7 +105,7 @@ public sealed class LocalTableEngineTests
 
         Assert.NotSame(current, retried);
         Assert.True(retried.IsLoaded);
-        Assert.Equal(1, engine.Bindings.TableCount);
+        Assert.Equal(2, engine.Bindings.TableCount); // and item_country_store's
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public sealed class LocalTableEngineTests
         await Eventually(() => Followers(table, 100) == 5.0, "the fixed snapshot to be loaded");
 
         Assert.Same(table, AuthorTable(engine));
-        Assert.Equal(1, tables.TableCount);
+        Assert.Equal(2, tables.TableCount); // and item_country_store's
     }
 
     [Fact]
@@ -270,7 +270,7 @@ public sealed class LocalTableEngineTests
 
     private static List<string> AuthorCalls(RecResult result) => result.Recording!.Runs[0].FeatureCalls
         .Where(c => c.Source == "author_store")
-        .Select(c => $"{c.Shape} {c.Status} keys={c.Keys} fields={string.Join(",", c.Fields.Select(f => f.Name + ":" + f.Type))} " +
+        .Select(c => $"{c.Status} keys={c.Keys} fields={string.Join(",", c.Fields.Select(f => f.Name + ":" + f.Type))} " +
             string.Join(";", c.Values!.OrderBy(v => v.Key).Select(v => $"{v.Key}={v.Value.GetRawText()}")))
         .ToList();
 
@@ -340,7 +340,7 @@ public sealed class LocalReadRecordingTests
             Assert.True(recorded.Succeeded, recorded.Error);
             Assert.True(updates >= 1, "the read counted no keys");
             var call = Assert.Single(recorded.Recording!.Runs[0].FeatureCalls, c => c.Source == "author_store");
-            Assert.True(call.Keys!.Value.GetArrayLength() > 1, "the items' authors, several of them");
+            Assert.True(call.Keys.GetArrayLength() > 1, "the items' authors, several of them");
             var recordedFollowers = call.Values!["a_followers"].GetRawText();
             Assert.DoesNotContain("9876543", recordedFollowers, StringComparison.Ordinal);
             listener.Dispose();

@@ -104,13 +104,21 @@ public interface IFeatureTableWriter
 {
     LocalTableSchema Schema { get; }
 
-    /// <summary>Starts an update of an int64-keyed table.</summary>
+    /// <summary>Starts an update of a table keyed by one int64 part.</summary>
     RecordBuilder Begin(long key, long version);
 
-    /// <summary>Starts an update of a string-keyed table, from the key's chars (no string needed).</summary>
+    /// <summary>Starts an update of a table keyed by one string part, from the key's chars (no string needed).</summary>
     RecordBuilder Begin(ReadOnlySpan<char> key, long version);
 
+    /// <summary>Starts an update of a table keyed by one part.</summary>
     RecordBuilder Begin(in EntityKey key, long version);
+
+    /// <summary>
+    /// Starts an update of a table keyed by any number of parts (<see cref="LocalTableSchema.Key"/>): the key's parts in
+    /// declared order, each of its part's type. Nothing of <paramref name="key"/> is kept.
+    /// </summary>
+    /// <exception cref="ArgumentException">The parts are not a key of the table: another count, or a part of another type.</exception>
+    RecordBuilder Begin(ReadOnlySpan<EntityKey> key, long version);
 
     /// <summary>Writes a tombstone: the key has no record from this version on. Returns false when ignored as stale.</summary>
     bool Delete(long key, long version);
@@ -118,6 +126,9 @@ public interface IFeatureTableWriter
     bool Delete(ReadOnlySpan<char> key, long version);
 
     bool Delete(in EntityKey key, long version);
+
+    /// <summary>Writes a tombstone for a key given by its parts, as <see cref="Begin(ReadOnlySpan{EntityKey}, long)"/>.</summary>
+    bool Delete(ReadOnlySpan<EntityKey> key, long version);
 
     /// <summary>Every update before <paramref name="position"/> has been written (see <see cref="LocalFeatureTable.Position"/>).</summary>
     void Checkpoint(UpdatePosition position);

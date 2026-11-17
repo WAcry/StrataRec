@@ -5,7 +5,10 @@
   "entities": {
     "user":   { "key": "ctx.request.user_id" },
     "item":   { "key": "col.entity_id" },
-    "author": { "key": "col.item.author_id" }
+    "author": { "key": "col.item.author_id" },
+    // A key of two parts (design 6.2): the item in the request's country. Per candidate, since one part is per row; a
+    // request without a country has no key, so its boost is the default.
+    "item_country": { "key": ["col.entity_id", "ctx.request.country"] }
   },
   "features": {
     "user.ctr_30d":        { "type": "float32", "source": "user_store", "field": "u_ctr_30d", "default": 0.02 },
@@ -18,7 +21,8 @@
     "item.report_rate":    { "type": "float32", "source": "item_store", "field": "i_report_rate", "default": 0.0 },
     "item.age_hours":      { "type": "float32", "source": "item_store", "field": "i_age_h" },
     "item.embedding":      { "type": "list<float32,4>", "source": "item_store", "field": "i_emb" },
-    "author.followers":    { "type": "float32", "source": "author_store", "field": "a_followers", "default": 0.0 }
+    "author.followers":    { "type": "float32", "source": "author_store", "field": "a_followers", "default": 0.0 },
+    "item_country.boost":  { "type": "float32", "source": "item_country_store", "field": "boost", "default": 1.0 }
   },
   "derived_features": {
     "item.smoothed_ctr":    { "type": "float32", "expr": "(col.item.clicks_7d + 10.0) / (col.item.impressions_7d + 100.0)" },

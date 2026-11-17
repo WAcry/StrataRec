@@ -23,24 +23,28 @@ public enum LocalTableMode : byte
 public readonly record struct LocalTableField(string Name, ColumnType Type);
 
 /// <summary>
-/// What one local feature table holds: the (source, entity) it serves, the key type and the physical fields bound to it
+/// What one local feature table holds: the (source, entity) it serves, the key layout and the physical fields bound to it
 /// (design 6.6). The record layout follows from it and is fixed for the life of the table: a catalog that adds or retypes
-/// a field of the source needs a new table.
+/// a field of the source, or keys the entity by parts of other types, needs a new table.
 /// </summary>
+/// <remarks>Any key layout: a one-part int64 key is indexed by its value, every other key (a string, several parts) by the
+/// XXH3-64 hash of its canonical bytes, with the bytes kept in the record (<see cref="TableKeys"/>).</remarks>
 public sealed class LocalTableSchema
 {
     private readonly Dictionary<string, int> _byName;
 
+    /// <summary>A table of one-part keys of <paramref name="keyType"/>.</summary>
     public LocalTableSchema(string source, string entity, EntityKeyType keyType, LocalTableMode mode, IReadOnlyList<LocalTableField> fields)
+        : this(source, entity, EntityKeyLayout.Single(keyType), mode, fields)
+    {
+    }
+
+    public LocalTableSchema(string source, string entity, EntityKeyLayout key, LocalTableMode mode, IReadOnlyList<LocalTableField> fields)
     {
         ArgumentException.ThrowIfNullOrEmpty(source);
         ArgumentException.ThrowIfNullOrEmpty(entity);
+        ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(fields);
-        if (keyType is not (EntityKeyType.Int64 or EntityKeyType.String))
-        {
-            throw new ArgumentOutOfRangeException(nameof(keyType), keyType, "Entity keys are int64 or string.");
-        }
-
         if (mode is not (LocalTableMode.Local or LocalTableMode.Cache))
         {
             throw new ArgumentOutOfRangeException(nameof(mode), mode, "Local tables are in local or cache mode.");
@@ -48,7 +52,7 @@ public sealed class LocalTableSchema
 
         Source = source;
         Entity = entity;
-        KeyType = keyType;
+        Key = key;
         Mode = mode;
         var copy = new LocalTableField[fields.Count];
         _byName = new Dictionary<string, int>(fields.Count, StringComparer.Ordinal);
@@ -78,7 +82,11 @@ public sealed class LocalTableSchema
     /// <summary>Entity name, e.g. <c>item</c>.</summary>
     public string Entity { get; }
 
-    public EntityKeyType KeyType { get; }
+    /// <summary>The entity's key layout. What the table stores is its part types in order (<see cref="EntityKeyLayout.TypeText"/>).</summary>
+    public EntityKeyLayout Key { get; }
+
+    /// <summary>The type of a one-part key, or null for a key of several parts.</summary>
+    public EntityKeyType? KeyType => Key.PartCount == 1 ? Key[0].Type : null;
 
     public LocalTableMode Mode { get; }
 
@@ -100,19 +108,13 @@ public sealed class LocalTableSchema
     /// physical feature of that entity whose <c>source</c> is <paramref name="source"/>, in catalog (name) order. Two
     /// features may read the same physical field only with the same type.
     /// </summary>
-    /// <exception cref="ArgumentException">The entity is unknown or a cross entity, or two features disagree on a field's type.</exception>
+    /// <exception cref="ArgumentException">The entity is unknown, or two features disagree on a field's type.</exception>
     public static LocalTableSchema FromCatalog(FeatureCatalog catalog, string source, string entity, LocalTableMode mode)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         if (!catalog.Entities.TryGetValue(entity, out var definition))
         {
             throw new ArgumentException($"Entity '{entity}' is not declared in catalog '{catalog.CatalogId}'.", nameof(entity));
-        }
-
-        if (definition.Kind == EntityKind.Cross)
-        {
-            // A cross entity is keyed by a context key and a candidate key; a local table record has one key.
-            throw new ArgumentException(CrossEntityMessage(entity), nameof(entity));
         }
 
         var features = new List<FeatureDefinition>();
@@ -150,7 +152,6 @@ public sealed class LocalTableSchema
         ArgumentNullException.ThrowIfNull(features);
         schema = null!;
         conflict = null;
-        var keyType = entity.Kind == EntityKind.Context ? entity.ContextKeyType : entity.CandidateKeyType;
         var types = new SortedDictionary<string, ColumnType>(StringComparer.Ordinal);
         foreach (var feature in features)
         {
@@ -177,13 +178,24 @@ public sealed class LocalTableSchema
             fields.Add(new LocalTableField(name, type));
         }
 
-        schema = new LocalTableSchema(source, entity.Name, keyType ?? EntityKeyType.Int64, mode, fields);
+        schema = new LocalTableSchema(source, entity.Name, entity.KeyLayout, mode, fields);
         return true;
     }
 
-    /// <summary>Why a cross entity cannot be held in a local table, and what to do instead.</summary>
-    internal static string CrossEntityMessage(string entity) =>
-        $"Entity '{entity}' is a cross entity (context key × candidate key); local tables hold one key per record. " +
-        "Bind its source with mode 'fetch', or hold per-user data as a list feature of the context entity " +
-        "(e.g. user.engaged_items: list<int64>, read with 'col.entity_id in ctx.user.engaged_items').";
+    /// <summary>How the key is written in a hint: <c>an int64</c>, <c>a string</c>, or <c>an array [int64, string]</c>.</summary>
+    internal string KeyHint()
+    {
+        if (Key.PartCount == 1)
+        {
+            return Key[0].Type == EntityKeyType.String ? "a JSON string" : "a JSON number (int64)";
+        }
+
+        var text = new System.Text.StringBuilder("an array of its ").Append(Key.PartCount).Append(" parts in order, [");
+        for (var p = 0; p < Key.PartCount; p++)
+        {
+            text.Append(p == 0 ? string.Empty : ", ").Append(Key[p].Type == EntityKeyType.String ? "<string>" : "<int64>");
+        }
+
+        return text.Append(']').ToString();
+    }
 }

@@ -6,6 +6,7 @@ using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
+using StrataRec.Features.Connectors;
 using StrataRec.Logging;
 
 namespace StrataRec.Pipeline.Replay;
@@ -76,6 +77,39 @@ internal static class ReplayJson
         using (var json = new Utf8JsonWriter(buffer))
         {
             WriteKey(json, key);
+        }
+
+        return Parse(buffer);
+    }
+
+    /// <summary>
+    /// A feature call's keys in staging order: each a value for a one-part key, an array of its parts for a key of several
+    /// (a shared part written in every key, so each key reads on its own).
+    /// </summary>
+    public static JsonElement Keys(in EntityKeyBatch keys)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var json = new Utf8JsonWriter(buffer))
+        {
+            json.WriteStartArray();
+            for (var i = 0; i < keys.Count; i++)
+            {
+                if (keys.PartCount == 1)
+                {
+                    WriteKey(json, keys.Key(i, 0));
+                    continue;
+                }
+
+                json.WriteStartArray();
+                for (var p = 0; p < keys.PartCount; p++)
+                {
+                    WriteKey(json, keys.Key(i, p));
+                }
+
+                json.WriteEndArray();
+            }
+
+            json.WriteEndArray();
         }
 
         return Parse(buffer);
@@ -200,6 +234,55 @@ internal static class ReplayJson
         return keys;
     }
 
+    /// <summary>
+    /// A feature call's keys (<see cref="Keys(in EntityKeyBatch)"/>), flattened: key r's parts at <c>r * partCount</c>. Every
+    /// key has the same number of parts, 1 (a value) to <see cref="EntityKeyLayout.MaxParts"/> (an array); an empty call has 1.
+    /// </summary>
+    public static EntityKey[] KeyTuples(JsonElement json, string pointer, out int partCount)
+    {
+        if (json.ValueKind != JsonValueKind.Array)
+        {
+            throw new ReplayBundleException(pointer, $"expected an array of entity keys, got {json.ValueKind}");
+        }
+
+        var count = json.GetArrayLength();
+        partCount = count == 0 || json[0].ValueKind != JsonValueKind.Array ? 1 : json[0].GetArrayLength();
+        if (partCount is < 1 or > EntityKeyLayout.MaxParts)
+        {
+            throw new ReplayBundleException(pointer + "/0", $"a key has 1 to {EntityKeyLayout.MaxParts} parts, got {partCount}",
+                "write a one-part key as its value, a key of several parts as an array of them");
+        }
+
+        var keys = new EntityKey[count * partCount];
+        var i = 0;
+        foreach (var element in json.EnumerateArray())
+        {
+            var at = pointer + "/" + i.ToString(CultureInfo.InvariantCulture);
+            if (partCount == 1)
+            {
+                keys[i++] = Key(element, at);
+                continue;
+            }
+
+            if (element.ValueKind != JsonValueKind.Array || element.GetArrayLength() != partCount)
+            {
+                throw new ReplayBundleException(at, $"expected a key of {partCount} parts, as the call's first, got {element.GetRawText()}",
+                    "every key of a call has the parts of the entity's key, in its order");
+            }
+
+            var p = 0;
+            foreach (var part in element.EnumerateArray())
+            {
+                keys[(i * partCount) + p] = Key(part, at + "/" + p.ToString(CultureInfo.InvariantCulture));
+                p++;
+            }
+
+            i++;
+        }
+
+        return keys;
+    }
+
     /// <summary>float32 values, with non-finite values written as their names.</summary>
     public static float[] Floats(JsonElement json, string pointer)
     {
@@ -250,14 +333,6 @@ internal static class ReplayJson
         "error" => IoOutcome.Error,
         "cancelled" or Outstanding => IoOutcome.Cancelled,
         _ => throw new ReplayBundleException(pointer, $"unknown status '{status}'", "use ok, partial, timeout, error, cancelled or outstanding"),
-    };
-
-    public static string ShapeName(KeyShape shape) => shape switch
-    {
-        KeyShape.Single => "single",
-        KeyShape.Many => "many",
-        KeyShape.Cross => "cross",
-        _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
     };
 
     public static string Hex(ulong value) => value.ToString("x16", CultureInfo.InvariantCulture);

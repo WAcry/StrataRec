@@ -71,10 +71,8 @@ public class LocalTableBaseDirectoryTests
 
     private static LocalTableSpec Spec(string? baseDirectory)
     {
-        var entity = new StrataRec.Features.Catalog.EntityDefinition
-        {
-            Name = "item", Kind = StrataRec.Features.Catalog.EntityKind.Candidate, CandidateKeyColumn = "entity_id", CandidateKeyType = EntityKeyType.Int64,
-        };
+        var entity = StrataRec.Features.Catalog.EntityDefinition.Of(
+            "item", StrataRec.Features.Catalog.EntityKeyPartDefinition.EntityId(EntityKeyType.Int64));
         var schema = new LocalTableSchema("item_store", entity.Name, EntityKeyType.Int64, LocalTableMode.Local, new[] { new LocalTableField("score", ColumnType.Float64) });
         var binding = ArtifactSerializer.Deserialize<FeatureSourceBinding>(
             """{ "mode": "local", "max_bytes": "1MiB", "bootstrap": { "source": "snapshot_files@1", "uri": "snap" } }""");

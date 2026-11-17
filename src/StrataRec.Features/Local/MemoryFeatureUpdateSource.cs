@@ -4,16 +4,17 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.Features.Local;
 
-/// <summary>One update held by a <see cref="MemoryFeatureUpdateSource"/>: field values by physical name
-/// (<see cref="ScalarValue.Missing"/> clears a field), or a tombstone when <see cref="Fields"/> is null.</summary>
-public sealed record MemoryFeatureUpdate(EntityKey Key, long Version, IReadOnlyDictionary<string, ScalarValue>? Fields)
+/// <summary>One update held by a <see cref="MemoryFeatureUpdateSource"/>: the key's parts in declared order (one for a
+/// one-part key), field values by physical name (<see cref="ScalarValue.Missing"/> clears a field), or a tombstone when
+/// <see cref="Fields"/> is null.</summary>
+public sealed record MemoryFeatureUpdate(IReadOnlyList<EntityKey> Key, long Version, IReadOnlyDictionary<string, ScalarValue>? Fields)
 {
     public bool IsDelete => Fields is null;
 }
 
 /// <summary>
 /// <c>memory_updates@1</c>: an update stream held in memory, for tests and samples. Updates are appended with
-/// <see cref="Upsert"/> and <see cref="Delete"/>; <see cref="RunAsync"/> applies them in order as one partition (offset =
+/// <see cref="Upsert(EntityKey[], long, IReadOnlyDictionary{string, ScalarValue})"/> and <see cref="Delete(EntityKey[], long)"/> (or their one-part forms); <see cref="RunAsync"/> applies them in order as one partition (offset =
 /// index of the next update), checkpoints after each batch, and waits for more until <see cref="Complete"/> or cancellation.
 /// </summary>
 /// <remarks>Not built for speed: values arrive as <see cref="ScalarValue"/>s and go through <see cref="RecordBuilder.Set"/>.</remarks>
@@ -40,13 +41,25 @@ public sealed class MemoryFeatureUpdateSource : IFeatureUpdateSource
         }
     }
 
-    public void Upsert(EntityKey key, long version, IReadOnlyDictionary<string, ScalarValue> fields)
+    /// <summary>Appends an update of a one-part key.</summary>
+    public void Upsert(EntityKey key, long version, IReadOnlyDictionary<string, ScalarValue> fields) => Upsert([key], version, fields);
+
+    /// <summary>Appends an update of a key given by its parts in declared order; a key that is not one of the table's
+    /// fails the run at <c>/key</c>.</summary>
+    public void Upsert(EntityKey[] key, long version, IReadOnlyDictionary<string, ScalarValue> fields)
     {
+        ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(fields);
-        Append(new MemoryFeatureUpdate(key, version, fields));
+        Append(new MemoryFeatureUpdate((EntityKey[])key.Clone(), version, fields));
     }
 
-    public void Delete(EntityKey key, long version) => Append(new MemoryFeatureUpdate(key, version, null));
+    public void Delete(EntityKey key, long version) => Delete([key], version);
+
+    public void Delete(EntityKey[] key, long version)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        Append(new MemoryFeatureUpdate((EntityKey[])key.Clone(), version, null));
+    }
 
     /// <summary>No more updates: <see cref="RunAsync"/> returns once it has applied the ones appended so far.</summary>
     public void Complete()
@@ -108,13 +121,14 @@ public sealed class MemoryFeatureUpdateSource : IFeatureUpdateSource
 
     private static void Apply(MemoryFeatureUpdate update, int offset, IFeatureTableWriter writer)
     {
+        var key = KeyOf(update, offset, writer.Schema);
         if (update.Fields is null)
         {
-            writer.Delete(update.Key, update.Version);
+            writer.Delete(key, update.Version);
             return;
         }
 
-        var builder = writer.Begin(update.Key, update.Version);
+        var builder = writer.Begin(key, update.Version);
         foreach (var (name, value) in update.Fields)
         {
             if (!writer.Schema.TryGetFieldIndex(name, out var field))
@@ -134,6 +148,37 @@ public sealed class MemoryFeatureUpdateSource : IFeatureUpdateSource
         }
 
         builder.Commit();
+    }
+
+    /// <summary>The update's key, checked against the table's key layout: another number of parts or a part of another type
+    /// is a <see cref="FeatureUpdateException"/> at <c>/key</c> (or <c>/key/&lt;i&gt;</c>) saying what the table is keyed by.</summary>
+    private static EntityKey[] KeyOf(MemoryFeatureUpdate update, int offset, LocalTableSchema schema)
+    {
+        var key = new EntityKey[update.Key.Count];
+        for (var p = 0; p < key.Length; p++)
+        {
+            key[p] = update.Key[p];
+        }
+
+        var layout = schema.Key;
+        if (key.Length != layout.PartCount)
+        {
+            throw new FeatureUpdateException($"{Type} update {offset}", "/key",
+                $"The key has {key.Length} part(s); table {schema.Source}/{schema.Entity} is keyed by {layout.PartCount}: {layout.TypeText}.",
+                "write the key as " + schema.KeyHint());
+        }
+
+        for (var p = 0; p < key.Length; p++)
+        {
+            if (key[p].IsString != (layout[p].Type == EntityKeyType.String))
+            {
+                throw new FeatureUpdateException($"{Type} update {offset}", layout.PartCount == 1 ? "/key" : "/key/" + p,
+                    $"Key part {p} ({layout[p].Reference}) is {(key[p].IsString ? "a string" : "an int64")}; table {schema.Source}/{schema.Entity} is keyed by {layout.TypeText}.",
+                    "write the key as " + schema.KeyHint());
+            }
+        }
+
+        return key;
     }
 
     private void Append(MemoryFeatureUpdate update)

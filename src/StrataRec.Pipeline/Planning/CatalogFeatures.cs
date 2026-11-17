@@ -141,23 +141,37 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
 
     public void NoteRead(string name, bool context)
     {
-        // A feature of an entity keyed by a feature reads the key too (it is fetched first, design 6.7), and so on along
-        // the chain (review 69: a deprecated key read only through its entity's features did not warn). Bounded, as a
-        // chain that loops is an error reported elsewhere.
-        for (var depth = 0; _deprecated is not null && depth < 16 && _catalog.TryGet(name, out var feature) && feature.IsContext == context; depth++)
+        // A feature of an entity keyed by features reads its key features too (they are fetched first, design 6.7), and
+        // so on along the chains (review 69: a deprecated key read only through its entity's features did not warn). Each
+        // feature once, so a chain that loops (an error reported elsewhere) ends.
+        if (_deprecated is null || !_catalog.TryGet(name, out var first) || first.IsContext != context)
         {
+            return;
+        }
+
+        var pending = new Stack<FeatureDefinition>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        pending.Push(first);
+        while (pending.Count > 0)
+        {
+            var feature = pending.Pop();
+            if (!seen.Add(feature.Name))
+            {
+                continue;
+            }
+
             if (feature.Deprecated)
             {
-                _deprecatedReads.Add(name);
+                _deprecatedReads.Add(feature.Name);
             }
 
-            if (!feature.Entity.KeyIsFeature)
+            foreach (var part in feature.Entity.Key)
             {
-                break;
+                if (part.Kind == EntityKeyPartKind.Feature && _catalog.TryGet(part.Name, out var key) && !key.IsContext)
+                {
+                    pending.Push(key);
+                }
             }
-
-            name = feature.Entity.CandidateKeyColumn!;
-            context = false;
         }
     }
 
@@ -225,13 +239,17 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
         return true;
     }
 
-    /// <summary>A physical feature: its key first when its entity is keyed by a feature (design 6.7: the key is fetched
-    /// first); an entity whose key cannot be registered has none, and its features fail with the key's error.</summary>
+    /// <summary>A physical feature: its key features first when its entity's key reads features (design 6.7: they are
+    /// fetched first); an entity a key feature of which cannot be registered has no key, and its features fail with the
+    /// key's error.</summary>
     private bool RegisterPhysical(FeatureDefinition feature)
     {
-        if (feature.Entity.KeyIsFeature && !TryRegister("col." + feature.Entity.CandidateKeyColumn))
+        foreach (var part in feature.Entity.Key)
         {
-            return false;
+            if (part.Kind == EntityKeyPartKind.Feature && !TryRegister("col." + part.Name))
+            {
+                return false;
+            }
         }
 
         Add(feature, feature.Type, null, []);

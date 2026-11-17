@@ -18,19 +18,20 @@ public sealed class FeatureCatalogArtifact
 
 /// <summary>An entity that features hang off (design 6.2).</summary>
 /// <remarks>
-/// Only the key is declared. Whether the entity is per request or per candidate, and the key's type, follow from it: a
-/// request input (<c>ctx.request.user_id</c>) keys a context entity and has its declared type; <c>col.entity_id</c> keys
-/// the candidates and has the pipeline's <c>entity_key_type</c>; a feature (<c>col.item.creator_id</c>) is a foreign key
-/// of that feature's type; a request input and a candidate column together key a cross entity. Declaring scope and key
-/// type as well only gave them a way to disagree: a <c>key_type</c> of int64 on <c>col.entity_id</c> in a pipeline of
-/// string ids made every lookup miss without an error.
+/// Only the key is declared, an ordered tuple of parts. Whether the entity is per request or per candidate, and each
+/// part's type, follow from it: a request input (<c>ctx.request.user_id</c>) has its declared type; <c>col.entity_id</c>
+/// the pipeline's <c>entity_key_type</c>; a candidate feature (<c>col.item.creator_id</c>, a foreign key) that feature's
+/// type. A key of request inputs only keys a context entity; any other a candidate entity. Declaring scope and key type
+/// as well only gave them a way to disagree: a <c>key_type</c> of int64 on <c>col.entity_id</c> in a pipeline of string
+/// ids made every lookup miss without an error.
 /// </remarks>
 public sealed class EntitySpec
 {
     /// <summary>
-    /// What keys the entity: a request input (<c>ctx.request.user_id</c>), the candidate id (<c>col.entity_id</c>), a
-    /// candidate feature (<c>col.item.creator_id</c>), or for a cross entity a list of a request input and a candidate
-    /// column. Each key is an int64 or a string.
+    /// What keys the entity: one reference, or a list of 1 to 8 distinct ones in the order of the key's parts. A part is a
+    /// request input (<c>ctx.request.user_id</c>), the candidate id (<c>col.entity_id</c>) or a candidate feature
+    /// (<c>col.item.creator_id</c>), of type int64 or string, e.g. <c>["col.entity_id", "ctx.request.country"]</c>. A key of
+    /// request inputs only is one per request; a key with a missing part is not looked up.
     /// </summary>
     public required JsonNode Key { get; init; }
 

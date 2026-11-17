@@ -28,7 +28,7 @@ public class FetchChunkTests
         var connector = new ScriptedConnector(async (keys, fields, writer, token) =>
         {
             tokens.Enqueue(token);
-            var key = keys.CandidateKeys.Span[0].Int64Value;
+            var key = keys.Keys.Span[0].Int64Value;
             if (key == 1)
             {
                 await late.Task; // ignores cancellation and finishes after the budget
@@ -135,7 +135,7 @@ public class FetchChunkTests
         };
         var connector = new ScriptedConnector((keys, _, _, token) =>
         {
-            var key = keys.CandidateKeys.Span[0].Int64Value;
+            var key = keys.Keys.Span[0].Int64Value;
             if (key == 2)
             {
                 token.Register(() =>
@@ -193,7 +193,7 @@ public class FetchChunkTests
         var sent = new ConcurrentQueue<long>();
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
-            sent.Enqueue(keys.CandidateKeys.Span[0].Int64Value);
+            sent.Enqueue(keys.Keys.Span[0].Int64Value);
             var clock = Stopwatch.StartNew();
             while (clock.ElapsedMilliseconds < 150)
             {
@@ -294,7 +294,7 @@ public class FetchChunkTests
         using var hang = new ManualResetEventSlim();
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
-            if (keys.CandidateKeys.Span[0].Int64Value == 1)
+            if (keys.Keys.Span[0].Int64Value == 1)
             {
                 ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 2.0);
                 return ValueTask.FromResult(FetchStatus.Ok);
@@ -337,7 +337,7 @@ public class FetchChunkTests
         static object? ValueOf(long key, string field) => field == "tag" ? "t" + key : key * 1.5;
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
-            var key = keys.CandidateKeys.Span[0].Int64Value;
+            var key = keys.Keys.Span[0].Int64Value;
             writers[key] = writer;
             if (key is 1 or 4)
             {
@@ -406,7 +406,7 @@ public class FetchChunkTests
         var hook = new DecisionHook();
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
-            var first = keys.CandidateKeys.Span[0].Int64Value;
+            var first = keys.Keys.Span[0].Int64Value;
             if (first == 1)
             {
                 return OnThread(start, () =>
@@ -619,7 +619,7 @@ public class FetchChunkTests
         {
             lock (_awaited)
             {
-                Outcomes[call.Batch.CandidateKeys.Span[0].Int64Value] = (call.Outcome, Stopwatch.GetTimestamp());
+                Outcomes[call.Batch.Keys.Span[0].Int64Value] = (call.Outcome, Stopwatch.GetTimestamp());
                 _decided++;
                 foreach (var (count, reached) in _awaited)
                 {

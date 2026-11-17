@@ -161,7 +161,7 @@ public sealed class LocalTableSpec
         {
             ["source"] = schema.Source,
             ["entity"] = schema.Entity,
-            ["key_type"] = schema.KeyType == EntityKeyType.String ? "string" : "int64",
+            ["key_type"] = schema.Key.TypeText, // "int64" or "string" for one part, "(int64,string)" for several
             ["mode"] = schema.Mode.ToString(),
             ["fields"] = fieldArray,
             ["binding"] = ArtifactSerializer.ToNode(binding),

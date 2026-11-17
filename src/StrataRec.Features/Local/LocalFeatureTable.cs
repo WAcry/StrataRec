@@ -22,8 +22,8 @@ public sealed class LocalFeatureTableOptions
     /// <summary>Keys the index holds before it first grows (a snapshot's record count, when known).</summary>
     public int InitialCapacity { get; init; }
 
-    /// <summary>String-key hash; tests inject a weak one to force collisions. Defaults to XXH3-64 of the UTF-16 key.</summary>
-    internal StringKeyHasher? StringKeyHasher { get; init; }
+    /// <summary>The hash of a hashed key (<see cref="TableKeys"/>); tests inject a weak one to force collisions. Defaults to XXH3-64 of the key's canonical bytes.</summary>
+    internal KeyHasher? KeyHasher { get; init; }
 
     /// <summary>The cache policy of a table in mode <see cref="LocalTableMode.Cache"/> (required there, and only there).</summary>
     public Cache.CacheTableOptions? Cache { get; init; }
@@ -107,7 +107,7 @@ public sealed class LocalFeatureTable
         }
 
         _current = new TableVersion(
-            layout, Options.StringKeyHasher ?? StringKeyHashes.Default, Options.PageSize, generation: 0, Options.InitialCapacity);
+            layout, Options.KeyHasher ?? KeyHashes.Default, Options.PageSize, generation: 0, Options.InitialCapacity);
         if (_current.Bytes > Options.MaxBytes)
         {
             // Every write checks the limit, so the empty table must be within it too.

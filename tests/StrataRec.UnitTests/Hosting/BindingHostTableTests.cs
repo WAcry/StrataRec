@@ -449,10 +449,8 @@ public class BindingHostTableTests
     /// is its own factory, so the specs of one source share a table.</summary>
     private static LocalTableSpec Spec(IFeatureUpdateSourceFactory factory, string maxBytes = "1MiB")
     {
-        var entity = new StrataRec.Features.Catalog.EntityDefinition
-        {
-            Name = "item", Kind = StrataRec.Features.Catalog.EntityKind.Candidate, CandidateKeyColumn = "entity_id", CandidateKeyType = EntityKeyType.Int64,
-        };
+        var entity = StrataRec.Features.Catalog.EntityDefinition.Of(
+            "item", StrataRec.Features.Catalog.EntityKeyPartDefinition.EntityId(EntityKeyType.Int64));
         var schema = new LocalTableSchema("item_store", entity.Name, EntityKeyType.Int64, LocalTableMode.Local, new[] { new LocalTableField("score", ColumnType.Float64) });
         var binding = ArtifactSerializer.Deserialize<FeatureSourceBinding>(
             $$"""{ "mode": "local", "max_bytes": "{{maxBytes}}", "bootstrap": { "source": "scripted@1" } }""");

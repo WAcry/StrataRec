@@ -387,12 +387,13 @@ public sealed class ManifestRefCliTests
         Assert.Contains("Pipeline 'primary' falls back to 'backup', which a run on one manifest does not load", errors);
     }
 
-    /// <summary>The sample's local table snapshot, named absolutely (see <see cref="ManifestStores.Workspace"/>).</summary>
+    /// <summary>The sample's local table snapshots, named absolutely (see <see cref="ManifestStores.Workspace"/>).</summary>
     private static void AbsoluteSnapshot(string root)
     {
         var path = Path.Combine(root, "bindings", "local.jsonc");
-        File.WriteAllText(path, File.ReadAllText(path).Replace("\"fixtures/author_snapshot\"",
-            JsonSerializer.Serialize(Path.Combine(root, "fixtures", "author_snapshot")), StringComparison.Ordinal));
+        File.WriteAllText(path, File.ReadAllText(path)
+            .Replace("\"fixtures/author_snapshot\"", JsonSerializer.Serialize(Path.Combine(root, "fixtures", "author_snapshot")), StringComparison.Ordinal)
+            .Replace("\"fixtures/item_country_snapshot\"", JsonSerializer.Serialize(Path.Combine(root, "fixtures", "item_country_snapshot")), StringComparison.Ordinal));
     }
 
     private static async Task<(int Code, string Output, string Errors)> Run(

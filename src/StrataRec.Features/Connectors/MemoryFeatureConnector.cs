@@ -12,19 +12,20 @@ namespace StrataRec.Features.Connectors;
 /// </summary>
 /// <remarks>
 /// Settings: either <c>"data"</c> (inline object) or <c>"data_file"</c> (path relative to the config root), plus optional
-/// <c>"latency_ms"</c> and <c>"fail": true</c> for fault injection. Data layout:
+/// <c>"latency_ms"</c> and <c>"fail": true</c> for fault injection. Data layout: one object level per key part, in the
+/// order the entity declares its key, then the fields:
 /// <code>
-/// { "10042": { "i_clk_7d": 12.0, "i_author_id": 7 } }            // Single / Many: key → fields
-/// { "123":   { "10042": { "ui_eng_30d": 3.0 } } }                  // Cross: context key → candidate key → fields
+/// { "10042": { "i_clk_7d": 12.0, "i_author_id": 7 } }            // one part: key → fields
+/// { "10042": { "US": { "boost": 1.2 } } }                          // [col.entity_id, ctx.request.country]: item → country → fields
 /// </code>
-/// Keys are JSON property names (int64 keys in decimal). Absent keys or fields are reported as missing.
-/// <para>Names that are canonical int64 decimals are also indexed by <c>long</c> when the data is loaded (top-level
-/// keys, and the candidate keys of a <c>Cross</c> record), so int64 lookups format no strings per key.</para>
+/// Key parts are JSON property names (int64 parts in decimal). Absent keys or fields are reported as missing. Every key
+/// layout is supported.
+/// <para>Names that are canonical int64 decimals are also indexed by <c>long</c>, so int64 lookups format no strings per
+/// key: the top level when the data is loaded, each nested level the first time a lookup goes through it.</para>
 /// </remarks>
 public sealed class MemoryFeatureConnector : IFeatureSourceConnector
 {
-    private readonly Dictionary<string, Record> _rows;
-    private readonly Dictionary<long, Record> _int64Rows;
+    private readonly Node _root;
     private readonly int _latencyMs;
     private readonly bool _fail;
 
@@ -35,27 +36,16 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
             throw new FormatException("memory@1 data must be a JSON object keyed by entity key.");
         }
 
-        // Later duplicates win, as JsonElement.TryGetProperty resolves them (the nested Cross index does the same).
-        _rows = new Dictionary<string, Record>(StringComparer.Ordinal);
-        _int64Rows = new Dictionary<long, Record>();
-        foreach (var property in data.EnumerateObject())
-        {
-            var value = property.Value.Clone();
-            var record = new Record(value, IndexInt64Properties(value));
-            _rows[property.Name] = record;
-            if (TryParseCanonicalInt64(property.Name, out var id))
-            {
-                _int64Rows[id] = record;
-            }
-        }
-
+        _root = new Node(data.Clone());
+        _root.Index(); // the top level now, so a one-part lookup never builds anything
         _latencyMs = latencyMs;
         _fail = fail;
     }
 
     public string ConnectorType => MemoryFeatureConnectorFactory.Type;
 
-    public bool Supports(KeyShape shape) => shape is KeyShape.Single or KeyShape.Many or KeyShape.Cross;
+    /// <summary>Every layout: the data nests one level per part.</summary>
+    public bool Supports(EntityKeyLayout layout) => true;
 
     public async ValueTask<FetchStatus> FetchAsync(
         EntityKeyBatch keys, ReadOnlyMemory<CompiledFieldBinding> fields, IFeatureBatchWriter writer, CancellationToken cancellationToken)
@@ -76,83 +66,36 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
 
     private FetchStatus Serve(EntityKeyBatch keys, ReadOnlyMemory<CompiledFieldBinding> fields, IFeatureBatchWriter writer)
     {
-        switch (keys.Shape)
+        if (keys.PartCount == 1 && !keys.IsShared(0))
         {
-            case KeyShape.Single:
-                if (TryGetRecord(keys.ContextKey, out var single))
-                {
-                    WriteRecord(single.Value, 0, fields.Span, writer);
-                }
-
-                break;
-            case KeyShape.Many:
-                var many = keys.CandidateKeys.Span;
-                for (var i = 0; i < many.Length; i++)
-                {
-                    if (TryGetRecord(many[i], out var record))
-                    {
-                        WriteRecord(record.Value, i, fields.Span, writer);
-                    }
-                }
-
-                break;
-            case KeyShape.Cross:
-                if (TryGetRecord(keys.ContextKey, out var byCandidate) && byCandidate.Value.ValueKind == JsonValueKind.Object)
-                {
-                    var cand = keys.CandidateKeys.Span;
-                    for (var i = 0; i < cand.Length; i++)
-                    {
-                        var found = cand[i].StringValue is { } name
-                            ? byCandidate.Value.TryGetProperty(name, out var record)
-                            : TryGetNested(byCandidate, cand[i].Int64Value, out record);
-                        if (found)
-                        {
-                            WriteRecord(record, i, fields.Span, writer);
-                        }
-                    }
-                }
-
-                break;
-            default:
-                return FetchStatus.Failed($"memory@1 does not support {keys.Shape}.");
-        }
-
-        return FetchStatus.Ok;
-    }
-
-    private bool TryGetRecord(in EntityKey key, out Record record) => key.StringValue is { } name
-        ? _rows.TryGetValue(name, out record)
-        : _int64Rows.TryGetValue(key.Int64Value, out record);
-
-    private static bool TryGetNested(in Record record, long key, out JsonElement value)
-    {
-        if (record.NestedByInt64 is { } nested)
-        {
-            return nested.TryGetValue(key, out value);
-        }
-
-        value = default;
-        return false;
-    }
-
-    /// <summary>The properties of an object whose names are canonical int64 decimals (the candidate keys of Cross data).</summary>
-    private static Dictionary<long, JsonElement>? IndexInt64Properties(JsonElement value)
-    {
-        if (value.ValueKind != JsonValueKind.Object)
-        {
-            return null;
-        }
-
-        Dictionary<long, JsonElement>? index = null;
-        foreach (var property in value.EnumerateObject())
-        {
-            if (TryParseCanonicalInt64(property.Name, out var id))
+            var one = keys.Part(0).Span;
+            for (var i = 0; i < one.Length; i++)
             {
-                (index ??= new Dictionary<long, JsonElement>())[id] = property.Value;
+                if (_root.TryGet(one[i], out var record))
+                {
+                    WriteRecord(record.Value, i, fields.Span, writer);
+                }
+            }
+
+            return FetchStatus.Ok;
+        }
+
+        for (var i = 0; i < keys.Count; i++)
+        {
+            var node = _root;
+            var found = true;
+            for (var p = 0; p < keys.PartCount && found; p++)
+            {
+                found = node.TryGet(keys.Key(i, p), out node);
+            }
+
+            if (found)
+            {
+                WriteRecord(node.Value, i, fields.Span, writer);
             }
         }
 
-        return index;
+        return FetchStatus.Ok;
     }
 
     /// <summary>
@@ -295,16 +238,64 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
             "fix the data or declare the field with an int64 type.");
     }
 
-    /// <summary>A top-level entry; for Cross data its properties are candidate keys, indexed by int64 when canonical.</summary>
-    private readonly record struct Record(JsonElement Value, Dictionary<long, JsonElement>? NestedByInt64);
+    /// <summary>
+    /// One level of the data: an object whose properties are the values of one key part (or, at the last level, a record's
+    /// fields). Indexed on first use, by name and, for canonical int64 names, by <c>long</c>; later duplicates win, as
+    /// <see cref="JsonElement.TryGetProperty(string, out JsonElement)"/> resolves them.
+    /// </summary>
+    private sealed class Node(JsonElement value)
+    {
+        private Levels? _levels;
+
+        public JsonElement Value { get; } = value;
+
+        public bool TryGet(in EntityKey key, out Node child)
+        {
+            var levels = Index();
+            if (levels is null)
+            {
+                child = null!;
+                return false;
+            }
+
+            return key.StringValue is { } name ? levels.ByName.TryGetValue(name, out child!) : levels.ByInt64.TryGetValue(key.Int64Value, out child!);
+        }
+
+        /// <summary>The node's properties, indexed once (concurrent first uses may both build; one index wins, the same).</summary>
+        public Levels? Index()
+        {
+            if (Volatile.Read(ref _levels) is { } built || Value.ValueKind != JsonValueKind.Object)
+            {
+                return _levels;
+            }
+
+            var byName = new Dictionary<string, Node>(StringComparer.Ordinal);
+            var byInt64 = new Dictionary<long, Node>();
+            foreach (var property in Value.EnumerateObject())
+            {
+                var child = new Node(property.Value);
+                byName[property.Name] = child;
+                if (TryParseCanonicalInt64(property.Name, out var id))
+                {
+                    byInt64[id] = child;
+                }
+            }
+
+            Interlocked.CompareExchange(ref _levels, new Levels(byName, byInt64), null);
+            return _levels;
+        }
+    }
+
+    private sealed record Levels(Dictionary<string, Node> ByName, Dictionary<long, Node> ByInt64);
 }
 
 /// <summary>Settings of <c>memory@1</c>.</summary>
 public sealed class MemoryConnectorSettings
 {
     /// <summary>
-    /// The records, by entity key: <c>{ "10042": { "i_clk_7d": 12.0 } }</c>, or for a cross entity, context key to candidate
-    /// key to fields. Not with <c>data_file</c>; without either, there are none.
+    /// The records, by entity key: <c>{ "10042": { "i_clk_7d": 12.0 } }</c>; for a key of several parts, one object level per
+    /// part in the entity's key order, e.g. item, then country, then fields. Not with <c>data_file</c>; without either, there
+    /// are none.
     /// </summary>
     public JsonElement? Data { get; init; }
 

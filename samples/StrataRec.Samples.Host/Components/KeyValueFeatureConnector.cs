@@ -47,8 +47,12 @@ public sealed class KeyValueFeatureConnector : IFeatureSourceConnector, ILoadabl
 
     public string ConnectorType => KeyValueFeatureConnectorFactory.Type;
 
-    /// <summary>Context entities (a user) are fetched as <see cref="KeyShape.Single"/>, candidates as <see cref="KeyShape.Many"/>.</summary>
-    public bool Supports(KeyShape shape) => shape is KeyShape.Single or KeyShape.Many;
+    /// <summary>
+    /// Entities keyed by one int64: a context entity (a user, one key per call) or a candidate entity (an item, many). Asked
+    /// once when a plan is compiled, so an entity keyed otherwise (a string, several parts) is a configuration error
+    /// (<c>CONNECTOR_KEY</c>) rather than a failed fetch on every request.
+    /// </summary>
+    public bool Supports(EntityKeyLayout layout) => layout.PartCount == 1 && layout[0].Type == EntityKeyType.Int64;
 
     public async ValueTask LoadAsync(CancellationToken cancellationToken)
     {
@@ -88,8 +92,7 @@ public sealed class KeyValueFeatureConnector : IFeatureSourceConnector, ILoadabl
     private FetchStatus Serve(in EntityKeyBatch keys, ReadOnlySpan<CompiledFieldBinding> fields, IFeatureBatchWriter writer)
     {
         var store = _store ?? throw new InvalidOperationException("kv_store@1 was called before it was loaded.");
-        var contextKey = keys.ContextKey;
-        var batch = keys.Shape == KeyShape.Single ? new ReadOnlySpan<EntityKey>(in contextKey) : keys.CandidateKeys.Span;
+        var batch = keys.Keys.Span; // one int64 part (Supports): one key per staging row
 
         // The record of each key, looked up once and shared by every field. Rented, not allocated: a request makes many calls.
         var records = ArrayPool<int>.Shared.Rent(Math.Max(1, batch.Length));
@@ -97,11 +100,6 @@ public sealed class KeyValueFeatureConnector : IFeatureSourceConnector, ILoadabl
         {
             for (var i = 0; i < batch.Length; i++)
             {
-                if (batch[i].IsString)
-                {
-                    return FetchStatus.Failed("kv_store@1 is keyed by int64; key the entity by int64 ids (an int64 entity_key_type, request input or key feature).");
-                }
-
                 records[i] = store.Records.TryGetValue(batch[i].Int64Value, out var record) ? record : -1;
             }
 

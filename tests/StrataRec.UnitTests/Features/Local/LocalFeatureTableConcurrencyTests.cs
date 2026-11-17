@@ -69,7 +69,7 @@ public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
                 CompactionMinBytes = 64 * 1024,
 
                 // 2,048 hash values for 12,000 string keys: collisions everywhere, on top of the probe chains.
-                StringKeyHasher = keyType == EntityKeyType.String ? static key => XxHash3.HashToUInt64(MemoryMarshal.AsBytes(key)) % 2048 : null,
+                KeyHasher = keyType == EntityKeyType.String ? static key => XxHash3.HashToUInt64(key) % 2048 : null,
             });
         var writer = table.Writer;
         var model = new Dictionary<long, (long Version, long QStamp, long PStamp, bool Deleted)>();

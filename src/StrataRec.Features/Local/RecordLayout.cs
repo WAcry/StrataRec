@@ -16,15 +16,18 @@ namespace StrataRec.Features.Local;
 /// 8   int32  length        bytes of the whole record, fixed part plus variable data, a multiple of 8
 /// 12  uint8  flags         bit 0: tombstone
 /// 13  uint8[V] validity    bit f set = field f has a value (V = ceil(fields / 8))
-/// …   int32  key offset    string-keyed tables only: the UTF-16 key, relative to the record start
-///     int32  key length    in chars
+/// …   int32  key offset    hashed keys only: the key's canonical bytes (<see cref="TableKeys"/>), relative to the record start
+///     int32  key length    in bytes
 /// H   fields               8-byte values first (int64, float64, variable-length references), then 4-byte values
 ///                          (int32, float32, string codes), then bools; each at its natural alignment
-/// F   variable data        lists (native elements, a bool one byte; list&lt;string&gt; as string codes), the string key
-///                          (UTF-16); each item 8-byte aligned
+/// F   variable data        lists (native elements, a bool one byte; list&lt;string&gt; as string codes), the key's bytes;
+///                          each item 8-byte aligned
 /// </code>
 /// <para>A variable-length field's slot holds <c>(int32 offset relative to the record start, int32 element count)</c>.
-/// A tombstone is just the header (validity all clear), plus the key for string-keyed tables.</para>
+/// A tombstone is just the header (validity all clear), plus the key's bytes for hashed keys.</para>
+/// <para>A one-part int64 key is the index's key itself and is not stored. Every other key (one string part, or several
+/// parts) is hashed: the index holds the XXH3-64 of its canonical bytes and the record the bytes, which a lookup compares.
+/// A one-string key's bytes are its UTF-16 code units, as before keys had several parts.</para>
 /// <para>A fixed-length list (<c>list&lt;float32,64&gt;</c>) is a list here like any other: the table stores what its writer
 /// wrote, and a read checks the length (<see cref="TableVersion"/>'s fill, as a request's other writers do), so one layout
 /// and one copy loop serve every list.</para>
@@ -42,10 +45,10 @@ internal sealed class RecordLayout
         Schema = schema;
         var count = schema.FieldCount;
         FieldCount = count;
-        StringKeys = schema.KeyType == EntityKeyType.String;
+        HashedKeys = TableKeys.IsHashed(schema.Key);
         ValidityBytes = (count + 7) / 8;
         var cursor = ValidityOffset + ValidityBytes;
-        if (StringKeys)
+        if (HashedKeys)
         {
             cursor = Align(cursor, 4);
             KeyRefOffset = cursor;
@@ -112,11 +115,12 @@ internal sealed class RecordLayout
 
     public int FieldCount { get; }
 
-    public bool StringKeys { get; }
+    /// <summary>True unless the key is one int64 part: records hold the key's canonical bytes and the index their hash.</summary>
+    public bool HashedKeys { get; }
 
     public int ValidityBytes { get; }
 
-    /// <summary>Offset of the (key offset, key length) pair; -1 for int64-keyed tables.</summary>
+    /// <summary>Offset of the (key offset, key length in bytes) pair; -1 for a one-part int64 key.</summary>
     public int KeyRefOffset { get; }
 
     /// <summary>Bytes of the header, which is also the fixed part of a tombstone.</summary>
