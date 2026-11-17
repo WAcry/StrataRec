@@ -28,8 +28,12 @@ namespace StrataRec.Features.Local;
 /// <code>
 /// {"key": 10042, "version": 17, "fields": {"i_clk_7d": 12.0, "i_title": "…", "i_emb_v3": [0.1, …], "i_age_h": null}}
 /// {"key": 10043, "version": 18, "deleted": true}
+/// {"key": [10042, "US"], "version": 3, "fields": {"boost": 1.2}}     // a table keyed by (item, country)
+/// {"key": [10042, "DE"], "version": 4, "deleted": true}
 /// </code>
-/// <para><c>key</c> is a JSON number for int64-keyed tables and a string for string-keyed ones; <c>version</c> is an int64.
+/// <para><c>key</c> is the entity's key: for a one-part key a JSON number (int64 part) or string (string part); for a key
+/// of several parts an array of exactly that many, in the entity's declared order, each a number or string as its part's
+/// type says (a wrong count or type is a load error at the key's pointer). <c>version</c> is an int64.
 /// <c>fields</c> uses the store's physical field names; fields the table does not hold are skipped, <c>null</c> is
 /// missing, and an absent field is not written (a later line of the same key keeps the earlier value). Values have the
 /// field's type; floats and float list elements also accept <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c>, which

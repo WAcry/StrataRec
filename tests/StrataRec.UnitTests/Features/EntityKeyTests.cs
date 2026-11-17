@@ -146,6 +146,62 @@ public sealed class EntityKeyTests
     }
 
     [Fact]
+    public void AChainOfEightPartKeys_IsCheckedForCyclesOnce_NotOncePerPath()
+    {
+        // Review 76: each entity's eight parts read eight features of the entity before it, and the cycle check walked
+        // the parent's chain once per part: ten entities took 6 s, fourteen would take hours. Remembering the entities
+        // found acyclic makes it linear.
+        var entities = new JsonObject { ["e00"] = new JsonObject { ["key"] = "col.entity_id" } };
+        var features = new JsonObject();
+        for (var i = 0; i < 14; i++)
+        {
+            if (i > 0)
+            {
+                var parts = new JsonArray();
+                for (var p = 0; p < 8; p++)
+                {
+                    parts.Add($"col.e{i - 1:D2}.k{p}");
+                }
+
+                entities[$"e{i:D2}"] = new JsonObject { ["key"] = parts };
+            }
+
+            for (var p = 0; p < 8; p++)
+            {
+                features[$"e{i:D2}.k{p}"] = new JsonObject { ["type"] = "int64", ["source"] = "s", ["field"] = $"k{p}" };
+            }
+        }
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var catalog = Build(entities.ToJsonString(), EntityKeyType.Int64, out var diagnostics, extraFeatures: features.ToJsonString());
+        watch.Stop();
+
+        Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
+        Assert.True(catalog.Entities.ContainsKey("e13"));
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"{watch.Elapsed.TotalMilliseconds} ms"); // milliseconds when linear
+    }
+
+    [Fact]
+    public void AnEntityFoundAcyclic_DoesNotHideACycleReachedAnotherWay()
+    {
+        // 'a' is checked first and marks 'z' acyclic; 'b' reaches 'z' (skipped) and the b-c cycle (found).
+        Build("""
+            {
+              "z": { "key": "col.entity_id" },
+              "a": { "key": "col.z.k" },
+              "b": { "key": ["col.z.k", "col.c.k"] },
+              "c": { "key": "col.b.k" }
+            }
+            """, EntityKeyType.Int64, out var diagnostics, extraFeatures: """
+            { "z.k": { "type": "int64", "source": "s", "field": "k" }, "b.k": { "type": "int64", "source": "s", "field": "k" },
+              "c.k": { "type": "int64", "source": "s", "field": "k" } }
+            """);
+
+        var cycles = diagnostics.Items.Where(d => d.Code == "ENTITY_KEY_CYCLE").Select(d => d.Pointer).Order(StringComparer.Ordinal);
+        Assert.Equal(["/entities/b/key/1", "/entities/c/key"], cycles);
+    }
+
+    [Fact]
     public void LayoutEquality_IsOverReferencesTypesAndSharing()
     {
         var a = new EntityKeyLayout([new EntityKeyPart("col.entity_id", EntityKeyType.Int64, false), new EntityKeyPart("ctx.request.c", EntityKeyType.String, true)]);

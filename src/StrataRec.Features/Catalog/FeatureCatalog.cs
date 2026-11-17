@@ -560,20 +560,23 @@ public sealed class FeatureCatalog
     /// <summary>
     /// Key chains must end (design 6.7: cycles are configuration errors): an entity whose key reads a feature of an entity
     /// whose key leads back to one already on the way is an <c>ENTITY_KEY_CYCLE</c>, at the part that leads into it. Every
-    /// feature part is an edge, so a cycle through any part of a composite key is found.
+    /// feature part is an edge, so a cycle through any part of a composite key is found. An entity found to lead into no
+    /// cycle is remembered for the whole catalog and not walked again: without it, eight parts reading eight features of
+    /// the same parent walk the parent's chain eight times each, and a valid chain of ten such entities took 6 s (review 76).
     /// </summary>
     private static void ValidateKeyCycles(
         Dictionary<string, EntityDefinition> entities, Dictionary<string, FeatureDefinition> features, DiagnosticBag diagnostics, string artifactName)
     {
         var names = new List<string>(entities.Keys);
         names.Sort(StringComparer.Ordinal);
+        var acyclic = new HashSet<string>(StringComparer.Ordinal); // entities whose key leads into no cycle
         foreach (var name in names)
         {
             var entity = entities[name];
             var path = new HashSet<string>(StringComparer.Ordinal) { entity.Name };
             for (var i = 0; i < entity.Key.Count; i++)
             {
-                if (KeyEntity(entity.Key[i], features) is { } next && CycleFrom(next, path, features) is { } through)
+                if (KeyEntity(entity.Key[i], features) is { } next && CycleFrom(next, path, acyclic, features) is { } through)
                 {
                     diagnostics.Error("ENTITY_KEY_CYCLE", artifactName, KeyPointer(entity, i),
                         $"Key part '{entity.Key[i].Reference}' of '{entity.Name}' leads to a key cycle through entity '{through}'.",
@@ -583,8 +586,15 @@ public sealed class FeatureCatalog
             }
         }
 
-        static string? CycleFrom(EntityDefinition entity, HashSet<string> path, Dictionary<string, FeatureDefinition> features)
+        // Whether a cycle can be reached from an entity does not depend on where the walk started, so what is found
+        // acyclic once holds for every later walk.
+        static string? CycleFrom(EntityDefinition entity, HashSet<string> path, HashSet<string> acyclic, Dictionary<string, FeatureDefinition> features)
         {
+            if (acyclic.Contains(entity.Name))
+            {
+                return null;
+            }
+
             if (!path.Add(entity.Name))
             {
                 return entity.Name;
@@ -592,13 +602,14 @@ public sealed class FeatureCatalog
 
             foreach (var part in entity.Key)
             {
-                if (KeyEntity(part, features) is { } next && CycleFrom(next, path, features) is { } through)
+                if (KeyEntity(part, features) is { } next && CycleFrom(next, path, acyclic, features) is { } through)
                 {
                     return through;
                 }
             }
 
             path.Remove(entity.Name);
+            acyclic.Add(entity.Name);
             return null;
         }
 
