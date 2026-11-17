@@ -315,14 +315,13 @@ public readonly struct ColumnKey<T>
 | `bool` | `bool` | 按位存储 |
 | `int32`、`int64` | `int64` | 读取时提升为 `int64` 计算；写入 `int32` 列时收窄，不回绕 |
 | `float32`、`float64` | `float64` | 读取时提升为 `float64` 计算；写入 `float32` 列时收窄 |
-| `string` | `string` | 字典编码，适合类目、来源这类低基数值；和常量比较时，常量在循环外换成编码 |
-| `text` | `string` | 长文本和高基数的字符串，例如对话上下文、提示词、模型生成的推荐理由、ID、URL；每行存一个字符串，不做字典编码。表达式里按 `string` 读，所有字符串运算都适用，和 `string` 列互相比较 |
+| `string` | `string` | 任意长度的字符串：类目、标题、ID、URL、提示词、模型生成的推荐理由。每行一个字符串引用，不做字典编码；重复的值由产生它的一方共享同一个实例（本地表的字典、连接器写入器的 `Intern`、缓存读取的去重），所以按行复制和比较都不新建字符串 |
 | `list<E>`、`list<E,N>`，`E` 是 `bool`、`int32`、`int64`、`float32`、`float64` 或 `string`，`N ≥ 1` | `list<E 的表达式类型>`（定长时带长度） | 变长或定长列表，每行的元素连续存放；也用于请求输入中的行为序列。向量（embedding）就是定长浮点列表，例如 `list<float32,64>`。元素的提升与标量相同：`list<int32>` 读作 `list<int64>`，`list<float32>` 读作 `list<float64>`，读取时不复制，写入时逐元素收窄。标签、主题、token ID 用 `list<int32>`，权重、价格序列用 `list<float32>`，都比宽类型省一半内存 |
 
 列表是类型构造器，不是每种元素各一个类型：元素能是什么，就是标量能是什么，每一层（存储、表达式、连接器、本地表、日志、结果）对列表只处理一次。三个限制：
 
 1. **列表整体可空，元素不可空。** `list<E>?` 表示这一行可能没有列表；列表里的每个元素都是值。有空缺的序列写成一个值列表加一个标志列表，或由产出方填默认元素。`list<int32?>` 报错并提示写 `list<int32>?`。
-2. **没有 `list<text>`。** `text` 是为单个长文本设计的存储（每行一个字符串、不做字典编码）；列表的元素用 `string`，它本来就可以是任意长度的字符串。写 `list<text>` 时报错并提示 `list<string>`。
+2. **只有一种字符串类型。** 原来还有 `text`（与 `string` 只是存储不同），写 `text`、`text?` 或 `list<text>` 时报错，提示 `string`、`string?`、`list<string>`。
 3. **列表不嵌套**，元素只能是标量。嵌套列表要两层偏移，没有一个内置函数需要它。
 
 **定长列表 `list<E,N>`。** 任何元素类型都可以声明长度，定长列表能用在任何接受同类变长列表的地方。长度给编译期带来两样东西：`dot`、`cosine` 两边声明的长度不同时直接报错；送给模型的张量形状确定（第 6.9 节）。写入长度不是 `N` 的列表，与 int32 越界同样处理（下文）：有 `default` 用默认值，否则缺失，计入 `column_out_of_range_total`。这条规则在写入存储时执行；暂存区、录制和缓存记录保存连接器写入的原值，回放时再执行一次。
@@ -348,12 +347,11 @@ public sealed class CandidateTable : IDisposable
 }
 ```
 
-主键列 `col.entity_id` 的类型由流水线的 `entity_key_type` 声明，可以是 `int64` 或 `string`；`string` 的主键每行各不相同，按 `text` 存（每行一个字符串），不做字典编码。所有缓冲区从池中租借，由请求统一归还（第 4.8 节）。列缓冲有四种实现：
+主键列 `col.entity_id` 的类型由流水线的 `entity_key_type` 声明，可以是 `int64` 或 `string`；`string` 的主键和其他字符串列一样存在字符串列里。所有缓冲区从池中租借，由请求统一归还（第 4.8 节）。列缓冲有三种实现：
 
 1. **标量列 `ScalarColumn<T>`**（`T : unmanaged`）：一个连续数组 `T[] Values`，外加可选的有效位图。整列都有效时位图为 `null`，循环不需要读取它。
-2. **字典编码字符串列 `DictStringColumn`**：`string[] Dictionary` 加 `int[] Codes`。比较 `col.recall.primary_source == 'two_tower'` 时，常量在循环外换成整数编码，循环内比较整数。
-3. **文本列 `TextColumn`**：每行一个 `string` 引用，不做字典编码。长文本大多来自连接器或模型，本来就是 .NET 字符串，转成连续的 UTF-8 再转回来只多两次拷贝。
-4. **列表列 `ListColumn<T>`**（`T` 是元素的存储类型：`bool`、`int`、`long`、`float`、`double`、`string`）：每行一个起点和长度，元素追加在一个共享数组里。与严格的 CSR 偏移不同，行可以按任意顺序写入（回填按物理行的任意顺序写），没写过的行是空列表。定长列表（包括 embedding）也存在这里，每行同样是一段连续的 span，SIMD 点积直接读；长度在写入时检查，所以不需要单独的定长布局。只需要长度的读者（`size()`、模板的段、复制的预算）通过非泛型基类 `ListColumn` 读取，不必知道元素类型。
+2. **字符串列 `StringColumn`**：每行一个 `string` 引用（`string?[]`，从池中租借），不做字典编码。字典编码要求每列每请求建一个字典，值本身也已经是字符串，省不下分配；比较时 `==` 按序数比较，同一实例直接相等，`in` 的常量集合在编译期建好。
+3. **列表列 `ListColumn<T>`**（`T` 是元素的存储类型：`bool`、`int`、`long`、`float`、`double`、`string`）：每行一个起点和长度，元素追加在一个共享数组里。与严格的 CSR 偏移不同，行可以按任意顺序写入（回填按物理行的任意顺序写），没写过的行是空列表。定长列表（包括 embedding）也存在这里，每行同样是一段连续的 span，SIMD 点积直接读；长度在写入时检查，所以不需要单独的定长布局。只需要长度的读者（`size()`、模板的段、复制的预算）通过非泛型基类 `ListColumn` 读取，不必知道元素类型。
 
 ### 4.5 行集合、填充状态与 Compact
 
@@ -629,7 +627,7 @@ internal sealed class RequestMemory
 1. **候选表与实体无关。** 行可以是物品、创作者、商家或一整页结果；主键可以是 `int64` 或 `string`（例如语义 ID）。
 2. **效果集合描述算子对行集合的影响。** 打分、淘汰、重排和生成新候选都是效果的组合（第 5.2 节）。
 3. **模型接口是命名张量和命名文本。** `IModelClient` 的输入和输出都按名字组织，形状由算子决定；算子负责把列映射到模型输入，再把模型输出映射回列或顺序（第 6.9 节）。
-4. **类型系统包含 `text` 和 `list`。** 提示词、生成的文本和用户行为序列都是普通的列或请求输入（第 4.3 节）。
+4. **类型系统包含 `list`。** 提示词、生成的文本（`string` 列）和用户行为序列都是普通的列或请求输入（第 4.3 节）。
 
 因此，新的推荐范式都能表达为一个新算子，不需要修改框架：
 
@@ -639,8 +637,8 @@ internal sealed class RequestMemory
 | 成对排序 | `PairwiseRanker@1` | `{RowOrder, ColumnWriter}`（`score_col` 可选） | 每个命名输入 `[P, 2]` 或 `[P, 2, D]` → 偏好概率 `[P]`；算子按期望胜场聚合成顺序 |
 | 列表级重排 | `ListwiseReranker@1` | `{RowOrder, ColumnWriter}`（`score_col` 可选） | 每个命名输入 `[1, N]` 或 `[1, N, D]` → 分数 `[1, N]` |
 | 生成式召回 | `GenerativeRetriever@1` | `RowSource` | 用户行为序列 `list<int64>` 和上下文 → 生成的物品 ID 或语义 ID 序列 |
-| 大模型重排 | `LlmReranker@1` | `RowOrder`（只保留选中的行时加 `RowFilter`） | 模板渲染的提示词 `text` → 生成文本，解析为有序 ID 列表 |
-| 大模型标注 | `LlmAnnotator@1` | `ColumnWriter` | 每行一个提示词 `text` → 按列类型解析的回答：文本（例如推荐理由）、类别、布尔或数值 |
+| 大模型重排 | `LlmReranker@1` | `RowOrder`（只保留选中的行时加 `RowFilter`） | 模板渲染的提示词 → 生成文本，解析为有序 ID 列表 |
+| 大模型标注 | `LlmAnnotator@1` | `ColumnWriter` | 每行一个提示词 → 按列类型解析的回答：文本（例如推荐理由）、类别、布尔或数值 |
 | 整页生成 | `GenerativeRetriever@1` 后接 `LlmReranker@1` | `RowSource`，然后 `{RowOrder, RowFilter}` | 上下文 → 生成的候选；候选池 → 一组有序的页面位置 |
 
 其中生成式召回和大模型类算子（`GenerativeRetriever@1`、`LlmReranker@1`、`LlmAnnotator@1`）由扩展包 `StrataRec.Llm` 提供，其余属于核心标准算子库（第 16.1 节）。几个与生成式模型相关的规则在框架层面统一处理：
@@ -828,14 +826,14 @@ public interface IFeatureBatchWriter
     Memory<T> GetValues<T>(int fieldIndex) where T : unmanaged;  // 密集暂存区，只用于定长标量，长度 = 键数量；列表（包括定长列表）用 Set*List 写入
     void SetValid(int fieldIndex, int keyIndex);
     void SetMissing(int fieldIndex, int keyIndex);
-    void SetString(int fieldIndex, int keyIndex, string value);               // string 与 text 字段
-    void SetString(int fieldIndex, int keyIndex, ReadOnlySpan<char> value);   // 连接器自己的字符缓冲区
-    void SetStringUtf8(int fieldIndex, int keyIndex, ReadOnlySpan<byte> utf8); // 存储返回的 UTF-8 字节
+    void SetString(int fieldIndex, int keyIndex, string value);
+    string Intern(ReadOnlySpan<char> value);      // 本次调用内相等的值返回同一个实例
+    string InternUtf8(ReadOnlySpan<byte> utf8);   // 同上，从存储返回的 UTF-8 字节解码
     void SetInt64List(int fieldIndex, int keyIndex, ReadOnlySpan<long> value); // 以及其他元素类型的列表
 }
 ```
 
-连接器写入的是**暂存区**：一块按 `keys` 顺序排列的密集内存，与候选表的物理行无关。暂存区是 `Memory<T>`，因为连接器是异步方法，跨越 `await` 的代码不能持有 `Span<T>`。布尔字段在暂存区里按字节存放，`string` 和 `text` 字段按键写入：`string` 是类别型的，取值在键之间重复，按字符或 UTF-8 写入时每个不同的值只生成一个字符串（5,000 个键、几个类别只有几个字符串）；`text` 每个值一个字符串。
+连接器写入的是**暂存区**：一块按 `keys` 顺序排列的密集内存，与候选表的物理行无关。暂存区是 `Memory<T>`，因为连接器是异步方法，跨越 `await` 的代码不能持有 `Span<T>`。布尔字段在暂存区里按字节存放，字符串字段按键写入，暂存区保存连接器给出的实例。取值在键之间重复的字段（类别、品牌、`list<string>` 的标签），连接器经 `Intern`/`InternUtf8` 取得字符串：一次调用内每个不同的值只生成一个（5,000 个键、几个类别只有几个字符串），最多 4,096 个不同值，表随调用结束丢弃，不做进程级驻留。需要跨请求复用的连接器自己持有有上限的字符串池。
 
 拉取完成后，在第一个读取这些列的节点开始之前，引擎把暂存区回填到候选表（第 4.5 节）：
 
@@ -889,10 +887,10 @@ internal sealed class TableVersion
 }
 ```
 
-1. **记录是定长的原生值。** 记录布局由特征目录中绑定到这个数据源和实体的全部物理特征决定，与计划读哪些特征无关（读同一数据源不同特征的计划共用一张表，流水线或实验开始读另一个特征也不会重新加载）：头部是写入时间（`cache`）或事件版本（`local`）以及有效位，后面依次是各特征的原生值。`string` 存表内字典的编码，字典只追加；`text` 和 `list`（包括定长列表）放在页内的变长区。字符串键按 64 位哈希建索引，记录里保存原键用于比对。表中没有“一个值一个对象”：几百万条记录对垃圾回收器来说只是几十个大数组，回收器不扫描数组的内容。
+1. **记录是定长的原生值。** 记录布局由特征目录中绑定到这个数据源和实体的全部物理特征决定，与计划读哪些特征无关（读同一数据源不同特征的计划共用一张表，流水线或实验开始读另一个特征也不会重新加载）：头部是写入时间（`cache`）或事件版本（`local`）以及有效位，后面依次是各特征的原生值。字符串和 `list<string>` 的元素存表内字典的编码，回填直接取字典里的实例，每个请求不新建字符串；`list`（包括定长列表）放在页内的变长区。字符串键按 64 位哈希建索引，记录里保存原键用于比对。表中没有“一条记录一个对象”：几百万条记录对垃圾回收器来说只是几十个大数组，回收器不扫描数组的内容；唯一的小对象是字典里每个不同字符串一个。
 2. **按实体组织记录。** 候选表按列存放，因为节点按列扫描。本地特征表的访问方式是用几百个随机的键去查，所以一个实体的全部特征放在一起：读一个候选的 30 个特征只碰两三个缓存行，按列存放则要碰 30 个。运行示例中 500 个候选大约是 1,500 次和 15,000 次缓存未命中的差别（估算）。快照文件仍然可以用 Arrow 等列式格式，加载时转置一次。
 3. **记录从不原地修改。** 更新在页的末尾追加一条新记录，再用一次原子写把索引指向它。读取不加锁，读到的要么是旧记录，要么是新记录，两者都完整。每张表只有一个写线程：`local` 是更新流的消费线程；`cache` 是一个后台写线程，请求把拉回的值放进它的有界队列，队列满时直接丢弃，下次未命中时再拉。
-4. **压实与回收。** 被替代的旧记录（以及 `cache` 中过期的记录）超过一半时，写线程把有效记录复制到新的页，建好新索引，再替换当前版本。请求开始时固定每张表的当前版本，旧版本的数组在最后一个使用它的请求结束后由垃圾回收释放，和计划的切换方式相同（第 4.8 节）。固定版本只是为了内存安全：同一个请求读到的不同键，可以来自不同时刻的更新，这和远程拉取时一样。
+4. **压实与回收。** 被替代的旧记录（以及 `cache` 中过期的记录），加上只有它们引用过的字典字符串，超过记录和字典总量的一半时，写线程把有效记录复制到新的页，建好新索引，再替换当前版本。请求开始时固定每张表的当前版本，旧版本的数组在最后一个使用它的请求结束后由垃圾回收释放，和计划的切换方式相同（第 4.8 节）。固定版本只是为了内存安全：同一个请求读到的不同键，可以来自不同时刻的更新，这和远程拉取时一样。
 
 **读取路径。** 读本地特征表是同步的内存操作，不经过暂存区。节点开始前，引擎为需要的存活行查一次索引（同一张表的所有特征共用这一次查找），把记录中的值直接写进候选表的槽位，并设置填充位。运行示例中 500 行 × 30 个特征估计在 20 μs 以内。因为没有 I/O，这些特征不需要提前拉取，也不受拉取屏障的影响（第 6.8 节）。
 
@@ -1112,7 +1110,7 @@ public sealed class ModelCall
 | 除法 | `/` 总是得到 `float64` | 整数相除得整数（`7 / 2 == 3`） | 打分公式里两个整数特征相除得 0 是常见错误 |
 | 混合运算 | `int64` 自动提升为 `float64` | 类型错误（`1 + 1.0`） | 公式里整数特征和浮点参数随处混用 |
 | 运行期错误 | 没有：溢出回绕、除以 0 按 IEEE 754、`% 0` 和 `int()` 越界得缺失（除数在绑定时就是 0 时编译报错，如 `x % 0`、`x % int(0)`） | 得到错误值 | 一行出错不能让整列失败；求值顺序也因此不影响结果 |
-| 类型 | `float32`/`int32` 存储、`string` 与 `text`、定长列表 `list<E,N>` | `int`、`uint`、`double`、`bytes`、map、时间类型等 | 列式存储和 SIMD |
+| 类型 | `float32`/`int32` 存储、定长列表 `list<E,N>` | `int`、`uint`、`double`、`bytes`、map、时间类型等 | 列式存储和 SIMD |
 | 不支持 | map 字面量、下标、宏（`all`、`exists`、`exists_one`、`map`、`filter`）、正则 `matches`、`string()` 等转换、字符串扩展函数 | | 宏是一行之内的循环，不能按列计算；逐行匹配正则太贵 |
 
 按 CEL 写、在 CEL 里能正常求值的表达式，只有整数除法得到不同的结果；CEL 在运行期报错的情况（整数溢出、对 0 取模、越界的 `int()`）在这里按上表得到值或缺失，只有绑定时就知道除数是 0 的取模在编译期报错；CEL 拒绝的混合运算在这里可以写；其余差异在编译期报错。领域函数（`soft_floor`、`hash01`、`l2_norm` 等）是框架内置的函数；由嵌入方提供自己的函数，本来就是 CEL 的用法。
@@ -1153,7 +1151,7 @@ utility * (1.0 + param.w_fresh * freshness) * cold_boost
 3. **消解可空性。** `x ?? y` 在 `x` 缺失时取 `y`，`y` 不可空时结果不可空；`has(x)` 返回 `bool`。三元表达式任一分支可空时结果可空。
 4. **结果必须非可空，有两个例外。** 打分结果、过滤条件、`when` 条件、排序键、模型输入和写入 `T` 列的值都必须是非可空类型；结果可空时编译报错，并提示在哪里加 `??`。写入可空列和探针记录的列可以是可空的，缺失原样保留。
 5. **布尔不参与算术。** 需要写成 `cond ? 1.0 : 0.0`。
-6. **字符串与文本。** 字符串支持 `==`、`!=`、`in [...]`、`size()`（码点数）、`contains()`（子串）、`startsWith()` 和 `endsWith()`；与字典编码的 `string` 列比较常量时，常量在编译期转换成字典编码，每个不同的值只比较一次。`text` 列在表达式里按 `string` 读，就像 `int32` 按 `int64` 读：两者只是存储不同，运算相同，可以互相比较。
+6. **字符串。** 字符串支持 `==`、`!=`、`in [...]`、`size()`（码点数）、`contains()`（子串）、`startsWith()` 和 `endsWith()`。比较按序数进行；`in` 的常量集合在编译期建好（不超过 8 个时逐个比较），不按行分配。
 7. **列表与 embedding。** 浮点列表（`list<float32>`、`list<float64>`，定长或变长，可以混用）支持 `dot`、`cosine`、`l2_norm`，精度跟随声明的元素类型：参与运算的列表都声明为 `list<float32>` 时按 float32 计算，这是 embedding 打分的常见情况；有一个是 `list<float64>` 或字面量时按 float64 计算，float32 的一侧精确扩宽。`cosine` 由点积和两个范数在 float64 中算出，两个后端结果逐位相同。两边声明的长度不同时编译报错；运行时长度不同的行结果缺失，只有两边都声明了相同长度时结果才不可空。任何元素类型的列表都支持 `size`、`contains`（`in`）、`overlap_count`。`contains` 和 `in` 的值与元素按 `==` 的规则比较，所以整数可以在浮点列表里查找；`overlap_count` 要求两个列表的元素类型相同。列表字面量的元素必须都是数、都是字符串或都是布尔值：全是整数时是 `list<int64>`，有一个浮点数时是 `list<float64>`（`[1, 2.5]`）。整数列表字面量（以及只在这样的字面量之间选择的 `?:`、`??`）在需要浮点列表的地方就是浮点列表，在编译期转换：写入 `list<float32>` 列的 `[1, 2]`、`col.weights ?? [0]`、`overlap_count(col.prices, [10, 20])` 都可以直接写。有类型的整数列表（列、特征、输入）不隐式转换成浮点列表，编译报错。列表字面量带长度，`[0.5, 1]` 是 `list<float64,2>`；可空的 embedding 通过函数结果加 `??` 处理，例如 `dot(a, b) ?? 0.0`。
 8. **编译期报错。** 未声明的名字、类型或可空性不匹配和参数个数错误都在编译期报告，并给出位置和相近的候选名字。
 
@@ -1184,7 +1182,7 @@ utility * (1.0 + param.w_fresh * freshness) * cold_boost
 2. 排序常用变换：`sigmoid`、`logit`、`soft_floor`、`linear_decay`、`piecewise_linear`
 3. 浮点列表：`dot`、`cosine`、`l2_norm`（`System.Numerics.Tensors` 的 SIMD 实现，精度见第 7.4 节）
 4. 列表（任何元素类型）：`size`、`contains`、`overlap_count`
-5. 字符串（`string` 和 `text`）：`size`、`contains`、`startsWith`、`endsWith`
+5. 字符串：`size`、`contains`、`startsWith`、`endsWith`
 6. 确定性随机：`hash01(ctx.request.seed, col.entity_id)` 返回 `[0, 1)` 内的均匀值
 7. 查表：`lookup(table_name, key, default)` 读取 `DataTableArtifact` 中的静态表，例如分位数校准表
 8. 数值转换：`int(x)` 向零截断，`double(x)` 把 `int64` 转成最近的 `float64`
@@ -1455,7 +1453,7 @@ flowchart LR
 1. **生产者与序号。** `producer.id` 由进程名和启动时间组成，`seq` 只出现在 `durable` 批次中。下游用 `(producer.id, seq)` 去重，并按序号发现缺口。
 2. **实际产出者。** `column_producers` 记录每个日志列实际由哪个节点产出。上例中主模型超时，`p_click` 来自后备模型 `ctr_backup`；训练任务可以据此过滤或单独处理这些样本。
 3. **列定义血缘。** `schema_sha256` 指向这个探针变体的 schema 记录，其中写明每一列和上下文字段的名字、类型和表达式原文，id 就是这条记录内容的哈希；批次直接带着这条记录（所有请求共用一个对象），日志接收端按 id 每条只写一次（JSON Lines 接收端在第一个用到它的批次之前写一行 `{"log_schema": ...}`）。哪些实验桶生效看批次的 `assigned_arms`。同名列 `p_click` 在不同计划版本中可能来自不同模型，分析时可以准确知道它的含义。
-4. **编码。** 流式传输推荐 Arrow IPC，落地文件推荐 Parquet，调试使用 JSON。批次中每个日志列保留表达式结果的原生类型，包括 `list`（`text` 列在表达式里读作 `string`，记成 `string`；float32 的列和列表与表达式结果一样记成 float64，embedding 记成 `list<float64,N>`）；上面的 JSON 只是调试编码。
+4. **编码。** 流式传输推荐 Arrow IPC，落地文件推荐 Parquet，调试使用 JSON。批次中每个日志列保留表达式结果的原生类型，包括 `list`（float32 的列和列表与表达式结果一样记成 float64，embedding 记成 `list<float64,N>`）；上面的 JSON 只是调试编码。
 5. **下游表结构固定。** 原始批次表的结构不随探针变化；标准 ETL 再把标量列展开成按行的视图 `funnel_rows(request_id, tap_id, rank, entity_id, row_prob, req_prob, float_values map<string,double>, int_values map<string,bigint>, string_values map<string,string>)`，`list` 列（包括 embedding）留在批次表中按需展开。实验新增日志列不需要修改下游表结构。
 6. **缺失。** `missing` 按列记录缺失行的下标位图，缺失值不会被写成 0 或哨兵值。
 
