@@ -7,7 +7,8 @@ namespace StrataRec.Pipeline.Operators.Standard;
 
 /// <summary>
 /// How a model operator lays out a call's batch, which gives every tensor of the call its leading dimensions (design 5.9,
-/// 6.9). The value a row contributes (one float32 or int64, or a float32 vector) follows its column type in every layout.
+/// 6.9). The value a row contributes (one float32 or int64, or N of them for a <c>list&lt;E,N&gt;</c>) follows its column
+/// type in every layout.
 /// </summary>
 internal enum TensorLayout
 {
@@ -30,10 +31,14 @@ internal enum TensorLayout
 /// version a node may use is checked, and a mismatch is a load error.
 /// </summary>
 /// <remarks>
-/// <para>The value of an input follows the declared type of the column or context value it maps: <c>float32</c>,
-/// <c>float64</c> and <c>bool</c> (0/1) are sent as float32; <c>int32</c> and <c>int64</c> as int64, with their exact
-/// values; <c>vec&lt;float32,N&gt;</c> as float32 with a trailing dimension N, row-major. Nullable types, strings, text
-/// and lists cannot be sent: a model needs a value in every row, and a tensor has no place for the others. The layout
+/// <para>The value of an input follows the declared type of the column or context value it maps: <c>float32</c> and
+/// <c>float64</c> are sent as float32; <c>bool</c> (0/1), <c>int32</c> and <c>int64</c> as int64, with their exact
+/// values; a fixed-length list <c>list&lt;E,N&gt;</c> (an embedding, a window of ids) as its element would be, with a
+/// trailing dimension N, row-major. A bool is an int64 because it is a category, not a measurement: an exact 0/1 that a
+/// model embeds or compares, as it does int ids, and every non-float element type then goes the same way. This is the
+/// built-in operators' mapping; an operator or model client of one's own may
+/// convert differently. Nullable types, strings, text and lists of any length cannot be sent: a model needs a value in
+/// every row, a tensor has no place for the others, and its trailing dimension must be the same in every row. The layout
 /// (<see cref="TensorLayout"/>) adds the leading dimensions: <c>[rows]</c>, <c>[pairs, 2]</c> or <c>[1, rows]</c> for a
 /// column, <c>[rows]</c>, <c>[pairs]</c> or <c>[1]</c> for a context value, which is broadcast to every batch entry.</para>
 /// <para>The column decides, never the model's signature: replay records a digest of the inputs, element type and shape
@@ -43,9 +48,9 @@ internal enum TensorLayout
 /// <para>So a version must declare exactly the mapped inputs (every input of a signature is required), each with the
 /// element type its mapping gives and a shape of the same rank, and every mapped output as float32 with the layout's
 /// shape. A dynamic dimension (rows, pairs, the list's length) must be declared <c>-1</c>; a fixed one (the pair's 2, the
-/// list batch's 1, a vector's N) as that size or <c>-1</c>, which a signature uses for "any". A model that declares
-/// float32 for an int column is fed a float32 derived feature, which design 6.9 rule 2 prefers anyway: one definition
-/// for training and serving.</para>
+/// list batch's 1, a list's N) as that size or <c>-1</c>, which a signature uses for "any". A model that declares
+/// float32 for an int or bool column is fed a float32 derived feature, which design 6.9 rule 2 prefers anyway: one
+/// definition for training and serving.</para>
 /// </remarks>
 internal static class ModelTensorRule
 {
@@ -66,7 +71,7 @@ internal static class ModelTensorRule
 
     /// <summary>The value one row contributes to an input's tensor.</summary>
     /// <param name="ElementType">Float32 or Int64.</param>
-    /// <param name="Dimension">0 for one value per row; N for a vector per row.</param>
+    /// <param name="Dimension">0 for one value per row; N for a <c>list&lt;E,N&gt;</c> per row.</param>
     public readonly record struct InputTensor(TensorElementType ElementType, int Dimension)
     {
         /// <summary>As a signature of <c>ModelScorer@1</c> declares it, e.g. <c>float32 [-1, 8]</c>.</summary>
@@ -85,20 +90,22 @@ internal static class ModelTensorRule
     public static string TensorHint(TensorLayout layout) => layout switch
     {
         TensorLayout.Rows =>
-            "ModelScorer@1 sends a float32, float64 or bool column or context value as float32 [-1], an int32 or int64 one as "
-            + "int64 [-1] and a vec<float32,N> one as float32 [-1, N], and reads every output as float32 [-1] (one value per row; "
-            + "the batch dimension is dynamic). Change the model's signature, or call the model from an operator that builds other tensors.",
+            "ModelScorer@1 sends a float32 or float64 column or context value as float32 [-1], a bool, int32 or int64 one as "
+            + "int64 [-1], and a list<E,N> one as its element would be with a trailing N (list<float32,N> as float32 [-1, N]), and reads "
+            + "every output as float32 [-1] (one value per row; the batch dimension is dynamic). Change the model's signature, or call the "
+            + "model from an operator that builds other tensors.",
         TensorLayout.Pairs =>
-            "PairwiseRanker@1 sends a float32, float64 or bool column as float32 [-1, 2], an int32 or int64 one as int64 [-1, 2] and a "
-            + "vec<float32,N> one as float32 [-1, 2, N] (the two rows of each pair, the higher-ranked first), a context value as float32 [-1], "
-            + "int64 [-1] or float32 [-1, N] (the same in every pair), and reads the output as float32 [-1] (one value per pair: the probability "
-            + "that its first row is preferred). The pair dimension is dynamic; the 2 and N may be declared -1. Change the model's signature, "
-            + "or call the model from an operator that builds other tensors.",
+            "PairwiseRanker@1 sends a float32 or float64 column as float32 [-1, 2], a bool, int32 or int64 one as int64 [-1, 2] and a "
+            + "list<E,N> one with a trailing N (list<float32,N> as float32 [-1, 2, N]; the two rows of each pair, the higher-ranked first), "
+            + "a context value as float32 [-1], int64 [-1] or with a trailing N (the same in every pair), and reads the output as float32 [-1] "
+            + "(one value per pair: the probability that its first row is preferred). The pair dimension is dynamic; the 2 and N may be "
+            + "declared -1. Change the model's signature, or call the model from an operator that builds other tensors.",
         _ =>
-            "ListwiseReranker@1 sends a float32, float64 or bool column as float32 [1, -1], an int32 or int64 one as int64 [1, -1] and a "
-            + "vec<float32,N> one as float32 [1, -1, N] (the window's rows as one list), a context value as float32 [1], int64 [1] or "
-            + "float32 [1, N], and reads the output as float32 [1, -1] (one score per row of the list). The list's length is dynamic; the 1 "
-            + "and N may be declared -1. Change the model's signature, or call the model from an operator that builds other tensors.",
+            "ListwiseReranker@1 sends a float32 or float64 column as float32 [1, -1], a bool, int32 or int64 one as int64 [1, -1] and a "
+            + "list<E,N> one with a trailing N (list<float32,N> as float32 [1, -1, N]; the window's rows as one list), a context value as "
+            + "float32 [1], int64 [1] or with a trailing N, and reads the output as float32 [1, -1] (one score per row of the list). The "
+            + "list's length is dynamic; the 1 and N may be declared -1. Change the model's signature, or call the model from an operator "
+            + "that builds other tensors.",
     };
 
     /// <summary>The value an operator sends for a value of <paramref name="type"/>; false for a type it cannot send.</summary>
@@ -110,30 +117,38 @@ internal static class ModelTensorRule
             return false;
         }
 
-        switch (type.Kind)
+        var element = type.IsList ? type.Element : type.Kind;
+        if (type.IsList && !type.IsFixedLength)
         {
-            case StorageKind.Float32 or StorageKind.Float64 or StorageKind.Bool:
-                tensor = new InputTensor(TensorElementType.Float32, 0);
+            return false;
+        }
+
+        switch (element)
+        {
+            case StorageKind.Float32 or StorageKind.Float64:
+                tensor = new InputTensor(TensorElementType.Float32, type.FixedLength);
                 return true;
-            case StorageKind.Int32 or StorageKind.Int64:
-                tensor = new InputTensor(TensorElementType.Int64, 0);
-                return true;
-            case StorageKind.Vector when type.Dimension > 0:
-                tensor = new InputTensor(TensorElementType.Float32, type.Dimension);
+            case StorageKind.Bool or StorageKind.Int32 or StorageKind.Int64:
+                tensor = new InputTensor(TensorElementType.Int64, type.FixedLength);
                 return true;
             default:
                 return false;
         }
     }
 
+    /// <summary>The tensor element type of a value of <paramref name="kind"/> (a scalar's kind or a list's element):
+    /// float32 for a float, int64 for a bool or an integer.</summary>
+    public static TensorElementType ElementTypeOf(StorageKind kind) =>
+        kind is StorageKind.Float32 or StorageKind.Float64 ? TensorElementType.Float32 : TensorElementType.Int64;
+
     /// <summary>
     /// The shape of an input's tensor in <paramref name="layout"/>: <paramref name="length"/> is the batch's dynamic
     /// dimension (rows, pairs, or the list's rows), or -1 for the shape a signature declares; <paramref name="dimension"/>
-    /// is the vector's N, or 0. A context value has no row dimension of its own: it is repeated for every batch entry.
+    /// is a <c>list&lt;E,N&gt;</c>'s N, or 0. A context value has no row dimension of its own: it is repeated for every batch entry.
     /// </summary>
     public static int[] InputShape(TensorLayout layout, bool broadcast, int length, int dimension) => (layout, broadcast, dimension) switch
     {
-        // The final array at once: one per input and batch, which a vector's shape built in two steps allocated twice.
+        // The final array at once: one per input and batch, which a list's shape built in two steps allocated twice.
         (TensorLayout.Rows, _, 0) or (TensorLayout.Pairs, true, 0) => [length],
         (TensorLayout.Rows, _, _) or (TensorLayout.Pairs, true, _) => [length, dimension],
         (TensorLayout.Pairs, false, 0) => [length, 2],
@@ -157,13 +172,24 @@ internal static class ModelTensorRule
     public static Problem UnsendableInput(TensorLayout layout, string name, string source, ColumnType type)
     {
         var pointer = "/inputs/" + JsonPointer.Escape(name);
-        return type.Nullable
-            ? new Problem(pointer, "MODEL_INPUT_TYPE", $"Model input '{name}' maps {source}, which is nullable ({type}): a model needs a value in every row.",
+        if (type.Nullable)
+        {
+            return new Problem(pointer, "MODEL_INPUT_TYPE", $"Model input '{name}' maps {source}, which is nullable ({type}): a model needs a value in every row.",
                 $"make {source} non-nullable (a feature with a default, a request input declared without '?'), or map a derived feature "
-                + "that settles the missing case with '??' (design 6.9)")
-            : new Problem(pointer, "MODEL_INPUT_TYPE", $"Model input '{name}' maps {source} ({type}), which {OperatorId(layout)} cannot send as a tensor.",
-                "map a float32, float64, bool, int32, int64 or vec<float32,N> column or context value (a derived feature, design 6.9), "
-                + "or call the model from an operator that builds other tensors");
+                + "that settles the missing case with '??' (design 6.9)");
+        }
+
+        if (type.IsList && !type.IsFixedLength && type.Element != StorageKind.String)
+        {
+            return new Problem(pointer, "MODEL_INPUT_TYPE",
+                $"Model input '{name}' maps {source} ({type}), a list of any length: a tensor's trailing dimension is the same in every row.",
+                $"declare the length of {source}, e.g. {ColumnType.List(type.Element, fixedLength: 64)}; a feature or column of that type keeps "
+                + "every row at that length (a row of another length takes the default or is missing, design 4.3)");
+        }
+
+        return new Problem(pointer, "MODEL_INPUT_TYPE", $"Model input '{name}' maps {source} ({type}), which {OperatorId(layout)} cannot send as a tensor.",
+            "map a float32, float64, bool, int32 or int64 column or context value, or a list<E,N> of those (a derived feature, design 6.9), "
+            + "or call the model from an operator that builds other tensors");
     }
 
     /// <param name="label">The model and version, as messages name them.</param>
@@ -271,7 +297,7 @@ internal static class ModelTensorRule
 
     /// <summary>
     /// The type of a column (or, with <paramref name="broadcast"/>, a context value) that <paramref name="layout"/> sends
-    /// as <paramref name="spec"/>, or null when none does. A vector whose N is declared -1 is any <c>vec&lt;float32,N&gt;</c>.
+    /// as <paramref name="spec"/>, or null when none does. A list whose N is declared -1 is any <c>list&lt;E,N&gt;</c>.
     /// </summary>
     private static string? ReferenceTypeFor(TensorLayout layout, bool broadcast, TensorSpec spec)
     {
@@ -300,10 +326,16 @@ internal static class ModelTensorRule
             };
         }
 
+        var element = spec.ElementType switch
+        {
+            TensorElementType.Float32 => "float32",
+            TensorElementType.Int64 => "int64",
+            _ => null,
+        };
         var n = shape[shape.Count - 1];
-        return spec.ElementType != TensorElementType.Float32 ? null
-            : n > 0 ? $"vec<float32,{n}>"
-            : n == -1 ? "vec<float32,N>"
+        return element is null ? null
+            : n > 0 ? $"list<{element},{n}>"
+            : n == -1 ? $"list<{element},N>"
             : null;
     }
 

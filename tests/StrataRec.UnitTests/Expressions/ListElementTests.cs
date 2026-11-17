@@ -62,8 +62,10 @@ public class ListElementTests
         Assert.Equal(ColumnType.List(StorageKind.Float64).AsNullable(), f.Compile("col.w32").ResultType);
         Assert.Equal(ColumnType.List(StorageKind.Float64), f.Compile("col.w64").ResultType);
         Assert.Equal(ColumnType.List(StorageKind.Bool).AsNullable(), f.Compile("col.b").ResultType);
-        Assert.Equal(ColumnType.List(StorageKind.Float64), f.Compile("[0.5, 1]").ResultType);
-        Assert.Equal(ColumnType.List(StorageKind.Bool), f.Compile("[true, false]").ResultType);
+        // A literal's length is known: it is a fixed-length list, which stands wherever a list of any length does.
+        Assert.Equal(ColumnType.List(StorageKind.Float64, fixedLength: 2), f.Compile("[0.5, 1]").ResultType);
+        Assert.Equal(ColumnType.List(StorageKind.Bool, fixedLength: 2), f.Compile("[true, false]").ResultType);
+        Assert.Equal(ColumnType.List(StorageKind.Float64), f.Compile("col.i > 2 ? [0.5, 1] : [1.5]").ResultType); // lengths differ
     }
 
     [Fact]
@@ -165,7 +167,7 @@ public class ListElementTests
 
         // As a float list site's value, in '??' and '?:' with a float list, and in overlap_count with one.
         var expression = f.Compile("[1, 2]", new CompileOptions { ExpectedType = ColumnType.List(StorageKind.Float32) });
-        Assert.Equal(ColumnType.List(StorageKind.Float64), expression.ResultType);
+        Assert.Equal(ColumnType.List(StorageKind.Float64, fixedLength: 2), expression.ResultType);
         ExprAssert.Rows(f, "col.w32 ?? [0]", new[] { 0.5, 1.5 }, Array.Empty<double>(), new[] { 0.0 }, new double[] { 2, 2, 2 });
         ExprAssert.Rows(f, "col.i > 2 ? [7, 8] : col.w64", new[] { 1.5, 2 }, new[] { 0.25 }, new double[] { 7, 8 }, Array.Empty<double>());
         ExprAssert.Rows(f, "overlap_count(col.w64, [2, 3])", 1, 0, 1, 0);
@@ -194,7 +196,7 @@ public class ListElementTests
         var expression = f.Compile(source.ToString(), new CompileOptions { ExpectedType = ColumnType.List(StorageKind.Float32) });
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-        Assert.Equal(ColumnType.List(StorageKind.Float64), expression.ResultType);
+        Assert.Equal(ColumnType.List(StorageKind.Float64, fixedLength: 1), expression.ResultType);
         Assert.True(allocated < 2_000_000, $"compiling allocated {allocated:N0} bytes");
         Assert.Equal(ScalarValue.FromFloat64List(new[] { 1.0 }), expression.EvaluateScalar(f.Context));
     }

@@ -79,7 +79,7 @@ public static class LogBatchJson
         WriteColumns(json, "float_cols", batch.Columns, static k => k is StorageKind.Float32 or StorageKind.Float64);
         WriteColumns(json, "int_cols", batch.Columns, static k => k is StorageKind.Int32 or StorageKind.Int64 or StorageKind.Bool);
         WriteColumns(json, "string_cols", batch.Columns, static k => k is StorageKind.String or StorageKind.Text);
-        WriteColumns(json, "nested_cols", batch.Columns, static k => k is StorageKind.Vector or StorageKind.List);
+        WriteColumns(json, "nested_cols", batch.Columns, static k => k == StorageKind.List);
         json.WriteStartObject("missing");
         foreach (var column in batch.Columns)
         {
@@ -106,9 +106,9 @@ public static class LogBatchJson
 
     /// <summary>Writes a value; missing becomes null (and is listed under <c>missing</c>).</summary>
     /// <param name="nonFiniteAsStrings">
-    /// False for logs: a NaN or ±∞ float, and a vector with such a component, is written as null like a missing value
+    /// False for logs: a NaN or ±∞ float, and a float list with such an element, is written as null like a missing value
     /// (design 8.7). True for replay bundles, which must keep what the request observed: such values are written as the
-    /// strings <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c>, per component in vectors.
+    /// strings <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c>, per element in lists.
     /// </param>
     public static void WriteValue(Utf8JsonWriter json, in ScalarValue value, bool nonFiniteAsStrings = false)
     {
@@ -142,30 +142,6 @@ public static class LogBatchJson
             case StorageKind.String or StorageKind.Text:
                 json.WriteStringValue(value.AsString());
                 break;
-            case StorageKind.Vector:
-                var vector = value.AsVector();
-                if (!nonFiniteAsStrings && !AllFinite(vector))
-                {
-                    // Same rule as scalars: a non-finite value is logged as missing (capture already does this).
-                    json.WriteNullValue();
-                    break;
-                }
-
-                json.WriteStartArray();
-                foreach (var f in vector)
-                {
-                    if (float.IsFinite(f))
-                    {
-                        json.WriteNumberValue(f);
-                    }
-                    else
-                    {
-                        json.WriteStringValue(NonFiniteName(f));
-                    }
-                }
-
-                json.WriteEndArray();
-                break;
             default:
                 WriteList(json, value, nonFiniteAsStrings);
                 break;
@@ -174,8 +150,8 @@ public static class LogBatchJson
 
     /// <summary>A list value as a JSON array of its elements, each written as a scalar of its element type is: a bool as
     /// 0 or 1, numbers as numbers (<c>list&lt;int32&gt;</c> and <c>list&lt;float32&gt;</c> values are held promoted, see
-    /// <see cref="ScalarValue"/>). A float list holding NaN or ±∞ follows the vector rule: null in logs, names per
-    /// element in replay bundles.</summary>
+    /// <see cref="ScalarValue"/>). A float list holding NaN or ±∞ is null in logs, as a non-finite float is, and keeps
+    /// names per element in replay bundles.</summary>
     private static void WriteList(Utf8JsonWriter json, in ScalarValue value, bool nonFiniteAsStrings)
     {
         if (value.ListElement == StorageKind.Float64 && !nonFiniteAsStrings && !ColumnValues.AllFinite(value.AsFloat64List()))
@@ -235,7 +211,7 @@ public static class LogBatchJson
     /// </summary>
     /// <remarks>Non-finite floats were written as null, so they read back as missing (design 8.7).</remarks>
     /// <param name="nonFiniteAsStrings">
-    /// Accept the strings <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c> as float values and vector components, as
+    /// Accept the strings <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c> as float values and float list elements, as
     /// <see cref="WriteValue"/> writes them for replay bundles.
     /// </param>
     public static bool TryReadValue(JsonElement json, ColumnType type, out ScalarValue value, out string? error, bool nonFiniteAsStrings = false)
@@ -280,34 +256,6 @@ public static class LogBatchJson
                 return true;
             case StorageKind.Text when json.ValueKind == JsonValueKind.String:
                 value = ScalarValue.FromText(json.GetString());
-                return true;
-            case StorageKind.Vector when json.ValueKind == JsonValueKind.Array:
-                var vector = new float[json.GetArrayLength()];
-                var v = 0;
-                foreach (var element in json.EnumerateArray())
-                {
-                    if (element.ValueKind == JsonValueKind.Number)
-                    {
-                        vector[v++] = element.GetSingle();
-                    }
-                    else if (nonFiniteAsStrings && TryNonFinite(element, out var component))
-                    {
-                        vector[v++] = (float)component;
-                    }
-                    else
-                    {
-                        error = $"vector element {v} is {element.ValueKind}, not a number";
-                        return false;
-                    }
-                }
-
-                if (type.Dimension > 0 && vector.Length != type.Dimension)
-                {
-                    error = $"expected {type.Dimension} elements for {type}, got {vector.Length}";
-                    return false;
-                }
-
-                value = ScalarValue.FromVector(vector);
                 return true;
             case StorageKind.List when json.ValueKind == JsonValueKind.Array:
                 return TryReadList(json, type, out value, out error, nonFiniteAsStrings);
@@ -422,19 +370,6 @@ public static class LogBatchJson
         return !double.IsFinite(value);
     }
 
-    private static bool AllFinite(ReadOnlySpan<float> values)
-    {
-        foreach (var f in values)
-        {
-            if (!float.IsFinite(f))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
     private static void WriteColumns(Utf8JsonWriter json, string name, LogColumn[] columns, Func<StorageKind, bool> kind)
     {
         json.WriteStartObject(name);
@@ -463,18 +398,6 @@ public static class LogBatchJson
         if (column.IsMissing(row))
         {
             json.WriteNullValue();
-            return;
-        }
-
-        if (column.Values is float[] vectors)
-        {
-            json.WriteStartArray();
-            foreach (var f in vectors.AsSpan(row * column.Type.Dimension, column.Type.Dimension))
-            {
-                json.WriteNumberValue(f);
-            }
-
-            json.WriteEndArray();
             return;
         }
 

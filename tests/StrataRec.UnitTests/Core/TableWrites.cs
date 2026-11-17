@@ -19,8 +19,13 @@ internal static class TableWrites
     /// <summary>One non-nullable column type of each <see cref="StorageKind"/>; a new kind fails here until it has one.</summary>
     public static readonly string[] EveryStorageType = Enum.GetValues<StorageKind>().SelectMany(kind => kind switch
     {
-        // Every element type of a list, so each one's write path is covered.
-        StorageKind.List => new[] { "list<bool>", "list<int32>", "list<int64>", "list<float32>", "list<float64>", "list<string>" },
+        // Every element type of a list, so each one's write path is covered, and fixed-length lists (an embedding) of the
+        // samples' lengths.
+        StorageKind.List => new[]
+        {
+            "list<bool>", "list<int32>", "list<int64>", "list<float32>", "list<float64>", "list<string>",
+            "list<float32,3>", "list<int32,3>", "list<bool,3>", "list<string,2>",
+        },
         _ => new[] { Scalar(kind) },
     }).ToArray();
 
@@ -33,7 +38,6 @@ internal static class TableWrites
         StorageKind.Float64 => "float64",
         StorageKind.String => "string",
         StorageKind.Text => "text",
-        StorageKind.Vector => "vec<float32,3>",
         _ => throw new NotSupportedException($"Add a column type of storage kind {kind} to the write contract tests."),
     };
 
@@ -45,7 +49,6 @@ internal static class TableWrites
         StorageKind.Float32 or StorageKind.Float64 => ScalarValue.FromFloat64(n + 0.5),
         StorageKind.String => ScalarValue.FromString("s" + n),
         StorageKind.Text => ScalarValue.FromText("t" + n),
-        StorageKind.Vector => ScalarValue.FromVector(Enumerable.Range(0, type.Dimension).Select(i => (float)(n + i)).ToArray()),
         StorageKind.List => type.Element switch
         {
             StorageKind.Bool => ScalarValue.FromBoolList(new[] { n % 2 == 0, true, false }),

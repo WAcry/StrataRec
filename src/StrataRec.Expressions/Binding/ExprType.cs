@@ -11,7 +11,6 @@ internal enum TypeKind : byte
     Int,
     Float,
     String,
-    Vector,
 
     // Lists, by promoted element type (design 4.3: list<int32> reads as list<int64>, list<float32> as list<float64>).
     ListBool,
@@ -20,8 +19,9 @@ internal enum TypeKind : byte
     ListString,
 }
 
-/// <summary>A promoted type with nullability. <see cref="Dim"/> is the vector dimension (0 = unknown).</summary>
-internal readonly record struct ExprType(TypeKind Kind, bool Nullable, int Dim = 0)
+/// <summary>A promoted type with nullability. <see cref="Length"/> is a list's fixed length (0 = any length, and for
+/// every other kind): what <c>dot</c> and <c>cosine</c> compare at compile time, and what a fixed-length site checks.</summary>
+internal readonly record struct ExprType(TypeKind Kind, bool Nullable, int Length = 0)
 {
     public static ExprType Error => default;
 
@@ -64,13 +64,13 @@ internal readonly record struct ExprType(TypeKind Kind, bool Nullable, int Dim =
         _ => TypeKind.Error,
     };
 
-    public ExprType WithNullable(bool nullable) => new(Kind, nullable, Dim);
+    public ExprType WithNullable(bool nullable) => new(Kind, nullable, Length);
 
     public static ExprType FromColumnType(ColumnType type)
     {
         var p = type.Promoted();
         var kind = p.Kind == StorageKind.List ? ListOf(ScalarKind(p.Element)) : ScalarKind(p.Kind);
-        return new ExprType(kind, type.Nullable, kind == TypeKind.Vector ? p.Dimension : 0);
+        return new ExprType(kind, type.Nullable, p.FixedLength);
     }
 
     private static TypeKind ScalarKind(StorageKind kind) => kind switch
@@ -80,7 +80,6 @@ internal readonly record struct ExprType(TypeKind Kind, bool Nullable, int Dim =
         StorageKind.Float64 => TypeKind.Float,
         StorageKind.String => TypeKind.String,
         StorageKind.Text => TypeKind.String, // text reads as string, as int32 reads as int64: storage, not a type of its own
-        StorageKind.Vector => TypeKind.Vector,
         _ => TypeKind.Error,
     };
 
@@ -88,7 +87,7 @@ internal readonly record struct ExprType(TypeKind Kind, bool Nullable, int Dim =
     {
         if (IsList)
         {
-            return ColumnType.List(Element.ToColumnType().Kind, Nullable);
+            return ColumnType.List(Element.ToColumnType().Kind, Nullable, Length);
         }
 
         var storage = Kind switch
@@ -97,27 +96,17 @@ internal readonly record struct ExprType(TypeKind Kind, bool Nullable, int Dim =
             TypeKind.Int => StorageKind.Int64,
             TypeKind.Float => StorageKind.Float64,
             TypeKind.String => StorageKind.String,
-            TypeKind.Vector => StorageKind.Vector,
             _ => throw new InvalidOperationException($"Type {this} has no column representation."),
         };
-        return new ColumnType(storage, Nullable, Dim);
+        return new ColumnType(storage, Nullable);
     }
 
-    public override string ToString()
+    public override string ToString() => IsList ? ToColumnType().ToString() : Kind switch
     {
-        var core = Kind switch
-        {
-            TypeKind.Bool => "bool",
-            TypeKind.Int => "int64",
-            TypeKind.Float => "float64",
-            TypeKind.String => "string",
-            TypeKind.Vector => Dim > 0 ? $"vec<float32,{Dim}>" : "vec",
-            TypeKind.ListBool => "list<bool>",
-            TypeKind.ListInt => "list<int64>",
-            TypeKind.ListFloat => "list<float64>",
-            TypeKind.ListString => "list<string>",
-            _ => "<error>",
-        };
-        return Nullable ? core + "?" : core;
-    }
+        TypeKind.Bool => Nullable ? "bool?" : "bool",
+        TypeKind.Int => Nullable ? "int64?" : "int64",
+        TypeKind.Float => Nullable ? "float64?" : "float64",
+        TypeKind.String => Nullable ? "string?" : "string",
+        _ => "<error>",
+    };
 }

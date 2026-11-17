@@ -85,8 +85,10 @@ internal static class ExprAssert
                 Assert.False(actual.IsMissing, $"{what}: expected a list, got missing");
                 Assert.Equal(list, actual.AsBoolList().ToArray());
                 break;
-            case float[] vector:
-                Assert.Equal(vector, actual.AsVector());
+            case float[] floats:
+                // A list<float32> value: its elements are float32s, held promoted.
+                Assert.False(actual.IsMissing, $"{what}: expected a list, got missing");
+                Assert.Equal(floats, actual.AsFloat64List().ToArray().Select(d => (float)d).ToArray());
                 break;
             default:
                 throw new ArgumentException($"Unsupported expected value {expected}");

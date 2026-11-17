@@ -10,9 +10,9 @@ namespace StrataRec.Models;
 /// </summary>
 /// <remarks>
 /// <para>Intended for local development, tests, replay fixtures and as a cheap fallback model. Its signature declares every
-/// input and output float32 <c>[-1]</c>, one value per row: <c>ModelScorer@1</c> can feed it float32, float64 and bool
-/// columns, and reports an int or vector column mapped to it at load time (the scorer sends those as int64 <c>[rows]</c>
-/// and float32 <c>[rows, N]</c>). A call with another tensor fails. Settings:</para>
+/// input and output float32 <c>[-1]</c>, one value per row: <c>ModelScorer@1</c> can feed it float32 and float64 columns,
+/// and reports a bool, int or list column mapped to it at load time (the scorer sends those as int64 <c>[rows]</c> and
+/// <c>[rows, N]</c>; a bool weighs in through a float32 derived feature, e.g. <c>is_new ? 1.0 : 0.0</c>). A call with another tensor fails. Settings:</para>
 /// <code>
 /// { "client": "linear@1",
 ///   "outputs": { "p_click": { "bias": -2.0, "weights": { "smoothed_ctr": 8.0 }, "activation": "sigmoid" } },

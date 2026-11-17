@@ -22,8 +22,10 @@ public sealed class ModelScorerConfig : ModelCallConfig
 /// <remarks>
 /// <para>Each batch sends one tensor per mapped input and reads one float32 per row from each mapped output. The tensor of
 /// an input follows the declared type of the column or context value it maps, not the model: float32 <c>[rows]</c> for
-/// float32, float64 and bool (0/1), int64 <c>[rows]</c> for int32 and int64 (exact), float32 <c>[rows, N]</c> for
-/// <c>vec&lt;float32,N&gt;</c>; a context value is broadcast to every row. Other types are compile errors at the input.
+/// float32 and float64, int64 <c>[rows]</c> for bool (0/1), int32 and int64 (exact), and <c>[rows, N]</c> of the
+/// element's tensor type for a <c>list&lt;E,N&gt;</c> (an embedding <c>list&lt;float32,N&gt;</c> as float32
+/// <c>[rows, N]</c>); a context value is broadcast to every row. Other types, lists of any length among them, are compile
+/// errors at the input.
 /// Every model version the node may use must declare those tensors, and the mapped outputs as float32 <c>[-1]</c>; this
 /// is checked at load time. <see cref="ModelTensorRule"/> holds the rule, and why the column decides.</para>
 /// <para>Inputs are plain references, so each is gathered straight from its column's storage (or its request-level value)

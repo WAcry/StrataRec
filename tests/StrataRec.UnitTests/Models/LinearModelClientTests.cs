@@ -6,7 +6,7 @@ namespace StrataRec.UnitTests.Models;
 
 /// <summary>
 /// <c>linear@1</c> takes float32 inputs with one value per row, as its signature declares: <c>ModelScorer@1</c> reports an
-/// int or vector column mapped to it at load time, and a call that sends another tensor anyway fails instead of reading
+/// bool, int or list column mapped to it at load time, and a call that sends another tensor anyway fails instead of reading
 /// past or beside its data.
 /// </summary>
 public sealed class LinearModelClientTests

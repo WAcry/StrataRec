@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Xml;
 using StrataRec.Artifacts.Json;
 using StrataRec.Core.Bindings;
+using StrataRec.Core.Columns;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 
@@ -30,7 +31,7 @@ namespace StrataRec.Features.Local;
 /// <para><c>key</c> is a JSON number for int64-keyed tables and a string for string-keyed ones; <c>version</c> is an int64.
 /// <c>fields</c> uses the store's physical field names; fields the table does not hold are skipped, <c>null</c> is
 /// missing, and an absent field is not written (a later line of the same key keeps the earlier value). Values have the
-/// field's type; floats and vector components also accept <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c>, which
+/// field's type; floats and float list elements also accept <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c>, which
 /// are stored as such and replaced on read like any non-finite value. A line with <c>"deleted": true</c> is a tombstone.</para>
 /// <para><b>Settings.</b> <c>uri</c>: the snapshot directory (holding <c>snapshot.json</c>) or the manifest itself, as a
 /// path (relative to the config root) or a <c>file://</c> URI. <c>reload</c>: an ISO 8601 duration such as <c>PT1H</c>, at most <c>P49D</c>.</para>
@@ -693,34 +694,6 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
 
                 builder.SetString(field, Chars(ref reader));
                 break;
-            case StorageKind.Vector:
-            {
-                if (reader.TokenType != JsonTokenType.StartArray)
-                {
-                    throw Mismatch(ref reader, field, -1, type);
-                }
-
-                var target = builder.VectorBuffer(field);
-                var n = 0;
-                while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
-                {
-                    if (n == target.Length)
-                    {
-                        throw Error(Pointer(field), $"Expected {target.Length} elements for {type}, got more.", $"write exactly {target.Length} numbers");
-                    }
-
-                    target[n] = Float32(ref reader, field, n, ColumnType.Float32);
-                    n++;
-                }
-
-                if (n != target.Length)
-                {
-                    throw Error(Pointer(field), $"Expected {target.Length} elements for {type}, got {n}.", $"write exactly {target.Length} numbers");
-                }
-
-                break;
-            }
-
             case StorageKind.List:
             {
                 if (reader.TokenType != JsonTokenType.StartArray)
@@ -758,6 +731,14 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
                     }
 
                     n++;
+                }
+
+                // A list of another length is data the type cannot hold, like an integer beyond int32: a load error at the
+                // line, rather than a record every read would replace.
+                if (!ColumnValues.FitsLength(n, type))
+                {
+                    throw Error(Pointer(field), $"Expected {type.FixedLength} elements for {type}, got {n}.",
+                        $"write exactly {type.FixedLength} elements, or declare the feature as {ColumnType.List(type.Element)} for lists of any length");
                 }
 
                 break;
@@ -899,7 +880,7 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
     private FeatureUpdateException Error(string pointer, string message, string? hint = null) =>
         new(_path + ":" + _line.ToString(CultureInfo.InvariantCulture), pointer, message, hint);
 
-    /// <summary><c>/fields/&lt;name&gt;</c>, or <c>/fields/&lt;name&gt;/&lt;element&gt;</c> for a vector or list element.</summary>
+    /// <summary><c>/fields/&lt;name&gt;</c>, or <c>/fields/&lt;name&gt;/&lt;element&gt;</c> for a list element.</summary>
     private string Pointer(int field, int element = -1) =>
         "/fields/" + Escape(_schema.Fields[field].Name) + (element < 0 ? string.Empty : "/" + element.ToString(CultureInfo.InvariantCulture));
 

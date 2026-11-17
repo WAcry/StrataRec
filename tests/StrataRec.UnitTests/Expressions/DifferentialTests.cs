@@ -43,8 +43,9 @@ public class DifferentialTests(ITestOutputHelper output)
         ("col.s1", "string", K.Str),
         ("col.s2", "string?", K.Str),
         ("col.t1", "text?", K.Text),
-        ("col.v1", "vec<float32,4>?", K.Vec),
-        ("col.v2", "vec<float32,4>", K.Vec),
+        ("col.v1", "list<float32,4>?", K.Vec),
+        ("col.v2", "list<float32,4>", K.Vec),
+        ("col.v3", "list<float64,4>?", K.Vec),
         ("col.li", "list<int64>?", K.ListInt),
         ("col.li32", "list<int32>?", K.ListInt),
         ("col.lj32", "list<int32>", K.ListInt),
@@ -62,7 +63,8 @@ public class DifferentialTests(ITestOutputHelper output)
         ("ctx.j", "int64", K.Int),
         ("ctx.b", "bool?", K.Bool),
         ("ctx.s", "string?", K.Str),
-        ("ctx.v", "vec<float32,4>?", K.Vec),
+        ("ctx.v", "list<float32,4>?", K.Vec),
+        ("ctx.v64", "list<float64,4>", K.Vec),
         ("ctx.li", "list<int64>", K.ListInt),
         ("ctx.li32", "list<int32>?", K.ListInt),
         ("ctx.ls", "list<string>?", K.ListStr),
@@ -264,11 +266,6 @@ public class DifferentialTests(ITestOutputHelper output)
             return expected.AsString() == actual.AsString();
         }
 
-        if (expected.Kind == StorageKind.Vector)
-        {
-            return expected.AsVector().SequenceEqual(actual.AsVector());
-        }
-
         return expected.Equals(actual);
     }
 
@@ -353,7 +350,9 @@ public class DifferentialTests(ITestOutputHelper output)
             case ScalarColumn<bool> c: c.Set(row, random.Next(2) == 0); break;
             case DictStringColumn c: c.Set(row, Strings[random.Next(Strings.Length)]); break;
             case TextColumn c: c.Set(row, Texts[random.Next(Texts.Length)]); break;
-            case VectorColumn c: c.Set(row, RandomVector(random, garbage)); break;
+            // A fixed-length column holds rows of its length, as its writers keep it (design 4.3).
+            case ListColumn<float> c when kind == K.Vec: c.Set(row, RandomVector(random, garbage)); break;
+            case ListColumn<double> c when kind == K.Vec: c.Set(row, RandomVector(random, garbage).Select(v => (double)v).ToArray()); break;
             case ListColumn<long> c: c.Set(row, RandomLongs(random)); break;
             case ListColumn<int> c: c.Set(row, RandomLongs(random).Select(v => (int)v).ToArray()); break;
             case ListColumn<string> c: c.Set(row, RandomStrings(random)); break;
@@ -362,7 +361,6 @@ public class DifferentialTests(ITestOutputHelper output)
             case ListColumn<bool> c: c.Set(row, RandomBools(random)); break;
         }
 
-        _ = kind;
     }
 
     private static double Garbage(Random random) => random.Next(4) switch
@@ -442,7 +440,7 @@ public class DifferentialTests(ITestOutputHelper output)
         K.Bool => ScalarValue.FromBool(random.Next(2) == 0),
         K.Str => ScalarValue.FromString(Strings[random.Next(Strings.Length)]),
         K.Text => ScalarValue.FromText(Texts[random.Next(Texts.Length)]),
-        K.Vec => ScalarValue.FromVector(RandomVector(random, garbage: false)),
+        K.Vec => ScalarValue.FromFloat32List(RandomVector(random, garbage: false)),
         K.ListInt => ScalarValue.FromInt64List(RandomLongs(random)),
         K.ListFloat => ScalarValue.FromFloat64List(RandomDoubles(random)),
         K.ListBool => ScalarValue.FromBoolList(RandomBools(random)),
@@ -487,9 +485,9 @@ public class DifferentialTests(ITestOutputHelper output)
                         17 => $"soft_floor({Num(d)}, {Num(d)}, {Num(d)})",
                         18 => $"linear_decay({Num(d)}, {Num(d)}, {Num(d)})",
                         19 => $"piecewise_linear({Num(d)}, [-1.0, 0, 2.5], [3, -1.0, 0.5])",
-                        20 => $"dot({Gen(K.Vec, d)}, {Gen(K.Vec, d)})",
-                        21 => $"cosine({Gen(K.Vec, d)}, {Gen(K.Vec, d)})",
-                        22 => $"l2_norm({Gen(K.Vec, d)})",
+                        20 => $"dot({VecArg(d)}, {VecArg(d)})",
+                        21 => $"cosine({VecArg(d)}, {VecArg(d)})",
+                        22 => $"l2_norm({VecArg(d)})",
                         23 => $"hash01({Gen(K.Int, d)}, {Gen(K.Int, d)})",
                         24 => $"hash01({Gen(K.Str, d)}, {Gen(K.Float, d)}, {Gen(K.Bool, d)}, {Gen(K.Int, d)})",
                         25 => $"({Gen(K.Bool, d)} ? {Num(d)} : {Num(d)})",
@@ -571,6 +569,18 @@ public class DifferentialTests(ITestOutputHelper output)
         }
 
         private string Num(int depth) => Gen(random.Next(3) == 0 ? K.Int : K.Float, depth);
+
+        /// <summary>
+        /// An argument of dot, cosine or l2_norm: mostly a <c>list&lt;float32,4&gt;</c> or <c>list&lt;float64,4&gt;</c>, mixed;
+        /// sometimes a float list of any length (its rows of another length than 4 give missing, never NaN) or a literal
+        /// of 4. Never a literal of another length: two declared lengths that differ do not compile.
+        /// </summary>
+        private string VecArg(int depth) => random.Next(6) switch
+        {
+            0 => rowLevel ? Pick("col.lf", "col.lf32", "ctx.lf") : "ctx.lf",
+            1 => "[1.0, 0.5, -1.0, 2]",
+            _ => Gen(K.Vec, depth),
+        };
 
         /// <summary>
     /// A divisor the binder knows is 0 (a literal, <c>int(0)</c>, a let of one) is a compile error (design 7.5); a 0 that

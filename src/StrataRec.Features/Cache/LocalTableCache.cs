@@ -463,8 +463,6 @@ public sealed class LocalTableCache
 
         public void Float64(int field, double value) => builder.SetFloat64(field, value);
 
-        public void Vector(int field, ReadOnlySpan<float> value) => builder.SetVector(field, value);
-
         public void String(int field, ReadOnlySpan<byte> utf8) => builder.SetString(field, Decode(utf8));
 
         public void List<T>(int field, ReadOnlySpan<T> value)

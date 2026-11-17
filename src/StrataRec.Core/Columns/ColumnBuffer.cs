@@ -156,7 +156,6 @@ public abstract class ColumnBuffer
         StorageKind.Float64 => new ScalarColumn<double>(type, capacity, memory),
         StorageKind.String => new DictStringColumn(type, capacity, memory),
         StorageKind.Text => new TextColumn(type, capacity, memory),
-        StorageKind.Vector => new VectorColumn(type, capacity, memory),
         StorageKind.List => ListColumn.CreateList(type, capacity, memory),
         _ => throw new ArgumentException($"Unsupported column type {type}.", nameof(type)),
     };

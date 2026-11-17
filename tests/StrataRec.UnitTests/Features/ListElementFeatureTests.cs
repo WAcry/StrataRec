@@ -171,6 +171,55 @@ public class ListElementFeatureTests
     }
 
     [Fact]
+    public async Task FixedLengthContextFeatures_OfAnotherLength_TakeTheDefault_OrAreMissing_OrFail_AndAreCounted()
+    {
+        // As a candidate column's writers do (design 4.3): a list of another length than list<E,N> is out of range, whatever
+        // its elements, even a non-finite one.
+        var rig = new FeatureTestRig();
+        var fits = Derived(rig, "user.fits", "list<float32,2>", ScalarValue.FromFloat64List(new[] { 0.5, 1 }));
+        var defaulted = Derived(rig, "user.d", "list<float32,2>", ScalarValue.FromFloat64List(new[] { 1.0, 2, 3 }), ScalarValue.FromFloat64List(new[] { 0.0, 0.0 }));
+        var missing = Derived(rig, "user.m", "list<int32,2>?", ScalarValue.FromInt64List(new long[] { 1 }));
+        var nonFinite = Derived(rig, "user.n", "list<float64,2>?", ScalarValue.FromFloat64List(new[] { double.NaN }));
+        var failed = Derived(rig, "user.f", "list<bool,1>", ScalarValue.FromBoolList(new[] { true, false }));
+        rig.Build();
+        var request = rig.NewRequest(ThreeItems, userId: 7);
+
+        request.Fetcher.StartContextFetch(new[] { fits, defaulted, missing, nonFinite, failed }, CancellationToken.None);
+        await request.EnsureAsync(fits, defaulted, missing, nonFinite, failed);
+
+        Assert.Equal(ScalarValue.FromFloat64List(new[] { 0.5, 1 }), request.ContextValue(fits));
+        Assert.Equal(ScalarValue.FromFloat64List(new[] { 0.0, 0.0 }), request.ContextValue(defaulted));
+        Assert.True(request.ContextValue(missing).IsMissing);
+        Assert.True(request.ContextValue(nonFinite).IsMissing);
+        Assert.Equal(FeatureState.Failed, request.Fetcher.GetState(failed));
+        Assert.Equal(4, request.Fetcher.Counters.OutOfRange);
+        Assert.Equal(0, request.Fetcher.NonFiniteReplaced);
+
+        static int Derived(FeatureTestRig rig, string name, string type, ScalarValue value, ScalarValue? defaultValue = null) =>
+            rig.Derived(name, FeatureTestRig.User, ColumnType.Parse(type), new TestExpression("v", ColumnType.Parse(type).Promoted(), scalar: _ => value),
+                Array.Empty<int>(), defaultValue);
+    }
+
+    [Fact]
+    public void FixedLengthCatalogDefaults_OfAnotherLength_AreErrorsAtTheDefault()
+    {
+        var diagnostics = new StrataRec.Artifacts.Model.DiagnosticBag();
+        FeatureCatalog.Build(new StrataRec.Artifacts.Model.FeatureCatalogArtifact
+        {
+            CatalogId = "c",
+            Entities = new() { ["user"] = new() { Key = JsonValue.Create("ctx.request.user_id") } },
+            DerivedFeatures = new()
+            {
+                ["user.w"] = new() { Type = "list<float32,3>", Expr = "[0.5, 1, 2]", Default = JsonNode.Parse("[0.1, 2]") },
+            },
+        }, new Dictionary<string, ColumnType> { ["user_id"] = ColumnType.Int64 }, EntityKeyType.Int64, diagnostics);
+
+        var error = Assert.Single(diagnostics.Items, d => d.Code == "FEATURE_BAD_DEFAULT");
+        Assert.Equal("/derived_features/user.w/default", error.Pointer);
+        Assert.Contains("must be an array of 3 numbers (list<float32,3>), got 2 elements", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CatalogDefaults_AreHeldAsTheirStorageHoldsThem()
     {
         var catalog = FeatureCatalog.Build(new StrataRec.Artifacts.Model.FeatureCatalogArtifact
@@ -269,7 +318,8 @@ public class ListElementFeatureTests
     {
         Assert.False(ConfigTypes.TryParse("list<text>", TypeSite.Feature, out _, out _, out var message, out var hint));
         Assert.Contains("plain strings of any length", message, StringComparison.Ordinal);
-        Assert.Contains("list<E> with E one of bool, int32, int64, float32, float64, string", hint, StringComparison.Ordinal);
+        Assert.Contains("list<E> or list<E,N>", hint, StringComparison.Ordinal);
+        Assert.Contains("with E one of bool, int32, int64, float32, float64, string", hint, StringComparison.Ordinal);
     }
 
     private static StagingBuffer Fetch(string json, CompiledFieldBinding[] fields, params long[] keys)

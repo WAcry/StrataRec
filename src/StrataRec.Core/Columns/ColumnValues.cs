@@ -30,7 +30,6 @@ public static class ColumnValues
             ScalarColumn<double> d => ScalarValue.FromFloat64(d[row]),
             DictStringColumn s => ScalarValue.FromString(s.Get(row)),
             TextColumn t => ScalarValue.FromText(t.Get(row)),
-            VectorColumn v => ScalarValue.FromVector(v.Row(row).ToArray()),
             ListColumn list => GetList(list, row),
             _ => throw new NotSupportedException($"Unsupported column {column.GetType().Name}."),
         };
@@ -105,20 +104,22 @@ public static class ColumnValues
 
     /// <summary>Writes a scalar into a row, narrowing numerics to the column's storage; missing clears validity.</summary>
     /// <remarks>For trusted values only (validated defaults, engine-produced values): an int64 that does not fit an
-    /// <c>int32</c> or <c>list&lt;int32&gt;</c> column throws <see cref="OverflowException"/> rather than wrapping. Writers of
-    /// data apply the out-of-range rule instead (<see cref="TrySet"/>, design 4.3).</remarks>
+    /// <c>int32</c> or <c>list&lt;int32&gt;</c> column, or a list of another length than a <c>list&lt;E,N&gt;</c> column's,
+    /// throws <see cref="OverflowException"/> rather than being wrapped or stored. Writers of data apply the out-of-range
+    /// rule instead (<see cref="TrySet"/>, design 4.3).</remarks>
     public static void Set(ColumnBuffer column, int row, in ScalarValue value)
     {
         if (!TrySet(column, row, value))
         {
-            throw new OverflowException(
-                $"{value} does not fit the {column.Type} column: int32 storage holds [{int.MinValue}, {int.MaxValue}].");
+            throw new OverflowException($"{value} does not fit the {column.Type} column: it is {Misfit(value, column.Type)}.");
         }
     }
 
     /// <summary>
-    /// Like <see cref="Set"/>, but returns false and leaves the row untouched when the value does not fit int32
-    /// storage: an <c>int32</c> column, or a <c>list&lt;int32&gt;</c> column with any element outside the range. Never wraps.
+    /// Like <see cref="Set"/>, but returns false and leaves the row untouched when the value cannot be stored as the
+    /// column's type: an int64 outside the range of an <c>int32</c> column, a <c>list&lt;int32&gt;</c> column's list with
+    /// any element outside it, or a list of another length than a <c>list&lt;E,N&gt;</c> column's. Never wraps, and never
+    /// stores a list of another length.
     /// </summary>
     public static bool TrySet(ColumnBuffer column, int row, in ScalarValue value)
     {
@@ -145,7 +146,6 @@ public static class ColumnValues
             case ScalarColumn<double> d: d.Set(row, value.AsFloat64()); break;
             case DictStringColumn s: s.Set(row, value.AsString()); break;
             case TextColumn t: t.Set(row, value.AsString()); break;
-            case VectorColumn v: v.Set(row, value.AsVector()); break;
             case ListColumn list: return TrySetList(list, row, value);
             default: throw new NotSupportedException($"Unsupported column {column.GetType().Name}.");
         }
@@ -154,9 +154,15 @@ public static class ColumnValues
     }
 
     /// <summary>Writes a present list value (promoted elements) into a list row, narrowing to the column's element
-    /// storage; false, leaving the row untouched, for an element outside int32 storage.</summary>
+    /// storage; false, leaving the row untouched, for an element outside int32 storage or a length other than the
+    /// column's fixed one.</summary>
     public static bool TrySetList(ListColumn column, int row, in ScalarValue value)
     {
+        if (!FitsLength(value.ListLength, column.Type))
+        {
+            return false;
+        }
+
         switch (column)
         {
             case ListColumn<bool> b: b.Set(row, value.AsBoolList()); break;
@@ -193,13 +199,39 @@ public static class ColumnValues
         }
     }
 
+    /// <summary>True when a list of <paramref name="length"/> elements is a value of <paramref name="type"/>: any length for
+    /// a list of any length (and for every other type), exactly N for a <c>list&lt;E,N&gt;</c>. The one length check of
+    /// every writer.</summary>
+    public static bool FitsLength(int length, ColumnType type) => type.FixedLength == 0 || length == type.FixedLength;
+
     /// <summary>
     /// True when a present (promoted) value can be stored as <paramref name="type"/>. False only for an int64 outside
     /// the int32 range bound for <c>int32</c> storage, a finite float64 beyond the float32 range bound for <c>float32</c>
-    /// storage (<see cref="Float32Range"/>), or a list with such an element bound for a list of them; missing values and
-    /// every other kind fit.
+    /// storage (<see cref="Float32Range"/>), a list with such an element bound for a list of them, or a list of another
+    /// length than a <c>list&lt;E,N&gt;</c>'s; missing values and every other kind fit.
     /// </summary>
-    public static bool FitsStorage(in ScalarValue value, ColumnType type) => type.ValueKind switch
+    public static bool FitsStorage(in ScalarValue value, ColumnType type) =>
+        (value.Kind != StorageKind.List || FitsLength(value.ListLength, type)) && FitsElements(value, type);
+
+    /// <summary>
+    /// Why a present value does not fit <paramref name="type"/> (<see cref="FitsStorage"/> is false), as the end of a
+    /// sentence: <c>outside the int32 range [...]</c>, <c>a list of 3 elements, not 64</c>. For the errors of writers that
+    /// refuse it.
+    /// </summary>
+    public static string Misfit(in ScalarValue value, ColumnType type)
+    {
+        if (value.Kind == StorageKind.List && !FitsLength(value.ListLength, type))
+        {
+            var count = value.ListLength;
+            return $"a list of {count} element{(count == 1 ? string.Empty : "s")}, not {type.FixedLength}";
+        }
+
+        return type.ValueKind == StorageKind.Float32
+            ? $"beyond the float32 range {Float32Range.Text}"
+            : $"outside the int32 range [{int.MinValue}, {int.MaxValue}]";
+    }
+
+    private static bool FitsElements(in ScalarValue value, ColumnType type) => type.ValueKind switch
     {
         StorageKind.Int32 => value.Kind switch
         {

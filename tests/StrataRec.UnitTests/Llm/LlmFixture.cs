@@ -28,7 +28,7 @@ internal static class LlmFixture
     /// <summary>
     /// The items: title (string), blurb (text?, missing for 20 and 40), price (float64), score (float32), stock (int64),
     /// fresh (bool), tags (list&lt;string&gt;?, missing for 50), codes (list&lt;int64&gt;), rating (float32?, missing for
-    /// 10), emb (vec&lt;float32,2&gt;), extra (string, named only by some templates), weights (list&lt;float32&gt;, only 10)
+    /// 10), emb (list&lt;float32,2&gt;), extra (string, named only by some templates), weights (list&lt;float32&gt;, only 10)
     /// and clicks (list&lt;bool&gt;, only 10).
     /// </summary>
     private const string Items = """
@@ -94,7 +94,7 @@ internal static class LlmFixture
                 "item.tags":   { "type": "list<string>",   "source": "items", "field": "tags" },
                 "item.codes":  { "type": "list<int64>",    "source": "items", "field": "codes",  "default": [] },
                 "item.rating": { "type": "float32",        "source": "items", "field": "rating" },
-                "item.emb":    { "type": "vec<float32,2>", "source": "items", "field": "emb",    "default": [0, 0] },
+                "item.emb":    { "type": "list<float32,2>", "source": "items", "field": "emb",    "default": [0, 0] },
                 "item.extra":  { "type": "string",         "source": "items", "field": "extra",  "default": "" },
                 "item.weights": { "type": "list<float32>", "source": "items", "field": "weights" },
                 "item.clicks": { "type": "list<bool>",     "source": "items", "field": "clicks" },

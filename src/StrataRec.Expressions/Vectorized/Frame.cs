@@ -14,12 +14,12 @@ internal readonly record struct Opnd(int Index, bool IsScalar)
     public override string ToString() => IsScalar ? $"s{Index}" : $"n{Index}";
 }
 
-/// <summary>How a vector or list node's per-lane values are found.</summary>
+/// <summary>How a list node's per-lane values are found.</summary>
 internal enum SourceKind : byte
 {
     None,
 
-    /// <summary>A <see cref="VectorColumn"/> or <see cref="ListColumn{T}"/>; lane → physical row.</summary>
+    /// <summary>A <see cref="ListColumn{T}"/>; lane → physical row.</summary>
     Column,
 
     /// <summary>One array for every lane (empty for an all-missing column).</summary>
@@ -32,7 +32,7 @@ internal enum SourceKind : byte
 /// <summary>
 /// Where one node's result lives during an evaluation. Scalar kinds point either at a register (a slice of a rented
 /// register file) or, zero-copy, at a column's own array in full-range mode. Validity is <c>null</c> when every lane is
-/// present. Vector and list nodes are lazy sources resolved per lane.
+/// present. List nodes are lazy sources resolved per lane.
 /// </summary>
 internal struct Loc
 {

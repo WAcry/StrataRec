@@ -311,34 +311,10 @@ internal static class TapCapture
     }
 
     /// <summary>
-    /// Non-finite values are logged as missing, never as NaN (design 4.3, 8.7). A vector or float list with any non-finite
-    /// element is missing as a whole: a partial vector has no meaning to a training job.
+    /// Non-finite values are logged as missing, never as NaN (design 4.3, 8.7). A float list with any non-finite element
+    /// is missing as a whole: a partial embedding has no meaning to a training job.
     /// </summary>
-    private static ScalarValue Sanitize(ScalarValue value)
-    {
-        if (value.IsMissing)
-        {
-            return value;
-        }
-
-        if (ColumnValues.IsNonFinite(value))
-        {
-            return ScalarValue.Missing;
-        }
-
-        if (value.Kind == StorageKind.Vector)
-        {
-            foreach (var f in value.AsVector())
-            {
-                if (!float.IsFinite(f))
-                {
-                    return ScalarValue.Missing;
-                }
-            }
-        }
-
-        return value;
-    }
+    private static ScalarValue Sanitize(ScalarValue value) => !value.IsMissing && ColumnValues.IsNonFinite(value) ? ScalarValue.Missing : value;
 
     private static long EntityHash(Core.Tables.CandidateTable table, int row) =>
         table.KeyType == EntityKeyType.Int64 ? table.Int64Ids![row] : Core.Hashing.StableHash.SeedFromSalt(table.StringIds!.Get(row));

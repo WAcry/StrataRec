@@ -15,48 +15,56 @@ public enum StorageKind : byte
     String,
     /// <summary>Long text (prompts, generated reasons).</summary>
     Text,
-    /// <summary>Fixed-length <c>vec&lt;float32,N&gt;</c>.</summary>
-    Vector,
 
     /// <summary>
-    /// Variable-length <c>list&lt;E&gt;</c> of one element kind (<see cref="ColumnType.Element"/>): <c>bool</c>,
-    /// <c>int32</c>, <c>int64</c>, <c>float32</c>, <c>float64</c> or <c>string</c>. A constructor rather than a kind per
-    /// element type, so every layer handles lists once and an element type works everywhere a scalar of it does.
+    /// <c>list&lt;E&gt;</c> of one element kind (<see cref="ColumnType.Element"/>): <c>bool</c>, <c>int32</c>, <c>int64</c>,
+    /// <c>float32</c>, <c>float64</c> or <c>string</c>, of any length or of a fixed one (<c>list&lt;E,N&gt;</c>,
+    /// <see cref="ColumnType.FixedLength"/>). A constructor rather than a kind per element type, so every layer handles lists
+    /// once and an element type works everywhere a scalar of it does. A vector (an embedding) is a fixed-length float list:
+    /// its rows are contiguous spans like every list's, so the same SIMD kernels apply, and no layer needs a path of its own.
     /// </summary>
     List,
 }
 
 /// <summary>
-/// A storage type plus nullability, e.g. <c>float32?</c>, <c>vec&lt;float32,64&gt;</c>, <c>list&lt;float32&gt;</c>.
+/// A storage type plus nullability, e.g. <c>float32?</c>, <c>list&lt;float32&gt;</c>, <c>list&lt;float32,64&gt;</c>.
 /// Expression evaluation works on the <see cref="Promoted"/> form (int32→int64, float32→float64, and the same for a
 /// list's elements).
 /// </summary>
-/// <remarks>A list is never missing element by element: the list as a whole is present or missing (<c>list&lt;E&gt;?</c>),
+/// <remarks>
+/// <para>A list is never missing element by element: the list as a whole is present or missing (<c>list&lt;E&gt;?</c>),
 /// and every element it holds is a value. A sequence with gaps is a list of values plus a list of flags, or a default
-/// element written by whoever builds it.</remarks>
+/// element written by whoever builds it.</para>
+/// <para>A list may declare its length (<c>list&lt;float32,64&gt;</c>, <see cref="FixedLength"/>): every value of the type
+/// then holds exactly that many elements, which is what a model input's tensor shape, <c>dot</c> between two embeddings and
+/// an MMR similarity need to know before a request runs. The storage is the same as a list of any length's; writers check
+/// the length instead, and a value of another length is replaced as a whole, like a list with an element outside int32
+/// storage (design 4.3).</para>
+/// </remarks>
 public readonly struct ColumnType : IEquatable<ColumnType>
 {
     /// <param name="kind">The storage kind.</param>
     /// <param name="nullable">Whether a row may be missing.</param>
-    /// <param name="dimension">A vector's dimension; 0 for "any dimension" (expression typing) and for other kinds.</param>
     /// <param name="element">A list's element kind (<see cref="IsListElement"/>); 0 for other kinds.</param>
-    public ColumnType(StorageKind kind, bool nullable = false, int dimension = 0, StorageKind element = 0)
+    /// <param name="fixedLength">A list's length when the type fixes it (at least 1); 0 for a list of any length and for other kinds.</param>
+    public ColumnType(StorageKind kind, bool nullable = false, StorageKind element = 0, int fixedLength = 0)
     {
-        if (kind == StorageKind.Vector && dimension < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(dimension));
-        }
-
         if (kind == StorageKind.List ? !IsListElement(element) : element != 0)
         {
             throw new ArgumentOutOfRangeException(nameof(element), element,
                 kind == StorageKind.List ? "A list's elements are bool, int32, int64, float32, float64 or string." : "Only a list has an element kind.");
         }
 
+        if (fixedLength < 0 || (fixedLength != 0 && kind != StorageKind.List))
+        {
+            throw new ArgumentOutOfRangeException(nameof(fixedLength), fixedLength,
+                kind == StorageKind.List ? "A list's fixed length is at least 1 (0 for any length)." : "Only a list has a length.");
+        }
+
         Kind = kind;
         Nullable = nullable;
-        Dimension = kind == StorageKind.Vector ? dimension : 0;
         Element = element;
+        FixedLength = fixedLength;
     }
 
     // The one-byte members are declared together, so the struct is 8 bytes rather than 12: it is passed by value
@@ -68,8 +76,9 @@ public readonly struct ColumnType : IEquatable<ColumnType>
     /// <summary>The kind of a list's elements; 0 for every other kind.</summary>
     public StorageKind Element { get; }
 
-    /// <summary>Vector dimension; 0 means "any dimension" (only used by expression typing).</summary>
-    public int Dimension { get; }
+    /// <summary>The number of elements every value of a <c>list&lt;E,N&gt;</c> holds (N); 0 for a list of any length and
+    /// for every other kind.</summary>
+    public int FixedLength { get; }
 
     public bool IsDefault => Kind == 0;
 
@@ -80,6 +89,9 @@ public readonly struct ColumnType : IEquatable<ColumnType>
     public bool IsFloat => Kind is StorageKind.Float32 or StorageKind.Float64;
 
     public bool IsList => Kind == StorageKind.List;
+
+    /// <summary>True for a list whose type fixes its length (<c>list&lt;E,N&gt;</c>).</summary>
+    public bool IsFixedLength => FixedLength > 0;
 
     /// <summary>The type of one element of a list (never nullable); throws for other kinds.</summary>
     public ColumnType ElementType => IsList ? new ColumnType(Element) : throw new InvalidOperationException($"{this} is not a list.");
@@ -97,8 +109,8 @@ public readonly struct ColumnType : IEquatable<ColumnType>
     public bool IsFloatStorage => ValueKind is StorageKind.Float32 or StorageKind.Float64;
 
     /// <summary>The kinds a list may hold: the fixed-size scalars and <c>string</c>. Not <c>text</c>: a list's strings are
-    /// never dictionary-encoded in a request, so the scalar string/text split has nothing to choose between; not vectors
-    /// or lists, which would make every layer handle nested variable-length data.</summary>
+    /// never dictionary-encoded in a request, so the scalar string/text split has nothing to choose between; not lists,
+    /// which would make every layer handle nested variable-length data.</summary>
     public static bool IsListElement(StorageKind kind) =>
         kind is StorageKind.Bool or StorageKind.Int32 or StorageKind.Int64 or StorageKind.Float32 or StorageKind.Float64 or StorageKind.String;
 
@@ -116,24 +128,23 @@ public readonly struct ColumnType : IEquatable<ColumnType>
 
     public static ColumnType Text => new(StorageKind.Text);
 
-    public static ColumnType Vector(int dimension) => new(StorageKind.Vector, false, dimension);
-
-    /// <summary><c>list&lt;E&gt;</c> of <paramref name="element"/> (<see cref="IsListElement"/>).</summary>
-    public static ColumnType List(StorageKind element, bool nullable = false) => new(StorageKind.List, nullable, 0, element);
+    /// <summary><c>list&lt;E&gt;</c> of <paramref name="element"/> (<see cref="IsListElement"/>), or <c>list&lt;E,N&gt;</c>
+    /// with a <paramref name="fixedLength"/>.</summary>
+    public static ColumnType List(StorageKind element, bool nullable = false, int fixedLength = 0) => new(StorageKind.List, nullable, element, fixedLength);
 
     public ColumnType AsNullable() => WithNullable(true);
 
     public ColumnType AsNonNullable() => WithNullable(false);
 
-    public ColumnType WithNullable(bool nullable) => new(Kind, nullable, Dimension, Element);
+    public ColumnType WithNullable(bool nullable) => new(Kind, nullable, Element, FixedLength);
 
     /// <summary>The expression-level type: int32→int64 and float32→float64, for a scalar or a list's elements; other kinds
-    /// unchanged.</summary>
+    /// unchanged, a list's length included.</summary>
     public ColumnType Promoted() => Kind switch
     {
         StorageKind.Int32 => new ColumnType(StorageKind.Int64, Nullable),
         StorageKind.Float32 => new ColumnType(StorageKind.Float64, Nullable),
-        StorageKind.List => List(Promote(Element), Nullable),
+        StorageKind.List => List(Promote(Element), Nullable, FixedLength),
         _ => this,
     };
 
@@ -144,7 +155,7 @@ public readonly struct ColumnType : IEquatable<ColumnType>
         _ => kind,
     };
 
-    /// <summary>Parses the configuration spelling of a type, e.g. <c>"float32?"</c> or <c>"vec&lt;float32,64&gt;"</c>.</summary>
+    /// <summary>Parses the configuration spelling of a type, e.g. <c>"float32?"</c> or <c>"list&lt;float32,64&gt;"</c>.</summary>
     public static ColumnType Parse(string text)
     {
         if (TryParse(text, out var type, out var error))
@@ -180,35 +191,79 @@ public readonly struct ColumnType : IEquatable<ColumnType>
 
         if (s.StartsWith("list<", StringComparison.Ordinal) && s.EndsWith('>'))
         {
-            var inner = s[5..^1].Trim();
-            if (TryParseScalar(inner, out var element) && IsListElement(element))
+            var inner = s[5..^1];
+            var comma = inner.Contains('<', StringComparison.Ordinal) ? -1 : inner.LastIndexOf(',');
+            var elementText = (comma < 0 ? inner : inner[..comma]).Trim();
+            var length = 0;
+            if (comma >= 0)
             {
-                type = List(element, nullable);
+                var lengthText = inner[(comma + 1)..].Trim();
+                if (!int.TryParse(lengthText, NumberStyles.None, CultureInfo.InvariantCulture, out length) || length < 1)
+                {
+                    error = $"Unknown type '{text}': the length N of list<E,N> is a whole number of at least 1, got '{lengthText}'; "
+                            + $"a list of any length is written list<{elementText}>.";
+                    return false;
+                }
+            }
+
+            if (TryParseScalar(elementText, out var element) && IsListElement(element))
+            {
+                type = List(element, nullable, length);
                 error = null;
                 return true;
             }
 
-            error = $"Unknown type '{text}': " + ListElementError(inner);
+            error = $"Unknown type '{text}': " + ListElementError(elementText);
             return false;
         }
 
-        if (s.StartsWith("vec<", StringComparison.Ordinal) && s.EndsWith('>'))
+        if (VectorAsList(s) is { } list)
         {
-            var inner = s[4..^1].Split(',');
-            if (inner.Length == 2
-                && inner[0].Trim() == "float32"
-                && int.TryParse(inner[1].Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var dim)
-                && dim > 0)
+            error = $"Unknown type '{text}': a vector is a list of fixed length, written list<float32,N>: '{list}{(nullable ? "?" : string.Empty)}'.";
+            return false;
+        }
+
+        error = $"Unknown type '{text}'. Expected one of: bool, int32, int64, float32, float64, string, text, " +
+                "list<E> or list<E,N> (E: bool, int32, int64, float32, float64 or string; N: its fixed length), optionally followed by '?'.";
+        return false;
+    }
+
+    /// <summary>
+    /// The list spelling of a vector type written in another syntax (<c>vec&lt;float32,64&gt;</c>, <c>vector</c>): a list of
+    /// the same element (float32 when the element written is not one a list holds) and the same length, or <c>N</c> where
+    /// none was written. Null when <paramref name="written"/> is not a vector spelling. For the errors and hints of every
+    /// place a type is written, so they agree.
+    /// </summary>
+    public static string? VectorAsList(string written)
+    {
+        ArgumentNullException.ThrowIfNull(written);
+        var core = written.Trim().ToLowerInvariant();
+        if (!core.StartsWith("vec", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var open = core.IndexOf('<', StringComparison.Ordinal);
+        var close = core.LastIndexOf('>');
+        var comma = core.LastIndexOf(',');
+        var element = "float32";
+        var length = "N";
+        if (open > 0 && close > open)
+        {
+            var hasLength = comma > open && comma < close;
+            if (TryParseScalar(core[(open + 1)..(hasLength ? comma : close)].Trim(), out var kind) && IsListElement(kind))
             {
-                type = new(StorageKind.Vector, nullable, dim);
-                error = null;
-                return true;
+                element = ScalarName(kind);
+            }
+
+            if (hasLength
+                && int.TryParse(core.AsSpan(comma + 1, close - comma - 1).Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var n) && n > 0)
+            {
+                length = n.ToString(CultureInfo.InvariantCulture);
             }
         }
 
-        error = $"Unknown type '{text}'. Expected one of: bool, int32, int64, float32, float64, string, text, vec<float32,N>, " +
-                "list<E> (E: bool, int32, int64, float32, float64 or string), optionally followed by '?'.";
-        return false;
+        return $"list<{element},{length}>";
     }
 
     /// <summary>Why <paramref name="element"/> is not a list's element type, and what to write instead.</summary>
@@ -223,7 +278,7 @@ public readonly struct ColumnType : IEquatable<ColumnType>
         return element switch
         {
             "text" => "a list's elements are plain strings of any length, never dictionary-encoded in a request: write 'list<string>'.",
-            _ when element.StartsWith("list<", StringComparison.Ordinal) || element.StartsWith("vec<", StringComparison.Ordinal) =>
+            _ when element.StartsWith("list<", StringComparison.Ordinal) || element.StartsWith("vec", StringComparison.Ordinal) =>
                 "a list's elements are scalars (bool, int32, int64, float32, float64 or string); lists do not nest.",
             _ => "a list's elements are bool, int32, int64, float32, float64 or string.",
         };
@@ -261,7 +316,7 @@ public readonly struct ColumnType : IEquatable<ColumnType>
     {
         var core = Kind switch
         {
-            StorageKind.Vector => Dimension > 0 ? $"vec<float32,{Dimension}>" : "vec",
+            StorageKind.List when FixedLength > 0 => "list<" + ScalarName(Element) + "," + FixedLength.ToString(CultureInfo.InvariantCulture) + ">",
             StorageKind.List => "list<" + ScalarName(Element) + ">",
             _ => ScalarName(Kind),
         };
@@ -269,11 +324,11 @@ public readonly struct ColumnType : IEquatable<ColumnType>
     }
 
     public bool Equals(ColumnType other) =>
-        Kind == other.Kind && Nullable == other.Nullable && Dimension == other.Dimension && Element == other.Element;
+        Kind == other.Kind && Nullable == other.Nullable && FixedLength == other.FixedLength && Element == other.Element;
 
     public override bool Equals(object? obj) => obj is ColumnType other && Equals(other);
 
-    public override int GetHashCode() => HashCode.Combine(Kind, Nullable, Dimension, Element);
+    public override int GetHashCode() => HashCode.Combine(Kind, Nullable, FixedLength, Element);
 
     public static bool operator ==(ColumnType left, ColumnType right) => left.Equals(right);
 

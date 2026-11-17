@@ -12,10 +12,10 @@ namespace StrataRec.Logging;
 /// request's candidate table can go back to the pool while the batch waits in a queue.
 /// </summary>
 /// <remarks>
-/// Columns used to be one <see cref="ScalarValue"/> per row (24 bytes) and a copied array per vector or list row: a
-/// candidate tap of 1,000 rows and 10 numeric columns held 240 KB of values; typed it holds 80 KB in 10 arrays, and a list
-/// or vector column is one array of elements instead of one per row. A sink reads the arrays directly; <see cref="Get"/>
-/// gives a row as a value, for cold readers.
+/// Columns used to be one <see cref="ScalarValue"/> per row (24 bytes) and a copied array per list row: a candidate tap
+/// of 1,000 rows and 10 numeric columns held 240 KB of values; typed it holds 80 KB in 10 arrays, and a list column is one
+/// array of elements instead of one per row. A sink reads the arrays directly; <see cref="Get"/> gives a row as a value,
+/// for cold readers.
 /// </remarks>
 public sealed class LogColumn
 {
@@ -31,17 +31,18 @@ public sealed class LogColumn
 
     public string Name { get; }
 
-    /// <summary>The column expression's type: <c>bool</c>, <c>int64</c>, <c>float64</c>, <c>string</c>,
-    /// <c>vec&lt;float32,N&gt;</c> or <c>list&lt;E&gt;</c> of those scalars.</summary>
+    /// <summary>The column expression's type: <c>bool</c>, <c>int64</c>, <c>float64</c>, <c>string</c>, or
+    /// <c>list&lt;E&gt;</c> or <c>list&lt;E,N&gt;</c> of those scalars (a float32 embedding logs as <c>list&lt;float64,N&gt;</c>,
+    /// as a float32 column logs as float64: a log column holds an expression's result, whose types are promoted).</summary>
     public ColumnType Type { get; }
 
     public int RowCount { get; }
 
     /// <summary>
     /// The values: for a scalar one per row, a <c>bool[]</c>, <c>long[]</c>, <c>double[]</c> or <c>string?[]</c>; for a
-    /// vector a <c>float[]</c> of <see cref="ColumnType.Dimension"/> per row; for a list the elements of every row in row
-    /// order (<c>bool[]</c>, <c>long[]</c>, <c>double[]</c> or <c>string[]</c>), which <see cref="Offsets"/> delimits. A
-    /// missing row holds zeros (null for a string) and a missing list row no elements.
+    /// list the elements of every row in row order (<c>bool[]</c>, <c>long[]</c>, <c>double[]</c> or <c>string[]</c>),
+    /// which <see cref="Offsets"/> delimits, a fixed-length list included. A missing row holds zeros (null for a string)
+    /// and a missing list row no elements.
     /// </summary>
     public Array Values { get; }
 
@@ -54,18 +55,12 @@ public sealed class LogColumn
 
     public bool IsMissing(int row) => Validity is { } validity && !Bits.Get(validity, row);
 
-    /// <summary>Row <paramref name="row"/> as a value; a vector or list row is copied. For tests and the JSON encoding.</summary>
+    /// <summary>Row <paramref name="row"/> as a value; a list row is copied. For tests and the JSON encoding.</summary>
     public ScalarValue Get(int row)
     {
         if (IsMissing(row))
         {
             return ScalarValue.Missing;
-        }
-
-        switch (Values)
-        {
-            case float[] vectors:
-                return ScalarValue.FromVector(vectors.AsSpan(row * Type.Dimension, Type.Dimension).ToArray());
         }
 
         if (Offsets is { } offsets)
@@ -95,19 +90,14 @@ public sealed class LogColumn
     /// whose fetch failed.</summary>
     public static LogColumn AllMissing(string name, ColumnType type, int rowCount)
     {
-        Array values = type.Kind switch
-        {
-            StorageKind.Vector => new float[rowCount * type.Dimension],
-            StorageKind.List => ElementArray(type.Element, 0),
-            _ => ElementArray(type.Kind, rowCount),
-        };
+        var values = type.IsList ? ElementArray(type.Element, 0) : ElementArray(type.Kind, rowCount);
         return new LogColumn(name, type, rowCount, values, type.IsList ? new int[rowCount + 1] : null, rowCount == 0 ? null : new ulong[Bits.WordCount(rowCount)]);
     }
 
     /// <summary>
     /// The <paramref name="rows"/> of <paramref name="buffer"/> (an expression's result, so its numbers are promoted:
-    /// int64, float64), in that order. A NaN or ±∞ number, a vector with such a component and a list with such an element
-    /// are missing: logs carry no non-finite values (design 8.7).
+    /// int64, float64), in that order. A NaN or ±∞ number and a list with such an element are missing: logs carry no
+    /// non-finite values (design 8.7).
     /// </summary>
     public static LogColumn Capture(string name, ColumnBuffer buffer, ReadOnlySpan<int> rows)
     {
@@ -120,7 +110,6 @@ public sealed class LogColumn
             ScalarColumn<long> l => Scalars(l, rows, ref validity),
             ScalarColumn<double> d => Scalars(d, rows, ref validity),
             DictStringColumn or TextColumn => Strings(buffer, rows, ref validity),
-            VectorColumn v => Vectors(v, rows, ref validity),
             ListColumn<bool> b => Elements(b, rows, offsets = new int[rows.Length + 1], ref validity),
             ListColumn<long> l => Elements(l, rows, offsets = new int[rows.Length + 1], ref validity),
             ListColumn<double> d => Elements(d, rows, offsets = new int[rows.Length + 1], ref validity),
@@ -139,12 +128,7 @@ public sealed class LogColumn
         ulong[]? validity = null;
         int[]? offsets = type.IsList ? new int[count + 1] : null;
         var elements = new List<ScalarValue>();
-        Array result = type.Kind switch
-        {
-            StorageKind.Vector => new float[count * type.Dimension],
-            StorageKind.List => ElementArray(type.Element, 0),
-            _ => ElementArray(type.Kind, count),
-        };
+        var result = type.IsList ? ElementArray(type.Element, 0) : ElementArray(type.Kind, count);
         var at = 0;
         for (var i = 0; i < count; i++)
         {
@@ -154,7 +138,7 @@ public sealed class LogColumn
                 offsets[i] = at;
             }
 
-            if (value.IsMissing || ColumnValues.IsNonFinite(value) || (value.Kind == StorageKind.Vector && !ColumnValues.AllFinite(value.AsVector())))
+            if (value.IsMissing || ColumnValues.IsNonFinite(value))
             {
                 MarkMissing(ref validity, count, i);
                 continue;
@@ -166,7 +150,6 @@ public sealed class LogColumn
                 case long[] l when offsets is null: l[i] = value.AsInt64(); break;
                 case double[] d when offsets is null: d[i] = value.AsFloat64(); break;
                 case string?[] s when offsets is null: s[i] = value.AsString(); break;
-                case float[] f: value.AsVector().CopyTo(f.AsSpan(i * type.Dimension, type.Dimension)); break;
                 default:
                     var list = value.ListLength;
                     result = type.Element switch
@@ -255,25 +238,6 @@ public sealed class LogColumn
             }
 
             values[i] = dictionary is not null ? dictionary.Get(row) : ((TextColumn)column).Get(row);
-        }
-
-        return values;
-    }
-
-    private static float[] Vectors(VectorColumn column, ReadOnlySpan<int> rows, ref ulong[]? validity)
-    {
-        var dimension = column.Dimension;
-        var values = new float[rows.Length * dimension];
-        for (var i = 0; i < rows.Length; i++)
-        {
-            var row = rows[i];
-            if (!column.IsValid(row) || !ColumnValues.AllFinite(column.Row(row)))
-            {
-                MarkMissing(ref validity, rows.Length, i);
-                continue;
-            }
-
-            column.Row(row).CopyTo(values.AsSpan(i * dimension, dimension));
         }
 
         return values;

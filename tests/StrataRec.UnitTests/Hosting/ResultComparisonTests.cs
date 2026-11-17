@@ -71,8 +71,8 @@ public sealed class ResultComparisonTests
         var replayed = Result(true, (1, double.NaN, "a"));
         foreach (var (left, right) in recorded.Columns.Zip(replayed.Columns))
         {
-            ((Dictionary<string, ScalarValue>)left)["embedding"] = ScalarValue.FromVector(new[] { float.NaN, float.PositiveInfinity });
-            ((Dictionary<string, ScalarValue>)right)["embedding"] = ScalarValue.FromVector(new[] { float.NaN, float.PositiveInfinity });
+            ((Dictionary<string, ScalarValue>)left)["embedding"] = ScalarValue.FromFloat32List(new[] { float.NaN, float.PositiveInfinity });
+            ((Dictionary<string, ScalarValue>)right)["embedding"] = ScalarValue.FromFloat32List(new[] { float.NaN, float.PositiveInfinity });
         }
 
         Assert.True(ResultComparison.Diff(recorded, replayed).Identical);

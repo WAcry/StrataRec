@@ -16,8 +16,8 @@ namespace StrataRec.Artifacts.Model;
 /// (<c>stratarec schema replay_bundle</c>) and a malformed bundle is reported with a JSON pointer.</para>
 /// <para>Values use the log encoding (design 8.7: missing is null, bool is 0 or 1) and are decoded with the type recorded
 /// next to them, never with the type of whatever configuration replays the bundle. Unlike logs, a bundle keeps the NaN
-/// and ±∞ the request observed, as the strings <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c> (per component in
-/// vectors): a replay must see the same values to make the same decisions. Bundles contain request inputs and feature
+/// and ±∞ the request observed, as the strings <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c> (per element in
+/// float lists): a replay must see the same values to make the same decisions. Bundles contain request inputs and feature
 /// values; who may read them is the environment's business (design 8.9).</para>
 /// </remarks>
 [Description("A recorded request for deterministic replay (StrataRec design 13.4).")]
@@ -28,9 +28,9 @@ public sealed class ReplayBundle
     /// A format version is the date its layout changed and that day's sequence (<c>2026-11-14.1</c>, then
     /// <c>2026-11-14.2</c>): it says when a bundle was laid out, and sorts as text.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-16.2";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-16.3";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-16.2\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-16.3\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -72,10 +72,10 @@ public sealed class ReplayRequestRecord
 /// <summary>A value and the type it was recorded with.</summary>
 public sealed class ReplayTypedValue
 {
-    [Description("Type spelling, e.g. \"int64?\" or \"vec<float32,4>\".")]
+    [Description("Type spelling, e.g. \"int64?\" or \"list<float32,4>\".")]
     public required string Type { get; init; }
 
-    [Description("Log encoding (design 8.7): null is missing, bool is 0 or 1, lists and vectors are arrays; NaN and ±∞ floats (and vector components) are the strings \"NaN\", \"Infinity\" and \"-Infinity\".")]
+    [Description("Log encoding (design 8.7): null is missing, bool is 0 or 1, lists are arrays; NaN and ±∞ floats (and float list elements) are the strings \"NaN\", \"Infinity\" and \"-Infinity\".")]
     public JsonElement? Value { get; init; }
 }
 

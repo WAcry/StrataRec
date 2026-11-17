@@ -64,20 +64,17 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
     public static ScalarValue FromText(string? value) =>
         value is null ? Missing : new(StorageKind.Text, 0, value);
 
-    /// <summary>A vector value over <paramref name="value"/>, which it keeps without copying: do not change the array afterwards.</summary>
+    /// <summary>A list value over <paramref name="value"/>, which it keeps without copying: do not change the array afterwards.</summary>
     /// <remarks>A value is immutable, and one value may be shared by every request (a plan's default or parameter, an
-    /// expression's constant), so the list and vector accessors are read-only spans: no reader can change what another
-    /// reads. Copy one (<c>ToArray()</c>) to sort or edit it.</remarks>
-    public static ScalarValue FromVector(float[]? value) =>
-        value is null ? Missing : new(StorageKind.Vector, value.Length, value);
-
-    /// <inheritdoc cref="FromVector"/>
+    /// expression's constant), so the list accessors are read-only spans: no reader can change what another reads. Copy
+    /// one (<c>ToArray()</c>) to sort or edit it. A value has no fixed length of its own: whether its length is the one a
+    /// <c>list&lt;E,N&gt;</c> holds is checked where it is converted or stored (<see cref="TryConvert"/>).</remarks>
     public static ScalarValue FromBoolList(bool[]? value) => List(StorageKind.Bool, value);
 
-    /// <inheritdoc cref="FromVector"/>
+    /// <inheritdoc cref="FromBoolList"/>
     public static ScalarValue FromInt64List(long[]? value) => List(StorageKind.Int64, value);
 
-    /// <inheritdoc cref="FromVector"/>
+    /// <inheritdoc cref="FromBoolList"/>
     public static ScalarValue FromFloat64List(double[]? value) => List(StorageKind.Float64, value);
 
     /// <summary>A <c>list&lt;float32&gt;</c> value, held promoted like every float, whose elements print as the floats they
@@ -93,7 +90,7 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
         return new(StorageKind.List, (long)StorageKind.Float64 | SinglePrecisionList, doubles);
     }
 
-    /// <inheritdoc cref="FromVector"/>
+    /// <inheritdoc cref="FromBoolList"/>
     public static ScalarValue FromStringList(string[]? value) => List(StorageKind.String, value);
 
     private static ScalarValue List(StorageKind element, Array? value) =>
@@ -122,10 +119,7 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
 
     public string AsString() => Kind is StorageKind.String or StorageKind.Text ? (string)_ref! : throw WrongKind(StorageKind.String);
 
-    /// <summary>The vector's components, read-only (see <see cref="FromVector"/>).</summary>
-    public ReadOnlySpan<float> AsVector() => Kind == StorageKind.Vector ? (float[])_ref! : throw WrongKind(StorageKind.Vector);
-
-    /// <summary>The list's elements, read-only (see <see cref="FromVector"/>).</summary>
+    /// <summary>The list's elements, read-only (see <see cref="FromBoolList"/>).</summary>
     public ReadOnlySpan<bool> AsBoolList() => ListOf<bool>(StorageKind.Bool);
 
     /// <inheritdoc cref="AsBoolList"/>
@@ -143,8 +137,9 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
 
     /// <summary>Converts to the given type's promoted form; returns false when the value cannot represent it, including an
     /// integer (or list element) outside the int32 range for <c>int32</c> and <c>list&lt;int32&gt;</c> targets, and a finite
-    /// float beyond the float32 range for <c>float32</c> and <c>list&lt;float32&gt;</c> ones (<see cref="Float32Range"/>).
-    /// A list converts element by element, as a scalar of its element type would.</summary>
+    /// float beyond the float32 range for <c>float32</c> and <c>list&lt;float32&gt;</c> ones (<see cref="Float32Range"/>), and
+    /// a list of another length than a <c>list&lt;E,N&gt;</c> target's. A list converts element by element, as a scalar of
+    /// its element type would.</summary>
     public bool TryConvert(ColumnType target, out ScalarValue converted)
     {
         converted = this;
@@ -155,7 +150,8 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
 
         if (target.IsList || Kind == StorageKind.List)
         {
-            return target.IsList && Kind == StorageKind.List && TryConvertList(target, out converted);
+            return target.IsList && Kind == StorageKind.List && (target.FixedLength == 0 || ListLength == target.FixedLength)
+                   && TryConvertList(target, out converted);
         }
 
         var kind = target.Promoted().Kind;
@@ -168,7 +164,6 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
 
             return target.Kind switch
             {
-                StorageKind.Vector => target.Dimension == 0 || AsVector().Length == target.Dimension,
                 StorageKind.Int32 => Int32Range.Fits(_bits),
                 StorageKind.Float32 => Float32Range.Fits(AsFloat64()),
                 _ => true,
@@ -274,7 +269,6 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
             StorageKind.Bool or StorageKind.Int64 => _bits == other._bits,
             StorageKind.Float64 => AsFloat64().Equals(other.AsFloat64()),
             StorageKind.String or StorageKind.Text => string.Equals((string)_ref!, (string)other._ref!, StringComparison.Ordinal),
-            StorageKind.Vector => AsVector().SequenceEqual(other.AsVector()),
             StorageKind.List => ListEquals(other),
             _ => false,
         };
@@ -339,15 +333,6 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
                 return HashCode.Combine(Kind, AsFloat64().GetHashCode());
             case StorageKind.String or StorageKind.Text:
                 return HashCode.Combine(Kind, StringComparer.Ordinal.GetHashCode((string)_ref!));
-            case StorageKind.Vector:
-                var h = new HashCode();
-                h.Add(Kind);
-                foreach (var f in AsVector())
-                {
-                    h.Add(f);
-                }
-
-                return h.ToHashCode();
             case StorageKind.List:
                 var hl = new HashCode();
                 hl.Add(Kind);
@@ -402,7 +387,6 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
         StorageKind.Float64 when IsFloat32 => ((float)AsFloat64()).ToString("R", CultureInfo.InvariantCulture),
         StorageKind.Float64 => AsFloat64().ToString("R", CultureInfo.InvariantCulture),
         StorageKind.String or StorageKind.Text => "'" + AsString() + "'",
-        StorageKind.Vector => "vec[" + AsVector().Length.ToString(CultureInfo.InvariantCulture) + "]",
         StorageKind.List => ListText(),
         _ => "?",
     };

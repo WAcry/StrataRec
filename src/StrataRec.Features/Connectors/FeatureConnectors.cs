@@ -56,9 +56,9 @@ public interface IFeatureBatchWriter
     int KeyCount { get; }
 
     /// <summary>
-    /// Native value buffer of a fixed-size field, indexed by key: <c>bool</c>, <c>int</c> (int32), <c>long</c>,
-    /// <c>float</c> (float32 and vectors, length KeyCount × dimension) or <c>double</c>. Writes become visible only
-    /// through <see cref="SetValid"/>.
+    /// Native value buffer of a fixed-size scalar field, indexed by key: <c>bool</c>, <c>int</c> (int32), <c>long</c>,
+    /// <c>float</c> (float32) or <c>double</c>. Writes become visible only through <see cref="SetValid"/>. Lists, of any
+    /// length or of a fixed one (an embedding, <c>list&lt;float32,64&gt;</c>), are written with the list setters.
     /// </summary>
     Memory<T> GetValues<T>(int fieldIndex)
         where T : unmanaged;
@@ -90,7 +90,10 @@ public interface IFeatureBatchWriter
     /// <summary>Writes a <c>list&lt;bool&gt;</c> field value.</summary>
     /// <remarks>One setter per element type, named like the field's declared element type: the field's type decides the
     /// width, so a connector decoding int32 ids (tags, topics, token ids) or float32 weights writes them as they are,
-    /// with no widened copy. A setter for another element type than the field's is a connector bug and throws.</remarks>
+    /// with no widened copy. A setter for another element type than the field's is a connector bug and throws. A
+    /// fixed-length field (<c>list&lt;float32,64&gt;</c>, an embedding) takes the same setter; a value of another length is
+    /// data, not a bug: the engine replaces it with the feature's default (or missing) where it stores it, and counts it
+    /// (<c>column_out_of_range_total</c>, design 4.3), while recordings and the cache keep what the connector wrote.</remarks>
     void SetBoolList(int fieldIndex, int keyIndex, ReadOnlySpan<bool> value);
 
     /// <summary>Writes a <c>list&lt;int32&gt;</c> field value.</summary>

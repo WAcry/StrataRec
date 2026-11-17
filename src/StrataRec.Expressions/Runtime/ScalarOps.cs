@@ -1,4 +1,3 @@
-using System.Numerics.Tensors;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using StrataRec.Core.Columns;
@@ -126,11 +125,11 @@ internal static class ScalarOps
             case IrOp.EndsWith:
                 return ScalarValue.FromBool(args[0].AsString().EndsWith(args[1].AsString(), StringComparison.Ordinal));
             case IrOp.Dot:
-                return ScalarValue.FromFloat64(VectorOps.Dot(args[0].AsVector(), args[1].AsVector()));
+                return VectorOps.TryDot(args[0].AsFloat64List(), args[1].AsFloat64List(), out var dot) ? ScalarValue.FromFloat64(dot) : ScalarValue.Missing;
             case IrOp.Cosine:
-                return ScalarValue.FromFloat64(VectorOps.Cosine(args[0].AsVector(), args[1].AsVector()));
+                return VectorOps.TryCosine(args[0].AsFloat64List(), args[1].AsFloat64List(), out var cosine) ? ScalarValue.FromFloat64(cosine) : ScalarValue.Missing;
             case IrOp.L2Norm:
-                return ScalarValue.FromFloat64(VectorOps.L2Norm(args[0].AsVector()));
+                return ScalarValue.FromFloat64(VectorOps.L2Norm(args[0].AsFloat64List()));
             case IrOp.PiecewiseLinear:
                 return ScalarValue.FromFloat64(((Knots)node.Data!).Evaluate(args[0].AsFloat64()));
             case IrOp.Hash01:
@@ -451,36 +450,6 @@ internal static class TextOps
     }
 }
 
-/// <summary>Vector functions over float32 storage (design 7.6). Dimension mismatches give NaN (total semantics).</summary>
-internal static class VectorOps
-{
-    public static double Dot(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
-    {
-        if (a.Length != b.Length)
-        {
-            return double.NaN;
-        }
-
-        return a.IsEmpty ? 0.0 : TensorPrimitives.Dot(a, b);
-    }
-
-    public static double L2Norm(ReadOnlySpan<float> a) => a.IsEmpty ? 0.0 : TensorPrimitives.Norm(a);
-
-    /// <summary>dot / (|a| |b|); NaN when a norm is zero or dimensions differ.</summary>
-    public static double Cosine(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
-    {
-        if (a.Length != b.Length || a.IsEmpty)
-        {
-            return double.NaN;
-        }
-
-        double dot = TensorPrimitives.Dot(a, b);
-        double na = TensorPrimitives.Norm(a);
-        double nb = TensorPrimitives.Norm(b);
-        return dot / (na * nb);
-    }
-}
-
 /// <summary>Reads symbol values: request-level values from <see cref="EvalContext"/> and single cells from columns.</summary>
 internal static class ValueAccess
 {
@@ -514,7 +483,6 @@ internal static class ValueAccess
             case TypeKind.Float when value.Kind == StorageKind.Float64:
             case TypeKind.Bool when value.Kind == StorageKind.Bool:
             case TypeKind.String when value.Kind == StorageKind.String:
-            case TypeKind.Vector when value.Kind == StorageKind.Vector:
                 return value;
             case TypeKind.ListBool or TypeKind.ListInt or TypeKind.ListFloat or TypeKind.ListString
                 when value.ListElement == type.ToColumnType().Element:
@@ -583,7 +551,6 @@ internal static class ValueAccess
             (TypeKind.Bool, ScalarColumn<bool> c) => ScalarValue.FromBool(MemoryMarshal.AsBytes(c.Values.AsSpan(row, 1))[0] != 0),
             (TypeKind.String, DictStringColumn c) => ScalarValue.FromString(c.Get(row)),
             (TypeKind.String, TextColumn c) => ScalarValue.FromString(c.Get(row)),
-            (TypeKind.Vector, VectorColumn c) => ScalarValue.FromVector(c.Row(row).ToArray()),
             (TypeKind.ListBool, ListColumn<bool> c) => ColumnValues.GetList(c, row),
             (TypeKind.ListInt, ListColumn<long> or ListColumn<int>) => ColumnValues.GetList((ListColumn)buffer, row),
             (TypeKind.ListFloat, ListColumn<double> or ListColumn<float>) => ColumnValues.GetList((ListColumn)buffer, row),

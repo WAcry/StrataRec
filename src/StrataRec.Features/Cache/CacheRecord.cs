@@ -31,17 +31,20 @@ internal enum CacheRecordHeader : byte
 /// <remarks>
 /// <para>Layout, little-endian (as are the platforms .NET runs on):</para>
 /// <code>
-/// 0   uint32  format          2026111401: the format version 2026-11-14.1 (the date it changed, that day's sequence)
+/// 0   uint32  format          2026111601: the format version 2026-11-16.1 (the date it changed, that day's sequence)
 /// 4   uint8   flags           bit 0: absent (the connector had no value for the key: every field missing)
 /// 5   uint8   (zero)
 /// 6   uint16  field count     of the table
 /// 8   int64   write time      Unix milliseconds: when the fetch that produced the values started
 /// 16  uint64  fingerprint     XXH3-64 of the field set (<see cref="Fingerprint"/>)
 /// 24  uint8[V] validity       bit f set = field f has a value (V = ceil(fields / 8))
-/// …   values of the fields that have one, in field order: bool 1 byte; int32, float32 4; int64, float64 8; vector
-///     dimension × float32; string and text int32 byte length + UTF-8; a list int32 count + its elements, each as the
-///     scalar of its element type is (a bool 1 byte, 0 or 1; list&lt;string&gt; items int32 byte length + UTF-8)
+/// …   values of the fields that have one, in field order: bool 1 byte; int32, float32 4; int64, float64 8; string and
+///     text int32 byte length + UTF-8; a list int32 count + its elements, each as the scalar of its element type is (a
+///     bool 1 byte, 0 or 1; list&lt;string&gt; items int32 byte length + UTF-8), a fixed-length list included
 /// </code>
+/// <para>2026-11-16.1 removed the vector encoding (N float32 values without a count): a vector is a
+/// <c>list&lt;float32,N&gt;</c>, encoded as every list is, and a record holds what the connector wrote, whose length the
+/// reader checks against the type as it does a connector's answer.</para>
 /// <para>The fingerprint covers the format, the key type and every field's name and storage type in field order (the
 /// table's order, by name), so two instances whose catalogs bind different fields to the source never decode each
 /// other's records: a reader that finds another fingerprint treats the record as a miss. Values are not aligned: the
@@ -49,8 +52,8 @@ internal enum CacheRecordHeader : byte
 /// </remarks>
 internal static class CacheRecord
 {
-    /// <summary>The format version 2026-11-14.1 as a number: date, then that day's sequence in two digits.</summary>
-    public const uint Format = 2026111401;
+    /// <summary>The format version 2026-11-16.1 as a number: date, then that day's sequence in two digits.</summary>
+    public const uint Format = 2026111601;
     public const byte AbsentFlag = 1;
     private const int FlagsOffset = 4;
     private const int FieldCountOffset = 6;
@@ -195,15 +198,6 @@ internal static class CacheRecord
 
                     visitor.Float64(f, BinaryPrimitives.ReadDoubleLittleEndian(rest));
                     size = 8;
-                    break;
-                case StorageKind.Vector:
-                    size = 4 * layout.Dimensions[f];
-                    if (rest.Length < size)
-                    {
-                        return false;
-                    }
-
-                    visitor.Vector(f, MemoryMarshal.Cast<byte, float>(rest[..size]));
                     break;
                 case StorageKind.String or StorageKind.Text:
                     if (!TryLength(rest, 1, out var bytes))
@@ -365,10 +359,6 @@ internal static class CacheRecord
         {
         }
 
-        public void Vector(int field, ReadOnlySpan<float> value)
-        {
-        }
-
         public void String(int field, ReadOnlySpan<byte> utf8)
         {
         }
@@ -407,8 +397,6 @@ internal interface ICacheRecordVisitor
 
     void Float64(int field, double value);
 
-    void Vector(int field, ReadOnlySpan<float> value);
-
     /// <summary>A <c>string</c> or <c>text</c> value.</summary>
     void String(int field, ReadOnlySpan<byte> utf8);
 
@@ -424,7 +412,7 @@ internal interface ICacheRecordVisitor
     void StringListEnd(int field);
 }
 
-/// <summary>The storage kind and dimension of each field of a table, as the codec walks them; built once per table.</summary>
+/// <summary>The storage kind of each field of a table (and a list's element kind), as the codec walks them; built once per table.</summary>
 internal sealed class CacheRecordLayout
 {
     public CacheRecordLayout(LocalTableSchema schema)
@@ -432,28 +420,30 @@ internal sealed class CacheRecordLayout
         FieldCount = schema.FieldCount;
         Kinds = new StorageKind[FieldCount];
         Elements = new StorageKind[FieldCount];
-        Dimensions = new int[FieldCount];
+        var size = CacheRecord.PrefixSize(FieldCount);
         for (var f = 0; f < FieldCount; f++)
         {
             var type = schema.Fields[f].Type;
             Kinds[f] = type.Kind;
             Elements[f] = type.Element;
-            Dimensions[f] = type.Kind == StorageKind.Vector ? type.Dimension : 0;
-        }
-
-        Fingerprint = CacheRecord.Fingerprint(schema);
-        var size = CacheRecord.PrefixSize(FieldCount);
-        for (var f = 0; f < FieldCount; f++)
-        {
-            size += Kinds[f] switch
+            size += type.Kind switch
             {
                 StorageKind.Bool => 1,
                 StorageKind.Int32 or StorageKind.Float32 => 4,
                 StorageKind.Int64 or StorageKind.Float64 => 8,
-                StorageKind.Vector => 4 * Dimensions[f],
+                // A fixed-length list of fixed-size elements (an embedding) has a known size: its count and N elements.
+                StorageKind.List when type.IsFixedLength && type.Element != StorageKind.String =>
+                    4 + (type.FixedLength * (type.Element switch
+                    {
+                        StorageKind.Bool => 1,
+                        StorageKind.Int32 or StorageKind.Float32 => 4,
+                        _ => 8,
+                    })),
                 _ => 4 + 16, // a length and a short value
             };
         }
+
+        Fingerprint = CacheRecord.Fingerprint(schema);
 
         TypicalSize = size;
     }
@@ -468,8 +458,6 @@ internal sealed class CacheRecordLayout
 
     /// <summary>Each list field's element kind; 0 for other fields.</summary>
     public StorageKind[] Elements { get; }
-
-    public int[] Dimensions { get; }
 
     public ulong Fingerprint { get; }
 }
@@ -535,17 +523,6 @@ internal sealed class CacheRecordWriter
     {
         Present(field, StorageKind.Float64);
         BinaryPrimitives.WriteDoubleLittleEndian(Reserve(8), value);
-    }
-
-    public void Vector(int field, ReadOnlySpan<float> value)
-    {
-        Present(field, StorageKind.Vector);
-        if (value.Length != _layout.Dimensions[field])
-        {
-            throw new ArgumentException($"Field {field} has {_layout.Dimensions[field]} dimensions, not {value.Length}.", nameof(value));
-        }
-
-        MemoryMarshal.AsBytes(value).CopyTo(Reserve(4 * value.Length));
     }
 
     /// <summary>A <c>string</c> or <c>text</c> value.</summary>

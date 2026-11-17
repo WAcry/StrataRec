@@ -18,8 +18,8 @@ namespace StrataRec.Features.Runtime;
 /// connector that fails half-way through a record, or reports a partial result, must not make the record's unwritten
 /// fields look valid.</para>
 /// <para>Chunks run concurrently on connector threads, and a timed-out chunk may keep writing after the request stopped
-/// waiting for it, while the other chunks are read. No two chunks ever write the same memory: fixed-size values,
-/// vectors and strings live in one array per field indexed by the fetch's key index, where chunks own disjoint ranges;
+/// waiting for it, while the other chunks are read. No two chunks ever write the same memory: fixed-size values and
+/// strings live in one array per field indexed by the fetch's key index, where chunks own disjoint ranges;
 /// each chunk's "written" bits start at a 64-bit word boundary, because two writers of one bitmap word lose each other's
 /// bits; and a list field gets one buffer per chunk, because its arena grows. Strings are staged as plain references and
 /// dictionary-encoded at backfill: a dictionary is not safe for concurrent writers either. A chunk's region is read only
@@ -147,14 +147,26 @@ internal sealed class StagingArea
             : ColumnValues.Get(field.Column, key);
     }
 
-    /// <summary>Copies the staged value of a fetch key (which must be present) into a row of a table column of the field's type.</summary>
-    public void CopyTo(int fieldIndex, int key, ColumnBuffer target, int row)
+    /// <summary>
+    /// Copies the staged value of a fetch key (which must be present) into a row of a table column of the field's type.
+    /// False, leaving the row untouched, for a list of another length than a <c>list&lt;E,N&gt;</c> column's: staging holds
+    /// what the connector wrote (recordings and the cache keep it as written), and the type applies where a value is
+    /// stored, as for every other writer (design 4.3).
+    /// </summary>
+    public bool TryCopyTo(int fieldIndex, int key, ColumnBuffer target, int row)
     {
         var field = _fields[fieldIndex];
         if (field.Column is null)
         {
             var chunk = key / ChunkSize;
-            target.CopyFrom(_lists![(fieldIndex * ChunkCount) + chunk]!, key - (chunk * ChunkSize), row);
+            var list = (ListColumn)_lists![(fieldIndex * ChunkCount) + chunk]!;
+            var local = key - (chunk * ChunkSize);
+            if (!ColumnValues.FitsLength(list.LengthOf(local), target.Type))
+            {
+                return false;
+            }
+
+            target.CopyFrom(list, local, row);
         }
         else if (field.Type.Kind == StorageKind.String && target is DictStringColumn strings)
         {
@@ -164,11 +176,13 @@ internal sealed class StagingArea
         {
             target.CopyFrom(field.Column, key, row);
         }
+
+        return true;
     }
 
     internal ColumnType TypeOf(int fieldIndex) => _fields[CheckField(fieldIndex)].Type;
 
-    /// <summary>Storage of a fixed-size, vector, string or text field, indexed by fetch key; null for a list field.</summary>
+    /// <summary>Storage of a fixed-size, string or text field, indexed by fetch key; null for a list field.</summary>
     internal ColumnBuffer? ColumnOf(int fieldIndex) => _fields[CheckField(fieldIndex)].Column;
 
     /// <summary>The list buffer of one chunk, created on its first write (from the chunk's own connector thread).</summary>
@@ -261,7 +275,7 @@ internal sealed class StagingBuffer : IFeatureBatchWriter, IStagedFeatureValues
     }
 
     /// <summary>
-    /// Storage of a field for this chunk (tests): fixed-size, vector, string and text fields are shared by the fetch's
+    /// Storage of a field for this chunk (tests): fixed-size, string and text fields are shared by the fetch's
     /// chunks and indexed by the fetch key (<c>chunk × ChunkSize + key</c>, the key itself for a buffer of its own); a
     /// list field's buffer is this chunk's and indexed by the chunk-local key.
     /// </summary>
@@ -281,8 +295,6 @@ internal sealed class StagingBuffer : IFeatureBatchWriter, IStagedFeatureValues
         where T : unmanaged => _area.ColumnOf(fieldIndex) switch
         {
             ScalarColumn<T> s => s.Values.AsMemory(_offset, KeyCount),
-            VectorColumn v when typeof(T) == typeof(float) =>
-                (Memory<T>)(object)v.Flat.AsMemory(_offset * v.Dimension, KeyCount * v.Dimension),
             _ => throw new InvalidOperationException(
                 $"Field {fieldIndex} has type {_area.TypeOf(fieldIndex)}; GetValues<{typeof(T).Name}> does not match it."),
         };

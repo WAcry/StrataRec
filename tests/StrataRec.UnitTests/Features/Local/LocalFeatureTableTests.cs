@@ -50,7 +50,7 @@ public class LocalFeatureTableTests
             ["f64"] = ScalarValue.FromFloat64(-0.0),
             ["s"] = ScalarValue.FromString(string.Empty),
             ["t"] = ScalarValue.FromText("lone surrogate \ud800 kept"),
-            ["v"] = ScalarValue.FromVector(new[] { float.MaxValue, float.MinValue, 0f, -0f }),
+            ["v"] = ScalarValue.FromFloat32List(new[] { float.MaxValue, float.MinValue, 0f, -0f }),
             ["li32"] = ScalarValue.FromInt64List(Array.Empty<long>()),
             ["li64"] = ScalarValue.FromInt64List(Array.Empty<long>()),
             ["ls"] = ScalarValue.FromStringList(new[] { string.Empty, string.Empty }),
@@ -69,8 +69,9 @@ public class LocalFeatureTableTests
 
     /// <summary>
     /// The same data served by a connector (staging, then backfill) and by a local table (lookup, then fill) must give
-    /// the request identical columns: values, defaults for absent keys and fields, missing values, and NaN/±∞ replaced
-    /// for float features but kept in vectors (design 4.3, 6.6, 6.7).
+    /// the request identical columns: values, defaults for absent keys and fields, missing values, NaN/±∞ replaced for
+    /// float features and float lists (an embedding, list&lt;float32,4&gt;, as a whole), and a list of another length than a
+    /// fixed-length feature's replaced and counted out of range (design 4.3, 6.6, 6.7).
     /// </summary>
     [Fact]
     public async Task ServesTheSameColumnsAsTheFetchPath()
@@ -83,12 +84,13 @@ public class LocalFeatureTableTests
             ["f32"] = ScalarValue.FromFloat64(1.5),
             ["f64"] = ScalarValue.FromFloat64(-2.5),
             ["s"] = ScalarValue.FromString("none"),
-            ["v"] = ScalarValue.FromVector(new[] { 9f, 9f, 9f, 9f }),
+            ["v"] = ScalarValue.FromFloat32List(new[] { 9f, 9f, 9f, 9f }),
             ["li32"] = ScalarValue.FromInt64List(new long[] { 1, 2 }),
             ["ls"] = ScalarValue.FromStringList(new[] { "d" }),
         };
 
-        // Key 3 has no record; key 5 has every field missing; NaN and ±∞ appear in floats and in a vector.
+        // Key 3 has no record; key 5 has every field missing; NaN and ±∞ appear in floats and in float lists; keys 7 and
+        // 11 have an embedding of another length (the table and the connector store what they were given).
         Dictionary<string, ScalarValue>? Data(long key)
         {
             if (key == 3)
@@ -101,7 +103,7 @@ public class LocalFeatureTableTests
             {
                 values["f32"] = ScalarValue.FromFloat64(double.NaN);
                 values["f64"] = ScalarValue.FromFloat64(key % 8 == 0 ? double.PositiveInfinity : double.NegativeInfinity);
-                values["v"] = ScalarValue.FromVector(new[] { float.NaN, 1f, float.PositiveInfinity, 2f });
+                values["v"] = ScalarValue.FromFloat32List(new[] { float.NaN, 1f, float.PositiveInfinity, 2f });
                 values["lf32"] = ScalarValue.FromFloat64List(new[] { 1, double.NaN });
                 values["lf64"] = ScalarValue.FromFloat64List(new[] { double.NegativeInfinity });
             }
@@ -111,6 +113,11 @@ public class LocalFeatureTableTests
                 values.Remove("t");
                 values.Remove("li64");
                 values.Remove("s");
+            }
+
+            if (key is 7 or 11)
+            {
+                values["v"] = ScalarValue.FromFloat32List(key == 7 ? new[] { 1f, 2f, 3f } : new[] { 1f, 2f, 3f, 4f, 5f });
             }
 
             return values;
@@ -158,10 +165,13 @@ public class LocalFeatureTableTests
         }
 
         var replaced = 0;
+        var outOfRange = 0;
         for (var f = 0; f < AllTypes.Length; f++)
         {
             var column = ColumnBuffer.Create(AllTypes[f].Type, Keys, memory);
-            replaced += version.Fill(f, records, rows, column, defaults.TryGetValue(AllTypes[f].Name, out var d) ? d : ScalarValue.Missing);
+            var counts = version.Fill(f, records, rows, column, defaults.TryGetValue(AllTypes[f].Name, out var d) ? d : ScalarValue.Missing);
+            replaced += counts.NonFinite;
+            outOfRange += counts.OutOfRange;
             for (var row = 0; row < Keys; row++)
             {
                 var fetched = request.Value(features[f], row);
@@ -171,7 +181,10 @@ public class LocalFeatureTableTests
         }
 
         Assert.Equal(request.Fetcher.NonFiniteReplaced, replaced);
-        Assert.Equal(12, replaced); // keys 4, 8 and 12, in f32, f64 and the float lists (each list as a whole)
+        Assert.Equal(15, replaced); // keys 4, 8 and 12, in f32, f64 and the float lists (each list as a whole, v too)
+        Assert.Equal(request.Fetcher.Counters.OutOfRange, outOfRange);
+        Assert.Equal(2, outOfRange); // keys 7 and 11 in v
+        Assert.Equal(defaults["v"], request.Value(features[Array.FindIndex(AllTypes, t => t.Name == "v")], 6));
         memory.Release();
         request.Memory.Release();
     }
@@ -555,7 +568,11 @@ public class LocalFeatureTableTests
         var builder = table.Writer.Begin(EntityKey.FromInt64(1), 1);
         var wrongType = Assert.Throws<InvalidOperationException>(() => builder.SetInt64(table.Schema.FieldIndex("i32"), 1));
         Assert.Contains("SetInt32", wrongType.Message, StringComparison.Ordinal);
-        Assert.Throws<ArgumentException>(() => builder.SetVector(table.Schema.FieldIndex("v"), new float[3]));
+        // A fixed-length field takes a list of any length from the typed setter (the read replaces it); a value set as a
+        // whole is checked, as an int32 is.
+        builder.SetFloat32List(table.Schema.FieldIndex("v"), new float[3]);
+        var wrongLength = Assert.Throws<ArgumentOutOfRangeException>(() => builder.Set(table.Schema.FieldIndex("v"), ScalarValue.FromFloat32List(new float[3])));
+        Assert.Contains("a list of 3 elements, not 4", wrongLength.Message, StringComparison.Ordinal);
         Assert.Throws<InvalidOperationException>(() => builder.AddInt64Item(table.Schema.FieldIndex("li64"), 1));
         builder.StartList(table.Schema.FieldIndex("li64"));
         builder.SetBool(table.Schema.FieldIndex("b"), true); // closes the open list
@@ -648,7 +665,7 @@ public class LocalFeatureTableTests
         var memory = new RequestMemory(new PoisoningPool());
         var reads = new LocalFieldRead[fields.Count];
         var single = new ColumnBuffer[fields.Count];
-        var expectedNonFinite = new int[fields.Count];
+        var expectedNonFinite = new LocalFillCounts[fields.Count];
         for (var r = 0; r < fields.Count; r++)
         {
             var f = fields[r];
@@ -658,10 +675,10 @@ public class LocalFeatureTableTests
             expectedNonFinite[r] = version.Fill(f, records, rows, single[r], absent);
         }
 
-        var nonFinite = new int[fields.Count];
+        var nonFinite = new LocalFillCounts[fields.Count];
         version.Fill(records, rows, reads, nonFinite);
         Assert.Equal(expectedNonFinite, nonFinite);
-        Assert.Contains(nonFinite, n => n > 0);
+        Assert.Contains(nonFinite, n => n.NonFinite > 0);
         for (var r = 0; r < fields.Count; r++)
         {
             for (var i = 0; i < keys.Length; i++)
@@ -745,9 +762,10 @@ public class LocalFeatureTableTests
         }
 
         var reference = version.Fill(0, records, (int[])rows.Clone(), expected, ScalarValue.Missing);
-        version.Fill(records, rows, new[] { new LocalFieldRead(0, actual, ScalarValue.Missing) }, rows.AsSpan(200, 1));
+        version.Fill(records, rows, new[] { new LocalFieldRead(0, actual, ScalarValue.Missing) },
+            System.Runtime.InteropServices.MemoryMarshal.Cast<int, LocalFillCounts>(rows.AsSpan(200, 2)));
 
-        Assert.Equal(reference, rows[200]);
+        Assert.Equal((reference.NonFinite, reference.OutOfRange), (rows[200], rows[201]));
         for (var row = 0; row < keys.Length; row++)
         {
             Assert.Equal(ColumnValues.Get(expected, row), ColumnValues.Get(actual, row));
@@ -831,7 +849,7 @@ public class LocalFeatureTableTests
                 "item.clicks_again": { "type": "float32", "source": "item_store", "field": "i_clk" },
                 "item.tags": { "type": "list<int32>", "source": "item_store", "field": "i_tags" },
                 "item.other": { "type": "int64", "source": "other_store", "field": "o" },
-                "user.emb": { "type": "vec<float32,8>", "source": "user_profile", "field": "u_emb" },
+                "user.emb": { "type": "list<float32,8>", "source": "user_profile", "field": "u_emb" },
                 "user_item.x": { "type": "float32", "source": "ui", "field": "x" }
               },
               "derived_features": {
@@ -850,7 +868,7 @@ public class LocalFeatureTableTests
 
         var users = LocalTableSchema.FromCatalog(catalog, "user_profile", "user", LocalTableMode.Cache);
         Assert.Equal(EntityKeyType.String, users.KeyType);
-        Assert.Equal(ColumnType.Vector(8), users.Fields[0].Type);
+        Assert.Equal(ColumnType.List(StorageKind.Float32, fixedLength: 8), users.Fields[0].Type);
 
         var cross = Assert.Throws<ArgumentException>(() => LocalTableSchema.FromCatalog(catalog, "ui", "user_item", LocalTableMode.Cache));
         Assert.Contains("fetch", cross.Message, StringComparison.Ordinal);
@@ -900,10 +918,6 @@ public class LocalFeatureTableTests
                 case StorageKind.Float32: writer.GetValues<float>(i).Span[k] = (float)value.AsFloat64(); writer.SetValid(i, k); break;
                 case StorageKind.Float64: writer.GetValues<double>(i).Span[k] = value.AsFloat64(); writer.SetValid(i, k); break;
                 case StorageKind.String or StorageKind.Text: writer.SetString(i, k, value.AsString()); break;
-                case StorageKind.Vector:
-                    value.AsVector().CopyTo(writer.GetValues<float>(i).Span.Slice(k * field.Type.Dimension, field.Type.Dimension));
-                    writer.SetValid(i, k);
-                    break;
                 case StorageKind.List:
                     switch (field.Type.Element)
                     {

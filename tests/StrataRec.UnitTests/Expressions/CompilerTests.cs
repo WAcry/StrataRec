@@ -19,7 +19,7 @@ public class CompilerTests
             .Col("col.item.report_rate", "float32")
             .Col("col.item.age_hours", "float32?")
             .Col("col.item.is_policy_safe", "bool?")
-            .Col("col.item.embedding", "vec<float32,64>?")
+            .Col("col.item.embedding", "list<float32,64>?")
             .Col("col.item.creator_id", "int64")
             .Col("col.creator.follower_count", "float32")
             .Col("col.score.p_click", "float64")
@@ -29,7 +29,7 @@ public class CompilerTests
             .Version("col.score.final@fusion", "float64")
             .Col("col.recall.best_score", "float64")
             .Col("col.recall.primary_source", "string")
-            .Ctx("ctx.user.embedding", "vec<float32,64>?")
+            .Ctx("ctx.user.embedding", "list<float32,64>?")
             .Ctx("ctx.user.tenure_days", "float32", ScalarValue.FromFloat64(45))
             .Ctx("ctx.request.recent_item_ids", "list<int64>", ScalarValue.FromInt64List(new long[] { 1001, 1003 }))
             .Ctx("ctx.request.seed", "int64", ScalarValue.FromInt64(42))
@@ -256,7 +256,7 @@ public class CompilerTests
     [InlineData("5.0 % 2.0", ExpressionErrorCodes.TypeMismatch, 4)] // both operands wrong: the operator
     [InlineData("'a' < 'b'", ExpressionErrorCodes.TypeMismatch, 4)]
     [InlineData("col.recall.primary_source + 'x'", ExpressionErrorCodes.TypeMismatch, 26)]
-    [InlineData("dot(col.item.embedding, ctx.small)", ExpressionErrorCodes.TypeMismatch, 24)] // the second vector disagrees
+    [InlineData("dot(col.item.embedding, ctx.small)", ExpressionErrorCodes.TypeMismatch, 24)] // the second list has another length
     [InlineData("1.5 in col.tags_int", ExpressionErrorCodes.TypeMismatch, 0)]
     [InlineData("size(col.score.final)", ExpressionErrorCodes.TypeMismatch, 5)]
     [InlineData("ctx.request.seed@fusion", ExpressionErrorCodes.UnknownName, 0)]
@@ -274,7 +274,7 @@ public class CompilerTests
     public void ErrorCodes_And_Offsets(string source, string code, int offset)
     {
         var f = HomeFeed();
-        f.Scope.Add(new Symbol(SymbolKind.Context, "ctx.small", ColumnType.Parse("vec<float32,8>"), 99));
+        f.Scope.Add(new Symbol(SymbolKind.Context, "ctx.small", ColumnType.Parse("list<float32,8>"), 99));
         f.Scope.Add(new Symbol(SymbolKind.Context, "ctx.knots", ColumnType.List(StorageKind.Int64), 98));
         f.Scope.Add(new Symbol(SymbolKind.Column, "col.tags_int", ColumnType.List(StorageKind.Int64), 97));
         var d = f.Errors(source)[0];

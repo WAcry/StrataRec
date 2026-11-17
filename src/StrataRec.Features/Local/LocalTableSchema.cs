@@ -56,9 +56,9 @@ public sealed class LocalTableSchema
         {
             var field = fields[i];
             ArgumentException.ThrowIfNullOrEmpty(field.Name, nameof(fields));
-            if (field.Type.IsDefault || (field.Type.Kind == StorageKind.Vector && field.Type.Dimension <= 0))
+            if (field.Type.IsDefault)
             {
-                throw new ArgumentException($"Field '{field.Name}' has no storage type (vectors need a dimension).", nameof(fields));
+                throw new ArgumentException($"Field '{field.Name}' has no storage type.", nameof(fields));
             }
 
             if (!_byName.TryAdd(field.Name, i))

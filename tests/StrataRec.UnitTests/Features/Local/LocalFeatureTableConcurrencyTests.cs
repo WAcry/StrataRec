@@ -44,7 +44,7 @@ public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
         new("q_f64", ColumnType.Float64),
         new("q_i32", ColumnType.Int32),
         new("q_text", ColumnType.Text),
-        new("q_vec", ColumnType.Vector(8)),
+        new("q_vec", ColumnType.List(StorageKind.Float32, fixedLength: 8)),
         new("q_li64", ColumnType.List(StorageKind.Int64)),
         new("q_ls", ColumnType.List(StorageKind.String)),
         new("p", ColumnType.Int64),         // key << 32 | stamp
@@ -203,11 +203,13 @@ public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
         builder.SetFloat64(QF64, stamp + 0.5);
         builder.SetInt32(QI32, (int)stamp);
         builder.SetString(QText, Text(key, stamp));
-        var vector = builder.VectorBuffer(QVec);
+        Span<float> vector = stackalloc float[8];
         for (var j = 0; j < vector.Length; j++)
         {
             vector[j] = (stamp % 100_000) + j;
         }
+
+        builder.SetFloat32List(QVec, vector);
 
         builder.StartList(QLi64);
         for (var j = 0; j < 1 + (stamp % 5); j++)
@@ -345,7 +347,8 @@ public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
             Expect(key, "q_f64", ((ScalarColumn<double>)columns[QF64])[row] == q + 0.5);
             Expect(key, "q_i32", ((ScalarColumn<int>)columns[QI32])[row] == (int)q);
             Expect(key, "q_text", ((TextColumn)columns[QText]).Get(row) == Text(key, q));
-            var vector = ((VectorColumn)columns[QVec]).Row(row);
+            var vector = ((ListColumn<float>)columns[QVec]).Get(row);
+            Expect(key, "q_vec length", vector.Length == 8);
             for (var j = 0; j < vector.Length; j++)
             {
                 Expect(key, "q_vec", vector[j] == (q % 100_000) + j);

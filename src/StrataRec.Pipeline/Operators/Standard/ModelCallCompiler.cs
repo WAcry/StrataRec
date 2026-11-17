@@ -29,7 +29,8 @@ public abstract class ModelCallConfig
 
     /// <summary>
     /// Model input name → column or context reference (<c>col.*</c> / <c>ctx.*</c>) of a non-nullable float32, float64,
-    /// bool, int32, int64 or <c>vec&lt;float32,N&gt;</c> type; the type decides the tensor (<see cref="ModelTensorRule"/>).
+    /// bool, int32 or int64 type, or a fixed-length <c>list&lt;E,N&gt;</c> of those; the type decides the tensor
+    /// (<see cref="ModelTensorRule"/>).
     /// </summary>
     [JsonPropertyOrder(-1)]
     public required Dictionary<string, string> Inputs { get; init; }

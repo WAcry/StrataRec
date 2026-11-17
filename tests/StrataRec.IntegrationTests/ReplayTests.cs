@@ -153,9 +153,10 @@ public sealed class ReplayTests
     [Fact]
     public async Task NonFiniteValues_TheRequestObserved_AreRecorded_AndReplayExactly()
     {
-        // Item 1's embedding has a component beyond float32: memory@1 stages it as +∞ and the raw vector stays present
-        // (has() is true). An output expression divides zero by zero. Neither is sanitized on the way to the caller, so a
-        // bundle that wrote them as null would replay other values.
+        // Item 1's embedding has a component beyond float32: memory@1 stages it as +∞, and the bundle records it so; the
+        // stored feature, a float list holding a non-finite element, is missing as a whole (design 4.3), in the replay too.
+        // An output expression divides zero by zero, which is not sanitized on the way to the caller, so a bundle that
+        // wrote it as null would replay another value.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             var path = Path.Combine(root, "fixtures", "items.json");
@@ -168,7 +169,7 @@ public sealed class ReplayTests
         var (engine, _) = MetricsTests.LoadEngine(host);
         var recorded = await engine.ExecuteAsync(Request("req-non-finite", 1001, "home", ControlArms), TestContext.Current.CancellationToken);
         Assert.True(recorded.Succeeded, recorded.Error);
-        Assert.True(recorded.Items.Single(i => i.Id.Int64Value == 1).Columns["embedding_present"].AsBool());
+        Assert.False(recorded.Items.Single(i => i.Id.Int64Value == 1).Columns["embedding_present"].AsBool());
         Assert.All(recorded.Items, i => Assert.True(double.IsNaN(i.Columns["undefined"].AsFloat64())));
 
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!));
@@ -181,7 +182,7 @@ public sealed class ReplayTests
 
         Assert.True(outcome.Report.Diff.Identical, Describe(outcome.Report));
         Assert.Empty(outcome.Report.Gaps);
-        Assert.True(outcome.Result.Items.Single(i => i.Id.Int64Value == 1).Columns["embedding_present"].AsBool());
+        Assert.False(outcome.Result.Items.Single(i => i.Id.Int64Value == 1).Columns["embedding_present"].AsBool());
 
         // A NaN score column: the comparison ends, leaves the NaNs out of the distributions and counts them.
         var report = ResultComparisonBound.Run(() => ReplayComparison.Compare(new[] { new ReplayPair("a", "a", outcome, outcome) }, 10, "undefined", "base", "base"));

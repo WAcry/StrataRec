@@ -86,7 +86,7 @@ public sealed class LogBatch
     public long Seq { get; set; }
 
     /// <summary>
-    /// About how much memory the batch holds: arrays, column values and what they point to (strings, lists, vectors), and
+    /// About how much memory the batch holds: arrays, column values and what they point to (strings, lists), and
     /// the envelope's lists and maps. What the log queues are bounded by (<see cref="LogPipelineOptions.DurableMaxBytes"/>):
     /// batches differ in size by orders of magnitude (a request-level tap is one row, a candidate tap thousands of rows of
     /// lists), so a count of batches bounds nothing. Computed once, when the batch is first queued; the batch does not
@@ -178,8 +178,6 @@ public sealed class LogBatch
         {
             case StorageKind.String or StorageKind.Text:
                 return Once(seen, value.AsString());
-            case StorageKind.Vector:
-                return ObjectBytes + value.AsVector().Length * 4L;
             case StorageKind.List:
                 var length = value.ListLength;
                 switch (value.ListElement)

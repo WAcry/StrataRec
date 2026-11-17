@@ -20,7 +20,7 @@ internal static class LocalTableTestSupport
         new("f64", ColumnType.Float64),
         new("s", ColumnType.String),
         new("t", ColumnType.Text),
-        new("v", ColumnType.Vector(4)),
+        new("v", ColumnType.List(StorageKind.Float32, fixedLength: 4)),
         new("li32", ColumnType.List(StorageKind.Int32)),
         new("li64", ColumnType.List(StorageKind.Int64)),
         new("ls", ColumnType.List(StorageKind.String)),
@@ -50,7 +50,7 @@ internal static class LocalTableTestSupport
         ["f64"] = ScalarValue.FromFloat64(seed / 3.0),
         ["s"] = ScalarValue.FromString("cat-" + (seed % 5)),
         ["t"] = ScalarValue.FromText("text " + seed + " é中😀"),
-        ["v"] = ScalarValue.FromVector(new[] { seed, seed + 0.5f, -seed, 1e-3f * seed }),
+        ["v"] = ScalarValue.FromFloat32List(new[] { seed, seed + 0.5f, -seed, 1e-3f * seed }),
         ["li32"] = ScalarValue.FromInt64List(new long[] { seed, int.MaxValue, int.MinValue, -seed }[..(int)(seed % 4)]),
         ["li64"] = ScalarValue.FromInt64List(new[] { seed, long.MinValue, seed * 7 }),
         ["ls"] = ScalarValue.FromStringList(new[] { "tag-" + (seed % 3), "x", "tag-" + seed }[..(int)(1 + (seed % 3))]),
@@ -65,7 +65,17 @@ internal static class LocalTableTestSupport
         var builder = writer.Begin(key, version);
         foreach (var (name, value) in values)
         {
-            builder.Set(writer.Schema.FieldIndex(name), value);
+            var field = writer.Schema.FieldIndex(name);
+            var type = writer.Schema.Fields[field].Type;
+            if (type.IsFixedLength && type.Element == StorageKind.Float32 && !value.IsMissing)
+            {
+                // As a source writes it: the typed setter takes any length, and the read replaces a list of another one.
+                builder.SetFloat32List(field, value.AsFloat64List().ToArray().Select(x => (float)x).ToArray());
+            }
+            else
+            {
+                builder.Set(field, value);
+            }
         }
 
         return builder.Commit();

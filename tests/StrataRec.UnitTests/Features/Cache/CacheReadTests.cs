@@ -396,7 +396,8 @@ public class CacheReadTests
     public async Task EveryFieldType_ReadsTheSameThroughEachTier_AsAFetch()
     {
         // The connector's answer is encoded for the tiers and decoded into the slots: a miss, an L1 hit and an L2 hit give
-        // a fetch's values, types and absences for every storage type.
+        // a fetch's values, types and absences for every storage type. Item 2's embedding has 2 elements, not 4: the tiers
+        // keep what the connector wrote, and every read replaces it and counts it out of range, as a fetch does.
         var store = new FakeCacheStore();
         var fetched = TypesRig(cache: false, store);
         var missed = TypesRig(cache: true, store);
@@ -411,13 +412,15 @@ public class CacheReadTests
         Assert.Equal(expected, miss);
         Assert.Equal(expected, local);
         Assert.Equal(expected, distributed);
+        Assert.Contains("out of range: 1", expected);
 
         static async Task<List<string>> Read((FeatureTestRig Rig, int[] Features) setup, long[] candidates)
         {
             var request = setup.Rig.NewRequest(candidates);
             var result = await request.EnsureAsync(setup.Features);
             Assert.Equal(FeatureState.Ok, result.State);
-            return setup.Features.SelectMany(f => Enumerable.Range(0, candidates.Length).Select(r => $"{f}/{r}: {request.Value(f, r)}")).ToList();
+            return setup.Features.SelectMany(f => Enumerable.Range(0, candidates.Length).Select(r => $"{f}/{r}: {request.Value(f, r)}"))
+                .Append($"out of range: {request.Fetcher.Counters.OutOfRange}").ToList();
         }
     }
 
@@ -569,7 +572,7 @@ public class CacheReadTests
             {
               "1": { "b": true, "i32": -7, "i64": 9007199254740991, "f32": 1.25, "f64": -2.5, "s": "music", "t": "a long text ✓",
                      "v": [1, 2, 3, 4], "li32": [1, -2], "li64": [-9007199254740991, 0], "ls": ["x", "", "zé"] },
-              "2": { "i64": 2, "s": "food", "ls": [] },
+              "2": { "i64": 2, "s": "food", "ls": [], "v": [1, 2] },
               "3": { "b": false, "i32": 0, "f32": 3.5, "f64": 1e300, "t": "", "v": [0, 0, 0, 0], "li32": [], "li64": [5] }
             }
             """;
@@ -592,7 +595,7 @@ public class CacheReadTests
             rig.Physical("item.f64", FeatureTestRig.Item, ColumnType.Float64, "item_store"),
             rig.Physical("item.s", FeatureTestRig.Item, ColumnType.String, "item_store", ScalarValue.FromString("unknown")),
             rig.Physical("item.t", FeatureTestRig.Item, ColumnType.Text, "item_store"),
-            rig.Physical("item.v", FeatureTestRig.Item, ColumnType.Vector(4), "item_store"),
+            rig.Physical("item.v", FeatureTestRig.Item, ColumnType.List(StorageKind.Float32, fixedLength: 4), "item_store"),
             rig.Physical("item.li32", FeatureTestRig.Item, ColumnType.List(StorageKind.Int32), "item_store"),
             rig.Physical("item.li64", FeatureTestRig.Item, ColumnType.List(StorageKind.Int64), "item_store"),
             rig.Physical("item.ls", FeatureTestRig.Item, ColumnType.List(StorageKind.String), "item_store"),

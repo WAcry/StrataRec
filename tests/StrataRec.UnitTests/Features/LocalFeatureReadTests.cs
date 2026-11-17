@@ -330,7 +330,7 @@ public class LocalFeatureReadTests
             rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float32, "item_store", ScalarValue.FromFloat64(0)),
             rig.Physical("item.age", FeatureTestRig.Item, ColumnType.Float32, "item_store"),
             rig.Physical("item.category", FeatureTestRig.Item, ColumnType.String, "item_store", ScalarValue.FromString("unknown")),
-            rig.Physical("item.emb", FeatureTestRig.Item, ColumnType.Vector(4), "item_store"),
+            rig.Physical("item.emb", FeatureTestRig.Item, ColumnType.List(StorageKind.Float32, fixedLength: 4), "item_store"),
             rig.Physical("item.author_id", FeatureTestRig.Item, ColumnType.Int64, "item_store"),
             rig.Physical("author.followers", Author, ColumnType.Float64, "author_store", ScalarValue.FromFloat64(-1)),
             rig.Physical("author.verified", Author, ColumnType.Int64, "author_store"),
@@ -388,7 +388,7 @@ public class LocalFeatureReadTests
                     double d => ScalarValue.FromFloat64(d),
                     long l => ScalarValue.FromInt64(l),
                     string s => ScalarValue.FromString(s),
-                    float[] v => ScalarValue.FromVector(v),
+                    float[] v => ScalarValue.FromFloat32List(v),
                     _ => throw new ArgumentException(value.ToString()),
                 });
             }

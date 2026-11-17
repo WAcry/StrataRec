@@ -12,7 +12,7 @@ public abstract class CompiledExpression
     /// <summary>Original source text.</summary>
     public abstract string Source { get; }
 
-    /// <summary>Promoted result type with nullability (int64, float64, bool, string, vec, list): a text column reads as
+    /// <summary>Promoted result type with nullability (int64, float64, bool, string, list): a text column reads as
     /// string, as int32 reads as int64; which storage a result is written to is the destination's choice.</summary>
     public abstract ColumnType ResultType { get; }
 
@@ -59,7 +59,8 @@ public abstract class CompiledExpression
     /// lists to <c>list&lt;int64&gt;</c> or <c>list&lt;int32&gt;</c> (narrowing) columns, and other kinds to the same kind.
     /// Missing results clear the destination's validity bit; present results set it.</para>
     /// <para>Narrowing to int32 storage never wraps. A value outside the int32 range (for a list: any element outside
-    /// it, since a partial list would be wrong data) is out of range: the row is marked missing and counted in
+    /// it, since a partial list would be wrong data) is out of range, and so is a list of another length than a
+    /// <c>list&lt;E,N&gt;</c> destination's: the row is marked missing and counted in
     /// <see cref="ExpressionCounters.OutOfRange"/>. Use the overload with a replacement value to write the column's
     /// default instead (design 4.3).</para>
     /// <para>Non-finite values are written as-is; the engine applies column defaults and counting at commit
@@ -74,11 +75,12 @@ public abstract class CompiledExpression
 
     /// <summary>
     /// Like <see cref="Evaluate(in EvalContext, ReadOnlySpan{int}, ColumnBuffer)"/>, writing
-    /// <paramref name="outOfRange"/> into rows whose result does not fit the destination's int32 storage.
+    /// <paramref name="outOfRange"/> into rows whose result does not fit the destination's int32 storage or fixed length.
     /// </summary>
     /// <param name="outOfRange">The destination column's declared default (promoted: an int64 for <c>int32</c>, an int64
     /// list for <c>list&lt;int32&gt;</c>), or <see cref="ScalarValue.Missing"/> to mark such rows missing. Either way the
-    /// row is counted in <see cref="ExpressionCounters.OutOfRange"/>. Ignored for destinations without int32 storage.</param>
+    /// row is counted in <see cref="ExpressionCounters.OutOfRange"/>. Ignored for destinations without int32 storage or a
+    /// fixed length.</param>
     /// <exception cref="ArgumentException">The destination cannot hold the result type, or <paramref name="outOfRange"/>
     /// is present but does not fit the destination itself.</exception>
     public abstract void Evaluate(in EvalContext context, ReadOnlySpan<int> rows, ColumnBuffer destination, in ScalarValue outOfRange);

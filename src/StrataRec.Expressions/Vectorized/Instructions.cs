@@ -299,7 +299,6 @@ internal abstract class Instr
 /// promoted, zero-copy in full-range mode where the storage already has the expression type.</summary>
 internal sealed class ColumnInstr(Symbol symbol, ExprType type) : Instr(type)
 {
-    private static readonly float[] NoFloats = Array.Empty<float>();
     private static readonly long[] NoLongs = Array.Empty<long>();
     private static readonly double[] NoDoubles = Array.Empty<double>();
     private static readonly bool[] NoBools = Array.Empty<bool>();
@@ -423,7 +422,6 @@ internal sealed class ColumnInstr(Symbol symbol, ExprType type) : Instr(type)
                 break;
             }
 
-            case (TypeKind.Vector, VectorColumn):
             case (TypeKind.ListBool, ListColumn<bool>):
             case (TypeKind.ListInt, ListColumn<long>):
             case (TypeKind.ListInt, ListColumn<int>): // list<int32> storage: read in place, see Lanes.IntList
@@ -456,7 +454,6 @@ internal sealed class ColumnInstr(Symbol symbol, ExprType type) : Instr(type)
                 loc.Source = SourceKind.Broadcast;
                 loc.SourceRef = Type.Kind switch
                 {
-                    TypeKind.Vector => NoFloats,
                     TypeKind.ListInt => NoLongs,
                     TypeKind.ListFloat => NoDoubles,
                     TypeKind.ListBool => NoBools,

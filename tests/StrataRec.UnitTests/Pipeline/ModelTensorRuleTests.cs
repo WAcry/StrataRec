@@ -8,7 +8,7 @@ namespace StrataRec.UnitTests.Pipeline;
 /// The one rule for which tensors the model operators send and which model signatures they accept (design 6.9): the
 /// value of an input follows the type of the column it maps, the operator's layout adds the leading dimensions, and a
 /// model must declare exactly the mapped inputs, each as that tensor, and every read output with the layout's shape. A
-/// dynamic dimension must be declared -1; a fixed one (the pair's 2, the list batch's 1, a vector's N) as its size or -1.
+/// dynamic dimension must be declared -1; a fixed one (the pair's 2, the list batch's 1, a list's N) as its size or -1.
 /// Each mismatch names where to fix it, what is sent and what to change.
 /// </summary>
 public sealed class ModelTensorRuleTests
@@ -26,13 +26,19 @@ public sealed class ModelTensorRuleTests
     [Theory]
     [InlineData("float32", "float32 [-1]")]
     [InlineData("float64", "float32 [-1]")]
-    [InlineData("bool", "float32 [-1]")]
+    [InlineData("bool", "int64 [-1]")] // a category, an exact 0 or 1, as an int is
     [InlineData("int32", "int64 [-1]")]
     [InlineData("int64", "int64 [-1]")]
-    [InlineData("vec<float32,8>", "float32 [-1, 8]")]
+    [InlineData("list<float32,8>", "float32 [-1, 8]")]
+    [InlineData("list<float64,8>", "float32 [-1, 8]")]
+    [InlineData("list<int32,2>", "int64 [-1, 2]")]
+    [InlineData("list<int64,1>", "int64 [-1, 1]")]
+    [InlineData("list<bool,3>", "int64 [-1, 3]")]
     [InlineData("float32?", null)]
     [InlineData("int64?", null)]
-    [InlineData("vec<float32,8>?", null)]
+    [InlineData("list<float32,8>?", null)]
+    [InlineData("list<string,2>", null)]
+    [InlineData("list<float32>", null)]
     [InlineData("string", null)]
     [InlineData("text", null)]
     [InlineData("list<int32>", null)]
@@ -74,13 +80,15 @@ public sealed class ModelTensorRuleTests
             new("safe", "col.item.safe", ColumnType.Bool),
             new("item_id", "col.entity_id", ColumnType.Int64),
             new("category_id", "col.item.category_id", ColumnType.Int32),
-            new("item_emb", "col.item.emb", ColumnType.Vector(8)),
-            new("user_emb", "ctx.user.emb", ColumnType.Vector(16), Broadcast: true),
+            new("item_emb", "col.item.emb", ColumnType.List(StorageKind.Float32, fixedLength: 8)),
+            new("user_emb", "ctx.user.emb", ColumnType.List(StorageKind.Float32, fixedLength: 16), Broadcast: true),
+            new("flags", "col.item.flags", ColumnType.List(StorageKind.Bool, fixedLength: 2)),
         };
         var signature = Signature(
             new[]
             {
-                Float("ctr"), Float("safe"), Spec("item_id", TensorElementType.Int64, -1), Spec("category_id", TensorElementType.Int64, -1),
+                Float("ctr"), Spec("safe", TensorElementType.Int64, -1), Spec("item_id", TensorElementType.Int64, -1),
+                Spec("category_id", TensorElementType.Int64, -1), Spec("flags", TensorElementType.Int64, -1, 2),
                 Spec("item_emb", TensorElementType.Float32, -1, 8), Spec("user_emb", TensorElementType.Float32, -1, 16),
             },
             new[] { Float("p_click"), Float("p_like") });
@@ -91,9 +99,9 @@ public sealed class ModelTensorRuleTests
     [Theory]
     [InlineData(new[] { -1, 8 })]
     [InlineData(new[] { -1, -1 })]
-    public void AVectorsN_MayBeDeclaredAsItsSizeOrAsAny(int[] declared)
+    public void AListsN_MayBeDeclaredAsItsSizeOrAsAny(int[] declared)
     {
-        var inputs = new ModelTensorRule.MappedInput[] { new("emb", "col.item.emb", ColumnType.Vector(8)) };
+        var inputs = new ModelTensorRule.MappedInput[] { new("emb", "col.item.emb", ColumnType.List(StorageKind.Float32, fixedLength: 8)) };
 
         Assert.Empty(ModelTensorRule.Check("Model 'm' version 'v2'", TensorLayout.Rows, inputs, Outputs,
             Signature(new[] { new TensorSpec("emb", TensorElementType.Float32, declared) }, new[] { Float("p_click") })));
@@ -103,12 +111,14 @@ public sealed class ModelTensorRuleTests
     [InlineData("int64", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "int64 [-1]", "a float32 derived feature of col.x")]
     [InlineData("int32", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "int64 [-1]", "a float32 derived feature of col.x")]
     [InlineData("float32", TensorElementType.Int64, new[] { -1 }, "int64 [-1]", "float32 [-1]", "an int64 derived feature of col.x")]
-    [InlineData("bool", TensorElementType.Int64, new[] { -1 }, "int64 [-1]", "float32 [-1]", "an int64 derived feature of col.x")]
-    [InlineData("vec<float32,8>", TensorElementType.Float32, new[] { -1, 16 }, "float32 [-1, 16]", "float32 [-1, 8]", "a vec<float32,16> derived feature of col.x")]
-    [InlineData("vec<float32,8>", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "float32 [-1, 8]", "a float32 derived feature of col.x")]
-    [InlineData("vec<float32,8>", TensorElementType.Int64, new[] { -1, 8 }, "int64 [-1, 8]", "float32 [-1, 8]", null)]
-    [InlineData("float64", TensorElementType.Float32, new[] { -1, 2 }, "float32 [-1, 2]", "float32 [-1]", "a vec<float32,2> derived feature of col.x")]
-    [InlineData("float32", TensorElementType.Float32, new[] { -1, -1 }, "float32 [-1, -1]", "float32 [-1]", "a vec<float32,N> derived feature of col.x")]
+    [InlineData("bool", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "int64 [-1]", "a float32 derived feature of col.x")] // bool is int64 0/1
+    [InlineData("list<bool,2>", TensorElementType.Float32, new[] { -1, 2 }, "float32 [-1, 2]", "int64 [-1, 2]", "a list<float32,2> derived feature of col.x")]
+    [InlineData("list<float32,8>", TensorElementType.Float32, new[] { -1, 16 }, "float32 [-1, 16]", "float32 [-1, 8]", "a list<float32,16> derived feature of col.x")]
+    [InlineData("list<float32,8>", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "float32 [-1, 8]", "a float32 derived feature of col.x")]
+    [InlineData("list<float32,8>", TensorElementType.Int64, new[] { -1, 8 }, "int64 [-1, 8]", "float32 [-1, 8]", "a list<int64,8> derived feature of col.x")]
+    [InlineData("list<float32,8>", TensorElementType.Text, new[] { -1, 8 }, "text [-1, 8]", "float32 [-1, 8]", null)]
+    [InlineData("float64", TensorElementType.Float32, new[] { -1, 2 }, "float32 [-1, 2]", "float32 [-1]", "a list<float32,2> derived feature of col.x")]
+    [InlineData("float32", TensorElementType.Float32, new[] { -1, -1 }, "float32 [-1, -1]", "float32 [-1]", "a list<float32,N> derived feature of col.x")]
     public void AnInputDeclaredOtherwiseThanItsColumnGives_IsAMismatch_SayingWhatIsSentAndHowToFixIt(
         string column, TensorElementType declaredType, int[] declaredShape, string declared, string sent, string? mapInstead)
     {
@@ -181,7 +191,7 @@ public sealed class ModelTensorRuleTests
     [Fact]
     public void AMappedNameTheModelLacks_IsReportedAtItsMapping_WithTheNamesItHas()
     {
-        var inputs = Inputs.Append(new ModelTensorRule.MappedInput("user/emb", "col.user.emb", ColumnType.Vector(4))).ToArray();
+        var inputs = Inputs.Append(new ModelTensorRule.MappedInput("user/emb", "col.user.emb", ColumnType.List(StorageKind.Float32, fixedLength: 4))).ToArray();
         var outputs = Outputs.Append(new ModelTensorRule.MappedOutput("p_like", "/outputs/p_like")).ToArray();
 
         var problems = ModelTensorRule.Check("Model 'm' version 'default'", TensorLayout.Rows, inputs, outputs,
@@ -194,9 +204,13 @@ public sealed class ModelTensorRuleTests
 
     [Theory]
     [InlineData("float32?", "Model input 'x' maps col.x, which is nullable (float32?): a model needs a value in every row.", "make col.x non-nullable (a feature with a default")]
-    [InlineData("vec<float32,4>?", "Model input 'x' maps col.x, which is nullable (vec<float32,4>?): a model needs a value in every row.", "'??'")]
-    [InlineData("string", "Model input 'x' maps col.x (string), which ModelScorer@1 cannot send as a tensor.", "int32, int64 or vec<float32,N>")]
-    [InlineData("list<int64>", "Model input 'x' maps col.x (list<int64>), which ModelScorer@1 cannot send as a tensor.", "an operator that builds other tensors")]
+    [InlineData("list<float32,4>?", "Model input 'x' maps col.x, which is nullable (list<float32,4>?): a model needs a value in every row.", "'??'")]
+    [InlineData("string", "Model input 'x' maps col.x (string), which ModelScorer@1 cannot send as a tensor.", "int32 or int64 column or context value, or a list<E,N> of those")]
+    [InlineData("list<string,2>", "Model input 'x' maps col.x (list<string,2>), which ModelScorer@1 cannot send as a tensor.", "an operator that builds other tensors")]
+    [InlineData("list<int64>", "Model input 'x' maps col.x (list<int64>), a list of any length: a tensor's trailing dimension is the same in every row.",
+        "declare the length of col.x, e.g. list<int64,64>")]
+    [InlineData("list<float32>", "Model input 'x' maps col.x (list<float32>), a list of any length: a tensor's trailing dimension is the same in every row.",
+        "declare the length of col.x, e.g. list<float32,64>")]
     public void AColumnTypeTheScorerCannotSend_IsAnInputTypeError(string type, string message, string hint)
     {
         var problem = ModelTensorRule.UnsendableInput(TensorLayout.Rows, "x", "col.x", ColumnType.Parse(type));
@@ -227,7 +241,7 @@ public sealed class ModelTensorRuleTests
 
     /// <summary>
     /// Rule 3 in each layout, both ways: the dynamic dimension (pairs, the list's length) only as -1; the fixed ones (the
-    /// pair's 2, the list batch's 1, a vector's N) as their size or -1; never another rank.
+    /// pair's 2, the list batch's 1, a list's N) as their size or -1; never another rank.
     /// </summary>
     [Theory]
     // A pair's column: [-1, 2], [-1, 2, N].
@@ -238,35 +252,37 @@ public sealed class ModelTensorRuleTests
     [InlineData("Pairs", false, "float32", TensorElementType.Float32, new[] { 256, 2 }, false)]
     [InlineData("Pairs", false, "float32", TensorElementType.Float32, new[] { -1, 3 }, false)]
     [InlineData("Pairs", false, "float32", TensorElementType.Float32, new[] { -1 }, false)]
-    [InlineData("Pairs", false, "vec<float32,4>", TensorElementType.Float32, new[] { -1, 2, 4 }, true)]
-    [InlineData("Pairs", false, "vec<float32,4>", TensorElementType.Float32, new[] { -1, -1, -1 }, true)]
-    [InlineData("Pairs", false, "vec<float32,4>", TensorElementType.Float32, new[] { -1, 2, 5 }, false)]
-    [InlineData("Pairs", false, "vec<float32,4>", TensorElementType.Float32, new[] { -1, 4 }, false)]
+    [InlineData("Pairs", false, "list<float32,4>", TensorElementType.Float32, new[] { -1, 2, 4 }, true)]
+    [InlineData("Pairs", false, "list<float32,4>", TensorElementType.Float32, new[] { -1, -1, -1 }, true)]
+    [InlineData("Pairs", false, "list<float32,4>", TensorElementType.Float32, new[] { -1, 2, 5 }, false)]
+    [InlineData("Pairs", false, "list<float32,4>", TensorElementType.Float32, new[] { -1, 4 }, false)]
     // A context value in a pair call: [-1], [-1, N].
     [InlineData("Pairs", true, "float32", TensorElementType.Float32, new[] { -1 }, true)]
     [InlineData("Pairs", true, "int64", TensorElementType.Int64, new[] { -1 }, true)]
     [InlineData("Pairs", true, "float32", TensorElementType.Float32, new[] { -1, 2 }, false)]
     [InlineData("Pairs", true, "float32", TensorElementType.Float32, new[] { 1 }, false)]
-    [InlineData("Pairs", true, "vec<float32,4>", TensorElementType.Float32, new[] { -1, 4 }, true)]
-    [InlineData("Pairs", true, "vec<float32,4>", TensorElementType.Float32, new[] { -1, -1 }, true)]
-    [InlineData("Pairs", true, "vec<float32,4>", TensorElementType.Float32, new[] { -1, 2, 4 }, false)]
+    [InlineData("Pairs", true, "list<float32,4>", TensorElementType.Float32, new[] { -1, 4 }, true)]
+    [InlineData("Pairs", true, "list<float32,4>", TensorElementType.Float32, new[] { -1, -1 }, true)]
+    [InlineData("Pairs", true, "list<float32,4>", TensorElementType.Float32, new[] { -1, 2, 4 }, false)]
     // The list's column: [1, -1], [1, -1, N].
     [InlineData("List", false, "float32", TensorElementType.Float32, new[] { 1, -1 }, true)]
-    [InlineData("List", false, "bool", TensorElementType.Float32, new[] { -1, -1 }, true)]
+    [InlineData("List", false, "bool", TensorElementType.Int64, new[] { -1, -1 }, true)]
+    [InlineData("List", false, "bool", TensorElementType.Float32, new[] { 1, -1 }, false)]
+    [InlineData("List", false, "list<bool,3>", TensorElementType.Int64, new[] { 1, -1, 3 }, true)]
     [InlineData("List", false, "int32", TensorElementType.Int64, new[] { 1, -1 }, true)]
     [InlineData("List", false, "float32", TensorElementType.Float32, new[] { 1, 50 }, false)]
     [InlineData("List", false, "float32", TensorElementType.Float32, new[] { 2, -1 }, false)]
     [InlineData("List", false, "float32", TensorElementType.Float32, new[] { -1 }, false)]
-    [InlineData("List", false, "vec<float32,4>", TensorElementType.Float32, new[] { 1, -1, 4 }, true)]
-    [InlineData("List", false, "vec<float32,4>", TensorElementType.Float32, new[] { -1, -1, -1 }, true)]
-    [InlineData("List", false, "vec<float32,4>", TensorElementType.Float32, new[] { 1, 4 }, false)]
+    [InlineData("List", false, "list<float32,4>", TensorElementType.Float32, new[] { 1, -1, 4 }, true)]
+    [InlineData("List", false, "list<float32,4>", TensorElementType.Float32, new[] { -1, -1, -1 }, true)]
+    [InlineData("List", false, "list<float32,4>", TensorElementType.Float32, new[] { 1, 4 }, false)]
     // A context value in the list call: [1], [1, N].
     [InlineData("List", true, "float32", TensorElementType.Float32, new[] { 1 }, true)]
     [InlineData("List", true, "int64", TensorElementType.Int64, new[] { -1 }, true)]
     [InlineData("List", true, "float32", TensorElementType.Float32, new[] { 2 }, false)]
     [InlineData("List", true, "float32", TensorElementType.Float32, new[] { 1, -1 }, false)]
-    [InlineData("List", true, "vec<float32,4>", TensorElementType.Float32, new[] { 1, 4 }, true)]
-    [InlineData("List", true, "vec<float32,4>", TensorElementType.Float32, new[] { -1, -1 }, true)]
+    [InlineData("List", true, "list<float32,4>", TensorElementType.Float32, new[] { 1, 4 }, true)]
+    [InlineData("List", true, "list<float32,4>", TensorElementType.Float32, new[] { -1, -1 }, true)]
     public void EachLayout_AcceptsItsShapes_WithFixedDimensionsAsTheirSizeOrAny(
         string layoutName, bool broadcast, string column, TensorElementType declaredType, int[] declaredShape, bool accepted)
     {
@@ -326,16 +342,20 @@ public sealed class ModelTensorRuleTests
         "or map a float32 context value instead (PairwiseRanker@1 sends a column's values of the two rows of each pair, and a context value once per pair)")]
     [InlineData("Pairs", false, "int64", TensorElementType.Float32, new[] { -1, 2 }, "float32 [-1, 2]", "int64 [-1, 2]",
         "or map a float32 derived feature of col.x instead")]
-    [InlineData("Pairs", false, "vec<float32,4>", TensorElementType.Float32, new[] { -1, 2, 8 }, "float32 [-1, 2, 8]", "float32 [-1, 2, 4]",
-        "or map a vec<float32,8> derived feature of col.x instead")]
+    [InlineData("Pairs", false, "list<float32,4>", TensorElementType.Float32, new[] { -1, 2, 8 }, "float32 [-1, 2, 8]", "float32 [-1, 2, 4]",
+        "or map a list<float32,8> derived feature of col.x instead")]
     // A context value declared as a column: the hint offers a column.
     [InlineData("Pairs", true, "int64", TensorElementType.Int64, new[] { -1, 2, 3 }, "int64 [-1, 2, 3]", "int64 [-1]",
-        "no column gives int64 [-1, 2, 3]")]
+        "or map a list<int64,3> column instead (PairwiseRanker@1 sends a column's values of the two rows of each pair, and a context value once per pair)")]
+    [InlineData("Pairs", true, "int64", TensorElementType.Int64, new[] { -1, 2, 3, 4 }, "int64 [-1, 2, 3, 4]", "int64 [-1]",
+        "no column gives int64 [-1, 2, 3, 4]")]
     [InlineData("List", true, "float32", TensorElementType.Int64, new[] { 1, -1 }, "int64 [1, -1]", "float32 [1]",
-        "or map an int64 column instead (ListwiseReranker@1 sends a column's values of the rows of the list, and a context value once per list)")]
-    // Same kind first: a context vector whose N is declared -1 gives [1, -1] too.
+        "or map a list<int64,N> derived feature of ctx.x instead")] // a context list of any declared N gives [1, N]
+    [InlineData("List", true, "float32", TensorElementType.Int64, new[] { 1, -1, 3 }, "int64 [1, -1, 3]", "float32 [1]",
+        "or map a list<int64,3> column instead (ListwiseReranker@1 sends a column's values of the rows of the list, and a context value once per list)")]
+    // Same kind first: a context list whose N is declared -1 gives [1, -1] too.
     [InlineData("List", true, "float32", TensorElementType.Float32, new[] { 1, -1 }, "float32 [1, -1]", "float32 [1]",
-        "or map a vec<float32,N> derived feature of ctx.x instead")]
+        "or map a list<float32,N> derived feature of ctx.x instead")]
     [InlineData("List", false, "float32", TensorElementType.Float32, new[] { 1 }, "float32 [1]", "float32 [1, -1]",
         "or map a float32 context value instead")]
     [InlineData("List", false, "float32", TensorElementType.Int64, new[] { 1, -1 }, "int64 [1, -1]", "float32 [1, -1]",

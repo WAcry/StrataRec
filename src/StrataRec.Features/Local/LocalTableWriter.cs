@@ -264,27 +264,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         MarkWritten(field, valid: true);
     }
 
-    internal Span<float> VectorBuffer(int token, int field)
-    {
-        CheckWrite(token, field, StorageKind.Vector);
-        MarkWritten(field, valid: true);
-        return MemoryMarshal.Cast<byte, float>(_fixed.AsSpan(_layout.Offsets[field], 4 * _layout.Dimensions[field]));
-    }
-
-    internal void SetVector(int token, int field, ReadOnlySpan<float> value)
-    {
-        CheckWrite(token, field, StorageKind.Vector);
-        var dimension = _layout.Dimensions[field];
-        if (value.Length != dimension)
-        {
-            throw new ArgumentException(
-                $"Field '{Schema.Fields[field].Name}' is {Schema.Fields[field].Type}: expected {dimension} elements, got {value.Length}.", nameof(value));
-        }
-
-        value.CopyTo(MemoryMarshal.Cast<byte, float>(_fixed.AsSpan(_layout.Offsets[field], 4 * dimension)));
-        MarkWritten(field, valid: true);
-    }
-
     /// <summary>A <c>string</c> or <c>text</c> value. Kept as chars until commit; a string is created only for a value the
     /// dictionary does not hold yet.</summary>
     internal void SetString(int token, int field, ReadOnlySpan<char> value)
@@ -1052,7 +1031,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             StorageKind.Float32 => "SetFloat32",
             StorageKind.Float64 => "SetFloat64",
             StorageKind.String or StorageKind.Text => "SetString",
-            StorageKind.Vector => "SetVector",
             _ => type.Element switch
             {
                 StorageKind.Bool => "SetBoolList or AddBoolItem",
@@ -1165,16 +1143,11 @@ public readonly struct RecordBuilder
     /// <summary>A <c>string</c> or <c>text</c> value from chars, e.g. decoded into a reused buffer.</summary>
     public void SetString(int field, ReadOnlySpan<char> value) => Writer.SetString(_token, field, value);
 
-    /// <summary>A <c>vec&lt;float32,N&gt;</c> value of exactly N elements.</summary>
-    public void SetVector(int field, ReadOnlySpan<float> value) => Writer.SetVector(_token, field, value);
-
-    /// <summary>The vector field's storage in the record being built, for decoding in place; the field counts as present,
-    /// so write all N elements.</summary>
-    public Span<float> VectorBuffer(int field) => Writer.VectorBuffer(_token, field);
-
     /// <summary>A <c>list&lt;bool&gt;</c> value.</summary>
     /// <remarks>One setter per element type, as for scalars: the field's declared element type decides, and a setter of
-    /// another element type throws and names the right one.</remarks>
+    /// another element type throws and names the right one. A fixed-length field (<c>list&lt;float32,64&gt;</c>) is set
+    /// the same way; a list of another length is stored as given, and a read replaces it like a request's other writers
+    /// do (design 4.3), so one bad record of a load does not stop the load.</remarks>
     public void SetBoolList(int field, ReadOnlySpan<bool> value) => Writer.SetList(_token, field, value, nameof(SetBoolList));
 
     /// <summary>A <c>list&lt;int32&gt;</c> value.</summary>
@@ -1233,7 +1206,8 @@ public readonly struct RecordBuilder
     /// Writes a promoted value (as configuration and tests hold them): int64 into <c>int32</c> storage must fit, float64
     /// into <c>float32</c> narrows, a missing value clears the field.
     /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">An integer (or list element) outside the int32 range of an int32 field.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">An integer (or list element) outside the int32 range of an int32 field, or
+    /// a list of another length than a <c>list&lt;E,N&gt;</c> field's.</exception>
     public void Set(int field, in Core.Values.ScalarValue value)
     {
         if (value.IsMissing)
@@ -1259,8 +1233,16 @@ public readonly struct RecordBuilder
             case StorageKind.Float32: SetFloat32(field, (float)value.AsFloat64()); break;
             case StorageKind.Float64: SetFloat64(field, value.AsFloat64()); break;
             case StorageKind.String or StorageKind.Text: SetString(field, value.AsString()); break;
-            case StorageKind.Vector: SetVector(field, value.AsVector()); break;
-            case StorageKind.List: SetList(field, type, value); break;
+            case StorageKind.List:
+                if (!ColumnValues.FitsLength(value.ListLength, type))
+                {
+                    var f = Writer.Schema.Fields[field];
+                    throw new ArgumentOutOfRangeException(nameof(value), value.ToString(),
+                        $"Field '{f.Name}' is {f.Type}: the value is {ColumnValues.Misfit(value, type)}; fix the data or declare the field as {ColumnType.List(type.Element)}.");
+                }
+
+                SetList(field, type, value);
+                break;
             default: throw new InvalidOperationException($"Unsupported field type {type}.");
         }
     }

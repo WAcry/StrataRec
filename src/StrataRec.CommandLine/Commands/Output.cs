@@ -242,22 +242,6 @@ internal static class Output
             case StorageKind.String or StorageKind.Text:
                 json.WriteStringValue(value.AsString());
                 break;
-            case StorageKind.Vector:
-                json.WriteStartArray();
-                foreach (var f in value.AsVector())
-                {
-                    if (float.IsFinite(f))
-                    {
-                        json.WriteNumberValue(f);
-                    }
-                    else
-                    {
-                        json.WriteStringValue(Logging.LogBatchJson.NonFiniteName(f)); // JSON numbers cannot be NaN or ±∞
-                    }
-                }
-
-                json.WriteEndArray();
-                break;
             case StorageKind.List:
                 // Each element as a value of its element type is (list<int32> and list<float32> are held promoted).
                 json.WriteStartArray();

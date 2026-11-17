@@ -237,7 +237,6 @@ internal sealed class ExprFixture
             ScalarColumn<bool> c => ScalarValue.FromBool(c[row]),
             DictStringColumn c => ScalarValue.FromString(c.Get(row)),
             TextColumn c => ScalarValue.FromText(c.Get(row)),
-            VectorColumn c => ScalarValue.FromVector(c.Row(row).ToArray()),
             ListColumn<long> c => ScalarValue.FromInt64List(c.Get(row).ToArray()),
             ListColumn<int> c => ScalarValue.FromInt64List(c.Get(row).ToArray().Select(v => (long)v).ToArray()),
             ListColumn<string> c => ScalarValue.FromStringList(c.Get(row).ToArray()),

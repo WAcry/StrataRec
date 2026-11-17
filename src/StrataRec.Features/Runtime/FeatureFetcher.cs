@@ -1054,7 +1054,8 @@ public sealed partial class FeatureFetcher
     /// <summary>
     /// Copies staged values into the live rows that are still unfilled, matching by key (design 4.5). Key index k belongs
     /// to chunk k / max_batch. A value is read only if its chunk succeeded and the connector wrote that field for that
-    /// key; anything else takes the default or becomes missing.
+    /// key; anything else takes the default or becomes missing, and so does a list of another length than a
+    /// <c>list&lt;E,N&gt;</c> feature's, counted out of range (design 4.3).
     /// </summary>
     private void Backfill(PendingFetch pending, FeatureRuntimeInfo feature, int fieldIndex, ref BackfillScratch scratch)
     {
@@ -1072,6 +1073,7 @@ public sealed partial class FeatureFetcher
         var keys = scratch.Keys;
         var copied = scratch.Copied!;
         var copiedCount = 0;
+        var outOfRange = 0;
         for (var p = 0; p < order.Length; p++)
         {
             var row = order[p];
@@ -1091,10 +1093,16 @@ public sealed partial class FeatureFetcher
                 continue;
             }
 
+            var stored = false;
             if (keyIndex >= 0 && pending.Staging is { } staging && !pending.ChunkFailed[keyIndex / pending.ChunkSize]
                 && staging.HasValue(fieldIndex, keyIndex))
             {
-                staging.CopyTo(fieldIndex, keyIndex, column, row);
+                stored = staging.TryCopyTo(fieldIndex, keyIndex, column, row);
+                outOfRange += stored ? 0 : 1;
+            }
+
+            if (stored)
+            {
                 column.SetValid(row);
                 copied[copiedCount++] = row;
             }
@@ -1104,6 +1112,11 @@ public sealed partial class FeatureFetcher
             }
 
             Bits.Set(filled, row);
+        }
+
+        if (outOfRange > 0)
+        {
+            _counters.AddOutOfRange(outOfRange);
         }
 
         if (copiedCount > 0 && ColumnValues.IsFloat(column))
@@ -1202,9 +1215,10 @@ public sealed partial class FeatureFetcher
         }
         else if (!feature.Type.Nullable && column.Validity is not null)
         {
-            // A non-nullable expression leaves a row missing only where an out-of-range int32 value was replaced at the
-            // write. With no default to take, the feature cannot be served as typed: readers compiled against a
-            // non-nullable type skip validity checks (same rule as a node output, design 4.6).
+            // A non-nullable expression leaves a row missing only where an out-of-range int32 value, or a list of another
+            // length than the feature's fixed one, was replaced at the write. With no default to take, the feature cannot
+            // be served as typed: readers compiled against a non-nullable type skip validity checks (same rule as a node
+            // output, design 4.6).
             var missing = 0;
             foreach (var row in span)
             {
@@ -1217,8 +1231,10 @@ public sealed partial class FeatureFetcher
             if (missing > 0)
             {
                 _state[feature.Index] = FeatureState.Failed;
-                _errors[feature.Index] = $"derived feature '{definition.Name}' produced {missing} value(s) outside the int32 range of its " +
-                    $"{feature.Type} type but is non-nullable and declares no default; declare a default or make the expression nullable";
+                var why = !feature.Type.IsFixedLength ? "outside the int32 range"
+                    : feature.Type.IsInt32Storage ? "outside the int32 range or of another length" : "of another length";
+                _errors[feature.Index] = $"derived feature '{definition.Name}' produced {missing} value(s) its {feature.Type} type cannot hold ({why}) " +
+                    "but is non-nullable and declares no default; declare a default or make the expression nullable";
             }
         }
 
@@ -1476,9 +1492,10 @@ public sealed partial class FeatureFetcher
 
     /// <summary>
     /// Publishes a context feature value as its storage holds it (<see cref="ColumnValues.AsStored"/>: a float32 feature's
-    /// value is rounded to float32): NaN/±∞, including a float beyond the float32 range, and an integer (or list element)
-    /// outside the int32 range of an <c>int32</c> or <c>list&lt;int32&gt;</c> feature, are counted and replaced by the
-    /// default or missing (design 4.3), and a missing value takes the default.
+    /// value is rounded to float32): NaN/±∞, including a float beyond the float32 range, an integer (or list element)
+    /// outside the int32 range of an <c>int32</c> or <c>list&lt;int32&gt;</c> feature, and a list of another length than a
+    /// <c>list&lt;E,N&gt;</c> feature's, are counted and replaced by the default or missing (design 4.3), and a missing value
+    /// takes the default.
     /// </summary>
     /// <remarks>Context values are held promoted, so an out-of-range value would not wrap here; it is still replaced,
     /// so a feature's value always lies in its declared type wherever it is read, logged or written, and is the value the
@@ -1487,7 +1504,9 @@ public sealed partial class FeatureFetcher
     {
         var definition = info.Definition;
         value = ColumnValues.AsStored(value, info.Type);
-        if (ColumnValues.IsNonFinite(value))
+        // A list of the wrong length is out of range whatever its elements are, as the column writers count it.
+        var wrongLength = value.Kind == StorageKind.List && !ColumnValues.FitsLength(value.ListLength, info.Type);
+        if (!wrongLength && ColumnValues.IsNonFinite(value))
         {
             AddNonFinite(info, 1);
             value = ScalarValue.Missing;
@@ -1502,9 +1521,10 @@ public sealed partial class FeatureFetcher
             _counters.AddOutOfRange(1);
             if (!definition.HasDefault && !info.Type.Nullable)
             {
+                var produced = wrongLength ? "a list" : value.ToString();
                 _state[info.Index] = FeatureState.Failed;
-                _errors[info.Index] = $"feature '{definition.Name}' produced {value}, outside the int32 range of its {info.Type} type, " +
-                    "but is non-nullable and declares no default";
+                _errors[info.Index] = $"feature '{definition.Name}' produced {produced} its {info.Type} type cannot hold ({ColumnValues.Misfit(value, info.Type)}) "
+                    + "but is non-nullable and declares no default";
             }
 
             value = ScalarValue.Missing;

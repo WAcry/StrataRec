@@ -17,7 +17,7 @@
     "item.is_policy_safe": { "type": "bool",    "source": "item_store", "field": "i_safe" },
     "item.report_rate":    { "type": "float32", "source": "item_store", "field": "i_report_rate", "default": 0.0 },
     "item.age_hours":      { "type": "float32", "source": "item_store", "field": "i_age_h" },
-    "item.embedding":      { "type": "vec<float32,4>", "source": "item_store", "field": "i_emb" },
+    "item.embedding":      { "type": "list<float32,4>", "source": "item_store", "field": "i_emb" },
     "author.followers":    { "type": "float32", "source": "author_store", "field": "a_followers", "default": 0.0 }
   },
   "derived_features": {

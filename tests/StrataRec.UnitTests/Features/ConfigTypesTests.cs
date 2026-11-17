@@ -24,14 +24,37 @@ public class ConfigTypesTests
     [InlineData("str", TypeSite.Column, "string")]
     [InlineData("strng", TypeSite.Parameter, "string")]
     [InlineData("flaot64", TypeSite.Feature, "float64")]
-    [InlineData("vec<float64,4>", TypeSite.Column, "vec<float32,4>")] // the dimension written is kept
-    [InlineData("vector", TypeSite.Feature, "vec<float32,N>")]
+    [InlineData("array<double,64>", TypeSite.Column, "list<float64,64>")] // the length written is kept
+    [InlineData("array<float,8>", TypeSite.Feature, "list<float32,8>")]
     public void AnUnknownType_SuggestsTheSpellingMeant_AndListsTheValidOnes(string written, TypeSite site, string suggestion)
     {
         Assert.False(ConfigTypes.TryParse(written, site, out _, out _, out var message, out var hint));
 
         Assert.Equal(site == TypeSite.Parameter ? $"Unknown parameter type '{written}'." : $"Unknown type '{written}'.", message);
         Assert.Equal($"did you mean '{suggestion}'? Valid types: {ConfigTypes.Spellings(site)}", hint);
+    }
+
+    [Theory]
+    [InlineData("vec<float32,4>", TypeSite.Column, "list<float32,4>")] // the length written is kept
+    [InlineData("vec<float32,4>?", TypeSite.Column, "list<float32,4>?")]
+    [InlineData("vec<float64,64>", TypeSite.Feature, "list<float64,64>")]
+    [InlineData("vec<float32,16>", TypeSite.Feature, "list<float32,16>")]
+    [InlineData("vector", TypeSite.Feature, "list<float32,N>")]
+    public void TheRemovedVectorType_IsAnError_WhoseHintIsTheFixedLengthList(string written, TypeSite site, string replacement)
+    {
+        Assert.False(ConfigTypes.TryParse(written, site, out _, out _, out var message, out var hint));
+
+        Assert.Equal($"Unknown type '{written}': a vector is a list of fixed length, list<E,N>.", message);
+        Assert.Equal($"did you mean '{replacement}'? Valid types: {ConfigTypes.Spellings(site)}", hint);
+    }
+
+    [Fact]
+    public void AVectorParameter_IsAnError_ThatSaysParametersAreNotLists()
+    {
+        Assert.False(ConfigTypes.TryParse("vec<float32,4>", TypeSite.Parameter, out _, out _, out var message, out var hint));
+
+        Assert.Equal("Unknown parameter type 'vec<float32,4>': a vector is a list of fixed length, list<E,N>.", message);
+        Assert.StartsWith("a parameter is never a list; parameter types: ", hint, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -93,7 +116,8 @@ public class ConfigTypesTests
 
     [Theory]
     [InlineData("int64?", TypeSite.Column, "int64?", false)]
-    [InlineData("vec<float32,8>", TypeSite.Feature, "vec<float32,8>", false)]
+    [InlineData("list<float32,8>", TypeSite.Feature, "list<float32,8>", false)]
+    [InlineData("list<int64,3>?", TypeSite.Column, "list<int64,3>?", false)]
     [InlineData("float64", TypeSite.Parameter, "float64", false)]
     [InlineData("map<string,float64>", TypeSite.Parameter, "float64", true)]
     public void AValidType_Parses(string written, TypeSite site, string type, bool map)

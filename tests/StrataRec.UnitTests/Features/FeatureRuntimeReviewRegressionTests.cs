@@ -668,7 +668,7 @@ public class FeatureRuntimeReviewRegressionTests
         });
         var rig = new FeatureTestRig().Source("item_store", connector);
         var clicks = rig.Physical("item.clicks_7d", FeatureTestRig.Item, ColumnType.Float64, "item_store");
-        var embedding = rig.Physical("item.embedding", FeatureTestRig.Item, ColumnType.Vector(2), "item_store");
+        var embedding = rig.Physical("item.embedding", FeatureTestRig.Item, ColumnType.List(StorageKind.Float32, fixedLength: 2), "item_store");
         var unused = rig.Physical("item.unused", FeatureTestRig.Item, ColumnType.Float64, "item_store");
         rig.Build();
         var request = rig.NewRequest(TwoItems);
@@ -687,7 +687,7 @@ public class FeatureRuntimeReviewRegressionTests
         var calls = connector.Calls.ToArray();
         Assert.Equal(2, calls.Length);
         Assert.Equal(new[] { "embedding" }, calls[1].Fields);
-        Assert.Equal(new[] { 2f, 0f }, request.Value(embedding, 1).AsVector());
+        Assert.Equal(new[] { 2.0, 0.0 }, request.Value(embedding, 1).AsFloat64List().ToArray());
         Assert.False(request.IsFilled(unused, 0));
     }
 

@@ -154,7 +154,9 @@ internal sealed class Binder
             return FailAt(odd, ExpressionErrorCodes.TypeMismatch, "List literal elements must all be numbers, all strings or all bools", list);
         }
 
-        return IrNode.Const(value, new ExprType(kind, false), list.Start, list.Length);
+        // A literal's length is known, as a list<E,N>'s is: dot(col.embedding, [1, 0, 0]) with another N is a compile
+        // error, and so is a literal of another length written for a fixed-length site.
+        return IrNode.Const(value, new ExprType(kind, false, values.Length), list.Start, list.Length);
 
         static int Category(in ScalarValue v) => v.Kind switch
         {
@@ -358,14 +360,14 @@ internal sealed class Binder
             case BinaryOp.Coalesce:
             {
                 AdaptListLiterals(ref l, ref r);
-                if (!TryUnify(l.Type, r.Type, out var kind, out var dim))
+                if (!TryUnify(l.Type, r.Type, out var kind, out var length))
                 {
                     // The left side is the value read; the right one, its default, is what disagrees.
                     return FailAt(b.Right, ExpressionErrorCodes.TypeMismatch, $"'??' needs both sides of the same type, got {l.Type} and {r.Type}", b,
                         DefaultHint(l.Type));
                 }
 
-                return IrNode.Make(IrOp.Coalesce, new ExprType(kind, r.Type.Nullable, dim), new[] { Coerce(l, kind), Coerce(r, kind) }, b.Start, b.Length);
+                return IrNode.Make(IrOp.Coalesce, new ExprType(kind, r.Type.Nullable, length), new[] { Coerce(l, kind), Coerce(r, kind) }, b.Start, b.Length);
             }
 
             case BinaryOp.In:
@@ -500,12 +502,12 @@ internal sealed class Binder
         }
 
         AdaptListLiterals(ref a, ref b);
-        if (!TryUnify(a.Type, b.Type, out var kind, out var dim))
+        if (!TryUnify(a.Type, b.Type, out var kind, out var length))
         {
             return FailAt(c.Else, ExpressionErrorCodes.TypeMismatch, $"The branches of '?:' have different types: {a.Type} and {b.Type}", c);
         }
 
-        var type = new ExprType(kind, cond.Type.Nullable || a.Type.Nullable || b.Type.Nullable, dim);
+        var type = new ExprType(kind, cond.Type.Nullable || a.Type.Nullable || b.Type.Nullable, length);
         return IrNode.Make(IrOp.Conditional, type, new[] { cond, Coerce(a, kind), Coerce(b, kind) }, c.Start, c.Length);
     }
 
@@ -694,20 +696,31 @@ internal sealed class Binder
 
             case "dot":
             case "cosine":
-                if (!RequireKind(args[0], TypeKind.Vector, name, call.Args[0]) || !RequireKind(args[1], TypeKind.Vector, name, call.Args[1]))
+            {
+                args[0] = AsFloatList(args[0]);
+                args[1] = AsFloatList(args[1]);
+                if (!RequireFloatList(args[0], name, call.Args[0]) || !RequireFloatList(args[1], name, call.Args[1]))
                 {
                     return Poison(call);
                 }
 
-                if (args[0].Type.Dim > 0 && args[1].Type.Dim > 0 && args[0].Type.Dim != args[1].Type.Dim)
+                int left = args[0].Type.Length, right = args[1].Type.Length;
+                if (left > 0 && right > 0 && left != right)
                 {
-                    return FailAt(call.Args[1], ExpressionErrorCodes.TypeMismatch, $"'{name}' needs vectors of the same dimension, got {args[0].Type} and {args[1].Type}", call);
+                    return FailAt(call.Args[1], ExpressionErrorCodes.TypeMismatch, $"'{name}' needs two lists of the same length, got {args[0].Type} and {args[1].Type}", call,
+                        "it pairs the lists element by element: compare embeddings of the same model and dimension");
                 }
 
-                return Lift(name == "dot" ? IrOp.Dot : IrOp.Cosine, TypeKind.Float, call, args[0], args[1]);
+                // Lists of different lengths have no dot product: a row where they differ is missing. Only when both
+                // lengths are declared (and equal) can no row differ, and the result is as nullable as the lists are.
+                var op = name == "dot" ? IrOp.Dot : IrOp.Cosine;
+                var product = Lift(op, TypeKind.Float, call, args[0], args[1]);
+                return left > 0 && left == right ? product : IrNode.Make(op, new ExprType(TypeKind.Float, true), product.Args, call.Start, call.Length);
+            }
 
             case "l2_norm":
-                return RequireKind(args[0], TypeKind.Vector, name, call.Args[0]) ? Lift(IrOp.L2Norm, TypeKind.Float, call, args[0]) : Poison(call);
+                args[0] = AsFloatList(args[0]);
+                return RequireFloatList(args[0], name, call.Args[0]) ? Lift(IrOp.L2Norm, TypeKind.Float, call, args[0]) : Poison(call);
 
             case "size":
                 if (args[0].Type.IsList || args[0].Type.Kind == TypeKind.String)
@@ -956,7 +969,12 @@ internal sealed class Binder
             }
             else if (expected.IsList && expected.ElementType.IsFloat && root.Type.Kind == TypeKind.ListInt)
             {
-                hint = $"an int64 list is not converted to a float list; declare the site as {ColumnType.List(StorageKind.Int64).AsNonNullable()}, or read a float list";
+                hint = $"an int64 list is not converted to a float list; declare the site as {ColumnType.List(StorageKind.Int64, false, expected.FixedLength)}, or read a float list";
+            }
+            else if (expected.IsList && root.Type.IsList && root.Type.Kind == ExprType.FromColumnType(expected).Kind)
+            {
+                hint = $"a {expected.AsNonNullable()} holds exactly {expected.FixedLength} elements and the expression's lists hold {root.Type.Length}; "
+                       + $"declare the site as {ColumnType.List(expected.Element, false, root.Type.Length)}, or write a list of {expected.FixedLength}";
             }
 
             Report(ExpressionErrorCodes.TypeMismatch, $"The expression has type {root.Type.WithNullable(false)} but this site expects {expected.AsNonNullable()}",
@@ -964,8 +982,9 @@ internal sealed class Binder
             return root;
         }
 
-        // A computed value outside the int32 or float32 range is replaced at run time (design 4.3); a constant one can
-        // only be a configuration mistake, so it is reported here, where it can be fixed.
+        // A computed value outside the int32 or float32 range is replaced at run time (design 4.3); a constant one can only
+        // be a configuration mistake, so it is reported here, where it can be fixed. (A constant list of another length
+        // than a fixed-length site's is a type mismatch above: a literal's type has its length.)
         if (_options.ExpectedType is { } narrow && root.IsConst && !ColumnValues.FitsStorage(root.Value, narrow))
         {
             var (range, width) = narrow.IsInt32Storage ? ($"[{int.MinValue}, {int.MaxValue}]", "int32") : (Float32Range.Text, "float32");
@@ -1014,7 +1033,7 @@ internal sealed class Binder
         }
 
         IrNode? result = null;
-        var type = new ExprType(TypeKind.ListFloat, node.Type.Nullable);
+        var type = node.Type with { Kind = TypeKind.ListFloat };
         if (node.IsConst && !node.Value.IsMissing)
         {
             var ints = node.Value.AsInt64List();
@@ -1064,8 +1083,10 @@ internal sealed class Binder
         StorageKind.Int32 or StorageKind.Int64 => actual.Kind == TypeKind.Int,
         StorageKind.Bool => actual.Kind == TypeKind.Bool,
         StorageKind.String or StorageKind.Text => actual.Kind == TypeKind.String,
-        StorageKind.Vector => actual.Kind == TypeKind.Vector && (expected.Dimension == 0 || actual.Dim == 0 || expected.Dimension == actual.Dim),
-        StorageKind.List => actual.Kind == ExprType.FromColumnType(expected).Kind,
+        // A list of any length (or an expression whose length is not known) may be written to a fixed-length site, whose
+        // writer checks each row's length; a list known to have another length cannot.
+        StorageKind.List => actual.Kind == ExprType.FromColumnType(expected).Kind
+                            && (expected.FixedLength == 0 || actual.Length == 0 || expected.FixedLength == actual.Length),
         _ => false,
     };
 
@@ -1145,22 +1166,15 @@ internal sealed class Binder
     // ----------------------------------------------------------------------------------------------------------
     // Helpers
 
-    private static bool TryUnify(ExprType a, ExprType b, out TypeKind kind, out int dim)
+    /// <summary>The type two branches (of <c>?:</c> or <c>??</c>) have together. Lists of one kind unify whatever their
+    /// lengths: the result keeps a length only when both branches have it, and is a list of any length otherwise.</summary>
+    private static bool TryUnify(ExprType a, ExprType b, out TypeKind kind, out int length)
     {
-        dim = 0;
+        length = 0;
         kind = TypeKind.Error;
         if (a.Kind == b.Kind)
         {
-            if (a.Kind == TypeKind.Vector)
-            {
-                if (a.Dim > 0 && b.Dim > 0 && a.Dim != b.Dim)
-                {
-                    return false;
-                }
-
-                dim = Math.Max(a.Dim, b.Dim);
-            }
-
+            length = a.Length == b.Length ? a.Length : 0;
             kind = a.Kind;
             return true;
         }
@@ -1195,14 +1209,16 @@ internal sealed class Binder
         return true;
     }
 
-    private bool RequireKind(IrNode arg, TypeKind kind, string name, AstNode at)
+    /// <summary>The argument check of the vector functions: a float list, of any length or of a fixed one.</summary>
+    private bool RequireFloatList(IrNode arg, string name, AstNode at)
     {
-        if (arg.Type.Kind == kind)
+        if (arg.Type.Kind == TypeKind.ListFloat)
         {
             return true;
         }
 
-        Fail(ExpressionErrorCodes.TypeMismatch, $"'{name}' needs a vector, got {arg.Type}", at);
+        Fail(ExpressionErrorCodes.TypeMismatch, $"'{name}' needs a float list (list<float32> or list<float64>, such as list<float32,64>), got {arg.Type}", at,
+            arg.Type.Kind == TypeKind.ListInt ? "an int64 list is not converted to a float list; declare the list's elements as float32 or float64" : null);
         return false;
     }
 
@@ -1241,7 +1257,7 @@ internal sealed class Binder
 
     private static IrNode Conditional(IrNode cond, IrNode a, IrNode b, AstNode at)
     {
-        var type = new ExprType(a.Type.Kind, cond.Type.Nullable || a.Type.Nullable || b.Type.Nullable, a.Type.Dim);
+        var type = new ExprType(a.Type.Kind, cond.Type.Nullable || a.Type.Nullable || b.Type.Nullable, a.Type.Kind == b.Type.Kind && a.Type.Length == b.Type.Length ? a.Type.Length : 0);
         return IrNode.Make(IrOp.Conditional, type, new[] { cond, a, b }, at.Start, at.Length);
     }
 

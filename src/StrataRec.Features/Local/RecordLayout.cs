@@ -17,12 +17,15 @@ namespace StrataRec.Features.Local;
 /// …   int32  key offset    string-keyed tables only: the UTF-16 key, relative to the record start
 ///     int32  key length    in chars
 /// H   fields               8-byte values first (int64, float64, variable-length references), then 4-byte values
-///                          (int32, float32, string codes, vector elements), then bools; each at its natural alignment
+///                          (int32, float32, string codes), then bools; each at its natural alignment
 /// F   variable data        text (UTF-16), lists (native elements, a bool one byte; list&lt;string&gt; as string codes), the string key;
 ///                          each item 8-byte aligned
 /// </code>
 /// <para>A variable-length field's slot holds <c>(int32 offset relative to the record start, int32 element count)</c>.
 /// A tombstone is just the header (validity all clear), plus the key for string-keyed tables.</para>
+/// <para>A fixed-length list (<c>list&lt;float32,64&gt;</c>) is a list here like any other: the table stores what its writer
+/// wrote, and a read checks the length (<see cref="TableVersion"/>'s fill, as a request's other writers do), so one layout
+/// and one copy loop serve every list.</para>
 /// </remarks>
 internal sealed class RecordLayout
 {
@@ -56,7 +59,6 @@ internal sealed class RecordLayout
         Elements = new StorageKind[count];
         ElementSizes = new int[count];
         Offsets = new int[count];
-        Dimensions = new int[count];
         Sizes = new int[count];
         VarSlots = new int[count];
         var varCount = 0;
@@ -77,7 +79,6 @@ internal sealed class RecordLayout
                 Kinds[f] = type.Kind;
                 Elements[f] = type.Element;
                 ElementSizes[f] = VariableElementSize(type);
-                Dimensions[f] = type.Kind == StorageKind.Vector ? type.Dimension : 0;
                 Offsets[f] = cursor;
                 Sizes[f] = size;
                 VarSlots[f] = ElementSizes[f] > 0 ? varCount++ : -1;
@@ -134,8 +135,6 @@ internal sealed class RecordLayout
     /// <summary>Offset of each field's value (or variable-length reference) from the record start.</summary>
     public int[] Offsets { get; }
 
-    public int[] Dimensions { get; }
-
     /// <summary>Bytes each field occupies in the fixed part.</summary>
     public int[] Sizes { get; }
 
@@ -176,7 +175,6 @@ internal sealed class RecordLayout
         StorageKind.Bool => (1, 1),
         StorageKind.Int32 or StorageKind.Float32 or StorageKind.String => (4, 4),
         StorageKind.Int64 or StorageKind.Float64 => (8, 8),
-        StorageKind.Vector => (checked(4 * type.Dimension), 4),
         StorageKind.Text or StorageKind.List => (8, 8),
         _ => throw new ArgumentOutOfRangeException(nameof(type), type, "Unsupported storage type."),
     };

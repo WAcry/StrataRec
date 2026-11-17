@@ -18,7 +18,9 @@ public sealed class LogValueReadTests
         { "float64", ScalarValue.FromFloat64(Math.PI) },
         { "string", ScalarValue.FromString("ü \"quoted\"") },
         { "text", ScalarValue.FromText("long text") },
-        { "vec<float32,3>", ScalarValue.FromVector(new[] { 0.5f, -1f, 0.1f }) },
+        { "list<float32,3>", ScalarValue.FromFloat32List(new[] { 0.5f, -1f, 0.1f }) },
+        { "list<int32,2>", ScalarValue.FromInt64List(new long[] { 7, -1 }) },
+        { "list<bool,1>?", ScalarValue.FromBoolList(new[] { true }) },
         { "list<int64>", ScalarValue.FromInt64List(new long[] { 1, -2, long.MinValue }) },
         { "list<int32>", ScalarValue.FromInt64List(new long[] { int.MaxValue, 0 }) },
         { "list<string>", ScalarValue.FromStringList(new[] { "a", string.Empty }) },
@@ -78,7 +80,17 @@ public sealed class LogValueReadTests
     public void NonFiniteValues_WereWrittenAsNull_AndReadBackMissing()
     {
         Assert.True(RoundTrip(ScalarValue.FromFloat64(double.NaN), ColumnType.Float64).IsMissing);
-        Assert.True(RoundTrip(ScalarValue.FromVector(new[] { float.PositiveInfinity }), ColumnType.Vector(1)).IsMissing);
+        Assert.True(RoundTrip(ScalarValue.FromFloat32List(new[] { float.PositiveInfinity }), ColumnType.Parse("list<float32,1>")).IsMissing);
+    }
+
+    [Fact]
+    public void AFixedLengthList_ReadsBackWhateverLengthWasWritten()
+    {
+        // A recording holds what a connector wrote, before the type's length was applied where it was stored; a replay
+        // reads it back as written and applies the same rule again.
+        var read = Read("[1, 2]", ColumnType.Parse("list<float32,4>"), nonFiniteAsStrings: true);
+
+        Assert.Equal(ScalarValue.FromFloat32List(new[] { 1f, 2f }), read);
     }
 
     [Theory]
@@ -96,20 +108,20 @@ public sealed class LogValueReadTests
     }
 
     [Fact]
-    public void BundleEncoding_KeepsNonFiniteVectorComponents()
+    public void BundleEncoding_KeepsNonFiniteEmbeddingElements()
     {
-        var vector = ScalarValue.FromVector(new[] { float.PositiveInfinity, 0.5f, float.NaN, float.NegativeInfinity });
+        var vector = ScalarValue.FromFloat32List(new[] { float.PositiveInfinity, 0.5f, float.NaN, float.NegativeInfinity });
 
         var written = Write(vector, nonFiniteAsStrings: true);
 
         Assert.Equal("[\"Infinity\",0.5,\"NaN\",\"-Infinity\"]", written);
-        Assert.Equal(vector, Read(written, ColumnType.Vector(4), nonFiniteAsStrings: true));
+        Assert.Equal(vector, Read(written, ColumnType.Parse("list<float32,4>"), nonFiniteAsStrings: true));
         Assert.Equal("null", Write(vector, nonFiniteAsStrings: false));
     }
 
     [Theory]
     [InlineData("float64", "\"NaN\"")]
-    [InlineData("vec<float32,2>", "[\"Infinity\", 1]")]
+    [InlineData("list<float32,2>", "[\"Infinity\", 1]")]
     public void LogEncoding_DoesNotAcceptNonFiniteNames(string type, string json)
     {
         using var document = JsonDocument.Parse(json);
@@ -123,7 +135,7 @@ public sealed class LogValueReadTests
     [InlineData("int64", "1.5")]
     [InlineData("bool", "2")]
     [InlineData("string", "3")]
-    [InlineData("vec<float32,2>", "[1, 2, 3]")]
+    [InlineData("list<float32,2>", "[1, true]")]
     [InlineData("list<int32>", "[1, 4294967296]")]
     [InlineData("list<string>", "[\"a\", 1]")]
     [InlineData("list<bool>", "[1, 2]")]

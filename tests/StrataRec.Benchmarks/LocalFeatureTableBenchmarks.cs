@@ -40,7 +40,7 @@ public class LocalFeatureTableBenchmarks
     private ColumnBuffer[] _columns = null!;
     private ScalarValue[] _absent = null!;
     private LocalFieldRead[] _reads = null!;
-    private int[] _nonFinite = null!;
+    private LocalFillCounts[] _counts = null!;
     private RequestMemory _memory = null!;
 
     [Params(500, 5_000)]
@@ -79,7 +79,7 @@ public class LocalFeatureTableBenchmarks
         _columns = new ColumnBuffer[fields.Count];
         _absent = new ScalarValue[fields.Count];
         _reads = new LocalFieldRead[fields.Count];
-        _nonFinite = new int[fields.Count];
+        _counts = new LocalFillCounts[fields.Count];
         for (var f = 0; f < fields.Count; f++)
         {
             _columns[f] = ColumnBuffer.Create(fields[f].Type, Keys, _memory);
@@ -102,7 +102,7 @@ public class LocalFeatureTableBenchmarks
     {
         var version = _table.Pin();
         var found = version.Lookup(NextKeys(), _records);
-        version.Fill(_records, _rows, _reads, _nonFinite);
+        version.Fill(_records, _rows, _reads, _counts);
         return found;
     }
 
@@ -128,13 +128,13 @@ public class LocalFeatureTableBenchmarks
     {
         var version = _table.Pin();
         var found = version.Lookup(_keySets[0], _records);
-        version.Fill(_records, _rows, _reads, _nonFinite);
+        version.Fill(_records, _rows, _reads, _counts);
         return found;
     }
 
     private long[] NextKeys() => _keySets[_next++ & (KeySets - 1)];
 
-    /// <summary>25 float32, 2 int64, 1 bool, 1 string, 1 vec&lt;float32,64&gt;.</summary>
+    /// <summary>25 float32, 2 int64, 1 bool, 1 string, 1 list&lt;float32,64&gt;.</summary>
     public static LocalTableSchema ItemSchema()
     {
         var fields = new List<LocalTableField>();
@@ -147,7 +147,7 @@ public class LocalFeatureTableBenchmarks
         fields.Add(new LocalTableField("published_at", ColumnType.Int64));
         fields.Add(new LocalTableField("is_safe", ColumnType.Bool));
         fields.Add(new LocalTableField("category", ColumnType.String));
-        fields.Add(new LocalTableField("embedding", ColumnType.Vector(64)));
+        fields.Add(new LocalTableField("embedding", ColumnType.List(StorageKind.Float32, fixedLength: 64)));
         return new LocalTableSchema("item_store", "item", EntityKeyType.Int64, LocalTableMode.Local, fields);
     }
 
@@ -163,11 +163,13 @@ public class LocalFeatureTableBenchmarks
         builder.SetInt64(26, 1_700_000_000 + id);
         builder.SetBool(27, id % 7 != 0);
         builder.SetString(28, Categories[id % Categories.Length]);
-        var embedding = builder.VectorBuffer(29);
+        Span<float> embedding = stackalloc float[64];
         for (var j = 0; j < embedding.Length; j++)
         {
             embedding[j] = ((id + j) % 100) * 0.01f;
         }
+
+        builder.SetFloat32List(29, embedding);
 
         builder.Commit();
     }

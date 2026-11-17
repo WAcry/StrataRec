@@ -39,7 +39,6 @@ internal static class ReplayJson
         StorageKind.Int64 => ColumnType.Int64,
         StorageKind.Float64 => ColumnType.Float64,
         StorageKind.Text => ColumnType.Text,
-        StorageKind.Vector => ColumnType.Vector(value.AsVector().Length),
         StorageKind.List => ColumnType.List(value.ListElement),
         _ => ColumnType.String,
     };
@@ -125,7 +124,7 @@ internal static class ReplayJson
     {
         if (!ColumnType.TryParse(text, out var type, out var error))
         {
-            throw new ReplayBundleException(pointer, error, "use a type spelling such as \"float32\", \"int64?\" or \"vec<float32,4>\"");
+            throw new ReplayBundleException(pointer, error, "use a type spelling such as \"float32\", \"int64?\" or \"list<float32,4>\"");
         }
 
         return type;

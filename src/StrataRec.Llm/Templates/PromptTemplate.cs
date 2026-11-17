@@ -42,7 +42,7 @@ public enum PromptScope : byte
 /// serving, not a second expression language.</para>
 /// <para><b>Values.</b> Strings and text verbatim; integers in invariant culture; floats in their shortest round-trip
 /// form (a <c>float32</c> as float32, so 0.1 renders as <c>0.1</c>); bools as <c>true</c> / <c>false</c>. A list renders
-/// only as a section, one item at a time (<c>{{#ctx.tags}}{{.}}, {{/ctx.tags}}</c>). A vector cannot be rendered.</para>
+/// only as a section, one item at a time (<c>{{#ctx.tags}}{{.}}, {{/ctx.tags}}</c>), a fixed-length one too.</para>
 /// <para><b>Sections.</b> Over <c>rows</c> and lists: once per item. Over a bool: once when true. Over a nullable value:
 /// once when present, and inside it <c>{{name}}</c> (or <c>{{.}}</c>) renders the value. An inverted section renders when
 /// the list is empty, the bool false or the value missing. A section over a value that always has one (a non-nullable
@@ -268,13 +268,6 @@ public sealed class PromptTemplate
             }
 
             var type = reference.Type;
-            if (type.Kind == StorageKind.Vector)
-            {
-                Error(tag, "MUSTACHE_UNRENDERABLE", $"{Text(tag)}: '{name}' is {type}, and a vector cannot be rendered as text.",
-                    "render a derived feature computed from it (one definition for training and serving), or leave it out of the prompt");
-                return;
-            }
-
             if (reference.IsList)
             {
                 Error(tag, "MUSTACHE_UNRENDERABLE", $"{Text(tag)}: '{name}' is {type}, and a list renders only as a section, one item at a time.",
@@ -358,13 +351,6 @@ public sealed class PromptTemplate
                     }
 
                     var type = reference.Type;
-                    if (type.Kind == StorageKind.Vector)
-                    {
-                        Error(tag, "MUSTACHE_UNRENDERABLE", $"{Text(tag)}: '{name}' is {type}, and a vector cannot be rendered or iterated.",
-                            "render a derived feature computed from it, or leave it out of the prompt");
-                        return;
-                    }
-
                     if (!reference.IsList && type.Kind != StorageKind.Bool && !type.Nullable)
                     {
                         Error(tag, "MUSTACHE_SECTION_TYPE",

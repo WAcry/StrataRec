@@ -46,13 +46,14 @@ public sealed class ExpressionCounters
     /// <summary>
     /// Number of values that did not fit the storage they were written to and were replaced by the column's default or
     /// marked missing (metric <c>column_out_of_range_total</c>, design 4.3): an int64 outside the int32 range written to
-    /// an <c>int32</c> column, or a list with such an element written to a <c>list&lt;int32&gt;</c> column (counted once
-    /// per list).
+    /// an <c>int32</c> column, a list with such an element written to a <c>list&lt;int32&gt;</c> column (counted once
+    /// per list), or a list of another length written to a <c>list&lt;E,N&gt;</c> column, feature or context value.
     /// </summary>
     /// <remarks>Kept apart from the non-finite count (<c>column_nonfinite_total</c>): NaN/±∞ points at the arithmetic
-    /// of an expression, an out-of-range value at a column declared too narrow for its data. It is also detected
-    /// earlier: a NaN survives in float storage until the engine sanitizes it at commit, while an int64 that does not
-    /// fit int32 storage cannot be stored at all, so the write itself must apply the rule.</remarks>
+    /// of an expression, an out-of-range value at a column declared too narrow for its data (or an embedding of another
+    /// model than the one declared). It is also detected earlier: a NaN survives in float storage until the engine
+    /// sanitizes it at commit, while an int64 that does not fit int32 storage, or a list of another length, cannot be
+    /// stored at all, so the write itself must apply the rule.</remarks>
     public long OutOfRange => Interlocked.Read(ref _outOfRange);
 
     public void AddOutOfRange(long count) => Interlocked.Add(ref _outOfRange, count);

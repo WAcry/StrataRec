@@ -40,6 +40,86 @@ public class ListTypeTests
         Assert.Contains(reason, error, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("list<float32,64>", StorageKind.Float32, 64, false)]
+    [InlineData("list<float32,64>?", StorageKind.Float32, 64, true)]
+    [InlineData("list<float64,1>", StorageKind.Float64, 1, false)]
+    [InlineData("list<int32,8>", StorageKind.Int32, 8, false)]
+    [InlineData("list<bool,3>?", StorageKind.Bool, 3, true)]
+    [InlineData("list<string,2>", StorageKind.String, 2, false)]
+    [InlineData("list<int64,2147483647>", StorageKind.Int64, int.MaxValue, false)]
+    public void FixedLength_ParsesPrintsAndKeepsItsLength(string text, StorageKind element, int length, bool nullable)
+    {
+        var type = ColumnType.Parse(text);
+
+        Assert.Equal(StorageKind.List, type.Kind);
+        Assert.Equal(element, type.Element);
+        Assert.Equal(length, type.FixedLength);
+        Assert.True(type.IsFixedLength);
+        Assert.Equal(nullable, type.Nullable);
+        Assert.Equal(text, type.ToString());
+        Assert.Equal(type, ColumnType.Parse(text.Replace(",", " , ", StringComparison.Ordinal)));
+        Assert.Equal(length, type.AsNullable().FixedLength);
+        Assert.Equal(length, type.WithNullable(false).FixedLength);
+        Assert.Equal(length, type.Promoted().FixedLength);
+        Assert.NotEqual(ColumnType.List(element, nullable), type);
+        Assert.NotEqual(ColumnType.List(element, nullable).GetHashCode(), type.GetHashCode());
+        Assert.False(ColumnType.List(element, nullable).IsFixedLength);
+    }
+
+    [Theory]
+    [InlineData("list<float32,0>", "a whole number of at least 1, got '0'")]
+    [InlineData("list<float32,-1>", "a whole number of at least 1, got '-1'")]
+    [InlineData("list<float32,N>", "a whole number of at least 1, got 'N'")]
+    [InlineData("list<float32,2147483648>", "a whole number of at least 1")]
+    [InlineData("list<float32,>", "a list of any length is written list<float32>")]
+    [InlineData("list<text,4>", "write 'list<string>'")]
+    [InlineData("vec<float32,64>", "'list<float32,64>'")]
+    [InlineData("vec<float32,64>?", "'list<float32,64>?'")]
+    [InlineData("vec<float64,8>", "'list<float64,8>'")]
+    [InlineData("vec<float32>", "'list<float32,N>'")]
+    [InlineData("vector", "'list<float32,N>'")]
+    public void FixedLengthMistakes_AndTheRemovedVectorType_AreRejected_WithTheFix(string text, string fix)
+    {
+        Assert.False(ColumnType.TryParse(text, out _, out var error));
+        Assert.Contains(fix, error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FixedLength_Constructor_RejectsANonPositiveLengthAndALengthOutsideAList()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ColumnType.List(StorageKind.Float32, fixedLength: -1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ColumnType(StorageKind.Float32, fixedLength: 4));
+    }
+
+    [Fact]
+    public void FixedLength_ColumnsStoreAnyListOfTheirLength_AndRefuseAnotherAsOutOfRange()
+    {
+        var memory = new RequestMemory();
+        var type = ColumnType.List(StorageKind.Float32, nullable: true, fixedLength: 3);
+        var column = ColumnBuffer.Create(type, 3, memory);
+        Assert.IsType<ListColumn<float>>(column);
+
+        var three = ScalarValue.FromFloat32List([1, 2, 3]);
+        var two = ScalarValue.FromFloat32List([1, 2]);
+        Assert.True(ColumnValues.FitsStorage(three, type));
+        Assert.False(ColumnValues.FitsStorage(two, type));
+        Assert.True(ColumnValues.FitsStorage(two, ColumnType.List(StorageKind.Float32)));
+        Assert.Equal("a list of 2 elements, not 3", ColumnValues.Misfit(two, type));
+
+        Assert.True(ColumnValues.TrySet(column, 0, three));
+        Assert.False(ColumnValues.TrySet(column, 1, two));
+        Assert.Equal(three, ColumnValues.Get(column, 0));
+        var thrown = Assert.Throws<OverflowException>(() => ColumnValues.Set(column, 2, two));
+        Assert.Contains("a list of 2 elements, not 3", thrown.Message, StringComparison.Ordinal);
+
+        // Converting a value to the type checks the length as well.
+        Assert.True(three.TryConvert(type, out _));
+        Assert.False(two.TryConvert(type, out _));
+        Assert.True(ScalarValue.FromInt64List([1, 2, 3]).TryConvert(type, out var converted));
+        Assert.Equal(3, converted.ListLength);
+    }
+
     [Fact]
     public void ColumnType_IsEightBytes()
     {

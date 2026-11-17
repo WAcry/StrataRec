@@ -25,32 +25,46 @@ public sealed class ModelScorerTests
 
     private static readonly int[] RowsOf3 = { -1, 3 };
 
-    /// <summary>The fixture's items by id: an int64 above 2^53, an int32, a float64, a bool and a 3-vector each.</summary>
-    private static readonly Dictionary<long, (long Code, int Rank, double Ctr, bool Safe, float[] Emb)> Items = new()
+    private static readonly int[] RowsOf2 = { -1, 2 };
+
+    /// <summary>The fixture's items by id: an int64 above 2^53, an int32, a float64, a bool, a list&lt;float32,3&gt;
+    /// (an embedding), a list&lt;bool,2&gt;, a list&lt;int32,2&gt; and a list&lt;float64,2&gt; each.</summary>
+    private static readonly Dictionary<long, (long Code, int Rank, double Ctr, bool Safe, float[] Emb, bool[] Flags, int[] Ids, double[] Weights)> Items = new()
     {
-        [Big] = (Big + 2, 7, 0.1, true, new[] { 1f, 2f, 3f }),
-        [Big - 1] = (-Big, -7, 1e-40, false, new[] { 4f, 5f, 6f }),
-        [3] = (long.MaxValue, int.MaxValue, 0.30000000000000004, true, new[] { 7f, 8f, 9f }),
-        [4] = (long.MinValue, int.MinValue, -2.5, false, new[] { -1f, float.Epsilon, 1e30f }),
-        [5] = (0, 0, 0, true, new[] { 0.1f, 0.2f, 0.3f }),
+        [Big] = (Big + 2, 7, 0.1, true, new[] { 1f, 2f, 3f }, new[] { true, false }, new[] { int.MaxValue, -1 }, new[] { 0.1, 2 }),
+        [Big - 1] = (-Big, -7, 1e-40, false, new[] { 4f, 5f, 6f }, new[] { false, false }, new[] { int.MinValue, 0 }, new[] { -0.5, 1e300 }),
+        [3] = (long.MaxValue, int.MaxValue, 0.30000000000000004, true, new[] { 7f, 8f, 9f }, new[] { true, true }, new[] { 3, 4 }, new[] { 0.0, 0.0 }),
+        [4] = (long.MinValue, int.MinValue, -2.5, false, new[] { -1f, float.Epsilon, 1e30f }, new[] { false, true }, new[] { 5, 6 }, new[] { 1.5, -1.5 }),
+        [5] = (0, 0, 0, true, new[] { 0.1f, 0.2f, 0.3f }, new[] { true, false }, new[] { 7, 8 }, new[] { 3.0, 4.0 }),
     };
 
     /// <summary>The scorer's inputs in the execution tests, and what the model declares for them.</summary>
     private const string AllKinds = """
         { "id": "col.entity_id", "code": "col.item.code", "rank": "col.item.rank", "ctr": "col.item.ctr", "safe": "col.item.safe",
-          "emb": "col.item.emb", "user_emb": "ctx.request.user_emb", "user_id": "ctx.request.user_id", "weight": "param.weight" }
+          "emb": "col.item.emb", "flags": "col.item.flags", "ids": "col.item.ids", "weights": "col.item.weights",
+          "user_emb": "ctx.request.user_emb", "user_id": "ctx.request.user_id", "member": "ctx.request.member",
+          "recent": "ctx.request.recent", "weight": "param.weight" }
         """;
 
+    /// <summary>
+    /// The built-in mapping: float32 and float64 (scalars and list elements) as float32; bool, int32 and int64 as int64,
+    /// a bool as 0 or 1; a list&lt;E,N&gt; with a trailing N.
+    /// </summary>
     private static readonly ModelSignature AllKindsSignature = new(
         new[]
         {
             new TensorSpec("id", TensorElementType.Int64, Rows), new TensorSpec("code", TensorElementType.Int64, Rows),
             new TensorSpec("rank", TensorElementType.Int64, Rows), new TensorSpec("ctr", TensorElementType.Float32, Rows),
-            new TensorSpec("safe", TensorElementType.Float32, Rows), new TensorSpec("emb", TensorElementType.Float32, RowsOf3),
+            new TensorSpec("safe", TensorElementType.Int64, Rows), new TensorSpec("emb", TensorElementType.Float32, RowsOf3),
+            new TensorSpec("flags", TensorElementType.Int64, RowsOf2), new TensorSpec("ids", TensorElementType.Int64, RowsOf2),
+            new TensorSpec("weights", TensorElementType.Float32, RowsOf2),
             new TensorSpec("user_emb", TensorElementType.Float32, RowsOf3), new TensorSpec("user_id", TensorElementType.Int64, Rows),
+            new TensorSpec("member", TensorElementType.Int64, Rows), new TensorSpec("recent", TensorElementType.Int64, RowsOf2),
             new TensorSpec("weight", TensorElementType.Float32, Rows),
         },
         new[] { new TensorSpec("p", TensorElementType.Float32, Rows) });
+
+    private static readonly long[] Recent = { Big, -3 };
 
     private static readonly float[] UserEmb = { 0.5f, -0.25f, 8f };
 
@@ -81,10 +95,15 @@ public sealed class ModelScorerTests
             AssertTensor(call["code"], TensorElementType.Int64, n);
             AssertTensor(call["rank"], TensorElementType.Int64, n);
             AssertTensor(call["ctr"], TensorElementType.Float32, n);
-            AssertTensor(call["safe"], TensorElementType.Float32, n);
+            AssertTensor(call["safe"], TensorElementType.Int64, n);
             AssertTensor(call["emb"], TensorElementType.Float32, n, 3);
+            AssertTensor(call["flags"], TensorElementType.Int64, n, 2);
+            AssertTensor(call["ids"], TensorElementType.Int64, n, 2);
+            AssertTensor(call["weights"], TensorElementType.Float32, n, 2);
             AssertTensor(call["user_emb"], TensorElementType.Float32, n, 3);
             AssertTensor(call["user_id"], TensorElementType.Int64, n);
+            AssertTensor(call["member"], TensorElementType.Int64, n);
+            AssertTensor(call["recent"], TensorElementType.Int64, n, 2);
             AssertTensor(call["weight"], TensorElementType.Float32, n);
             for (var r = 0; r < n; r++)
             {
@@ -94,10 +113,15 @@ public sealed class ModelScorerTests
                 Assert.Equal(item.Code, call["code"].Int64[r]); // exact: no detour through double
                 Assert.Equal(item.Rank, call["rank"].Int64[r]);
                 Assert.Equal((float)item.Ctr, call["ctr"].Float32[r]);
-                Assert.Equal(item.Safe ? 1f : 0f, call["safe"].Float32[r]);
+                Assert.Equal(item.Safe ? 1L : 0L, call["safe"].Int64[r]); // a bool is an exact 0 or 1, as an int is
                 Assert.Equal(item.Emb, call["emb"].Float32.AsSpan(r * 3, 3).ToArray()); // row-major
+                Assert.Equal(item.Flags.Select(f => f ? 1L : 0L), call["flags"].Int64.AsSpan(r * 2, 2).ToArray());
+                Assert.Equal(item.Ids.Select(i => (long)i), call["ids"].Int64.AsSpan(r * 2, 2).ToArray());
+                Assert.Equal(item.Weights.Select(w => (float)w), call["weights"].Float32.AsSpan(r * 2, 2).ToArray()); // float64 elements as float32
                 Assert.Equal(UserEmb, call["user_emb"].Float32.AsSpan(r * 3, 3).ToArray()); // the request's vector in every row
                 Assert.Equal(Big, call["user_id"].Int64[r]);
+                Assert.Equal(1L, call["member"].Int64[r]);
+                Assert.Equal(Recent, call["recent"].Int64.AsSpan(r * 2, 2).ToArray());
                 Assert.Equal(0.75f, call["weight"].Float32[r]);
             }
         }
@@ -109,11 +133,14 @@ public sealed class ModelScorerTests
     [Theory]
     [InlineData("col.item.maybe", "MODEL_INPUT_TYPE", "Model input 'x' maps col.item.maybe, which is nullable (float32?): a model needs a value in every row.")]
     [InlineData("ctx.request.maybe_id", "MODEL_INPUT_TYPE", "Model input 'x' maps ctx.request.maybe_id, which is nullable (int64?): a model needs a value in every row.")]
-    [InlineData("col.item.maybe_emb", "MODEL_INPUT_TYPE", "Model input 'x' maps col.item.maybe_emb, which is nullable (vec<float32,3>?): a model needs a value in every row.")]
+    [InlineData("col.item.maybe_emb", "MODEL_INPUT_TYPE", "Model input 'x' maps col.item.maybe_emb, which is nullable (list<float32,3>?): a model needs a value in every row.")]
     [InlineData("col.item.tag", "MODEL_INPUT_TYPE", "Model input 'x' maps col.item.tag (string), which ModelScorer@1 cannot send as a tensor.")]
     [InlineData("ctx.request.surface", "MODEL_INPUT_TYPE", "Model input 'x' maps ctx.request.surface (string), which ModelScorer@1 cannot send as a tensor.")]
-    [InlineData("col.item.tags", "MODEL_INPUT_TYPE", "Model input 'x' maps col.item.tags (list<int64>), which ModelScorer@1 cannot send as a tensor.")]
-    [InlineData("col.item.codes", "MODEL_INPUT_TYPE", "Model input 'x' maps col.item.codes (list<int32>), which ModelScorer@1 cannot send as a tensor.")]
+    [InlineData("col.item.tags", "MODEL_INPUT_TYPE",
+        "Model input 'x' maps col.item.tags (list<int64>), a list of any length: a tensor's trailing dimension is the same in every row.")]
+    [InlineData("col.item.codes", "MODEL_INPUT_TYPE",
+        "Model input 'x' maps col.item.codes (list<int32>), a list of any length: a tensor's trailing dimension is the same in every row.")]
+    [InlineData("col.item.names", "MODEL_INPUT_TYPE", "Model input 'x' maps col.item.names (list<string,2>), which ModelScorer@1 cannot send as a tensor.")]
     [InlineData("col.item.ctr * 2.0", "MODEL_INPUT_NOT_REFERENCE", "Model input 'x' must be a plain column or context reference, not an expression.")]
     public void AnInputItCannotSend_IsACompileError_AtTheInput(string source, string code, string message)
     {
@@ -140,18 +167,45 @@ public sealed class ModelScorerTests
             + "(one definition for training and serving, design 6.9)", error.Hint);
     }
 
+    [Fact]
+    public void AVariableLengthListInput_IsAnError_WhoseHintDeclaresTheLength()
+    {
+        var compilation = TryCompile(new CapturingModels(AllKindsSignature), """{ "x": "col.item.tags" }""", batchSize: 2);
+
+        var error = Assert.Single(compilation.Diagnostics, d => d.IsError);
+        Assert.Equal("/nodes/scorer/config/inputs/x", error.Pointer);
+        Assert.StartsWith("declare the length of col.item.tags, e.g. list<int64,64>", error.Hint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ABoolColumnMappedToAFloat32Input_IsAMismatch_WithTheFix()
+    {
+        // A bool goes to the model as int64 0/1 (as an int does), not as a float32.
+        var models = new CapturingModels(new ModelSignature(new[] { new TensorSpec("safe", TensorElementType.Float32, Rows) }, AllKindsSignature.Outputs));
+
+        var compilation = TryCompile(models, """{ "safe": "col.item.safe" }""", batchSize: 2);
+
+        var error = Assert.Single(compilation.Diagnostics, d => d.IsError);
+        Assert.Equal(("/nodes/scorer/config/inputs/safe", "MODEL_TENSOR_MISMATCH"), (error.Pointer, error.Code));
+        Assert.Equal("Model 'm' version 'default' declares input 'safe' as float32 [-1], but it maps col.item.safe (bool), which ModelScorer@1 sends as int64 [-1].",
+            error.Message);
+        Assert.Equal("declare input 'safe' as int64 [-1] in the model's signature, or map a float32 derived feature of col.item.safe instead "
+            + "(one definition for training and serving, design 6.9)", error.Hint);
+    }
+
     private static void AssertTensor(CapturedInput input, TensorElementType type, int rows, int width = 0)
     {
         Assert.Equal(type, input.ElementType);
         Assert.Equal(width == 0 ? new[] { rows } : new[] { rows, width }, input.Shape);
         Assert.Equal(type == TensorElementType.Float32 ? rows * Math.Max(1, width) : 0, input.Float32.Length);
-        Assert.Equal(type == TensorElementType.Int64 ? rows : 0, input.Int64.Length);
+        Assert.Equal(type == TensorElementType.Int64 ? rows * Math.Max(1, width) : 0, input.Int64.Length);
     }
 
     private static ValueTask<PipelineResult> Run(ExecutionPlan plan) => new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
     {
         RequestId = "r",
-        Inputs = new RequestInputs().Set("user_emb", ScalarValue.FromVector(UserEmb)).Set("user_id", Big).Set("surface", "home"),
+        Inputs = new RequestInputs().Set("user_emb", ScalarValue.FromFloat32List(UserEmb)).Set("user_id", Big).Set("surface", "home")
+            .Set("member", ScalarValue.FromBool(true)).Set("recent", ScalarValue.FromInt64List(Recent)),
         Deadline = TimeSpan.FromSeconds(30),
     });
 
@@ -177,9 +231,13 @@ public sealed class ModelScorerTests
                 "item.rank":      { "type": "int32",          "source": "items", "field": "rank", "default": 0 },
                 "item.ctr":       { "type": "float64",        "source": "items", "field": "ctr",  "default": 0.0 },
                 "item.safe":      { "type": "bool",           "source": "items", "field": "safe", "default": false },
-                "item.emb":       { "type": "vec<float32,3>", "source": "items", "field": "emb",  "default": [0, 0, 0] },
+                "item.emb":       { "type": "list<float32,3>", "source": "items", "field": "emb",  "default": [0, 0, 0] },
+                "item.flags":     { "type": "list<bool,2>",    "source": "items", "field": "flags", "default": [false, false] },
+                "item.ids":       { "type": "list<int32,2>",   "source": "items", "field": "ids", "default": [0, 0] },
+                "item.weights":   { "type": "list<float64,2>", "source": "items", "field": "weights", "default": [0, 0] },
+                "item.names":     { "type": "list<string,2>",  "source": "items", "field": "names", "default": ["", ""] },
                 "item.maybe":     { "type": "float32",        "source": "items", "field": "maybe" },
-                "item.maybe_emb": { "type": "vec<float32,3>", "source": "items", "field": "maybe_emb" },
+                "item.maybe_emb": { "type": "list<float32,3>", "source": "items", "field": "maybe_emb" },
                 "item.tag":       { "type": "string",         "source": "items", "field": "tag",   "default": "" },
                 "item.tags":      { "type": "list<int64>",    "source": "items", "field": "tags",  "default": [] },
                 "item.codes":     { "type": "list<int32>",    "source": "items", "field": "codes", "default": [] } } }
@@ -193,7 +251,8 @@ public sealed class ModelScorerTests
         Write(root, "pipelines/p.jsonc", $$"""
             { "pipeline_id": "p", "entity_key_type": "int64",
               "request_schema": {
-                "user_emb": { "type": "vec<float32,3>" }, "user_id": { "type": "int64" }, "maybe_id": { "type": "int64?" }, "surface": { "type": "string" } },
+                "user_emb": { "type": "list<float32,3>" }, "user_id": { "type": "int64" }, "maybe_id": { "type": "int64?" }, "surface": { "type": "string" },
+                "member": { "type": "bool" }, "recent": { "type": "list<int64,2>" } },
               "columns": { "score.p": { "type": "float32", "default": 0.0 } },
               "param_schema": { "quotas": { "type": "map<string,int64>" }, "k": { "type": "int64" }, "weight": { "type": "float64" } },
               "params": { "quotas": { "s": 10 }, "k": 10, "weight": 0.75 },
@@ -206,7 +265,9 @@ public sealed class ModelScorerTests
         Write(root, "fixtures/ids.json", "{ \"items\": [" + string.Join(", ", Items.Keys) + "] }");
         Write(root, "fixtures/items.json", "{ " + string.Join(", ", Items.Select(p => string.Create(CultureInfo.InvariantCulture,
             $"\"{p.Key}\": {{ \"code\": {p.Value.Code}, \"rank\": {p.Value.Rank}, \"ctr\": {p.Value.Ctr:R}, \"safe\": {(p.Value.Safe ? "true" : "false")}, "
-            + $"\"emb\": [{string.Join(", ", p.Value.Emb.Select(f => f.ToString("R", CultureInfo.InvariantCulture)))}] }}"))) + " }");
+            + $"\"emb\": [{string.Join(", ", p.Value.Emb.Select(f => f.ToString("R", CultureInfo.InvariantCulture)))}], "
+            + $"\"flags\": [{string.Join(", ", p.Value.Flags.Select(f => f ? "true" : "false"))}], \"ids\": [{string.Join(", ", p.Value.Ids)}], "
+            + $"\"weights\": [{string.Join(", ", p.Value.Weights.Select(w => w.ToString("R", CultureInfo.InvariantCulture)))}] }}"))) + " }");
 
         var diagnostics = new DiagnosticBag();
         var workspace = ConfigWorkspace.Load(root, diagnostics);

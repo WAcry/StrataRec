@@ -775,7 +775,7 @@
                       "type": "string"
                     },
                     "embedding_col": {
-                      "description": "Vector column; rows without a vector have zero similarity to everything.",
+                      "description": "A fixed-length float list column (list<float32,N> or list<float64,N>), such as an item embedding; rows without one have zero similarity to everything.",
                       "type": "string"
                     },
                     "lambda": {

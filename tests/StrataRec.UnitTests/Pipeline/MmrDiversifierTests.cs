@@ -94,24 +94,40 @@ public sealed class MmrDiversifierTests
             }
 
             Assert.Equal(Reference(scores, vectors, lambda), Order(scores, vectors, lambda));
+            Assert.Equal(Reference(scores, vectors, lambda, float64: true), Order(scores, vectors, lambda, float64: true)); // ties as float64 has them
         }
     }
 
-    private static int[] Order(double[] scores, float[]?[] vectors, double lambda)
+    [Fact]
+    public void ARowOfAnotherLength_HasNoSimilarity_AsARowWithoutAVector()
+    {
+        // The column's writers keep every row at its declared length; were one not, it is never paired element by element.
+        double[] scores = [1.0, 0.9, 0.8];
+        float[]?[] vectors = [[1, 0], [1, 0, 0], [1, 0]];
+
+        Assert.Equal(Reference(scores, [[1, 0], null, [1, 0]], 0.5), Order(scores, vectors, 0.5));
+    }
+
+    private static int[] Order(double[] scores, float[]?[] vectors, double lambda, bool float64 = false)
     {
         var memory = new RequestMemory();
         try
         {
-            var column = new VectorColumn(ColumnType.Vector(2).AsNullable(), scores.Length, memory);
+            var type = ColumnType.List(float64 ? StorageKind.Float64 : StorageKind.Float32, nullable: true, fixedLength: 2);
+            var column = (ListColumn)ColumnBuffer.Create(type, scores.Length, memory);
             for (var i = 0; i < vectors.Length; i++)
             {
-                if (vectors[i] is { } vector)
+                if (vectors[i] is not { } vector)
                 {
-                    column.Set(i, vector);
+                    column.SetMissing(i);
+                }
+                else if (column is ListColumn<double> doubles)
+                {
+                    doubles.Set(i, vector.Select(x => (double)x).ToArray());
                 }
                 else
                 {
-                    column.SetMissing(i);
+                    ((ListColumn<float>)column).Set(i, vector);
                 }
             }
 
@@ -129,7 +145,7 @@ public sealed class MmrDiversifierTests
     /// The formula, directly, on the rows with a score: the first pick by score, then λ·score − (1−λ)·max cosine, the
     /// cosine 0 where either row has no vector (or a zero one). Then the rows without a score, in their incoming order.
     /// </summary>
-    private static int[] Reference(double[] scores, float[]?[] vectors, double lambda)
+    private static int[] Reference(double[] scores, float[]?[] vectors, double lambda, bool float64 = false)
     {
         var scored = Enumerable.Range(0, scores.Length).Where(i => !double.IsNegativeInfinity(scores[i])).ToList();
         var picked = new List<int>();
@@ -139,7 +155,7 @@ public sealed class MmrDiversifierTests
             var bestValue = double.NegativeInfinity;
             foreach (var i in scored.Where(i => !picked.Contains(i)))
             {
-                var value = picked.Count == 0 ? scores[i] : (lambda * scores[i]) - ((1 - lambda) * picked.Max(p => Cosine(vectors[i], vectors[p])));
+                var value = picked.Count == 0 ? scores[i] : (lambda * scores[i]) - ((1 - lambda) * picked.Max(p => float64 ? Cosine64(vectors[i], vectors[p]) : Cosine(vectors[i], vectors[p])));
                 if (best < 0 || value > bestValue)
                 {
                     best = i;
@@ -162,5 +178,17 @@ public sealed class MmrDiversifierTests
 
         var norms = MathF.Sqrt((a[0] * a[0]) + (a[1] * a[1])) * MathF.Sqrt((b[0] * b[0]) + (b[1] * b[1]));
         return norms == 0 ? 0 : ((a[0] * b[0]) + (a[1] * b[1])) / norms;
+    }
+
+    /// <summary>The cosine in float64, as a <c>list&lt;float64,N&gt;</c> column computes it.</summary>
+    private static double Cosine64(float[]? a, float[]? b)
+    {
+        if (a is null || b is null)
+        {
+            return 0;
+        }
+
+        var norms = Math.Sqrt(((double)a[0] * a[0]) + ((double)a[1] * a[1])) * Math.Sqrt(((double)b[0] * b[0]) + ((double)b[1] * b[1]));
+        return norms == 0 ? 0 : (((double)a[0] * b[0]) + ((double)a[1] * b[1])) / norms;
     }
 }

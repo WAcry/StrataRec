@@ -16,8 +16,8 @@ namespace StrataRec.Pipeline.Planning;
 /// them with the same rules. So a mistake reads alike, at the same pointer, from a service, the CLI and the engine.
 /// </summary>
 /// <remarks>
-/// <para>The rules: every input given is declared; a value has its declared type (an int32 must fit in int32, a vector its
-/// dimension); a missing value (JSON <c>null</c>, or absent) is allowed only for an input declared nullable (<c>T?</c>).
+/// <para>The rules: every input given is declared; a value has its declared type (an int32 must fit in int32, a
+/// <c>list&lt;E,N&gt;</c> hold N elements); a missing value (JSON <c>null</c>, or absent) is allowed only for an input declared nullable (<c>T?</c>).
 /// Nothing is ever turned into a default: a missing input stays missing, for expressions to handle (<c>has()</c>, <c>??</c>).</para>
 /// <para>Errors are in the words of the JSON (<c>Input 'user_id' must be an integer (int64), got the string "x".</c>) and
 /// located at <c>/inputs/&lt;name&gt;</c>, a pointer relative to a request body of the shape <c>{ "inputs": { … } }</c>; a

@@ -613,9 +613,6 @@ internal sealed class RunReplay : IFeatureCallHook
             case StorageKind.String or StorageKind.Text when value.Kind is StorageKind.String or StorageKind.Text:
                 writer.SetString(field, key, value.AsString());
                 return true;
-            case StorageKind.Vector when value.Kind == StorageKind.Vector && value.AsVector().Length == type.Dimension:
-                value.AsVector().CopyTo(writer.GetValues<float>(field).Span.Slice(key * type.Dimension, type.Dimension));
-                break;
             case StorageKind.List when value.Kind == StorageKind.List:
                 return TryWriteList(writer, field, key, type.Element, value);
             default:

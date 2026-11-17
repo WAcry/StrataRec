@@ -27,13 +27,14 @@ public static class ConfigTypes
 {
     private static readonly string[] ColumnSpellings =
     {
-        "bool", "int32", "int64", "float32", "float64", "string", "text", "vec<float32,N>", "list<E>",
+        "bool", "int32", "int64", "float32", "float64", "string", "text", "list<E>",
     };
 
     /// <summary>A list's element types (<see cref="ColumnType.IsListElement"/>), as written.</summary>
     private static readonly string[] ElementSpellings = { "bool", "int32", "int64", "float32", "float64", "string" };
 
-    private static readonly string ListElements = "list<E> with E one of " + string.Join(", ", ElementSpellings);
+    private static readonly string ListElements =
+        "list<E> or list<E,N> (exactly N elements, e.g. an embedding list<float32,64>) with E one of " + string.Join(", ", ElementSpellings);
 
     private static readonly string[] ParameterLeaves = { "int64", "float64", "bool", "string" };
 
@@ -106,6 +107,18 @@ public static class ConfigTypes
         }
 
         message = site == TypeSite.Parameter ? $"Unknown parameter type '{written}'." : $"Unknown type '{written}'.";
+        if (ColumnType.VectorAsList(leaf) is not null)
+        {
+            // There is no vector type: a vector (an embedding) is a list of fixed length, which Suggest spells with the
+            // element and length written. A parameter is never a list.
+            message = $"{message[..^1]}: a vector is a list of fixed length, list<E,N>.";
+            if (site == TypeSite.Parameter)
+            {
+                hint = "a parameter is never a list; parameter types: " + Spellings(site);
+                return false;
+            }
+        }
+
         if (site != TypeSite.Parameter && leaf.StartsWith("list<", StringComparison.Ordinal) && !ColumnType.TryParse(leaf, out _, out var why))
         {
             // Why a list cannot hold what was written (text, a nested list, a nullable element). A feature is never
@@ -129,23 +142,30 @@ public static class ConfigTypes
         var core = (written.EndsWith('?') ? written[..^1] : written).Trim().ToLowerInvariant();
         var candidates = site == TypeSite.Parameter ? ParameterLeaves : ColumnSpellings;
         var suggestion = Alias(core, site);
-        if (suggestion is null && site != TypeSite.Parameter && core.StartsWith("vec", StringComparison.Ordinal))
+        if (suggestion is null && site != TypeSite.Parameter)
         {
-            // Keep the dimension written, e.g. vec<float64,4> → vec<float32,4>.
-            var comma = core.LastIndexOf(',');
-            var close = core.LastIndexOf('>');
-            suggestion = comma > 0 && close > comma && int.TryParse(core.AsSpan(comma + 1, close - comma - 1).Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var dim) && dim > 0
-                ? $"vec<float32,{dim}>"
-                : "vec<float32,N>";
+            // A vector is a fixed-length list; the length written is kept, e.g. vec<float32,4> → list<float32,4>.
+            suggestion = ColumnType.VectorAsList(core);
         }
 
-        if (suggestion is null && site != TypeSite.Parameter && ListInner(core) is { } inner)
+        if (suggestion is null && site != TypeSite.Parameter && ListInner(core) is { } listInner)
         {
-            // Keep the element written, in this place's spelling: list<double> → list<float64>, array<text> → list<string>.
+            // Keep the element written, in this place's spelling: list<double> → list<float64>, array<text> → list<string>;
+            // and a valid length: list<double,64> → list<float64,64>.
+            var inner = listInner;
+            var length = string.Empty;
+            var comma = inner.LastIndexOf(',');
+            if (comma >= 0)
+            {
+                var n = inner[(comma + 1)..].Trim();
+                length = int.TryParse(n, NumberStyles.None, CultureInfo.InvariantCulture, out var count) && count > 0 ? "," + n : string.Empty;
+                inner = inner[..comma].Trim();
+            }
+
             var element = inner.EndsWith('?') ? inner[..^1].Trim() : inner;
             var meant = element == "text" ? "string" : Alias(element, site) ?? (Array.IndexOf(ElementSpellings, element) >= 0 ? element : NameSuggestions.Closest(element, ElementSpellings));
             // A nullable element means a list that may be missing: list<E>? where '?' is written, a plain list elsewhere.
-            suggestion = meant is null ? null : $"list<{meant}>" + (inner.EndsWith('?') && !nullable && site == TypeSite.Column ? "?" : string.Empty);
+            suggestion = meant is null ? null : $"list<{meant}{length}>" + (inner.EndsWith('?') && !nullable && site == TypeSite.Column ? "?" : string.Empty);
         }
 
         if (suggestion is null && Array.IndexOf(candidates, core) >= 0)

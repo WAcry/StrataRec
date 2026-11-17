@@ -105,7 +105,7 @@ public class CacheTableTests
         [
             new("b", ColumnType.Bool), new("f32", ColumnType.Float32), new("f64", ColumnType.Float64), new("i32", ColumnType.Int32),
             new("i64", ColumnType.Int64), new("li32", ColumnType.List(StorageKind.Int32)), new("li64", ColumnType.List(StorageKind.Int64)), new("ls", ColumnType.List(StorageKind.String)),
-            new("s", ColumnType.String), new("t", ColumnType.Text), new("v", ColumnType.Vector(3)),
+            new("s", ColumnType.String), new("t", ColumnType.Text), new("v", ColumnType.List(StorageKind.Float32, fixedLength: 3)),
         ]);
         var layout = new CacheRecordLayout(schema);
         var writer = new CacheRecordWriter(layout, 8);
@@ -119,7 +119,7 @@ public class CacheTableTests
         writer.StringList(7, ["", "zé", "✓"]);
         writer.String(8, "music");
         writer.String(9, "");
-        writer.Vector(10, [1, 2, 3]);
+        writer.List<float>(10, [1, 2, 3]); // a fixed-length list is encoded as every list is
         var (offset, length) = writer.End();
         var record = writer.Bytes.AsSpan(offset, length);
 
@@ -134,6 +134,10 @@ public class CacheTableTests
         Assert.Equal(CacheRecordHeader.Mismatch, CacheRecord.ReadHeader(record, layout.FieldCount - 1, layout.Fingerprint, out _, out _));
         var otherFormat = record.ToArray();
         System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(otherFormat, 2026010101); // 2026-01-01.1
+        Assert.Equal(CacheRecordHeader.Mismatch, CacheRecord.ReadHeader(otherFormat, layout.FieldCount, layout.Fingerprint, out _, out _));
+        // 2026-11-14.1 encoded a vector as N float32s without a count: such a record is another format, not this one's list.
+        Assert.Equal(2026111601u, CacheRecord.Format);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(otherFormat, 2026111401);
         Assert.Equal(CacheRecordHeader.Mismatch, CacheRecord.ReadHeader(otherFormat, layout.FieldCount, layout.Fingerprint, out _, out _));
         Assert.Equal(CacheRecordHeader.Corrupt, CacheRecord.ReadHeader(record[..10], layout.FieldCount, layout.Fingerprint, out _, out _));
         Assert.False(CacheRecord.IsWellFormed(record[..^1], layout));
@@ -194,7 +198,7 @@ public class CacheTableTests
     public void Decoding_NeverThrows_OnBytesThatAreNotARecord()
     {
         var layout = new CacheRecordLayout(new LocalTableSchema("s", "e", EntityKeyType.Int64, LocalTableMode.Cache,
-            [new("ls", ColumnType.List(StorageKind.String)), new("t", ColumnType.Text), new("v", ColumnType.Vector(2)), new("li64", ColumnType.List(StorageKind.Int64))]));
+            [new("ls", ColumnType.List(StorageKind.String)), new("t", ColumnType.Text), new("v", ColumnType.List(StorageKind.Float32, fixedLength: 2)), new("li64", ColumnType.List(StorageKind.Int64))]));
         var random = new Random(7);
         for (var i = 0; i < 20_000; i++)
         {
@@ -308,8 +312,6 @@ public class CacheTableTests
         public void Float32(int field, float value) => Add(field, value.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
         public void Float64(int field, double value) => Add(field, value.ToString(System.Globalization.CultureInfo.InvariantCulture));
-
-        public void Vector(int field, ReadOnlySpan<float> value) => Add(field, "[" + string.Join(",", value.ToArray()) + "]");
 
         public void String(int field, ReadOnlySpan<byte> utf8) => Add(field, System.Text.Encoding.UTF8.GetString(utf8));
 

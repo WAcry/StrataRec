@@ -62,7 +62,7 @@ internal enum IrOp : byte
     StartsWith,
     EndsWith,
 
-    // Vectors.
+    // Float lists (embeddings): dot, cosine, l2_norm.
     Dot,
     Cosine,
     L2Norm,

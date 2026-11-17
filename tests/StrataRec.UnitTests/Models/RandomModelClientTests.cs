@@ -144,7 +144,7 @@ public sealed class RandomModelClientTests
             Inputs = new[] { NamedInput.FromFloat32("smoothed_ctr", new[] { 1 }, new float[1]), NamedInput.FromInt64("log_followers", new[] { 1 }, new long[1]) },
             Options = new ModelCallOptions(Seed: 1),
         };
-        var vectorInput = new ModelCall // what ModelScorer@1 sends for a vec<float32,2> column: enough floats, but two per row
+        var vectorInput = new ModelCall // what ModelScorer@1 sends for a list<float32,2> column: enough floats, but two per row
         {
             Model = "ctr_model",
             BatchSize = 1,
@@ -263,7 +263,7 @@ public sealed class RandomModelClientTests
         Assert.Equal(new[] { "ctr float32 [-1]", "emb float32 [-1, 3]", "item_id int64 [-1]" }, point.Inputs.Select(Describe));
         Assert.Equal(new[] { "p_click float32 [-1]" }, point.Outputs.Select(Describe));
         Assert.Empty(ModelTensorRule.Check("m", TensorLayout.Rows,
-            new ModelTensorRule.MappedInput[] { new("item_id", "col.entity_id", ColumnType.Int64), new("emb", "col.item.emb", ColumnType.Vector(3)), new("ctr", "col.item.ctr", ColumnType.Float32) },
+            new ModelTensorRule.MappedInput[] { new("item_id", "col.entity_id", ColumnType.Int64), new("emb", "col.item.emb", ColumnType.List(StorageKind.Float32, fixedLength: 3)), new("ctr", "col.item.ctr", ColumnType.Float32) },
             new ModelTensorRule.MappedOutput[] { new("p_click", "/outputs/p_click") }, point));
 
         var pair = await Create(PairSettings).GetSignatureAsync("ctr_model", null, CancellationToken.None);
@@ -282,8 +282,8 @@ public sealed class RandomModelClientTests
         Assert.Empty(ModelTensorRule.Check("m", TensorLayout.List,
             new ModelTensorRule.MappedInput[]
             {
-                new("final", "col.score.final", ColumnType.Float32), new("emb", "col.item.emb", ColumnType.Vector(2)),
-                new("seed", "ctx.request.seed", ColumnType.Int64, Broadcast: true), new("user", "ctx.request.user_vec", ColumnType.Vector(3), Broadcast: true),
+                new("final", "col.score.final", ColumnType.Float32), new("emb", "col.item.emb", ColumnType.List(StorageKind.Float32, fixedLength: 2)),
+                new("seed", "ctx.request.seed", ColumnType.Int64, Broadcast: true), new("user", "ctx.request.user_vec", ColumnType.List(StorageKind.Float32, fixedLength: 3), Broadcast: true),
             },
             new ModelTensorRule.MappedOutput[] { new("scores", "/output") }, list));
     }

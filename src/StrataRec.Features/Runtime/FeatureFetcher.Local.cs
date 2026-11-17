@@ -20,7 +20,7 @@ namespace StrataRec.Features.Runtime;
 /// <para><b>How.</b> The table is pinned once per request (<see cref="Pin"/>): every read of the request uses that
 /// version. For the features a node needs, one <see cref="LocalReadBatch"/>: the rows' distinct keys, one
 /// <see cref="TableVersion.Lookup(ReadOnlySpan{long}, Span{LocalRecordRef})"/> of them, and each row's record taken from
-/// it; then one multi-field <see cref="TableVersion.Fill(ReadOnlySpan{LocalRecordRef}, ReadOnlySpan{int}, ReadOnlySpan{LocalFieldRead}, Span{int})"/>
+/// it; then one multi-field <see cref="TableVersion.Fill(ReadOnlySpan{LocalRecordRef}, ReadOnlySpan{int}, ReadOnlySpan{LocalFieldRead}, Span{LocalFillCounts})"/>
 /// into the slots and one bitmap of the rows OR-ed into each slot's fill bits. Buffers are rented from the request
 /// memory and the key index is the fetcher's, so the read allocates nothing (a <c>text</c> value becomes a string).</para>
 /// <para><b>One batch, one answer per key.</b> A pinned version still sees an update its writer makes in place (the
@@ -236,13 +236,13 @@ public sealed partial class FeatureFetcher
 
         if (readCount > 0)
         {
-            Span<int> nonFinite = readCount <= 128 ? stackalloc int[readCount] : _memory.Rent<int>(readCount).AsSpan(0, readCount);
-            version.Fill(records, rows, reads.AsSpan(0, readCount), nonFinite);
+            Span<LocalFillCounts> counts = readCount <= 128 ? stackalloc LocalFillCounts[readCount] : _memory.Rent<LocalFillCounts>(readCount).AsSpan(0, readCount);
+            version.Fill(records, rows, reads.AsSpan(0, readCount), counts);
             for (var r = 0; r < readCount; r++)
             {
                 var info = _plan.Features[readFeatures[r]];
                 Bits.Or(_table.GetFilled(info.Slot), bits);
-                AddNonFinite(info, nonFinite[r]);
+                AddReplaced(info, counts[r]);
             }
         }
 
@@ -275,7 +275,18 @@ public sealed partial class FeatureFetcher
             var replaced = version.Fill(
                 local.TableFields[info.FieldIndex], subsetRecords.AsSpan(0, n), subsetRows.AsSpan(0, n), _table.GetOrCreateSlot(info.Slot),
                 info.Definition.Absent, filled);
-            AddNonFinite(info, replaced);
+            AddReplaced(info, replaced);
+        }
+    }
+
+    /// <summary>Counts what a fill replaced by the absent value: non-finite values, and lists of another length than a
+    /// fixed-length feature's (out of range, as every writer counts them, design 4.3).</summary>
+    private void AddReplaced(FeatureRuntimeInfo info, LocalFillCounts replaced)
+    {
+        AddNonFinite(info, replaced.NonFinite);
+        if (replaced.OutOfRange > 0)
+        {
+            _counters.AddOutOfRange(replaced.OutOfRange);
         }
     }
 

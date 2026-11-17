@@ -24,8 +24,8 @@ public class ConfigValuesTests
     [InlineData("[1, \"x\"]", "list<int64>", "must be an array of integers (list<int64>); element 1 is the string \"x\"")]
     [InlineData("[1.5]", "list<int32>", "must be an array of integers (list<int32>); element 0 is the number 1.5")]
     [InlineData("[\"a\", null]", "list<string>", "must be an array of strings (list<string>); element 1 is null")]
-    [InlineData("[1, 2, 3]", "vec<float32,4>", "must be an array of 4 numbers (vec<float32,4>), got 3 elements")]
-    [InlineData("[1, true, 3, 4]", "vec<float32,4>", "must be an array of 4 numbers (vec<float32,4>); element 1 is true")]
+    [InlineData("[1, 2, 3]", "list<float32,4>", "must be an array of 4 numbers (list<float32,4>), got 3 elements")]
+    [InlineData("[1, true, 3, 4]", "list<float32,4>", "must be an array of 4 numbers (list<float32,4>); element 1 is true")]
     public void AValueOfTheWrongKind_SaysWhatItMustBeAndWhatItIs(string json, string type, string error)
     {
         Assert.False(ConfigValues.TryToScalar(JsonNode.Parse(json), ColumnType.Parse(type), out _, out var actual));
@@ -144,7 +144,7 @@ public class ConfigValuesTests
     [InlineData("3000000000", "int32?", "must be within the int32 range [-2147483648, 2147483647], got the number 3000000000; declare the type as int64? for larger values")]
     [InlineData("1e400", "float64", "must be a number (float64) within the float64 range, got the number 1e400")]
     [InlineData("-1e400", "float32", "must be a number (float32) within the float64 range, got the number -1e400")]
-    [InlineData("[1, 1e39, 3]", "vec<float32,3>", "must be an array of 3 numbers (vec<float32,3>); element 1 is the number 1e39")]
+    [InlineData("[1, 1e39, 3]", "list<float32,3>", "must be an array of numbers within the float32 range [-3.4028235E+38, 3.4028235E+38]; element 1 is the number 1e39; declare the type as list<float64,3> for larger values")]
     [InlineData("\"\\uD800\"", "string", "must be a string, got a string that is not valid Unicode")]
     public void AValueItsTypeCannotHold_IsAnError_NotAnException(string json, string type, string error)
     {
@@ -179,7 +179,7 @@ public class ConfigValuesTests
     [InlineData("null", "int64?")]
     [InlineData("null", "int64")]
     [InlineData("[1, 2.5]", "list<int32>")]
-    [InlineData("[0.25, 1, 2]", "vec<float32,3>")]
+    [InlineData("[0.25, 1, 2]", "list<float32,3>")]
     [InlineData("[\"a\", 1]", "list<string>")]
     [InlineData("\"long text\"", "text")]
     [InlineData("1e400", "float64")]
@@ -221,7 +221,8 @@ public class ConfigValuesTests
         Assert.Equal(
             "must be an array of integers within the int32 range [-2147483648, 2147483647]; element 0 is the number 3000000000; declare the type as list<int64> for larger values",
             Convert(ScalarValue.FromInt64List(new long[] { 3_000_000_000 }), "list<int32>"));
-        Assert.Equal("must be an array of 4 numbers (vec<float32,4>), got 1 element", Convert(ScalarValue.FromVector(new float[] { 1 }), "vec<float32,4>"));
+        Assert.Equal("must be an array of 4 numbers (list<float32,4>), got 1 element", Convert(ScalarValue.FromFloat32List(new float[] { 1 }), "list<float32,4>"));
+        Assert.Equal("must be an array of 2 integers (list<int32,2>), got 3 elements", Convert(ScalarValue.FromInt64List(new long[] { 1, 2, 3_000_000_000 }), "list<int32,2>"));
 
         static string Convert(ScalarValue value, string type)
         {
@@ -234,6 +235,7 @@ public class ConfigValuesTests
     public void Describe_IsTheJsonShapeAndTheType()
     {
         Assert.Equal("an integer (int64)", ConfigValues.Describe(ColumnType.Parse("int64?")));
-        Assert.Equal("an array of 4 numbers (vec<float32,4>)", ConfigValues.Describe(ColumnType.Parse("vec<float32,4>")));
+        Assert.Equal("an array of 4 numbers (list<float32,4>)", ConfigValues.Describe(ColumnType.Parse("list<float32,4>")));
+        Assert.Equal("an array of 2 true/false values (list<bool,2>)", ConfigValues.Describe(ColumnType.Parse("list<bool,2>")));
     }
 }

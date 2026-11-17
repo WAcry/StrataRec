@@ -98,27 +98,9 @@ internal readonly ref struct FloatListLane
     }
 }
 
-/// <summary>Per-lane access to vector, list and string operands.</summary>
+/// <summary>Per-lane access to list and string operands.</summary>
 internal static class Lanes
 {
-    public static ReadOnlySpan<float> Vector(ref Frame f, Opnd o, int lane)
-    {
-        if (o.IsScalar)
-        {
-            ref var s = ref f.Scalar(o);
-            return s.IsMissing ? default : s.AsVector();
-        }
-
-        ref var loc = ref f.Locs[o.Index];
-        return loc.Source switch
-        {
-            SourceKind.Column => ((VectorColumn)loc.SourceRef!).Row(f.Row(lane)),
-            SourceKind.Broadcast => (float[])loc.SourceRef!,
-            SourceKind.Select => Vector(ref f, Pick(ref loc, lane), lane),
-            _ => default,
-        };
-    }
-
     /// <summary>
     /// The <c>ListColumn&lt;long&gt;</c> or <c>ListColumn&lt;int&gt;</c> an int list operand reads in place (a plain column
     /// reference), or null when its lanes must be resolved one by one (a request-level value, an all-missing column, a
@@ -670,7 +652,11 @@ internal sealed class AffixInstr(IrOp op, ExprType type, Opnd text, Opnd affix) 
     }
 }
 
-/// <summary><c>dot</c>, <c>cosine</c>, <c>l2_norm</c> per lane with the shared SIMD kernels.</summary>
+/// <summary>
+/// <c>dot</c>, <c>cosine</c>, <c>l2_norm</c> per lane with the shared SIMD kernels (<see cref="VectorOps"/>), on the lists'
+/// storage in place: float32 or float64 elements, in any mix. A lane whose two lists differ in length is missing; the
+/// binder makes the result nullable unless both lengths are declared and equal, when no lane can differ.
+/// </summary>
 internal sealed class VectorFunctionInstr(IrOp op, ExprType type, Opnd[] operands) : Instr(type, operands)
 {
     public override void Execute(ref Frame f)
@@ -682,15 +668,64 @@ internal sealed class VectorFunctionInstr(IrOp op, ExprType type, Opnd[] operand
         }
 
         var a = Operands[0];
-        for (var i = 0; i < f.N; i++)
+        var n = f.N;
+        if (op == IrOp.L2Norm)
         {
-            dst[i] = op switch
+            for (var i = 0; i < n; i++)
             {
-                IrOp.Dot => VectorOps.Dot(Lanes.Vector(ref f, a, i), Lanes.Vector(ref f, Operands[1], i)),
-                IrOp.Cosine => VectorOps.Cosine(Lanes.Vector(ref f, a, i), Lanes.Vector(ref f, Operands[1], i)),
-                _ => VectorOps.L2Norm(Lanes.Vector(ref f, a, i)),
-            };
+                var list = Lanes.FloatList(ref f, a, i);
+                dst[i] = list.IsFloat32 ? VectorOps.L2Norm(list.Float32) : VectorOps.L2Norm(list.Float64);
+            }
+
+            return;
         }
+
+        var b = Operands[1];
+        if (ValidReg < 0)
+        {
+            // Both lengths are declared and equal, so every lane's lists have that length; NaN only if a writer broke that.
+            for (var i = 0; i < n; i++)
+            {
+                dst[i] = TryApply(Lanes.FloatList(ref f, a, i), Lanes.FloatList(ref f, b, i), out var value) ? value : double.NaN;
+            }
+
+            return;
+        }
+
+        var lifted = f.Locs[Out].Valid is not null; // LiftValidity left the operands' validity there, or nothing (all valid)
+        var valid = OutValid(ref f);
+        for (var i = 0; i < n; i += 64)
+        {
+            ulong word = 0;
+            var count = Math.Min(64, n - i);
+            for (var j = 0; j < count; j++)
+            {
+                if (TryApply(Lanes.FloatList(ref f, a, i + j), Lanes.FloatList(ref f, b, i + j), out var value))
+                {
+                    word |= 1UL << j;
+                }
+
+                dst[i + j] = value;
+            }
+
+            valid[i >> 6] = lifted ? valid[i >> 6] & word : word;
+        }
+    }
+
+    /// <summary><c>dot</c> or <c>cosine</c> of one lane, over whichever storage each list has; false when the lengths differ.</summary>
+    private bool TryApply(FloatListLane a, FloatListLane b, out double value)
+    {
+        var dot = op == IrOp.Dot;
+        if (a.IsFloat32)
+        {
+            return b.IsFloat32
+                ? dot ? VectorOps.TryDot(a.Float32, b.Float32, out value) : VectorOps.TryCosine(a.Float32, b.Float32, out value)
+                : dot ? VectorOps.TryDot(a.Float32, b.Float64, out value) : VectorOps.TryCosine(a.Float32, b.Float64, out value);
+        }
+
+        return b.IsFloat32
+            ? dot ? VectorOps.TryDot(a.Float64, b.Float32, out value) : VectorOps.TryCosine(a.Float64, b.Float32, out value)
+            : dot ? VectorOps.TryDot(a.Float64, b.Float64, out value) : VectorOps.TryCosine(a.Float64, b.Float64, out value);
     }
 }
 

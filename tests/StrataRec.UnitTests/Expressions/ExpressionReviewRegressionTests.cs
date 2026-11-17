@@ -457,13 +457,13 @@ public class ExpressionReviewRegressionTests
     {
         var f = new ExprFixture(capacity: 4)
             .Col("col.a", "list<int64>?").Col("col.b", "list<int64>?").Col("col.c", "bool")
-            .Col("col.s", "list<string>?").Col("col.v", "vec<float32,2>?").Col("col.x", "float64?")
-            .Ctx("ctx.l", "list<int64>?").Ctx("ctx.u", "vec<float32,2>", ScalarValue.FromVector(new[] { 7f, 7f }))
+            .Col("col.s", "list<string>?").Col("col.v", "list<float32,2>?").Col("col.x", "float64?")
+            .Ctx("ctx.l", "list<int64>?").Ctx("ctx.u", "list<float32,2>", ScalarValue.FromFloat32List(new[] { 7f, 7f }))
             .Build(4);
         var a = f.Buffer<ListColumn<long>>("col.a");
         var b = f.Buffer<ListColumn<long>>("col.b");
         var s = f.Buffer<ListColumn<string>>("col.s");
-        var v = f.Buffer<VectorColumn>("col.v");
+        var v = f.Buffer<ListColumn<float>>("col.v");
         for (var r = 0; r < 4; r++)
         {
             a.Set(r, new long[] { 10 + r });
@@ -520,8 +520,8 @@ public class ExpressionReviewRegressionTests
             {
                 0 => null,
                 StorageKind.List when value.ListElement == StorageKind.Int64 => value.AsInt64List().ToArray(),
+                StorageKind.List when value.ListElement == StorageKind.Float64 => value.AsFloat64List().ToArray().Select(d => (float)d).ToArray(),
                 StorageKind.List => value.AsStringList().ToArray(),
-                StorageKind.Vector => value.AsVector().ToArray(),
                 _ => value.AsFloat64(),
             };
         }

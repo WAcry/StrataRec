@@ -36,7 +36,7 @@ internal readonly struct LocalRecordRef
     public bool Found => Page is not null;
 }
 
-/// <summary>One field to read in a multi-field <see cref="TableVersion.Fill(ReadOnlySpan{LocalRecordRef}, ReadOnlySpan{int}, ReadOnlySpan{LocalFieldRead}, Span{int})"/>:
+/// <summary>One field to read in a multi-field <see cref="TableVersion.Fill(ReadOnlySpan{LocalRecordRef}, ReadOnlySpan{int}, ReadOnlySpan{LocalFieldRead}, Span{LocalFillCounts})"/>:
 /// the table field, the column of its storage type to write, and what absent rows get (the feature's default, or missing).</summary>
 internal readonly struct LocalFieldRead
 {
@@ -53,6 +53,11 @@ internal readonly struct LocalFieldRead
 
     public ScalarValue Absent { get; }
 }
+
+/// <summary>What a fill replaced by the absent value, by the metric that counts it.</summary>
+/// <param name="NonFinite">NaN/±∞ values (and float lists holding one): <c>column_nonfinite_total</c>.</param>
+/// <param name="OutOfRange">Lists of another length than a <c>list&lt;E,N&gt;</c> target's: <c>column_out_of_range_total</c>.</param>
+internal readonly record struct LocalFillCounts(int NonFinite, int OutOfRange);
 
 /// <summary>
 /// One generation of a <see cref="LocalFeatureTable"/>: pages of records, the index over them and the string dictionary
@@ -173,7 +178,7 @@ public sealed class TableVersion
 
     /// <summary>
     /// Looks every key up once: <c>records[i]</c> becomes the record of <c>keys[i]</c> or none. All features of the
-    /// table are then read from these references (<see cref="Fill(ReadOnlySpan{LocalRecordRef}, ReadOnlySpan{int}, ReadOnlySpan{LocalFieldRead}, Span{int})"/>). Returns the number of keys found.
+    /// table are then read from these references (<see cref="Fill(ReadOnlySpan{LocalRecordRef}, ReadOnlySpan{int}, ReadOnlySpan{LocalFieldRead}, Span{LocalFillCounts})"/>). Returns the number of keys found.
     /// </summary>
     /// <remarks>
     /// Keys are taken in blocks of <see cref="LookupBlock"/>, in two passes. The first reads every key's home slot and
@@ -299,8 +304,9 @@ public sealed class TableVersion
     /// </param>
     /// <param name="filled">The slot's fill bitmap; when not empty, every row in <paramref name="rows"/> is marked filled.</param>
     /// <returns>
-    /// The number of NaN/±∞ values replaced by <paramref name="absent"/>. Like backfill (design 4.3), stored
-    /// <c>float32</c>/<c>float64</c> values that are not finite are not served; vector components are copied as stored.
+    /// The values replaced by <paramref name="absent"/>. Like backfill (design 4.3), stored <c>float32</c>/<c>float64</c>
+    /// values that are not finite are not served (a float list with such an element as a whole), nor are lists of another
+    /// length than a <c>list&lt;E,N&gt;</c> target's: the table stores what its writer wrote, and a read applies the type.
     /// </returns>
     /// <remarks>
     /// <para>Allocates nothing except where the column type requires it: a <c>text</c> value becomes a new string, and a
@@ -310,13 +316,13 @@ public sealed class TableVersion
     /// <para>The per-row loops are unchecked; see <see cref="FillCore"/> for what makes that safe whatever the caller's
     /// spans point at.</para>
     /// </remarks>
-    internal int Fill(
+    internal LocalFillCounts Fill(
         int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ColumnBuffer target, in ScalarValue absent, Span<ulong> filled = default)
     {
         var read = new LocalFieldRead(field, target, absent);
-        Span<int> nonFinite = stackalloc int[1];
-        FillCore(records, rows, new ReadOnlySpan<LocalFieldRead>(in read), nonFinite, filled);
-        return nonFinite[0];
+        Span<LocalFillCounts> counts = stackalloc LocalFillCounts[1];
+        FillCore(records, rows, new ReadOnlySpan<LocalFieldRead>(in read), counts, filled);
+        return counts[0];
     }
 
     /// <summary>
@@ -325,30 +331,30 @@ public sealed class TableVersion
     /// per field, but the rows are taken in blocks of <see cref="FillBlock"/> and every field is filled for a block before
     /// the next, so the block's records are read from the L1 cache by every field instead of from memory once per field.
     /// </summary>
-    /// <param name="nonFinite">When not empty, <c>nonFinite[r]</c> receives the number of NaN/±∞ values of <c>reads[r]</c> that
-    /// were replaced by its absent value.</param>
+    /// <param name="counts">When not empty, <c>counts[r]</c> receives the values of <c>reads[r]</c> that were replaced by its
+    /// absent value.</param>
     /// <remarks>Fill bits are left to the caller: every row in <paramref name="rows"/> is filled for every field, so one
     /// bitmap of the rows can be OR-ed into each slot's fill bitmap.</remarks>
-    internal void Fill(ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ReadOnlySpan<LocalFieldRead> reads, Span<int> nonFinite = default)
+    internal void Fill(ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ReadOnlySpan<LocalFieldRead> reads, Span<LocalFillCounts> counts = default)
     {
-        if (!nonFinite.IsEmpty && nonFinite.Length < reads.Length)
+        if (!counts.IsEmpty && counts.Length < reads.Length)
         {
-            throw new ArgumentException($"{nonFinite.Length} counters for {reads.Length} reads.", nameof(nonFinite));
+            throw new ArgumentException($"{counts.Length} counters for {reads.Length} reads.", nameof(counts));
         }
 
-        FillCore(records, rows, reads, nonFinite, filled: default);
+        FillCore(records, rows, reads, counts, filled: default);
     }
 
     /// <summary>
     /// Both Fills, and the one place that keeps their unchecked loops safe. The caller's spans can change under the
     /// loops: <paramref name="rows"/> may be a view of a target column's own array (the first value written changes a row
-    /// not yet consumed), may overlap <paramref name="nonFinite"/>, or may be changed by another thread between the check
+    /// not yet consumed), may overlap <paramref name="counts"/>, or may be changed by another thread between the check
     /// and the loop. So rows, records and reads are first copied into scratch arrays the table rents, the copies are
     /// checked, and the loops read only the copies (and the column arrays, which each loop checks against the largest
     /// row). The copies cost up to a microsecond per call for 500 rows, 3% of filling 30 fields of them from the cache.
     /// </summary>
     private void FillCore(
-        ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ReadOnlySpan<LocalFieldRead> reads, Span<int> nonFinite, Span<ulong> filled)
+        ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ReadOnlySpan<LocalFieldRead> reads, Span<LocalFillCounts> counts, Span<ulong> filled)
     {
         if (records.Length != rows.Length)
         {
@@ -364,7 +370,7 @@ public sealed class TableVersion
             rows.CopyTo(rowCopy);
             records.CopyTo(recordCopy);
             reads.CopyTo(readCopy);
-            FillChecked(recordCopy.AsSpan(0, count), rowCopy.AsSpan(0, count), readCopy.AsSpan(0, reads.Length), nonFinite);
+            FillChecked(recordCopy.AsSpan(0, count), rowCopy.AsSpan(0, count), readCopy.AsSpan(0, reads.Length), counts);
             if (!filled.IsEmpty)
             {
                 foreach (var row in rowCopy.AsSpan(0, count))
@@ -385,12 +391,12 @@ public sealed class TableVersion
     }
 
     /// <summary>The fill itself, on <see cref="FillCore"/>'s private copies, which nothing else can change.</summary>
-    private void FillChecked(ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ReadOnlySpan<LocalFieldRead> reads, Span<int> nonFinite)
+    private void FillChecked(ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ReadOnlySpan<LocalFieldRead> reads, Span<LocalFillCounts> counts)
     {
         var maxRow = CheckRows(records, rows);
-        if (!nonFinite.IsEmpty)
+        if (!counts.IsEmpty)
         {
-            nonFinite[..reads.Length].Clear();
+            counts[..reads.Length].Clear();
         }
 
         // The part of a record the reads touch: the header (validity bits) up to the end of the last field read.
@@ -423,16 +429,16 @@ public sealed class TableVersion
                 }
 
                 var replaced = FillField(reads[r].Field, blockRecords, blockRows, maxRow, reads[r].Target, reads[r].Absent, memo);
-                if (!nonFinite.IsEmpty)
+                if (!counts.IsEmpty)
                 {
-                    nonFinite[r] += replaced;
+                    counts[r] = new LocalFillCounts(counts[r].NonFinite + replaced.NonFinite, counts[r].OutOfRange + replaced.OutOfRange);
                 }
             }
         }
     }
 
     /// <summary>
-    /// Rows per block of the multi-field <see cref="Fill(ReadOnlySpan{LocalRecordRef}, ReadOnlySpan{int}, ReadOnlySpan{LocalFieldRead}, Span{int})"/>:
+    /// Rows per block of the multi-field <see cref="Fill(ReadOnlySpan{LocalRecordRef}, ReadOnlySpan{int}, ReadOnlySpan{LocalFieldRead}, Span{LocalFillCounts})"/>:
     /// the headers and scalar values of 128 records (two or three cache lines each) fit the L1 data cache.
     /// </summary>
     internal const int FillBlock = 128;
@@ -478,19 +484,18 @@ public sealed class TableVersion
         return sum;
     }
 
-    private int FillField(
+    private LocalFillCounts FillField(
         int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, int maxRow, ColumnBuffer target, in ScalarValue absent, Span<int> stringMemo)
     {
         switch (_layout.Kinds[field])
         {
-            case StorageKind.Bool: FillScalar<bool>(field, records, rows, maxRow, (ScalarColumn<bool>)target, absent); return 0;
-            case StorageKind.Int32: FillScalar<int>(field, records, rows, maxRow, (ScalarColumn<int>)target, absent); return 0;
-            case StorageKind.Int64: FillScalar<long>(field, records, rows, maxRow, (ScalarColumn<long>)target, absent); return 0;
-            case StorageKind.Float32: return FillFloat32(field, records, rows, maxRow, (ScalarColumn<float>)target, absent);
-            case StorageKind.Float64: return FillFloat64(field, records, rows, maxRow, (ScalarColumn<double>)target, absent);
-            case StorageKind.String: FillString(field, records, rows, maxRow, (DictStringColumn)target, absent, stringMemo); return 0;
-            case StorageKind.Text: FillText(field, records, rows, (TextColumn)target, absent); return 0;
-            case StorageKind.Vector: FillVector(field, records, rows, maxRow, (VectorColumn)target, absent); return 0;
+            case StorageKind.Bool: FillScalar<bool>(field, records, rows, maxRow, (ScalarColumn<bool>)target, absent); return default;
+            case StorageKind.Int32: FillScalar<int>(field, records, rows, maxRow, (ScalarColumn<int>)target, absent); return default;
+            case StorageKind.Int64: FillScalar<long>(field, records, rows, maxRow, (ScalarColumn<long>)target, absent); return default;
+            case StorageKind.Float32: return new(FillFloat32(field, records, rows, maxRow, (ScalarColumn<float>)target, absent), 0);
+            case StorageKind.Float64: return new(FillFloat64(field, records, rows, maxRow, (ScalarColumn<double>)target, absent), 0);
+            case StorageKind.String: FillString(field, records, rows, maxRow, (DictStringColumn)target, absent, stringMemo); return default;
+            case StorageKind.Text: FillText(field, records, rows, (TextColumn)target, absent); return default;
             case StorageKind.List:
                 switch (_layout.Elements[field])
                 {
@@ -499,7 +504,7 @@ public sealed class TableVersion
                     case StorageKind.Int64: return FillList(field, records, rows, (ListColumn<long>)target, absent);
                     case StorageKind.Float32: return FillList(field, records, rows, (ListColumn<float>)target, absent);
                     case StorageKind.Float64: return FillList(field, records, rows, (ListColumn<double>)target, absent);
-                    default: FillStringList(field, records, rows, (ListColumn<string>)target, absent); return 0;
+                    default: return new(0, FillStringList(field, records, rows, (ListColumn<string>)target, absent));
                 }
 
             default: throw new InvalidOperationException($"Unsupported field kind {_layout.Kinds[field]}.");
@@ -540,9 +545,8 @@ public sealed class TableVersion
         CheckField(field);
         ArgumentNullException.ThrowIfNull(target);
         var kind = _layout.Kinds[field];
-        if (target.Type.Kind != kind
-            || (kind == StorageKind.Vector && target.Type.Dimension != _layout.Dimensions[field])
-            || target.Type.Element != _layout.Elements[field])
+        // The target's fixed length may differ from the field's: the fill checks each list against the target's type.
+        if (target.Type.Kind != kind || target.Type.Element != _layout.Elements[field])
         {
             throw new ArgumentException(
                 $"Field '{_layout.Schema.Fields[field].Name}' is {_layout.Schema.Fields[field].Type}; the target column is {target.Type}.", nameof(target));
@@ -598,8 +602,8 @@ public sealed class TableVersion
 
     /// <summary>
     /// The field's stored value as a promoted scalar (int32 → int64, float32 → float64, list&lt;int32&gt; → list&lt;int64&gt;),
-    /// or missing. For cold paths (context features, replay recording, tests): vectors, lists and text are copied. Values
-    /// are as stored: NaN and ±∞ are not replaced.
+    /// or missing. For cold paths (context features, replay recording, tests): lists and text are copied. Values
+    /// are as stored: NaN and ±∞ are not replaced, and a list's length is not checked (the reader applies the type).
     /// </summary>
     internal ScalarValue Read(int field, in LocalRecordRef record)
     {
@@ -619,8 +623,6 @@ public sealed class TableVersion
             case StorageKind.Float64: return ScalarValue.FromFloat64(BinaryPrimitives.ReadDoubleLittleEndian(page.AsSpan(at)));
             case StorageKind.String: return ScalarValue.FromString(StringOf(BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(at))));
             case StorageKind.Text: return ScalarValue.FromText(new string(MemoryMarshal.Cast<byte, char>(VarBytes(page, record.Offset, field, 2))));
-            case StorageKind.Vector:
-                return ScalarValue.FromVector(MemoryMarshal.Cast<byte, float>(page.AsSpan(at, 4 * _layout.Dimensions[field])).ToArray());
             case StorageKind.List when _layout.Elements[field] != StorageKind.String:
                 var elements = VarBytes(page, record.Offset, field, _layout.ElementSizes[field]);
                 return _layout.Elements[field] switch
@@ -988,45 +990,6 @@ public sealed class TableVersion
         }
     }
 
-    private void FillVector(int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, int maxRow, VectorColumn column, in ScalarValue absent)
-    {
-        var dimension = _layout.Dimensions[field];
-        var flat = column.Flat;
-        RequireLength(flat.Length, (maxRow + 1L) * dimension);
-        ref var flat0 = ref Unsafe.As<float, byte>(ref MemoryMarshal.GetArrayDataReference(flat));
-        ref var record0 = ref MemoryMarshal.GetReference(records);
-        ref var row0 = ref MemoryMarshal.GetReference(rows);
-        var words = TargetValidity(column, absent.IsMissing, maxRow);
-        var at = _layout.Offsets[field];
-        var validityAt = RecordLayout.ValidityOffset + (field >> 3);
-        var bit = 1 << (field & 7);
-        var bytes = 4 * dimension;
-        for (var i = 0; i < rows.Length; i++)
-        {
-            var row = Unsafe.Add(ref row0, i);
-            ref readonly var record = ref Unsafe.Add(ref record0, i);
-            if (record.Page is { } page)
-            {
-                ref var start = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(page), record.Offset);
-                if ((Unsafe.Add(ref start, validityAt) & bit) != 0)
-                {
-                    Unsafe.CopyBlockUnaligned(ref Unsafe.Add(ref flat0, (nint)row * bytes), ref Unsafe.Add(ref start, at), (uint)bytes);
-                    MarkValid(words, row);
-                    continue;
-                }
-            }
-
-            if (absent.IsMissing)
-            {
-                MarkMissing(words!, row);
-            }
-            else
-            {
-                ColumnValues.Set(column, row, absent);
-            }
-        }
-    }
-
     /// <summary>
     /// A target column's validity bitmap for an unchecked fill loop, its length checked once against the largest row.
     /// When absent rows are missing the bitmap is made up front, so the loop never calls out to allocate it (a call in the
@@ -1057,32 +1020,40 @@ public sealed class TableVersion
     private static void MarkMissing(ulong[] words, int row) =>
         Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(words), row >> 6) &= ~(1UL << row);
 
-    /// <summary>A list of fixed-size elements; a float list holding NaN or ±∞ takes the absent value, as a float does,
-    /// and is counted (the return value).</summary>
-    private int FillList<T>(int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ListColumn<T> column, in ScalarValue absent)
+    /// <summary>A list of fixed-size elements. A float list holding NaN or ±∞ takes the absent value, as a float does, and
+    /// is counted as non-finite; a list of another length than a <c>list&lt;E,N&gt;</c> target's takes it too, counted as
+    /// out of range.</summary>
+    private LocalFillCounts FillList<T>(int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ListColumn<T> column, in ScalarValue absent)
         where T : unmanaged
     {
         var size = Unsafe.SizeOf<T>();
-        var nonFinite = 0;
+        var type = column.Type;
+        int nonFinite = 0, outOfRange = 0;
         for (var i = 0; i < rows.Length; i++)
         {
             var row = rows[i];
             if (records[i].Page is { } page && IsValid(page, records[i].Offset, field))
             {
                 var values = MemoryMarshal.Cast<byte, T>(VarBytes(page, records[i].Offset, field, size));
-                if (AllFinite(values))
+                if (!ColumnValues.FitsLength(values.Length, type))
+                {
+                    outOfRange++;
+                }
+                else if (AllFinite(values))
                 {
                     column.Set(row, values);
                     continue;
                 }
-
-                nonFinite++;
+                else
+                {
+                    nonFinite++;
+                }
             }
 
             WriteAbsent(column, row, absent);
         }
 
-        return nonFinite;
+        return new LocalFillCounts(nonFinite, outOfRange);
     }
 
     /// <summary>True unless a float element is NaN or ±∞; always true for other elements (a constant test per T).</summary>
@@ -1091,32 +1062,43 @@ public sealed class TableVersion
         typeof(T) == typeof(float) ? ColumnValues.AllFinite(MemoryMarshal.Cast<T, float>(values))
         : typeof(T) != typeof(double) || ColumnValues.AllFinite(MemoryMarshal.Cast<T, double>(values));
 
-    private void FillStringList(int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ListColumn<string> column, in ScalarValue absent)
+    /// <summary>A <c>list&lt;string&gt;</c>; returns the lists of another length than a <c>list&lt;string,N&gt;</c> target's,
+    /// which take the absent value.</summary>
+    private int FillStringList(int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ListColumn<string> column, in ScalarValue absent)
     {
         var strings = Volatile.Read(ref _strings);
+        var type = column.Type;
+        var outOfRange = 0;
         for (var i = 0; i < rows.Length; i++)
         {
             var row = rows[i];
             if (records[i].Page is { } page && IsValid(page, records[i].Offset, field))
             {
                 var codes = MemoryMarshal.Cast<byte, int>(VarBytes(page, records[i].Offset, field, 4));
-                var target = column.SetUninitialized(row, codes.Length);
-                for (var j = 0; j < codes.Length; j++)
+                if (ColumnValues.FitsLength(codes.Length, type))
                 {
-                    var code = codes[j];
-                    if ((uint)code >= (uint)strings.Length)
+                    var target = column.SetUninitialized(row, codes.Length);
+                    for (var j = 0; j < codes.Length; j++)
                     {
-                        strings = Volatile.Read(ref _strings);
+                        var code = codes[j];
+                        if ((uint)code >= (uint)strings.Length)
+                        {
+                            strings = Volatile.Read(ref _strings);
+                        }
+
+                        target[j] = strings[code];
                     }
 
-                    target[j] = strings[code];
+                    continue;
                 }
+
+                outOfRange++;
             }
-            else
-            {
-                WriteAbsent(column, row, absent);
-            }
+
+            WriteAbsent(column, row, absent);
         }
+
+        return outOfRange;
     }
 
     private static void WriteAbsent(ColumnBuffer column, int row, in ScalarValue absent)

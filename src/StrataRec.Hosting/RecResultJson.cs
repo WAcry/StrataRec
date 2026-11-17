@@ -273,7 +273,7 @@ public static class RecResultJson
 
     /// <summary>
     /// A list as a JSON array of its elements, each written as a scalar of its element type is (a float32 list's
-    /// elements as the floats they are, a non-finite element as null, as a vector component).
+    /// elements as the floats they are, a non-finite element as null, as a non-finite float is).
     /// </summary>
     private static void WriteList(Utf8JsonWriter json, in ScalarValue value)
     {
@@ -326,9 +326,9 @@ public static class RecResultJson
     }
 
     /// <summary>
-    /// A value as JSON: missing is <c>null</c>, and so is a non-finite float (or vector component), which JSON cannot
-    /// represent; integers exact, floats in their shortest round-trip form, a float32 value (a float32 column's, a vector
-    /// component) as the float: <c>0.1</c>, not the double <c>0.10000000149011612</c> it widens to.
+    /// A value as JSON: missing is <c>null</c>, and so is a non-finite float (or float list element), which JSON cannot
+    /// represent; integers exact, floats in their shortest round-trip form, a float32 value (a float32 column's, a
+    /// <c>list&lt;float32&gt;</c> element) as the float: <c>0.1</c>, not the double <c>0.10000000149011612</c> it widens to.
     /// </summary>
     public static void WriteValue(Utf8JsonWriter json, in ScalarValue value)
     {
@@ -348,22 +348,6 @@ public static class RecResultJson
                 break;
             case StorageKind.String or StorageKind.Text:
                 json.WriteStringValue(value.AsString());
-                break;
-            case StorageKind.Vector:
-                json.WriteStartArray();
-                foreach (var component in value.AsVector())
-                {
-                    if (float.IsFinite(component))
-                    {
-                        json.WriteNumberValue(component);
-                    }
-                    else
-                    {
-                        json.WriteNullValue();
-                    }
-                }
-
-                json.WriteEndArray();
                 break;
             case StorageKind.List:
                 WriteList(json, value);

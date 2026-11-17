@@ -304,25 +304,70 @@ public class SemanticsTests
     public void Vectors_Dot_Cosine_Norm()
     {
         var f = new ExprFixture()
-            .Col("col.v", "vec<float32,3>?")
-            .Ctx("ctx.u", "vec<float32,3>", ScalarValue.FromVector(new float[] { 1, 0, 0 }))
-            .Ctx("ctx.none", "vec<float32,3>?")
+            .Col("col.v", "list<float32,3>?")
+            .Ctx("ctx.u", "list<float32,3>", ScalarValue.FromFloat32List(new float[] { 1, 0, 0 }))
+            .Ctx("ctx.none", "list<float32,3>?")
             .Build(4);
-        var v = f.Buffer<VectorColumn>("col.v");
+        var v = f.Buffer<ListColumn<float>>("col.v");
         v.Set(0, new float[] { 1, 2, 3 });
         v.Set(1, new float[] { 0, 0, 0 });
         v.SetMissing(2);
         v.Set(3, new float[] { 3, 4, 0 });
 
+        // In float64 over the float32 elements, so both backends and the reference give the same bits.
         ExprAssert.Rows(f, "dot(col.v, ctx.u)", 1.0, 0.0, null, 3.0);
         ExprAssert.Rows(f, "dot(col.v, col.v)", 14.0, 0.0, null, 25.0);
-        ExprAssert.Rows(f, "l2_norm(col.v)", (double)MathF.Sqrt(14), 0.0, null, 5.0);
-        ExprAssert.Rows(f, "cosine(col.v, ctx.u)", 1.0 / (double)MathF.Sqrt(14), double.NaN, null, 0.6);
+        ExprAssert.Rows(f, "l2_norm(col.v)", Math.Sqrt(14), 0.0, null, 5.0);
+        ExprAssert.Rows(f, "cosine(col.v, ctx.u)", 1.0 / Math.Sqrt(14), double.NaN, null, 0.6);
         ExprAssert.Rows(f, "dot(col.v, ctx.u) ?? 0.0", 1.0, 0.0, 0.0, 3.0);
         ExprAssert.Rows(f, "dot(col.v, ctx.none) ?? -1.0", -1.0, -1.0, -1.0, -1.0);
         ExprAssert.Rows(f, "has(col.v)", true, true, false, true);
         ExprAssert.Rows(f, "col.v ?? ctx.u", new float[] { 1, 2, 3 }, new float[] { 0, 0, 0 }, new float[] { 1, 0, 0 }, new float[] { 3, 4, 0 });
-        ExprAssert.Rows(f, "l2_norm(col.entity_id > 1001 ? ctx.u : col.v)", (double)MathF.Sqrt(14), 0.0, 1.0, 1.0);
+        ExprAssert.Rows(f, "l2_norm(col.entity_id > 1001 ? ctx.u : col.v)", Math.Sqrt(14), 0.0, 1.0, 1.0);
+    }
+
+    [Fact]
+    public void VectorFunctions_TakeFloat32AndFloat64Lists_Mixed_AndMissRowsOfAnotherLength()
+    {
+        var f = new ExprFixture()
+            .Col("col.a", "list<float32>?")
+            .Col("col.d", "list<float64,3>")
+            .Ctx("ctx.u", "list<float64,3>", ScalarValue.FromFloat64List(new double[] { 1, 0, 0 }))
+            .Build(4);
+        var a = f.Buffer<ListColumn<float>>("col.a");
+        a.Set(0, new float[] { 1, 2, 3 });
+        a.Set(1, new float[] { 1, 2 }); // of another length than col.d's rows
+        a.SetMissing(2);
+        a.Set(3, Array.Empty<float>());
+        var d = f.Buffer<ListColumn<double>>("col.d");
+        d.Set(0, new double[] { 0.5, 0.25, 2 });
+        d.Set(1, new double[] { 3, 4, 0 });
+        d.Set(2, new double[] { 0, 0, 1 });
+        d.Set(3, new double[] { 1, 1, 1 });
+
+        // float32 × float64: the float32 elements widen, no copy.
+        ExprAssert.Rows(f, "dot(col.a, col.d)", 7.0, null, null, null);
+        ExprAssert.Rows(f, "cosine(col.a, col.d)", 7.0 / (Math.Sqrt(14) * Math.Sqrt(4.3125)), null, null, null);
+        ExprAssert.Rows(f, "dot(col.d, ctx.u)", 0.5, 3.0, 0.0, 1.0);
+        ExprAssert.Rows(f, "l2_norm(col.d)", Math.Sqrt(4.3125), 5.0, 1.0, Math.Sqrt(3));
+        ExprAssert.Rows(f, "l2_norm(col.a)", Math.Sqrt(14), Math.Sqrt(5), null, 0.0);
+        ExprAssert.Rows(f, "dot(col.a, [1.0, 1.0])", null, 3.0, null, null);
+        ExprAssert.Rows(f, "dot(col.a, [1, 1])", null, 3.0, null, null); // an int list literal is a float list here
+
+        // Two declared lengths make the result non-nullable; a list of any length on either side makes it nullable.
+        Assert.Equal("float64", f.Compile("dot(col.d, ctx.u)").ResultType.ToString());
+        Assert.Equal("float64?", f.Compile("dot(col.a, col.d)", new CompileOptions { AllowNullableResult = true }).ResultType.ToString());
+
+        // Two declared lengths that differ can never pair.
+        var mismatch = Assert.Single(f.Errors("dot(col.d, [1.0, 2.0])"));
+        Assert.Equal(ExpressionErrorCodes.TypeMismatch, mismatch.Code);
+        Assert.Contains("list<float64,3> and list<float64,2>", mismatch.Message);
+        Assert.NotNull(mismatch.Hint);
+        Assert.Equal(ExpressionErrorCodes.TypeMismatch, Assert.Single(f.Errors("cosine(ctx.u, [1.0])")).Code);
+
+        // Not a float list.
+        var ints = Assert.Single(f.Errors("l2_norm(['a'])"));
+        Assert.Contains("float list", ints.Message);
     }
 
     [Fact]

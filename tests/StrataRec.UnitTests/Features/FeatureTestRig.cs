@@ -567,8 +567,8 @@ internal sealed class ScriptedConnector(ScriptedConnector.Handler handler) : IFe
                 writer.GetValues<long>(field.FieldIndex).Span[keyIndex] = l;
                 break;
             case float[] v:
-                v.CopyTo(writer.GetValues<float>(field.FieldIndex).Span.Slice(keyIndex * v.Length, v.Length));
-                break;
+                writer.SetFloat32List(field.FieldIndex, keyIndex, v);
+                return;
             case string s:
                 writer.SetString(field.FieldIndex, keyIndex, s);
                 return;

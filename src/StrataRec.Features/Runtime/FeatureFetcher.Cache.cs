@@ -649,7 +649,6 @@ public sealed partial class FeatureFetcher
                 case StorageKind.Int64: writer.Int64(t, ((ScalarColumn<long>)staging.ColumnOf(m)!)[key]); break;
                 case StorageKind.Float32: writer.Float32(t, ((ScalarColumn<float>)staging.ColumnOf(m)!)[key]); break;
                 case StorageKind.Float64: writer.Float64(t, ((ScalarColumn<double>)staging.ColumnOf(m)!)[key]); break;
-                case StorageKind.Vector: writer.Vector(t, ((VectorColumn)staging.ColumnOf(m)!).Row(key)); break;
                 case StorageKind.String or StorageKind.Text: writer.String(t, ((TextColumn)staging.ColumnOf(m)!).Get(key)); break;
                 case StorageKind.List: writer.List(t, (ListColumn)staging.ListBuffer(m, chunk)!, inChunk); break;
                 default: throw new InvalidOperationException($"Unsupported field kind {layout.Kinds[t]}.");
@@ -1217,17 +1216,6 @@ public sealed partial class FeatureFetcher
             }
         }
 
-        public readonly void Vector(int field, ReadOnlySpan<float> value)
-        {
-            for (var i = _starts[field]; i < _starts[field + 1]; i++)
-            {
-                if (Take(i))
-                {
-                    ((VectorColumn)_targets[i].Column).Set(Row, value);
-                }
-            }
-        }
-
         public readonly void String(int field, ReadOnlySpan<byte> utf8)
         {
             string? value = null;
@@ -1259,14 +1247,7 @@ public sealed partial class FeatureFetcher
             // A float list holding NaN or ±inf is replaced as a whole, as a float is (design 4.3).
             var finite = typeof(T) == typeof(float) ? ColumnValues.AllFinite(MemoryMarshal.Cast<T, float>(value))
                 : typeof(T) != typeof(double) || ColumnValues.AllFinite(MemoryMarshal.Cast<T, double>(value));
-            if (finite)
-            {
-                ListValue(field, value);
-            }
-            else
-            {
-                NonFinite(field);
-            }
+            ListValue(field, value, finite);
         }
 
         public void StringListStart(int field, int count)
@@ -1280,7 +1261,7 @@ public sealed partial class FeatureFetcher
         public void StringListEnd(int field)
         {
             var items = _items!;
-            ListValue<string>(field, items.AsSpan(0, _itemCount));
+            ListValue<string>(field, items.AsSpan(0, _itemCount), finite: true);
             items.AsSpan(0, _itemCount).Clear();
             ArrayPool<string>.Shared.Return(items);
             _items = null;
@@ -1298,13 +1279,32 @@ public sealed partial class FeatureFetcher
             }
         }
 
-        private readonly void ListValue<T>(int field, ReadOnlySpan<T> value)
+        /// <summary>A list into each target as the target's type takes it: a list of another length than a
+        /// <c>list&lt;E,N&gt;</c> target's takes the absent value and is counted out of range, as backfill does with a
+        /// connector's answer (the record holds what the connector wrote); a float list holding NaN or ±∞ is counted non-finite.</summary>
+        private readonly void ListValue<T>(int field, ReadOnlySpan<T> value, bool finite)
         {
             for (var i = _starts[field]; i < _starts[field + 1]; i++)
             {
-                if (Take(i))
+                if (!Take(i))
                 {
-                    ((ListColumn<T>)_targets[i].Column).Set(Row, value);
+                    continue;
+                }
+
+                var target = _targets[i];
+                if (!ColumnValues.FitsLength(value.Length, target.Column.Type))
+                {
+                    ColumnValues.Set(target.Column, Row, target.Info.Definition.Absent);
+                    _owner._counters.AddOutOfRange(1);
+                }
+                else if (!finite)
+                {
+                    ColumnValues.Set(target.Column, Row, target.Info.Definition.Absent);
+                    _owner.AddNonFinite(target.Info, 1);
+                }
+                else
+                {
+                    ((ListColumn<T>)target.Column).Set(Row, value);
                 }
             }
         }
@@ -1355,14 +1355,6 @@ public sealed partial class FeatureFetcher
         public void Float32(int f, float value) => Set(f, ScalarValue.FromFloat32(value));
 
         public void Float64(int f, double value) => Set(f, ScalarValue.FromFloat64(value));
-
-        public void Vector(int f, ReadOnlySpan<float> value)
-        {
-            if (f == field)
-            {
-                Value = ScalarValue.FromVector(value.ToArray());
-            }
-        }
 
         public void String(int f, ReadOnlySpan<byte> utf8)
         {

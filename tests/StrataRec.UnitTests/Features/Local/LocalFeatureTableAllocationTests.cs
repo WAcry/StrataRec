@@ -65,7 +65,7 @@ public class LocalFeatureTableAllocationTests
             var memory = new RequestMemory();
             var columns = new ColumnBuffer[Fields.Length];
             var reads = new LocalFieldRead[Fields.Length];
-            var nonFinite = new int[Fields.Length];
+            var nonFinite = new LocalFillCounts[Fields.Length];
             var filled = new ulong[Fields.Length][];
             for (var f = 0; f < Fields.Length; f++)
             {

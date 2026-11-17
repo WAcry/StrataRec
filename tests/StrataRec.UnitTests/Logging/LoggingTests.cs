@@ -347,7 +347,7 @@ public sealed class LogPipelineTests
     }
 
     [Fact]
-    public void NonFiniteVectorIsEncodedAsMissingInsteadOfThrowing()
+    public void NonFiniteEmbeddingIsEncodedAsMissingInsteadOfThrowing()
     {
         var batch = Batch("served", LogDelivery.Durable);
         batch = new LogBatch
@@ -355,7 +355,7 @@ public sealed class LogPipelineTests
             TapId = batch.TapId, RequestId = batch.RequestId, PipelineId = batch.PipelineId, ManifestId = batch.ManifestId, Schema = batch.Schema,
             TimeMs = batch.TimeMs, Delivery = batch.Delivery, RequestProbability = 1, Int64EntityIds = batch.Int64EntityIds, Ranks = batch.Ranks,
             RowProbability = batch.RowProbability, Context = batch.Context,
-            Columns = new[] { LogColumn.FromValues("emb", ColumnType.Vector(2), new[] { ScalarValue.FromVector(new[] { 1f, float.NaN }), ScalarValue.FromVector(new[] { 1f, 2f }) }) },
+            Columns = new[] { LogColumn.FromValues("emb", ColumnType.Parse("list<float64,2>?"), new[] { ScalarValue.FromFloat32List(new[] { 1f, float.NaN }), ScalarValue.FromFloat32List(new[] { 1f, 2f }) }) },
         };
 
         using var document = JsonDocument.Parse(LogBatchJson.Encode(batch));

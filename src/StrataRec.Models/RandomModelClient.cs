@@ -52,8 +52,8 @@ namespace StrataRec.Models;
 /// request seed changes it, and elements with equal inputs score equally, as they would from a real model (ties rank by
 /// <c>entity_id</c>). Unlike a real model, a pair's preference and its reverse's are independent draws, and a list row's
 /// score ignores the other rows of the list. The canonical encoding treats −0.0 as 0.0 and every NaN alike, as
-/// <c>hash01</c> does. 24 bits keep every value exact in float32 and below 1. A context vector of a listwise model is
-/// declared with its size (<c>[1, 8]</c>): as <c>[1, -1]</c> it would start with the output's shape and count as
+/// <c>hash01</c> does. 24 bits keep every value exact in float32 and below 1. A context embedding (a <c>list&lt;float32,8&gt;</c>) of a
+/// listwise model is declared with its size (<c>[1, 8]</c>): as <c>[1, -1]</c> it would start with the output's shape and count as
 /// per element.</para>
 /// <para>A call fails unless it sends every declared input with its declared element type and rank, every fixed
 /// dimension equal, the first dimension of a per-element input equal to the batch size, and data for the whole shape. A

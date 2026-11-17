@@ -177,12 +177,13 @@ public static class StrataRecMetrics
     public static readonly Counter<long> ColumnNonFinite = Meter.CreateCounter<long>(Names.ColumnNonFinite, "{value}", "Non-finite values replaced or masked.");
 
     /// <summary>
-    /// Values outside the int32 storage of an <c>int32</c> or <c>list&lt;int32&gt;</c> column or feature, replaced by
-    /// the default or marked missing instead of wrapping (design 4.3; <c>column_out_of_range_total</c>). Recorded once
+    /// Values outside the int32 storage of an <c>int32</c> or <c>list&lt;int32&gt;</c> column or feature, and lists of
+    /// another length than a <c>list&lt;E,N&gt;</c>'s, replaced by the default or marked missing instead of wrapping or
+    /// being stored (design 4.3; <c>column_out_of_range_total</c>). Recorded once
     /// per pipeline execution: the expression backend counts them per request and does not know the column. Tags:
     /// <c>stratarec.pipeline</c>.
     /// </summary>
-    public static readonly Counter<long> ColumnOutOfRange = Meter.CreateCounter<long>(Names.ColumnOutOfRange, "{value}", "Values outside the int32 storage range, replaced or masked.");
+    public static readonly Counter<long> ColumnOutOfRange = Meter.CreateCounter<long>(Names.ColumnOutOfRange, "{value}", "Values outside the int32 storage range or a list's fixed length, replaced or masked.");
 
     // Data sources: feature connectors (per max_batch chunk) and candidate sources (per call).
 

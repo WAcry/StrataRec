@@ -20,15 +20,15 @@ public class CoreReviewRegressionTests
     [Fact]
     public void Compact_ShrinksStorageToSurvivorsPlusRemainingBudget()
     {
-        var table = NewTable(1000, ColumnType.Vector(64));
+        var table = NewTable(1000, ColumnType.List(StorageKind.Float32, fixedLength: 64));
         table.AppendRows(Enumerable.Range(0, 900).Select(i => (long)i).ToArray());
-        var vec = (VectorColumn)table.GetOrCreateSlot(1);
+        var vec = (ListColumn<float>)table.GetOrCreateSlot(1);
         Assert.Equal(1000, vec.Capacity);
 
         table.Rows.Truncate(50);
         table.Compact();
         Assert.Equal(50 + 100, table.StorageCapacity);
-        Assert.Equal(150, ((VectorColumn)table.TryGetSlot(1)!).Capacity);
+        Assert.Equal(150, ((ListColumn<float>)table.TryGetSlot(1)!).Capacity);
 
         // The remaining append budget still fits after compaction.
         table.AppendRows(Enumerable.Range(5000, 100).Select(i => (long)i).ToArray());
@@ -52,16 +52,6 @@ public class CoreReviewRegressionTests
     }
 
     [Fact]
-    public void VectorCopy_RejectsDimensionMismatch()
-    {
-        var memory = new RequestMemory();
-        var a = new VectorColumn(ColumnType.Vector(2), 4, memory);
-        var b = new VectorColumn(ColumnType.Vector(3), 4, memory);
-        a.Set(0, new float[] { 1, 2 });
-        Assert.Throws<ArgumentException>(() => b.CopyFrom(a, 0, 0));
-    }
-
-    [Fact]
     public void ListSelfCopy_PreservesMissing()
     {
         var list = new ListColumn<long>(ColumnType.List(StorageKind.Int64).AsNullable(), 4, new RequestMemory());
@@ -75,7 +65,7 @@ public class CoreReviewRegressionTests
     public void ScalarValue_EqualValuesHashEqually()
     {
         Assert.Equal(ScalarValue.FromInt64List(new long[] { 1, 2 }).GetHashCode(), ScalarValue.FromInt64List(new long[] { 1, 2 }).GetHashCode());
-        Assert.Equal(ScalarValue.FromVector(new float[] { 1, 2 }).GetHashCode(), ScalarValue.FromVector(new float[] { 1, 2 }).GetHashCode());
+        Assert.Equal(ScalarValue.FromFloat32List(new float[] { 1, 2 }).GetHashCode(), ScalarValue.FromFloat32List(new float[] { 1, 2 }).GetHashCode());
         Assert.Equal(ScalarValue.FromFloat64(0.0), ScalarValue.FromFloat64(-0.0));
         Assert.Equal(ScalarValue.FromFloat64(0.0).GetHashCode(), ScalarValue.FromFloat64(-0.0).GetHashCode());
     }

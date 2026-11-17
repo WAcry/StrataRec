@@ -4,12 +4,16 @@ using StrataRec.Core.Types;
 namespace StrataRec.Core.Columns;
 
 /// <summary>
-/// A variable-length <c>list&lt;E&gt;</c> column: the rows' extents, whatever the element type. What only needs a row's
-/// length (<c>size()</c>, a template's section, a copy's budget) reads it here without knowing the element type.
+/// A <c>list&lt;E&gt;</c> or <c>list&lt;E,N&gt;</c> column: the rows' extents, whatever the element type. What only needs a
+/// row's length (<c>size()</c>, a template's section, a copy's budget) reads it here without knowing the element type.
 /// </summary>
 /// <remarks>
-/// Each row stores <c>(start, length)</c> into an append-only arena. Unlike strict CSR offsets, rows may be written in
-/// any order (backfill writes rows in arbitrary physical order), and zero-initialized rows are valid empty lists.
+/// <para>Each row stores <c>(start, length)</c> into an append-only arena. Unlike strict CSR offsets, rows may be written in
+/// any order (backfill writes rows in arbitrary physical order), and zero-initialized rows are valid empty lists.</para>
+/// <para>A fixed-length list (an embedding) is stored the same way: a row is a contiguous span either way, which is all
+/// the SIMD kernels need, so one storage serves both. The column does not check lengths; the writers that apply the
+/// type's rules do (<see cref="ColumnValues.TrySet"/>), as for int32 narrowing. The type only sizes the first arena: N per
+/// row, so filling every row never grows it.</para>
 /// </remarks>
 public abstract class ListColumn : ColumnBuffer
 {
@@ -78,7 +82,8 @@ public sealed class ListColumn<T> : ListColumn
             throw new ArgumentException($"{type} is not stored as {typeof(T).Name} elements.", nameof(type));
         }
 
-        _arena = memory.Rent<T>(Math.Max(16, capacity * 4));
+        // A fixed length is the exact size of a full column; four elements per row is a guess for lists of any length.
+        _arena = memory.Rent<T>(Math.Max(16, checked(capacity * (type.IsFixedLength ? type.FixedLength : 4))));
     }
 
     public ReadOnlySpan<T> Get(int row) => _arena.AsSpan(_starts[row], _lengths[row]);

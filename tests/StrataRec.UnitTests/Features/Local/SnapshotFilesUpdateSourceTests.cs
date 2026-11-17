@@ -45,7 +45,7 @@ public class SnapshotFilesUpdateSourceTests
             ["f64"] = ScalarValue.FromFloat64(-1e300),
             ["s"] = ScalarValue.FromString("cat"),
             ["t"] = ScalarValue.FromText("multi\nline é"),
-            ["v"] = ScalarValue.FromVector(new[] { 1f, 2.5f, -3f, 4e-3f }),
+            ["v"] = ScalarValue.FromFloat32List(new[] { 1f, 2.5f, -3f, 4e-3f }),
             ["li32"] = ScalarValue.FromInt64List(new long[] { 1, int.MaxValue }),
             ["li64"] = ScalarValue.FromInt64List(new[] { long.MinValue }),
             ["ls"] = ScalarValue.FromStringList(new[] { "a", "b\"q" }),
@@ -57,7 +57,7 @@ public class SnapshotFilesUpdateSourceTests
         var two = ReadRecord(version, table.Schema, EntityKey.FromInt64(2))!;
         Assert.True(double.IsNaN(two["f32"].AsFloat64()));
         Assert.Equal(double.NegativeInfinity, two["f64"].AsFloat64());
-        Assert.Equal(float.PositiveInfinity, two["v"].AsVector()[0]);
+        Assert.Equal(double.PositiveInfinity, two["v"].AsFloat64List()[0]);
         Assert.True(two["s"].IsMissing);
 
         Assert.True(ReadRecord(version, table.Schema, EntityKey.FromInt64(3))!["i64"].IsMissing);

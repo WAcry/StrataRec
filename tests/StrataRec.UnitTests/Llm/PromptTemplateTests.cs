@@ -104,8 +104,7 @@ public sealed class PromptTemplateTests
     [InlineData("{{.}}", 0, "MUSTACHE_IMPLICIT", "use {{.}} inside a section over a list")]
     [InlineData("{{#rows}} {{.}}{{/rows}}", 10, "MUSTACHE_IMPLICIT", "name the value to show")]
     [InlineData("{{#ctx.request.interests}}{{#.}}x{{/.}}{{/ctx.request.interests}}", 26, "MUSTACHE_SECTION_TYPE", "iterate a list by its name")]
-    [InlineData("{{#rows}}{{col.item.emb}}{{/rows}}", 9, "MUSTACHE_UNRENDERABLE", "render a derived feature")]
-    [InlineData("{{#rows}}{{#col.item.emb}}x{{/col.item.emb}}{{/rows}}", 9, "MUSTACHE_UNRENDERABLE", "render a derived feature")]
+    [InlineData("{{#rows}}{{col.item.emb}}{{/rows}}", 9, "MUSTACHE_UNRENDERABLE", "iterate it: {{#col.item.emb}}{{.}}, {{/col.item.emb}}")] // an embedding is a list
     [InlineData("I like {{ctx.request.interests}}", 7, "MUSTACHE_UNRENDERABLE", "iterate it: {{#ctx.request.interests}}{{.}}, {{/ctx.request.interests}}")]
     [InlineData("{{#ctx.request.query}}q{{/ctx.request.query}}", 0, "MUSTACHE_SECTION_TYPE", "show the value with {{ctx.request.query}}")]
     [InlineData("{{^param.boost}}none{{/param.boost}}", 0, "MUSTACHE_SECTION_TYPE", "a section takes a list")]
@@ -207,7 +206,7 @@ public sealed class PromptTemplateTests
     [InlineData("LlmAnnotator@1", "Rated {{col.item.rating}}", 6, "MUSTACHE_NULLABLE", "guard it")]
     [InlineData("LlmAnnotator@1", "{{col.item.titel}}", 0, "MUSTACHE_UNKNOWN_NAME", "did you mean 'col.item.title'?")]
     [InlineData("LlmAnnotator@1", "{{title}}", 0, "MUSTACHE_UNKNOWN_NAME", "a per-row template names col.* (the row's values), ctx.* and param.* references")]
-    [InlineData("LlmAnnotator@1", "{{col.item.emb}}", 0, "MUSTACHE_UNRENDERABLE", "render a derived feature")]
+    [InlineData("LlmAnnotator@1", "{{col.item.emb}}", 0, "MUSTACHE_UNRENDERABLE", "iterate it")]
     [InlineData("LlmAnnotator@1", " ", 0, "MUSTACHE_EMPTY", "why would this user like {{col.item.title}}")]
     [InlineData("GenerativeRetriever@1", "For {{col.item.title}}", 4, "MUSTACHE_SCOPE", "render request values only: ctx.* and param.*")]
     [InlineData("GenerativeRetriever@1", "{{col.item.titel}}", 0, "MUSTACHE_SCOPE", "render request values only: ctx.* and param.*")]

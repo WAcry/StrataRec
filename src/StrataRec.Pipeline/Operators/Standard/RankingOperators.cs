@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Numerics.Tensors;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Memory;
@@ -354,7 +355,8 @@ public sealed class MmrDiversifierConfig
 {
     public required string ScoreCol { get; init; }
 
-    /// <summary>Vector column; rows without a vector have zero similarity to everything.</summary>
+    /// <summary>A fixed-length float list column (<c>list&lt;float32,N&gt;</c> or <c>list&lt;float64,N&gt;</c>), such as an
+    /// item embedding; rows without one have zero similarity to everything.</summary>
     public required string EmbeddingCol { get; init; }
 
     /// <summary>Relevance weight λ in [0, 1]; use <see cref="LambdaParam"/> to make it tunable.</summary>
@@ -397,10 +399,21 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
             return null;
         }
 
-        if (embedding.Type.Kind != StorageKind.Vector)
+        // The similarity pairs rows element by element, so every row must have the same length, which only a declared
+        // length guarantees: a list of any length would make a row of another length a silent zero similarity.
+        if (!embedding.Type.IsList || embedding.Type.Element is not (StorageKind.Float32 or StorageKind.Float64))
         {
-            context.Error("/embedding_col", "COLUMN_TYPE_MISMATCH", $"Embedding column '{config.EmbeddingCol}' must be a vector, not {embedding.Type}.",
-                "use a vec<float32,N> column, such as an item embedding from the catalog");
+            context.Error("/embedding_col", "COLUMN_TYPE_MISMATCH",
+                $"Embedding column '{config.EmbeddingCol}' must be a fixed-length float list (list<float32,N> or list<float64,N>), not {embedding.Type}.",
+                "use an embedding column such as an item embedding from the catalog, declared e.g. list<float32,64>");
+            return null;
+        }
+
+        if (!embedding.Type.IsFixedLength)
+        {
+            context.Error("/embedding_col", "COLUMN_TYPE_MISMATCH",
+                $"Embedding column '{config.EmbeddingCol}' is {embedding.Type}, a list of any length: MMR compares rows' embeddings element by element, so their length must be declared.",
+                $"declare the column with its length, e.g. {ColumnType.List(embedding.Type.Element, embedding.Type.Nullable, 64)}");
             return null;
         }
 
@@ -442,7 +455,9 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
     /// The MMR order of a window of rows: the first pick is the row with the largest relevance, then each step picks the
     /// largest λ·relevance − (1−λ)·(the row's largest similarity to a row already picked); equal values keep the incoming
     /// order. Rows without relevance come after every row with one, in their incoming order. The similarity is the cosine
-    /// of the rows' vectors, and 0 where either has none (or a zero one); with λ = 1 it has no weight and is not computed.
+    /// of the rows' vectors, and 0 where either has none (or a zero one, or one of another length than the column's); with
+    /// λ = 1 it has no weight and is not computed. A <c>list&lt;float32,N&gt;</c> column is computed in float32 (TensorPrimitives'
+    /// SIMD), a <c>list&lt;float64,N&gt;</c> one in float64.
     /// </summary>
     /// <remarks>
     /// The similarity was floored at 0 (the largest started at 0), so a row opposite every pick counted as merely
@@ -456,17 +471,34 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
     /// <param name="rows">The window's rows, in their incoming order.</param>
     /// <param name="relevance">Each row's score; negative infinity for a row without one.</param>
     /// <param name="order">Receives the rows in MMR order (as many as <paramref name="rows"/>).</param>
-    internal static void Order(ReadOnlySpan<int> rows, ReadOnlySpan<double> relevance, VectorColumn? vectors, double lambda, Span<int> order, RequestMemory memory)
+    /// <param name="vectors">The embedding column: a <c>ListColumn&lt;float&gt;</c> or <c>ListColumn&lt;double&gt;</c>, or null when
+    /// the request has none.</param>
+    internal static void Order(ReadOnlySpan<int> rows, ReadOnlySpan<double> relevance, ListColumn? vectors, double lambda, Span<int> order, RequestMemory memory)
+    {
+        if (vectors is ListColumn<double> doubles)
+        {
+            Order(rows, relevance, doubles, lambda, order, memory);
+        }
+        else
+        {
+            Order(rows, relevance, vectors as ListColumn<float>, lambda, order, memory);
+        }
+    }
+
+    private static void Order<T>(ReadOnlySpan<int> rows, ReadOnlySpan<double> relevance, ListColumn<T>? vectors, double lambda, Span<int> order, RequestMemory memory)
+        where T : unmanaged, IFloatingPointIeee754<T>
     {
         var n = rows.Length;
         var similar = lambda < 1 && vectors is not null;
         var maxSim = memory.RentScratch<double>(n); // read only once a row has been picked, and only with a similarity weight
         var used = memory.RentScratch<bool>(n);
         used.AsSpan(0, n).Clear();
-        var norms = memory.RentScratch<float>(n);
+        var norms = memory.RentScratch<T>(n);
+        var length = vectors?.Type.FixedLength ?? 0;
         for (var i = 0; i < n; i++)
         {
-            norms[i] = similar && vectors!.IsValid(rows[i]) ? TensorPrimitives.Norm(vectors.Row(rows[i])) : 0f;
+            // The column's writers keep every row at its length; a row of another one is treated as no vector, never paired.
+            norms[i] = similar && vectors!.IsValid(rows[i]) && vectors.LengthOf(rows[i]) == length ? TensorPrimitives.Norm(vectors.Get(rows[i])) : T.Zero;
         }
 
         var scoredLeft = 0;
@@ -522,12 +554,14 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
                 continue;
             }
 
-            var chosen = norms[best] > 0f ? vectors!.Row(rows[best]) : default;
+            var chosen = norms[best] > T.Zero ? vectors!.Get(rows[best]) : default;
             for (var i = 0; i < n; i++)
             {
                 if (!used[i])
                 {
-                    double sim = norms[best] > 0f && norms[i] > 0f ? TensorPrimitives.Dot(chosen, vectors!.Row(rows[i])) / (norms[best] * norms[i]) : 0f;
+                    var sim = norms[best] > T.Zero && norms[i] > T.Zero
+                        ? double.CreateTruncating(TensorPrimitives.Dot(chosen, vectors!.Get(rows[i])) / (norms[best] * norms[i]))
+                        : 0.0;
                     maxSim[i] = step == 0 ? sim : Math.Max(maxSim[i], sim);
                 }
             }
@@ -559,7 +593,7 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
             }
 
             var order = memory.RentScratch<int>(live.Length);
-            Order(live[..n], relevance.AsSpan(0, n), context.Read(embedding) as VectorColumn, lambda, order, memory);
+            Order(live[..n], relevance.AsSpan(0, n), context.Read(embedding) as ListColumn, lambda, order, memory);
             live[n..].CopyTo(order.AsSpan(n));
             context.SetOrder(order.AsSpan(0, live.Length)); // copied
             memory.ReturnScratch(relevance);

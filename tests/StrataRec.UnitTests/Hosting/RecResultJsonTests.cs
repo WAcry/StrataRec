@@ -83,7 +83,7 @@ public sealed class RecResultJsonTests
             ["inf"] = ScalarValue.FromFloat64(double.NegativeInfinity),
             ["string"] = ScalarValue.FromString("a \"quoted\" é"),
             ["text"] = ScalarValue.FromText("line\nbreak"),
-            ["vector"] = ScalarValue.FromVector(new[] { 0.5f, float.NaN, float.PositiveInfinity }),
+            ["vector"] = ScalarValue.FromFloat32List(new[] { 0.5f, float.NaN, float.PositiveInfinity }), // an embedding, list<float32,3>
             ["ints"] = ScalarValue.FromInt64List(new[] { long.MinValue, 2L }),
             ["strings"] = ScalarValue.FromStringList(new[] { "x", string.Empty }),
             ["empty"] = ScalarValue.FromInt64List(Array.Empty<long>()),
@@ -112,7 +112,7 @@ public sealed class RecResultJsonTests
         Assert.Contains("\"strings\":[\"x\",\"\"]", json, StringComparison.Ordinal);
         Assert.Contains("\"empty\":[]", json, StringComparison.Ordinal);
         Assert.Contains("\"flags\":[true,false]", json, StringComparison.Ordinal); // JSON booleans, as a bool column is
-        Assert.Contains("\"weights\":[0.1,null,1E-300]", json, StringComparison.Ordinal); // a non-finite element is null, as in vectors
+        Assert.Contains("\"weights\":[0.1,null,1E-300]", json, StringComparison.Ordinal); // a non-finite element is null, as a non-finite float is
         Assert.Contains("\"weights32\":[0.1,null]", json, StringComparison.Ordinal); // float32 elements as the floats they are
     }
 

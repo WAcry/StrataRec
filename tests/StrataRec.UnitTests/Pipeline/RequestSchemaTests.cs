@@ -19,7 +19,7 @@ public sealed class RequestSchemaTests
         ["region"] = ColumnType.Parse("string?"),
         ["n32"] = ColumnType.Parse("int32?"),
         ["tags"] = ColumnType.Parse("list<int32>?"),
-        ["emb"] = ColumnType.Parse("vec<float32,3>?"),
+        ["emb"] = ColumnType.Parse("list<float32,3>?"),
         ["flag"] = ColumnType.Parse("bool?"),
         ["a/b"] = ColumnType.Parse("string?"),
     });
@@ -47,7 +47,7 @@ public sealed class RequestSchemaTests
         Assert.Equal("us", inputs["region"].AsString());
         Assert.Equal(7L, inputs["n32"].AsInt64()); // promoted
         Assert.Equal(new long[] { 1, 2 }, inputs["tags"].AsInt64List());
-        Assert.Equal(new[] { 0.5f, 1f, -2f }, inputs["emb"].AsVector());
+        Assert.Equal(new[] { 0.5, 1, -2 }, inputs["emb"].AsFloat64List().ToArray());
         Assert.True(inputs["flag"].AsBool());
         Assert.False(inputs.TryGetValue("a/b", out _)); // null: missing, never a default
 
@@ -74,8 +74,9 @@ public sealed class RequestSchemaTests
         "Input 'n32' must be within the int32 range [-2147483648, 2147483647], got the number 3000000000; declare the type as int64? for larger values.", null)]
     [InlineData("""{ "user_id": 1, "tags": [1, 3000000000] }""", "/inputs/tags",
         "Input 'tags' must be an array of integers within the int32 range [-2147483648, 2147483647]; element 1 is the number 3000000000; declare the type as list<int64>? for larger values.", null)]
-    [InlineData("""{ "user_id": 1, "emb": [1, 2] }""", "/inputs/emb", "Input 'emb' must be an array of 3 numbers (vec<float32,3>), got 2 elements.", null)]
-    [InlineData("""{ "user_id": 1, "emb": [1, 2, 1e39] }""", "/inputs/emb", "Input 'emb' must be an array of 3 numbers (vec<float32,3>); element 2 is the number 1e39.", null)]
+    [InlineData("""{ "user_id": 1, "emb": [1, 2] }""", "/inputs/emb", "Input 'emb' must be an array of 3 numbers (list<float32,3>), got 2 elements.", null)]
+    [InlineData("""{ "user_id": 1, "emb": [1, 2, 1e39] }""", "/inputs/emb",
+        "Input 'emb' must be an array of numbers within the float32 range [-3.4028235E+38, 3.4028235E+38]; element 2 is the number 1e39; declare the type as list<float64,3>? for larger values.", null)]
     [InlineData("""{ "user_id": 1, "flag": 1 }""", "/inputs/flag", "Input 'flag' must be true or false (bool), got the number 1.", null)]
     [InlineData("""{ "user_id": null }""", "/inputs/user_id", "Input 'user_id' is required by the request_schema of pipeline 'home_feed'.",
         "give it an integer (int64); only an input declared nullable ('int64?') may be null or absent")]
@@ -166,8 +167,8 @@ public sealed class RequestSchemaTests
         var element = Schema.Check(new RequestInputs().Set("user_id", ScalarValue.FromInt64(1)).Set("tags", ScalarValue.FromInt64List(new long[] { 1, -3_000_000_000 })));
         Assert.Contains("element 1 is the number -3000000000; declare the type as list<int64>? for larger values", element!.Message, StringComparison.Ordinal);
 
-        var vector = Schema.Check(new RequestInputs().Set("user_id", ScalarValue.FromInt64(1)).Set("emb", ScalarValue.FromVector(new float[] { 1, 2 })));
-        Assert.Equal("Input 'emb' must be an array of 3 numbers (vec<float32,3>), got 2 elements.", vector!.Message);
+        var vector = Schema.Check(new RequestInputs().Set("user_id", ScalarValue.FromInt64(1)).Set("emb", ScalarValue.FromFloat32List(new float[] { 1, 2 })));
+        Assert.Equal("Input 'emb' must be an array of 3 numbers (list<float32,3>), got 2 elements.", vector!.Message);
 
         var missing = Schema.Check(new RequestInputs());
         Assert.Equal(("/inputs/user_id", "Input 'user_id' is required by the request_schema of pipeline 'home_feed'."), (missing!.Pointer, missing.Message));

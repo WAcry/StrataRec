@@ -464,7 +464,7 @@ public sealed class ModelRankerTests
     internal static ValueTask<PipelineResult> Run(ExecutionPlan plan) => new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
     {
         RequestId = "r",
-        Inputs = new RequestInputs().Set("user_emb", ScalarValue.FromVector(UserEmb)).Set("user_id", Big),
+        Inputs = new RequestInputs().Set("user_emb", ScalarValue.FromFloat32List(UserEmb)).Set("user_id", Big),
         Deadline = TimeSpan.FromSeconds(30),
     });
 
@@ -491,7 +491,7 @@ public sealed class ModelRankerTests
               "features": {
                 "item.code": { "type": "int64",          "source": "items", "field": "code", "default": 0 },
                 "item.ctr":  { "type": "float64",        "source": "items", "field": "ctr",  "default": 0.0 },
-                "item.emb":  { "type": "vec<float32,3>", "source": "items", "field": "emb",  "default": [0, 0, 0] } } }
+                "item.emb":  { "type": "list<float32,3>", "source": "items", "field": "emb",  "default": [0, 0, 0] } } }
             """);
         Write(root, "bindings/local.jsonc", $$"""
             { "environment": "local",
@@ -501,7 +501,7 @@ public sealed class ModelRankerTests
             """);
         Write(root, "pipelines/p.jsonc", $$"""
             { "pipeline_id": "p", "entity_key_type": "int64",
-              "request_schema": { "user_emb": { "type": "vec<float32,3>" }, "user_id": { "type": "int64" } },
+              "request_schema": { "user_emb": { "type": "list<float32,3>" }, "user_id": { "type": "int64" } },
               "columns": { {{columns}} },
               "param_schema": {
                 "quotas": { "type": "map<string,int64>" }, "k": { "type": "int64" }, "weight": { "type": "float64" },

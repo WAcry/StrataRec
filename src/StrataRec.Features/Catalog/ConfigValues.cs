@@ -113,30 +113,6 @@ public static class ConfigValues
 
                 value = type.Kind == StorageKind.String ? ScalarValue.FromString(text) : ScalarValue.FromText(text);
                 return true;
-            case StorageKind.Vector when kind == JsonValueKind.Array:
-                var length = element.GetArrayLength();
-                if (type.Dimension > 0 && length != type.Dimension)
-                {
-                    error = Expected(type, length == 1 ? "1 element" : $"{length} elements");
-                    return false;
-                }
-
-                var vector = new float[length];
-                var v = 0;
-                foreach (var component in element.EnumerateArray())
-                {
-                    // A component beyond float32 would be stored as an infinity: not a number the request gave.
-                    if (component.ValueKind != JsonValueKind.Number || !component.TryGetDouble(out var d) || !float.IsFinite((float)d))
-                    {
-                        error = Element(type, v, JsonWords.Value(component));
-                        return false;
-                    }
-
-                    vector[v++] = (float)d;
-                }
-
-                value = ScalarValue.FromVector(vector);
-                return true;
             case StorageKind.List when kind == JsonValueKind.Array:
                 return TryList(element, type, out value, out error);
         }
@@ -146,12 +122,19 @@ public static class ConfigValues
     }
 
     /// <summary>A JSON array as a list of <paramref name="type"/>'s elements, each read as a scalar of the element type
-    /// is (an int32 element within int32, a float within float64); held promoted, as every list value is.</summary>
+    /// is (an int32 element within int32, a float within float64), and as many as a <c>list&lt;E,N&gt;</c> holds; held
+    /// promoted, as every list value is.</summary>
     private static bool TryList(in JsonElement array, ColumnType type, out ScalarValue value, [NotNullWhen(false)] out string? error)
     {
         value = ScalarValue.Missing;
         error = null;
         var count = array.GetArrayLength();
+        if (!ColumnValues.FitsLength(count, type))
+        {
+            error = Expected(type, Elements(count));
+            return false;
+        }
+
         var index = 0;
         switch (type.Element)
         {
@@ -251,6 +234,9 @@ public static class ConfigValues
         // Only why it failed is worked out here, on the error path: TryConvert decided.
         switch (type.Kind)
         {
+            case StorageKind.List when value.Kind == StorageKind.List && !ColumnValues.FitsLength(value.ListLength, type):
+                error = Expected(type, Elements(value.ListLength));
+                return false;
             case StorageKind.Int32 when value.Kind == StorageKind.Int64:
                 error = OutOfRange(type, Words(value), fitsInt64: true);
                 return false;
@@ -285,10 +271,6 @@ public static class ConfigValues
                 }
 
                 break;
-            case StorageKind.Vector when value.Kind == StorageKind.Vector:
-                var length = value.AsVector().Length;
-                error = Expected(type, length == 1 ? "1 element" : $"{length} elements");
-                return false;
         }
 
         error = Expected(type, Words(value));
@@ -309,13 +291,12 @@ public static class ConfigValues
             StorageKind.Float32 or StorageKind.Float64 => "a number",
             StorageKind.String => "a string",
             StorageKind.Text => "a string",
-            StorageKind.Vector => type.Dimension > 0 ? $"an array of {type.Dimension} numbers" : "an array of numbers",
-            StorageKind.List => type.Element switch
+            StorageKind.List => (type.IsFixedLength ? $"an array of {type.FixedLength} " : "an array of ") + type.Element switch
             {
-                StorageKind.Bool => "an array of true or false",
-                StorageKind.Int32 or StorageKind.Int64 => "an array of integers",
-                StorageKind.Float32 or StorageKind.Float64 => "an array of numbers",
-                _ => "an array of strings",
+                StorageKind.Bool => type.IsFixedLength ? "true/false values" : "true or false",
+                StorageKind.Int32 or StorageKind.Int64 => "integers",
+                StorageKind.Float32 or StorageKind.Float64 => "numbers",
+                _ => "strings",
             },
             _ => "a value",
         };
@@ -350,7 +331,9 @@ public static class ConfigValues
             : $"must be an array of numbers within the float32 range {Float32Range.Text}; element {element} is {got}{fix}";
     }
 
-    private static bool IsArray(ColumnType type) => type.Kind is StorageKind.Vector or StorageKind.List;
+    private static bool IsArray(ColumnType type) => type.Kind == StorageKind.List;
+
+    private static string Elements(int count) => count == 1 ? "1 element" : $"{count} elements";
 
     /// <summary>
     /// The index of the first item of <paramref name="array"/> that cannot be read: a string that is not valid Unicode (a

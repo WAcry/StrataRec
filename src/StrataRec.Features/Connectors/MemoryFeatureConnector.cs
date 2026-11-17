@@ -211,26 +211,6 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
                     writer.SetValid(field.FieldIndex, keyIndex);
                     break;
                 case StorageKind.String or StorageKind.Text: writer.SetString(field.FieldIndex, keyIndex, v.GetString()!); break;
-                case StorageKind.Vector:
-                    var dim = field.Type.Dimension;
-                    var dest = writer.GetValues<float>(field.FieldIndex).Span.Slice(keyIndex * dim, dim);
-                    var n = 0;
-                    foreach (var e in v.EnumerateArray())
-                    {
-                        if (n < dim)
-                        {
-                            dest[n] = e.GetSingle();
-                        }
-
-                        n++;
-                    }
-
-                    if (n == dim)
-                    {
-                        writer.SetValid(field.FieldIndex, keyIndex);
-                    }
-
-                    break;
                 case StorageKind.List:
                     WriteList(v, keyIndex, field, writer);
                     break;
@@ -239,7 +219,8 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
     }
 
     /// <summary>A list value, decoded straight to the field's element storage into a pooled buffer, which can go back
-    /// right away: the writer copies.</summary>
+    /// right away: the writer copies. Written as it is, whatever its length: the engine checks a fixed-length field's
+    /// length where it stores the value, as for any connector.</summary>
     private static void WriteList(JsonElement array, int keyIndex, in CompiledFieldBinding field, IFeatureBatchWriter writer)
     {
         var count = array.GetArrayLength();
