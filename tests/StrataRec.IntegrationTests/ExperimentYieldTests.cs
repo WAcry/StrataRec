@@ -168,10 +168,57 @@ public sealed class ExperimentYieldTests
         Assert.Equal(now.Experiments.Assigned, replayed.Result.Experiments.Assigned);
         Assert.Equal([new IgnoredArm("exp_short_feed/short", IgnoredArmReason.Yielded)], replayed.Result.Experiments.Ignored);
         Assert.False(replayed.Report.Diff.Identical);
-        Assert.Contains("arm 'exp_quality_weight/strong' yielded in the recording and runs in the replayed plan", replayed.Report.Notes);
+        Assert.Contains("arm 'exp_quality_weight/strong' was ignored in the recording (yielded) and runs in the replayed plan", replayed.Report.Notes);
         Assert.Contains("arm 'exp_short_feed/short' yields to 'exp_quality_weight' in the replayed plan; replayed without it", replayed.Report.Notes);
         Assert.Equal(8, withArms.Result.Items.Count);
         Assert.Equal([new IgnoredArm("exp_short_feed/short", IgnoredArmReason.Yielded)], withArms.Result.Experiments.Ignored);
+    }
+
+    /// <summary>
+    /// A recording of the platform's arms replays through the platform's rule (review 98): where the replayed plan puts
+    /// the two experiments into one layer, both arms are a layer conflict and the request runs the baseline, as a request
+    /// in them would now, not an invalid request; an arm the replayed plan does not have is ignored as unknown. Forced
+    /// arms stay strict, as in a request.
+    /// </summary>
+    [Fact]
+    public async Task AReplayOfThePlatformsArms_IgnoresThemAsTheReplayedPlanWould()
+    {
+        await using var recorded = MetricsTests.LoadEngine(HomeFeedTestHost.LoadModified(root =>
+        {
+            ShortFeed(root);
+            QualityYields(root);
+        })).Engine;
+        await using var oneLayer = MetricsTests.LoadEngine(HomeFeedTestHost.LoadModified(root =>
+        {
+            ShortFeed(root);
+            ReplayTests.Edit(root, "releases/home_feed.local.jsonc", "\"exp_short_feed\": { \"layer\": \"exp_short_feed\" }", "\"exp_short_feed\": { \"layer\": \"params\" }");
+        })).Engine;
+        await using var without = MetricsTests.LoadEngine(HomeFeedTestHost.Load()).Engine;
+        var token = TestContext.Current.CancellationToken;
+        var platform = await recorded.ExecuteAsync(Request("req-platform", forced: false, "exp_quality_weight/strong", "exp_short_feed/short", record: true), token);
+        var forced = await recorded.ExecuteAsync(Request("req-forced", forced: true, "exp_quality_weight/strong", "exp_short_feed/short", record: true), token);
+        var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(platform.Recording!));
+
+        var conflict = await oneLayer.ReplayAsync(bundle, cancellationToken: token);
+        var gone = await without.ReplayAsync(bundle, cancellationToken: token);
+        var strict = await oneLayer.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(forced.Recording!)), cancellationToken: token);
+
+        Assert.True(conflict.Result.Succeeded, conflict.Result.Error);
+        Assert.Equal(10, conflict.Result.Items.Count);
+        Assert.Empty(conflict.Result.Experiments.Assigned);
+        Assert.Equal(
+            [new IgnoredArm("exp_quality_weight/strong", IgnoredArmReason.LayerConflict), new IgnoredArm("exp_short_feed/short", IgnoredArmReason.LayerConflict)],
+            conflict.Result.Experiments.Ignored);
+        Assert.Contains("arm 'exp_short_feed/short' is in a layer with another arm of the request in the replayed plan (layer_conflict); replayed without it", conflict.Report.Notes);
+
+        Assert.Equal(8, gone.Result.Items.Count);
+        Assert.Equal(["exp_quality_weight/strong"], gone.Result.Experiments.Assigned);
+        Assert.Equal([new IgnoredArm("exp_short_feed/short", IgnoredArmReason.Unknown)], gone.Result.Experiments.Ignored);
+        Assert.Contains("arm 'exp_short_feed/short' is not in the replayed plan; replayed without it", gone.Report.Notes);
+        Assert.Contains("arm 'exp_quality_weight/strong' was ignored in the recording (yielded) and runs in the replayed plan", gone.Report.Notes);
+
+        Assert.False(strict.Result.Succeeded);
+        Assert.Equal(RecErrorKind.InvalidRequest, strict.Result.ErrorKind);
     }
 
     /// <summary>

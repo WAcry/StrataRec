@@ -107,6 +107,7 @@ internal sealed partial class UnifiedCompilation
         }
 
         var enumerated = new HashSet<string>(StringComparer.Ordinal);
+        var counted = new Dictionary<string, long>(StringComparer.Ordinal); // rules of one set of layers count it once
         var reported = new HashSet<string>(StringComparer.Ordinal);
         foreach (var scope in _builder.DataFlowScopes(nodes, taps, output, Conditional))
         {
@@ -130,7 +131,13 @@ internal sealed partial class UnifiedCompilation
             }
 
             var list = new List<int>(layers);
-            var product = Combinations(choices, list);
+            var key = string.Join(",", list);
+            if (!counted.TryGetValue(key, out var product))
+            {
+                product = Combinations(choices, list);
+                counted[key] = product;
+            }
+
             if (product > _request.MaxCombinationsChecked)
             {
                 // Without a complete check some assignment could run a plan this rule rejects, so the plan is rejected
@@ -156,7 +163,7 @@ internal sealed partial class UnifiedCompilation
                 continue;
             }
 
-            if (enumerated.Add(string.Join(",", list)))
+            if (enumerated.Add(key))
             {
                 Enumerate(choices, list, combination => Check(combination, timeline, fallbacks, output, seen, report));
             }
@@ -700,42 +707,57 @@ internal sealed partial class UnifiedCompilation
     /// </summary>
     private long Enumerate(SortedDictionary<int, List<int>> choices, List<int> layers, Action<int[]>? visit, long limit = long.MaxValue)
     {
+        // Iterative, as the odometer it replaces: a scope can span more layers than a thread's stack has frames for.
         var combination = NewCombination();
-        long count = 0;
-        Visit(0);
-        return count;
-
-        // False once the limit is reached.
-        bool Visit(int depth)
+        if (layers.Count == 0)
         {
-            if (depth == layers.Count)
+            visit?.Invoke(combination);
+            return 1;
+        }
+
+        var digits = new int[layers.Count]; // per layer: 0 not assigned, d its choice d - 1
+        long count = 0;
+        var depth = 0;
+        while (true)
+        {
+            // The layers to depth are set and run together; a deeper layer starts not assigned, which always runs.
+            if (depth < layers.Count - 1)
             {
-                count++;
-                visit?.Invoke((int[])combination.Clone());
-                return count < limit;
+                depth++;
+                continue;
             }
 
-            var layer = layers[depth];
-            combination[layer] = -1;
-            if (!Visit(depth + 1))
+            count++;
+            visit?.Invoke((int[])combination.Clone());
+            if (count >= limit)
             {
-                return false;
+                return count;
             }
 
-            foreach (var arm in choices[layer])
+            // The next: the deepest layer with a further arm that runs with the layers before it.
+            while (true)
             {
-                if (RunsWith(arm, combination, layers, depth))
+                var options = choices[layers[depth]];
+                var next = digits[depth] + 1;
+                while (next <= options.Count && !RunsWith(options[next - 1], combination, layers, depth))
                 {
-                    combination[layer] = arm;
-                    if (!Visit(depth + 1))
-                    {
-                        return false;
-                    }
+                    next++;
+                }
+
+                if (next <= options.Count)
+                {
+                    digits[depth] = next;
+                    combination[layers[depth]] = options[next - 1];
+                    break;
+                }
+
+                digits[depth] = 0;
+                combination[layers[depth]] = -1;
+                if (--depth < 0)
+                {
+                    return count;
                 }
             }
-
-            combination[layer] = -1;
-            return true;
         }
     }
 

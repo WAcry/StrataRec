@@ -108,67 +108,66 @@ public sealed partial class RecEngine
                     notes, 0, plan.ManifestId);
             }
 
-            // The arms the recorded request was assigned: those it ran and those that yielded (a yield is judged on the
-            // assignment, design 11.1), resolved below over the replayed plan's yields, as the request would be now: a yield
-            // added, removed or reversed since the recording changes which arms run. The platform's other ignored arms
-            // (unknown, layer conflict) stay part of its assignment record; arms passed to the replay replace that
-            // assignment, so it then has none.
+            // The arms to run, resolved over the replayed plan as the request's assignment would be now (reviews 96, 98).
+            // A recording of the platform's arms (external, provider) holds every id the platform sent, those that ran and
+            // those it ignored for any reason; they go through the platform's rule again, so a changed plan ignores (an
+            // unknown arm, a layer conflict), runs or yields them as it would the request. Forced arms, and arms passed to
+            // the replay, are strict, as forced arms are in a request: an arm the plan does not have is left out with a
+            // note, two of one layer reject the replay. Yields come last, for every source.
             var recordedIgnored = options?.Arms is null ? IgnoredArms(recordedRequest.Assignment) : Array.Empty<IgnoredArm>();
-            var assignedIds = new List<string>(options?.Arms ?? recordedArms);
-            var kept = new List<IgnoredArm>(recordedIgnored.Length);
-            foreach (var arm in recordedIgnored)
-            {
-                if (arm.Reason == IgnoredArmReason.Yielded)
-                {
-                    assignedIds.Add(arm.Id);
-                }
-                else
-                {
-                    kept.Add(arm);
-                }
-            }
-
-            var known = new List<string>();
-            foreach (var arm in assignedIds)
-            {
-                if (plan.TryGetArm(arm, out _))
-                {
-                    known.Add(arm);
-                }
-                else
-                {
-                    notes.Add($"arm '{arm}' is not in the replayed plan; replayed without it");
-                }
-            }
-
             RequestArms arms;
-            try
+            IgnoredArm[] ignored;
+            if (options?.Arms is null && recordedRequest.Assignment.Source is "external" or "provider")
             {
-                arms = plan.ArmsFromIds(known);
+                var sent = new List<string>(recordedArms);
+                foreach (var arm in recordedIgnored)
+                {
+                    sent.Add(arm.Id);
+                }
+
+                arms = ExternalArms.Resolve(plan.Layers.AsSpan(), plan.Arms.AsSpan(), sent, out ignored);
             }
-            catch (ArgumentException ex)
+            else
             {
-                return Outcome(bundle, Rejected(request, RecErrorKind.InvalidRequest, ex.Message), recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null, notes, 0,
-                    plan.ManifestId);
+                // A forced recording's yielded arms were forced too.
+                var forced = new List<string>(options?.Arms ?? recordedArms);
+                foreach (var arm in recordedIgnored)
+                {
+                    if (arm.Reason == IgnoredArmReason.Yielded)
+                    {
+                        forced.Add(arm.Id);
+                    }
+                }
+
+                var known = new List<string>();
+                foreach (var arm in forced)
+                {
+                    if (plan.TryGetArm(arm, out _))
+                    {
+                        known.Add(arm);
+                    }
+                    else
+                    {
+                        notes.Add($"arm '{arm}' is not in the replayed plan; replayed without it");
+                    }
+                }
+
+                try
+                {
+                    arms = plan.ArmsFromIds(known);
+                }
+                catch (ArgumentException ex)
+                {
+                    return Outcome(bundle, Rejected(request, RecErrorKind.InvalidRequest, ex.Message), recordedResult, recordedArms, null, primaryRecord, null, primaryReplay, null,
+                        notes, 0, plan.ManifestId);
+                }
+
+                ignored = Array.Empty<IgnoredArm>();
             }
 
             var assigned = arms;
-            arms = ExternalArms.Yield(plan, assigned, kept.ToArray(), out var ignored);
-            foreach (var arm in ignored)
-            {
-                if (arm.Reason == IgnoredArmReason.Yielded && !WasYielded(recordedIgnored, arm.Id) && plan.TryGetArm(arm.Id, out var info))
-                {
-                    notes.Add($"arm '{arm.Id}' yields to '{plan.Experiments[plan.Yields.YieldsTo(info.Index, assigned)].Id}' in the replayed plan; replayed without it");
-                }
-            }
-
-            foreach (var arm in recordedIgnored)
-            {
-                if (arm.Reason == IgnoredArmReason.Yielded && plan.TryGetArm(arm.Id, out var info) && arms.ArmIn(info.LayerIndex) == info.Index)
-                {
-                    notes.Add($"arm '{arm.Id}' yielded in the recording and runs in the replayed plan");
-                }
-            }
+            arms = ExternalArms.Yield(plan, assigned, ignored, out ignored);
+            Notes(plan, recordedArms, recordedIgnored, assigned, arms, ignored, notes);
 
             // The recorded configuration override, applied again over the replayed plan with the replayed arms, as the
             // request applied it (DebugOptions.ConfigOverride); its run has the arms merged in.
@@ -678,11 +677,49 @@ public sealed partial class RecEngine
         return records;
     }
 
-    private static bool WasYielded(IgnoredArm[] recorded, string id)
+    /// <summary>
+    /// Notes for the arms a replay runs otherwise than the recording: one that ran and the replayed plan ignores (the
+    /// strict sources note an unknown arm where they leave it out), and one the recording ignored that runs now.
+    /// </summary>
+    private static void Notes(
+        ExecutionPlan plan, IReadOnlyList<string> recordedArms, IgnoredArm[] recordedIgnored, in RequestArms assigned, in RequestArms running, IgnoredArm[] ignored,
+        List<string> notes)
     {
-        foreach (var arm in recorded)
+        foreach (var arm in ignored)
         {
-            if (arm.Reason == IgnoredArmReason.Yielded && string.Equals(arm.Id, id, StringComparison.Ordinal))
+            if (!Contains(recordedArms, arm.Id))
+            {
+                continue;
+            }
+
+            if (arm.Reason == IgnoredArmReason.Yielded && plan.TryGetArm(arm.Id, out var info))
+            {
+                notes.Add($"arm '{arm.Id}' yields to '{plan.Experiments[plan.Yields.YieldsTo(info.Index, assigned)].Id}' in the replayed plan; replayed without it");
+            }
+            else if (arm.Reason == IgnoredArmReason.Unknown)
+            {
+                notes.Add($"arm '{arm.Id}' is not in the replayed plan; replayed without it");
+            }
+            else if (arm.Reason == IgnoredArmReason.LayerConflict)
+            {
+                notes.Add($"arm '{arm.Id}' is in a layer with another arm of the request in the replayed plan (layer_conflict); replayed without it");
+            }
+        }
+
+        foreach (var arm in recordedIgnored)
+        {
+            if (plan.TryGetArm(arm.Id, out var info) && running.ArmIn(info.LayerIndex) == info.Index)
+            {
+                notes.Add($"arm '{arm.Id}' was ignored in the recording ({IgnoredArm.Name(arm.Reason)}) and runs in the replayed plan");
+            }
+        }
+    }
+
+    private static bool Contains(IReadOnlyList<string> ids, string id)
+    {
+        foreach (var candidate in ids)
+        {
+            if (string.Equals(candidate, id, StringComparison.Ordinal))
             {
                 return true;
             }
