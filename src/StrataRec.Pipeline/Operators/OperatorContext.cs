@@ -143,9 +143,10 @@ public sealed class OperatorContext
     /// (<see cref="RetrieveAsync"/>), not by <see cref="CancellationToken"/>, which a client's callback could hold up; and a
     /// prefetch that faulted is rethrown as it is, not taken for the deadline. The bound is also checked before each round
     /// and before each read is judged (an empty one's callback included), so what is stored after it passed is never
-    /// settled, and a fault is not reported for a deadline that came first, however long a callback ran. <paramref name="reads"/>
-    /// is read once, before anything is settled: no code of the operator's runs between a check and what it guards. An
-    /// operator that stopped waiting reads nothing more of the request's.</para>
+    /// settled, and a fault is not reported for a deadline that came first, however long a callback ran. Each read of
+    /// <paramref name="reads"/> is asked for once, in order, with the bound checked before: none of the operator's code (its
+    /// list, its callback) is called once a check saw the bound pass. An operator that stopped waiting reads nothing more of
+    /// the request's.</para>
     /// </remarks>
     /// <exception cref="OperationCanceledException">The attempt's budget ran out or the caller gave up first: the reads not
     /// settled by then never are, and the operator stops, as when a call it sent is cut off.</exception>
@@ -154,26 +155,25 @@ public sealed class OperatorContext
         ArgumentNullException.ThrowIfNull(reads);
         ArgumentNullException.ThrowIfNull(settled);
 
-        // The operator's list is read once, here. Judging a read then runs none of the operator's code, so nothing but the
-        // engine's own work comes between a bound check and what it guards, however long the list takes to index
-        // (review 91: an indexer that ran past the bound let a faulted prefetch be read after the check, standing for it).
-        var featuresOf = new ImmutableArray<int>[reads.Count];
-        for (var i = 0; i < featuresOf.Length; i++)
+        // One pass over the operator's list, which reads each read once and never again: one with nothing to wait for is
+        // settled as it is read, the others are kept with their features (no copy of the list: none for an operator that
+        // waits for nothing). The bound is checked before each call into the operator's code, its list's indexer as its
+        // callback: indexed in each round, a slow list let a callback run after the bound passed (review 89) and a faulted
+        // prefetch stand for it (91); read up front without a check, the rest of the list was read after it (93).
+        List<(int Index, ImmutableArray<int> Features)>? waiting = null;
+        var count = reads.Count;
+        for (var i = 0; i < count; i++)
         {
-            featuresOf[i] = (reads[i] ?? throw new ArgumentException($"reads[{i}] is null.", nameof(reads))).Features;
-        }
-
-        List<int>? waiting = null;
-        for (var i = 0; i < featuresOf.Length; i++)
-        {
-            if (featuresOf[i].IsEmpty)
+            ThrowIfBoundPassed();
+            var read = (reads[i] ?? throw new ArgumentException($"reads[{i}] is null.", nameof(reads))).Features;
+            if (read.IsEmpty)
             {
-                ThrowIfBoundPassed(); // the callback before may have run past it (review 86)
+                ThrowIfBoundPassed(); // the indexer may have run past it
                 settled(i, new FeatureFillResult(FeatureState.Ok));
             }
             else
             {
-                (waiting ??= new List<int>(featuresOf.Length)).Add(i);
+                (waiting ??= new List<(int, ImmutableArray<int>)>(count - i)).Add((i, read));
             }
         }
 
@@ -192,9 +192,9 @@ public sealed class OperatorContext
             tasks.Clear();
             stored.Clear();
             pending.Clear();
-            foreach (var i in waiting)
+            foreach (var (_, read) in waiting)
             {
-                foreach (var f in featuresOf[i])
+                foreach (var f in read)
                 {
                     var task = features.ContextStoredTask(f);
                     if (!tasks.Contains(task))
@@ -212,13 +212,13 @@ public sealed class OperatorContext
 
             for (var w = 0; w < waiting.Count; w++)
             {
-                var i = waiting[w];
-                // Before the read's state is read, not only before its callback: a faulted prefetch rethrown there must not
-                // stand for a deadline or a caller that came first (review 86). One check guards both: between it and the
-                // callback only the engine's own state is read, no code of the operator's (its list was read up front).
+                var (i, read) = waiting[w];
+                // Before the read's state is read: a faulted prefetch rethrown there must not stand for a deadline or a
+                // caller that came first (review 86).
                 ThrowIfBoundPassed();
-                if (Settled(features, featuresOf[i], tasks, stored, out var result))
+                if (Settled(features, read, tasks, stored, out var result))
                 {
+                    ThrowIfBoundPassed(); // and before its callback: judging a read of many features takes time too (review 93)
                     waiting.RemoveAt(w--);
                     settled(i, result);
                 }
