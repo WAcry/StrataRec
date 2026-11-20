@@ -90,17 +90,28 @@ public sealed class IoTarget
 
     /// <summary>
     /// Starts timing one call, and a child span when the request is traced (<see cref="StrataRecTracing.IsRecording"/>).
-    /// Call it where the call starts so the span becomes the ambient parent of the client's own spans.
+    /// Call it where the call starts so the span becomes the ambient parent of the client's own spans. Never throws: a host
+    /// <c>ActivityListener</c> whose sampler or start callback throws leaves the call without a span, as a listener that
+    /// throws when the call completes loses only that measurement (<see cref="IoCall.Complete"/>). The call sites hold the
+    /// request's memory before they start the call, so a throw here would keep it held.
     /// </summary>
     public IoCall Start()
     {
-        var span = StrataRecTracing.StartChild(SpanName, ActivityKind.Client);
-        if (span is { IsAllDataRequested: true })
+        Activity? span;
+        try
         {
-            foreach (var tag in Tags)
+            span = StrataRecTracing.StartChild(SpanName, ActivityKind.Client);
+            if (span is { IsAllDataRequested: true })
             {
-                span.SetTag(tag.Key, tag.Value);
+                foreach (var tag in Tags)
+                {
+                    span.SetTag(tag.Key, tag.Value);
+                }
             }
+        }
+        catch (Exception)
+        {
+            span = null; // the host's listener threw: the call goes on without a span
         }
 
         return new IoCall(this, Stopwatch.GetTimestamp(), span);

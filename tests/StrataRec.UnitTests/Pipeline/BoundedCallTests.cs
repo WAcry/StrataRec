@@ -654,6 +654,48 @@ public sealed class BoundedCallListenerTests
         Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
     }
 
+    [Fact]
+    public async Task AnActivityListenerThatThrowsWhenACallStarts_LeavesItWithoutASpan_AndTheCallLetsGoOfTheMemory()
+    {
+        // The call site holds the request's memory, then starts the call: a throw from the host's start callback kept the
+        // memory held for good (found while fixing review 80). The listener samples only this test's trace.
+        var root = "bounded-call-start-" + Guid.NewGuid().ToString("N");
+        ActivityTraceId trace = default;
+        var started = 0;
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == StrataRecTelemetry.Name,
+            Sample = (ref ActivityCreationOptions<ActivityContext> options) =>
+                options.Name == root || (trace != default && options.Parent.TraceId == trace)
+                    ? ActivitySamplingResult.AllDataAndRecorded
+                    : ActivitySamplingResult.None,
+            ActivityStarted = span =>
+            {
+                if (span.TraceId == trace && span.OperationName != root)
+                {
+                    Interlocked.Increment(ref started);
+                    throw new InvalidOperationException("a host's activity listener failed");
+                }
+            },
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var request = StrataRecTelemetry.ActivitySource.StartActivity(root);
+        trace = request!.TraceId;
+        var target = new IoTarget(IoKind.CandidateSource, "start_listener");
+        var memory = new RequestMemory();
+        var budget = new AttemptBudget(CancellationToken.None, Stopwatch.GetTimestamp() + (600L * Stopwatch.Frequency));
+        var call = new Recording(new ValueTask<int>(5));
+
+        var result = await BoundedCall.RunAsync<int, Recording>(call, budget, memory, target, null, "req", null)
+            .AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((CallEnd.Answered, 5, IoOutcome.Ok), (result.End, result.Value, result.Outcome));
+        Assert.Equal(1, Volatile.Read(ref started)); // it ran, and threw
+        budget.Release();
+        memory.Release();
+        Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
+    }
+
     /// <summary>Answers with <paramref name="answer"/> and keeps what each end recorded.</summary>
     private readonly struct Recording(ValueTask<int> answer) : IBoundedCall<int>
     {
