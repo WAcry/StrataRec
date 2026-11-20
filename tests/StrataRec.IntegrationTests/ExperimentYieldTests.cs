@@ -5,6 +5,7 @@ using StrataRec.Experiments.Assignment;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Manifests;
+using StrataRec.Hosting.Plans;
 using StrataRec.Hosting.Replay;
 using StrataRec.Hosting.Workspace;
 using StrataRec.Pipeline.Execution;
@@ -21,6 +22,9 @@ public sealed class ExperimentYieldTests
     /// <summary>exp_short_feed (its own layer) shortens the feed to 5; exp_quality_weight/strong sets the same parameter to 8.</summary>
     private static void ShortFeed(string root, string patch = """{ "params": { "final_top_k": 5 } }""") =>
         InteractionWarningTests.Experiment(root, "exp_short_feed", "short", patch);
+
+    private static void ShortYields(string root) => ReplayTests.Edit(root, "releases/home_feed.local.jsonc",
+        "\"exp_short_feed\": { \"layer\": \"exp_short_feed\" }", "\"exp_short_feed\": { \"layer\": \"exp_short_feed\", \"yields_to\": [\"exp_quality_weight\"] }");
 
     private static void QualityYields(string root, string to = "exp_short_feed") => ReplayTests.Edit(root, "releases/home_feed.local.jsonc",
         "{ \"layer\": \"params\" }", $"{{ \"layer\": \"params\", \"yields_to\": [\"{to}\"] }}");
@@ -122,6 +126,7 @@ public sealed class ExperimentYieldTests
         var replayed = await after.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(together.Recording!)), cancellationToken: token);
         Assert.Contains("arm 'exp_quality_weight/strong' yields to 'exp_short_feed' in the replayed plan; replayed without it", replayed.Report.Notes);
         Assert.Equal(5, replayed.Result.Items.Count);
+        Assert.Equal([new IgnoredArm("exp_quality_weight/strong", IgnoredArmReason.Yielded)], replayed.Result.Experiments.Ignored); // as a request now records it
 
         var yielded = await after.ExecuteAsync(Request("req-yielded", forced: false, "exp_quality_weight/strong", "exp_short_feed/short", record: true), token);
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(yielded.Recording!));
@@ -129,6 +134,76 @@ public sealed class ExperimentYieldTests
         var again = await after.ReplayAsync(bundle, cancellationToken: token);
         Assert.True(again.Report.Diff.Identical, string.Join("\n", again.Report.Notes));
         Assert.Equal([new IgnoredArm("exp_quality_weight/strong", IgnoredArmReason.Yielded)], again.Result.Experiments.Ignored);
+    }
+
+    /// <summary>
+    /// A replay resolves the yields of the replayed plan over the arms the recording was assigned, those that yielded
+    /// included (review 96): a recording where the quality experiment yielded, replayed where the short feed yields to
+    /// it instead, runs as a request in both runs there now, and differs from the recording. Arms passed to the replay
+    /// yield the same way.
+    /// </summary>
+    [Fact]
+    public async Task AReplay_ResolvesTheRecordedAssignment_OverTheYieldsOfTheReplayedPlan()
+    {
+        await using var recorded = MetricsTests.LoadEngine(HomeFeedTestHost.LoadModified(root =>
+        {
+            ShortFeed(root);
+            QualityYields(root);
+        })).Engine;
+        await using var reversed = MetricsTests.LoadEngine(HomeFeedTestHost.LoadModified(root =>
+        {
+            ShortFeed(root);
+            ShortYields(root);
+        })).Engine;
+        var token = TestContext.Current.CancellationToken;
+        var live = await recorded.ExecuteAsync(Request("req-recorded", forced: false, "exp_quality_weight/strong", "exp_short_feed/short", record: true), token);
+        var now = await reversed.ExecuteAsync(Request("req-now", forced: false, "exp_quality_weight/strong", "exp_short_feed/short"), token);
+        var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(live.Recording!));
+
+        var replayed = await reversed.ReplayAsync(bundle, cancellationToken: token);
+        var withArms = await reversed.ReplayAsync(bundle, new ReplayOptions { Arms = ["exp_quality_weight/strong", "exp_short_feed/short"] }, token);
+
+        Assert.Equal((5, 8), (live.Items.Count, now.Items.Count));
+        Assert.Equal(8, replayed.Result.Items.Count);
+        Assert.Equal(now.Experiments.Assigned, replayed.Result.Experiments.Assigned);
+        Assert.Equal([new IgnoredArm("exp_short_feed/short", IgnoredArmReason.Yielded)], replayed.Result.Experiments.Ignored);
+        Assert.False(replayed.Report.Diff.Identical);
+        Assert.Contains("arm 'exp_quality_weight/strong' yielded in the recording and runs in the replayed plan", replayed.Report.Notes);
+        Assert.Contains("arm 'exp_short_feed/short' yields to 'exp_quality_weight' in the replayed plan; replayed without it", replayed.Report.Notes);
+        Assert.Equal(8, withArms.Result.Items.Count);
+        Assert.Equal([new IgnoredArm("exp_short_feed/short", IgnoredArmReason.Yielded)], withArms.Result.Experiments.Ignored);
+    }
+
+    /// <summary>
+    /// A yield changes what a request in both experiments runs, which no combination the default diff compares shows, so
+    /// it is a structural change; a reversed one is one removed and one added (review 96). An effective plan is the one a
+    /// request in the arms runs, without the arm that yields, as the executor runs it.
+    /// </summary>
+    [Fact]
+    public void ADiff_ReportsAYieldAddedOrReversed_AndAnEffectivePlanRunsWithoutTheArmThatYields()
+    {
+        var quality = HomeFeedTestHost.LoadModified(root =>
+        {
+            ShortFeed(root);
+            QualityYields(root);
+        }).Plan();
+        var shortFeed = HomeFeedTestHost.LoadModified(root =>
+        {
+            ShortFeed(root);
+            ShortYields(root);
+        }).Plan();
+
+        var diff = PlanDiff.Compare(quality, shortFeed);
+        var effective = EffectivePlan.Create(quality, quality.ArmsFromIds(["exp_quality_weight/strong", "exp_short_feed/short"]));
+
+        Assert.True(diff.HasDifferences);
+        Assert.Empty(diff.Combinations); // the baseline and each arm alone run as before
+        Assert.Equal(
+            [("exp_quality_weight", "exp_short_feed", StructureChangeKind.Removed), ("exp_short_feed", "exp_quality_weight", StructureChangeKind.Added)],
+            diff.Structure.Select(c => (c.Id, c.YieldsTo!, c.Change)).ToArray());
+        Assert.All(diff.Structure, c => Assert.Equal("yield", c.Kind));
+        Assert.Equal(["exp_short_feed/short"], effective.ArmIds);
+        Assert.Equal(5L, effective.ParamsDocument()["final_top_k"]!.GetValue<long>());
     }
 
     [Fact]
@@ -311,6 +386,49 @@ public sealed class ExperimentYieldDeclarationTests
         Assert.Contains("INTERACTION_FLOW_COLUMN score.final", compilation.Report.Yields.Single(y => y.To == "exp_freshness_calibration").Resolves);
         Assert.Equal(["INTERACTION_READ score.final"], compilation.Report.Yields.Single(y => y.To == "exp_mmr_diversity").Resolves);
     }
+
+    /// <summary>
+    /// The combination limit counts the combinations that run: a yield removes those with both experiments, as one layer
+    /// would, so declaring it instead of merging two layers costs no more checks (review 96). Three layers changing one
+    /// multiplier of fusion, each yielding to those after it, run 4 of the 8 combinations; with one yield between two of
+    /// three layers changing fusion, 6 run.
+    /// </summary>
+    [Fact]
+    public void TheCombinationLimit_CountsTheCombinationsThatRun()
+    {
+        var host = HomeFeedTestHost.Load();
+        var chain = new[] { Yields(Fusion("a", "quality", "1.1"), "b", "c"), Yields(Fusion("b", "quality", "1.2"), "c"), Fusion("c", "quality", "1.3") };
+        var one = new[] { Yields(Fusion("a", "quality", "1.1"), "b"), Fusion("b", "quality", "1.2"), Fusion("c", "locale", "1.3") };
+
+        var four = PlanCompiler.Compile(CombinationLimitTests.With(host.Request, chain, maxCombinationsChecked: 4), host.Environment);
+        var six = PlanCompiler.Compile(CombinationLimitTests.With(host.Request, one, maxCombinationsChecked: 6), host.Environment);
+        var five = PlanCompiler.Compile(CombinationLimitTests.With(host.Request, one, maxCombinationsChecked: 5), host.Environment);
+
+        Assert.True(four.Succeeded, string.Join("\n", four.Diagnostics));
+        Assert.Equal(4, four.Report.CombinationsChecked);
+        Assert.True(six.Succeeded, string.Join("\n", six.Diagnostics));
+        Assert.Equal(6, six.Report.CombinationsChecked);
+        var limit = five.Diagnostics.First(d => d.Code == "COMBINATION_CHECK_LIMIT"); // one per data-flow rule fusion decides
+        Assert.Contains("too many combinations, more than the 5 that can be checked", limit.Message, StringComparison.Ordinal);
+        Assert.Contains("yield", limit.Hint, StringComparison.Ordinal);
+    }
+
+    /// <summary>A review of an interaction that a yield keeps apart is unused; the hint names the yield, since the two are in different layers (review 96).</summary>
+    [Fact]
+    public void AReviewOfAnInteractionAYieldKeepsApart_IsUnused_AndTheHintNamesTheYield()
+    {
+        var compilation = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "releases/home_feed.local.jsonc",
+            "\"exp_mmr_diversity\":         { \"layer\": \"rerank\" }",
+            "\"exp_mmr_diversity\":         { \"layer\": \"rerank\", \"yields_to\": [\"exp_freshness_calibration\"] }")).Compile();
+
+        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
+        var warning = Assert.Single(compilation.Diagnostics, d => d.Code == "INTERACTION_REVIEW_UNUSED");
+        Assert.Equal("/reviewed_interactions/exp_freshness_calibration/0", warning.Pointer);
+        Assert.Contains("'exp_mmr_diversity' yields to 'exp_freshness_calibration'", warning.Hint, StringComparison.Ordinal);
+    }
+
+    private static ExperimentPlacement Fusion(string id, string multiplier, string value) =>
+        CombinationLimitTests.Treatment(id, $$"""{ "nodes": { "fusion": { "config": { "multipliers": { "{{multiplier}}": "{{value}}" } } } } }""");
 
     private static ExperimentPlacement Yields(ExperimentPlacement placement, params string[] to) => placement with { YieldsTo = to };
 

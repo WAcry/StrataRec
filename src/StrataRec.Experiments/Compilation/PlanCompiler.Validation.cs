@@ -61,7 +61,7 @@ internal sealed partial class UnifiedCompilation
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var allLayers = new List<int>(choices.Keys);
-        if (Product(choices, allLayers) <= _request.MaxCombinationsChecked)
+        if (Combinations(choices, allLayers) <= _request.MaxCombinationsChecked)
         {
             Enumerate(choices, allLayers, combination => Check(combination, timeline, fallbacks, output, seen, report));
             return;
@@ -130,7 +130,7 @@ internal sealed partial class UnifiedCompilation
             }
 
             var list = new List<int>(layers);
-            var product = Product(choices, list);
+            var product = Combinations(choices, list);
             if (product > _request.MaxCombinationsChecked)
             {
                 // Without a complete check some assignment could run a plan this rule rejects, so the plan is rejected
@@ -149,7 +149,8 @@ internal sealed partial class UnifiedCompilation
                         $"The data flow of {scope.Subject} depends on arms in {list.Count} layers ({string.Join("; ", names)}): " +
                         $"{(product == long.MaxValue ? "too many" : product.ToString(System.Globalization.CultureInfo.InvariantCulture))} combinations, " +
                         $"more than the {_request.MaxCombinationsChecked} that can be checked.",
-                        "put experiments that change these nodes into fewer layers (arms of one layer never run together), or graduate some of them");
+                        "put experiments that change these nodes into fewer layers (arms of one layer never run together), let one yield to another "
+                        + "where both are assigned (design 11.1), or graduate some of them");
                 }
 
                 continue;
@@ -455,28 +456,33 @@ internal sealed partial class UnifiedCompilation
             return;
         }
 
-        var placed = new HashSet<string>(StringComparer.Ordinal);
+        var placed = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var (id, _, _) in _experiments)
         {
-            placed.Add(id);
+            placed[id] = placed.Count;
         }
 
         foreach (var (experiment, (artifact, reviewed)) in _reviewed)
         {
             foreach (var (other, columns) in reviewed)
             {
-                if (!placed.Contains(other))
+                if (!placed.TryGetValue(other, out var otherIndex))
                 {
                     continue;
                 }
 
+                // A yield between the two keeps them from running together: say which, since they are in different layers
+                // and may still both add nodes on the column.
+                var index = placed[experiment];
+                var hint = _yields.Yields(index, otherIndex) ? $"remove the entry: '{experiment}' yields to '{other}', so the two never run together (design 11.1)"
+                    : _yields.Yields(otherIndex, index) ? $"remove the entry: '{other}' yields to '{experiment}', so the two never run together (design 11.1)"
+                    : "remove the entry: the experiments share a layer, or neither adds a node that interacts on the column";
                 for (var i = 0; i < columns.Count; i++)
                 {
                     if (!_reviewUsed.Contains((experiment, other, columns[i])))
                     {
                         _diagnostics.Warning("INTERACTION_REVIEW_UNUSED", artifact, $"/reviewed_interactions/{JsonPointer.Escape(other)}/{i}",
-                            $"No interaction between '{experiment}' and '{other}' on '{columns[i]}' needs a review in this release.",
-                            "remove the entry: the experiments share a layer, or neither adds a node that interacts on the column");
+                            $"No interaction between '{experiment}' and '{other}' on '{columns[i]}' needs a review in this release.", hint);
                     }
                 }
             }
@@ -653,6 +659,24 @@ internal sealed partial class UnifiedCompilation
         return combination;
     }
 
+    /// <summary>
+    /// How many combinations of <paramref name="layers"/> run (<see cref="Enumerate"/>): the product of the layers'
+    /// choices without yields; with them, counted up to the limit, and <see cref="long.MaxValue"/> above it. A yield
+    /// removes the combinations with both experiments, as one layer would, so declaring one instead of merging two layers
+    /// costs no more checks.
+    /// </summary>
+    private long Combinations(SortedDictionary<int, List<int>> choices, List<int> layers)
+    {
+        var product = Product(choices, layers);
+        if (_yields.IsEmpty || product <= _request.MaxCombinationsChecked)
+        {
+            return product;
+        }
+
+        var count = Enumerate(choices, layers, visit: null, limit: (long)_request.MaxCombinationsChecked + 1);
+        return count > _request.MaxCombinationsChecked ? long.MaxValue : count;
+    }
+
     private static long Product(SortedDictionary<int, List<int>> choices, List<int> layers)
     {
         long product = 1;
@@ -668,35 +692,71 @@ internal sealed partial class UnifiedCompilation
         return product;
     }
 
-    /// <summary>Odometer over every assignment of the given layers (each: not assigned, or one of its arms).</summary>
-    private void Enumerate(SortedDictionary<int, List<int>> choices, List<int> layers, Action<int[]> visit)
+    /// <summary>
+    /// Every combination of the given layers (each: not assigned, or one of its arms) that runs, in order (the first layer
+    /// varying slowest, "not assigned" first): none with two arms one of whose experiments yields to the other's, since a
+    /// request assigned both runs without one, a combination visited too. Stops after <paramref name="limit"/>
+    /// combinations; returns how many it visited. Without yields, every combination.
+    /// </summary>
+    private long Enumerate(SortedDictionary<int, List<int>> choices, List<int> layers, Action<int[]>? visit, long limit = long.MaxValue)
     {
-        var digits = new int[layers.Count];
-        while (true)
+        var combination = NewCombination();
+        long count = 0;
+        Visit(0);
+        return count;
+
+        // False once the limit is reached.
+        bool Visit(int depth)
         {
-            var combination = NewCombination();
-            for (var i = 0; i < layers.Count; i++)
+            if (depth == layers.Count)
             {
-                combination[layers[i]] = digits[i] == 0 ? -1 : choices[layers[i]][digits[i] - 1];
+                count++;
+                visit?.Invoke((int[])combination.Clone());
+                return count < limit;
             }
 
-            visit(combination);
-            var position = layers.Count - 1;
-            while (position >= 0)
+            var layer = layers[depth];
+            combination[layer] = -1;
+            if (!Visit(depth + 1))
             {
-                if (++digits[position] <= choices[layers[position]].Count)
+                return false;
+            }
+
+            foreach (var arm in choices[layer])
+            {
+                if (RunsWith(arm, combination, layers, depth))
                 {
-                    break;
+                    combination[layer] = arm;
+                    if (!Visit(depth + 1))
+                    {
+                        return false;
+                    }
                 }
-
-                digits[position] = 0;
-                position--;
             }
 
-            if (position < 0)
+            combination[layer] = -1;
+            return true;
+        }
+    }
+
+    /// <summary>Whether <paramref name="arm"/> runs beside the arms of the first <paramref name="depth"/> <paramref name="layers"/> of <paramref name="combination"/>.</summary>
+    private bool RunsWith(int arm, int[] combination, List<int> layers, int depth)
+    {
+        if (_yields.IsEmpty)
+        {
+            return true;
+        }
+
+        var experiment = _arms[arm].ExperimentIndex;
+        for (var i = 0; i < depth; i++)
+        {
+            var other = combination[layers[i]];
+            if (other >= 0 && (_yields.Yields(experiment, _arms[other].ExperimentIndex) || _yields.Yields(_arms[other].ExperimentIndex, experiment)))
             {
-                return;
+                return false;
             }
         }
+
+        return true;
     }
 }

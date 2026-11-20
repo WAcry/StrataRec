@@ -108,8 +108,28 @@ public sealed partial class RecEngine
                     notes, 0, plan.ManifestId);
             }
 
+            // The arms the recorded request was assigned: those it ran and those that yielded (a yield is judged on the
+            // assignment, design 11.1), resolved below over the replayed plan's yields, as the request would be now: a yield
+            // added, removed or reversed since the recording changes which arms run. The platform's other ignored arms
+            // (unknown, layer conflict) stay part of its assignment record; arms passed to the replay replace that
+            // assignment, so it then has none.
+            var recordedIgnored = options?.Arms is null ? IgnoredArms(recordedRequest.Assignment) : Array.Empty<IgnoredArm>();
+            var assignedIds = new List<string>(options?.Arms ?? recordedArms);
+            var kept = new List<IgnoredArm>(recordedIgnored.Length);
+            foreach (var arm in recordedIgnored)
+            {
+                if (arm.Reason == IgnoredArmReason.Yielded)
+                {
+                    assignedIds.Add(arm.Id);
+                }
+                else
+                {
+                    kept.Add(arm);
+                }
+            }
+
             var known = new List<string>();
-            foreach (var arm in options?.Arms ?? recordedArms)
+            foreach (var arm in assignedIds)
             {
                 if (plan.TryGetArm(arm, out _))
                 {
@@ -132,22 +152,23 @@ public sealed partial class RecEngine
                     plan.ManifestId);
             }
 
-            // Arms the recording ran together that the replayed plan never does (one's experiment yields to the other's):
-            // replayed as a request in them would run now, without the arm that yields.
-            if (!plan.Yields.IsEmpty)
+            var assigned = arms;
+            arms = ExternalArms.Yield(plan, assigned, kept.ToArray(), out var ignored);
+            foreach (var arm in ignored)
             {
-                var yielded = new List<int>();
-                var assigned = arms;
-                arms = plan.Yields.Resolve(assigned, yielded);
-                foreach (var arm in yielded)
+                if (arm.Reason == IgnoredArmReason.Yielded && !WasYielded(recordedIgnored, arm.Id) && plan.TryGetArm(arm.Id, out var info))
                 {
-                    notes.Add($"arm '{plan.Arms[arm].Id}' yields to '{plan.Experiments[plan.Yields.YieldsTo(arm, assigned)].Id}' in the replayed plan; replayed without it");
+                    notes.Add($"arm '{arm.Id}' yields to '{plan.Experiments[plan.Yields.YieldsTo(info.Index, assigned)].Id}' in the replayed plan; replayed without it");
                 }
             }
 
-            // The platform's arms the recorded request ignored are part of its assignment record; arms passed to the replay
-            // replace that assignment, so it then has none.
-            var ignored = options?.Arms is null ? IgnoredArms(recordedRequest.Assignment) : Array.Empty<IgnoredArm>();
+            foreach (var arm in recordedIgnored)
+            {
+                if (arm.Reason == IgnoredArmReason.Yielded && plan.TryGetArm(arm.Id, out var info) && arms.ArmIn(info.LayerIndex) == info.Index)
+                {
+                    notes.Add($"arm '{arm.Id}' yielded in the recording and runs in the replayed plan");
+                }
+            }
 
             // The recorded configuration override, applied again over the replayed plan with the replayed arms, as the
             // request applied it (DebugOptions.ConfigOverride); its run has the arms merged in.
@@ -655,6 +676,19 @@ public sealed partial class RecEngine
         }
 
         return records;
+    }
+
+    private static bool WasYielded(IgnoredArm[] recorded, string id)
+    {
+        foreach (var arm in recorded)
+        {
+            if (arm.Reason == IgnoredArmReason.Yielded && string.Equals(arm.Id, id, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>The ignored arms a bundle recorded.</summary>

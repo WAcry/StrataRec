@@ -14,13 +14,21 @@ public enum StructureChangeKind : byte
     Moved,
 }
 
-/// <summary>A layer, experiment or arm present on one side only, or an experiment in another layer.</summary>
-/// <param name="Kind"><c>layer</c>, <c>experiment</c> or <c>arm</c>.</param>
-/// <param name="Id">The layer name, experiment id or <c>experiment/arm</c>.</param>
+/// <summary>
+/// A layer, experiment, arm or yield present on one side only, or an experiment in another layer. A yield (design 11.1)
+/// changes no combination the comparison runs (the baseline and each arm alone) but what a request in both experiments
+/// runs, so it is reported here; a reversed one is one removed and one added.
+/// </summary>
+/// <param name="Kind"><c>layer</c>, <c>experiment</c>, <c>arm</c> or <c>yield</c>.</param>
+/// <param name="Id">The layer name, experiment id, <c>experiment/arm</c>, or for a yield the experiment that yields.</param>
 /// <param name="Change">What changed.</param>
-/// <param name="FromLayer">Its layer on the from side; null when absent there (and for layers).</param>
-/// <param name="ToLayer">Its layer on the to side; null when absent there (and for layers).</param>
-public sealed record StructureChange(string Kind, string Id, StructureChangeKind Change, string? FromLayer, string? ToLayer);
+/// <param name="FromLayer">Its layer on the from side; null when absent there (and for layers and yields).</param>
+/// <param name="ToLayer">Its layer on the to side; null when absent there (and for layers and yields).</param>
+public sealed record StructureChange(string Kind, string Id, StructureChangeKind Change, string? FromLayer, string? ToLayer)
+{
+    /// <summary>For a yield, the experiment <see cref="Id"/> yields to; otherwise null.</summary>
+    public string? YieldsTo { get; init; }
+}
 
 /// <summary>What differs for one arm combination.</summary>
 /// <param name="Label"><c>baseline</c>, or the arms joined with <c> + </c>.</param>
@@ -226,7 +234,35 @@ public sealed class PlanDiff
             }
         }
 
+        var fromYields = Yields(from);
+        var toYields = Yields(to);
+        foreach (var yield in Union(fromYields.Keys, toYields.Keys))
+        {
+            var inTo = toYields.TryGetValue(yield, out var edge);
+            if (!inTo || !fromYields.ContainsKey(yield))
+            {
+                edge = inTo ? edge : fromYields[yield];
+                changes.Add(new StructureChange("yield", edge.From, inTo ? StructureChangeKind.Added : StructureChangeKind.Removed, null, null) { YieldsTo = edge.To });
+            }
+        }
+
         return changes;
+    }
+
+    /// <summary>A plan's yields by <c>experiment\nyielded-to</c> (sorting by the one that yields).</summary>
+    private static SortedDictionary<string, (string From, string To)> Yields(ExecutionPlan plan)
+    {
+        var yields = new SortedDictionary<string, (string From, string To)>(StringComparer.Ordinal);
+        foreach (var experiment in plan.Experiments)
+        {
+            foreach (var to in experiment.YieldsTo)
+            {
+                var target = plan.Experiments[to].Id;
+                yields[experiment.Id + "\n" + target] = (experiment.Id, target);
+            }
+        }
+
+        return yields;
     }
 
     private static SortedDictionary<string, string?> Layers(ExecutionPlan plan)

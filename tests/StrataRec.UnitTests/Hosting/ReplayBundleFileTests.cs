@@ -10,7 +10,7 @@ public sealed class ReplayBundleFileTests
 {
     private const string Minimal = """
         {
-          "format": "stratarec.replay_bundle/2026-11-20.2",
+          "format": "stratarec.replay_bundle/2026-11-20.3",
           "request": { "pipeline_id": "p", "request_id": "r", "seed": 1, "time_ms": 0, "deadline_ms": 100, "assignment": { "source": "none" } },
           "manifest": { "id": "m" },
           "runs": [
@@ -31,12 +31,12 @@ public sealed class ReplayBundleFileTests
     [Fact]
     public void ABundleOfThePreviousFormat_IsRejectedAtTheFormat()
     {
-        // 2026-11-20.2: calls are batched evenly, so a bundle of 2026-11-20.1 holds calls cut at other boundaries (review 86);
-        // there are no old readers.
-        var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(Minimal.Replace("2026-11-20.2", "2026-11-20.1", StringComparison.Ordinal)));
+        // 2026-11-20.3 adds the reason "yielded", which a build of 2026-11-20.2 cannot read (review 96); there are no old
+        // readers.
+        var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(Minimal.Replace("2026-11-20.3", "2026-11-20.2", StringComparison.Ordinal)));
 
         Assert.Equal("/format", error.Pointer);
-        Assert.Equal("stratarec.replay_bundle/2026-11-20.2", ReplayBundle.CurrentFormat);
+        Assert.Equal("stratarec.replay_bundle/2026-11-20.3", ReplayBundle.CurrentFormat);
     }
 
     [Fact]
@@ -171,7 +171,7 @@ public sealed class ReplayBundleFileTests
         // Review 32 #4: "\uD800" (an unpaired surrogate escape) escaped as InvalidOperationException.
         var unpaired = "\"" + (char)92 + "uD800\"";
         var json = member == "seed"
-            ? """{"format":"stratarec.replay_bundle/2026-11-20.2","request":{"seed":""" + unpaired + "}}"
+            ? """{"format":"stratarec.replay_bundle/2026-11-20.3","request":{"seed":""" + unpaired + "}}"
             : """{"format":""" + unpaired + ""","request":{}}""";
 
         var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(json));

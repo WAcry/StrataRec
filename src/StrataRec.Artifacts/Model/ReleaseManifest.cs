@@ -81,7 +81,7 @@ public sealed class ManifestExperiment
 
     /// <summary>
     /// The experiment's layer: a request is in at most one arm per layer, so the arms of one layer are never validated
-    /// together and the arms of different layers always are (design 11.5).
+    /// together and the arms of different layers are, unless one experiment yields to the other (design 11.1, 11.5).
     /// </summary>
     public required string Layer { get; init; }
 

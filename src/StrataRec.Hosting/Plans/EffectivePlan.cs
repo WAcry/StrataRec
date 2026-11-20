@@ -72,10 +72,15 @@ public sealed class EffectivePlan
 
     public OutputPlan Output => Plan.Output;
 
-    /// <summary>The plan a request with <paramref name="arms"/> executes.</summary>
+    /// <summary>
+    /// The plan a request in <paramref name="arms"/> executes: without an arm whose experiment yields to another's of them
+    /// (design 11.1), as the executor runs it, so <see cref="ArmIds"/> are the arms that run. A tool that shows the arms a
+    /// user named refuses such a combination first (<see cref="ExecutionPlan.NeverRunTogether"/>).
+    /// </summary>
     public static EffectivePlan Create(ExecutionPlan plan, RequestArms arms)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        arms = plan.Yields.Resolve(arms);
         var nodes = new List<EffectiveNode>();
         foreach (var slot in plan.Timeline)
         {

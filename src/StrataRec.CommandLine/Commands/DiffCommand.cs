@@ -21,7 +21,7 @@ internal static class DiffCommand
     /// <summary>The shape of <c>--format json</c>: in <c>diff --help</c>, not in the list of commands.</summary>
     private const string JsonFormat =
         "Output format. json: { from: {ref, pipeline}, to: {ref, pipeline}, differences: bool, " +
-        "structure: [{kind: layer|experiment|arm, id, change: added|removed|moved, from_layer, to_layer}], compared: [combination], " +
+        "structure: [{kind: layer|experiment|arm|yield, id, change: added|removed|moved, from_layer, to_layer, yields_to (a yield)}], compared: [combination], " +
         "combinations: [{combination, arms: [arm], missing_on?: from|to, reason?, changes: [{pointer, change: added|removed|changed, from?, to?}]}] }. " +
         "A pointer is RFC 6901 into the combination's plan: /nodes/<id>/..., /params/<leaf>, /taps/<id>/..., /funnel_groups/<group>/..., /output/... " +
         "(explain-plan --arms --format json shows the same members). Only combinations that differ are listed; 'compared' names every one compared.";
@@ -194,6 +194,7 @@ internal static class DiffCommand
                 {
                     { Change: StructureChangeKind.Moved } => $"  ~ {change.Kind} {change.Id}: layer {change.FromLayer} -> {change.ToLayer}",
                     { Kind: "layer" } => $"  {Marker(change.Change)} layer {change.Id}",
+                    { Kind: "yield" } => $"  {Marker(change.Change)} yield {change.Id} -> {change.YieldsTo}",
                     _ => $"  {Marker(change.Change)} {change.Kind} {change.Id} (layer {change.FromLayer ?? change.ToLayer})",
                 });
             }
@@ -305,6 +306,11 @@ internal static class DiffCommand
             json.WriteString("change", change.Change.ToString().ToLowerInvariant());
             WriteNullable(json, "from_layer", change.FromLayer);
             WriteNullable(json, "to_layer", change.ToLayer);
+            if (change.YieldsTo is { } yieldsTo)
+            {
+                json.WriteString("yields_to", yieldsTo);
+            }
+
             json.WriteEndObject();
         }
 

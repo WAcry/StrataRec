@@ -29,11 +29,13 @@ public sealed class ReplayBundle
     /// <c>2026-11-14.2</c>): it says when a bundle was laid out, and sorts as text. It changes also when what a bundle
     /// records means something else for the same layout: 2026-11-20.2 batches calls evenly (Batching.Size), so a bundle
     /// recorded before holds calls cut at other boundaries, which a replay could not answer as recorded: a model call is
-    /// matched as a whole and a recorded timeout belongs to its batch (review 86).
+    /// matched as a whole and a recorded timeout belongs to its batch (review 86). 2026-11-20.3 adds the ignored arm's
+    /// reason <c>yielded</c> (design 11.1): a build before cannot read it, and refuses such a bundle at its format, with
+    /// a hint to record again, instead of at a reason it does not know (review 96).
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-20.2";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-20.3";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-20.2\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-20.3\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
