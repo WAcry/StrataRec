@@ -37,6 +37,9 @@ dotnet_naming_symbols.private_fields.applicable_accessibilities = private, priva
 dotnet_naming_style.underscore_camel.required_prefix = _
 dotnet_naming_style.underscore_camel.capitalization = camel_case
 
+# A lock is a System.Threading.Lock field (IDE0330), not an object.
+dotnet_diagnostic.IDE0330.severity = warning
+
 # Analyzer tuning: library code must not capture sync context.
 dotnet_diagnostic.CA2007.severity = none
 dotnet_diagnostic.CA1062.severity = none

@@ -164,7 +164,7 @@ internal sealed class WatchedStore(IArtifactStore inner) : IArtifactStore
 /// </summary>
 internal sealed class ManualTimers : TimeProvider
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly List<ManualTimer> _timers = new();
     private readonly List<(int Count, TaskCompletionSource Done)> _waiters = new();
     private DateTimeOffset _now = Start;

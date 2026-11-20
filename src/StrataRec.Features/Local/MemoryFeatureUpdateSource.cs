@@ -22,7 +22,7 @@ public sealed class MemoryFeatureUpdateSource : IFeatureUpdateSource
 {
     public const string Type = "memory_updates@1";
 
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly List<MemoryFeatureUpdate> _updates = new();
     private TaskCompletionSource _changed = NewSignal();
     private bool _completed;

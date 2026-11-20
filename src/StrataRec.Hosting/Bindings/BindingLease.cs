@@ -42,7 +42,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
     private const int Retired = 1 << 30;
 
     private readonly BindingHost _host;
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly List<BindingHost.TableEntry> _tables = new();
     private readonly Dictionary<TableKey, BindingHost.TableEntry> _tablesByKey = new();
     private readonly List<BindingHost.ClientEntry> _clients = new();

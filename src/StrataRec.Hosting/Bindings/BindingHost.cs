@@ -83,7 +83,7 @@ public sealed class BindingHostOptions
 /// </remarks>
 public sealed partial class BindingHost : IAsyncDisposable, IDisposable
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly Dictionary<TableKey, TableEntry> _tables = new();
     private readonly HashSet<TableEntry> _entries = new(); // every entry whose source may still run, for shutdown
     private readonly Dictionary<BindingKey, ClientEntry> _clients = new();
@@ -290,7 +290,7 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
         private readonly BindingHost _host;
         private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly ObservedCancellationSource _stop = new(CancellationSite.LocalTable);
-        private readonly object _gate = new();
+        private readonly Lock _gate = new();
         private readonly TaskCompletionSource _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private Task? _run;
         private bool _stopping;

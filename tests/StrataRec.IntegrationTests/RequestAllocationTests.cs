@@ -153,7 +153,7 @@ public sealed class RequestAllocationTests
     /// <summary>Rents fresh arrays and tracks the bytes out of the pool and their peak.</summary>
     private sealed class PeakPool : Core.Memory.IBufferPool
     {
-        private readonly object _gate = new();
+        private readonly Lock _gate = new();
         private long _out;
 
         public int Outstanding { get; private set; }

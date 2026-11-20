@@ -75,7 +75,7 @@ public sealed class RequestMemory
     private readonly RequestEventLog? _events;
     private readonly string _subject;
     private readonly string? _requestId;
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private Lease[] _leases = Array.Empty<Lease>(); // guarded by _gate until the last Release
     private int _leaseCount;
     private int _holders = 1;

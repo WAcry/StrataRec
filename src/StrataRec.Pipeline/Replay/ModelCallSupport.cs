@@ -146,7 +146,7 @@ internal static class ModelInputDigest
 /// </summary>
 internal sealed class RecordingOutputWriter(IModelOutputWriter inner) : IModelOutputWriter
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly List<(string Name, Memory<float> Values)> _floats = new();
     private readonly List<(string Name, string Text)> _texts = new();
 

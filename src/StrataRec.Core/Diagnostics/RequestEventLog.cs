@@ -92,8 +92,9 @@ public sealed partial class RequestEventLog : IDisposable
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<(RequestEvent Event, string Subject), EventWindow> _events = new();
     private readonly ConcurrentDictionary<(IoKind Kind, string Name), HealthWindow> _health = new();
-    private readonly object _flushGate = new();
-    private readonly List<HeldMemory> _held = new(); // guarded by itself
+    private readonly Lock _flushGate = new();
+    private readonly Lock _heldGate = new();
+    private readonly List<HeldMemory> _held = new(); // guarded by _heldGate
     private readonly Timer? _timer;
     private long _windowStart;
 
@@ -159,7 +160,7 @@ public sealed partial class RequestEventLog : IDisposable
     public void WatchHeld(RequestMemory memory, string subject, string? requestId)
     {
         var since = Stopwatch.GetTimestamp();
-        lock (_held)
+        lock (_heldGate)
         {
             _held.Add(new HeldMemory(memory, subject, requestId, since));
         }
@@ -219,7 +220,7 @@ public sealed partial class RequestEventLog : IDisposable
     /// <summary>Reports the watched requests held for <see cref="HeldAfter"/> or more and stops watching them and the returned ones.</summary>
     private void ReportHeld(long now)
     {
-        lock (_held)
+        lock (_heldGate)
         {
             var kept = 0;
             for (var i = 0; i < _held.Count; i++)
@@ -277,6 +278,7 @@ public sealed partial class RequestEventLog : IDisposable
     /// <summary>Occurrences of one (event, subject) in the current window, plus the window's sample.</summary>
     private sealed class EventWindow
     {
+        private readonly Lock _gate = new();
         private long _count;
         private int _sampled;
         private string? _request;
@@ -290,7 +292,7 @@ public sealed partial class RequestEventLog : IDisposable
                 return;
             }
 
-            lock (this)
+            lock (_gate)
             {
                 if (_sampled == 0)
                 {
@@ -303,7 +305,7 @@ public sealed partial class RequestEventLog : IDisposable
 
         public long Take(out string? request, out string? detail)
         {
-            lock (this)
+            lock (_gate)
             {
                 request = _request;
                 detail = _detail;
@@ -323,6 +325,7 @@ public sealed partial class RequestEventLog : IDisposable
     /// </remarks>
     private sealed class HealthWindow
     {
+        private readonly Lock _gate = new();
         private long _calls;
         private long _failures;
         private string? _error;
@@ -332,7 +335,7 @@ public sealed partial class RequestEventLog : IDisposable
 
         public void Add(bool failed, string? error)
         {
-            lock (this)
+            lock (_gate)
             {
                 _calls++;
                 if (failed)
@@ -345,7 +348,7 @@ public sealed partial class RequestEventLog : IDisposable
 
         public long Take(out long failures, out string? error)
         {
-            lock (this)
+            lock (_gate)
             {
                 var calls = _calls;
                 failures = _failures;
