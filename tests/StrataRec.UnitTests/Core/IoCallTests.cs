@@ -127,6 +127,39 @@ public sealed class IoCallSpanTests
         Assert.Equal(foreign.TraceId, nextTrace);
         Assert.True(Assert.Single(flow.Named("recall late")).IsStopped);
     }
+
+    /// <summary>
+    /// Review 88: a call started where the execution context does not flow has none to stop its span in. Stopped on the
+    /// flow completing it, that flow was left in this call's request: its next span joined the request's trace.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ACallStartedWithoutFlow_GivesTheFlowCompletingIt_ItsActivityBack(bool running)
+    {
+        using var flow = new TracedFlow();
+        IoCall call;
+        using (ExecutionContext.SuppressFlow())
+        {
+            call = new IoTarget(IoKind.CandidateSource, "unflowed").Start();
+            call.Sent();
+        }
+
+        var (before, after, nextTrace) = await Task.Run(() =>
+        {
+            Activity.Current = null;
+            using var own = running ? new Activity("another request").Start() : null;
+            var before = Activity.Current;
+            call.Complete(IoOutcome.Ok);
+            var after = Activity.Current;
+            using var next = new Activity("the flow goes on").Start();
+            return (before, after, next.TraceId);
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Same(before, after);
+        Assert.NotEqual(flow.Request.TraceId, nextTrace);
+        Assert.True(Assert.Single(flow.Named("recall unflowed")).IsStopped);
+    }
 }
 
 /// <summary>

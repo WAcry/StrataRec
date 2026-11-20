@@ -285,7 +285,9 @@ public readonly struct IoCall
     /// (<see cref="ExecutionContext.Run"/>), which that change leaves as it was: the flow completing the call keeps its own
     /// activity. Stopped on that flow, one running another request's activity went on as a child of this call's request
     /// (review 85), and one whose activity had stopped could not be given it back (review 87). The host's listeners run in
-    /// the call site's context, as the call's own.</para>
+    /// the call site's context, as the call's own. A call started where the execution context does not flow
+    /// (<see cref="ExecutionContext.SuppressFlow"/>) has none to stop it in: the flow completing it is given back its
+    /// activity after the span stops.</para>
     /// </remarks>
     /// <param name="keys">Keys sent (feature sources), or -1.</param>
     /// <param name="requestId">Sample request id for failure summaries.</param>
@@ -327,14 +329,25 @@ public readonly struct IoCall
                 // Tags call no listener; nothing here may throw out of Complete.
             }
 
-            if (!ReferenceEquals(Activity.Current, span) && _context is { } context)
+            var current = Activity.Current;
+            if (ReferenceEquals(current, span))
+            {
+                Stop(span);
+                Restore(span, _ambient); // a stop callback threw before Stop gave the flow its activity back
+            }
+            else if (_context is { } context)
             {
                 ExecutionContext.Run(context, static span => Stop((Activity)span!), span); // see the remarks
             }
             else
             {
+                // No context to stop it in (the flow did not flow when the call started): this flow gets back the activity
+                // it had, which the setter refuses only for one that has stopped (review 88: it was left in this call's request).
                 Stop(span);
-                Restore(span, _ambient); // a stop callback threw before Stop gave the flow its activity back
+                if (!ReferenceEquals(Activity.Current, current))
+                {
+                    SetCurrent(current);
+                }
             }
         }
     }

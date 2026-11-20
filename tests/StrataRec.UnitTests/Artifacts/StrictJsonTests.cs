@@ -298,6 +298,37 @@ public sealed class StrictJsonTests
         Assert.Equal("/x/a/0", deep?.Pointer);
     }
 
+    /// <summary>
+    /// Review 88: a wrapped element is walked, not read back from its text. Its text kept the comments and trailing commas
+    /// of JSONC (refused), went past the reader's depth for one read with a larger limit (refused at the member, not at the
+    /// first container too deep), and threw out of the check when it held bytes that are not UTF-8. A default element holds
+    /// no JSON: it is reported, not cloned (which threw).
+    /// </summary>
+    [Fact]
+    public void AWrappedElement_IsWalked_NotReadBackFromItsText()
+    {
+        var options = new JsonSerializerOptions { TypeInfoResolver = new DefaultJsonTypeInfoResolver() };
+        options.Converters.Add(new ElementConverter(throws: true)); // wraps an object or array element; never run
+        var info = (JsonTypeInfo<JsonElement>)options.GetTypeInfo(typeof(JsonElement));
+        JsonBindingError? Checked(JsonElement element, int maxDepth, out JsonNode? copy) =>
+            StrictJson.Check(new JsonObject { ["p"] = JsonValue.Create(element, info) }, maxDepth, out copy);
+
+        using var badValue = JsonDocument.Parse(WithBytes("""{ "x": ["#AD"] }""", [0xFF]));
+        Assert.Equal("/p/x/0", Checked(badValue.RootElement, Jsonc.MaxDepth, out _)?.Pointer);
+        using var badName = JsonDocument.Parse(WithBytes("""[{ "#AD": 1 }]""", [0xFF]));
+        Assert.Equal("/p/0", Checked(badName.RootElement, Jsonc.MaxDepth, out _)?.Pointer);
+
+        Assert.Null(Checked(Jsonc.ParseElement("""{ "x": /* kept */ [1, 2,], }"""u8), Jsonc.MaxDepth, out var copy));
+        Assert.Equal("""{"p":{"x":[1,2]}}""", copy!.ToJsonString());
+
+        using var deep = JsonDocument.Parse(new string('[', 1001) + new string(']', 1001), new JsonDocumentOptions { MaxDepth = 2000 });
+        Assert.Equal("/p/0/0/0/0", Checked(deep.RootElement, 5, out _)?.Pointer); // the first container beyond 5 levels
+
+        var undefined = Checked(default, Jsonc.MaxDepth, out _);
+        Assert.Equal("/p", undefined?.Pointer);
+        Assert.Contains("default JsonElement", undefined!.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>Writes every element as 59 nested arrays, or throws.</summary>
     private sealed class ElementConverter(bool throws) : JsonConverter<JsonElement>
     {

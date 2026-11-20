@@ -83,7 +83,8 @@ public static class StrictJson
     /// NaN inside it) is reported at its pointer, in the words of what threw. A number JSON cannot write (NaN or an
     /// infinity, of double, float or Half, boxed or not) that cannot be written, and a string that is not Unicode (the
     /// writer puts U+FFFD in its place), are kept as they are: the canonical form reports them at their pointer. Every
-    /// other value, a primitive too, is the JSON it writes, by its own converter (review 85).</para>
+    /// other value, a primitive too, is the JSON it writes, by its own converter (review 85), but one holding a
+    /// <see cref="JsonElement"/>, which is the JSON of the element, whatever converter it was given (review 87).</para>
     /// <para>What the check read is what the caller must read from then on, <paramref name="copy"/>: reading the host's
     /// tree again would write its CLR values again, and a value may write something else the second time.</para>
     /// </remarks>
@@ -211,32 +212,20 @@ public static class StrictJson
     /// A value holding a <see cref="JsonElement"/>: the JSON the element is, read from the element and copied from it, never
     /// written by the value, whose converter may be the host's (review 87: one given a <c>JsonTypeInfo&lt;JsonElement&gt;</c>
     /// was checked as the element and copied by <see cref="JsonNode.DeepClone"/>, which ran the converter outside the
-    /// check: what it wrote was used unchecked, and what it threw went out of the request). A string's escapes and bytes
-    /// are checked as text; an object or array (which only such a value holds) is read back from its text and checked as
-    /// one, its depth counted from its place in the tree.
+    /// check: what it wrote was used unchecked, and what it threw went out of the request). Its strings and names are
+    /// checked as text first (<see cref="Check(in JsonElement)"/>, at the pointer of the one at fault), then the element is
+    /// walked and copied, its depth counted from its place in the tree. Walked, not read back from its text (review 88):
+    /// the text of an element read from JSONC keeps its comments and trailing commas, one read with a larger depth limit
+    /// went past the reader's own, and getting the text of one holding bytes that are not UTF-8 threw. A default element
+    /// holds no JSON at all.
     /// </summary>
     private static JsonBindingError? CheckElement(JsonElement element, int level, int maxDepth, out JsonNode? copy)
     {
         copy = null;
-        if (element.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+        if (element.ValueKind == JsonValueKind.Undefined)
         {
-            if (level > maxDepth)
-            {
-                return TooDeep(maxDepth);
-            }
-
-            JsonNode? read;
-            try
-            {
-                read = JsonNode.Parse(element.GetRawText(), documentOptions: new JsonDocumentOptions { MaxDepth = WrittenDepth });
-            }
-            catch (JsonException ex)
-            {
-                return new JsonBindingError(string.Empty, $"This value cannot be read as JSON: {ExceptionText.Of(ex)}",
-                    "build it from JsonObject and JsonArray");
-            }
-
-            return CheckNode(read, level, maxDepth, out copy);
+            return new JsonBindingError(string.Empty, "This value holds no JSON: it wraps a default JsonElement.",
+                "wrap an element read from JSON, or leave the member out");
         }
 
         if (Check(element) is { } invalid)
@@ -244,8 +233,63 @@ public static class StrictJson
             return invalid;
         }
 
-        copy = JsonValue.Create(element.Clone());
-        return null;
+        return CopyElement(element.Clone(), level, maxDepth, out copy);
+    }
+
+    /// <summary>Copies an element whose strings and names were checked, stopping at the first object or array too deep.</summary>
+    private static JsonBindingError? CopyElement(JsonElement element, int level, int maxDepth, out JsonNode? copy)
+    {
+        copy = null;
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+            {
+                if (level > maxDepth)
+                {
+                    return TooDeep(maxDepth);
+                }
+
+                var copied = new JsonObject();
+                foreach (var member in element.EnumerateObject())
+                {
+                    if (CopyElement(member.Value, level + 1, maxDepth, out var value) is { } inner)
+                    {
+                        return Under(member.Name, inner);
+                    }
+
+                    copied.Add(member.Name, value); // unique by ordinal: the check found none twice
+                }
+
+                copy = copied;
+                return null;
+            }
+            case JsonValueKind.Array:
+            {
+                if (level > maxDepth)
+                {
+                    return TooDeep(maxDepth);
+                }
+
+                var copied = new JsonArray();
+                var index = 0;
+                foreach (var item in element.EnumerateArray())
+                {
+                    if (CopyElement(item, level + 1, maxDepth, out var value) is { } inner)
+                    {
+                        return Under(index.ToString(System.Globalization.CultureInfo.InvariantCulture), inner);
+                    }
+
+                    copied.Add(value);
+                    index++;
+                }
+
+                copy = copied;
+                return null;
+            }
+            default:
+                copy = JsonValue.Create(element); // null for JSON null
+                return null;
+        }
     }
 
     /// <summary>Whether <paramref name="text"/> has no unpaired UTF-16 surrogate.</summary>

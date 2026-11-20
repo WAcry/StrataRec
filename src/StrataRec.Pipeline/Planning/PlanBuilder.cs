@@ -1029,6 +1029,15 @@ public sealed class PlanBuilder
             // A node its 'when' or 'min_remaining_ms' skips fills nothing, and its fallback does not run: after it, only the
             // context features they read are there whatever ran (review 85). A tap attached to it is captured only once it
             // or its fallback has run, so it may log all the node reads.
+            // A tap of entered or dropped rows logs rows that were live when the node filled, and none that this position
+            // appends: it may log all the node reads, whatever is appended (review 88).
+            HashSet<int>? entered = null;
+            if (AttachedTo(taps, node.NodeId, enteredOrDropped: true))
+            {
+                entered = [.. fetched];
+                MarkFetched(entered, node.ReadFeatures);
+            }
+
             HashSet<int>? here = fetched;
             if (appender is not null)
             {
@@ -1039,7 +1048,7 @@ public sealed class PlanBuilder
             else if (MaySkip(node))
             {
                 MarkContextFetched(fetched, node.ReadFeatures);
-                here = AttachedTo(taps, node.NodeId) ? [.. fetched] : null;
+                here = AttachedTo(taps, node.NodeId, enteredOrDropped: false) ? [.. fetched] : null;
             }
 
             if (here is not null)
@@ -1054,7 +1063,7 @@ public sealed class PlanBuilder
                 {
                     if (tap.AttachAfter == node.NodeId)
                     {
-                        ValidateTap(tap, possible, here ?? fetched, later, ordered, fallbacks, output, artifact);
+                        ValidateTap(tap, possible, tap.Scope == TapScope.Survived ? here ?? fetched : entered!, later, ordered, fallbacks, output, artifact);
                     }
                 }
             }
@@ -1315,7 +1324,8 @@ public sealed class PlanBuilder
     /// covered (a row source and the producers); independence of nodes that may share an order (the two nodes); a
     /// fallback's existence and outputs (the node); a pinned version read by a node or the output (the reader and the
     /// pinned node); a tap's columns, features and pinned versions (the tap, the nodes it attaches after, and the
-    /// producers, feature readers or pinned node); a tap's attach point (the tap and the nodes it attaches after); a
+    /// producers, feature readers or pinned node; for a candidate feature, also each row source, whose rows have no value
+    /// for it until a later reader fills them); a tap's attach point (the tap and the nodes it attaches after); a
     /// context feature a tap logs (the tap and the nodes that read the feature: the output reads the same everywhere).</para>
     /// </remarks>
     /// <param name="nodes">Node id → the variants it takes in some combination (timeline nodes and fallbacks).</param>
@@ -1592,8 +1602,16 @@ public sealed class PlanBuilder
 
             foreach (var feature in features)
             {
-                Scope($"tap '{tapId}' reading feature '{_features[feature].Definition.Name}'", pointer,
-                    With(attach, featureReaders.GetValueOrDefault(feature) ?? none), tapId);
+                var name = _features[feature].Definition.Name;
+                var deciding = With(attach, featureReaders.GetValueOrDefault(feature) ?? none);
+                Scope($"tap '{tapId}' reading feature '{name}'", pointer, deciding, tapId);
+
+                // A row source between the last reader and the tap leaves the rows it appends without the feature: one
+                // such position decides it with the readers (review 88: a layer adding a row source was not in the scope).
+                foreach (var rowSource in rowSources)
+                {
+                    Scope($"tap '{tapId}' reading feature '{name}' and row source '{rowSource}'", pointer, With(deciding, new[] { rowSource }), tapId);
+                }
             }
         }
 
@@ -1638,13 +1656,14 @@ public sealed class PlanBuilder
         }
     }
 
-    private static bool AttachedTo(IReadOnlyList<CompiledTap>? taps, string nodeId)
+    /// <summary>Whether a tap of survived rows (or of entered or dropped ones) attaches after <paramref name="nodeId"/>.</summary>
+    private static bool AttachedTo(IReadOnlyList<CompiledTap>? taps, string nodeId, bool enteredOrDropped)
     {
         if (taps is not null)
         {
             foreach (var tap in taps)
             {
-                if (tap.AttachAfter == nodeId)
+                if (tap.AttachAfter == nodeId && (tap.Scope != TapScope.Survived) == enteredOrDropped)
                 {
                     return true;
                 }
@@ -1858,20 +1877,26 @@ public sealed class PlanBuilder
         foreach (var node in ordered)
         {
             var before = !later.Contains(node.NodeId);
+            var appends = IsRowSource(node) || (node.OnFailure == FailurePolicy.Fallback && node.FallbackNodeId is { } id
+                && fallbacks.TryGetValue(id, out var fallback) && IsRowSource(fallback));
             if (Reads(node.ReadFeatures))
             {
+                // A tap attached to a node is captured only once it ran: one that may be skipped counts there too, and one
+                // whose position appends rows only for entered or dropped rows (review 88: it was named for any tap).
                 if (!before)
                 {
-                    // A tap attached to a node is captured only once it ran: one that may be skipped counts there too.
-                    return $"attach the tap after '{node.NodeId}', the first node after this point that reads '{name}'";
+                    if (!appends || scope != TapScope.Survived)
+                    {
+                        return $"attach the tap after '{node.NodeId}', the first node after this point that reads '{name}'";
+                    }
                 }
-
-                (reader, readerMaySkip, appender) = (node.NodeId, MaySkip(node), null);
+                else
+                {
+                    (reader, readerMaySkip, appender) = (node.NodeId, MaySkip(node), null);
+                }
             }
 
-            if (before && reader is not null && appender is null
-                && (IsRowSource(node) || (node.OnFailure == FailurePolicy.Fallback && node.FallbackNodeId is { } id
-                    && fallbacks.TryGetValue(id, out var fallback) && IsRowSource(fallback))))
+            if (before && reader is not null && appender is null && appends)
             {
                 appender = node.NodeId;
             }

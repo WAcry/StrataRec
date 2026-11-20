@@ -1,4 +1,8 @@
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Memory;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
@@ -190,6 +194,36 @@ public sealed class TapCandidateKeyTests
         Assert.Equal(new long[] { 10, 0 }, (long[])column.Values); // candidate 2 has no record: the default, as filled by 'later'
     }
 
+    /// <summary>
+    /// Review 88: a tap of entered or dropped rows logs rows that were live when the node filled, none that its position
+    /// appends. The rule refused it as it refuses a tap of survived rows there.
+    /// </summary>
+    [Theory]
+    [InlineData("entered")]
+    [InlineData("dropped")]
+    public async Task ATapOfEnteredOrDroppedRows_AtAPositionThatAppends_LogsWhatTheNodeFilled(string scope)
+    {
+        var pipeline = Appending(Pipeline("""{ "after": "next" }""", "col.item.base", primary: "item.base", backup: "", output: "1.0"))
+            .Replace("\"key\": { \"group\": \"all\",", $"\"key\": {{ \"group\": \"all\", \"rows\": {{ \"scope\": \"{scope}\" }},", StringComparison.Ordinal);
+        if (scope == "dropped")
+        {
+            pipeline = pipeline.Replace("\"op\": \"AppendsOne@1\", \"config\": { \"output_col\": \"score.t\"",
+                "\"op\": \"AppendsOne@1\", \"config\": { \"drop_entered\": true, \"output_col\": \"score.t\"", StringComparison.Ordinal);
+        }
+
+        var compilation = Compile(pipeline, OperatorRegistry.CreateDefault().Add(new FailsAfterReadingFactory()).Add(new AppendsOneFactory()));
+        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
+
+        var result = await ExecuteAsync(compilation.Plan!, capture: true, write: false, pool: new DirtyPool());
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal("backup", result.Outcomes.Single(o => o.NodeId == "next").ProducedBy);
+        Assert.Contains(result.Items, item => item.Id.Int64Value == 2);
+        var batch = Assert.Single(result.LogBatches, b => b.TapId == "key");
+        Assert.Equal(new long[] { 1 }, batch.Int64EntityIds);
+        Assert.Equal(new long[] { 10 }, (long[])Assert.Single(batch.Columns).Values);
+    }
+
     /// <summary>A row source after the node that read the feature: the hint names both.</summary>
     [Fact]
     public void RowsALaterRowSourceAppends_HaveNoValueForWhatAnEarlierNodeFilled()
@@ -240,6 +274,11 @@ public sealed class TapCandidateKeyTests
     public sealed class AppendingConfig
     {
         public required string OutputCol { get; init; }
+
+        public long Id { get; init; } = 2;
+
+        /// <summary>Drops every row before appending (for a tap of dropped rows).</summary>
+        public bool DropEntered { get; init; }
     }
 
     /// <summary>Reads a column (its node fills the feature), then fails.</summary>
@@ -268,21 +307,26 @@ public sealed class TapCandidateKeyTests
     /// <summary>Appends candidate 2 and writes its column for that row only.</summary>
     private sealed class AppendsOneFactory : IOperatorFactory
     {
-        public OperatorDescriptor Descriptor { get; } = new("AppendsOne", 1, Effects.RowSource, typeof(AppendingConfig), "Appends candidate 2.");
+        public OperatorDescriptor Descriptor { get; } = new("AppendsOne", 1, Effects.RowSource | Effects.RowFilter, typeof(AppendingConfig), "Appends candidate 2.");
 
         public Operator? Compile(OperatorCompileContext context)
         {
             var config = context.BindConfig<AppendingConfig>()!;
-            return context.TryWriteColumn(config.OutputCol, "/output_col", null, out var output) ? new Appends(output) : null;
+            return context.TryWriteColumn(config.OutputCol, "/output_col", null, out var output) ? new Appends(output, config.Id, config.DropEntered) : null;
         }
 
-        private sealed class Appends(OutputColumn output) : Operator
+        private sealed class Appends(OutputColumn output, long id, bool dropEntered) : Operator
         {
             public override int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => 1;
 
             public override ValueTask ExecuteAsync(OperatorContext context)
             {
-                var row = context.AppendRows(new long[] { 2 });
+                if (dropEntered)
+                {
+                    context.Truncate(0);
+                }
+
+                var row = context.AppendRows(new long[] { id });
                 ((ScalarColumn<double>)context.Output(output)).Set(row, 2.0);
                 return ValueTask.CompletedTask;
             }
@@ -302,16 +346,213 @@ public sealed class TapCandidateKeyTests
         Assert.Equal(3L, Assert.Single(Assert.Single(result.LogBatches, b => b.TapId == "key").Context, c => c.Name == "w").Value.AsInt64());
     }
 
+    /// <summary>
+    /// Review 88: past the combination limit, the compiler checks each rule's scope. A tap's candidate feature was decided
+    /// by the tap, its attach point and the feature's readers; a layer adding a row source (or a row-source fallback)
+    /// between two readers was in no scope, so three layers together (skip the later reader, add the row source, log the
+    /// feature at the output) compiled, and the tap logged the appended row's storage. Each row source is in a scope.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AScopedCombinationCheck_DecidesATapsCandidateFeatureWithEachRowSource(bool useFallback)
+    {
+        var baseline = Pipeline("""{ "output": true }""", "col.entity_id", primary: "double(col.item.base)",
+                backup: "1.0", laterReader: true, output: "1.0")
+            .Replace("\"k\": 1", "\"k\": 2", StringComparison.Ordinal)
+            .Replace("\"score.l\": { \"type\": \"float64\", \"default\": 0.0 }",
+                "\"score.l\": { \"type\": \"float64\", \"default\": 0.0 }, \"score.app\": { \"type\": \"float64?\" }", StringComparison.Ordinal);
+        var placements = new[]
+        {
+            Layer("a", """{ "nodes": { "later": { "when": "false" } } }"""),
+            Layer("b", useFallback
+                ? """
+                  { "nodes": {
+                     "more": { "order": 250, "op": "FailsAfterReading@1", "on_failure": "fallback", "fallback": "more_backup",
+                         "config": { "output_col": "score.app", "expr": "entity_id" } },
+                     "more_backup": { "role": "fallback", "op": "AppendsOne@1", "config": { "output_col": "score.app" } } } }
+                  """
+                : """
+                  { "nodes": {
+                     "more": { "order": 250, "op": "AppendsOne@1", "config": { "output_col": "score.app" } } } }
+                  """),
+            Layer("c", """{ "log_taps": { "key": { "columns": { "v": "col.item.base" } } } }"""),
+            Layer("d", """{ "nodes": { "recall": { "fetch_barrier": false } } }"""),
+        };
+        var operators = OperatorRegistry.CreateDefault().Add(new AppendsOneFactory()).Add(new FailsAfterReadingFactory());
+        var (request, environment) = Inputs(baseline, operators);
+        var scopedRequest = CombinationLimitTests.With(request, placements, 8);
+        foreach (var pair in new[] { new[] { "a/t", "b/t" }, new[] { "a/t", "c/t" }, new[] { "b/t", "c/t" } })
+        {
+            var merged = PlanCompiler.CompileMerged(scopedRequest, pair, environment);
+            Assert.True(merged.Succeeded, string.Join("\n", merged.Diagnostics));
+        }
+
+        var triple = new[] { "a/t", "b/t", "c/t" };
+        var joint = PlanCompiler.CompileMerged(scopedRequest, triple, environment);
+        Assert.False(joint.Succeeded);
+        Assert.Contains(joint.Diagnostics, d => d.IsError && d.Code == "TAP_FEATURE_NOT_FETCHED");
+
+        var exhaustive = PlanCompiler.Compile(CombinationLimitTests.With(request, placements, 16), environment);
+        Assert.True(exhaustive.Report.CombinationCheckExhaustive);
+        Assert.False(exhaustive.Succeeded);
+        Assert.Contains(exhaustive.Diagnostics, d => d.IsError && d.Code == "TAP_FEATURE_NOT_FETCHED");
+
+        var scoped = PlanCompiler.Compile(scopedRequest, environment);
+        Assert.False(scoped.Report.CombinationCheckExhaustive);
+        Assert.False(scoped.Succeeded);
+        Assert.Contains(scoped.Diagnostics, d => d.IsError && d.Code == "TAP_FEATURE_NOT_FETCHED");
+    }
+
+    /// <summary>
+    /// Review 88: the hint named the first later node that reads the feature, though rows its position appends (by it or
+    /// its fallback) have no value for it: moved there, the tap was refused again. It names the first that keeps it.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TheHint_PassesOverALaterReaderWhosePositionAppendsRows(bool useFallback)
+    {
+        var basePipeline = Pipeline("""{ "after": "recall" }""", "col.item.base", primary: "double(col.item.base)",
+            backup: useFallback ? "" : "1.0", laterReader: true, output: "1.0");
+        var pipeline = useFallback
+            ? Appending(basePipeline.Replace("double(col.item.base)", "item.base", StringComparison.Ordinal))
+            : basePipeline
+                .Replace("\"score.t\": { \"type\": \"float64\", \"default\": 0.0 }", "\"score.t\": { \"type\": \"float64?\" }", StringComparison.Ordinal)
+                .Replace("\"next\": { \"order\": 200, \"op\": \"ExpressionScorer@1\"",
+                    "\"next\": { \"order\": 200, \"op\": \"ReadsAndAppends@1\"", StringComparison.Ordinal)
+                .Replace("double(col.item.base)", "item.base", StringComparison.Ordinal);
+        var operators = OperatorRegistry.CreateDefault().Add(new AppendsOneFactory())
+            .Add(new FailsAfterReadingFactory()).Add(new ReadsAndAppendsFactory());
+
+        var before = Assert.Single(Compile(pipeline, operators).Diagnostics, d => d.IsError);
+        Assert.Equal("TAP_FEATURE_NOT_FETCHED", before.Code);
+        Assert.Equal("attach the tap after 'later', the first node after this point that reads 'item.base'", before.Hint);
+
+        var accepted = Compile(pipeline.Replace("""{ "after": "recall" }""", """{ "after": "later" }""", StringComparison.Ordinal), operators);
+        Assert.True(accepted.Succeeded, string.Join("\n", accepted.Diagnostics));
+    }
+
+    /// <summary>Review 88: each of two row sources needs a later reader to fill its rows; context features are not affected.</summary>
+    [Fact]
+    public async Task TwoRowSources_EachNeedALaterReaderToFillTheirRows_AndContextFeaturesStay()
+    {
+        var baseline = Pipeline("""{ "after": "refill" }""", "col.item.base", primary: "double(col.item.base)",
+                backup: "double(ctx.user.w)", laterReader: true, output: "1.0", context: "ctx.user.w")
+            .Replace("\"k\": 1", "\"k\": 3", StringComparison.Ordinal)
+            .Replace("\"score.l\": { \"type\": \"float64\", \"default\": 0.0 }",
+                "\"score.l\": { \"type\": \"float64\", \"default\": 0.0 }, \"score.app\": { \"type\": \"float64?\" }, \"score.second\": { \"type\": \"float64\", \"default\": 0.0 }", StringComparison.Ordinal)
+            .Replace("\"next\": {", """
+                "more": { "order": 250, "op": "AppendsOne@1", "config": { "output_col": "score.app" } },
+                "refill": { "order": 260, "op": "ExpressionScorer@1", "config": { "output_col": "score.second", "expr": "double(col.item.base)" } },
+                "last_more": { "order": 275, "op": "AppendsOne@1", "config": { "output_col": "score.app", "id": 3 } },
+                "next": {
+                """, StringComparison.Ordinal);
+
+        var operators = OperatorRegistry.CreateDefault().Add(new AppendsOneFactory());
+        var middle = Compile(baseline, operators);
+        Assert.True(middle.Succeeded, string.Join("\n", middle.Diagnostics));
+        var middleResult = await ExecuteAsync(middle.Plan!, capture: true, write: false, pool: new DirtyPool());
+        Assert.True(middleResult.Succeeded, middleResult.Error);
+        var middleBatch = Assert.Single(middleResult.LogBatches, b => b.TapId == "key");
+        Assert.Equal(new long[] { 1, 2 }, middleBatch.Int64EntityIds);
+        Assert.Equal(new long[] { 10, 0 }, (long[])Assert.Single(middleBatch.Columns).Values);
+        Assert.Equal(3L, Assert.Single(middleBatch.Context).Value.AsInt64());
+
+        var moved = baseline.Replace("""{ "after": "refill" }""", """{ "after": "last_more" }""", StringComparison.Ordinal);
+        var invalid = Compile(moved, operators);
+        var error = Assert.Single(invalid.Diagnostics, d => d.IsError);
+        Assert.Equal("TAP_FEATURE_NOT_FETCHED", error.Code);
+        Assert.Equal("attach the tap after 'later', the first node after this point that reads 'item.base'", error.Hint);
+
+        var last = Compile(baseline.Replace("""{ "after": "refill" }""", """{ "after": "later" }""", StringComparison.Ordinal), operators);
+        Assert.True(last.Succeeded, string.Join("\n", last.Diagnostics));
+        var lastResult = await ExecuteAsync(last.Plan!, capture: true, write: false, pool: new DirtyPool());
+        Assert.True(lastResult.Succeeded, lastResult.Error);
+        var lastBatch = Assert.Single(lastResult.LogBatches, b => b.TapId == "key");
+        Assert.Equal(new long[] { 1, 2, 3 }, lastBatch.Int64EntityIds);
+        Assert.Equal(new long[] { 10, 0, 0 }, (long[])Assert.Single(lastBatch.Columns).Values);
+        Assert.Equal(3L, Assert.Single(lastBatch.Context).Value.AsInt64());
+
+        var outputPipeline = moved
+            .Replace("""{ "after": "last_more" }""", """{ "output": true }""", StringComparison.Ordinal)
+            .Replace(""""score": "1.0"""", """"score": "double(col.item.base)"""", StringComparison.Ordinal)
+            .Replace(""""later": { "order": 300, "op": "ExpressionScorer@1", "config": { "output_col": "score.l", "expr": "double(col.creator.pop)" } }"""",
+                """"later": { "order": 300, "when": "false", "op": "ExpressionScorer@1", "config": { "output_col": "score.l", "expr": "double(col.creator.pop)" } }"""", StringComparison.Ordinal);
+        var output = Compile(outputPipeline, operators);
+        Assert.True(output.Succeeded, string.Join("\n", output.Diagnostics));
+        var outputResult = await ExecuteAsync(output.Plan!, capture: true, write: false, pool: new DirtyPool());
+        Assert.True(outputResult.Succeeded, outputResult.Error);
+        Assert.Equal(NodeOutcomeKind.SkippedWhen, outputResult.Outcomes.Single(o => o.NodeId == "later").Kind);
+        var outputBatch = Assert.Single(outputResult.LogBatches, b => b.TapId == "key");
+        Assert.Equal(new long[] { 1, 2, 3 }, outputBatch.Int64EntityIds);
+        Assert.Equal(new long[] { 10, 0, 0 }, (long[])Assert.Single(outputBatch.Columns).Values);
+        Assert.Equal(3L, Assert.Single(outputBatch.Context).Value.AsInt64());
+    }
+
+    private sealed class ReadsAndAppendsFactory : IOperatorFactory
+    {
+        public OperatorDescriptor Descriptor { get; } = new("ReadsAndAppends", 1, Effects.RowSource, typeof(ReadingConfig), "Reads a column and appends a row.");
+
+        public Operator? Compile(OperatorCompileContext context)
+        {
+            var config = context.BindConfig<ReadingConfig>()!;
+            return context.TryReadColumn(config.Expr, "/expr", out _) && context.TryWriteColumn(config.OutputCol, "/output_col", null, out var output)
+                ? new Appends(output) : null;
+        }
+
+        private sealed class Appends(OutputColumn output) : Operator
+        {
+            public override int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => 1;
+
+            public override ValueTask ExecuteAsync(OperatorContext context)
+            {
+                var row = context.AppendRows(new long[] { 2 });
+                ((ScalarColumn<double>)context.Output(output)).Set(row, 2.0);
+                return ValueTask.CompletedTask;
+            }
+        }
+    }
+
+    private static ExperimentPlacement Layer(string id, string patch) => new(new ExperimentArtifact
+    {
+        ExperimentId = id,
+        PipelineId = "p",
+        Owner = "owner",
+        Description = "probe",
+        ExpiresAt = "2099-01-01",
+        Arms = new Dictionary<string, JsonObject> { ["t"] = JsonNode.Parse(patch)!.AsObject() },
+    }, "layer_" + id);
+
+    private sealed class DirtyPool : IBufferPool
+    {
+        public T[] Rent<T>(int minimumLength)
+        {
+            var array = new T[Math.Max(1, minimumLength)];
+            if (!RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+            {
+                MemoryMarshal.CreateSpan(ref Unsafe.As<T, byte>(ref MemoryMarshal.GetArrayDataReference(array)), array.Length * Unsafe.SizeOf<T>()).Fill(0xA5);
+            }
+
+            return array;
+        }
+
+        public void Return<T>(T[] array, bool clearArray)
+        {
+        }
+    }
+
     private static Task<PipelineResult> Execute(ExecutionPlan plan, bool capture, bool write) =>
         ExecuteAsync(plan, capture, write).AsTask();
 
-    private static async ValueTask<PipelineResult> ExecuteAsync(ExecutionPlan plan, bool capture, bool write)
+    private static async ValueTask<PipelineResult> ExecuteAsync(ExecutionPlan plan, bool capture, bool write,
+        RequestArms arms = default, IBufferPool? pool = null)
     {
         await using var logs = new LogPipeline(new InMemoryLogSink());
-        return await new PipelineExecutor(logs: logs).ExecuteAsync(plan, new PipelineRequest
+        return await new PipelineExecutor(pool: pool, logs: logs).ExecuteAsync(plan, new PipelineRequest
         {
             RequestId = "tap-key", Inputs = new RequestInputs().Set("user_id", 5), Deadline = TimeSpan.FromSeconds(5), TimeMs = 1_767_225_600_000,
-            CaptureLogs = capture, WriteLogs = write,
+            CaptureLogs = capture, WriteLogs = write, Arms = arms,
         }, TestContext.Current.CancellationToken);
     }
 
@@ -343,6 +584,12 @@ public sealed class TapCandidateKeyTests
 
     private static PlanCompilation Compile(string pipeline, OperatorRegistry? operators = null)
     {
+        var (request, environment) = Inputs(pipeline, operators);
+        return PlanCompiler.Compile(request, environment);
+    }
+
+    private static (PlanCompileRequest, PlanEnvironment) Inputs(string pipeline, OperatorRegistry? operators = null)
+    {
         var root = Directory.CreateTempSubdirectory("stratarec-tap-key-").FullName;
         foreach (var dir in new[] { "catalog", "bindings", "pipelines" })
         {
@@ -362,7 +609,7 @@ public sealed class TapCandidateKeyTests
         var diagnostics = new DiagnosticBag();
         var request = ConfigWorkspace.Load(root, diagnostics).CreateCompileRequest("p", "local", diagnostics);
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
-        return PlanCompiler.Compile(request!, new PlanEnvironment
+        return (request!, new PlanEnvironment
         {
             BaseDirectory = root, Connectors = FeatureConnectorRegistry.CreateDefault(), Operators = operators ?? OperatorRegistry.CreateDefault(),
         });
