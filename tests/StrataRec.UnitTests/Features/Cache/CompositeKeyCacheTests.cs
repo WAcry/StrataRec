@@ -89,6 +89,34 @@ public class CompositeKeyCacheTests
         Assert.Single(writerConnector.Calls);
     }
 
+    /// <summary>
+    /// Review 78: 4,096 candidates whose keys share a 128-char request input, fetched in chunks of 512, write back one
+    /// batch, which holds that string once. It was charged once per key, about 1.44 MiB, and the table's empty 1 MiB queue
+    /// (a sixteenth of 16 MiB) dropped the whole batch: nothing was cached, whatever the table's room.
+    /// </summary>
+    [Fact]
+    public async Task AWriteBack_WhoseKeysShareARequestInput_IsChargedItOnce_AndWritten()
+    {
+        const int Count = 4096;
+        var connector = Boosts();
+        var rig = new FeatureTestRig().CacheSource("ic_store", connector, maxBytes: "16MiB", maxBatch: 512);
+        var country = rig.RequestInput("country");
+        var boost = rig.Physical("item_country.boost", ItemCountry, ColumnType.Float64, "ic_store");
+        rig.Build();
+        var (table, cache) = (rig.Tables["ic_store"], rig.Tables["ic_store"].Cache!);
+        var code = new string('l', 128);
+
+        var request = rig.NewRequest([.. Enumerable.Range(1, Count).Select(i => (long)i)]);
+        request.Context[country] = ScalarValue.FromString(code);
+        Assert.Equal(FeatureState.Ok, (await request.EnsureAsync(boost)).State);
+
+        Assert.Equal(8, connector.Calls.Count);
+        Assert.InRange(cache.QueuedBytes, 1, 512 << 10); // ~0.32 MiB: the keys' slots, the records and the string once
+        Assert.Equal(1, cache.WriteQueued(table.Writer));
+        Assert.Equal(Count, table.Pin().RecordCount);
+        request.Memory.Release();
+    }
+
     [Theory]
     [InlineData(new object[] { 10042L }, "10042")]
     [InlineData(new object[] { -7L }, "-7")]

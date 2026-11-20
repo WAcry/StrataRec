@@ -50,6 +50,9 @@ public sealed partial class FeatureFetcher
     /// <summary>The sequence of a connector call recorded as part of something else (a cache read's misses), not on its own.</summary>
     private const int NotRecorded = -1;
 
+    /// <summary>What a read of the distributed tier gives for a chunk that failed, was late or was cancelled: its records are never read.</summary>
+    private const long ChunkNotAnswered = long.MinValue;
+
     private CacheRead? _cacheHead; // candidate cache reads of the current wave still resolving, in start order
     private CacheRead? _cacheTail;
 
@@ -270,8 +273,12 @@ public sealed partial class FeatureFetcher
             read.StoreDeadline = clock.GetTimestamp() + (read.StoreBudgetMs * clock.TimestampFrequency / 1000);
         }
 
+        // Tracked, as the context fetch is: it may start an origin call after every call the request has sent so far
+        // completed (the request may have stopped reading it, after a failure), so the drain waits for it, not only for
+        // the calls it starts (review 78).
         _memory.Hold();
         read.Resolution = ResolveAsync(read, cancellationToken);
+        TrackIo(read.Resolution);
     }
 
     /// <summary>
@@ -279,7 +286,7 @@ public sealed partial class FeatureFetcher
     /// stale record for what the connector failed; then hands what was fetched to the tiers' writers. Touches only the
     /// read's own buffers (it runs while the request's thread does other work) and never throws for an I/O failure.
     /// </summary>
-    private async ValueTask ResolveAsync(CacheRead read, CancellationToken cancellationToken)
+    private async Task ResolveAsync(CacheRead read, CancellationToken cancellationToken)
     {
         try
         {
@@ -312,14 +319,14 @@ public sealed partial class FeatureFetcher
     {
         var chunkSize = read.IsContext ? 1 : read.Supply.MaxBatch;
         var chunks = Batching.Count(read.MissCount, chunkSize);
-        var calls = _memory.Rent<ValueTask<bool>>(chunks);
+        var calls = _memory.Rent<ValueTask<long>>(chunks);
         for (var c = 0; c < chunks; c++)
         {
             // A store's synchronous part runs here, unbounded (see IFeatureCacheStore.GetAsync): once one has taken the
             // tier's time, the chunks not sent yet are not sent; their keys go to the connector like a late chunk's.
             var offset = c * chunkSize;
             calls[c] = read.Cache.Clock.GetTimestamp() >= read.StoreDeadline || read.Cancellation!.Token.IsCancellationRequested || cancellationToken.IsCancellationRequested
-                ? new ValueTask<bool>(false)
+                ? new ValueTask<long>(ChunkNotAnswered)
                 : StoreCall(read, tier, offset, Math.Min(chunkSize, read.MissCount - offset), cancellationToken);
         }
 
@@ -330,15 +337,17 @@ public sealed partial class FeatureFetcher
         {
             var offset = c * chunkSize;
             var count = Math.Min(chunkSize, read.MissCount - offset);
-            if (!await calls[c].ConfigureAwait(false))
+            // Each chunk is judged at the time its call was seen to answer, not when this loop reaches it: a later chunk
+            // may answer after a record it carries expired, so the time an earlier chunk was judged at would serve it as
+            // fresh (pre-release assessment); and one that answered at once, waiting here behind a slow earlier chunk,
+            // would be judged late and its fresh records sent to the connector (review 78).
+            var nowMs = await calls[c].ConfigureAwait(false);
+            if (nowMs == ChunkNotAnswered)
             {
                 failed += count; // its region of Stored may still be written: never read
                 continue;
             }
 
-            // Each chunk is judged when it answered: a later chunk may answer after a record it carries expired, so the
-            // time an earlier chunk was judged at would serve it as fresh (pre-release assessment).
-            var nowMs = cache.NowMs();
             for (var m = offset; m < offset + count; m++)
             {
                 var record = read.Stored[m];
@@ -386,9 +395,10 @@ public sealed partial class FeatureFetcher
     /// (decisions.md, the wait invariants): the request memory is held from before the call until the store really
     /// completes and the call site is done; the wait is bounded by the tier's deadline and the caller's token, never by
     /// the store's token; the call is completed exactly once; what the store writes after the read stopped waiting is
-    /// never read. A store that answers synchronously allocates nothing here. True when the chunk answered in time.
+    /// never read. A store that answers synchronously allocates nothing here. The cache clock's time (ms) when the chunk
+    /// was seen to answer in time, which its records are judged at; <see cref="ChunkNotAnswered"/> when it did not.
     /// </summary>
-    private ValueTask<bool> StoreCall(CacheRead read, DistributedCacheTier tier, int offset, int count, CancellationToken cancellationToken)
+    private ValueTask<long> StoreCall(CacheRead read, DistributedCacheTier tier, int offset, int count, CancellationToken cancellationToken)
     {
         var cancellation = read.Cancellation!;
         _memory.Hold();
@@ -409,7 +419,7 @@ public sealed partial class FeatureFetcher
         {
             try
             {
-                return new ValueTask<bool>(StoreObserved(io, read, count, call, cancellationToken));
+                return new ValueTask<long>(AnsweredAt(read, StoreObserved(io, read, count, call, cancellationToken)));
             }
             finally
             {
@@ -422,12 +432,12 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>The rest of a store read that did not complete synchronously; the shape of <see cref="AwaitConnectorAsync"/>.</summary>
-    private async ValueTask<bool> AwaitStoreAsync(
+    private async ValueTask<long> AwaitStoreAsync(
         IoCall io, CacheRead read, int count, ValueTask call, FetchCancellation cancellation, CancellationToken cancellationToken)
     {
         var lease = new IoLease(_memory, cancellation);
         var task = call.AsTask();
-        TrackIo(task.ContinueWith(
+        _ = task.ContinueWith(
             static (t, state) =>
             {
                 _ = t.Exception; // observe a late failure nobody awaits any more
@@ -436,7 +446,8 @@ public sealed partial class FeatureFetcher
             lease,
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default));
+            TaskScheduler.Default);
+        TrackIo(lease.Task); // done once the connector and this call site both are (review 78)
 
         // The wait decides the outcome; the call is completed once, after it, outside the catch. The outer finally covers
         // the wait, the classification and the completion alike.
@@ -461,9 +472,9 @@ public sealed partial class FeatureFetcher
                 error = StoreFailure(read, outcome, ex);
             }
 
-            return observeNow
+            return AnsweredAt(read, observeNow
                 ? StoreObserved(io, read, count, new ValueTask(task), cancellationToken)
-                : StoreCompleted(io, count, outcome, error);
+                : StoreCompleted(io, count, outcome, error));
         }
         finally
         {
@@ -501,6 +512,9 @@ public sealed partial class FeatureFetcher
 
         return StoreCompleted(io, count, outcome, error);
     }
+
+    /// <summary>The cache clock's time now when a store read answered in time (just seen to); <see cref="ChunkNotAnswered"/> otherwise.</summary>
+    private static long AnsweredAt(CacheRead read, bool answered) => answered ? read.Cache.NowMs() : ChunkNotAnswered;
 
     /// <summary>Records a finished store read (metrics, source health, span) and says whether its records may be read.</summary>
     private bool StoreCompleted(in IoCall io, int count, IoOutcome outcome, string? error)
@@ -1118,7 +1132,8 @@ public sealed partial class FeatureFetcher
         /// <summary>The read's cancellation and deadline, for both tiers; null when it had no time left to send anything.</summary>
         public FetchCancellation? Cancellation { get; set; }
 
-        public ValueTask Resolution { get; set; }
+        /// <summary>The resolution of the misses (<see cref="ResolveAsync"/>); also tracked by the request's I/O drain.</summary>
+        public Task Resolution { get; set; } = Task.CompletedTask;
 
         public long Started { get; set; }
 

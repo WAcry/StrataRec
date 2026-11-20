@@ -16,7 +16,8 @@ namespace StrataRec.Features.Cache;
 /// returns; one background loop per instance writes the queued batches one after another, one store round trip each.
 /// Past <see cref="QueueBytes"/> waiting bytes (records, keys and entries) a batch is dropped and counted (<c>stratarec.cache.writes</c>,
 /// outcome <c>dropped</c>): the keys are fetched again on their next miss, which is what the tier exists to avoid, so
-/// the metric says when the store cannot keep up. A failed write is counted (<c>failed</c>) and forgotten.</para>
+/// the metric says when the store cannot keep up. An empty queue takes even a batch larger than the whole limit
+/// (<see cref="WriteQueueBudget"/>). A failed write is counted (<c>failed</c>) and forgotten.</para>
 /// <para><b>The queue belongs to the instance, not to a table.</b> Plans that share the instance share its queue, and
 /// the store is disposed only after the loop stopped, so no write runs on a disposed store; what is still queued then
 /// is dropped.</para>
@@ -51,10 +52,13 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
 
     public IFeatureCacheStore Store { get; }
 
-    /// <summary>The most record bytes waiting to be written; a write past it is dropped.</summary>
+    /// <summary>
+    /// The most bytes waiting to be written (records, entries and key texts); a write past it is dropped, but for one
+    /// larger than the whole limit handed to an empty queue, which takes it.
+    /// </summary>
     public long QueueBytes { get; }
 
-    /// <summary>Record bytes queued and not written yet.</summary>
+    /// <summary>Bytes queued and not written yet, as charged (records, entries and key texts).</summary>
     public long QueuedBytes => Interlocked.Read(ref _queuedBytes);
 
     /// <summary>Loads the store (connects, resolves its credentials) when it needs it.</summary>
@@ -63,7 +67,8 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
 
     /// <summary>
     /// Queues <paramref name="count"/> records of <paramref name="cache"/>'s keyspace for the store without waiting; false
-    /// (counted as dropped) when the queue is full or the tier is being disposed. The arrays become the tier's.
+    /// (counted as dropped) when they do not fit a queue that holds some (<see cref="WriteQueueBudget"/>) or the tier is
+    /// being disposed. The arrays become the tier's.
     /// </summary>
     internal bool TryWrite(LocalTableCache cache, CacheStoreEntry[] entries, int count)
     {
@@ -78,7 +83,13 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
             bytes += entries[i].Record.Length + TableVersion.StringObjectBytes(entries[i].Key.Length);
         }
 
-        if (Interlocked.Add(ref _queuedBytes, bytes) > QueueBytes || !_queue.Writer.TryWrite(new PendingWrite(cache, entries, count, bytes)))
+        if (!WriteQueueBudget.TryTake(ref _queuedBytes, bytes, QueueBytes))
+        {
+            cache.CountWrites(CacheTier.Distributed, CacheWriteOutcome.Dropped, count);
+            return false;
+        }
+
+        if (!_queue.Writer.TryWrite(new PendingWrite(cache, entries, count, bytes)))
         {
             Interlocked.Add(ref _queuedBytes, -bytes);
             cache.CountWrites(CacheTier.Distributed, CacheWriteOutcome.Dropped, count);

@@ -4,6 +4,7 @@ using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Features.Cache;
+using StrataRec.Features.Connectors;
 using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features.Cache;
@@ -193,6 +194,88 @@ public class CacheStoreCallTests
         Assert.Equal(111.0, request.Value(clicks, 0).AsFloat64()); // the first chunk's hit
         Assert.Equal(2.0, request.Value(clicks, 1).AsFloat64()); // not 111: expired when it arrived
         Assert.Equal(new long[] { 2 }, connector.Calls.SelectMany(c => c.Keys).Select(k => k.Int64Value));
+    }
+
+    /// <summary>
+    /// Review 78: the reverse. The second chunk answers at once and is fresh; the first answers after the records' TTL
+    /// passed and goes to the connector. The chunks were judged as the read reached them, in index order, so the second,
+    /// waiting behind the first, was judged at the first's time: expired, and sent to the connector too (with a failing
+    /// connector, the feature failed though a fresh value existed).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AChunkThatAnsweredInTime_StaysAHit_WhileAnEarlierChunkAnswersAfterItsRecordsExpired(bool connectorFails)
+    {
+        var store = new FirstChunkWaits();
+        var connector = connectorFails
+            ? new ScriptedConnector((_, _, _, _) => ValueTask.FromResult(FetchStatus.Failed("origin unavailable")))
+            : ScriptedConnector.Values((key, _) => key * 1.0);
+        var rig = new FeatureTestRig().CacheSource("item_store", connector, ttlMs: 10, distributed: store, maxBatch: 1);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+        store.Prepare(rig.Tables["item_store"].Cache!, rig.Clock.NowMs, 111.0);
+        rig.Clock.HoldTimestamps(); // the tier's time never runs out
+
+        var request = rig.NewRequest([1, 2]); // two chunks
+        var fill = request.EnsureAsync(clicks).AsTask();
+        Assert.Equal(2, store.Calls); // both sent; the second answered
+        rig.Clock.AdvanceMs(50);
+        store.Answer();
+        var result = await fill;
+
+        Assert.Equal(connectorFails ? FeatureState.Degraded : FeatureState.Ok, result.State);
+        Assert.Equal(connectorFails ? null : 1.0, request.Value(clicks, 0).IsMissing ? (double?)null : request.Value(clicks, 0).AsFloat64());
+        Assert.Equal(111.0, request.Value(clicks, 1).AsFloat64()); // the second chunk's hit
+        Assert.Equal(new long[] { 1 }, connector.Calls.SelectMany(c => c.Keys).Select(k => k.Int64Value));
+        await request.Fetcher.WhenIoCompleteAsync();
+        request.Memory.Release();
+    }
+
+    /// <summary>
+    /// A store whose first read waits for <see cref="Answer"/> and whose later reads answer at once; each answers a record
+    /// written at the time <see cref="Prepare"/> was given.
+    /// </summary>
+    private sealed class FirstChunkWaits : IFeatureCacheStore
+    {
+        private readonly TaskCompletionSource _answer = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private ReadOnlyMemory<byte> _record;
+        private int _calls;
+
+        public string StoreType => TestCacheStoreFactory.Type;
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        public void Prepare(LocalTableCache cache, long writtenMs, double value)
+        {
+            var writer = new CacheRecordWriter(cache.Layout, 64);
+            writer.Begin(writtenMs, cache.Fingerprint, absent: false);
+            writer.Float64(0, value);
+            var (offset, length) = writer.End();
+            _record = writer.Bytes.AsMemory(offset, length);
+        }
+
+        public void Answer() => _answer.TrySetResult();
+
+        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref _calls) == 1)
+            {
+                return new ValueTask(AnswerLaterAsync(records));
+            }
+
+            records.Span.Fill(_record);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask SetAsync(CacheKeyspace keyspace, ReadOnlyMemory<CacheStoreEntry> entries, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+
+        private async Task AnswerLaterAsync(Memory<ReadOnlyMemory<byte>> records)
+        {
+            await _answer.Task;
+            records.Span.Fill(_record);
+        }
     }
 
     /// <summary>

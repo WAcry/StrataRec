@@ -97,6 +97,36 @@ public class DistributedCacheTierTests
         Assert.Equal((1, true), (store.Disposals, store.DisposedAfterTheWriteReturned));
     }
 
+    /// <summary>
+    /// Review 78: as the table's writer, the tier's queue takes a batch larger than its whole limit when it is empty (the
+    /// loop takes a batch off the queue as it sends it), and nothing over its limit while it holds some: it holds at most
+    /// that one batch over its limit.
+    /// </summary>
+    [Fact]
+    public async Task AWriteLargerThanTheQueue_GoesIntoAnEmptyQueue_AndNotIntoOneThatHoldsSome()
+    {
+        using var dropped = new CountedWrites("dropped");
+        using var written = new CountedWrites("written");
+        var store = new GatedStore(holdCall: 1);
+        var tier = new DistributedCacheTier(store, queueBytes: 4096);
+        var cache = Cache();
+        CacheStoreEntry[] large = [new(new string('k', 10_000), new byte[] { 1, 2, 3 }, TimeSpan.FromMinutes(1))];
+        Assert.True(tier.TryWrite(cache, Entries(1), 1));
+        await store.Held.Task.WaitAsync(Wait, TestContext.Current.CancellationToken); // being written: the queue is empty
+
+        Assert.True(tier.TryWrite(cache, large, 1));
+        Assert.InRange(tier.QueuedBytes, 20_000, 20_200);
+        Assert.False(tier.TryWrite(cache, Entries(2), 1)); // past its limit
+        Assert.False(tier.TryWrite(cache, [new(new string('k', 10_000), new byte[] { 1, 2, 3 }, TimeSpan.FromMinutes(1))], 1));
+        Assert.Equal(2, dropped.Total);
+
+        store.Release();
+        await Task.Run(() => Assert.True(SpinWait.SpinUntil(() => store.Calls == 2, Wait)), TestContext.Current.CancellationToken);
+        await tier.DisposeAsync();
+        Assert.Equal((2, 2L, 2L), (store.Calls, written.Total, dropped.Total)); // both taken ones written
+        Assert.Equal(0, tier.QueuedBytes);
+    }
+
     private static LocalTableCache Cache() =>
         new LocalFeatureTable(Schema, new LocalFeatureTableOptions { MaxBytes = 1 << 20, Cache = new CacheTableOptions { TtlMs = 60_000 } }).Cache!;
 

@@ -224,6 +224,35 @@ public sealed class GroupAggregateTests
     }
 
     /// <summary>
+    /// Review 78: the std is about the true mean, not the running mean rounded at the values' scale, and at most the
+    /// largest |x|. The deviations from the rounded mean alone made 1e16+6 and 1e16+4 alternating √2, 0 and the smallest
+    /// subnormal (alone or with a second one) that subnormal, and four −MaxValue then four +MaxValue infinite: missing in
+    /// a nullable output, and a failed node in a non-nullable one. In this input order, through both.
+    /// </summary>
+    [Theory]
+    [InlineData(new[] { 10000000000000006.0, 10000000000000004.0, 10000000000000006.0, 10000000000000004.0 }, 1.0)]
+    [InlineData(new[] { 0.0, double.Epsilon }, 0.0)] // ε/2, rounded to even
+    [InlineData(new[] { 0.0, double.Epsilon, double.Epsilon }, 0.0)] // √2·ε/3
+    [InlineData(new[] { -double.MaxValue, -double.MaxValue, -double.MaxValue, -double.MaxValue,
+        double.MaxValue, double.MaxValue, double.MaxValue, double.MaxValue }, double.MaxValue)]
+    public async Task Std_IsAboutTheTrueMean_AndAtMostTheLargestValue(double[] values, double std)
+    {
+        foreach (var nullable in new[] { true, false })
+        {
+            var items = values.Select((v, i) => ((long)(i + 1), (long?)1, "a", nullable ? (double?)v : null, nullable ? 0.0 : v)).ToArray();
+            var plan = TryCompileOver(items, ("agg", $$"""
+                { "op": "GroupAggregate@1", "order": 200, "config": { "outputs": {
+                    "author.std": { "fn": "std", "value_col": "{{(nullable ? "item.score" : "item.weight")}}" } } } }
+                """)).Plan!;
+
+            var result = await Run(plan);
+
+            Assert.Null(result.Error);
+            Assert.All(ById(result).Values, row => Assert.Equal(std, row["author_std"].AsFloat64()));
+        }
+    }
+
+    /// <summary>
     /// The node's buffers are scratch, given back once its outputs are written: outputs computed one after another over
     /// the same reused buffers each start clean (a sum, a std and a count after a rank, as when computed alone).
     /// </summary>

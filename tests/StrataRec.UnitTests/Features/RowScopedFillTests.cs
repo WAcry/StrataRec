@@ -1,6 +1,7 @@
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
+using StrataRec.Features.Connectors;
 using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features;
@@ -143,6 +144,54 @@ public class RowScopedFillTests
         Assert.All(Enumerable.Range(0, 4), row => Assert.True(request.IsFilled(@base, row)));
         Assert.Equal(40, request.Value(tenfold, 3).AsInt64());
         Assert.False(request.IsFilled(tenfold, 0)); // computed for the rows only
+    }
+
+    /// <summary>
+    /// Review 79: a prefetch started for other rows (a fallback's declared reads, after rows were appended), which fails for
+    /// all its keys, is not waited for by a row-scoped fill whose rows have what it needs: waiting set the feature failed
+    /// and failed the fill. Its rows' derived values are computed; the prefetch is left in flight, for the request's end.
+    /// When a row of the fill is unfilled, the prefetch is waited for, and its failure fails the fill, not fetched again.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFetchInFlight_ThatTheRowsNeedNothingFrom_IsNotWaitedFor(bool overlapping)
+    {
+        var connector = new ScriptedConnector((keys, fields, writer, _) =>
+        {
+            if (keys.Key(0, 0).Int64Value == 2)
+            {
+                return ValueTask.FromResult(FetchStatus.Failed("only key 2 failed"));
+            }
+
+            ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key);
+            return ValueTask.FromResult(FetchStatus.Ok);
+        });
+        var rig = new FeatureTestRig().Source("item_store", connector);
+        var @base = rig.Physical("item.base", FeatureTestRig.Item, ColumnType.Int64, "item_store", ScalarValue.FromInt64(0));
+        var scope = new DictionaryScope().Add(new Symbol(SymbolKind.Column, "col.item.base", ColumnType.Int64, 1, rig.SlotOf(@base)));
+        var tenfold = rig.Derived("item.derived", FeatureTestRig.Item, ColumnType.Int64,
+            ExpressionCompiler.Compile("col.item.base * 10", scope, CompileOptions.Any), [@base]);
+        rig.Build();
+        var request = rig.NewRequest([1, 2]);
+        Assert.Equal(FeatureState.Ok, (await request.Fetcher.EnsureAsync([@base], [0], CancellationToken.None)).State);
+        request.Fetcher.Prefetch([@base], CancellationToken.None); // key 2, which fails
+
+        var result = await request.Fetcher.EnsureAsync([tenfold], overlapping ? [0, 1] : [0], CancellationToken.None);
+
+        Assert.Equal(new long[][] { [1], [2] }, connector.Calls.Select(c => c.Keys.Select(k => k.Int64Value).ToArray()));
+        if (overlapping)
+        {
+            Assert.Equal(FeatureState.Failed, result.State);
+            Assert.Contains("only key 2 failed", result.Error);
+        }
+        else
+        {
+            Assert.Equal(FeatureState.Ok, result.State);
+            Assert.Equal(10, request.Value(tenfold, 0).AsInt64());
+            Assert.False(request.IsFilled(@base, 1));
+            request.Fetcher.EndRequest(); // settles the unread prefetch
+        }
     }
 
     [Fact]

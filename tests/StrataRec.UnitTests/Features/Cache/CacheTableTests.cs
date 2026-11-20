@@ -1,4 +1,5 @@
 using System.Diagnostics.Metrics;
+using System.Runtime.CompilerServices;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
@@ -36,7 +37,8 @@ public class CacheTableTests
 
     /// <summary>
     /// Pre-release assessment: a write-back is charged what it holds while it waits, its keys' strings with its records.
-    /// A 10,000-char key with an 18-byte record held 20 KB against a queue that counted 18 B, in either tier.
+    /// A 10,000-char key with an 18-byte record held 20 KB against a queue that counted 18 B, in either tier. Each queue
+    /// holds a small batch here, since an empty one takes even a batch over its limit (review 78).
     /// </summary>
     [Fact]
     public async Task AWriteBack_IsChargedItsKeys_NotOnlyItsRecords_InEitherTier()
@@ -60,12 +62,74 @@ public class CacheTableTests
 
         var batch = new CacheWriteBatch([EntityKey.FromString(key)], [record], 1);
         Assert.InRange(batch.Bytes, 20_000, 20_100);
+        Assert.True(cache.TryWriteBack(new CacheWriteBatch([EntityKey.FromString("k")], [record], 1)));
         Assert.False(cache.TryWriteBack(batch));
 
-        await using var tier = new DistributedCacheTier(new FakeCacheStore(), queueBytes: 4096);
+        var store = new HeldStore();
+        await using var tier = new DistributedCacheTier(store, queueBytes: 4096);
+        Assert.True(tier.TryWrite(cache, [new CacheStoreEntry("k", record, TimeSpan.FromMinutes(1))], 1)); // being written
+        await store.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.True(tier.TryWrite(cache, [new CacheStoreEntry("k", record, TimeSpan.FromMinutes(1))], 1)); // waiting
         Assert.False(tier.TryWrite(cache, [new CacheStoreEntry(key, record, TimeSpan.FromMinutes(1))], 1));
-        Assert.True(tier.TryWrite(cache, [new CacheStoreEntry("k", record, TimeSpan.FromMinutes(1))], 1));
         Assert.Equal(2, dropped.Total);
+        store.Release();
+    }
+
+    /// <summary>
+    /// Review 78: a key part several keys share, the same string object (a request input's or a context feature's part
+    /// of a composite key), is one string held, charged once. 4,096 candidates sharing a 128-char part were charged that
+    /// string 4,096 times, about 1.44 MiB, and an empty 1 MiB queue dropped the batch. An equal string that is another
+    /// object for each key is held, and charged, once per key.
+    /// </summary>
+    [Fact]
+    public void AKeyPartTheKeysShare_IsChargedOnce()
+    {
+        const int Count = 4096;
+        var cache = Table(maxBytes: 16 << 20).Cache;
+        var writer = new CacheRecordWriter(cache.Layout, 64);
+        writer.Begin(0, cache.Fingerprint, absent: false);
+        writer.Float64(0, 1);
+        var (offset, length) = writer.End();
+        var records = Enumerable.Repeat((ReadOnlyMemory<byte>)writer.Bytes.AsMemory(offset, length), Count).ToArray();
+        var shared = new string('l', 128);
+
+        var sharing = new CacheWriteBatch(Keys(_ => shared), records, Count, partCount: 2);
+        var distinct = new CacheWriteBatch(Keys(_ => new string('l', 128)), records, Count, partCount: 2);
+
+        var slots = (2L * Count * Unsafe.SizeOf<EntityKey>()) + (Count * Unsafe.SizeOf<ReadOnlyMemory<byte>>()) + ((long)Count * length);
+        Assert.Equal(slots + TableVersion.StringObjectBytes(128), sharing.Bytes);
+        Assert.Equal(slots + (Count * TableVersion.StringObjectBytes(128)), distinct.Bytes);
+        Assert.True(sharing.Bytes < 512 << 10);
+
+        static EntityKey[] Keys(Func<int, string> part) =>
+            Enumerable.Range(0, Count).SelectMany(i => new[] { EntityKey.FromInt64(i), EntityKey.FromString(part(i)) }).ToArray();
+    }
+
+    /// <summary>
+    /// Review 78: one request's misses make one write-back, whatever max_batch split its calls into, so a batch larger
+    /// than the whole queue limit was dropped by an idle queue on every request. An empty queue takes it (as the log
+    /// pipeline takes a batch larger than its budget); one that holds some takes nothing over its limit, so it holds at
+    /// most that one batch over it.
+    /// </summary>
+    [Fact]
+    public void AWriteBackLargerThanTheQueue_GoesIntoAnEmptyQueue_AndNotIntoOneThatHoldsSome()
+    {
+        var (table, cache, clock) = Table(maxBytes: 1 << 20, writeQueueBytes: 4096);
+        var large = Batch(cache, clock.NowMs, new string('n', 5_000), 1);
+        Assert.True(large.Bytes > 4096);
+        using var dropped = new Counted(StrataRecMetrics.Names.CacheWrites, "dropped");
+
+        Assert.True(cache.TryWriteBack(large));
+        Assert.Equal(large.Bytes, cache.QueuedBytes);
+        Assert.False(cache.TryWriteBack(Batch(cache, clock.NowMs, 2))); // the queue is past its limit
+        Assert.Equal(1, cache.WriteQueued(table.Writer));
+
+        Assert.True(cache.TryWriteBack(Batch(cache, clock.NowMs, 2)));
+        Assert.False(cache.TryWriteBack(Batch(cache, clock.NowMs, new string('n', 5_000), 3))); // the queue holds some
+        Assert.Equal(1, cache.WriteQueued(table.Writer));
+        Assert.Equal(0, cache.QueuedBytes);
+        Assert.Equal(2, dropped.Total);
+        Assert.Equal(2, table.Pin().RecordCount);
     }
 
     [Fact]
@@ -323,6 +387,27 @@ public class CacheTableTests
         // About 4 KiB of string per record, distinct per key: what the table's dictionary holds for it alone.
         Assert.True(cache.TryWriteBack(Batch(cache, writtenMs, key + new string('n', 2_000), key)));
         cache.WriteQueued(table.Writer);
+    }
+
+    /// <summary>A store whose writes wait for <see cref="Release"/>, saying when the first began.</summary>
+    private sealed class HeldStore : IFeatureCacheStore
+    {
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public string StoreType => TestCacheStoreFactory.Type;
+
+        public void Release() => _release.TrySetResult();
+
+        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask SetAsync(CacheKeyspace keyspace, ReadOnlyMemory<CacheStoreEntry> entries, CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            return new ValueTask(_release.Task.WaitAsync(cancellationToken));
+        }
     }
 
     /// <summary>Sums a counter's measurements with one <c>stratarec.outcome</c> while alive.</summary>

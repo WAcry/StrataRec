@@ -72,7 +72,7 @@ public sealed partial class FeatureFetcher
     private readonly FeatureState[] _state;
     private readonly string?[] _errors;
     private readonly List<PendingFetch> _pending = new();
-    private readonly List<Task> _io = new(); // guarded by lock (_io): connector completions and the context fetch
+    private readonly List<Task> _io = new(); // guarded by lock (_io): connector calls, cache reads' resolutions, the context fetch
     private readonly ExpressionCounters _counters;
     private readonly IFeatureCallHook? _hook;
     private int _nonFiniteReplaced;
@@ -130,16 +130,18 @@ public sealed partial class FeatureFetcher
     public FeatureState GetState(int feature) => _state[feature];
 
     /// <summary>
-    /// Completes when every external operation this request started has really finished: each connector call (also one
-    /// whose result was rejected because it arrived after its time budget) and the whole background context fetch.
-    /// Each releases its hold on the request memory just before it counts as finished.
+    /// Completes when every external operation this request started has really finished: each connector or store call
+    /// that did not answer synchronously (also one whose result was rejected because it arrived after its time budget),
+    /// both its connector and its call site (which records it), each cache read's resolution of its misses, and the whole
+    /// background context fetch. Each releases its hold on the request memory just before it counts as finished.
     /// </summary>
     /// <remarks>
     /// The set of operations can grow while this waits: a chained context group starts where its key was stored, on a
-    /// connector's thread, and registers its call then, possibly after this was called (review 77). It always registers
-    /// before the context fetch, which is tracked, completes, so a wait that finds nothing registered since it began has
-    /// seen everything: this waits round after round until one finds nothing new, and every round to its end before it
-    /// rethrows the first failure.
+    /// connector's thread, and registers its call then, possibly after this was called (review 77); a cache read sends its
+    /// origin calls once its distributed tier answered, possibly after the request stopped reading it (review 78). Each
+    /// registers before its parent, which is tracked (the context fetch, the read's resolution), completes, so a wait
+    /// that finds nothing registered since it began has seen everything: this waits round after round until one finds
+    /// nothing new, and every round to its end before it rethrows the first failure.
     /// </remarks>
     public async Task WhenIoCompleteAsync()
     {
@@ -235,8 +237,9 @@ public sealed partial class FeatureFetcher
     /// returned rows (design 3.4), known once the final order is, when no reader is left for the other live rows. The waves
     /// of <see cref="EnsureAsync(ReadOnlySpan{int}, CancellationToken)"/>, but a fetch or a table read takes the keys of these
     /// rows, a derived feature is computed for them, and only they are marked filled, so a later whole fill fills the
-    /// rest. A fetch already in flight (a prefetch) carrying a needed feature is completed for every live row it covers, as
-    /// for any reader. With no rows nothing is filled or waited for, context features included: no row reads them.
+    /// rest. A fetch already in flight (a prefetch) carrying a needed feature that is unfilled on some of these rows is
+    /// completed for every live row it covers, as for any reader; one whose needed features are all filled on these rows
+    /// is not waited for. With no rows nothing is filled or waited for, context features included: no row reads them.
     /// </summary>
     /// <remarks>
     /// <para>The state, one per feature for the request, is recorded by the rules of a whole fill applied to the rows this
@@ -245,6 +248,11 @@ public sealed partial class FeatureFetcher
     /// every key it was asked, as for rows appended after a fill); an ok or degraded state it records covers its rows alone,
     /// and the rows it leaves unfilled are filled, and their failure recorded, by the next fill that needs them. The state
     /// returned is the features' state for the request, so one that failed in an earlier fill fails here too.</para>
+    /// <para>A prefetch these rows need nothing from is left in flight, settled as an unread one when the request ends:
+    /// one started for rows not returned (a fallback's declared reads, say) that failed for all its keys set the feature
+    /// failed, and failed the output whose rows were filled already (review 79). One that covers an unfilled row of these
+    /// is completed, its failure recorded, as before; whether it covers that row's key is not looked at, so a prefetch of
+    /// other keys is waited for too while any of these rows is unfilled.</para>
     /// <para>The features and rows are read before this returns, so the caller may reuse their storage.</para>
     /// </remarks>
     public ValueTask<FeatureFillResult> EnsureAsync(ReadOnlySpan<int> features, ReadOnlySpan<int> rows, CancellationToken cancellationToken)
@@ -284,11 +292,14 @@ public sealed partial class FeatureFetcher
             ComputeDerivedOfWave(-1, member, scope);
             for (var wave = 0; wave <= _plan.MaxWave; wave++)
             {
-                // In-flight (prefetched) fetches carrying a needed feature first; their keys may cover most rows.
+                // In-flight (prefetched) fetches carrying a needed feature first; their keys may cover most rows. A
+                // row-scoped fill leaves one whose needed features are filled on its rows already: it was started for other
+                // rows, and nothing this fill reads comes from it (see the remarks of the row-scoped overload).
                 for (var i = 0; i < _pending.Count; i++)
                 {
                     var pending = _pending[i];
-                    if (pending.Group.Wave == wave && Intersects(pending.Features, member))
+                    if (pending.Group.Wave == wave && Intersects(pending.Features, member)
+                        && (scope.Rows is null || AnyUnfilled(pending.Features, member, scope)))
                     {
                         _pending.RemoveAt(i--);
                         await CompleteAsync(pending).ConfigureAwait(false);
@@ -400,6 +411,20 @@ public sealed partial class FeatureFetcher
         for (var i = 0; i < features.Count; i++)
         {
             if (_plan.Features[features.Items[i]].IsContext)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Whether a feature of <paramref name="features"/> in <paramref name="member"/> is unfilled on a row of <paramref name="scope"/>.</summary>
+    private bool AnyUnfilled(int[] features, bool[] member, RowScope scope)
+    {
+        foreach (var f in features)
+        {
+            if (member[f] && !IsFilled(_plan.Features[f].Slot, scope))
             {
                 return true;
             }
@@ -803,7 +828,7 @@ public sealed partial class FeatureFetcher
     {
         var lease = new IoLease(_memory, cancellation);
         var task = call.AsTask();
-        TrackIo(task.ContinueWith(
+        _ = task.ContinueWith(
             static (t, state) =>
             {
                 _ = t.Exception; // observe a late failure nobody awaits any more
@@ -812,7 +837,8 @@ public sealed partial class FeatureFetcher
             lease,
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default));
+            TaskScheduler.Default);
+        TrackIo(lease.Task); // done once the connector and this call site both are (review 78)
 
         // The wait decides the status; the call is completed once, after it (as BoundedCall does): completing inside the
         // try would complete it again from the catch when the completion itself throws (a hook that fails, say). The
@@ -1675,7 +1701,13 @@ public sealed partial class FeatureFetcher
     /// One hold per external call, so the abandoned-I/O count stays one per connector call still running. A call answered
     /// synchronously needs none of this: its call site releases the hold right after recording it.
     /// </summary>
-    private sealed class IoLease(RequestMemory memory, FetchCancellation cancellation)
+    /// <remarks>
+    /// Its task, which the request's I/O drain tracks, completes then, just after the memory is released, and never
+    /// faults: the drain tracked the connector's completion alone, and returned while a prefetch nobody read was still
+    /// recording its call and holding the memory (review 78). Continuations run asynchronously: only a drain awaits it,
+    /// and none runs on a connector's or a call site's thread.
+    /// </remarks>
+    private sealed class IoLease(RequestMemory memory, FetchCancellation cancellation) : TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
     {
         private int _parts = 2;
 
@@ -1693,7 +1725,14 @@ public sealed partial class FeatureFetcher
         {
             if (Interlocked.Decrement(ref _parts) == 0)
             {
-                memory.Release();
+                try
+                {
+                    memory.Release();
+                }
+                finally
+                {
+                    SetResult();
+                }
             }
         }
     }

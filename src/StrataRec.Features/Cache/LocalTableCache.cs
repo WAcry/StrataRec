@@ -20,8 +20,9 @@ public sealed class CacheTableOptions
 
     /// <summary>
     /// The most bytes waiting for the table's writer (<see cref="CacheWriteBatch.Bytes"/>: records and keys); a write-back
-    /// past it is dropped and counted (the key is fetched again on its next miss). 0 takes a sixteenth of
-    /// <c>max_bytes</c>, between 1 MiB and 64 MiB.
+    /// past it is dropped and counted (the key is fetched again on its next miss), but for one larger than the whole limit
+    /// handed to an empty queue, which takes it (<see cref="WriteQueueBudget"/>). 0 takes a sixteenth of <c>max_bytes</c>,
+    /// between 1 MiB and 64 MiB.
     /// </summary>
     public long WriteQueueBytes { get; init; }
 
@@ -105,6 +106,13 @@ internal sealed class CacheWriteBatch(EntityKey[] keys, ReadOnlyMemory<byte>[] r
     /// strings. A long string key (a composite one, say) with a short record holds more in its key than in its record, and
     /// the records' bytes alone let the queue hold several times its limit (pre-release assessment).
     /// </summary>
+    /// <remarks>
+    /// A string is charged once where consecutive keys share it, the same object as the previous key's same part: a part
+    /// from a request input or a context feature is one string for every key of the read, and charging it per key made
+    /// 4,096 candidates sharing a 128-character part cost about 1.44 MiB instead of 0.32 MiB, so an empty 1 MiB queue
+    /// dropped the batch (review 78). Comparing references allocates nothing; an equal string that is another object is
+    /// another object held, and charged.
+    /// </remarks>
     public long Bytes { get; } = Footprint(keys, records, count, partCount);
 
     private static long Footprint(EntityKey[] keys, ReadOnlyMemory<byte>[] records, int count, int partCount)
@@ -117,7 +125,7 @@ internal sealed class CacheWriteBatch(EntityKey[] keys, ReadOnlyMemory<byte>[] r
 
         for (var k = 0; k < count * partCount; k++)
         {
-            if (keys[k].StringValue is { } text)
+            if (keys[k].StringValue is { } text && (k < partCount || !ReferenceEquals(text, keys[k - partCount].StringValue)))
             {
                 bytes += TableVersion.StringObjectBytes(text.Length);
             }
@@ -139,7 +147,8 @@ internal sealed class CacheWriteBatch(EntityKey[] keys, ReadOnlyMemory<byte>[] r
 /// so a slow fetch that started early never replaces what a later one wrote. A record copied from the distributed tier
 /// keeps the write time it was written with there.</para>
 /// <para><b>Write-back is off the request path.</b> A read hands its records over with <see cref="TryWriteBack"/>, which
-/// never waits: past <see cref="CacheTableOptions.WriteQueueBytes"/> waiting bytes the batch is dropped and counted. The
+/// never waits: past <see cref="CacheTableOptions.WriteQueueBytes"/> waiting bytes the batch is dropped and counted (an
+/// empty queue takes even a larger one, <see cref="WriteQueueBudget"/>). The
 /// engine runs the writer as the table's update source (<see cref="CacheWriterSource"/>), so the table host starts,
 /// restarts and stops it like any other; until it runs, the table counts as loaded at once, since an empty cache is a
 /// complete one (every key misses).</para>
@@ -193,7 +202,7 @@ public sealed class LocalTableCache
     /// <summary>The longest lifetime of any key: the TTL plus the most jitter.</summary>
     public long MaxLifetimeMs { get; }
 
-    /// <summary>Record bytes handed to the writer and not written yet.</summary>
+    /// <summary>Bytes handed to the writer and not written yet, as charged (<see cref="CacheWriteBatch.Bytes"/>).</summary>
     public long QueuedBytes => Volatile.Read(ref _queuedBytes);
 
     internal CacheRecordLayout Layout { get; }
@@ -288,10 +297,19 @@ public sealed class LocalTableCache
         return TimeSpan.FromTicks(remaining * TimeSpan.TicksPerMillisecond);
     }
 
-    /// <summary>Hands records to the writer without waiting; false (and counted) when the queue is full.</summary>
+    /// <summary>
+    /// Hands records to the writer without waiting; false (and counted) when they do not fit a queue that holds some
+    /// (<see cref="WriteQueueBudget"/>).
+    /// </summary>
     internal bool TryWriteBack(CacheWriteBatch batch)
     {
-        if (Interlocked.Add(ref _queuedBytes, batch.Bytes) > _queueLimit || !_queue.Writer.TryWrite(batch))
+        if (!WriteQueueBudget.TryTake(ref _queuedBytes, batch.Bytes, _queueLimit))
+        {
+            CountWrites(CacheTier.Local, CacheWriteOutcome.Dropped, batch.Count);
+            return false;
+        }
+
+        if (!_queue.Writer.TryWrite(batch))
         {
             Interlocked.Add(ref _queuedBytes, -batch.Bytes);
             CountWrites(CacheTier.Local, CacheWriteOutcome.Dropped, batch.Count);

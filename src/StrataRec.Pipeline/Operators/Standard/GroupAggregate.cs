@@ -341,11 +341,13 @@ public sealed class GroupAggregateFactory : IOperatorFactory
                 }
             }
 
-            double[]? scales = null, squares = null;
+            double[]? scales = null, sums = null, squares = null;
             if (output.Function == Function.Std)
             {
-                (scales, squares) = (memory.RentScratch<double>(groups), memory.RentScratch<double>(groups));
-                Deviations(column!, live, groupOf, totals, peaks!, scales, squares, groups);
+                scales = memory.RentScratch<double>(groups);
+                sums = memory.RentScratch<double>(groups);
+                squares = memory.RentScratch<double>(groups);
+                Deviations(column!, live, groupOf, totals, peaks!, scales, sums, squares, groups);
             }
 
             for (var i = 0; i < n; i++)
@@ -357,7 +359,7 @@ public sealed class GroupAggregateFactory : IOperatorFactory
                     values[i] = output.Function switch
                     {
                         Function.Count => counts[g],
-                        Function.Std => scales![g] == 0 ? 0 : scales[g] * Math.Sqrt(squares![g] / counts[g]) / peaks![g],
+                        Function.Std => Std(scales![g], sums![g], squares![g], counts[g], peaks![g]),
                         _ => totals[g],
                     };
                 }
@@ -366,6 +368,7 @@ public sealed class GroupAggregateFactory : IOperatorFactory
             if (scales is not null)
             {
                 memory.ReturnScratch(squares!);
+                memory.ReturnScratch(sums!);
                 memory.ReturnScratch(scales);
                 memory.ReturnScratch(peaks!);
             }
@@ -375,25 +378,36 @@ public sealed class GroupAggregateFactory : IOperatorFactory
         }
 
         /// <summary>
-        /// The sum of squared deviations from each group's mean, as <c>scale² · squares</c> with the deviations divided by
-        /// the group's largest (LAPACK's dlassq): no square of a large deviation overflows and none of a small one
-        /// underflows, so the std is right at every scale a float64 holds (±1e200 has std 1e200 and ±1e-200 has 1e-200;
-        /// summing the squares themselves made the first infinite and the second 0, pre-release assessment).
+        /// The factor a group's values are taken at: halved when its largest |x| is over half the largest float64, so that
+        /// a deviation between values of opposite signs does not overflow; as they are otherwise. Halving is exact but for
+        /// subnormals, which in such a group are far below the deviations' rounding.
+        /// </summary>
+        private static double Factor(double peak) => peak > double.MaxValue / 2 ? 0.5 : 1;
+
+        /// <summary>
+        /// The deviations of each group's values from its center (its running mean, held within ±its largest |x|), taken at
+        /// the group's <see cref="Factor"/>, as <c>scale · sums</c> (their signed sum) and <c>scale² · squares</c> (the sum
+        /// of their squares), with every deviation divided by the group's largest (LAPACK's dlassq): no square of a large
+        /// deviation overflows and none of a small one underflows, so the std is right at every scale a float64 holds
+        /// (±1e200 has std 1e200 and ±1e-200 has 1e-200; summing the squares themselves made the first infinite and the
+        /// second 0, pre-release assessment).
         /// </summary>
         /// <remarks>
-        /// A group whose largest |x| is over half the largest float64 takes its values and mean halved, so that a
-        /// deviation between values of opposite signs does not overflow; <paramref name="peaks"/> becomes each group's
-        /// factor (0.5 or 1), which the std is divided by. Halving is exact but for subnormals, which in such a group are
-        /// far below the deviations' rounding; every other group's values are taken as they are.
+        /// The signed sum is the corrected two-pass term: the running mean is rounded at the values' scale, and the
+        /// deviations from it alone made the std of 1e16+6 and 1e16+4 alternating √2 instead of 1, and that of 0 and the
+        /// smallest subnormal that subnormal instead of 0 (review 78); the variance about the true mean is
+        /// <c>E[d²] − E[d]²</c> of the deviations d from any center. Holding the center within ±largest |x| (a rounded mean
+        /// can step past it) keeps every deviation within twice that, which the factor keeps finite.
         /// </remarks>
         private static void Deviations(
-            ColumnBuffer column, ReadOnlySpan<int> live, int[] groupOf, double[] means, double[] peaks, double[] scales, double[] squares,
-            int groups)
+            ColumnBuffer column, ReadOnlySpan<int> live, int[] groupOf, double[] means, double[] peaks, double[] scales, double[] sums,
+            double[] squares, int groups)
         {
             for (var g = 0; g < groups; g++)
             {
-                peaks[g] = peaks[g] > double.MaxValue / 2 ? 0.5 : 1;
+                means[g] = Math.Clamp(means[g], -peaks[g], peaks[g]) * Factor(peaks[g]); // the center, at the group's factor
                 scales[g] = 0;
+                sums[g] = 0;
                 squares[g] = 0;
             }
 
@@ -405,25 +419,46 @@ public sealed class GroupAggregateFactory : IOperatorFactory
                     continue;
                 }
 
-                var factor = peaks[g];
-                var d = Math.Abs((Read(column, live[i]) * factor) - (means[g] * factor));
-                if (d == 0)
+                var d = (Read(column, live[i]) * Factor(peaks[g])) - means[g];
+                var size = Math.Abs(d);
+                if (size == 0)
                 {
-                    continue; // equal to the mean: adds nothing, and the std of equal values stays exactly 0
+                    continue; // equal to the center: adds nothing, and the std of equal values stays exactly 0
                 }
 
-                if (scales[g] < d)
+                if (scales[g] < size)
                 {
-                    var r = scales[g] / d;
+                    var r = scales[g] / size;
+                    sums[g] = Math.CopySign(1, d) + (sums[g] * r);
                     squares[g] = 1 + (squares[g] * r * r);
-                    scales[g] = d;
+                    scales[g] = size;
                 }
                 else
                 {
                     var r = d / scales[g];
+                    sums[g] += r;
                     squares[g] += r * r;
                 }
             }
+        }
+
+        /// <summary>
+        /// A group's population std from its <see cref="Deviations"/>: <c>scale · √(squares/n − (sums/n)²)</c>, the
+        /// difference clamped at 0, then bounded by the group's largest |x| (a population std is at most that) before it
+        /// is divided by the factor: rounding can no longer carry it past the largest float64 (four −MaxValue then four
+        /// +MaxValue have std MaxValue; the rounded mean made it infinite and the node failed, review 78).
+        /// </summary>
+        private static double Std(double scale, double sums, double squares, long count, double peak)
+        {
+            if (scale == 0)
+            {
+                return 0;
+            }
+
+            var mean = sums / count;
+            var variance = (squares / count) - (mean * mean);
+            var factor = Factor(peak);
+            return variance > 0 ? Math.Min(scale * Math.Sqrt(variance), peak * factor) / factor : 0;
         }
 
         /// <summary>Each row's rank within its group into <paramref name="values"/>; whether it has one into <paramref name="present"/>.</summary>
