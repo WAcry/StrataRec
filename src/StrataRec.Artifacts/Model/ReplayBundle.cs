@@ -101,8 +101,8 @@ public sealed class ReplayIgnoredArm
     [Description("The id as the platform sent it (experiment/arm).")]
     public required string Id { get; init; }
 
-    [Description("unknown (the served plan has no such arm) or layer_conflict (another arm of its layer came too, so that layer ran its baseline).")]
-    [AllowedValues("unknown", "layer_conflict")]
+    [Description("unknown (the served plan has no such arm), layer_conflict (another arm of its layer came too, so that layer ran its baseline) or yielded (its experiment yields to another experiment the request was in, so that layer ran its baseline).")]
+    [AllowedValues("unknown", "layer_conflict", "yielded")]
     public required string Reason { get; init; }
 }
 

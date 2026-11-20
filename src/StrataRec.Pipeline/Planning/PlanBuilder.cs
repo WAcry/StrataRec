@@ -2202,6 +2202,7 @@ public sealed class PlanBuilder
             Layers = layers,
             Experiments = experiments,
             Arms = arms,
+            Yields = ArmYields.Create(experiments, arms),
             ContextFeatures = ToSortedArray(contextFeatures),
             Warnings = _diagnostics.Items,
             CompileTime = _clock.Elapsed,

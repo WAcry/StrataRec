@@ -13,6 +13,12 @@ public enum IgnoredArmReason
 
     /// <summary>Another arm of the same layer came too, so that layer runs its baseline.</summary>
     LayerConflict,
+
+    /// <summary>
+    /// Its experiment yields to an experiment the request is also in (a release's <c>yields_to</c>, design 11.1), so its
+    /// layer runs its baseline. Every arm of the experiment yields alike, its control included.
+    /// </summary>
+    Yielded,
 }
 
 /// <summary>An arm id the platform sent that the request did not run with, and why.</summary>
@@ -20,11 +26,12 @@ public enum IgnoredArmReason
 /// <param name="Reason">Why it was ignored.</param>
 public readonly record struct IgnoredArm(string Id, IgnoredArmReason Reason)
 {
-    /// <summary>The reason as replay bundles, metrics and the CLI spell it: <c>unknown</c> or <c>layer_conflict</c>.</summary>
+    /// <summary>The reason as replay bundles, metrics and the CLI spell it: <c>unknown</c>, <c>layer_conflict</c> or <c>yielded</c>.</summary>
     public static string Name(IgnoredArmReason reason) => reason switch
     {
         IgnoredArmReason.Unknown => "unknown",
         IgnoredArmReason.LayerConflict => "layer_conflict",
+        IgnoredArmReason.Yielded => "yielded",
         _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, null),
     };
 
@@ -38,6 +45,9 @@ public readonly record struct IgnoredArm(string Id, IgnoredArmReason Reason)
                 return true;
             case "layer_conflict":
                 reason = IgnoredArmReason.LayerConflict;
+                return true;
+            case "yielded":
+                reason = IgnoredArmReason.Yielded;
                 return true;
             default:
                 reason = default;
@@ -60,6 +70,8 @@ public readonly record struct IgnoredArm(string Id, IgnoredArmReason Reason)
 ///   <item>Two different arms of one layer: that layer gets no arm and runs its baseline, and every arm of it that was
 ///   sent is ignored as <see cref="IgnoredArmReason.LayerConflict"/>. Not "first wins": the arms of one layer are never
 ///   validated together (design 11.5), and picking one would depend on the list order.</item>
+///   <item>An arm whose experiment yields to an experiment the request is also in does not run, ignored as
+///   <see cref="IgnoredArmReason.Yielded"/> (<see cref="Yield"/>, applied to every source of arms).</item>
 /// </list>
 /// <para>Forced arms (<c>DebugOptions.ForceArms</c>) are strict instead (<see cref="ExecutionPlan.ArmsFromIds"/>): they
 /// name what a developer wants to run, so a mistake there fails the request.</para>
@@ -134,6 +146,43 @@ public static class ExternalArms
         }
 
         return new RequestArms(byLayer);
+    }
+
+    /// <summary>
+    /// <paramref name="arms"/> as they run (<see cref="ExecutionPlan.Yields"/>): an arm whose experiment yields to the
+    /// experiment of another of them is added to <paramref name="ignored"/> as <see cref="IgnoredArmReason.Yielded"/>,
+    /// sorted by id with the rest, and its layer runs the baseline. Every source of a request's arms goes through it,
+    /// forced arms too: they show what a request in those arms runs, and a pair that yields is never compiled together.
+    /// </summary>
+    /// <param name="ignored">The ids already ignored, sorted by id; returned as it is (no allocation) when no arm yields.</param>
+    public static RequestArms Yield(ExecutionPlan plan, in RequestArms arms, IgnoredArm[] ignored, out IgnoredArm[] withYielded)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        withYielded = ignored;
+        if (plan.Yields.IsEmpty)
+        {
+            return arms;
+        }
+
+        List<IgnoredArm>? yielded = null;
+        for (var layer = 0; layer < arms.LayerCount; layer++)
+        {
+            var arm = arms.ArmIn(layer);
+            if (arm >= 0 && plan.Yields.YieldsTo(arm, arms) >= 0)
+            {
+                (yielded ??= new List<IgnoredArm>(2)).Add(new IgnoredArm(plan.Arms[arm].Id, IgnoredArmReason.Yielded));
+            }
+        }
+
+        if (yielded is null)
+        {
+            return arms;
+        }
+
+        yielded.AddRange(ignored);
+        yielded.Sort(static (a, b) => string.CompareOrdinal(a.Id, b.Id));
+        withYielded = yielded.ToArray();
+        return plan.Yields.Resolve(arms);
     }
 
     private static ArmInfo? Find(ReadOnlySpan<ArmInfo> arms, string id)

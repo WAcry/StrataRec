@@ -321,12 +321,12 @@ public sealed class ConfigWorkspace
         }
 
         var placements = new List<ExperimentPlacement>();
-        var listed = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        var listed = new SortedDictionary<string, (string Layer, List<string>? YieldsTo)>(StringComparer.Ordinal);
         if (release is not null)
         {
             foreach (var (id, entry) in release.Value.Experiments)
             {
-                listed[id] = entry.Layer;
+                listed[id] = (entry.Layer, entry.YieldsTo);
             }
         }
 
@@ -334,11 +334,11 @@ public sealed class ConfigWorkspace
         {
             foreach (var (id, layer) in extraExperiments)
             {
-                listed[id] = layer;
+                listed[id] = (layer, listed.TryGetValue(id, out var entry) ? entry.YieldsTo : null);
             }
         }
 
-        foreach (var (id, layer) in listed)
+        foreach (var (id, (layer, yieldsTo)) in listed)
         {
             if (!Experiments.TryGetValue(id, out var experiment))
             {
@@ -347,7 +347,19 @@ public sealed class ConfigWorkspace
                 continue;
             }
 
-            placements.Add(new ExperimentPlacement(experiment.Value, layer));
+            // The release names what this experiment yields to: one it does not release is a mistake here (a misspelling,
+            // or one taken out of the release), though a manifest that stopped it still loads (ExperimentPlacement.YieldsTo).
+            for (var i = 0; i < (yieldsTo?.Count ?? 0); i++)
+            {
+                if (!listed.ContainsKey(yieldsTo![i]))
+                {
+                    diagnostics.Error("YIELD_UNKNOWN", releaseLabel, "/experiments/" + JsonPointer.Escape(id) + "/yields_to/" + i,
+                        $"'{id}' yields to '{yieldsTo[i]}', which this release does not run.",
+                        NameSuggestions.DidYouMean(yieldsTo[i], listed.Keys) ?? "name an experiment of this release's 'experiments', or remove the entry");
+                }
+            }
+
+            placements.Add(new ExperimentPlacement(experiment.Value, layer) { YieldsTo = yieldsTo ?? [], Release = releaseLabel });
             artifactIds["experiment:" + id] = experiment.ContentId;
         }
 

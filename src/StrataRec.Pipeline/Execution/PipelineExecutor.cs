@@ -26,7 +26,18 @@ internal sealed class PipelineRequest
 
     public required RequestInputs Inputs { get; init; }
 
-    public RequestArms Arms { get; init; }
+    private RequestArms _arms;
+
+    /// <summary>The request's arms; the executor runs them as <see cref="ExecutionPlan.Yields"/> resolves them.</summary>
+    public RequestArms Arms { get => _arms; init => _arms = value; }
+
+    /// <summary>This request with other arms (a shallow copy: the rest is shared).</summary>
+    internal PipelineRequest WithArms(in RequestArms arms)
+    {
+        var copy = (PipelineRequest)MemberwiseClone();
+        copy._arms = arms;
+        return copy;
+    }
 
     public required TimeSpan Deadline { get; init; }
 
@@ -295,6 +306,17 @@ internal sealed class PipelineExecutor
     public async ValueTask<PipelineResult> ExecuteAsync(ExecutionPlan plan, PipelineRequest request, CancellationToken cancellationToken = default)
     {
         var start = Stopwatch.GetTimestamp();
+
+        // Arms one of which yields never run together, whoever decided them (ArmYields): the engine has resolved them
+        // after the assignment (and recorded what yielded); a caller that passes such arms gets what a request in them runs.
+        if (!plan.Yields.IsEmpty)
+        {
+            var running = plan.Yields.Resolve(request.Arms);
+            if (!running.SameAs(request.Arms))
+            {
+                request = request.WithArms(running);
+            }
+        }
 
         // A replay is not traffic: no metrics, event logs or spans (its timings are not real, and the recorded request
         // was already counted), and never a persistent log (design 8.6 item 6).

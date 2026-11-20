@@ -78,7 +78,14 @@ internal static class ExplainPlanCommand
         {
             try
             {
-                selected = EffectivePlan.Create(plan, plan.ArmsFromIds(armIds));
+                var arms = plan.ArmsFromIds(armIds);
+                if (plan.NeverRunTogether(arms) is { } never)
+                {
+                    errors.WriteLine($"These arms never run together: {never}.");
+                    return 2;
+                }
+
+                selected = EffectivePlan.Create(plan, arms);
             }
             catch (ArgumentException ex)
             {
@@ -151,6 +158,13 @@ internal static class ExplainPlanCommand
                 }
 
                 o.WriteLine($"  {e.Id,-32} layer {plan.Layers[e.LayerIndex].Name,-10} arms {string.Join(", ", arms)}{(owners.Count > 0 ? "  owners " + string.Join(", ", owners) : string.Empty)}");
+            }
+
+            // What a yield costs and what it buys (design 11.1): the review that it is meant.
+            foreach (var y in report.Yields)
+            {
+                o.WriteLine($"  {y.Experiment} yields to {y.To}: does not run on {y.To}'s traffic; keeps apart "
+                    + (y.Resolves.Count > 0 ? string.Join(", ", y.Resolves) : "nothing (YIELD_UNUSED)"));
             }
         }
 
@@ -484,6 +498,17 @@ internal static class ExplainPlanCommand
             WriteStrings(json, "nodes", arm.Nodes);
             WriteStrings(json, "param_leaves", arm.ParamLeaves);
             WriteStrings(json, "owners", arm.Owners);
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
+        json.WriteStartArray("yields");
+        foreach (var y in report.Yields)
+        {
+            json.WriteStartObject();
+            json.WriteString("experiment", y.Experiment);
+            json.WriteString("yields_to", y.To);
+            WriteStrings(json, "resolves", y.Resolves);
             json.WriteEndObject();
         }
 

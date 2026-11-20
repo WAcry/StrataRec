@@ -216,6 +216,20 @@ public sealed class GeneratedExperimentTests
             layerArms.AddRange(armIds);
         }
 
+        // Sometimes one experiment yields to another of a different layer (design 11.1): a combination with both runs, in
+        // the unified plan as in the merged compile, without the one that yields, and a conflict between them is no error.
+        // Drawn last, so the experiments of a seed are those it had before yields were generated.
+        if (placements.Count >= 2 && random.Next(3) == 0)
+        {
+            var from = random.Next(placements.Count);
+            var to = random.Next(placements.Count);
+            if (from != to && placements[from].Layer != placements[to].Layer)
+            {
+                placements[from] = placements[from] with { YieldsTo = [placements[to].Experiment.ExperimentId] };
+                described.Add($"{placements[from].Experiment.ExperimentId} yields to {placements[to].Experiment.ExperimentId}");
+            }
+        }
+
         var request = new PlanCompileRequest
         {
             Pipeline = pipeline, Catalog = sample.Catalog, Bindings = sample.Bindings, Tables = sample.Tables, Policy = sample.Policy,

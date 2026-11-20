@@ -15,19 +15,21 @@ namespace StrataRec.Hosting;
 internal sealed class RequestTelemetry
 {
     /// <summary>Requests for a pipeline the engine does not serve: no pipeline tag (the id is caller input, unbounded).</summary>
-    public static readonly RequestTelemetry Unknown = new([], [], [], []);
+    public static readonly RequestTelemetry Unknown = new([], [], [], [], []);
 
     private readonly KeyValuePair<string, object?>[] _ignoredUnknown;
     private readonly KeyValuePair<string, object?>[] _ignoredConflict;
+    private readonly KeyValuePair<string, object?>[] _ignoredYielded;
 
     private RequestTelemetry(
         KeyValuePair<string, object?>[] pipeline, KeyValuePair<string, object?>[][] arms, KeyValuePair<string, object?>[] ignoredUnknown,
-        KeyValuePair<string, object?>[] ignoredConflict)
+        KeyValuePair<string, object?>[] ignoredConflict, KeyValuePair<string, object?>[] ignoredYielded)
     {
         Pipeline = pipeline;
         Arms = arms;
         _ignoredUnknown = ignoredUnknown;
         _ignoredConflict = ignoredConflict;
+        _ignoredYielded = ignoredYielded;
     }
 
     public KeyValuePair<string, object?>[] Pipeline { get; }
@@ -61,7 +63,8 @@ internal sealed class RequestTelemetry
             arms[i] = [pipeline, new(StrataRecTags.Arm, plan.Arms[i].Id)];
         }
 
-        return new RequestTelemetry([pipeline], arms, Ignored(pipeline, IgnoredArmReason.Unknown), Ignored(pipeline, IgnoredArmReason.LayerConflict));
+        return new RequestTelemetry(
+            [pipeline], arms, Ignored(pipeline, IgnoredArmReason.Unknown), Ignored(pipeline, IgnoredArmReason.LayerConflict), Ignored(pipeline, IgnoredArmReason.Yielded));
 
         static KeyValuePair<string, object?>[] Ignored(KeyValuePair<string, object?> pipeline, IgnoredArmReason reason) =>
             [pipeline, new(StrataRecTags.Outcome, IgnoredArm.Name(reason))];
@@ -72,7 +75,12 @@ internal sealed class RequestTelemetry
     {
         foreach (var arm in ignored)
         {
-            StrataRecMetrics.RequestArmsIgnored.Add(1, arm.Reason == IgnoredArmReason.Unknown ? _ignoredUnknown : _ignoredConflict);
+            StrataRecMetrics.RequestArmsIgnored.Add(1, arm.Reason switch
+            {
+                IgnoredArmReason.Unknown => _ignoredUnknown,
+                IgnoredArmReason.LayerConflict => _ignoredConflict,
+                _ => _ignoredYielded,
+            });
         }
     }
 

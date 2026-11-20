@@ -122,8 +122,10 @@ public sealed class DebugOptions
 {
     /// <summary>
     /// Arms to force (<c>experiment/arm</c>), overriding assignment; an empty list forces the baseline. Strict, unlike the
-    /// platform's arms: an unknown arm or two arms of one layer fail the request. The request writes no persistent logs
-    /// (see remarks).
+    /// platform's arms: an unknown arm or two arms of one layer fail the request. An arm whose experiment yields to the
+    /// experiment of another forced arm (a release's <c>yields_to</c>) does not run and is recorded as yielded, as for a
+    /// request the platform assigned both: forcing shows what a request in those arms runs. The request writes no
+    /// persistent logs (see remarks).
     /// </summary>
     public IReadOnlyList<string>? ForceArms { get; init; }
 
@@ -770,9 +772,10 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                 return result = Rejected(request, assignment.ErrorKind, assignmentError);
             }
 
-            arms = assignment.Arms;
-            ignored = assignment.Ignored;
-            pipeline.Telemetry.RecordIgnored(assignment.Ignored);
+            // Whatever assigned the arms, an experiment that yields to another the request is in does not run (design 11.1).
+            arms = ExternalArms.Yield(pipeline.Plan, assignment.Arms, assignment.Ignored, out var ignoredOrYielded);
+            ignored = ignoredOrYielded;
+            pipeline.Telemetry.RecordIgnored(ignoredOrYielded);
             var remaining = request.Deadline - Stopwatch.GetElapsedTime(started);
             if (remaining <= TimeSpan.Zero)
             {

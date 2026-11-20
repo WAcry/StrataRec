@@ -71,6 +71,7 @@ public static class ManifestBuilder
             {
                 Artifact = await store.PutAsync(workspace.Experiments[id].Document, cancellationToken).ConfigureAwait(false),
                 Layer = placement.Layer,
+                YieldsTo = placement.YieldsTo.Count == 0 ? null : new List<string>(placement.YieldsTo),
                 Requires = new List<string>(requirements.Experiments[id]),
             };
         }
@@ -132,6 +133,12 @@ public static class ManifestBuilder
             if (removing.Contains(name))
             {
                 revoked[name] = new RevokedExperiment { Artifact = entry.Artifact, Seq = seq };
+            }
+            else if (entry.YieldsTo is { } yieldsTo && yieldsTo.Exists(removing.Contains))
+            {
+                // A yield to a stopped experiment yields nothing (it is not there to run with): the entry no longer names it.
+                var kept = yieldsTo.FindAll(to => !removing.Contains(to));
+                entries[name] = new ManifestExperiment { Artifact = entry.Artifact, Layer = entry.Layer, YieldsTo = kept.Count == 0 ? null : kept, Requires = entry.Requires };
             }
             else
             {
@@ -201,7 +208,7 @@ public static class ManifestBuilder
                     diagnostics.Error("MANIFEST_IDENTITY", label, pointer, $"The experiment artifact defines '{experiment.ExperimentId}', not '{name}'.");
                 }
 
-                placements.Add(new ExperimentPlacement(experiment, entry.Layer));
+                placements.Add(new ExperimentPlacement(experiment, entry.Layer) { YieldsTo = entry.YieldsTo ?? [], Release = label });
             }
         }
 

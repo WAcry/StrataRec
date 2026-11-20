@@ -66,7 +66,20 @@ public sealed class PlanCompileRequest
 public sealed record ReleaseRequirements(IReadOnlyList<string> Baseline, IReadOnlyDictionary<string, IReadOnlyList<string>> Experiments);
 
 /// <summary>An experiment and the layer it runs in (layers come from the manifest, not the artifact, design 11.2).</summary>
-public sealed record ExperimentPlacement(ExperimentArtifact Experiment, string Layer);
+public sealed record ExperimentPlacement(ExperimentArtifact Experiment, string Layer)
+{
+    /// <summary>
+    /// The experiments it yields to (<see cref="ManifestExperiment.YieldsTo"/>). One the compile does not have yields
+    /// nothing: a release that stopped the other experiment (design 10.6) loads without being checked again.
+    /// </summary>
+    public IReadOnlyList<string> YieldsTo { get; init; } = [];
+
+    /// <summary>
+    /// The release file or manifest that placed it, as diagnostics name it: what is wrong with <see cref="YieldsTo"/> is
+    /// reported there, at <c>/experiments/&lt;id&gt;/yields_to/&lt;i&gt;</c>.
+    /// </summary>
+    public string Release { get; init; } = "release";
+}
 
 /// <summary>The result of a compile: a plan when there were no errors, and every diagnostic either way.</summary>
 public sealed class PlanCompilation
@@ -130,7 +143,20 @@ public sealed class PlanReport
 
     /// <summary>False when the combination space exceeded the limit and only targeted combinations were checked.</summary>
     public bool CombinationCheckExhaustive { get; init; } = true;
+
+    /// <summary>Each yield of the release (design 11.1), with what it keeps from running together.</summary>
+    public IReadOnlyList<YieldReport> Yields { get; init; } = [];
 }
+
+/// <summary>
+/// One experiment yielding to another (<see cref="ExperimentPlacement.YieldsTo"/>): <paramref name="Experiment"/> runs in
+/// none of its arms on a request also in an arm of <paramref name="To"/>, so it loses the traffic <paramref name="To"/>
+/// runs on.
+/// </summary>
+/// <param name="Resolves">What would be checked between their arms if they could run together: the conflicting paths
+/// (<c>PATCH_CONFLICT</c>) and the interactions (<c>INTERACTION_FLOW_COLUMN</c>, <c>INTERACTION_READ</c>), sorted; empty
+/// when there is neither (<c>YIELD_UNUSED</c>).</param>
+public sealed record YieldReport(string Experiment, string To, IReadOnlyList<string> Resolves);
 
 /// <summary>Variants of one node id (design 12.3).</summary>
 /// <param name="NodeId">Node id.</param>

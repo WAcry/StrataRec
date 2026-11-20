@@ -59,9 +59,23 @@ public static class PlanCompiler
         return compilation;
     }
 
+    private static bool YieldsToAny(ExperimentPlacement placement, HashSet<string> experiments)
+    {
+        foreach (var to in placement.YieldsTo)
+        {
+            if (to != placement.Experiment.ExperimentId && experiments.Contains(to))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Compiles the baseline with the patches of <paramref name="armIds"/> (<c>experiment/arm</c>) applied in layer
-    /// order, as a plain pipeline without experiments. Running it equals running the unified plan with those arms.
+    /// order, as a plain pipeline without experiments. Running it equals running the unified plan with those arms: an
+    /// arm whose experiment yields to the experiment of another of them is left out, as a request runs without it.
     /// </summary>
     /// <param name="configOverride">
     /// A request's configuration override (design 13.3), applied after the arms, so it wins over them: an RFC 7396 merge
@@ -95,6 +109,27 @@ public static class PlanCompiler
             if (!found)
             {
                 throw new ArgumentException($"Unknown arm '{id}'. Arms are named 'experiment/arm'.", nameof(armIds));
+            }
+        }
+
+        // As the unified plan runs them (ArmYields): an arm whose experiment yields to the experiment of another arm here
+        // does not run. Judged on the arms given, not on those left, so the order does not matter.
+        var present = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (_, id, _) in selected)
+        {
+            present.Add(id[..id.IndexOf('/')]);
+        }
+
+        for (var i = selected.Count - 1; i >= 0; i--)
+        {
+            var experiment = selected[i].Id[..selected[i].Id.IndexOf('/')];
+            foreach (var placement in request.Experiments)
+            {
+                if (placement.Experiment.ExperimentId == experiment && YieldsToAny(placement, present))
+                {
+                    selected.RemoveAt(i);
+                    break;
+                }
             }
         }
 
@@ -428,6 +463,15 @@ internal sealed partial class UnifiedCompilation
 
     /// <summary>The reviewed interactions an interaction matched: (experiment, other experiment, column).</summary>
     private readonly HashSet<(string, string, string)> _reviewUsed = new();
+
+    /// <summary>Which experiments yield to which (<see cref="ArmYields"/>); every combination is judged as it runs.</summary>
+    private ArmYields _yields = ArmYields.None;
+
+    /// <summary>Each declared yield of a present experiment to another, where it is declared.</summary>
+    private readonly List<(int From, int To, string Release, string Pointer)> _yieldDeclarations = new();
+
+    /// <summary>Per pair of experiments (lower index first) that never run together because one yields: what that resolves.</summary>
+    private readonly SortedDictionary<(int, int), SortedSet<string>> _yieldResolves = new();
     private readonly List<ArmPatch> _arms = new();
     private readonly SortedDictionary<string, NodeVariants> _variants = new(StringComparer.Ordinal);
     private readonly SortedDictionary<string, TapVariants> _taps = new(StringComparer.Ordinal);
@@ -484,6 +528,7 @@ internal sealed partial class UnifiedCompilation
     {
         var start = _diagnostics.Count;
         DefineExperiments();
+        DefineYields();
         Settle(start, Array.Empty<ArmPatch>());
 
         start = _diagnostics.Count;
@@ -511,6 +556,7 @@ internal sealed partial class UnifiedCompilation
         }
 
         ValidatePairs();
+        ValidateYields();
         ValidateReviewedInteractions();
         ValidateBaselineAlone();
         if (_request.ValidateArmsIndependently)
@@ -548,6 +594,7 @@ internal sealed partial class UnifiedCompilation
                 Arms = ArmReports(),
                 CombinationsChecked = report.Checked,
                 CombinationCheckExhaustive = report.Exhaustive,
+                Yields = YieldReports(),
             },
         };
     }
@@ -652,6 +699,119 @@ internal sealed partial class UnifiedCompilation
             {
                 _reviewed[e.ExperimentId] = (artifact, reviewed);
             }
+        }
+    }
+
+    /// <summary>
+    /// The yields of the release (<see cref="ExperimentPlacement.YieldsTo"/>, design 11.1): an experiment yields only to
+    /// another of this compile in another layer, never to itself, and never back along a chain of yields.
+    /// </summary>
+    private void DefineYields()
+    {
+        var byId = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < _experiments.Count; i++)
+        {
+            byId[_experiments[i].Id] = i;
+        }
+
+        var yieldsTo = new SortedSet<int>?[_experiments.Count];
+        var declared = new Dictionary<(int, int), (string Release, string Pointer)>();
+        foreach (var placement in _request.Experiments)
+        {
+            var id = placement.Experiment.ExperimentId;
+            if (!byId.TryGetValue(id, out var from))
+            {
+                continue; // a duplicate or an experiment without arms: reported where it was defined
+            }
+
+            for (var i = 0; i < placement.YieldsTo.Count; i++)
+            {
+                var name = placement.YieldsTo[i];
+                var pointer = "/experiments/" + JsonPointer.Escape(id) + "/yields_to/" + i;
+                if (name is null || !byId.TryGetValue(name, out var to))
+                {
+                    continue; // not in this compile: a release that stopped it yields nothing to it (ExperimentPlacement.YieldsTo)
+                }
+
+                if (to == from)
+                {
+                    _diagnostics.Error("YIELD_SELF", placement.Release, pointer, $"'{id}' yields to itself.", "remove the entry");
+                }
+                else if (_experiments[to].Layer == _experiments[from].Layer)
+                {
+                    _diagnostics.Warning("YIELD_SAME_LAYER", placement.Release, pointer,
+                        $"'{id}' yields to '{name}', but both are in layer '{_layers[_experiments[from].Layer]}': a request is never in both.",
+                        "remove the entry (arms of one layer never run together, design 11.1)");
+                }
+                else if ((yieldsTo[from] ??= new SortedSet<int>()).Add(to))
+                {
+                    declared[(from, to)] = (placement.Release, pointer);
+                    _yieldDeclarations.Add((from, to, placement.Release, pointer));
+                }
+            }
+        }
+
+        // A cycle (a yields to b, b to a) has no experiment that runs where all are assigned, and no meaning as a decision.
+        var state = new byte[_experiments.Count]; // 0 unvisited, 1 on the path, 2 done
+        var path = new List<int>();
+        for (var start = 0; start < _experiments.Count; start++)
+        {
+            FindCycles(start);
+        }
+
+        var arrays = new ImmutableArray<int>[_experiments.Count];
+        for (var i = 0; i < arrays.Length; i++)
+        {
+            arrays[i] = yieldsTo[i] is { } set ? [.. set] : [];
+        }
+
+        var experimentOfArm = new int[_arms.Count];
+        foreach (var arm in _arms)
+        {
+            experimentOfArm[arm.Index] = arm.ExperimentIndex;
+        }
+
+        var layerOfExperiment = new int[_experiments.Count];
+        for (var i = 0; i < layerOfExperiment.Length; i++)
+        {
+            layerOfExperiment[i] = _experiments[i].Layer;
+        }
+
+        _yields = ArmYields.Create(experimentOfArm, layerOfExperiment, arrays);
+
+        void FindCycles(int experiment)
+        {
+            if (state[experiment] == 2)
+            {
+                return;
+            }
+
+            state[experiment] = 1;
+            path.Add(experiment);
+            foreach (var to in yieldsTo[experiment] ?? [])
+            {
+                if (state[to] == 1)
+                {
+                    var names = new List<string>();
+                    for (var i = path.IndexOf(to); i < path.Count; i++)
+                    {
+                        names.Add(_experiments[path[i]].Id);
+                    }
+
+                    names.Add(_experiments[to].Id);
+                    var (release, pointer) = declared[(experiment, to)];
+                    _diagnostics.Error("YIELD_CYCLE", release, pointer,
+                        $"Yields go round in a cycle: {string.Join(" yields to ", names)}.",
+                        "a yield gives one experiment priority over another: remove one of these entries");
+                }
+                else
+                {
+                    FindCycles(to);
+                }
+            }
+
+            path.RemoveAt(path.Count - 1);
+            state[experiment] = 2;
         }
     }
 
@@ -1049,7 +1209,7 @@ internal sealed partial class UnifiedCompilation
                 variants.Failed[c] = compiled is null;
             }
 
-            Settle(start, ArmPatches(variants.ArmsOf(first)));
+            Settle(start, Running(ArmPatches(variants.ArmsOf(first))));
         }
     }
 
@@ -1118,7 +1278,8 @@ internal sealed partial class UnifiedCompilation
         bool? fallbackRole = null;
         for (var c = 0; c < space.Count; c++)
         {
-            var armsInCombination = ArmPatches(variants.ArmsOf(c));
+            // A combination with an arm that yields never runs as such: it is defined as it runs, without that arm.
+            var armsInCombination = Running(ArmPatches(variants.ArmsOf(c)));
             var definition = Merge(baseline, armsInCombination, "nodes", nodeId);
             if (definition is null)
             {
@@ -1197,7 +1358,7 @@ internal sealed partial class UnifiedCompilation
             var byHash = new Dictionary<string, (CompiledTap? Tap, bool Failed)>(StringComparer.Ordinal);
             for (var c = 0; c < space.Count; c++)
             {
-                var armsInCombination = ArmPatches(variants.ArmsOf(c));
+                var armsInCombination = Running(ArmPatches(variants.ArmsOf(c)));
                 var definition = Merge(baseline, armsInCombination, "log_taps", tapId);
                 if (definition is null)
                 {
@@ -1437,6 +1598,66 @@ internal sealed partial class UnifiedCompilation
         return new RequestArms(byLayer);
     }
 
+    /// <summary>
+    /// A combination (an arm per layer) as it runs: without the arms whose experiment yields to another experiment of it
+    /// (<see cref="ArmYields"/>), the same array when none does.
+    /// </summary>
+    private int[] Running(int[] combination)
+    {
+        if (_yields.IsEmpty)
+        {
+            return combination;
+        }
+
+        var yielded = new List<int>();
+        _yields.Resolve(new RequestArms(combination), yielded);
+        if (yielded.Count == 0)
+        {
+            return combination;
+        }
+
+        var running = (int[])combination.Clone();
+        foreach (var arm in yielded)
+        {
+            running[_arms[arm].LayerIndex] = -1;
+        }
+
+        return running;
+    }
+
+    /// <inheritdoc cref="Running(int[])"/>
+    private List<ArmPatch> Running(List<ArmPatch> arms)
+    {
+        if (_yields.IsEmpty || arms.Count < 2)
+        {
+            return arms;
+        }
+
+        var combination = NewCombination();
+        foreach (var arm in arms)
+        {
+            combination[arm.LayerIndex] = arm.Index;
+        }
+
+        var yielded = new List<int>();
+        _yields.Resolve(new RequestArms(combination), yielded);
+        if (yielded.Count == 0)
+        {
+            return arms;
+        }
+
+        var running = new List<ArmPatch>(arms.Count);
+        foreach (var arm in arms)
+        {
+            if (!yielded.Contains(arm.Index))
+            {
+                running.Add(arm);
+            }
+        }
+
+        return running;
+    }
+
     private List<ArmPatch> ArmPatches(List<int> indices)
     {
         var list = new List<ArmPatch>(indices.Count);
@@ -1570,7 +1791,7 @@ internal sealed partial class UnifiedCompilation
         for (var i = 0; i < experiments.Length; i++)
         {
             var (id, layer, arms) = _experiments[i];
-            experiments[i] = new ExperimentInfo(i, id, layer, arms);
+            experiments[i] = new ExperimentInfo(i, id, layer, arms) { YieldsTo = _yields.YieldsOf(i) };
         }
 
         return ImmutableCollectionsMarshal.AsImmutableArray(experiments);

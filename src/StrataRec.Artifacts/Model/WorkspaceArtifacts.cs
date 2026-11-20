@@ -31,8 +31,20 @@ public sealed class ReleaseArtifact
 /// <summary>An experiment in flight in a release.</summary>
 public sealed class ReleaseExperiment
 {
-    /// <inheritdoc cref="ManifestExperiment.Layer"/>
+    /// <summary>
+    /// The experiment's layer: a request is in at most one arm per layer, so the arms of one layer are never validated
+    /// together and the arms of different layers always are (design 11.5).
+    /// </summary>
     public required string Layer { get; init; }
+
+    /// <summary>
+    /// Experiments of this release this one yields to (design 11.1): on a request also in an arm of one of them, this
+    /// experiment runs in none of its arms (its layer runs the baseline, and the request records it as yielded), so the
+    /// two never run together, as if they shared a layer. For two experiments of different layers that conflict or
+    /// interact (design 11.5) when putting them into one layer would cost too much traffic: this one gives up the
+    /// other's share.
+    /// </summary>
+    public List<string>? YieldsTo { get; init; }
 }
 
 /// <summary>

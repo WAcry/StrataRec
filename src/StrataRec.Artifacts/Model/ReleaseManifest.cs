@@ -86,6 +86,15 @@ public sealed class ManifestExperiment
     public required string Layer { get; init; }
 
     /// <summary>
+    /// Experiments of this release this one yields to (design 11.1): on a request also in an arm of one of them, this
+    /// experiment runs in none of its arms (its layer runs the baseline, and the request records it as yielded), so the
+    /// two never run together, as if they shared a layer. For two experiments of different layers that conflict or
+    /// interact (design 11.5) when putting them into one layer would cost too much traffic: this one gives up the
+    /// other's share. Omitted when it yields to none.
+    /// </summary>
+    public List<string>? YieldsTo { get; init; }
+
+    /// <summary>
     /// Capabilities the experiment requires of the binary beyond the baseline's, computed by the build from what its
     /// compile used (design 10.4): removing the experiment removes them, so a revocation lets a binary that lacks them
     /// serve the rest, and a controller rolling a binary back knows which experiments to remove.

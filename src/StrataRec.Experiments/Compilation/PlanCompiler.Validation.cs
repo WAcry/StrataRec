@@ -204,6 +204,7 @@ internal sealed partial class UnifiedCompilation
 
     private void Check(int[] combination, ImmutableArray<TimelineSlot> timeline, Dictionary<string, TimelineSlot> fallbacks, OutputPlan output, HashSet<string> seen, CombinationReport report)
     {
+        combination = Running(combination); // one with an arm that yields runs without it: that is what is checked
         if (!seen.Add(string.Join(",", combination)))
         {
             return;
@@ -275,10 +276,11 @@ internal sealed partial class UnifiedCompilation
     }
 
     /// <summary>
-    /// Checks every pair of arms that can be assigned together (any two of different layers) for path conflicts (errors)
-    /// and interactions (warnings for review), design 11.5. Two arms placing nodes at the same order are not a conflict:
-    /// the per-combination data-flow check refuses same-order nodes that depend on each other (ORDER_DEPENDENCY), and
-    /// independent ones run in either order with the same result.
+    /// Checks every pair of arms that can run together (any two of different layers, unless one's experiment yields to the
+    /// other's) for path conflicts (errors) and interactions (warnings for review), design 11.5. Two arms placing nodes at
+    /// the same order are not a conflict: the per-combination data-flow check refuses same-order nodes that depend on each
+    /// other (ORDER_DEPENDENCY), and independent ones run in either order with the same result. A pair that never runs
+    /// together because of a yield is not reported: what it would be is what the yield resolves (<see cref="ValidateYields"/>).
     /// </summary>
     private void ValidatePairs()
     {
@@ -303,6 +305,9 @@ internal sealed partial class UnifiedCompilation
                     continue;
                 }
 
+                var resolves = _yields.Yields(a.ExperimentIndex, b.ExperimentIndex) || _yields.Yields(b.ExperimentIndex, a.ExperimentIndex)
+                    ? YieldResolves(a.ExperimentIndex, b.ExperimentIndex)
+                    : null;
                 foreach (var conflict in MergePatchAnalyzer.FindConflicts(a.Footprint, b.Footprint))
                 {
                     if (IsAddition(a, conflict.First) && IsAddition(b, conflict.Second))
@@ -310,31 +315,66 @@ internal sealed partial class UnifiedCompilation
                         continue; // identical re-adds are fine; different ones are ADD_CONFLICT
                     }
 
+                    if (resolves is not null)
+                    {
+                        resolves.Add("PATCH_CONFLICT " + conflict.First.Path + (conflict.First.Path.Equals(conflict.Second.Path) ? string.Empty : " / " + conflict.Second.Path));
+                        continue;
+                    }
+
                     _diagnostics.Error("PATCH_CONFLICT", a.Artifact, a.PointerPrefix + conflict.First.Path,
                         $"Arms '{a.Id}' and '{b.Id}' (layers '{_layers[a.LayerIndex]}' and '{_layers[b.LayerIndex]}') can be assigned to the same request and both change '{conflict.First.Path}'"
                         + (conflict.First.Path.Equals(conflict.Second.Path) ? "." : $" / '{conflict.Second.Path}'."),
-                        "put the experiments in the same layer so their arms exclude each other, or combine them into one experiment (design 11.5)");
+                        "put the experiments in the same layer so their arms exclude each other, combine them into one experiment, "
+                        + $"or let one take the other's traffic where both are assigned: {YieldHint(a, b)} (design 11.1, 11.5)");
                 }
 
-                Interactions(a, b, writes, addedReads);
-                Interactions(b, a, writes, addedReads);
+                Interactions(a, b, writes, addedReads, resolves);
+                Interactions(b, a, writes, addedReads, resolves);
             }
         }
     }
 
-    private void Interactions(ArmPatch a, ArmPatch b, Dictionary<int, Dictionary<int, string>> writes, Dictionary<int, Dictionary<int, ArmRead>> addedReads)
+    /// <summary>What a yield between two experiments resolves (<see cref="_yieldResolves"/>), by the pair, lower index first.</summary>
+    private SortedSet<string> YieldResolves(int a, int b)
+    {
+        var key = a < b ? (a, b) : (b, a);
+        if (!_yieldResolves.TryGetValue(key, out var set))
+        {
+            set = new SortedSet<string>(StringComparer.Ordinal);
+            _yieldResolves[key] = set;
+        }
+
+        return set;
+    }
+
+    /// <summary>How to declare that <paramref name="a"/>'s experiment yields to <paramref name="b"/>'s, for a hint.</summary>
+    private string YieldHint(ArmPatch a, ArmPatch b) =>
+        $"in the release, \"{a.ExperimentId}\": {{ \"layer\": \"{_layers[a.LayerIndex]}\", \"yields_to\": [\"{b.ExperimentId}\"] }}";
+
+    /// <param name="resolves">Where the interactions go when a yield keeps the two arms from running together: no
+    /// warning, and no reviewed interaction is used up by them.</param>
+    private void Interactions(
+        ArmPatch a, ArmPatch b, Dictionary<int, Dictionary<int, string>> writes, Dictionary<int, Dictionary<int, ArmRead>> addedReads, SortedSet<string>? resolves)
     {
         foreach (var (logical, node) in writes[a.Index])
         {
             var column = _builder.Schema.Columns[logical];
-            if (a.Index < b.Index && column.Flow && writes[b.Index].TryGetValue(logical, out var otherNode) && !Reviewed(a, b, column.Name))
+            if (a.Index < b.Index && column.Flow && writes[b.Index].TryGetValue(logical, out var otherNode) && resolves is not null)
+            {
+                resolves.Add("INTERACTION_FLOW_COLUMN " + column.Name);
+            }
+            else if (a.Index < b.Index && column.Flow && writes[b.Index].TryGetValue(logical, out otherNode) && !Reviewed(a, b, column.Name))
             {
                 _diagnostics.Warning("INTERACTION_FLOW_COLUMN", a.Artifact, a.PointerPrefix + "/nodes/" + JsonPointer.Escape(node),
                     $"Arms '{a.Id}' ('{node}') and '{b.Id}' ('{otherNode}') can be assigned together and both add a node writing flow column '{column.Name}'.",
                     ReviewHint(a, b, column.Name));
             }
 
-            if (addedReads[b.Index].TryGetValue(logical, out var read) && !Reviewed(a, b, column.Name))
+            if (addedReads[b.Index].TryGetValue(logical, out var read) && resolves is not null)
+            {
+                resolves.Add("INTERACTION_READ " + column.Name);
+            }
+            else if (addedReads[b.Index].TryGetValue(logical, out read) && !Reviewed(a, b, column.Name))
             {
                 var reader = read.Node;
                 var how = read.Fallback is { } fallback
@@ -347,9 +387,45 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    private static string ReviewHint(ArmPatch a, ArmPatch b, string column) =>
+    private string ReviewHint(ArmPatch a, ArmPatch b, string column) =>
         $"if the two may compose, record the review in '{a.ExperimentId}': \"reviewed_interactions\": {{ \"{b.ExperimentId}\": [\"{column}\"] }}; " +
-        "otherwise put the experiments in the same layer (design 11.5)";
+        $"otherwise put the experiments in the same layer, or let one yield to the other where both are assigned: {YieldHint(a, b)} (design 11.1, 11.5)";
+
+    /// <summary>
+    /// A yield that resolves nothing is a warning: the arms of the two neither conflict nor interact, so it only costs the
+    /// experiment that yields the traffic of the other, and a yield that outlived its conflict would hide the next one.
+    /// </summary>
+    private void ValidateYields()
+    {
+        // With an error anywhere, conflicts and interactions are not all known (as for reviewed interactions, review 69).
+        if (_diagnostics.HasErrors)
+        {
+            return;
+        }
+
+        foreach (var (from, to, release, pointer) in _yieldDeclarations)
+        {
+            if (!_yieldResolves.TryGetValue(from < to ? (from, to) : (to, from), out var resolves) || resolves.Count == 0)
+            {
+                _diagnostics.Warning("YIELD_UNUSED", release, pointer,
+                    $"'{_experiments[from].Id}' yields to '{_experiments[to].Id}', but their arms neither conflict nor interact: it only costs '{_experiments[from].Id}' the traffic '{_experiments[to].Id}' runs on.",
+                    "remove the entry (design 11.1)");
+            }
+        }
+    }
+
+    private List<YieldReport> YieldReports()
+    {
+        var reports = new List<YieldReport>(_yieldDeclarations.Count);
+        foreach (var (from, to, _, _) in _yieldDeclarations)
+        {
+            var resolves = _yieldResolves.TryGetValue(from < to ? (from, to) : (to, from), out var set) ? new List<string>(set) : new List<string>();
+            reports.Add(new YieldReport(_experiments[from].Id, _experiments[to].Id, resolves));
+        }
+
+        reports.Sort(static (x, y) => string.CompareOrdinal(x.Experiment, y.Experiment) is var c && c != 0 ? c : string.CompareOrdinal(x.To, y.To));
+        return reports;
+    }
 
     /// <summary>Whether either experiment recorded the interaction on <paramref name="column"/> as reviewed; marks what matched.</summary>
     private bool Reviewed(ArmPatch a, ArmPatch b, string column) => Reviewed(a.ExperimentId, b.ExperimentId, column) | Reviewed(b.ExperimentId, a.ExperimentId, column);

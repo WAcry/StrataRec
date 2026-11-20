@@ -132,6 +132,19 @@ public sealed partial class RecEngine
                     plan.ManifestId);
             }
 
+            // Arms the recording ran together that the replayed plan never does (one's experiment yields to the other's):
+            // replayed as a request in them would run now, without the arm that yields.
+            if (!plan.Yields.IsEmpty)
+            {
+                var yielded = new List<int>();
+                var assigned = arms;
+                arms = plan.Yields.Resolve(assigned, yielded);
+                foreach (var arm in yielded)
+                {
+                    notes.Add($"arm '{plan.Arms[arm].Id}' yields to '{plan.Experiments[plan.Yields.YieldsTo(arm, assigned)].Id}' in the replayed plan; replayed without it");
+                }
+            }
+
             // The platform's arms the recorded request ignored are part of its assignment record; arms passed to the replay
             // replace that assignment, so it then has none.
             var ignored = options?.Arms is null ? IgnoredArms(recordedRequest.Assignment) : Array.Empty<IgnoredArm>();
@@ -659,7 +672,7 @@ public sealed partial class RecEngine
             var record = assignment.Ignored[i];
             if (!IgnoredArm.TryParse(record.Reason, out var reason))
             {
-                throw new ReplayBundleException($"/request/assignment/ignored/{i}/reason", $"unknown reason '{record.Reason}'", "a reason is unknown or layer_conflict");
+                throw new ReplayBundleException($"/request/assignment/ignored/{i}/reason", $"unknown reason '{record.Reason}'", "a reason is unknown, layer_conflict or yielded");
             }
 
             ignored[i] = new IgnoredArm(record.Id, reason);

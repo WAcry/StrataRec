@@ -25,6 +25,12 @@ public readonly struct RequestArms
 
     /// <summary>Global arm index assigned in <paramref name="layer"/>, or -1.</summary>
     public int ArmIn(int layer) => _armByLayer is null || layer >= _armByLayer.Length ? -1 : _armByLayer[layer];
+
+    /// <summary>Whether both are the same assignment object (what <see cref="ArmYields.Resolve"/> returns when nothing yields).</summary>
+    internal bool SameAs(in RequestArms other) => ReferenceEquals(_armByLayer, other._armByLayer);
+
+    /// <summary>A copy of the arm per layer, to change (<see cref="ArmYields.Resolve"/>).</summary>
+    internal int[] CopyArms() => _armByLayer is null ? [] : (int[])_armByLayer.Clone();
 }
 
 /// <summary>
@@ -36,7 +42,14 @@ public readonly struct RequestArms
 public sealed record LayerInfo(int Index, string Name);
 
 /// <summary>An experiment in the plan.</summary>
-public sealed record ExperimentInfo(int Index, string Id, int LayerIndex, ImmutableArray<int> ArmIndices);
+public sealed record ExperimentInfo(int Index, string Id, int LayerIndex, ImmutableArray<int> ArmIndices)
+{
+    /// <summary>
+    /// The experiments (by index) this one yields to (a release's <c>yields_to</c>, <see cref="ArmYields"/>): on a request
+    /// in an arm of one of them it runs in none of its arms. Ascending; empty for most.
+    /// </summary>
+    public ImmutableArray<int> YieldsTo { get; init; } = [];
+}
 
 /// <summary>An experiment arm in the plan; <see cref="Id"/> is <c>experiment/arm</c>.</summary>
 public sealed record ArmInfo(int Index, string Id, string ArmName, int ExperimentIndex, int LayerIndex);
@@ -199,6 +212,12 @@ public sealed class ExecutionPlan
 
     public required ImmutableArray<ArmInfo> Arms { get; init; }
 
+    /// <summary>
+    /// Which experiments yield to which (<see cref="ExperimentInfo.YieldsTo"/>): applied to every request's arms after its
+    /// assignment, whatever its source, before anything selects by them.
+    /// </summary>
+    public ArmYields Yields { get; init; } = ArmYields.None;
+
     /// <summary>Context features needed by any variant, the output or log taps; prefetched at request start.</summary>
     public required ImmutableArray<int> ContextFeatures { get; init; }
 
@@ -256,6 +275,25 @@ public sealed class ExecutionPlan
         }
 
         return new RequestArms(byLayer);
+    }
+
+    /// <summary>
+    /// Why <paramref name="arms"/> never run together as given (one's experiment yields to another's, <see cref="Yields"/>:
+    /// a request in them runs without the arm that yields), or null when they do. For tools that show or compare a
+    /// combination, which must not show one that never runs.
+    /// </summary>
+    public string? NeverRunTogether(in RequestArms arms)
+    {
+        for (var layer = 0; layer < arms.LayerCount; layer++)
+        {
+            var arm = arms.ArmIn(layer);
+            if (arm >= 0 && Yields.YieldsTo(arm, arms) is var to and >= 0)
+            {
+                return $"'{Experiments[Arms[arm].ExperimentIndex].Id}' yields to '{Experiments[to].Id}': a request in both runs without '{Arms[arm].Id}'";
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

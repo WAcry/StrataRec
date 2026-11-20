@@ -122,9 +122,11 @@ public static class StrataRecMetrics
 
     /// <summary>
     /// Arm ids from the experimentation platform that a request did not run with (design 11.1): the platform and the
-    /// served release disagree, so its view of exposure is off by these. Not tagged by arm: an unknown id is platform
-    /// input, unbounded. Tags: <c>stratarec.pipeline</c>, <c>stratarec.outcome</c> = <c>unknown</c> (the served plan has
-    /// no such arm) | <c>layer_conflict</c> (two arms of one layer came, and that layer ran its baseline).
+    /// served release disagree, or the release has the arm's experiment yield, so the platform's view of exposure is off by
+    /// these. Not tagged by arm: an unknown id is platform input, unbounded. Tags: <c>stratarec.pipeline</c>,
+    /// <c>stratarec.outcome</c> = <c>unknown</c> (the served plan has no such arm) | <c>layer_conflict</c> (two arms of one
+    /// layer came, and that layer ran its baseline) | <c>yielded</c> (its experiment yields to another experiment the
+    /// request is in, and its layer ran its baseline: the traffic it gives up).
     /// </summary>
     public static readonly Counter<long> RequestArmsIgnored = Meter.CreateCounter<long>(Names.RequestArmsIgnored, "{arm}", "Arm ids from the experiment platform that requests ignored, by reason.");
 

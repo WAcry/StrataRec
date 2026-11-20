@@ -160,7 +160,10 @@ internal static class StatusCommand
         var described = new List<string>(names.Count);
         foreach (var name in names)
         {
-            described.Add($"{name} (layer {manifest.Experiments[name].Layer})");
+            var entry = manifest.Experiments[name];
+            described.Add(entry.YieldsTo is { Count: > 0 } yieldsTo
+                ? $"{name} (layer {entry.Layer}, yields to {string.Join(", ", yieldsTo)})"
+                : $"{name} (layer {entry.Layer})");
         }
 
         return string.Join(", ", described);
@@ -195,6 +198,17 @@ internal static class StatusCommand
             {
                 json.WriteStartObject(name);
                 json.WriteString("layer", manifest.Experiments[name].Layer);
+                if (manifest.Experiments[name].YieldsTo is { Count: > 0 } yieldsTo)
+                {
+                    json.WriteStartArray("yields_to");
+                    foreach (var to in yieldsTo)
+                    {
+                        json.WriteStringValue(to);
+                    }
+
+                    json.WriteEndArray();
+                }
+
                 json.WriteString("artifact", manifest.Experiments[name].Artifact);
                 json.WriteEndObject();
             }

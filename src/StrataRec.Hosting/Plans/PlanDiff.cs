@@ -179,7 +179,8 @@ public sealed class PlanDiff
             byLayer[arm.LayerIndex] = id;
         }
 
-        return (plan.ArmsFromIds(arms), null);
+        var resolved = plan.ArmsFromIds(arms);
+        return plan.NeverRunTogether(resolved) is { } never ? (default, never) : (resolved, null);
     }
 
     private static List<StructureChange> CompareStructure(ExecutionPlan from, ExecutionPlan to)
