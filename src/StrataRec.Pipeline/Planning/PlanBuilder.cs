@@ -105,6 +105,7 @@ public sealed class PlanBuilder
     private readonly DiagnosticBag _diagnostics;
     private readonly List<CompiledNode> _nodes = new();
     private readonly List<FeatureRuntimeInfo> _features = new();
+    private readonly HashSet<int> _awaitedFeatures = new(); // read by operators while they run (CompileAwaitedExpression)
     private readonly List<CompiledFunnelGroup> _groups = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private PlanSchema? _schema;
@@ -368,6 +369,7 @@ public sealed class PlanBuilder
         }
 
         var effects = factory.Descriptor.Effects;
+        _awaitedFeatures.UnionWith(context.AwaitedFeatures);
         var node = new CompiledNode
         {
             NodeId = nodeId,
@@ -1824,7 +1826,8 @@ public sealed class PlanBuilder
             _environment.CacheStores,
             _environment.Clock,
             CatalogLabel,
-            _catalog);
+            _catalog,
+            _awaitedFeatures);
     }
 
     /// <summary>Assembles the final plan. Call after every node, the output and the feature plan are compiled.</summary>

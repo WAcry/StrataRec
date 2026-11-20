@@ -169,8 +169,9 @@ internal sealed class RunReplay : IFeatureCallHook
     /// <summary>
     /// Answers a candidate source call; <paramref name="buffer"/> is filled up to its limit. The node's own recorded call
     /// of the source is replayed exactly, status included, and consumed. A node the recording has no (unconsumed) call
-    /// for, such as a node the configuration added, gets a copy of the longest list the source returned to any node, and
-    /// consumes nothing: another node's call stays that node's, whatever order the nodes ask in.
+    /// for, such as a node the configuration added, gets a copy of the longest list the source returned to a call with the
+    /// same query values, or else to any call, and consumes nothing: another node's call stays that node's, whatever order
+    /// the nodes ask in. Either way, an answer recorded for other query values is reported (<c>query_changed</c>).
     /// </summary>
     internal CandidateSourceStatus Retrieve(string node, string source, CandidateQuery query, CandidateBuffer buffer)
     {
@@ -186,10 +187,11 @@ internal sealed class RunReplay : IFeatureCallHook
                 }
             }
 
+            var replayed = RunRecorder.Query(query.Values);
             if (exact is not null)
             {
                 exact.Consumed = true;
-                if (ChangedValue(exact.Query, RunRecorder.Query(query.Values)) is { } changed)
+                if (ChangedValue(exact.Query, replayed) is { } changed)
                 {
                     // Answered as recorded all the same: the recording has no answer to the new values.
                     AddGap("candidate_source", source, changed, "query_changed", 1, node);
@@ -204,13 +206,25 @@ internal sealed class RunReplay : IFeatureCallHook
                 return CandidateSourceStatus.Ok;
             }
 
-            // The data of a successful call; a failure belongs to the call that failed.
-            CandidateEntry? longest = null;
+            // The data of a successful call; a failure belongs to the call that failed. One that answered the same query
+            // values first (review 80: a node the configuration added, querying with other values, got another query's
+            // answer silently).
+            CandidateEntry? longest = null, matching = null;
             foreach (var candidate in _candidateCalls)
             {
-                if (candidate.Source == source && candidate.Outcome == IoOutcome.Ok && (longest is null || candidate.Ids.Length > longest.Ids.Length))
+                if (candidate.Source != source || candidate.Outcome != IoOutcome.Ok)
+                {
+                    continue;
+                }
+
+                if (longest is null || candidate.Ids.Length > longest.Ids.Length)
                 {
                     longest = candidate;
+                }
+
+                if ((matching is null || candidate.Ids.Length > matching.Ids.Length) && ChangedValue(candidate.Query, replayed) is null)
+                {
+                    matching = candidate;
                 }
             }
 
@@ -220,7 +234,12 @@ internal sealed class RunReplay : IFeatureCallHook
                 return CandidateSourceStatus.Ok;
             }
 
-            Copy(longest, node, query, buffer);
+            if (matching is null && ChangedValue(longest.Query, replayed) is { } differs)
+            {
+                AddGap("candidate_source", source, differs, "query_changed", 1, node);
+            }
+
+            Copy(matching ?? longest, node, query, buffer);
             return CandidateSourceStatus.Ok;
         }
     }
@@ -914,6 +933,19 @@ internal sealed class RunReplay : IFeatureCallHook
             if (ids.Length != call.Scores.Count)
             {
                 throw new ReplayBundleException(at + "/scores", $"{call.Scores.Count} score(s) for {ids.Length} id(s)", "record one score per id");
+            }
+
+            // The query's values are compared as JSON, so each must be a value of its type, as a recording writes it
+            // (review 80: a type of "nonsense" and an object for a value were indexed, and reported as a changed query).
+            foreach (var (name, typed) in call.Query ?? [])
+            {
+                var value = $"{at}/query/{JsonPointer.Escape(name)}";
+                if (typed is null)
+                {
+                    throw new ReplayBundleException(value, "a query value is null", "record each query value as { \"type\": …, \"value\": … }");
+                }
+
+                _ = ReplayJson.Value(typed.Value, ReplayJson.Type(typed.Type, value + "/type"), value + "/value");
             }
 
             _candidateCalls.Add(new CandidateEntry(call.Seq, call.Node, call.Source, call.Limit, call.Query, outcome, call.Error, ids, call.Scores.ToArray()));

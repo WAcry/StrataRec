@@ -214,8 +214,149 @@ public sealed class RecallQueryTests
         Assert.True(outcome.Result.Succeeded, outcome.Result.Error);
         var gap = Assert.Single(outcome.Report.Gaps, g => g.Reason == "query_changed");
         Assert.Equal(("candidate_source", "two_tower", "tenure", 1, "recall"), (gap.Kind, gap.Source, gap.Field, gap.Count, gap.Examples.Single()));
-        Assert.Equal("candidate source two_tower: its query value 'tenure' differs from the recorded one in 1 call(s); the recorded candidates were returned", gap.Description);
+        Assert.Equal("candidate source two_tower: its query value 'tenure' differs from the recorded one in 1 call(s), which were answered as recorded", gap.Description);
         Assert.Equal(Items(recorded), Items(outcome.Result));
+    }
+
+    [Fact]
+    public async Task AQueryReadingADerivedFeature_IsSentOnceItIsComputed_NotAfterTheWholePrefetch()
+    {
+        // user.query_embedding is derived from the user's embedding; geo_store (the request's country) is still in flight.
+        // The derived feature was computed only once every group was stored, so two_tower waited for geo_store (review 80).
+        var host = HomeFeedTestHost.LoadModified(root =>
+        {
+            ReplayTests.Edit(root, "catalog/home_feed.jsonc", "\"derived_features\": {",
+                "\"derived_features\": { \"user.query_embedding\": { \"type\": \"list<float32,3>\", \"expr\": \"ctx.user.embedding\" },");
+            ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"user_embedding\": \"ctx.user.embedding\"", "\"user_embedding\": \"ctx.user.query_embedding\"");
+        });
+        using var geo = new GatedConnectors("geo_store");
+        var sources = new ProbeSources();
+        await using var engine = Engine(host, sources, geo);
+        var running = engine.ExecuteAsync(WithCountry("req-derived-query"), TestContext.Current.CancellationToken).AsTask();
+        try
+        {
+            await geo.Started.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+            await sources.Called("two_tower").WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+            Assert.Equal([1.0, 0.0, 0.0], sources.Query("two_tower")["user_embedding"].AsFloat64List().ToArray());
+        }
+        finally
+        {
+            geo.Open();
+        }
+
+        var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(NodeOutcomeKind.Succeeded, result.Trace!.Single(n => n.NodeId == "recall").Kind);
+    }
+
+    [Fact]
+    public async Task AFeatureThatFailed_RefusesTheSourceAtOnce_WhateverItsOtherFeaturesDo()
+    {
+        // two_tower reads the user's embedding, whose store fails, and the country's region, whose store is held past the
+        // node's budget: the source is refused when the embedding fails, not timed out with the region (review 80).
+        var host = HomeFeedTestHost.LoadModified(root =>
+        {
+            ReplayTests.Edit(root, "bindings/local.jsonc", "\"user_store\":   { \"connector\": \"memory@1\",", "\"user_store\":   { \"connector\": \"memory@1\", \"fail\": true,");
+            ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"user_embedding\": \"ctx.user.embedding\"",
+                "\"user_embedding\": \"ctx.user.embedding\", \"region\": \"ctx.country.region\"");
+            ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"order\": 100, \"op\": \"MultiSourceRecall@1\",", "\"order\": 100, \"op\": \"MultiSourceRecall@1\", \"timeout_ms\": 500,");
+        });
+        using var geo = new GatedConnectors("geo_store");
+        var sources = new ProbeSources();
+        await using var engine = Engine(host, sources, geo);
+        var running = engine.ExecuteAsync(WithCountry("req-failed-first"), TestContext.Current.CancellationToken).AsTask();
+        await geo.Started.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        _ = Task.Delay(1500, TestContext.Current.CancellationToken).ContinueWith(_ => geo.Open(), TaskScheduler.Default);
+
+        var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        var recall = result.Trace!.Single(n => n.NodeId == "recall");
+        Assert.Equal(NodeOutcomeKind.Degraded, recall.Kind);
+        Assert.StartsWith("recall sources failed: two_tower: its query reads a context feature that failed (", recall.Detail, StringComparison.Ordinal);
+        Assert.False(sources.Called("two_tower").IsCompleted);
+    }
+
+    [Fact]
+    public async Task SourcesWhoseFeaturesAreStoredTogether_AreSentInSourceOrder()
+    {
+        // popular reads the user's tenure, two_tower the user's embedding: both stored by user_store at once. two_tower comes
+        // first in source_order, so it is sent first, every time (each source waited on its own and raced, review 80).
+        var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
+            "\"queries\": { \"two_tower\": {", "\"queries\": { \"popular\": { \"tenure\": \"ctx.user.tenure_days\" }, \"two_tower\": {"));
+        for (var i = 0; i < 16; i++)
+        {
+            using var users = new GatedConnectors("user_store");
+            var sources = new ProbeSources();
+            await using var engine = Engine(host, sources, users);
+            var running = engine.ExecuteAsync(Request($"req-order-{i}"), TestContext.Current.CancellationToken).AsTask();
+            await users.Started.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+            users.Open();
+
+            var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+            Assert.Equal(["two_tower", "popular"], result.Recording!.Runs[0].CandidateCalls.OrderBy(c => c.Seq).Select(c => c.Source));
+        }
+    }
+
+    [Fact]
+    public async Task TheWaitForAQuerysFeatures_EndsAtTheDeadline_EvenWhileAClientsCancellationCallbackRuns()
+    {
+        // popular's client blocks in a callback on its token, registered after the node started waiting for two_tower's
+        // embedding; the node's token is cancelled at the deadline on a thread that runs the newest callback first. The
+        // wait was cancelled through that token, so it waited for the client's callback to return (review 80); it ends at
+        // the deadline on its own now, as a call does.
+        var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
+            "\"order\": 100, \"op\": \"MultiSourceRecall@1\",", "\"order\": 100, \"op\": \"MultiSourceRecall@1\", \"timeout_ms\": 1000,"));
+        using var users = new GatedConnectors("user_store");
+        using var resume = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var popularToken = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sources = new ProbeSources
+        {
+            BeforeRetrieve = (query, token) =>
+            {
+                if (query.SourceName != "popular")
+                {
+                    return ValueTask.CompletedTask;
+                }
+
+                popularToken.TrySetResult(token);
+                return new ValueTask(answer.Task);
+            },
+        };
+        await using var engine = Engine(host, sources, users);
+        var running = engine.ExecuteAsync(Request("req-wait-callback"), TestContext.Current.CancellationToken).AsTask();
+        try
+        {
+            var token = await popularToken.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+            await Task.Delay(200, TestContext.Current.CancellationToken); // the node is waiting for user_store by now
+            using var callback = token.Register(() =>
+            {
+                entered.TrySetResult();
+                resume.Wait(Patience);
+            });
+            await entered.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+            var result = await running.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken); // the callback still runs
+
+            Assert.Equal("timed out after 1000 ms", result.Trace!.Single(n => n.NodeId == "recall").Detail);
+            Assert.False(sources.Called("two_tower").IsCompleted);
+        }
+        finally
+        {
+            resume.Set();
+            answer.TrySetResult();
+            users.Open();
+        }
+    }
+
+    private static RecRequest WithCountry(string requestId)
+    {
+        var request = Request(requestId);
+        request.Inputs.Set("country", "DE");
+        return request;
     }
 
     private static RecRequest Request(string requestId, long? userId = 1001) => new()
@@ -258,6 +399,9 @@ public sealed class RecallQueryTests
 
         public ICandidateSourceFactory Vectors { get; }
 
+        /// <summary>Runs when a source is sent, before it answers, with the call's token.</summary>
+        public Func<CandidateQuery, CancellationToken, ValueTask>? BeforeRetrieve { get; init; }
+
         /// <summary>Completes when <paramref name="source"/> is sent.</summary>
         public Task Called(string source) => Entry(source).Called.Task;
 
@@ -286,10 +430,15 @@ public sealed class RecallQueryTests
         {
             public string ClientType => inner.ClientType;
 
-            public ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken)
+            public async ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken)
             {
                 owner.Sent(query);
-                return inner.RetrieveAsync(query, sink, cancellationToken);
+                if (owner.BeforeRetrieve is { } before)
+                {
+                    await before(query, cancellationToken).ConfigureAwait(false);
+                }
+
+                return await inner.RetrieveAsync(query, sink, cancellationToken).ConfigureAwait(false);
             }
         }
     }

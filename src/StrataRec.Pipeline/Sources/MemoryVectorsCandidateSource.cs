@@ -17,8 +17,9 @@ namespace StrataRec.Pipeline.Sources;
 /// </summary>
 /// <remarks>
 /// <para>A request whose query vector is missing (a user without an embedding and no default) gets no candidates: the
-/// node's other sources answer it. A query without the configured value, or a vector of another length than the items',
-/// is a failed call, naming both.</para>
+/// node's other sources answer it; so does an index without items. A query without the configured value, a value whose
+/// type is not a list of floats, a vector of another length than the items', or a score that is not finite (vectors too
+/// large for a float64 dot product) is a failed call, naming them.</para>
 /// <para>An exhaustive scan, for the few thousand items of a fixture: its scratch is rented from the shared pool, so a
 /// request allocates nothing for it.</para>
 /// </remarks>
@@ -54,21 +55,27 @@ public sealed class MemoryVectorsCandidateSource : ICandidateSource
             return CandidateSourceStatus.Failed(MemoryVectorsCandidateSourceFactory.Type + " source is configured to fail.");
         }
 
-        if (!query.Values.TryGet(_query, out _, out var value))
+        if (!query.Values.TryGet(_query, out var type, out var value))
         {
             return CandidateSourceStatus.Failed(
                 $"{MemoryVectorsCandidateSourceFactory.Type} reads the query vector '{_query}', and the query of '{query.SourceName}' has no such value; " +
                 $"give it one in the recall node's queries, e.g. \"queries\": {{ \"{query.SourceName}\": {{ \"{_query}\": \"ctx.user.embedding\" }} }}.");
         }
 
-        if (value.IsMissing)
+        // The query's type first, so a wrong one fails whether or not this request has a value (review 80).
+        if (type.Kind != StorageKind.List || type.Element != StorageKind.Float64)
         {
-            return CandidateSourceStatus.Ok; // nothing to search with: the node's other sources answer
+            return CandidateSourceStatus.Failed($"The query vector '{_query}' must be a list of floats; its expression is of type {type}.");
         }
 
-        if (value.Kind != StorageKind.List || value.ListElement != StorageKind.Float64)
+        if (type.FixedLength > 0 && _dimensions > 0 && type.FixedLength != _dimensions)
         {
-            return CandidateSourceStatus.Failed($"The query vector '{_query}' must be a list of floats; got {value}.");
+            return CandidateSourceStatus.Failed($"The query vector '{_query}' is of type {type}; the items' vectors have {_dimensions} elements.");
+        }
+
+        if (value.IsMissing || _dimensions == 0)
+        {
+            return CandidateSourceStatus.Ok; // nothing to search with, or nothing to find: the node's other sources answer
         }
 
         var vector = value.AsFloat64List();
@@ -77,11 +84,10 @@ public sealed class MemoryVectorsCandidateSource : ICandidateSource
             return CandidateSourceStatus.Failed($"The query vector '{_query}' has {vector.Length} elements; the items' vectors have {_dimensions}.");
         }
 
-        Search(vector, query.Limit, sink);
-        return CandidateSourceStatus.Ok;
+        return Search(vector, query.Limit, sink);
     }
 
-    private void Search(ReadOnlySpan<double> vector, int limit, ICandidateSink sink)
+    private CandidateSourceStatus Search(ReadOnlySpan<double> vector, int limit, ICandidateSink sink)
     {
         var count = _int64Ids.Length;
         var scores = ArrayPool<double>.Shared.Rent(Math.Max(1, count));
@@ -96,6 +102,14 @@ public sealed class MemoryVectorsCandidateSource : ICandidateSource
                 for (var d = 0; d < item.Length; d++)
                 {
                     score += item[d] * vector[d];
+                }
+
+                if (!double.IsFinite(score))
+                {
+                    // A product overflowed: the order (and min_score) would be decided by NaN or infinity (review 80).
+                    return CandidateSourceStatus.Failed(
+                        $"The dot product of item {(_stringIds[i] ?? _int64Ids[i].ToString(System.Globalization.CultureInfo.InvariantCulture))} with the query vector " +
+                        $"'{_query}' is not finite; scale the vectors so it fits a float64.");
                 }
 
                 if (_minScore is { } min && !(score >= min))
@@ -122,6 +136,8 @@ public sealed class MemoryVectorsCandidateSource : ICandidateSource
                     sink.Add(_int64Ids[i], scores[i]);
                 }
             }
+
+            return CandidateSourceStatus.Ok;
         }
         finally
         {
@@ -245,7 +261,7 @@ public sealed class MemoryVectorsCandidateSourceFactory : CandidateSourceFactory
     private static MemoryVectorsCandidateSource Index(MemoryVectorsSettings settings, List<MemoryVectorsItem> items)
     {
         const string pointer = "/items";
-        var dimensions = items.Count == 0 ? 0 : items[0].Vector.Count;
+        var dimensions = items.Count == 0 ? 0 : items[0].Vector.Count; // no items: every query finds nothing
         var int64Ids = new long[items.Count];
         var stringIds = new string?[items.Count];
         var vectors = new double[items.Count * dimensions];

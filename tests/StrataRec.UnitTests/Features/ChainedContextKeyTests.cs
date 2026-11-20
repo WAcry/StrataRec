@@ -279,8 +279,8 @@ public class ChainedContextKeyTests
         var session = rig.Physical("session.score", Session, ColumnType.Float64, "session_store");
         var late = rig.Derived("identity.doubled", Identity, ColumnType.Float64.AsNullable(), TestExpression.ContextTimes(userIdContext, 2), [userId]);
         rig.Build();
-        Assert.True(rig.Plan.Features[shard].ReadByKey);
-        Assert.False(rig.Plan.Features[late].ReadByKey);
+        Assert.True(rig.Plan.Features[shard].ComputedEarly);
+        Assert.False(rig.Plan.Features[late].ComputedEarly);
         var request = Request(rig, userKey, "k-1001");
 
         request.Fetcher.StartContextFetch([weight, session, late], CancellationToken.None);

@@ -72,6 +72,48 @@ public sealed class MemoryVectorsCandidateSourceTests
     }
 
     [Fact]
+    public async Task AnIndexWithoutItems_FindsNothing_ForAnyVector()
+    {
+        var source = Create("""{ "query": "user_embedding", "items": [] }""");
+
+        var (status, found) = await RetrieveAsync(source, Values(ScalarValue.FromFloat64List([1.0, 2.0])));
+
+        Assert.True(status.Succeeded, status.Error); // it said "the items' vectors have 0" (review 80)
+        Assert.Empty(found);
+    }
+
+    [Fact]
+    public async Task AQueryValueNotOfAFloatListType_OrOfAFixedLengthNotTheItems_FailsEvenWhenMissing()
+    {
+        var source = Create($$"""{ "query": "user_embedding", {{Items}} }""");
+
+        // A missing value of a wrong type was taken as nothing to search with (review 80).
+        var (wrongType, _) = await RetrieveAsync(source, Values(ScalarValue.Missing, ColumnType.Int64.AsNullable()));
+        Assert.Equal("The query vector 'user_embedding' must be a list of floats; its expression is of type int64?.", wrongType.Error);
+
+        var (wrongLength, _) = await RetrieveAsync(source, Values(ScalarValue.Missing, ColumnType.List(StorageKind.Float64, nullable: true, fixedLength: 3)));
+        Assert.Equal("The query vector 'user_embedding' is of type list<float64,3>?; the items' vectors have 2 elements.", wrongLength.Error);
+    }
+
+    [Fact]
+    public async Task AScoreThatOverflows_FailsTheCall_InsteadOfRankingByNaN()
+    {
+        // 1e308 · 2 overflows to +∞ and 1e308 · −2 to −∞: their sum is NaN, which dropped the right first item (review 80).
+        var source = Create("""
+            { "query": "user_embedding", "min_score": 1, "items": [
+              { "id": 1, "vector": [1e308, 1e308, 2.0] },
+              { "id": 2, "vector": [0.0, 0.0, 1.0] } ] }
+            """);
+
+        var (status, found) = await RetrieveAsync(
+            source, Values(ScalarValue.FromFloat64List([2.0, -2.0, 1.0]), ColumnType.List(StorageKind.Float64, fixedLength: 3)));
+
+        Assert.False(status.Succeeded);
+        Assert.Equal("The dot product of item 1 with the query vector 'user_embedding' is not finite; scale the vectors so it fits a float64.", status.Error);
+        Assert.Empty(found);
+    }
+
+    [Fact]
     public async Task TheDataFileSuppliesTheItems_AndItsErrorsAreAtTheSetting_NamingThePlaceInTheFile()
     {
         var dir = Directory.CreateTempSubdirectory("stratarec-vectors-").FullName;

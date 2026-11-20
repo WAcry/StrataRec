@@ -6,6 +6,7 @@ using StrataRec.Core.Memory;
 using StrataRec.Core.Tables;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
+using StrataRec.Features.Runtime;
 using StrataRec.Models;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Replay;
@@ -119,20 +120,63 @@ public sealed class OperatorContext
     public ScalarValue ContextValue(int contextId) => _state.Context[contextId];
 
     /// <summary>
-    /// Waits until the context features of <paramref name="reads"/> are stored and returns their worst state; then the
-    /// awaited expressions they come from (<see cref="OperatorCompileContext.CompileAwaitedExpression"/>) can be evaluated
-    /// (<see cref="EvalContext"/>). A failed feature is the operator's to handle, as it handles a failed call: its value is
-    /// missing. The features were prefetched when the request started, so this waits only for what is still in flight,
-    /// and an operator sending several calls starts each once its own features are stored. Waits may run concurrently;
-    /// evaluate the expressions on the operator's own flow. The wait is not bounded by the node's budget: wait together
-    /// with <see cref="CancellationToken"/>.
+    /// Whether the context features of <paramref name="reads"/> are settled: true with their worst state once every one
+    /// is stored, or at once with <see cref="FeatureState.Failed"/> when one already failed; false while one is still in
+    /// flight (wait with <see cref="WhenAnyReadyAsync"/>). Then the awaited expressions they come from
+    /// (<see cref="OperatorCompileContext.CompileAwaitedExpression"/>) can be evaluated (<see cref="EvalContext"/>). A failed
+    /// feature is the operator's to handle, as it handles a failed call: its value is missing.
     /// </summary>
-    public ValueTask<Features.Runtime.FeatureFillResult> WhenReadyAsync(AwaitedReads reads)
+    /// <remarks>
+    /// <para>For an operator sending several calls (a recall source's query, design 5.4): it asks for every call still
+    /// waiting, in its own order, and sends each that is ready, so calls whose features are stored together are sent in
+    /// that order; then it waits for any of the rest. The features were prefetched when the request started, so only what
+    /// is still in flight is waited for.</para>
+    /// <para>Call it on the operator's flow while the attempt runs: it reads the request's state.</para>
+    /// </remarks>
+    public bool TryGetReady(AwaitedReads reads, out FeatureFillResult result)
     {
         ArgumentNullException.ThrowIfNull(reads);
-        return reads.IsEmpty
-            ? new ValueTask<Features.Runtime.FeatureFillResult>(new Features.Runtime.FeatureFillResult(Features.Runtime.FeatureState.Ok))
-            : _state.Features.WhenContextStoredAsync(reads.Features);
+        if (reads.IsEmpty)
+        {
+            result = new FeatureFillResult(FeatureState.Ok);
+            return true;
+        }
+
+        return _state.Features.TryGetContextStored(reads.Features, out result);
+    }
+
+    /// <summary>
+    /// Waits until one more context feature of <paramref name="reads"/> is stored, at once when none is pending; then ask
+    /// <see cref="TryGetReady"/> again. The wait is bounded on its own by the attempt's deadline and the caller, as a call
+    /// is (<see cref="RetrieveAsync"/>), not by <see cref="CancellationToken"/>, which a client's callback could hold up.
+    /// </summary>
+    /// <exception cref="OperationCanceledException">The attempt's budget ran out or the caller gave up: the operator stops,
+    /// as when a call it sent is cut off.</exception>
+    public async ValueTask WhenAnyReadyAsync(IReadOnlyList<AwaitedReads> reads)
+    {
+        ArgumentNullException.ThrowIfNull(reads);
+        var pending = new List<Task>();
+        for (var r = 0; r < reads.Count; r++)
+        {
+            _state.Features.AddUnstoredContextTasks(reads[r].Features, pending);
+        }
+
+        if (pending.Count == 0)
+        {
+            return;
+        }
+
+        var any = pending.Count == 1 ? pending[0] : Task.WhenAny(pending);
+        try
+        {
+            // The prefetch's own tasks, awaited without reading anything of the request's: a wait cut off at the deadline
+            // leaves nothing behind that could read the request's memory after it was returned.
+            await any.WaitAsync(AttemptBudget.Until(Budget.Deadline), Budget.Caller).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            throw new OperationCanceledException("The node's budget ran out while it waited for context features.", Budget.Token);
+        }
     }
 
     /// <summary>Drops rows whose rank position is not flagged. Requires <see cref="Effects.RowFilter"/>.</summary>

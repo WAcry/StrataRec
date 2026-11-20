@@ -93,11 +93,12 @@ public sealed class FeatureRuntimeInfo
     internal void DependOnKey(ImmutableArray<int> keyFeatures) => _dependencies = keyFeatures;
 
     /// <summary>
-    /// A derived context feature that a key reads, directly or through other derived features (set by
-    /// <see cref="FeaturePlan.Create"/>): the context prefetch computes it as soon as its inputs are stored, so the groups
-    /// keyed by it start then; other derived context features are computed once the whole prefetch is.
+    /// A derived context feature that a key reads, or an operator awaits while it runs (a recall source's query, design
+    /// 5.4), directly or through other derived features (set by <see cref="FeaturePlan.Create"/>): the context prefetch
+    /// computes it as soon as its inputs are stored, so the groups keyed by it start then and the operator's call is sent
+    /// then; other derived context features are computed once the whole prefetch is.
     /// </summary>
-    internal bool ReadByKey { get; set; }
+    internal bool ComputedEarly { get; set; }
 }
 
 /// <summary>The two tag sets of <see cref="StrataRecMetrics.SourceValues"/> for one feature of a source.</summary>
@@ -252,6 +253,10 @@ public sealed class FeaturePlan
     /// <param name="catalog">The catalog the features come from: a <c>local</c> table holds every physical feature it
     /// binds to the table's source and entity, not only those of <paramref name="features"/> (see
     /// <see cref="NeedsWholeTable"/>); null holds the plan's features alone.</param>
+    /// <param name="awaited">The context features operators await while they run rather than before they start (a recall
+    /// source's query, design 5.4), by index in <paramref name="features"/>: a derived one is computed as soon as its inputs
+    /// are stored (<see cref="FeatureRuntimeInfo.ComputedEarly"/>), so such an operator does not wait for the whole
+    /// prefetch; null has none.</param>
     /// <exception cref="ArgumentException">An info of <paramref name="features"/> belongs to a plan already.</exception>
     /// <remarks>The plan takes <paramref name="features"/> as they are and fills in their groups, fields, key dependencies
     /// and waves. So an info belongs to one plan: one that a plan has taken (another plan's <see cref="Features"/>, which
@@ -269,7 +274,8 @@ public sealed class FeaturePlan
         FeatureCacheStoreRegistry? cacheStores = null,
         TimeProvider? clock = null,
         string catalogArtifact = "catalog",
-        FeatureCatalog? catalog = null)
+        FeatureCatalog? catalog = null,
+        IReadOnlyCollection<int>? awaited = null)
     {
         foreach (var f in features)
         {
@@ -372,7 +378,7 @@ public sealed class FeaturePlan
         // Cycles are reported here; the wave computation below only has to terminate on them.
         var derivedOrder = TopologicalDerivedOrder(all, diagnostics, catalogArtifact);
         AssignWaves(all, groups);
-        MarkReadByKey(all, groups);
+        MarkComputedEarly(all, groups, awaited);
         return new FeaturePlan(all, groups.ToArray(), derivedOrder);
     }
 
@@ -440,11 +446,11 @@ public sealed class FeaturePlan
     }
 
     /// <summary>
-    /// Marks the derived context features keys read, directly or through other derived features
-    /// (<see cref="FeatureRuntimeInfo.ReadByKey"/>), whether the key is a context group's or a shared part of a candidate
-    /// group's: the prefetch computes them as soon as their inputs are stored.
+    /// Marks the derived context features keys read, whether the key is a context group's or a shared part of a candidate
+    /// group's, and those <paramref name="awaited"/> lists, directly or through other derived features
+    /// (<see cref="FeatureRuntimeInfo.ComputedEarly"/>): the prefetch computes them as soon as their inputs are stored.
     /// </summary>
-    private static void MarkReadByKey(FeatureRuntimeInfo[] features, IReadOnlyList<FetchGroup> groups)
+    private static void MarkComputedEarly(FeatureRuntimeInfo[] features, IReadOnlyList<FetchGroup> groups, IReadOnlyCollection<int>? awaited)
     {
         foreach (var group in groups)
         {
@@ -454,15 +460,23 @@ public sealed class FeaturePlan
             }
         }
 
+        if (awaited is not null)
+        {
+            foreach (var f in awaited)
+            {
+                Mark(f);
+            }
+        }
+
         void Mark(int f)
         {
             var info = features[f];
-            if (!info.IsDerived || !info.IsContext || info.ReadByKey)
+            if (!info.IsDerived || !info.IsContext || info.ComputedEarly)
             {
                 return; // a physical one is stored by its group; one marked already (a cycle is rejected anyway)
             }
 
-            info.ReadByKey = true;
+            info.ComputedEarly = true;
             foreach (var d in info.Dependencies)
             {
                 Mark(d);

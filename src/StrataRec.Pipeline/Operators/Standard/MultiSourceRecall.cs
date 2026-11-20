@@ -29,8 +29,10 @@ public sealed class MultiSourceRecallConfig
     /// expression over <c>ctx.*</c> and <c>param.*</c>, such as <c>{ "two_tower": { "user_embedding": "ctx.user.embedding" } }</c>
     /// for a two-tower service that needs the user's features to retrieve. A source waits for the context features its own
     /// query reads and for nothing else: one without a query starts at once, one reading the user's embedding as soon as
-    /// it is stored, while the others run. A source whose query reads a feature that failed is not called and counts as a
-    /// failed source; a degraded one degrades the node; a missing value is sent as missing.
+    /// it is stored (a derived feature as soon as it is computed), while the others run; sources whose features are stored
+    /// together are sent in source order. The wait is within the node's budget. A source whose query reads a feature that
+    /// failed is not called, as soon as that feature failed, and counts as a failed source; a degraded one degrades the
+    /// node; a missing value is sent as missing.
     /// </summary>
     public Dictionary<string, Dictionary<string, string>>? Queries { get; init; }
 }
@@ -294,47 +296,47 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
             var calls = new Task<CandidateSourceStatus>?[sources.Length];
             var buffers = new CandidateBuffer?[sources.Length];
             var bits = context.Memory.Rent<int>(sources.Length);
-            var bit = 0;
-            List<int>? waiting = null;
-            for (var i = 0; i < sources.Length; i++)
-            {
-                var quotaValue = context.Param(sources[i].Quota);
-                bits[i] = quotaValue.IsMissing ? -1 : bit++; // a source without a quota here has no bit (see the type's remarks)
-                var quota = quotaValue.IsMissing ? 0 : (int)Math.Clamp(quotaValue.AsInt64(), 0, int.MaxValue);
-                if (quota == 0)
-                {
-                    continue;
-                }
-
-                buffers[i] = new CandidateBuffer(quota, context.Memory);
-                if (sources[i].Query is { Reads.IsEmpty: false })
-                {
-                    (waiting ??= new List<int>()).Add(i); // sent once the features its query reads are stored
-                    continue;
-                }
-
-                calls[i] = Send(context, sources[i], buffers[i]!);
-            }
-
-            // The sources whose queries read context features, each sent as soon as its own are stored (design 5.4), while
-            // the calls above run: a source reading the user's embedding does not hold back one that needs nothing.
             string?[]? refused = null; // per source: why it was not sent (its query read a feature that failed)
             string?[]? degraded = null; // per source: the degraded feature its query read
             ExceptionDispatchInfo? stopped = null;
-            if (waiting is not null)
+            try
             {
-                refused = new string?[sources.Length];
-                degraded = new string?[sources.Length];
-                try
+                var bit = 0;
+                List<int>? waiting = null;
+                for (var i = 0; i < sources.Length; i++)
                 {
+                    var quotaValue = context.Param(sources[i].Quota);
+                    bits[i] = quotaValue.IsMissing ? -1 : bit++; // a source without a quota here has no bit (see the type's remarks)
+                    var quota = quotaValue.IsMissing ? 0 : (int)Math.Clamp(quotaValue.AsInt64(), 0, int.MaxValue);
+                    if (quota == 0)
+                    {
+                        continue;
+                    }
+
+                    buffers[i] = new CandidateBuffer(quota, context.Memory);
+                    if (sources[i].Query is { Reads.IsEmpty: false })
+                    {
+                        (waiting ??= new List<int>()).Add(i); // sent once the features its query reads are stored
+                        continue;
+                    }
+
+                    calls[i] = Send(context, sources[i], buffers[i]!);
+                }
+
+                // The sources whose queries read context features, each sent as soon as its own are stored (design 5.4), while
+                // the calls above run: a source reading the user's embedding does not hold back one that needs nothing.
+                if (waiting is not null)
+                {
+                    refused = new string?[sources.Length];
+                    degraded = new string?[sources.Length];
                     await SendWhenReadyAsync(context, waiting, calls, buffers, refused, degraded).ConfigureAwait(false);
                 }
-                catch (Exception ex)
-                {
-                    // The node's budget or the caller (or a defect of the prefetch): the sources still waiting are not sent,
-                    // and the ones sent are awaited below, so every call is recorded before the node's outcome is.
-                    stopped = ExceptionDispatchInfo.Capture(ex);
-                }
+            }
+            catch (Exception ex)
+            {
+                // The node's budget or the caller while sources waited, or a defect: the sources not sent yet are not sent,
+                // and the ones sent are awaited below, so every call is recorded before the node's outcome is.
+                stopped = ExceptionDispatchInfo.Capture(ex);
             }
 
             var attempted = 0;
@@ -365,6 +367,13 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                     // The node's budget or the caller: every call is cut off by the same bound, so the others end at once.
                     // Waiting for them keeps every call recorded before the node's outcome is.
                     cutOff ??= ex;
+                    buffers[i] = null;
+                    continue;
+                }
+                catch (Exception ex)
+                {
+                    // A defect at the call site: the other calls are still awaited, for the same reason.
+                    stopped ??= ExceptionDispatchInfo.Capture(ex);
                     buffers[i] = null;
                     continue;
                 }
@@ -402,46 +411,41 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         }
 
         /// <summary>
-        /// Sends each waiting source once the context features its query reads are stored, in source order among those
-        /// stored together. A source whose query read a feature that failed is not sent; <paramref name="refused"/> says why.
-        /// The wait is bounded by the node's budget and the caller (<see cref="OperatorContext.CancellationToken"/>), which
-        /// throws; the queries are evaluated here, on the operator's flow, one at a time.
+        /// Sends each waiting source once the context features its query reads are stored, and refuses one as soon as one of
+        /// them failed (<paramref name="refused"/> says why), whatever its other features do. Each round handles every source
+        /// that is settled, in source order, so sources whose features are stored together are sent in that order; then it
+        /// waits for any feature still pending. The wait is bounded by the node's deadline and the caller, and throws when
+        /// either ends it; the queries are evaluated here, on the operator's flow, one at a time.
         /// </summary>
         private async Task SendWhenReadyAsync(
             OperatorContext context, List<int> waiting, Task<CandidateSourceStatus>?[] calls, CandidateBuffer?[] buffers, string?[] refused, string?[] degraded)
         {
-            List<(int Source, Task<FeatureFillResult> Ready)>? pending = null;
-            foreach (var i in waiting)
+            List<AwaitedReads>? pending = null;
+            while (true)
             {
-                var ready = context.WhenReadyAsync(sources[i].Query!.Reads);
-                if (ready.IsCompletedSuccessfully)
+                for (var w = 0; w < waiting.Count; w++)
                 {
-                    SendWith(context, i, ready.Result, calls, buffers, refused, degraded);
-                }
-                else
-                {
-                    (pending ??= new()).Add((i, ready.AsTask()));
-                }
-            }
-
-            while (pending is { Count: > 0 })
-            {
-                var tasks = new Task[pending.Count];
-                for (var p = 0; p < pending.Count; p++)
-                {
-                    tasks[p] = pending[p].Ready;
-                }
-
-                await Task.WhenAny(tasks).WaitAsync(context.CancellationToken).ConfigureAwait(false);
-                for (var p = 0; p < pending.Count; p++)
-                {
-                    if (pending[p].Ready.IsCompleted)
+                    var i = waiting[w];
+                    if (context.TryGetReady(sources[i].Query!.Reads, out var fill))
                     {
-                        var (source, ready) = pending[p];
-                        pending.RemoveAt(p--);
-                        SendWith(context, source, await ready.ConfigureAwait(false), calls, buffers, refused, degraded);
+                        waiting.RemoveAt(w--);
+                        SendWith(context, i, fill, calls, buffers, refused, degraded);
                     }
                 }
+
+                if (waiting.Count == 0)
+                {
+                    return;
+                }
+
+                pending ??= new List<AwaitedReads>(waiting.Count);
+                pending.Clear();
+                foreach (var i in waiting)
+                {
+                    pending.Add(sources[i].Query!.Reads);
+                }
+
+                await context.WhenAnyReadyAsync(pending).ConfigureAwait(false);
             }
         }
 

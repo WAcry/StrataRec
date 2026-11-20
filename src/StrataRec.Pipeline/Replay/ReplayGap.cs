@@ -12,7 +12,8 @@ namespace StrataRec.Pipeline.Replay;
 /// incompatibly), <c>limit_exceeds_recording</c> (a larger quota than the recording could answer),
 /// <c>inputs_changed</c> (model inputs differ from the recorded ones, so the recorded output does not apply) or
 /// <c>query_changed</c> (a value of a candidate source's query differs from the recorded one, so the recorded candidates
-/// answer another query; they are returned all the same, as the recording has no others).
+/// answer another query; the call is answered as recorded all the same, a failure as a failure, as the recording has no
+/// other answer).
 /// </param>
 /// <param name="Count">Keys, candidates or rows affected.</param>
 /// <param name="Examples">Up to five affected keys (or nodes).</param>
@@ -24,7 +25,7 @@ public sealed record ReplayGap(string Kind, string Source, string? Field, string
         ("feature", _) => $"feature field {Source}/{Field}: {Count} key(s) have no recorded value; treated as missing",
         ("candidate_source", "limit_exceeds_recording") => $"candidate source {Source}: asked for {Count} more candidate(s) than the recording holds",
         ("candidate_source", "query_changed") =>
-            $"candidate source {Source}: its query value '{Field}' differs from the recorded one in {Count} call(s); the recorded candidates were returned",
+            $"candidate source {Source}: its query value '{Field}' differs from the recorded one in {Count} call(s), which were answered as recorded",
         ("candidate_source", _) => $"candidate source {Source} was not called in the recording; it returned no candidates",
         ("model", "inputs_changed") => $"model {Source}: {Count} row(s) have different inputs than recorded; their outputs are missing",
         ("model", _) => $"model {Source}: {Count} row(s) or call(s) have no recorded output; treated as missing",
