@@ -56,6 +56,9 @@ public sealed class ConfigOverrideTests
     [InlineData("""{ "params": { "final_top_k": "three" } }""", "PARAM_BAD_VALUE pipeline:home_feed/params/final_top_k", null)]
     [InlineData("""{ "nodez": {} }""", "CONFIG_OVERRIDE_UNKNOWN_SECTION request/config_override/nodez", "/config_override/nodez")]
     [InlineData("""{ "nodes": { "rank_sort": { "config": { "score_col": "no.such_column" } } } }""", "pipeline:home_feed/nodes/rank_sort", null)]
+    // An integer beyond 2^53 RFC 8785 cannot hold exactly: the compiler's hash of the node threw out of the request.
+    [InlineData("""{ "nodes": { "coarse_top_k": { "order": 1152921504606846976 } } }""",
+        "CONFIG_OVERRIDE_NOT_CANONICAL request/config_override/nodes/coarse_top_k/order", "/config_override/nodes/coarse_top_k/order")]
     public async Task AnOverrideThatDoesNotCompile_RejectsTheRequestAsInvalid_NamingTheError(string patch, string error, string? pointer)
     {
         var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());

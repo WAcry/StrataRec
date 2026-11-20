@@ -423,8 +423,25 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         if (result.Applied)
         {
             var warnings = new DiagnosticBag();
-            CheckFallback(state.PipelineId, warnings, DiagnosticSeverity.Warning); // applied already: it can only be said
+            CheckFallbacksAround(state.PipelineId, warnings); // applied already: it can only be said
             LogWarnings(warnings.Items);
+        }
+    }
+
+    /// <summary>
+    /// The checks a plan that loaded after startup changes, as warnings: its own fallback (<see cref="CheckFallback"/>), and
+    /// every served pipeline that falls back to it, since a fallback's new plan may require an input those do not give
+    /// (found otherwise only when one of them first falls back, failing the request).
+    /// </summary>
+    private void CheckFallbacksAround(string pipelineId, DiagnosticBag diagnostics)
+    {
+        CheckFallback(pipelineId, diagnostics, DiagnosticSeverity.Warning);
+        foreach (var other in _pipelines)
+        {
+            if (other.PipelineId != pipelineId && _engine.TryGetPipeline(other.PipelineId, out var loaded) && loaded.FallbackPipeline == pipelineId)
+            {
+                CheckFallback(other.PipelineId, diagnostics, DiagnosticSeverity.Warning);
+            }
         }
     }
 

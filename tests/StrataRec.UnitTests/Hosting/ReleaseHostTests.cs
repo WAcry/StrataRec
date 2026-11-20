@@ -95,6 +95,40 @@ public sealed class ReleaseHostTests : IDisposable
         await host.StopAsync(TestContext.Current.CancellationToken);
     }
 
+    /// <summary>
+    /// A fallback hot-updated alone is checked against the pipelines that fall back to it, as at startup: the poller checked
+    /// only the new plan's own fallback, so a required input the new fallback added was found when a request of 'a' first
+    /// fell back to it, and failed.
+    /// </summary>
+    [Fact]
+    public async Task AFallbackLoadedInTheBackground_IsCheckedAgainstThePipelinesFallingBackToIt()
+    {
+        var (_, a) = await _fixture.Pipeline("a", fallback: "b").Pipeline("b").BuildAsync("a", seq: 1);
+        var (_, b) = await _fixture.BuildAsync("b", seq: 1);
+        await _fixture.PublishAsync("a", a);
+        await _fixture.PublishAsync("b", b);
+        var log = new ReleaseLog();
+        using var host = Build(["a", "b"], _clock, log: log);
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await _clock.WhenScheduledAsync(2).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken); // both poll
+        Assert.DoesNotContain(log.Entries, e => e.EventId.Id == 1003);
+
+        var (_, b2) = await _fixture.Pipeline("b", inputs: """ "user_id": { "type": "int64?" }, "tenant_id": { "type": "int64" } """).BuildAsync("b", seq: 2);
+        await _fixture.PublishAsync("b", b2);
+        var scheduled = _clock.Scheduled;
+        _clock.Advance(Poll);
+        await _clock.WhenScheduledAsync(scheduled + 2).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken); // both wait again
+
+        Assert.True(host.Services.GetRequiredService<IRecEngine>().TryGetRequestSchema("b", out var served) && served.Contains("tenant_id")); // b2 applied
+        await _reports.WhenCountAsync(3); // a and b at startup, b2
+        Assert.Equal(ManifestLoadStatus.Applied, Assert.Single(_reports.All, r => r.Result.ManifestId == b2).Result.Status);
+        var warning = Assert.Single(log.Entries, e => e.EventId.Id == 1003);
+        Assert.Equal(LogLevel.Warning, warning.Level);
+        Assert.StartsWith("Configuration warning FALLBACK_INPUT_UNDECLARED at pipeline:a/fallback_pipeline: Fallback pipeline 'b' requires input 'tenant_id'",
+            warning.Message, StringComparison.Ordinal);
+        await host.StopAsync(TestContext.Current.CancellationToken);
+    }
+
     [Fact]
     public async Task AHostWithoutWhatReleasesNeed_SaysWhatToAdd()
     {

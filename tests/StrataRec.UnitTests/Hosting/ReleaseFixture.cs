@@ -44,13 +44,13 @@ internal sealed class ReleaseFixture : IDisposable
     /// <summary>The engine environment a node of this workspace runs with.</summary>
     public PlanEnvironment Environment => new() { BaseDirectory = Root };
 
-    /// <summary>Writes pipeline <paramref name="id"/>: its <c>k</c> makes its artifact (and its manifests) differ.</summary>
-    public ReleaseFixture Pipeline(string id, int k = 2, string? fallback = null)
+    /// <summary>Writes pipeline <paramref name="id"/>: its <c>k</c> makes its artifact (and its manifests) differ; <paramref name="inputs"/> are its request_schema's members.</summary>
+    public ReleaseFixture Pipeline(string id, int k = 2, string? fallback = null, string inputs = """ "user_id": { "type": "int64?" } """)
     {
         var fallbackMember = fallback is null ? string.Empty : $"\"fallback_pipeline\": \"{fallback}\",";
         File.WriteAllText(Path.Combine(Root, "pipelines", id + ".jsonc"), $$"""
             { "pipeline_id": "{{id}}", "entity_key_type": "int64", {{fallbackMember}}
-              "request_schema": { "user_id": { "type": "int64?" } },
+              "request_schema": { {{inputs}} },
               "param_schema": { "quotas": { "type": "map<string,int64>" }, "k": { "type": "int64" } },
               "params": { "quotas": { "s": 10 }, "k": {{k}} },
               "nodes": {

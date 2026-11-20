@@ -266,6 +266,40 @@ public sealed class DiagnosticLocationCliTests : IDisposable
             errors.ToString(), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A value RFC 8785 cannot hold exactly (an integer beyond 2^53, here 2^60) is an error of its file at the value, with a
+    /// hint, and every other file is still read: <c>validate --format json</c> exited 1 with nothing on standard output and
+    /// the canonicalizer's exception on standard error.
+    /// </summary>
+    [Fact]
+    public void Json_AValueWithoutACanonicalForm_IsAnErrorAtTheValue_AndTheOtherFilesAreStillRead()
+    {
+        const string Experiment = "experiments/exp_quality_weight.jsonc";
+        var root = Workspace(
+            (Pipeline, "\"final_top_k\": 10,", "\"final_top_k\": 1152921504606846976,"),
+            (Experiment, "\"final_top_k\": 8 }", "\"final_top_k\": -1152921504606846977 }"),
+            ("experiments/exp_typo.jsonc", string.Empty, """{ "experiment_id": "exp_other" }"""));
+        var output = new StringWriter();
+
+        Assert.Equal(1, ValidateCommand.Run(Tool.Environment, root, "local", null, "json", warningsAsErrors: false, output));
+
+        using var report = JsonDocument.Parse(output.ToString());
+        var errors = report.RootElement.GetProperty("diagnostics").EnumerateArray().ToList();
+        Assert.Equal(3, errors.Count);
+        Assert.Contains(errors, e => e.GetProperty("artifact").GetString() == "experiments/exp_typo.jsonc"); // another file, still read
+        foreach (var (file, pointer, value) in new[] { (Pipeline, "/params/final_top_k", "1152921504606846976"), (Experiment, "/arms/strong/params/final_top_k", "-1152921504606846977") })
+        {
+            var error = Assert.Single(errors, e => e.GetProperty("artifact").GetString() == file);
+            var (line, _) = Position(root, file, value);
+            Assert.Equal("ARTIFACT_NOT_CANONICAL", error.GetProperty("code").GetString());
+            Assert.Equal(pointer, error.GetProperty("pointer").GetString());
+            Assert.Equal($"{root}/{file}", error.GetProperty("file").GetString());
+            Assert.Equal(line, error.GetProperty("line").GetInt32()); // the member, on the value's line
+            Assert.StartsWith($"The integer {value} cannot be represented exactly in RFC 8785 form", error.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.Equal("write integers beyond ±2^53 (9007199254740992) as strings", error.GetProperty("hint").GetString());
+        }
+    }
+
     /// <summary>A copy of the sample with each (file, old, new) replacement applied once; an empty old writes a new file.</summary>
     private string Workspace(params (string File, string Old, string New)[] edits)
     {

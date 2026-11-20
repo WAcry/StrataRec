@@ -80,6 +80,31 @@ public sealed class FileSystemManifestSourceTests : IDisposable
         Assert.ThrowsAny<ArgumentException>(() => source.GetPointerPath(pipelineId, environment));
     }
 
+    /// <summary>
+    /// A name starting with '.' is refused for writing, reading and listing alike: listing skips such entries (temporary
+    /// and lock files), so a pointer written under one was never listed.
+    /// </summary>
+    [Theory]
+    [InlineData("p", ".preview")]
+    [InlineData(".p", "e")]
+    [InlineData("p", "..x")]
+    public async Task NamesStartingWithADot_AreRefusedEverywhere(string pipelineId, string environment)
+    {
+        var source = new FileSystemManifestSource(_root);
+
+        var refused = Assert.Throws<ArgumentException>(() => source.GetPointerPath(pipelineId, environment));
+        await Assert.ThrowsAsync<ArgumentException>(() => source.WritePointerAsync(pipelineId, environment, IdA, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ArgumentException>(() => source.GetManifestIdAsync(pipelineId, environment, CancellationToken.None).AsTask());
+
+        Assert.Contains("starts with '.'", refused.Message, StringComparison.Ordinal);
+        Assert.Equal(pipelineId.StartsWith('.') ? "pipelineId" : "environment", refused.ParamName);
+        Assert.False(Directory.Exists(Path.Combine(_root, "pointers")));
+        if (environment.StartsWith('.'))
+        {
+            Assert.Throws<ArgumentException>(() => source.ListPointers(environment));
+        }
+    }
+
     [Fact]
     public async Task OnlyContentIds_ArePointedAt()
     {

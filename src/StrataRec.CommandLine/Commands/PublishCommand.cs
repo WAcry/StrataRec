@@ -136,7 +136,7 @@ internal static class PublishCommand
         catch (ArgumentException ex)
         {
             diagnostics.Error("MANIFEST_POINTER_NAME", Label(id), "/pipeline_id", ex.Message,
-                "pipeline ids and environment names become file names of pointers: use letters, digits, '_', '-' and '.'");
+                FileSystemManifestSource.NameHint);
             return null;
         }
 

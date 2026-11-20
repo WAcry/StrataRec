@@ -30,11 +30,18 @@ public sealed class FileSystemManifestSource : IManifestSource
     public string Root { get; }
 
     /// <summary>
-    /// The pointer file of a pipeline in an environment, whether or not it exists. Both names become path segments, so
-    /// each must be a plain file name.
+    /// How to name a pipeline or an environment whose pointer this source keeps (<see cref="GetPointerPath"/>): the hint of
+    /// every tool that reports a name it refused.
     /// </summary>
-    /// <exception cref="ArgumentException">A name is empty, <c>.</c> or <c>..</c>, or holds a path separator or a character
-    /// a file name cannot have.</exception>
+    public const string NameHint =
+        "pipeline ids and environment names are the file names of pointers: use letters, digits, '_', '-' and '.', and do not start with '.'";
+
+    /// <summary>
+    /// The pointer file of a pipeline in an environment, whether or not it exists. Both names become path segments, so
+    /// each must be a plain file name, and one that does not start with '.' (<see cref="ListPointers"/> skips those).
+    /// </summary>
+    /// <exception cref="ArgumentException">A name is empty, starts with '.', or holds a path separator or a character a
+    /// file name cannot have.</exception>
     public string GetPointerPath(string pipelineId, string environment) =>
         Path.Combine(Root, "pointers", Segment(environment, nameof(environment)), Segment(pipelineId, nameof(pipelineId)) + ".json");
 
@@ -43,9 +50,9 @@ public sealed class FileSystemManifestSource : IManifestSource
     /// then pipeline (ordinal). Whether a file's content is a valid pointer is <see cref="GetManifestIdAsync"/>'s to say;
     /// what cannot be listed is listed with its <see cref="PointerFile.Error"/>, so one bad entry does not hide the others
     /// (review 40): a directory that cannot be read, a file name no pointer can have. Lock and temporary files, and
-    /// anything else whose name starts with a dot, are skipped.
+    /// anything else whose name starts with a dot, are skipped: no pipeline or environment may be named so.
     /// </summary>
-    /// <exception cref="ArgumentException"><paramref name="environment"/> is not a plain file name.</exception>
+    /// <exception cref="ArgumentException"><paramref name="environment"/> is not a name a pointer can have.</exception>
     public IReadOnlyList<PointerFile> ListPointers(string? environment = null)
     {
         var pointers = new List<PointerFile>();
@@ -247,10 +254,21 @@ public sealed class FileSystemManifestSource : IManifestSource
     private static InvalidDataException Invalid(string path, string reason, Exception? inner = null) =>
         new($"The manifest pointer {path} is not valid: {reason}. A pointer is {{ \"{ManifestMember}\": \"sha256:<hex>\" }}, as 'stratarec publish' writes it.", inner);
 
+    /// <summary>
+    /// The one rule for the names that become path segments of pointers, for writing, reading and listing alike. A name
+    /// starting with '.' is refused: listing skips such entries, as temporary and lock files are (and editors' and the
+    /// system's hidden ones), so a pointer under one would be written and never seen by <c>stratarec status</c>.
+    /// </summary>
     private static string Segment(string name, string parameter)
     {
         ArgumentException.ThrowIfNullOrEmpty(name, parameter);
-        if (name is "." or ".." || name.Contains('/') || name.Contains('\\') || name.AsSpan().IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        if (name.StartsWith('.'))
+        {
+            throw new ArgumentException(
+                $"'{name}' cannot name a pointer file: it starts with '.', which marks the temporary and hidden files that listing pointers skips.", parameter);
+        }
+
+        if (name.Contains('/') || name.Contains('\\') || name.AsSpan().IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
         {
             throw new ArgumentException($"'{name}' cannot name a pointer file: it must be a plain file name, without path separators.", parameter);
         }

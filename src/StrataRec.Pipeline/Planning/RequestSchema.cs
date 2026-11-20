@@ -84,8 +84,11 @@ public sealed class RequestSchema
     /// <summary>
     /// Warnings for a fallback pipeline that would fail the requests it is there to serve (design 5.6): a request that
     /// falls back carries the inputs it was written for, those of <paramref name="primary"/>, and the fallback gets the ones
-    /// it declares. So the fallback fails it when it requires an input the primary does not declare, or declares optional;
-    /// and may fail it when an input is declared with another type. Reported at the primary's <c>/fallback_pipeline</c>.
+    /// it declares, each converted to the type it declares as any request's inputs are (<see cref="Bind"/>). So the
+    /// fallback fails it when it requires an input the primary does not declare, or declares optional; and when an input's
+    /// value, which the primary accepted, does not convert to the fallback's type (<see cref="ConversionFailure"/>): a
+    /// fallback that widens a type (int32 to int64, a fixed length to any) serves every such request. Reported at the
+    /// primary's <c>/fallback_pipeline</c>.
     /// </summary>
     public static void CheckFallback(RequestSchema primary, RequestSchema fallback, string artifact, DiagnosticBag diagnostics)
     {
@@ -109,13 +112,15 @@ public sealed class RequestSchema
                 continue;
             }
 
-            if (!given.AsNonNullable().Equals(required.AsNonNullable()))
+            // A value and its absence are judged apart: the type says which values convert, nullability whether none may.
+            if (ConversionFailure(given, required) is { } failure)
             {
                 diagnostics.Warning("FALLBACK_INPUT_TYPE", artifact, Pointer,
-                    $"Input '{name}' is {given} in '{p}' but {required} in its fallback pipeline '{f}': a value the first accepts may not convert, and the request that falls back fails.",
-                    "declare the input with the same type in both request schemas");
+                    $"Input '{name}' is {given} in '{p}' but {required} in its fallback pipeline '{f}': {failure}, and a request that falls back with it fails.",
+                    $"declare '{name}' as {given.WithNullable(required.Nullable)} in '{f}', which takes every value '{p}' accepts");
             }
-            else if (given.Nullable && !required.Nullable)
+
+            if (given.Nullable && !required.Nullable)
             {
                 diagnostics.Warning("FALLBACK_INPUT_OPTIONAL", artifact, Pointer,
                     $"Input '{name}' is optional in '{p}' ({given}) but required in its fallback pipeline '{f}' ({required}): a request without it fails when it falls back.",
@@ -123,6 +128,50 @@ public sealed class RequestSchema
             }
         }
     }
+
+    /// <summary>
+    /// What fails when a value an input of type <paramref name="given"/> accepted is converted to <paramref name="required"/>,
+    /// as the fallback's binding converts it (<see cref="ScalarValue.TryConvert"/>); null when every value converts.
+    /// Nullability is not judged here. Widening converts every value: int32 to int64, float32 to float64, an integer to a
+    /// float (to the nearest double, as a number given for any float input is), a list's elements likewise, and a list of
+    /// a fixed length to one of any length or of that length. The rest fails some values or all: a narrower type, a float
+    /// to an integer, a list of another length, another kind.
+    /// </summary>
+    /// <returns>A clause for a message: <c>a value outside the int32 range does not convert to it</c>.</returns>
+    internal static string? ConversionFailure(ColumnType given, ColumnType required)
+    {
+        if (given.IsList != required.IsList)
+        {
+            return "no value converts to it";
+        }
+
+        if (!given.IsList)
+        {
+            return ScalarFailure(given.Kind, required.Kind, "a value", "no value converts to it");
+        }
+
+        if (required.IsFixedLength && given.FixedLength != required.FixedLength)
+        {
+            return given.IsFixedLength
+                ? $"a list of {given.FixedLength} elements does not convert to one of {required.FixedLength}"
+                : $"a list of other than {required.FixedLength} elements does not convert to it";
+        }
+
+        return ScalarFailure(given.Element, required.Element, "an element", "no list converts to it");
+    }
+
+    /// <summary>What fails converting a scalar (or a list's element) of kind <paramref name="from"/> to <paramref name="to"/>.</summary>
+    private static string? ScalarFailure(StorageKind from, StorageKind to, string what, string none) => (from, to) switch
+    {
+        _ when from == to => null,
+        (StorageKind.Int32, StorageKind.Int64) or (StorageKind.Float32, StorageKind.Float64) => null,
+        (StorageKind.Int32 or StorageKind.Int64, StorageKind.Float32 or StorageKind.Float64) => null, // |int64| < float32's range
+        (StorageKind.Int64, StorageKind.Int32) => $"{what} outside the int32 range does not convert to it",
+        (StorageKind.Float64, StorageKind.Float32) => $"{what} beyond the float32 range does not convert to it",
+        (StorageKind.Float32 or StorageKind.Float64, StorageKind.Int32 or StorageKind.Int64) =>
+            $"{what} with a fraction, or beyond the {(to == StorageKind.Int32 ? "int32" : "int64")} range, does not convert to it",
+        _ => none,
+    };
 
     /// <summary>Where an input is in a request body: <c>/inputs/&lt;name&gt;</c> (RFC 6901, escaped).</summary>
     public static string Pointer(string name) => "/inputs/" + JsonPointer.Escape(name);

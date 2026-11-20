@@ -224,6 +224,42 @@ public sealed class PublishCommandTests
         }
     }
 
+    /// <summary>
+    /// An environment named with a leading '.' is refused alike by build, publish and status, with the hint: build and
+    /// publish took it and wrote <c>pointers/.preview/home_feed.json</c>, which listing pointers skips as a hidden or
+    /// temporary entry, so <c>status -e .preview</c> listed nothing and exited 0.
+    /// </summary>
+    [Fact]
+    public async Task AnEnvironmentStartingWithADot_IsRefusedByBuildPublishAndStatus()
+    {
+        var root = ManifestStores.Workspace(r => File.WriteAllText(Path.Combine(r, "bindings", ".preview.jsonc"),
+            File.ReadAllText(Path.Combine(r, "bindings", "local.jsonc")).Replace("\"environment\":\"local\"", "\"environment\":\".preview\"", StringComparison.Ordinal)));
+        var store = ManifestStores.NewStore();
+        const string Hint = "do not start with '.'";
+
+        var errors = new StringWriter();
+        Assert.Equal(1, await BuildCommand.RunAsync(Tool.Environment, root, ".preview", null, store, null, null, TextWriter.Null, CancellationToken.None, errors));
+        Assert.Contains("error POINTER_UNREADABLE", errors.ToString());
+        Assert.Contains("'.preview' cannot name a pointer file: it starts with '.'", errors.ToString());
+        Assert.Contains(Hint, errors.ToString());
+
+        // With --seq the store's pointers are not read, and build writes the manifest; publishing it is refused.
+        var file = Path.Combine(store, "preview.json");
+        errors = new StringWriter();
+        Assert.True(0 == await BuildCommand.RunAsync(Tool.Environment, root, ".preview", null, store, file, 1, TextWriter.Null, CancellationToken.None, errors), errors.ToString());
+        var (code, _, publishErrors) = await Publish(store, file);
+        Assert.Equal(1, code);
+        Assert.Contains("error MANIFEST_POINTER_NAME", publishErrors);
+        Assert.Contains(Hint, publishErrors);
+        Assert.False(Directory.Exists(Path.Combine(store, "pointers", ".preview")));
+
+        var status = new StringWriter();
+        Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(["status", "-s", store, "-e", ".preview"], Tool.Environment, TextWriter.Null, status,
+            TestContext.Current.CancellationToken));
+        Assert.Contains("error POINTER_NAME_INVALID --env", status.ToString());
+        Assert.Contains(Hint, status.ToString());
+    }
+
     private static ReleaseManifest Renumbered(ReleaseManifest manifest, string environment, long seq) => new()
     {
         PipelineId = manifest.PipelineId, Environment = environment, Seq = seq, Previous = manifest.Previous,

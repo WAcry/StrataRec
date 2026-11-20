@@ -119,7 +119,8 @@ internal sealed class HomeFeedTestHost
         return compilation.Plan!;
     }
 
-    public static PipelineRequest NewRequest(long? userId = 1001, string surface = "home", RequestArms arms = default, bool captureLogs = false) => new()
+    public static PipelineRequest NewRequest(
+        long? userId = 1001, string surface = "home", RequestArms arms = default, bool captureLogs = false, bool? writeLogs = null) => new()
     {
         RequestId = "req-" + (userId?.ToString() ?? "anon"),
         Inputs = Inputs(userId, surface),
@@ -127,6 +128,7 @@ internal sealed class HomeFeedTestHost
         Deadline = Deadline,
         TimeMs = 1_767_225_600_000,
         CaptureLogs = captureLogs,
+        WriteLogs = writeLogs ?? !captureLogs, // as the engine runs traffic: an executor with a log pipeline writes to it
     };
 
     public static RequestInputs Inputs(long? userId, string surface)

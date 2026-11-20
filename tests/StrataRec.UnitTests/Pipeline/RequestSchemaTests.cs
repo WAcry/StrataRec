@@ -240,6 +240,28 @@ public sealed class RequestSchemaTests
     [InlineData("region", "string?", "string", null)] // the fallback is more lenient
     [InlineData("region", "int64", "string", "FALLBACK_INPUT_TYPE")] // another type
     [InlineData("region", "int64?", "string?", "FALLBACK_INPUT_TYPE")]
+    // Judged by what the fallback's binding converts (review: int32 → int64 was flagged, though the fallback served it).
+    [InlineData("n", "int64", "int32", null)] // every int32 is an int64
+    [InlineData("n", "int64?", "int32", null)]
+    [InlineData("n", "int32", "int64", "FALLBACK_INPUT_TYPE")] // beyond the int32 range fails
+    [InlineData("x", "float64", "float32", null)]
+    [InlineData("x", "float32", "float64", "FALLBACK_INPUT_TYPE")] // beyond the float32 range fails
+    [InlineData("x", "float64", "int64", null)] // an integer converts to the nearest double, as for any float input
+    [InlineData("x", "float32", "int32", null)]
+    [InlineData("n", "int64", "float64", "FALLBACK_INPUT_TYPE")] // a fraction fails
+    [InlineData("n", "int32", "string", "FALLBACK_INPUT_TYPE")]
+    [InlineData("b", "bool", "bool", null)]
+    [InlineData("b", "bool", "int32", "FALLBACK_INPUT_TYPE")]
+    [InlineData("l", "list<int64>", "list<int32>", null)] // elements as scalars
+    [InlineData("l", "list<int32>", "list<int64>", "FALLBACK_INPUT_TYPE")]
+    [InlineData("l", "list<float64>", "list<float32,4>", null)] // a fixed length into any length, a wider element
+    [InlineData("l", "list<float32,4>", "list<float32,4>", null)]
+    [InlineData("l", "list<float32,3>", "list<float32,4>", "FALLBACK_INPUT_TYPE")] // no list converts
+    [InlineData("l", "list<float32,4>", "list<float32>", "FALLBACK_INPUT_TYPE")] // other lengths fail
+    [InlineData("l", "list<float32,4>", "list<float64,4>", "FALLBACK_INPUT_TYPE")]
+    [InlineData("l", "list<int64>", "int64", "FALLBACK_INPUT_TYPE")] // a scalar is no list
+    [InlineData("l", "int64", "list<int64>", "FALLBACK_INPUT_TYPE")]
+    [InlineData("n", "int64", "int32?", "FALLBACK_INPUT_OPTIONAL")] // nullability apart: the type widens
     public void CheckFallback_WarnsAboutWhatTheFallbackWouldFailARequestOn(string name, string fallbackType, string? primaryType, string? code)
     {
         var primaryInputs = new Dictionary<string, ColumnType> { ["user_id"] = ColumnType.Parse("int64") };
@@ -265,6 +287,108 @@ public sealed class RequestSchemaTests
         Assert.Contains($"'{name}'", warning.Message, StringComparison.Ordinal);
         Assert.Contains("'backup'", warning.Message, StringComparison.Ordinal);
         Assert.False(string.IsNullOrEmpty(warning.Hint));
+    }
+
+    [Theory]
+    [InlineData("int64", "int32",
+        "Input 'n' is int64 in 'feed' but int32 in its fallback pipeline 'backup': a value outside the int32 range does not convert to it, and a request that falls back with it fails.",
+        "declare 'n' as int64 in 'backup', which takes every value 'feed' accepts")]
+    [InlineData("float64", "int64?",
+        "Input 'n' is float64 in 'feed' but int64? in its fallback pipeline 'backup': a value with a fraction, or beyond the int64 range, does not convert to it, and a request that falls back with it fails.",
+        "declare 'n' as float64? in 'backup', which takes every value 'feed' accepts")]
+    [InlineData("list<int64>", "list<int64,3>",
+        "Input 'n' is list<int64> in 'feed' but list<int64,3> in its fallback pipeline 'backup': a list of other than 3 elements does not convert to it, and a request that falls back with it fails.",
+        "declare 'n' as list<int64> in 'backup', which takes every value 'feed' accepts")]
+    [InlineData("list<int64,2>", "list<int64,3>",
+        "Input 'n' is list<int64,2> in 'feed' but list<int64,3> in its fallback pipeline 'backup': a list of 2 elements does not convert to one of 3, and a request that falls back with it fails.",
+        "declare 'n' as list<int64,2> in 'backup', which takes every value 'feed' accepts")]
+    [InlineData("list<float64>", "list<float32>",
+        "Input 'n' is list<float64> in 'feed' but list<float32> in its fallback pipeline 'backup': an element beyond the float32 range does not convert to it, and a request that falls back with it fails.",
+        "declare 'n' as list<float64> in 'backup', which takes every value 'feed' accepts")]
+    [InlineData("string", "int64",
+        "Input 'n' is string in 'feed' but int64 in its fallback pipeline 'backup': no value converts to it, and a request that falls back with it fails.",
+        "declare 'n' as string in 'backup', which takes every value 'feed' accepts")]
+    public void CheckFallback_SaysWhatFailsToConvert_AndATypeThatTakesEveryValue(string primaryType, string fallbackType, string message, string hint)
+    {
+        var diagnostics = new StrataRec.Artifacts.Model.DiagnosticBag();
+
+        RequestSchema.CheckFallback(Single("feed", primaryType), Single("backup", fallbackType), "pipelines/feed.jsonc", diagnostics);
+
+        var warning = Assert.Single(diagnostics.Items);
+        Assert.Equal(("FALLBACK_INPUT_TYPE", message, hint), (warning.Code, warning.Message, warning.Hint));
+    }
+
+    /// <summary>A narrower type and a required input are two failures, each reported: the type no longer hides the other.</summary>
+    [Fact]
+    public void CheckFallback_ReportsTheTypeAndTheNullabilityApart()
+    {
+        var diagnostics = new StrataRec.Artifacts.Model.DiagnosticBag();
+
+        RequestSchema.CheckFallback(Single("feed", "int64?"), Single("backup", "int32"), "pipelines/feed.jsonc", diagnostics);
+
+        Assert.Equal(new[] { "FALLBACK_INPUT_TYPE", "FALLBACK_INPUT_OPTIONAL" }, diagnostics.Items.Select(d => d.Code));
+    }
+
+    /// <summary>
+    /// <see cref="RequestSchema.ConversionFailure"/> says exactly what the fallback's binding fails at run time
+    /// (<see cref="ScalarValue.TryConvert"/>): for every pair of types, every value an input of the first accepted (typed
+    /// values of every kind a host may pass, at the edges of each range) converts to the second when it says none fails,
+    /// and one does not when it says some do. So the check can neither flag a fallback that serves every request nor miss
+    /// one that fails some.
+    /// </summary>
+    [Fact]
+    public void ConversionFailure_AgreesWithTheConversionTheFallbackRuns()
+    {
+        var types = new[]
+        {
+            "bool", "int32", "int64", "float32", "float64", "string",
+            "list<bool>", "list<int32>", "list<int64>", "list<float32>", "list<float64>", "list<string>",
+            "list<int32,2>", "list<int64,2>", "list<int64,3>", "list<float32,2>", "list<float64,2>", "list<float64,3>",
+        };
+        var probes = Probes();
+        foreach (var givenText in types)
+        {
+            foreach (var requiredText in types)
+            {
+                var (given, required) = (ColumnType.Parse(givenText), ColumnType.Parse(requiredText));
+                var accepted = probes.Where(p => p.TryConvert(given, out _)).ToList();
+                var failing = accepted.Where(p => !p.TryConvert(required, out _)).ToList();
+                var failure = RequestSchema.ConversionFailure(given, required);
+                Assert.True(failure is null == (failing.Count == 0),
+                    $"{givenText} → {requiredText}: the check says '{failure ?? "every value converts"}', the conversion fails {failing.Count} of {accepted.Count} values");
+            }
+        }
+    }
+
+    private static RequestSchema Single(string pipeline, string type) =>
+        new(pipeline, new Dictionary<string, ColumnType> { ["n"] = ColumnType.Parse(type) });
+
+    /// <summary>Typed values of every kind, at the edges of every range, and lists of them of several lengths.</summary>
+    private static List<ScalarValue> Probes()
+    {
+        long[] integers = [0, 1, -1, int.MaxValue, int.MinValue, int.MaxValue + 1L, int.MinValue - 1L, long.MaxValue, long.MinValue, 9_007_199_254_740_993];
+        double[] floats = [0.0, 0.5, -2.0, 3.0, float.MaxValue, -(double)float.MaxValue, float.MaxValue * 2.0, 1e300, -1e300, int.MaxValue + 1.0, 9.3e18, 4096.25];
+        var probes = new List<ScalarValue> { ScalarValue.FromBool(true), ScalarValue.FromString("a"), ScalarValue.FromFloat32(0.5f), ScalarValue.FromFloat32(float.MaxValue) };
+        probes.AddRange(integers.Select(ScalarValue.FromInt64));
+        probes.AddRange(floats.Select(ScalarValue.FromFloat64));
+        foreach (var length in new[] { 0, 1, 2, 3 })
+        {
+            probes.Add(ScalarValue.FromBoolList(Enumerable.Repeat(true, length).ToArray()));
+            probes.Add(ScalarValue.FromStringList(Enumerable.Repeat("a", length).ToArray()));
+            foreach (var integer in integers)
+            {
+                probes.Add(ScalarValue.FromInt64List(Enumerable.Repeat(integer, length).ToArray()));
+            }
+
+            foreach (var number in floats)
+            {
+                probes.Add(ScalarValue.FromFloat64List(Enumerable.Repeat(number, length).ToArray()));
+            }
+
+            probes.Add(ScalarValue.FromFloat32List(Enumerable.Repeat(1.5f, length).ToArray()));
+        }
+
+        return probes;
     }
 
 }

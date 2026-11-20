@@ -109,11 +109,21 @@ public sealed class RecRequest
 }
 
 /// <summary>Debugging controls (design 13.3), authorized by the host.</summary>
+/// <remarks>
+/// <para>Which requests write the persistent logs (the log sink's taps and the <c>$experiments</c> record, design 8.6 item
+/// 6 and 14 item 6): a request that changes what is served, with <see cref="ForceArms"/> (an empty list, the baseline,
+/// included) or a <see cref="ConfigOverride"/>, writes none, also when its fallback pipeline serves it: what it logged
+/// would read as the platform's assignment and the released configuration, and contaminate experiment analysis and
+/// training data. Nor does a request that <see cref="CaptureLogs"/>: its batches are returned instead. Options that only
+/// look at a request, <see cref="Trace"/>, <see cref="ExplainIds"/>, <see cref="Record"/> and <see cref="OnRecording"/>,
+/// leave its logging as it is: it is served as any request is, and logged as one.</para>
+/// </remarks>
 public sealed class DebugOptions
 {
     /// <summary>
-    /// Arms to force (<c>experiment/arm</c>), overriding assignment. Strict, unlike the platform's arms: an unknown arm or
-    /// two arms of one layer fail the request.
+    /// Arms to force (<c>experiment/arm</c>), overriding assignment; an empty list forces the baseline. Strict, unlike the
+    /// platform's arms: an unknown arm or two arms of one layer fail the request. The request writes no persistent logs
+    /// (see remarks).
     /// </summary>
     public IReadOnlyList<string>? ForceArms { get; init; }
 
@@ -126,8 +136,8 @@ public sealed class DebugOptions
     /// as invalid, naming the first error. Nothing of it outlives the request.
     /// </summary>
     /// <remarks>
-    /// The request writes no logs (its taps are captured as with <see cref="CaptureLogs"/>, and returned only when that is
-    /// set): what a configuration nobody released produced must not reach training data under the served manifest's id.
+    /// The request writes no persistent logs (its batches are returned when <see cref="CaptureLogs"/> is set): what a
+    /// configuration nobody released produced must not reach training data under the served manifest's id.
     /// Its record lists the arms applied and no triggered experiment, since the plan it ran has none. A recording carries
     /// the override, and replaying it applies the override again. The fallback pipeline, when it serves, runs as
     /// configured.
@@ -137,7 +147,10 @@ public sealed class DebugOptions
     /// <summary>Include per-node outcomes in <see cref="RecResult.Trace"/>.</summary>
     public bool Trace { get; init; }
 
-    /// <summary>Return log batches in <see cref="RecResult.LogBatches"/> instead of writing them (design 8.6 item 6).</summary>
+    /// <summary>
+    /// Return log batches in <see cref="RecResult.LogBatches"/> instead of writing them (design 8.6 item 6); a request that
+    /// forces arms or a configuration writes none either way, and returns them only with this set.
+    /// </summary>
     public bool CaptureLogs { get; init; }
 
     /// <summary>
@@ -1053,11 +1066,19 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             Deadline = deadline,
             Seed = seed,
             TimeMs = timeMs,
-            CaptureLogs = request.Debug is { } debug && (debug.CaptureLogs || debug.ConfigOverride is not null), // an override writes no logs
+            CaptureLogs = request.Debug?.CaptureLogs == true,
+            WriteLogs = WritesLogs(request), // for the fallback's run too: it serves a request a debugger shaped
             ExplainIds = request.Debug?.ExplainIds,
             OnRecording = runs is null ? null : runs.Add,
             OnEnd = pipeline.Bindings.Join(), // last: the executor, called next, ends it on every outcome
         }, cancellationToken);
+
+    /// <summary>
+    /// Whether a request's runs may write the persistent logs (the rule <see cref="DebugOptions"/> states): not when a
+    /// debugger chose its arms or its configuration, nor when it captures its logs.
+    /// </summary>
+    private static bool WritesLogs(RecRequest request) =>
+        request.Debug is not { } debug || (debug.ForceArms is null && debug.ConfigOverride is null && !debug.CaptureLogs);
 
     /// <summary>
     /// The inputs of a request that falls back (design 5.6): those the fallback pipeline declares. The caller wrote the

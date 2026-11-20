@@ -112,6 +112,19 @@ public static class PlanCompiler
                 }
             }
 
+            // The compiler hashes the definitions it builds (RFC 8785): a value of the override that form cannot hold
+            // exactly (an integer beyond 2^53) is the override's mistake, at its pointer, not an exception out of the request.
+            try
+            {
+                JsonCanonicalizer.CanonicalizeToString(configOverride);
+            }
+            catch (JsonCanonicalizationException ex)
+            {
+                diagnostics.Error("CONFIG_OVERRIDE_NOT_CANONICAL", OverrideArtifact, OverridePointer + ex.Pointer.ToString(), ex.Reason,
+                    ex.Hint ?? "write the value so that RFC 8785 holds it exactly");
+                known = false;
+            }
+
             if (!known || view.Apply(configOverride, diagnostics, OverrideArtifact, OverridePointer) is not { } overridden)
             {
                 return new PlanCompilation { Diagnostics = diagnostics.Items, Report = UnifiedCompilation.EmptyReport };

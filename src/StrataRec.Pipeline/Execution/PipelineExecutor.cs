@@ -37,10 +37,20 @@ internal sealed class PipelineRequest
     public long? TimeMs { get; init; }
 
     /// <summary>
-    /// Return log batches in <see cref="PipelineResult.LogBatches"/> instead of sending them to the log pipeline: draft
-    /// previews, replays and local runs never write persistent logs (design 8.6 item 6).
+    /// Return log batches in <see cref="PipelineResult.LogBatches"/> to the caller. A captured batch is the caller's, so
+    /// it is never also sent to the log pipeline, whatever <see cref="WriteLogs"/> says.
     /// </summary>
     public bool CaptureLogs { get; init; }
+
+    /// <summary>
+    /// Whether the run may send its log batches (taps and the <c>$experiments</c> record) to the log pipeline, the
+    /// persistent logs: the engine sets it for traffic, and not for a run whose arms or configuration a debugger forced,
+    /// whose logs are captured, or that replays (design 8.6 item 6, 14 item 6), since what they log is not what the
+    /// served configuration did for the request and must not reach experiment analysis or training data. Separate from
+    /// <see cref="CaptureLogs"/>: a forced run that captures nothing writes nothing either. False by default, so a run
+    /// writes only when asked to; a replay never writes.
+    /// </summary>
+    public bool WriteLogs { get; init; }
 
     /// <summary>
     /// Record the run for a replay bundle (design 13.4): <see cref="PipelineResult.Recording"/> then holds every external
@@ -373,7 +383,7 @@ internal sealed class PipelineExecutor
             };
 
             fetcher.StartContextFetch(plan.ContextFeatures.AsSpan(), cancellationToken);
-            if (_logs is not null || request.CaptureLogs || replay is not null)
+            if (Writes(request) || Returns(request))
             {
                 // Without a consumer every captured batch would be discarded: skip sampling and capture entirely.
                 await TapCapture.SelectAsync(state, cancellationToken).ConfigureAwait(false);
@@ -1205,20 +1215,20 @@ internal sealed class PipelineExecutor
 
     /// <summary>
     /// Completes every batch with the request's final record (assignment, triggers, node outcomes) and either returns
-    /// them with the result or hands them to the log pipeline. Experiment requests also emit a durable trigger record
-    /// (design 8.8, 12.6).
+    /// them with the result (<see cref="Returns"/>) or hands them to the log pipeline (<see cref="Writes"/>), or neither.
+    /// Experiment requests also emit a durable trigger record (design 8.8, 12.6).
     /// </summary>
     private void PublishLogs(RequestState state, PipelineRequest request, PipelineResult result, bool returned)
     {
-        // A capturing request (draft preview, debug run) never writes to the persistent logs, even when it is aborted
-        // and nobody receives its captures (design 8.6 item 6): forced arms must not contaminate experiment data.
-        if ((request.CaptureLogs || request.Replay is not null) && !returned)
+        // Only a run the engine lets write reaches the persistent logs, also when it is aborted and nobody receives a
+        // capture (design 8.6 item 6): forced arms and configurations must not contaminate experiment data.
+        var capture = returned && Returns(request);
+        if (!capture && !Writes(request))
         {
             return;
         }
 
-        var capture = request.CaptureLogs || request.Replay is not null;
-        if (state.Batches is null && (state.Plan.Experiments.Length == 0 || (_logs is null && !capture)))
+        if (state.Batches is null && state.Plan.Experiments.Length == 0)
         {
             return;
         }
@@ -1263,18 +1273,24 @@ internal sealed class PipelineExecutor
             return;
         }
 
-        if (_logs is not null)
+        foreach (var batch in batches)
         {
-            foreach (var batch in batches)
-            {
-                _logs.Submit(batch);
-            }
+            _logs!.Submit(batch);
         }
     }
 
+    /// <summary>Whether the run's log batches are returned to the caller: captured, or a replay's (compared, never written).</summary>
+    private static bool Returns(PipelineRequest request) => request.CaptureLogs || request.Replay is not null;
+
+    /// <summary>
+    /// Whether the run's log batches go to the persistent logs: there are some, the engine allows it
+    /// (<see cref="PipelineRequest.WriteLogs"/>), and they are not the caller's instead.
+    /// </summary>
+    private bool Writes(PipelineRequest request) => _logs is not null && request.WriteLogs && !Returns(request);
+
     /// <summary>Where the run's log batches go, as a bundle records it.</summary>
     private string LogDestination(PipelineRequest request) =>
-        request.CaptureLogs ? "captured" : _logs is not null ? "pipeline" : "none";
+        request.CaptureLogs ? "captured" : Writes(request) ? "pipeline" : "none";
 
     /// <summary>Hands a run's recording to <see cref="PipelineRequest.OnRecording"/>; a callback that throws never changes the run's outcome.</summary>
     private static void Deliver(ExecutionPlan plan, PipelineRequest request, ReplayRunRecord run, RequestEventLog? events)

@@ -60,7 +60,7 @@ internal static class StatusCommand
         catch (ArgumentException ex)
         {
             diagnostics.Error("POINTER_NAME_INVALID", ex.ParamName == "environment" ? "--env" : "--pipeline", string.Empty, ex.Message,
-                "pipeline ids and environment names are the file names of pointers: use letters, digits, '_', '-' and '.'");
+                FileSystemManifestSource.NameHint);
             Output.Diagnostics(diagnostics.Items, format, errors);
             return 2;
         }

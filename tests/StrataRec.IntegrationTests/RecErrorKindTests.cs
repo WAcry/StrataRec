@@ -140,6 +140,45 @@ public sealed class RecErrorKindTests : IDisposable
         Assert.Equal(new long[] { 7, 8, 9 }, result.Items.Select(i => i.Id.Int64Value));
     }
 
+    /// <summary>
+    /// A fallback that declares an input wider than its primary (int32 as int64, <c>list&lt;float32,2&gt;</c> as
+    /// <c>list&lt;float64&gt;</c>) serves every request that falls back, the values at the edge of the primary's ranges
+    /// included, and loading says nothing about it: FALLBACK_INPUT_TYPE flagged it. The reverse is flagged, and fails such
+    /// a request when it falls back, as the warning says.
+    /// </summary>
+    [Fact]
+    public async Task AFallbackThatWidensAnInput_ServesTheRequest_AndOnlyTheNarrowingOneIsFlagged()
+    {
+        WritePipeline(_root, "narrow_broken", "failing", "wide_backup",
+            """ "user_id": { "type": "int64" }, "slot": { "type": "int32" }, "vec": { "type": "list<float32,2>" } """);
+        WritePipeline(_root, "wide_backup", "good", null,
+            """ "user_id": { "type": "int64" }, "slot": { "type": "int64" }, "vec": { "type": "list<float64>?" } """);
+        WritePipeline(_root, "wide_broken", "failing", "narrow_backup", """ "user_id": { "type": "int64" }, "slot": { "type": "int64" } """);
+        WritePipeline(_root, "narrow_backup", "good", null, """ "user_id": { "type": "int64" }, "slot": { "type": "int32" } """);
+        await using var engine = new RecEngine(new PlanEnvironment { BaseDirectory = _root });
+
+        var diagnostics = ServiceCollectionExtensions.LoadWorkspace(engine, _root, "local");
+
+        Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
+        var flagged = Assert.Single(diagnostics.Items, d => d.Code == "FALLBACK_INPUT_TYPE");
+        Assert.EndsWith("wide_broken.jsonc", flagged.Artifact, StringComparison.Ordinal);
+        Assert.Contains("a value outside the int32 range does not convert", flagged.Message, StringComparison.Ordinal);
+
+        var widened = await engine.ExecuteAsync(Request("narrow_broken",
+            Inputs(1001).Set("slot", ScalarValue.FromInt64(int.MinValue)).Set("vec", ScalarValue.FromFloat32List([float.MaxValue, 0.5f]))),
+            TestContext.Current.CancellationToken);
+        Assert.True(widened.Succeeded, widened.Error);
+        Assert.Equal("wide_backup", widened.ServedBy);
+        Assert.Equal(new long[] { 7, 8, 9 }, widened.Items.Select(i => i.Id.Int64Value));
+
+        var fits = await engine.ExecuteAsync(Request("wide_broken", Inputs(1001).Set("slot", ScalarValue.FromInt64(5))), TestContext.Current.CancellationToken);
+        var beyond = await engine.ExecuteAsync(Request("wide_broken", Inputs(1001).Set("slot", ScalarValue.FromInt64(int.MaxValue + 1L))),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(("narrow_backup", true), (fits.ServedBy, fits.Succeeded));
+        Assert.Equal((false, RecErrorKind.Failed), (beyond.Succeeded, beyond.ErrorKind));
+        Assert.Contains("fallback 'narrow_backup' failed: Input 'slot' must be within the int32 range", beyond.Error, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task InputsReadWithOnePlan_AndRunOnTheNext_AreCheckedAgainstTheNext()
     {
@@ -309,18 +348,24 @@ public sealed class RecErrorKindTests : IDisposable
         };
         foreach (var (id, source, fallback, schema) in pipelines)
         {
-            var fallbackMember = fallback is null ? string.Empty : $"\"fallback_pipeline\": \"{fallback}\",";
-            File.WriteAllText(Path.Combine(root, "pipelines", id + ".jsonc"), $$"""
-                { "pipeline_id": "{{id}}", {{fallbackMember}}
-                  "request_schema": { {{schema}} },
-                  "param_schema": { "recall_quotas": { "type": "map<string,int64>" }, "k": { "type": "int64" } },
-                  "params": { "recall_quotas": { "{{source}}": 10 }, "k": 5 },
-                  "nodes": { "recall": { "order": 100, "op": "MultiSourceRecall@1", "config": { "quotas_param": "recall_quotas" } } },
-                  "output": { "limit_param": "k", "columns": { "source": "col.recall.primary_source" } } }
-                """);
+            WritePipeline(root, id, source, fallback, schema);
         }
 
         return root;
+    }
+
+    /// <summary>A pipeline that recalls from <paramref name="source"/> (<c>good</c> or <c>failing</c>), with the request schema's members.</summary>
+    private static void WritePipeline(string root, string id, string source, string? fallback, string schema)
+    {
+        var fallbackMember = fallback is null ? string.Empty : $"\"fallback_pipeline\": \"{fallback}\",";
+        File.WriteAllText(Path.Combine(root, "pipelines", id + ".jsonc"), $$"""
+            { "pipeline_id": "{{id}}", {{fallbackMember}}
+              "request_schema": { {{schema}} },
+              "param_schema": { "recall_quotas": { "type": "map<string,int64>" }, "k": { "type": "int64" } },
+              "params": { "recall_quotas": { "{{source}}": 10 }, "k": 5 },
+              "nodes": { "recall": { "order": 100, "op": "MultiSourceRecall@1", "config": { "quotas_param": "recall_quotas" } } },
+              "output": { "limit_param": "k", "columns": { "source": "col.recall.primary_source" } } }
+            """);
     }
 
     private static void Edit(string path, string from, string to)

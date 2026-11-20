@@ -62,6 +62,26 @@ public sealed class StrataRecStartupTests : IDisposable
         Assert.Equal(("NODE_BAD_CONFIG", "/nodes/top/config/k"), (error.Code, error.Pointer));
     }
 
+    /// <summary>
+    /// A workspace directory without a pipeline stops the host, with the error validate reports: the host started, served
+    /// nothing, and its health check answered 503.
+    /// </summary>
+    [Fact]
+    public async Task AWorkspaceWithoutAPipeline_StopsTheHost()
+    {
+        var root = Path.Combine(_contentRoot, "config");
+        Directory.CreateDirectory(root);
+        using var host = Build(new CapturedLog(), options => options.ConfigRoot = root);
+
+        var thrown = await Assert.ThrowsAsync<ConfigException>(() => host.StartAsync(TestContext.Current.CancellationToken));
+
+        var error = Assert.Single(thrown.Diagnostics);
+        Assert.Equal(("WORKSPACE_NO_PIPELINE", root), (error.Code, error.Artifact));
+        Assert.Contains($"The workspace {root} has no pipeline", error.Message, StringComparison.Ordinal);
+        Assert.Contains("pipelines/<pipeline_id>.jsonc", error.Hint, StringComparison.Ordinal);
+        Assert.Empty(host.Services.GetRequiredService<IRecEngine>().PipelineIds());
+    }
+
     [Fact]
     public async Task Warnings_GoToTheHostsLog_AsEvent1003()
     {

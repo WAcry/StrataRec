@@ -29,12 +29,16 @@ public sealed record LoadedArtifact<T>(T Value, JsonNode Document, string Path, 
 /// ├── tables/&lt;table_id&gt;.jsonc
 /// └── schemas/&lt;kind&gt;.schema.json        JSON Schemas the files name in "$schema" for editors (not read here)
 /// </code>
-/// File names must match the ids inside, so a path always tells you what a file defines. A file's top-level
+/// File names must match the ids inside, so a path always tells you what a file defines; a file may end in
+/// <c>.jsonc</c> or <c>.json</c>, and one artifact defined by two files is an error. A file's top-level
 /// <c>$schema</c> is taken out before it is bound and hashed (<see cref="ArtifactSchemas.TryRemoveSchemaMember"/>).
 /// Every problem is reported as a diagnostic with the file and a JSON pointer, never as an exception.
 /// </remarks>
 public sealed class ConfigWorkspace
 {
+    /// <summary>The policy's file names, in the order <see cref="Files"/> sorts those of a directory (ordinal).</summary>
+    private static readonly string[] PolicyFiles = ["policy.json", "policy.jsonc"];
+
     private ConfigWorkspace(string root) => Root = root;
 
     public string Root { get; }
@@ -55,7 +59,12 @@ public sealed class ConfigWorkspace
 
     public SortedDictionary<string, LoadedArtifact<DataTableArtifact>> Tables { get; } = new(StringComparer.Ordinal);
 
-    /// <summary>Loads every artifact under <paramref name="root"/>. Problems go to <paramref name="diagnostics"/>.</summary>
+    /// <summary>
+    /// Loads every artifact under <paramref name="root"/>. Problems go to <paramref name="diagnostics"/>: besides each file's
+    /// own, two files that define the same artifact (<c>pipelines/home_feed.json</c> and <c>pipelines/home_feed.jsonc</c>),
+    /// and a workspace without a pipeline. Validate, build, the other commands and a host serving the workspace all read it
+    /// through here, so none of them uses one of two definitions, or serves nothing, without saying so.
+    /// </summary>
     public static ConfigWorkspace Load(string root, DiagnosticBag diagnostics)
     {
         var workspace = new ConfigWorkspace(Path.GetFullPath(root));
@@ -65,17 +74,27 @@ public sealed class ConfigWorkspace
             return workspace;
         }
 
-        var policyPath = Path.Combine(workspace.Root, "policy.jsonc");
-        if (File.Exists(policyPath))
+        foreach (var name in PolicyFiles)
         {
-            workspace.Policy = workspace.Read<PolicyArtifact>(policyPath, diagnostics);
+            var path = Path.Combine(workspace.Root, name);
+            if (File.Exists(path) && workspace.Read<PolicyArtifact>(path, diagnostics) is { } a)
+            {
+                if (workspace.Policy is { } first)
+                {
+                    Duplicate(first.Path, a.Path, "the policy", string.Empty, diagnostics);
+                }
+                else
+                {
+                    workspace.Policy = a;
+                }
+            }
         }
 
         foreach (var file in workspace.Files("catalog"))
         {
             if (workspace.Read<FeatureCatalogArtifact>(file, diagnostics) is { } a && workspace.CheckName(a, a.Value.CatalogId, "/catalog_id", diagnostics))
             {
-                workspace.Catalogs[a.Value.CatalogId] = a;
+                Index(workspace.Catalogs, a.Value.CatalogId, a, $"catalog '{a.Value.CatalogId}'", "/catalog_id", diagnostics);
             }
         }
 
@@ -83,23 +102,33 @@ public sealed class ConfigWorkspace
         {
             if (workspace.Read<SourceBindingArtifact>(file, diagnostics) is { } a && workspace.CheckName(a, a.Value.Environment, "/environment", diagnostics))
             {
-                workspace.Bindings[a.Value.Environment] = a;
+                Index(workspace.Bindings, a.Value.Environment, a, $"the bindings of environment '{a.Value.Environment}'", "/environment", diagnostics);
             }
         }
 
-        foreach (var file in workspace.Files("pipelines"))
+        var pipelineFiles = workspace.Files("pipelines");
+        foreach (var file in pipelineFiles)
         {
             if (workspace.Read<PipelineArtifact>(file, diagnostics) is { } a && workspace.CheckName(a, a.Value.PipelineId, "/pipeline_id", diagnostics))
             {
-                workspace.Pipelines[a.Value.PipelineId] = a;
+                Index(workspace.Pipelines, a.Value.PipelineId, a, $"pipeline '{a.Value.PipelineId}'", "/pipeline_id", diagnostics);
             }
+        }
+
+        if (pipelineFiles.Count == 0)
+        {
+            // Nothing to validate, build or serve: without this, validate passed and a host started that answered nothing.
+            diagnostics.Error("WORKSPACE_NO_PIPELINE", workspace.Root, string.Empty,
+                $"The workspace {workspace.Root} has no pipeline: {Path.Combine(workspace.Root, "pipelines")} holds no .json or .jsonc file.",
+                "add pipelines/<pipeline_id>.jsonc, with catalog/, bindings/ and releases/ beside it ('stratarec init' writes a workspace to start from), " +
+                "or point -c (StrataRecOptions.ConfigRoot for a host) at the workspace directory");
         }
 
         foreach (var file in workspace.Files("experiments"))
         {
             if (workspace.Read<ExperimentArtifact>(file, diagnostics) is { } a && workspace.CheckName(a, a.Value.ExperimentId, "/experiment_id", diagnostics))
             {
-                workspace.Experiments[a.Value.ExperimentId] = a;
+                Index(workspace.Experiments, a.Value.ExperimentId, a, $"experiment '{a.Value.ExperimentId}'", "/experiment_id", diagnostics);
             }
         }
 
@@ -108,7 +137,8 @@ public sealed class ConfigWorkspace
             if (workspace.Read<ReleaseArtifact>(file, diagnostics) is { } a
                 && workspace.CheckName(a, a.Value.PipelineId + "." + a.Value.Environment, "/environment", diagnostics))
             {
-                workspace.Releases[a.Value.PipelineId + "/" + a.Value.Environment] = a;
+                Index(workspace.Releases, a.Value.PipelineId + "/" + a.Value.Environment, a,
+                    $"the release of pipeline '{a.Value.PipelineId}' in environment '{a.Value.Environment}'", "/environment", diagnostics);
             }
         }
 
@@ -116,12 +146,34 @@ public sealed class ConfigWorkspace
         {
             if (workspace.Read<DataTableArtifact>(file, diagnostics) is { } a && workspace.CheckName(a, a.Value.TableId, "/table_id", diagnostics))
             {
-                workspace.Tables[a.Value.TableId] = a;
+                Index(workspace.Tables, a.Value.TableId, a, $"table '{a.Value.TableId}'", "/table_id", diagnostics);
             }
         }
 
         return workspace;
     }
+
+    /// <summary>
+    /// Adds an artifact under its id, unless another file defined it already: then the later file is an error naming
+    /// both, and the first stays (nothing is compiled or served from a workspace with errors). A file is named by its id
+    /// with either extension, so <c>home_feed.json</c> and <c>home_feed.jsonc</c> both define <c>home_feed</c>; taking the
+    /// last, as assigning by id did, validated a workspace with one of them while the other was silently ignored.
+    /// </summary>
+    private static void Index<T>(
+        SortedDictionary<string, LoadedArtifact<T>> index, string id, LoadedArtifact<T> artifact, string what, string pointer, DiagnosticBag diagnostics)
+    {
+        if (index.TryGetValue(id, out var first))
+        {
+            Duplicate(first.Path, artifact.Path, what, pointer, diagnostics);
+            return;
+        }
+
+        index[id] = artifact;
+    }
+
+    private static void Duplicate(string first, string second, string what, string pointer, DiagnosticBag diagnostics) =>
+        diagnostics.Error("ARTIFACT_DUPLICATE", second, pointer, $"Both {first} and {second} define {what}; only one file may.",
+            $"keep one of the two files and delete the other ({first} or {second})");
 
     /// <summary>
     /// The pipelines to compile or load for <paramref name="ids"/>: those, then the <c>fallback_pipeline</c> of each that is
@@ -374,10 +426,10 @@ public sealed class ConfigWorkspace
             return null;
         }
 
+        T value;
         try
         {
-            var value = ArtifactSerializer.Deserialize<T>(document, relative);
-            return new LoadedArtifact<T>(value, document, relative, ContentHash.Compute(document));
+            value = ArtifactSerializer.Deserialize<T>(document, relative);
         }
         catch (ArtifactFormatException ex)
         {
@@ -385,6 +437,24 @@ public sealed class ConfigWorkspace
                 ex.Hint ?? $"run 'stratarec schema {kind}' for the JSON Schema of this file");
             return null;
         }
+
+        // The content id hashes the RFC 8785 form, and every later hash (of a plan's nodes, of the store's blobs, of a
+        // manifest) is of what this document holds: a value that form cannot hold exactly (an integer beyond 2^53 that would
+        // read back as another) is this file's error, here, not an exception out of validate, build or a host's startup.
+        string contentId;
+        try
+        {
+            contentId = ContentHash.Compute(document);
+        }
+        catch (JsonCanonicalizationException ex)
+        {
+            diagnostics.Error("ARTIFACT_NOT_CANONICAL", relative, ex.Pointer.ToString(),
+                $"{ex.Reason} An artifact is identified by the hash of its canonical JSON (RFC 8785), which must hold every value exactly.",
+                ex.Hint ?? "write the value so that RFC 8785 holds it exactly");
+            return null;
+        }
+
+        return new LoadedArtifact<T>(value, document, relative, contentId);
     }
 
     private bool CheckName<T>(LoadedArtifact<T> artifact, string id, string pointer, DiagnosticBag diagnostics)

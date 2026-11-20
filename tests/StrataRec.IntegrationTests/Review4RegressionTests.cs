@@ -210,7 +210,7 @@ public sealed class Review4RegressionTests
         {
             var executor = new PipelineExecutor(logs: logs);
             using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
-            var request = HomeFeedTestHost.NewRequest(arms: plan.ArmsFromIds(new[] { "exp_quality_weight/strong" }), captureLogs: true);
+            var request = HomeFeedTestHost.NewRequest(arms: plan.ArmsFromIds(new[] { "exp_quality_weight/strong" }), captureLogs: true, writeLogs: true);
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await executor.ExecuteAsync(plan, request, cancel.Token));
             await logs.FlushAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
