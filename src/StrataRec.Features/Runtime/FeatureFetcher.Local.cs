@@ -136,15 +136,17 @@ public sealed partial class FeatureFetcher
                 Fill(group, features, version, batch.Rows, batch.RowRecords);
                 if (batch.KeyRecords.Length > 0)
                 {
+                    // Recorded before its metrics: a host's listener that throws on them fails the fill, as on any metric
+                    // the request thread records, but the read it served is in the recording (review 83).
+                    if (_hook is { Replays: false } recorder)
+                    {
+                        RecordRead(recorder, group, features, version, batch, started);
+                    }
+
                     CountKeys(local.Table, batch.Found, batch.KeyRecords.Length - batch.Found);
                     if (CountsValues)
                     {
                         CountTableValues(group, features, version, batch.KeyRecords);
-                    }
-
-                    if (_hook is { Replays: false } recorder)
-                    {
-                        RecordRead(recorder, group, features, version, batch, started);
                     }
                 }
             }
@@ -428,13 +430,13 @@ public sealed partial class FeatureFetcher
             return ReadCachedContext(group, features, version, key, record, started, cancellationToken);
         }
 
+        StoreLocalContext(group, features, version, key, record, started); // recorded before its metrics (ReadLocal)
         CountKeys(local.Table, record.Found ? 1 : 0, record.Found ? 0 : 1);
         if (CountsValues)
         {
             CountTableValues(group, features, version, new ReadOnlySpan<LocalRecordRef>(in record));
         }
 
-        StoreLocalContext(group, features, version, key, record, started);
         return null;
     }
 

@@ -1,5 +1,8 @@
 using StrataRec.Core.Diagnostics;
+using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
+using StrataRec.Core.Values;
+using StrataRec.Features.Cache;
 using StrataRec.Features.Connectors;
 using StrataRec.Features.Runtime;
 using StrataRec.UnitTests.Features.Cache;
@@ -10,7 +13,9 @@ namespace StrataRec.UnitTests.Features;
 /// Review 80: a host's metric listener that throws when a feature call completes loses its measurement. The call is
 /// recorded with its outcome and values and the fill gets them: the call site completed the call (metrics, health, span)
 /// before recording it, so the throw left a call that had answered unrecorded, outstanding in a recording, and threw the
-/// listener's exception out of the fill. Both ways a call is found answered: at once, and after a wait.
+/// listener's exception out of the fill. Both ways a call is found answered: at once, and after a wait. A read the
+/// request serves from a table is recorded before its metrics, and the write-back the read's queue drops is counted
+/// without throwing (review 83).
 /// </summary>
 [Collection(MetricMeasurement.Name)]
 public sealed class CallSiteListenerTests
@@ -43,6 +48,127 @@ public sealed class CallSiteListenerTests
         Assert.Equal(IoOutcome.Ok, call.Outcome);
         Assert.Equal(new double?[] { 1.5, 3.0 }, call.Values);
         Assert.Equal(1, listener.Calls);
+        await request.Fetcher.WhenIoCompleteAsync();
+        Assert.Equal(0, request.Memory.Release());
+    }
+
+    /// <summary>
+    /// Review 83: a read served from a table (a cache whose every key is fresh, or a local table) counted the values it
+    /// served (<c>stratarec.source.values</c>) before it was recorded: a listener that threw there failed the fill, as on
+    /// any metric the request thread records, and left the recording without the read. Recorded first now; the fill
+    /// still fails.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AReadServedFromATable_IsRecordedBeforeItsValuesAreCounted(bool cache)
+    {
+        const string source = "review83_table";
+        var connector = ScriptedConnector.Values((key, _) => key * 1.0);
+        var rig = cache
+            ? new FeatureTestRig().CacheSource(source, connector)
+            : new FeatureTestRig().LocalSource(source, writer =>
+            {
+                var record = writer.Begin(1L, 1);
+                Assert.True(writer.Schema.TryGetFieldIndex("clicks", out var field));
+                record.Set(field, ScalarValue.FromFloat64(1.0));
+                Assert.True(record.Commit());
+            });
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, source);
+        rig.Build();
+        if (cache)
+        {
+            var warm = rig.NewRequest([1]);
+            Assert.Equal(FeatureState.Ok, (await warm.EnsureAsync(clicks)).State);
+            Assert.Equal(1, rig.WriteBack(source));
+            warm.Memory.Release();
+        }
+
+        using var listener = MeasurementHook.Throwing(StrataRecMetrics.Names.SourceValues, (StrataRecTags.Source, source));
+        var hook = new FeatureCallHookTests.ListHook();
+        var request = rig.NewRequest([1], hook: hook);
+
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => request.EnsureAsync(clicks).AsTask());
+
+        Assert.Equal("a host's metric listener failed", thrown.Message);
+        Assert.Equal(1, listener.Calls);
+        var read = Assert.Single(hook.Recorded);
+        Assert.Equal(new double?[] { 1.0 }, read.Values);
+        Assert.Equal(cache ? 1 : 0, connector.Calls.Count); // only the warm request reached the connector
+        request.Memory.Release();
+    }
+
+    /// <summary>The same for a context feature, read by the context prefetch from a fresh cache record or a local table.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AContextReadServedFromATable_IsRecordedBeforeItsValuesAreCounted(bool cache)
+    {
+        const string source = "review83_context_table";
+        var connector = ScriptedConnector.Values((key, _) => key * 1.0);
+        var rig = cache
+            ? new FeatureTestRig().CacheSource(source, connector)
+            : new FeatureTestRig().LocalSource(source, writer =>
+            {
+                var record = writer.Begin(1001L, 1);
+                Assert.True(writer.Schema.TryGetFieldIndex("ctr", out var field));
+                record.Set(field, ScalarValue.FromFloat64(1001.0));
+                Assert.True(record.Commit());
+            });
+        var ctr = rig.Physical("user.ctr", FeatureTestRig.User, ColumnType.Float64, source);
+        rig.Build();
+        if (cache)
+        {
+            var warm = rig.NewRequest([1], userId: 1001);
+            warm.Fetcher.StartContextFetch([ctr], CancellationToken.None);
+            Assert.Equal(FeatureState.Ok, (await warm.EnsureAsync(ctr)).State);
+            await warm.Fetcher.WhenIoCompleteAsync();
+            Assert.Equal(1, rig.WriteBack(source));
+            warm.Memory.Release();
+        }
+
+        using var listener = MeasurementHook.Throwing(StrataRecMetrics.Names.SourceValues, (StrataRecTags.Source, source));
+        var hook = new FeatureCallHookTests.ListHook();
+        var request = rig.NewRequest([1], userId: 1001, hook: hook);
+
+        request.Fetcher.StartContextFetch([ctr], CancellationToken.None);
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => request.EnsureAsync(ctr).AsTask());
+
+        Assert.Equal("a host's metric listener failed", thrown.Message);
+        Assert.Equal(1, listener.Calls);
+        var read = Assert.Single(hook.Recorded);
+        Assert.Equal(new double?[] { 1001.0 }, read.Values);
+        Assert.Equal(cache ? 1 : 0, connector.Calls.Count);
+        request.Memory.Release();
+    }
+
+    /// <summary>
+    /// Review 83: a read hands what the connector answered to the table's write-back queue while it resolves, before it is
+    /// recorded; a full queue drops it and counts the drop (<c>stratarec.cache.writes</c>, outcome <c>dropped</c>) on the
+    /// request's thread. A listener that threw there failed a fill the connector had answered, unrecorded. The drop is
+    /// counted as before and its listener's exception lost; what the writer counts on its own thread is reported as before.
+    /// </summary>
+    [Fact]
+    public async Task AWriteBackTheQueueDrops_WhoseListenerThrows_LeavesTheFillAndTheRecording()
+    {
+        const string source = "review83_write_back";
+        var connector = ScriptedConnector.Values((key, _) => key * 1.0);
+        var rig = new FeatureTestRig().CacheSource(source, connector, maxBytes: "16MiB"); // a write-back queue of 1 MiB
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, source);
+        rig.Build();
+        var table = rig.Tables[source].Cache!;
+        Assert.True(table.TryWriteBack(new CacheWriteBatch([EntityKey.FromInt64(99)], [new byte[2 << 20]], 1))); // an empty queue takes it
+        using var listener = MeasurementHook.Throwing(StrataRecMetrics.Names.CacheWrites, (StrataRecTags.Outcome, "dropped"));
+        var hook = new FeatureCallHookTests.ListHook();
+        var request = rig.NewRequest([1], hook: hook);
+
+        var result = await request.EnsureAsync(clicks);
+
+        Assert.Equal(FeatureState.Ok, result.State);
+        Assert.Equal(1.0, request.Value(clicks, 0).AsFloat64());
+        Assert.Equal(1, listener.Calls); // the drop was counted, and the listener threw
+        Assert.Equal(IoOutcome.Ok, Assert.Single(hook.Recorded).Outcome);
+        Assert.Single(connector.Calls);
         await request.Fetcher.WhenIoCompleteAsync();
         Assert.Equal(0, request.Memory.Release());
     }

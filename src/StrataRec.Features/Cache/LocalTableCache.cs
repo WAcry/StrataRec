@@ -305,18 +305,37 @@ public sealed class LocalTableCache
     {
         if (!WriteQueueBudget.TryTake(ref _queuedBytes, batch.Bytes, _queueLimit))
         {
-            CountWrites(CacheTier.Local, CacheWriteOutcome.Dropped, batch.Count);
+            CountDropped(CacheTier.Local, batch.Count);
             return false;
         }
 
         if (!_queue.Writer.TryWrite(batch))
         {
             Interlocked.Add(ref _queuedBytes, -batch.Bytes);
-            CountWrites(CacheTier.Local, CacheWriteOutcome.Dropped, batch.Count);
+            CountDropped(CacheTier.Local, batch.Count);
             return false;
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Counts a write-back a tier's queue did not take. Never throws: a read hands its records to the queues while it
+    /// resolves, after its calls and before it is recorded, so a metric listener that threw here turned a read the
+    /// connector had answered into a failed fill, unrecorded (review 83). The measurement is lost instead, as in
+    /// <see cref="CountKeys"/>. What the writers count on their own threads is reported to the host as before
+    /// (<see cref="CountWrites"/>).
+    /// </summary>
+    internal void CountDropped(CacheTier tier, int records)
+    {
+        try
+        {
+            CountWrites(tier, CacheWriteOutcome.Dropped, records);
+        }
+        catch (Exception)
+        {
+            // See the summary.
+        }
     }
 
     /// <summary>

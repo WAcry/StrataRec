@@ -260,13 +260,11 @@ public sealed class PlanSchema
     }
 
     /// <summary>
-    /// The index of the catalog feature <paramref name="name"/> (a candidate one's column, or a context one's field) when
-    /// the compile has registered it, otherwise -1. Unlike <see cref="TryGetColumn"/> and <see cref="TryGetContext"/> it
-    /// registers nothing and notes no read: it is for checks of what the compile registered.
+    /// The index of the context catalog feature <paramref name="name"/> (without <c>ctx.</c>) when the compile has
+    /// registered it, otherwise -1. Unlike <see cref="TryGetContext"/> it registers nothing and notes no read: it is for
+    /// checks of what the compile registered.
     /// </summary>
-    internal int RegisteredFeature(string name, bool context) =>
-        context ? (_context.TryGetValue(name, out var field) ? field.FeatureIndex : -1)
-        : _columns.TryGetValue(name, out var column) ? column.FeatureIndex : -1;
+    internal int RegisteredContextFeature(string name) => _context.TryGetValue(name, out var field) ? field.FeatureIndex : -1;
 
     /// <summary>The context field named <paramref name="name"/> (without <c>ctx.</c>). While the plan compiles, looking
     /// up a catalog feature registers it.</summary>

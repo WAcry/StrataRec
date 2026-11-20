@@ -67,8 +67,8 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
 
     /// <summary>
     /// Queues <paramref name="count"/> records of <paramref name="cache"/>'s keyspace for the store without waiting; false
-    /// (counted as dropped) when they do not fit a queue that holds some (<see cref="WriteQueueBudget"/>) or the tier is
-    /// being disposed. The arrays become the tier's.
+    /// (counted as dropped, on the caller's thread: <see cref="LocalTableCache.CountDropped"/>) when they do not fit a queue
+    /// that holds some (<see cref="WriteQueueBudget"/>) or the tier is being disposed. The arrays become the tier's.
     /// </summary>
     internal bool TryWrite(LocalTableCache cache, CacheStoreEntry[] entries, int count)
     {
@@ -85,14 +85,14 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
 
         if (!WriteQueueBudget.TryTake(ref _queuedBytes, bytes, QueueBytes))
         {
-            cache.CountWrites(CacheTier.Distributed, CacheWriteOutcome.Dropped, count);
+            cache.CountDropped(CacheTier.Distributed, count);
             return false;
         }
 
         if (!_queue.Writer.TryWrite(new PendingWrite(cache, entries, count, bytes)))
         {
             Interlocked.Add(ref _queuedBytes, -bytes);
-            cache.CountWrites(CacheTier.Distributed, CacheWriteOutcome.Dropped, count);
+            cache.CountDropped(CacheTier.Distributed, count);
             return false;
         }
 

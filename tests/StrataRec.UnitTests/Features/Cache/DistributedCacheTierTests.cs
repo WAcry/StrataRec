@@ -127,6 +127,31 @@ public class DistributedCacheTierTests
         Assert.Equal(0, tier.QueuedBytes);
     }
 
+    /// <summary>
+    /// Review 83: a write the tier's queue drops is counted on the thread that hands it over, a request's, while the read
+    /// resolves: a listener that threw there failed the read. It returns false, counted, and the listener's exception is
+    /// lost; what the loop counts is still kept for the disposal to report (the test above).
+    /// </summary>
+    [Fact]
+    public async Task AWriteTheQueueDrops_WhoseListenerThrows_IsRefusedWithoutThrowing()
+    {
+        using var listener = MeasurementHook.Throwing(
+            StrataRecMetrics.Names.CacheWrites, (StrataRecTags.CacheTier, "distributed"), (StrataRecTags.Outcome, "dropped"));
+        var store = new GatedStore(holdCall: 1);
+        var tier = new DistributedCacheTier(store, queueBytes: 4096);
+        var cache = Cache();
+        Assert.True(tier.TryWrite(cache, Entries(1), 1));
+        await store.Held.Task.WaitAsync(Wait, TestContext.Current.CancellationToken); // being written: the queue is empty
+        Assert.True(tier.TryWrite(cache, [new(new string('k', 10_000), new byte[] { 1, 2, 3 }, TimeSpan.FromMinutes(1))], 1));
+
+        Assert.False(tier.TryWrite(cache, Entries(2), 1)); // past its limit
+
+        Assert.Equal(1, listener.Calls);
+        store.Release();
+        await Task.Run(() => Assert.True(SpinWait.SpinUntil(() => store.Calls == 2, Wait)), TestContext.Current.CancellationToken);
+        await tier.DisposeAsync();
+    }
+
     private static LocalTableCache Cache() =>
         new LocalFeatureTable(Schema, new LocalFeatureTableOptions { MaxBytes = 1 << 20, Cache = new CacheTableOptions { TtlMs = 60_000 } }).Cache!;
 

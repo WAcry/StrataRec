@@ -1,0 +1,90 @@
+using System.Diagnostics;
+using Microsoft.Extensions.Logging;
+using StrataRec.Core.Diagnostics;
+using StrataRec.UnitTests.Features.Cache;
+
+namespace StrataRec.UnitTests.Core;
+
+/// <summary>
+/// Reviews 82 and 83: a host's activity listener that throws when a call's span is sampled, starts or stops leaves the
+/// call without a span or without its end, and leaves the flow's current activity as the call found it. The span the
+/// start callback threw on was already current, and a stopped span whose stop callback threw stayed current: either
+/// became the parent of the flow's next call.
+/// </summary>
+public sealed class IoCallSpanTests
+{
+    [Theory]
+    [InlineData(ListenerStage.Sample)]
+    [InlineData(ListenerStage.Start)]
+    [InlineData(ListenerStage.Stop)]
+    public void AListenerThatThrowsOnACall_LeavesTheFlowsCurrentActivity_AndTheNextCallUnderTheRequest(ListenerStage stage)
+    {
+        using var flow = new TracedFlow(stage, "recall first");
+
+        var first = new IoTarget(IoKind.CandidateSource, "first").Start();
+        var during = Activity.Current;
+        first.Complete(IoOutcome.Ok);
+        var after = Activity.Current;
+        var next = new IoTarget(IoKind.CandidateSource, "next").Start();
+        next.Complete(IoOutcome.Ok);
+
+        Assert.Equal(1, flow.Thrown);
+        Assert.Same(flow.Request, after);
+        Assert.Same(flow.Request, Assert.Single(flow.Named("recall next")).Parent);
+        if (stage == ListenerStage.Stop)
+        {
+            // Its span was current while it ran, and stopped.
+            Assert.Same(Assert.Single(flow.Named("recall first")), during);
+            Assert.True(during!.IsStopped);
+        }
+        else
+        {
+            // No span: the sampler threw before one was created, or the start callback after it was made current.
+            Assert.Same(flow.Request, during);
+        }
+
+        if (stage == ListenerStage.Start)
+        {
+            Assert.False(Assert.Single(flow.Named("recall first")).IsStopped); // not stopped: stopping would report it
+        }
+    }
+}
+
+/// <summary>
+/// Review 83: each metric of a call has its own boundary. A host's listener that threw on the duration skipped the call's
+/// key count and its error count, which other listeners subscribe to on their own; the health and failure summaries were
+/// kept (review 80).
+/// </summary>
+[Collection(MetricMeasurement.Name)]
+public sealed class IoCallMetricTests
+{
+    [Fact]
+    public void AListenerThatThrowsOnTheDuration_LosesOnlyThatMeasurement()
+    {
+        const string source = "review83_metric_boundaries";
+        using var keys = new MeasurementHook(StrataRecMetrics.Names.SourceKeys, static () => { }, (StrataRecTags.Source, source));
+        using var errors = new MeasurementHook(StrataRecMetrics.Names.SourceErrors, static () => { }, (StrataRecTags.Source, source));
+        using var duration = MeasurementHook.Throwing(StrataRecMetrics.Names.SourceDuration, (StrataRecTags.Source, source));
+        var logger = new EventIds();
+        using var events = new RequestEventLog(logger, autoFlush: false);
+
+        new IoTarget(IoKind.FeatureSource, source).Start().Complete(IoOutcome.Error, 3, "req", "origin failed", events);
+        events.Flush();
+
+        Assert.Equal((1, 1, 1), (duration.Calls, keys.Calls, errors.Calls));
+        Assert.Equal([2001, 2002], logger.Ids); // the source started failing, and the window's summary
+    }
+
+    private sealed class EventIds : ILogger
+    {
+        public List<int> Ids { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Ids.Add(eventId.Id);
+    }
+}

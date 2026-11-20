@@ -116,17 +116,17 @@ public sealed partial class FeatureFetcher
 
         if (misses == 0)
         {
-            // Every key fresh (or no row has a key): a local read.
+            // Every key fresh (or no row has a key): a local read, recorded before its metrics (ReadLocal).
             Fill(group, features, version, batch.Rows, batch.RowRecords);
+            if (keyCount > 0 && _hook is { Replays: false } recorder)
+            {
+                RecordRead(recorder, group, features, version, batch, started);
+            }
+
             cache.CountKeys(CacheTier.Local, CacheKeyOutcome.Hit, keyCount);
             if (keyCount > 0 && CountsValues)
             {
                 CountTableValues(group, features, version, batch.KeyRecords);
-            }
-
-            if (keyCount > 0 && _hook is { Replays: false } recorder)
-            {
-                RecordRead(recorder, group, features, version, batch, started);
             }
 
             SetReadState(group, features);
@@ -195,13 +195,13 @@ public sealed partial class FeatureFetcher
         hashes[0] = LocalTableCache.KeyHash(key, 0);
         if (Freshness(cache, version, record, hashes[0], nowMs) == CacheFreshness.Fresh)
         {
+            StoreLocalContext(group, features, version, key, record, started); // recorded before its metrics (ReadLocal)
             cache.CountKeys(CacheTier.Local, CacheKeyOutcome.Hit, 1);
             if (CountsValues)
             {
                 CountTableValues(group, features, version, new ReadOnlySpan<LocalRecordRef>(in record));
             }
 
-            StoreLocalContext(group, features, version, key, record, started);
             return null;
         }
 
@@ -415,6 +415,7 @@ public sealed partial class FeatureFetcher
             call = ValueTask.FromException(ex); // threw before returning a task: completed, writing no more
         }
 
+        io.Sent(); // the read's next chunk is not a child of this one
         if (call.IsCompleted)
         {
             try

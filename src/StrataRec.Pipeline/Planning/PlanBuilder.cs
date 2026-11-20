@@ -1793,14 +1793,19 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
-    /// Marks features as fetched with everything a fill or the prefetch makes available first for them (design 6.7, 6.8):
-    /// the features a derived one is computed from, and the key features of a physical one's entity, along the chains.
+    /// Marks features as fetched with everything that is available whenever they are (design 6.7, 6.8): the features a
+    /// derived one is computed from, and the context key features of a physical one's entity, along the chains.
     /// </summary>
     /// <remarks>
-    /// The feature plan makes the key features a physical feature's dependencies when it groups the features, after these
-    /// checks run, so they follow the entity's key here: a tap logging <c>ctx.country.region</c>, the key of the
-    /// <c>ctx.region.boost</c> a node reads, was told no node reads it, although the prefetch fetches it for every request
-    /// that runs the node (review 80). A key feature is registered with the features keyed by it.
+    /// <para>The feature plan makes the key features a physical feature's dependencies when it groups the features, after
+    /// these checks run, so the context ones follow the entity's key here: a tap logging <c>ctx.country.region</c>, the key
+    /// of the <c>ctx.region.boost</c> a node reads, was told no node reads it, although the prefetch fetches it for every
+    /// request that runs the node (review 80). A key feature is registered with the features keyed by it.</para>
+    /// <para>Only context keys: the context prefetch stores a context key whatever reads it, but a candidate key (the
+    /// <c>col.item.base</c> keying <c>col.creator.pop</c>) is written into the table only by a fill that consumes the
+    /// feature keyed by it, never by a prefetch. Followed, it let a tap after a node log the key of a feature that only the
+    /// node's fallback reads; the request then threw when a sampled tap read the column nobody had written (review 83).
+    /// A tap logs a candidate key after a node that reads the key itself.</para>
     /// </remarks>
     private void MarkFetched(HashSet<int> fetched, ImmutableArray<int> features)
     {
@@ -1826,7 +1831,7 @@ public sealed class PlanBuilder
 
         foreach (var part in info.Definition.Entity.Key)
         {
-            if (part.IsFeature && Schema.RegisteredFeature(part.Name, part.Kind == EntityKeyPartKind.ContextFeature) is >= 0 and var key)
+            if (part.Kind == EntityKeyPartKind.ContextFeature && Schema.RegisteredContextFeature(part.Name) is >= 0 and var key)
             {
                 MarkFetched(fetched, key);
             }

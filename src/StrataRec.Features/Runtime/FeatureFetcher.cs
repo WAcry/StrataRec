@@ -827,6 +827,7 @@ public sealed partial class FeatureFetcher
             call = ValueTask.FromException<FetchStatus>(ex); // threw before returning a task: completed, writing no more
         }
 
+        io.Sent(); // the send loop's next chunk is not a child of this one
         if (call.IsCompleted)
         {
             writerHeld = false;
