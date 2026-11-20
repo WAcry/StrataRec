@@ -243,6 +243,36 @@ public sealed class StrictJsonTests
     }
 
     /// <summary>
+    /// Review 83: a lone number JSON cannot write is the canonical form's, as a NaN double is, whatever its CLR type. A
+    /// Half NaN passed the check and threw JsonReaderException where the canonical form wrote it; a boxed NaN was written
+    /// by the check, which reported it as a value that cannot be written. Each passes, and its copy is refused by the
+    /// canonical form at its pointer.
+    /// </summary>
+    [Theory]
+    [InlineData("double")]
+    [InlineData("half")]
+    [InlineData("half_infinity")]
+    [InlineData("boxed_double")]
+    [InlineData("boxed_half")]
+    public void ALoneNumberJsonCannotWrite_IsTheCanonicalFormsWhateverItsType(string type)
+    {
+        var value = type switch
+        {
+            "double" => JsonValue.Create(double.NaN),
+            "half" => JsonValue.Create(Half.NaN),
+            "half_infinity" => JsonValue.Create(Half.NegativeInfinity),
+            "boxed_double" => JsonValue.Create<object>(double.PositiveInfinity),
+            _ => JsonValue.Create<object>(Half.NaN),
+        };
+
+        Assert.Null(StrictJson.Check(new JsonObject { ["x"] = new JsonArray(1, value) }, Jsonc.MaxDepth, out var copy));
+
+        var refused = Assert.Throws<JsonCanonicalizationException>(() => JsonCanonicalizer.CanonicalizeToString(copy));
+        Assert.Equal("/x/1", refused.Pointer.ToString());
+        Assert.Equal("NaN and Infinity are not JSON numbers (RFC 8785 section 3.2.2.3).", refused.Reason);
+    }
+
+    /// <summary>
     /// Review 83: what is read after the check is what the check read. The copy holds what a wrapped CLR value wrote when
     /// it was checked, read back as JSON, however it writes later; it shares no node with the host's tree, and its objects
     /// compare names by ordinal, whatever the host's compared.

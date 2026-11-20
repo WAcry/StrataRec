@@ -19,6 +19,10 @@ public sealed class ConfigOverrideTests
 {
     private static readonly string[] TreatmentArms = { "exp_freshness_calibration/calibrated", "exp_mmr_diversity/mmr", "exp_quality_weight/strong" };
 
+    private const string NotAJsonNumber =
+        "CONFIG_OVERRIDE_NOT_CANONICAL request/config_override/params/final_top_k: NaN and Infinity are not JSON numbers (RFC 8785 section 3.2.2.3). " +
+        "(hint: use a finite number or an explicit string such as \"none\")";
+
     [Fact]
     public async Task AnOverride_WinsOverTheArms_KeepsWhatItDoesNotTouch_AndLeavesTheServedPlanAsItWas()
     {
@@ -105,7 +109,10 @@ public sealed class ConfigOverrideTests
     /// for the integer, an error with no pointer): names that differ only in case under a case-insensitive parse, which the
     /// check passed and the object threw on when first enumerated; an object repeating a member beside a NaN, which made
     /// the check give up and the canonical form throw; a tree nested deeper than a reader's default depth, which threw in
-    /// the check. Each is an invalid request at the override's pointer.
+    /// the check. Each is an invalid request at the override's pointer. Review 83: a number JSON cannot write is
+    /// CONFIG_OVERRIDE_NOT_CANONICAL whatever its CLR type, as a NaN double is: a Half NaN or infinity threw
+    /// JsonReaderException out of the request where the canonical form wrote it, and a boxed NaN was
+    /// CONFIG_OVERRIDE_INVALID, written by the check.
     /// </summary>
     [Theory]
     [InlineData("ignore_case", "CONFIG_OVERRIDE_INVALID request/config_override/params/FINAL_TOP_K: Member 'FINAL_TOP_K' is given more than once",
@@ -113,6 +120,10 @@ public sealed class ConfigOverrideTests
     [InlineData("repeated_beside_nan", "CONFIG_OVERRIDE_INVALID request/config_override/nodes/coarse_top_k: Member 'coarse_top_k' is given more than once",
         "/config_override/nodes/coarse_top_k")]
     [InlineData("nan", "CONFIG_OVERRIDE_NOT_CANONICAL request/config_override/params/final_top_k", "/config_override/params/final_top_k")]
+    [InlineData("half_nan", NotAJsonNumber, "/config_override/params/final_top_k")]
+    [InlineData("half_infinity", NotAJsonNumber, "/config_override/params/final_top_k")]
+    [InlineData("boxed_nan", NotAJsonNumber, "/config_override/params/final_top_k")]
+    [InlineData("boxed_half_nan", NotAJsonNumber, "/config_override/params/final_top_k")]
     public async Task AHostBuiltOverride_ThatCannotBeRead_RejectsTheRequestAtItsPointer(string shape, string error, string pointer)
     {
         var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
@@ -125,6 +136,10 @@ public sealed class ConfigOverrideTests
                 ["params"] = new JsonObject { ["final_top_k"] = double.NaN },
                 ["nodes"] = JsonNode.Parse("""{ "coarse_top_k": { "order": 1 }, "coarse_top_k": { "order": 2 } }"""),
             },
+            "half_nan" => new JsonObject { ["params"] = new JsonObject { ["final_top_k"] = JsonValue.Create(Half.NaN) } },
+            "half_infinity" => new JsonObject { ["params"] = new JsonObject { ["final_top_k"] = JsonValue.Create(Half.PositiveInfinity) } },
+            "boxed_nan" => new JsonObject { ["params"] = new JsonObject { ["final_top_k"] = JsonValue.Create<object>(double.NaN) } },
+            "boxed_half_nan" => new JsonObject { ["params"] = new JsonObject { ["final_top_k"] = JsonValue.Create<object>(Half.NaN) } },
             _ => new JsonObject { ["params"] = new JsonObject { ["final_top_k"] = double.NaN } },
         };
 

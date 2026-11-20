@@ -343,4 +343,23 @@ public class JsonCanonicalizerTests
         Assert.Throws<JsonCanonicalizationException>(() => JsonCanonicalizer.Canonicalize(new JsonObject { ["d"] = double.NegativeInfinity }));
         Assert.Throws<JsonCanonicalizationException>(() => JsonCanonicalizer.Canonicalize(new JsonObject { ["f"] = float.NaN }));
     }
+
+    /// <summary>
+    /// Review 83: a Half that is not finite was not checked as a double or float is, and writing it threw
+    /// JsonReaderException ('N' is an invalid start of a value), not a canonicalization error at its pointer. It is
+    /// rejected as they are, boxed or not; a finite Half is a number.
+    /// </summary>
+    [Fact]
+    public void Canonicalize_ClrNonFiniteHalf_IsRejectedAtItsPointer()
+    {
+        foreach (var value in new[] { JsonValue.Create(Half.NaN), JsonValue.Create(Half.PositiveInfinity), JsonValue.Create(Half.NegativeInfinity), JsonValue.Create<object>(Half.NaN) })
+        {
+            var ex = Assert.Throws<JsonCanonicalizationException>(() => JsonCanonicalizer.Canonicalize(new JsonObject { ["h"] = value }));
+
+            Assert.Equal("/h", ex.Pointer.ToString());
+            Assert.Equal("NaN and Infinity are not JSON numbers (RFC 8785 section 3.2.2.3).", ex.Reason);
+        }
+
+        Assert.Equal("""{"h":65500}""", JsonCanonicalizer.CanonicalizeToString(new JsonObject { ["h"] = JsonValue.Create(Half.MaxValue) }));
+    }
 }

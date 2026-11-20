@@ -80,9 +80,10 @@ public static class StrictJson
     /// wrote it (review 83). So such a value is written once, here, and read back from that text, with names compared by
     /// ordinal (as RFC 7396 merging compares them, <see cref="JsonMergePatch"/>): its objects and arrays get the same
     /// checks, its depth counted from its place in the tree, at pointers into it. One whose writing throws (a cycle, a
-    /// NaN inside it) is reported at its pointer, in the words of what threw. A CLR primitive (a number, string or boolean
-    /// System.Text.Json writes itself) is kept as it is: JSON cannot write a NaN, nor a string that is not Unicode (the
-    /// writer puts U+FFFD in its place), and the canonical form reports both at their pointers.</para>
+    /// NaN inside it) is reported at its pointer, in the words of what threw. A number JSON cannot write (NaN or an
+    /// infinity, of double, float or Half, boxed or not) is not written, and a CLR primitive (a number, string or boolean
+    /// System.Text.Json writes itself) is kept as it is: the canonical form reports the number at its pointer, and a
+    /// string that is not Unicode (the writer puts U+FFFD in its place).</para>
     /// <para>What the check read is what the caller must read from then on, <paramref name="copy"/>: reading the host's
     /// tree again would write its CLR values again, and a value may write something else the second time.</para>
     /// </remarks>
@@ -174,32 +175,43 @@ public static class StrictJson
     }
 
     /// <summary>
-    /// A value the host gave as a CLR object (see the remarks of <see cref="Check(JsonNode?, int, out JsonNode?)"/>). Its
-    /// kind is known without writing it for a CLR primitive, and written for any other value (once, then kept). An object
-    /// or an array is written again here and read back: that text is what is checked and copied. Anything else is copied
-    /// with <see cref="JsonNode.DeepClone"/>, which keeps a CLR primitive as it is and writes any other value, once.
+    /// A value the host gave as a CLR object (see the remarks of <see cref="Check(JsonNode?, int, out JsonNode?)"/>). A
+    /// number JSON cannot write (NaN or an infinity, <see cref="JsonNodeUtilities.IsNonFiniteNumber"/>) is not written: the
+    /// canonical form reports it at its pointer, as it does a double NaN, whatever its CLR type (writing a Half NaN threw
+    /// a JsonReaderException out of the request, review 83). Every other value is written here, inside the catch, so that
+    /// nothing after the check writes one that cannot be. Its kind is known without writing it for a CLR primitive, and
+    /// written (once, then kept) for any other value. An object or an array is written again and read back: that text is
+    /// what is checked and copied. Anything else is copied with <see cref="JsonNode.DeepClone"/>, which writes a value
+    /// that is not a primitive and keeps a primitive as it is; a primitive is then written once, only to know it can be.
     /// </summary>
     private static JsonBindingError? CheckClrValue(JsonValue value, int level, int maxDepth, out JsonNode? copy)
     {
         copy = null;
+        if (JsonNodeUtilities.IsNonFiniteNumber(value, out var number))
+        {
+            copy = JsonValue.Create(number); // as a double NaN is: the canonical form's (CONFIG_OVERRIDE_NOT_CANONICAL for an override)
+            return null;
+        }
+
         JsonNode? read;
         try
         {
             read = value.GetValueKind() is JsonValueKind.Object or JsonValueKind.Array
                 ? JsonNode.Parse(Write(value).Span, documentOptions: new JsonDocumentOptions { MaxDepth = WrittenDepth }) // names by ordinal
                 : value.DeepClone();
+            if (read is JsonValue leaf && !leaf.TryGetValue(out JsonElement _))
+            {
+                _ = Write(leaf); // a CLR primitive, kept as it is (the canonical form reports a string that is not Unicode)
+                copy = leaf;
+                return null;
+            }
         }
         catch (Exception ex)
         {
-            // The host's own code (a converter, a getter) or what it holds: whatever it throws is the value's mistake.
+            // Writing the host's value runs the host's code (a converter, a getter) on what it holds: whatever that throws
+            // is the value's mistake.
             return new JsonBindingError(string.Empty, $"This value cannot be written as JSON: {ExceptionText.Of(ex)}",
                 "give a value System.Text.Json can write (no cycle, no NaN or infinity), or build it from JsonObject and JsonArray");
-        }
-
-        if (read is JsonValue leaf && !leaf.TryGetValue(out JsonElement _))
-        {
-            copy = leaf; // a CLR primitive, as it was (the canonical form reports a NaN or a string that is not Unicode)
-            return null;
         }
 
         return CheckNode(read, level, maxDepth, out copy); // read from the text it wrote: no CLR value is left in it

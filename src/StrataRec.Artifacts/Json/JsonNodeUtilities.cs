@@ -18,6 +18,42 @@ internal static class JsonNodeUtilities
         node is null || (node is JsonValue value && value.GetValueKind() == JsonValueKind.Null);
 
     /// <summary>
+    /// Whether <paramref name="value"/> holds a CLR number JSON cannot write, NaN or an infinity, of any binary floating
+    /// type <see cref="JsonValue"/> holds (<see cref="double"/>, <see cref="float"/>, <see cref="Half"/>, boxed or not);
+    /// <paramref name="number"/> is it as a double. Asked of the CLR value, not by writing it: writing throws, and not
+    /// alike (an <see cref="ArgumentException"/> for a double, a <see cref="JsonException"/> for a Half, review 83), and
+    /// <see cref="JsonNode.GetValueKind"/> says Number for it. A value read from text holds none: its number is text, and
+    /// converting it would make a finite binary64 number such as <c>1e100</c> an infinite float.
+    /// </summary>
+    internal static bool IsNonFiniteNumber(JsonValue value, out double number)
+    {
+        number = 0;
+        if (value.TryGetValue(out JsonElement _))
+        {
+            return false;
+        }
+
+        if (value.TryGetValue(out double d))
+        {
+            number = d;
+        }
+        else if (value.TryGetValue(out float f))
+        {
+            number = f;
+        }
+        else if (value.TryGetValue(out Half h))
+        {
+            number = (double)h;
+        }
+        else
+        {
+            return false;
+        }
+
+        return !double.IsFinite(number);
+    }
+
+    /// <summary>
     /// Looks up a member by exact (ordinal) name, as RFC 7396 and RFC 6901 require, even when the object was created
     /// with <see cref="JsonNodeOptions.PropertyNameCaseInsensitive"/>.
     /// </summary>
