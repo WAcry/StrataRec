@@ -81,15 +81,15 @@ public static class StrictJson
     /// ordinal (as RFC 7396 merging compares them, <see cref="JsonMergePatch"/>): its objects and arrays get the same
     /// checks, its depth counted from its place in the tree, at pointers into it. One whose writing throws (a cycle, a
     /// NaN inside it) is reported at its pointer, in the words of what threw. A number JSON cannot write (NaN or an
-    /// infinity, of double, float or Half, boxed or not) is not written, and a CLR primitive (a number, string or boolean
-    /// System.Text.Json writes itself) is kept as it is: the canonical form reports the number at its pointer, and a
-    /// string that is not Unicode (the writer puts U+FFFD in its place).</para>
+    /// infinity, of double, float or Half, boxed or not) that cannot be written, and a string that is not Unicode (the
+    /// writer puts U+FFFD in its place), are kept as they are: the canonical form reports them at their pointer. Every
+    /// other value, a primitive too, is the JSON it writes, by its own converter (review 85).</para>
     /// <para>What the check read is what the caller must read from then on, <paramref name="copy"/>: reading the host's
     /// tree again would write its CLR values again, and a value may write something else the second time.</para>
     /// </remarks>
     /// <param name="copy">When there is no problem, a copy of the tree as checked, which shares no node with it: each
-    /// wrapped CLR value but a primitive is the JSON it wrote here, read back, and every object compares names by
-    /// ordinal. Null when there is a problem (or <paramref name="node"/> is null).</param>
+    /// wrapped CLR value is the JSON it wrote here, read back (but a number or string the canonical form reports), and
+    /// every object compares names by ordinal. Null when there is a problem (or <paramref name="node"/> is null).</param>
     /// <returns>The first problem, at its pointer relative to <paramref name="node"/>; null when there is none. The copy
     /// of a tree that has none reads without throwing anything this check looks for.</returns>
     public static JsonBindingError? Check(JsonNode? node, int maxDepth, out JsonNode? copy)
@@ -175,39 +175,36 @@ public static class StrictJson
     }
 
     /// <summary>
-    /// A value the host gave as a CLR object (see the remarks of <see cref="Check(JsonNode?, int, out JsonNode?)"/>). A
-    /// number JSON cannot write (NaN or an infinity, <see cref="JsonNodeUtilities.IsNonFiniteNumber"/>) is not written: the
-    /// canonical form reports it at its pointer, as it does a double NaN, whatever its CLR type (writing a Half NaN threw
-    /// a JsonReaderException out of the request, review 83). Every other value is written here, inside the catch, so that
-    /// nothing after the check writes one that cannot be. Its kind is known without writing it for a CLR primitive, and
-    /// written (once, then kept) for any other value. An object or an array is written again and read back: that text is
-    /// what is checked and copied. Anything else is copied with <see cref="JsonNode.DeepClone"/>, which writes a value
-    /// that is not a primitive and keeps a primitive as it is; a primitive is then written once, only to know it can be.
+    /// A value the host gave as a CLR object (see the remarks of <see cref="Check(JsonNode?, int, out JsonNode?)"/>): written
+    /// once, here, inside the catch, and read back; that text is what is checked and copied, so nothing after the check
+    /// writes a CLR value, and what is checked is what the value writes, by its own converter (review 85: asking an object
+    /// its kind wrote it, and writing it wrote it again; a double NaN a converter writes as the string "NaN" was refused as
+    /// the number it is). A number JSON cannot write (NaN or an infinity, <see cref="JsonNodeUtilities.IsNonFiniteNumber"/>)
+    /// that fails to write or to read back is the canonical form's to report at its pointer, as a double NaN is, whatever
+    /// its CLR type (writing a Half NaN wrote text that threw a JsonReaderException out of the request, review 83).
     /// </summary>
     private static JsonBindingError? CheckClrValue(JsonValue value, int level, int maxDepth, out JsonNode? copy)
     {
         copy = null;
-        if (JsonNodeUtilities.IsNonFiniteNumber(value, out var number))
+        if (value.TryGetValue(out string? text) && !IsUnicode(text))
         {
-            copy = JsonValue.Create(number); // as a double NaN is: the canonical form's (CONFIG_OVERRIDE_NOT_CANONICAL for an override)
+            copy = JsonValue.Create(text); // the writer would put U+FFFD in its place: the canonical form's, at its pointer
             return null;
         }
 
         JsonNode? read;
         try
         {
-            read = value.GetValueKind() is JsonValueKind.Object or JsonValueKind.Array
-                ? JsonNode.Parse(Write(value).Span, documentOptions: new JsonDocumentOptions { MaxDepth = WrittenDepth }) // names by ordinal
-                : value.DeepClone();
-            if (read is JsonValue leaf && !leaf.TryGetValue(out JsonElement _))
-            {
-                _ = Write(leaf); // a CLR primitive, kept as it is (the canonical form reports a string that is not Unicode)
-                copy = leaf;
-                return null;
-            }
+            read = JsonNode.Parse(Write(value).Span, documentOptions: new JsonDocumentOptions { MaxDepth = WrittenDepth }); // names by ordinal
         }
         catch (Exception ex)
         {
+            if (JsonNodeUtilities.IsNonFiniteNumber(value, out var number))
+            {
+                copy = JsonValue.Create(number); // as a double NaN is: the canonical form's (CONFIG_OVERRIDE_NOT_CANONICAL for an override)
+                return null;
+            }
+
             // Writing the host's value runs the host's code (a converter, a getter) on what it holds: whatever that throws
             // is the value's mistake.
             return new JsonBindingError(string.Empty, $"This value cannot be written as JSON: {ExceptionText.Of(ex)}",
@@ -215,6 +212,24 @@ public static class StrictJson
         }
 
         return CheckNode(read, level, maxDepth, out copy); // read from the text it wrote: no CLR value is left in it
+    }
+
+    /// <summary>Whether <paramref name="text"/> has no unpaired UTF-16 surrogate.</summary>
+    private static bool IsUnicode(string text)
+    {
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (char.IsHighSurrogate(text[i]) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+            {
+                i++;
+            }
+            else if (char.IsSurrogate(text[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>The text <paramref name="node"/> writes: at most <see cref="WrittenDepth"/> levels, which a <see cref="Utf8JsonWriter"/> writes by default.</summary>

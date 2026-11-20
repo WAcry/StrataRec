@@ -212,11 +212,13 @@ public readonly struct IoCall
     public TimeSpan Elapsed => _target is null ? TimeSpan.Zero : Stopwatch.GetElapsedTime(_started);
 
     /// <summary>
-    /// The client has returned from the call, answered or still running: the span stops being the current activity of
-    /// the call site's flow. The client's own work took it as its parent when it was sent; what the call site does next
-    /// is not part of this call. A call that completes on this flow ends the span here anyway, but one that runs on is
-    /// completed on the flow that awaits it, so the span stayed the parent of the call site's later calls: each chunk of
-    /// a fetch from an asynchronous connector was a child of the chunk before it. Nothing to do without a span.
+    /// The client has returned from the call still running: the span stops being the current activity of the call site's
+    /// flow. The client's own work took it as its parent when it was sent; what the call site does next is not part of
+    /// this call. One that runs on is completed on the flow that awaits it, so the span stayed the parent of the call
+    /// site's later calls: each chunk of a fetch from an asynchronous connector was a child of the chunk before it. A call
+    /// that answered before its client returned is completed at once instead, which gives the flow its activity back after
+    /// the outcome is taken (review 85: the host's <see cref="Activity.CurrentChanged"/> handlers ran here before the
+    /// answer's time was read). Nothing to do without a span; never throws.
     /// </summary>
     public void Sent()
     {
@@ -229,13 +231,31 @@ public readonly struct IoCall
     /// <summary>
     /// Gives the flow back <paramref name="ambient"/> while <paramref name="span"/>, which a call made current, still is
     /// its current activity. A flow whose current activity is another one (another call's, or the client's own) is left
-    /// as it is: this flow is not the one the call changed.
+    /// as it is: this flow is not the one the call changed. Never throws (<see cref="SetCurrent"/>).
     /// </summary>
     internal static void Restore(Activity span, Activity? ambient)
     {
         if (ReferenceEquals(Activity.Current, span))
         {
-            Activity.Current = ambient;
+            SetCurrent(ambient);
+        }
+    }
+
+    /// <summary>
+    /// Sets the flow's current activity. The setter calls the host's <see cref="Activity.CurrentChanged"/> handlers once
+    /// the activity is set, so what one throws is ignored, as what a listener throws when a call starts or completes
+    /// (<see cref="Complete"/>): it went up through <see cref="Sent"/>, and the call site neither completed the call it
+    /// had sent nor let go of the request's memory (review 85).
+    /// </summary>
+    private static void SetCurrent(Activity? activity)
+    {
+        try
+        {
+            Activity.Current = activity;
+        }
+        catch (Exception)
+        {
+            // A CurrentChanged handler threw, after the activity was set.
         }
     }
 
@@ -253,6 +273,9 @@ public readonly struct IoCall
     /// <para>A stop callback that throws does so after the span is stopped and before <see cref="Activity.Stop"/> gives
     /// the flow back the activity it had: the flow gets it here, or the stopped span stayed the parent of the flow's later
     /// calls (review 83).</para>
+    /// <para><see cref="Activity.Stop"/> makes the activity the span started over current, whatever the flow's current
+    /// one: a flow whose current activity is not the span keeps the one it has, or one completing a call it did not start,
+    /// in another request's activity, went on as a child of this call's request (review 85).</para>
     /// </remarks>
     /// <param name="keys">Keys sent (feature sources), or -1.</param>
     /// <param name="requestId">Sample request id for failure summaries.</param>
@@ -273,6 +296,7 @@ public readonly struct IoCall
 
         if (_span is { } span)
         {
+            var current = Activity.Current;
             try
             {
                 if (span.IsAllDataRequested)
@@ -294,7 +318,15 @@ public readonly struct IoCall
             catch (Exception)
             {
                 // An activity listener threw: see the remarks.
-                Restore(span, _ambient);
+            }
+
+            if (ReferenceEquals(current, span))
+            {
+                Restore(span, _ambient); // a stop callback threw before Stop gave the flow its activity back
+            }
+            else if (!ReferenceEquals(current, _ambient) && ReferenceEquals(Activity.Current, _ambient))
+            {
+                SetCurrent(current); // Stop made the span's predecessor current on a flow that had another one
             }
         }
     }

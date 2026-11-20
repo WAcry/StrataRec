@@ -30,8 +30,18 @@ public sealed partial class RecEngine
         var source = served.Source.Read(); // the configuration as it was loaded, whatever the host did with its objects since
         try
         {
-            var compilation = await lease.CompileAsync(bindings => PlanCompiler.CompileMerged(source, arms, environment, bindings, configOverride), deadline.Token)
-                .ConfigureAwait(false);
+            // A compile that waited for model signatures runs again (BindingLease.CompileAsync): that one reads the
+            // override as the first one checked it, not the host's tree, which writes its CLR values again and may have
+            // changed since (review 85).
+            var patch = configOverride;
+            var compilation = await lease.CompileAsync(
+                bindings =>
+                {
+                    var compiled = PlanCompiler.CompileMerged(source, arms, environment, bindings, patch);
+                    patch = compiled.ConfigOverride ?? patch;
+                    return compiled;
+                },
+                deadline.Token).ConfigureAwait(false);
             if (compilation.Plan is not { } plan)
             {
                 var (error, pointer) = Describe("does not compile", compilation.Diagnostics);

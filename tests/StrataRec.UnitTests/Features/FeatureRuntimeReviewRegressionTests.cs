@@ -577,7 +577,7 @@ public class FeatureRuntimeReviewRegressionTests
             ScriptedConnector.WriteAll(keys, fields, writer, (_, _) => 5.0); // late write into its staging buffer
             return FetchStatus.Ok;
         });
-        var rig = new FeatureTestRig().Source("item_store", connector, timeoutMs: 50);
+        var rig = new FeatureTestRig().Source("item_store", connector, timeoutMs: 300); // time to send the call on a loaded machine: one never sent holds nothing
         var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
         rig.Build();
         var pool = new PoisoningPool();

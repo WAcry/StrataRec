@@ -68,8 +68,11 @@ public sealed class CandidateQueryReplayTests
     [InlineData("list<float64>", """["a"]""", "/runs/0/candidate_calls/0/query/q/value")]
     [InlineData("list<float64,3>", "[1, 2]", "/runs/0/candidate_calls/0/query/q/value")]
     [InlineData("float64", "1e400", "/runs/0/candidate_calls/0/query/q/value")] // review 84: read as an infinity, it borrowed a real one's answer
+    [InlineData("float64", "-1e400", "/runs/0/candidate_calls/0/query/q/value")]
     [InlineData("float32", "-1e400", "/runs/0/candidate_calls/0/query/q/value")]
     [InlineData("list<float64>", "[1, 1e400]", "/runs/0/candidate_calls/0/query/q/value")]
+    [InlineData("float32", "1e39", "/runs/0/candidate_calls/0/query/q/value")] // beyond float32, though not float64
+    [InlineData("list<float32,2>", "[1, -1e39]", "/runs/0/candidate_calls/0/query/q/value")]
     public void ARecordedValueNotOfItsType_IsRejectedAtItsPointer(string type, string value, string pointer)
     {
         var run = RunReplayTests.Run();
@@ -93,6 +96,18 @@ public sealed class CandidateQueryReplayTests
 
         Assert.Equal(new long[] { 1 }, Retrieve(replay, "a", ColumnType.Bool, ScalarValue.FromBool(true)).Ids);
         Assert.Equal(new long[] { 1 }, Retrieve(replay, "added", ColumnType.Bool, ScalarValue.FromBool(true)).Ids); // a true call, not c's
+        Assert.Empty(replay.Gaps);
+    }
+
+    [Fact]
+    public void AnInfinityRecordedByName_IsBorrowedForAQueryForIt()
+    {
+        var run = RunReplayTests.Run();
+        run.CandidateCalls.Add(Recorded("a", "float64", RunReplayTests.Json("\"Infinity\""), "ok", 7));
+        run.CandidateCalls.Add(Recorded("b", "list<float32,2>", RunReplayTests.Json("[1, \"-Infinity\"]"), "ok", 8));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        Assert.Equal(new long[] { 7 }, Retrieve(replay, "added", ColumnType.Float64, ScalarValue.FromFloat64(double.PositiveInfinity)).Ids);
         Assert.Empty(replay.Gaps);
     }
 

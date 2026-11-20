@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
+using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
@@ -416,6 +417,66 @@ public sealed class BindingLifetimeTests
             }
         }).Root;
 
+    /// <summary>
+    /// Review 85: a compile that waited for a model's signature runs again, and that one read the host's override again:
+    /// a wrapped CLR value was written once more (and ran as it wrote then), and a plain tree the host changed meanwhile
+    /// was compiled as changed. Both compiles read the override as the first one checked it.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ACompileThatWaitedForASignature_ReadsTheOverrideAsItWasChecked(bool wrapped)
+    {
+        var root = Workspace(generation: 1);
+        SampleBindings.RebindModel(root, "ctr_model", $$"""
+            {
+              "client": "{{RemoteSignatureModels.Type}}",
+              "outputs": { "p_click": { "bias": -1.5, "weights": { "smoothed_ctr": 12.0, "log_followers": 0.05 }, "activation": "sigmoid" } }
+            }
+            """);
+        var remote = new RemoteSignatureModels();
+        await using var engine = new RecEngine(Environment(root, remote));
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
+        var lookups = remote.Lookups;
+        var quota = new ConfigOverrideTests.CountingQuota();
+        var parameters = wrapped
+            ? new JsonObject { ["recall_quotas"] = JsonValue.Create(quota) }
+            : new JsonObject { ["final_top_k"] = 3 };
+        remote.OnLookup = () =>
+        {
+            if (!wrapped)
+            {
+                parameters["final_top_k"] = 101; // out of range
+            }
+        };
+
+        var result = await engine.ExecuteAsync(new RecRequest
+        {
+            PipelineId = "home_feed",
+            RequestId = $"pending-signature-{wrapped}",
+            Inputs = HomeFeedTestHost.Inputs(1001, "home"),
+            Assignment = Array.Empty<string>(),
+            Deadline = HomeFeedTestHost.Deadline,
+            TimeMs = 1_767_225_600_000,
+            Debug = new DebugOptions { Record = true, ConfigOverride = new JsonObject { ["params"] = parameters } },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.True(remote.Lookups > lookups); // the compile waited, and ran again
+        var recorded = result.Recording!.Request.ConfigOverride!["params"]!;
+        if (wrapped)
+        {
+            Assert.Equal(1, quota.Writes);
+            Assert.Equal("21", result.Recording.Runs[0].Params["recall_quotas.popular"].Value!.Value.GetRawText());
+            Assert.Equal("21", recorded["recall_quotas"]!["popular"]!.ToJsonString());
+        }
+        else
+        {
+            Assert.Equal("3", result.Recording.Runs[0].Params["final_top_k"].Value!.Value.GetRawText());
+            Assert.Equal("3", recorded["final_top_k"]!.ToJsonString());
+        }
+    }
+
     /// <summary>Binds <c>ctr_model</c> to <see cref="ScriptedModels"/> with the sample's linear weights; the generation makes the identity.</summary>
     private static void Rebind(string root, int generation, string? credentials = null) =>
         SampleBindings.RebindModel(root, "ctr_model", $$"""
@@ -732,6 +793,9 @@ public sealed class BindingLifetimeTests
 
         public ModelSignature? Answer { get; init; }
 
+        /// <summary>Runs when a lookup answers, before the compile that waited for it runs again.</summary>
+        public Action? OnLookup { get; set; }
+
         public int Lookups => Volatile.Read(ref _lookups);
 
         public IModelClient Create(BindingContext context) => new Client(this, _linear.Create(Only(context, LinearSettings)));
@@ -744,6 +808,7 @@ public sealed class BindingLifetimeTests
             {
                 Interlocked.Increment(ref owner._lookups);
                 await Task.Delay(20, cancellationToken).ConfigureAwait(false); // the round trip
+                owner.OnLookup?.Invoke();
                 return owner.Answer ?? await inner.GetSignatureAsync(model, version, cancellationToken).ConfigureAwait(false);
             }
 

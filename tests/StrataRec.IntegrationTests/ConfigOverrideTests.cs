@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Bindings;
@@ -265,13 +266,41 @@ public sealed class ConfigOverrideTests
 
         Assert.True(recorded.Succeeded, recorded.Error);
         var writes = quotas.Writes;
+        Assert.Equal(1, writes); // review 85: asking the value its kind wrote it, then writing it wrote it again
         var ran = recorded.Recording!.Runs[0].Params["recall_quotas.popular"].Value!.Value.GetRawText();
+        Assert.Equal("21", ran);
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!));
         Assert.Equal(ran, bundle.Request.ConfigOverride!["params"]!["recall_quotas"]!["popular"]!.ToJsonString());
         var outcome = await engine.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(outcome.Report.Diff.Identical, ReplayTests.Describe(outcome.Report));
         Assert.Empty(outcome.Report.Params);
         Assert.Equal(writes, quotas.Writes);
+    }
+
+    /// <summary>
+    /// Review 85: a wrapped CLR value is checked as the JSON it writes, by its own converter: a double NaN one writes as
+    /// the string "NaN" is that string, which runs and is recorded, not the number JSON cannot write.
+    /// </summary>
+    [Fact]
+    public async Task AClrNaNItsConverterWritesAsAString_IsThatString()
+    {
+        await using var engine = OpaqueEngine();
+        var options = new JsonSerializerOptions { TypeInfoResolver = new DefaultJsonTypeInfoResolver() };
+        options.Converters.Add(new NaNAsString());
+        var payload = JsonValue.Create(double.NaN, (JsonTypeInfo<double>)options.GetTypeInfo(typeof(double)));
+
+        var result = await engine.ExecuteAsync(Request("wrapped", null, Probe(payload)), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal("\"NaN\"", result.Recording!.Request.ConfigOverride!["nodes"]!["probe"]!["config"]!["payload"]!.ToJsonString());
+    }
+
+    private sealed class NaNAsString : JsonConverter<double>
+    {
+        public override double Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => throw new NotSupportedException();
+
+        public override void Write(Utf8JsonWriter writer, double value, JsonSerializerOptions options) =>
+            writer.WriteStringValue(double.IsNaN(value) ? "NaN" : value.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
     /// <summary>

@@ -48,6 +48,35 @@ public sealed class IoCallSpanTests
             Assert.False(Assert.Single(flow.Named("recall first")).IsStopped); // not stopped: stopping would report it
         }
     }
+
+    /// <summary>
+    /// Review 85: <see cref="Activity.Stop"/> makes the activity a span started over current, whatever the flow's current
+    /// one. A call sent, then completed on a flow that runs another request's activity, made that flow a child of this
+    /// call's request. A flow whose current activity is the span still gets the request's back (the test above).
+    /// </summary>
+    [Theory]
+    [InlineData(ListenerStage.None)]
+    [InlineData(ListenerStage.Stop)]
+    public async Task ACallCompletedOnAFlowWithAnotherActivity_LeavesThatActivityCurrent(ListenerStage stage)
+    {
+        using var flow = new TracedFlow(stage, "fetch detached");
+        var call = new IoTarget(IoKind.FeatureSource, "detached").Start();
+        call.Sent();
+        Assert.Same(flow.Request, Activity.Current);
+
+        var (current, foreign) = await Task.Run(() =>
+        {
+            var other = new Activity("another request").SetParentId(ActivityTraceId.CreateRandom(), ActivitySpanId.CreateRandom()).Start();
+            call.Complete(IoOutcome.Ok, 1);
+            var after = Activity.Current;
+            other.Stop();
+            return (after, other);
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Same(foreign, current);
+        Assert.True(Assert.Single(flow.Named("fetch detached")).IsStopped);
+        Assert.Same(flow.Request, Activity.Current);
+    }
 }
 
 /// <summary>

@@ -117,6 +117,52 @@ public class CacheStoreCallTests
     }
 
     /// <summary>
+    /// Review 85: a store that answers synchronously is seen answering before the flow gets its activity back. The host's
+    /// <see cref="System.Diagnostics.Activity.CurrentChanged"/> handlers ran first (in <see cref="IoCall.Sent"/>), and one
+    /// that took time (here it moves the cache's clock past the TTL) made a record fresh when the store answered expired,
+    /// which went to the connector (the same as review 80's metric listener).
+    /// </summary>
+    [Fact]
+    public async Task AStoreThatAnswersAtOnce_IsSeenAnswering_BeforeTheHostsCurrentChangedHandlersRun()
+    {
+        var target = "changed_" + Guid.NewGuid().ToString("N");
+        var store = new ClockedStore(() => { });
+        var connector = ScriptedConnector.Values((key, _) => key * 1.0);
+        var rig = new FeatureTestRig().CacheSource(target, connector, ttlMs: 10, distributed: store);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, target);
+        rig.Build();
+        store.Prepare(rig.Tables[target].Cache!, rig.Clock.NowMs, 111.0);
+        rig.Clock.HoldTimestamps();
+        using var flow = new TracedFlow();
+        var changes = 0;
+        void Changed(object? sender, System.Diagnostics.ActivityChangedEventArgs args)
+        {
+            if (ReferenceEquals(args.Current, flow.Request) && args.Previous?.OperationName == "cache " + target)
+            {
+                changes++;
+                rig.Clock.AdvanceMs(50);
+            }
+        }
+
+        var request = rig.NewRequest([1]);
+        System.Diagnostics.Activity.CurrentChanged += Changed;
+        try
+        {
+            Assert.Equal(FeatureState.Ok, (await request.EnsureAsync(clicks)).State);
+        }
+        finally
+        {
+            System.Diagnostics.Activity.CurrentChanged -= Changed;
+        }
+
+        Assert.Equal(1, changes);
+        Assert.Equal(111.0, request.Value(clicks, 0).AsFloat64()); // the store's, fresh when it answered
+        Assert.Empty(connector.Calls);
+        await request.Fetcher.WhenIoCompleteAsync();
+        Assert.Equal(0, request.Memory.Release());
+    }
+
+    /// <summary>
     /// Review 19: once the tier's time is up (here the first chunk's synchronous part took it), no further chunk is sent.
     /// The tier's time is judged by the cache's clock, held by the test (review 21 #2): the first chunk is sent with time
     /// left, whatever the machine does, and its call moves the clock past the tier's time.

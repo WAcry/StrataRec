@@ -415,7 +415,6 @@ public sealed partial class FeatureFetcher
             call = ValueTask.FromException(ex); // threw before returning a task: completed, writing no more
         }
 
-        io.Sent(); // the read's next chunk is not a child of this one
         if (call.IsCompleted)
         {
             try
@@ -429,6 +428,7 @@ public sealed partial class FeatureFetcher
             }
         }
 
+        io.Sent(); // the read's next chunk is not a child of this one
         return AwaitStoreAsync(io, read, count, call, cancellation, cancellationToken);
     }
 

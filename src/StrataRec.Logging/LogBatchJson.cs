@@ -209,7 +209,8 @@ public static class LogBatchJson
     /// <c>int32</c> value or <c>list&lt;int32&gt;</c> element must fit int32. The encoding carries no type, so the reader
     /// supplies it, as a log consumer does from the batch's schema.
     /// </summary>
-    /// <remarks>Non-finite floats were written as null, so they read back as missing (design 8.7).</remarks>
+    /// <remarks>Non-finite floats were written as null, so they read back as missing (design 8.7); a number outside the
+    /// type's range is not a value of it.</remarks>
     /// <param name="nonFiniteAsStrings">
     /// Accept the strings <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c> as float values and float list elements, as
     /// <see cref="WriteValue"/> writes them for replay bundles.
@@ -247,11 +248,12 @@ public static class LogBatchJson
                 return true;
             case StorageKind.Float32 or StorageKind.Float64 when json.ValueKind == JsonValueKind.Number:
                 // A JSON number is finite: one beyond the float64 range reads as an infinity, which a writer would have
-                // spelled "Infinity". Read as one, it compared equal to a real infinity (review 84).
+                // spelled "Infinity". Read as one, it compared equal to a real infinity (review 84). A float32 value beyond
+                // the float32 range is not one either: stored, it would be an infinity.
                 var number = json.GetDouble();
-                if (!double.IsFinite(number))
+                if (!double.IsFinite(number) || (type.Kind == StorageKind.Float32 && !float.IsFinite((float)number)))
                 {
-                    error = $"{json.GetRawText()} is beyond the float64 range";
+                    error = $"{json.GetRawText()} is beyond the {(type.Kind == StorageKind.Float32 ? "float32" : "float64")} range";
                     return false;
                 }
 

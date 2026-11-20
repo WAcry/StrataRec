@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
+using System.Reflection;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
@@ -556,7 +557,7 @@ public sealed class RecallQueryTests
     private static List<(long, int)> Items(RecResult result) => result.Items.Select(i => (i.Id.Int64Value, i.Rank)).ToList();
 
     /// <summary>memory@1 connectors where geo_store waits for <see cref="OpenGeo"/> and region_store for <see cref="OpenRegion"/>.</summary>
-    private sealed class TwoGateConnectors : IFeatureConnectorFactory, IDisposable
+    internal sealed class TwoGateConnectors : IFeatureConnectorFactory, IDisposable
     {
         private readonly MemoryFeatureConnectorFactory _inner = new();
 
@@ -751,5 +752,95 @@ public sealed class RecallQueryListenerTests
         var result = await running.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         Assert.Equal("TimeoutException: a host's metric listener timed out", result.Trace!.Single(n => n.NodeId == "recall").Detail);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFeatureStoredAfterTheDeadline_IsNotSettled_NorIsItsFaultTheNodes(bool fault)
+    {
+        // The first read is settled at once; its callback runs past the node's budget, and the second read's feature is
+        // stored (or its store faults) before the callback returns. The wait had already seen it done, so the second read
+        // was settled after the deadline, or the late fault was the node's exception (review 84).
+        var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
+            "\"recall\": {", "\"late\": { \"order\": 50, \"op\": \"LateSettle@1\", \"timeout_ms\": 300, \"config\": {} }, \"recall\": {"));
+        using var listener = new MeterListener();
+        if (fault)
+        {
+            listener.InstrumentPublished = (instrument, observer) =>
+            {
+                if (instrument.Meter.Name == StrataRecTelemetry.Name && instrument.Name == StrataRecMetrics.Names.SourceValues)
+                {
+                    observer.EnableMeasurementEvents(instrument);
+                }
+            };
+            listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+            {
+                foreach (var (key, value) in tags)
+                {
+                    if (key == StrataRecTags.Source && (string?)value == "geo_store")
+                    {
+                        throw new InvalidOperationException("a late store fault");
+                    }
+                }
+            });
+            listener.Start();
+        }
+
+        using var connectors = new RecallQueryTests.TwoGateConnectors();
+        var late = new LateSettleFactory(connectors);
+        await using var engine = new RecEngine(new PlanEnvironment
+        {
+            BaseDirectory = host.Root,
+            Connectors = FeatureConnectorRegistry.CreateDefault().Add(connectors),
+            Operators = OperatorRegistry.CreateDefault().Add(late),
+        });
+        var load = engine.Load(host.Request);
+        Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
+
+        var result = await engine.ExecuteAsync(RecallQueryTests.WithCountry($"req-late-settle-{fault}"), TestContext.Current.CancellationToken)
+            .AsTask().WaitAsync(RecallQueryTests.Patience, TestContext.Current.CancellationToken);
+
+        Assert.True(late.StoredLate);
+        Assert.False(late.SettledLate);
+        Assert.Equal("timed out after 300 ms", result.Trace!.Single(n => n.NodeId == "late").Detail);
+    }
+
+    /// <summary>Awaits the user's embedding, then the country's region (held by geo_store's gate).</summary>
+    private sealed class LateSettleFactory(RecallQueryTests.TwoGateConnectors connectors) : IOperatorFactory
+    {
+        public OperatorDescriptor Descriptor { get; } = new("LateSettle", 1, Effects.None, typeof(NoSettings), "Settles a read past its budget.");
+
+        /// <summary>The second read's feature was stored, or failed, while the first read's callback ran past the budget.</summary>
+        public bool StoredLate { get; private set; }
+
+        public bool SettledLate { get; private set; }
+
+        private void OpenGeo() => connectors.OpenGeo.TrySetResult();
+
+        public Operator? Compile(OperatorCompileContext context)
+        {
+            var user = context.CompileAwaitedExpression("ctx.user.embedding", "/user");
+            var region = context.CompileAwaitedExpression("ctx.country.region", "/region");
+            return user is null || region is null ? null : new Late(this, [context.AwaitedReadsOf([user]), context.AwaitedReadsOf([region])]);
+        }
+
+        private sealed class Late(LateSettleFactory owner, AwaitedReads[] reads) : Operator
+        {
+            public override ValueTask ExecuteAsync(OperatorContext context) => context.WhenEachReadyAsync(reads, (read, _) =>
+            {
+                if (read == 1)
+                {
+                    owner.SettledLate = true;
+                    return;
+                }
+
+                Assert.True(context.CancellationToken.WaitHandle.WaitOne(RecallQueryTests.Patience), "the budget ran out");
+                var state = (RequestState)typeof(OperatorContext).GetField("_state", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(context)!;
+                var stored = state.Features.ContextStoredTask(reads[1].Features[0]);
+                owner.OpenGeo();
+                owner.StoredLate = ((IAsyncResult)stored).AsyncWaitHandle.WaitOne(RecallQueryTests.Patience);
+            });
+        }
     }
 }

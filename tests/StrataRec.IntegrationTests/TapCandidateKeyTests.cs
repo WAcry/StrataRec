@@ -77,6 +77,87 @@ public sealed class TapCandidateKeyTests
         }
     }
 
+    /// <summary>
+    /// Review 85: a node its <c>when</c> or <c>min_remaining_ms</c> skips fills nothing, and its fallback does not run
+    /// either. The checks counted what it reads as fetched at every later point: the plan compiled, and the request threw
+    /// once the output's tap was sampled after a skip. The hint names the node and why a later point cannot count on it.
+    /// </summary>
+    [Theory]
+    [InlineData("col.creator.pop", "\"when\": \"false\",")]
+    [InlineData("col.item.base", "\"when\": \"false\",")]
+    [InlineData("col.item.base", "\"min_remaining_ms\": 60000,")]
+    public void ATapAfterANodeThatMayBeSkipped_IsToldTheCandidateFeaturesItReadsAreNotFetched(string logged, string skip)
+    {
+        var compilation = Compile(Pipeline("""{ "output": true }""", logged, primary: "double(col.creator.pop)", backup: "1.0", next: skip, output: "1.0"));
+
+        var error = Assert.Single(compilation.Diagnostics, d => d.IsError);
+        Assert.Equal(("TAP_FEATURE_NOT_FETCHED", "/log_taps/key"), (error.Code, error.Pointer));
+        var name = logged["col.".Length..];
+        Assert.Equal(
+            $"attach the tap after 'next', which reads '{name}': its 'when' or 'min_remaining_ms' may skip it, and then nothing writes the feature for a later point",
+            error.Hint);
+    }
+
+    /// <summary>
+    /// A tap attached to a node that may be skipped is captured only when the node ran: it logs what the node reads then,
+    /// and nothing when the node is skipped.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ATapAttachedToANodeThatMayBeSkipped_LogsWhatItReads_WhenItRuns(bool runs)
+    {
+        var compilation = Compile(Pipeline("""{ "after": "next" }""", "col.item.base", primary: "double(col.creator.pop)", backup: "1.0",
+            next: $"\"when\": \"{(runs ? "true" : "false")}\",", output: "1.0"));
+        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
+
+        var result = await Execute(compilation.Plan!, capture: true, write: false);
+
+        Assert.True(result.Succeeded, result.Error);
+        var batches = result.LogBatches.Where(b => b.TapId == "key").ToList();
+        if (runs)
+        {
+            Assert.Equal(10L, ((long[])Assert.Single(Assert.Single(batches).Columns).Values)[0]);
+        }
+        else
+        {
+            Assert.Empty(batches);
+        }
+    }
+
+    /// <summary>A node that may be skipped still counts for the context features it reads: the prefetch stores them for every request.</summary>
+    [Fact]
+    public async Task ATapAfterANodeThatMayBeSkipped_LogsTheContextFeaturesItReads()
+    {
+        var compilation = Compile(Pipeline("""{ "output": true }""", "col.entity_id", primary: "double(ctx.user.w)", backup: "1.0",
+            context: "ctx.user.w", next: "\"when\": \"false\",", output: "1.0"));
+        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
+
+        var result = await Execute(compilation.Plan!, capture: true, write: false);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(3L, Assert.Single(Assert.Single(result.LogBatches, b => b.TapId == "key").Context, c => c.Name == "w").Value.AsInt64());
+    }
+
+    /// <summary>
+    /// Review 85: the output reads the features of its columns for every row it returns, so a tap there can log them; the
+    /// hint named only nodes.
+    /// </summary>
+    [Fact]
+    public async Task ATapLoggingACandidateFeatureOnlyTheOutputReads_IsToldToAttachThere_WhereItLogsIt()
+    {
+        var after = Compile(Pipeline("""{ "after": "next" }""", "col.item.base", primary: "1.0", backup: "1.0", output: "double(col.creator.pop)"));
+        var error = Assert.Single(after.Diagnostics, d => d.IsError);
+        Assert.Equal("TAP_FEATURE_NOT_FETCHED", error.Code);
+        Assert.Equal("attach the tap to the output (\"attach\": { \"output\": true }), which reads 'item.base'", error.Hint);
+
+        var compilation = Compile(Pipeline("""{ "output": true }""", "col.item.base", primary: "1.0", backup: "1.0", output: "double(col.creator.pop)"));
+        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
+        var result = await Execute(compilation.Plan!, capture: true, write: false);
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(10L, ((long[])Assert.Single(Assert.Single(result.LogBatches, b => b.TapId == "key").Columns).Values)[0]);
+    }
+
     /// <summary>A context feature only the fallback reads is prefetched for every request: the tap logs it.</summary>
     [Fact]
     public async Task ATapLoggingAContextFeatureOnlyAFallbackReads_LogsIt()
@@ -107,10 +188,12 @@ public sealed class TapCandidateKeyTests
     /// Candidate 1, then <c>next</c> (a constant score unless <paramref name="primary"/> reads a feature) whose fallback
     /// reads <paramref name="backup"/>, by default <c>col.creator.pop</c>, keyed by <c>col.item.base</c>; with
     /// <paramref name="laterReader"/>, a node <c>later</c> after it reads <c>col.creator.pop</c>. The tap <c>key</c> logs
-    /// <paramref name="logged"/>, and <paramref name="context"/> as a context field.
+    /// <paramref name="logged"/>, and <paramref name="context"/> as a context field. <paramref name="next"/> adds members to
+    /// <c>next</c>; <paramref name="output"/> is the output's column.
     /// </summary>
     private static string Pipeline(
-        string attach, string logged, string primary, string backup = "double(col.creator.pop)", bool laterReader = false, string? context = null) => $$"""
+        string attach, string logged, string primary, string backup = "double(col.creator.pop)", bool laterReader = false, string? context = null,
+        string next = "", string output = "col.score.t") => $$"""
         { "pipeline_id": "p",
           "request_schema": { "user_id": { "type": "int64" } },
           "columns": { "score.t": { "type": "float64", "default": 0.0 }, "score.l": { "type": "float64", "default": 0.0 } },
@@ -120,11 +203,11 @@ public sealed class TapCandidateKeyTests
           "log_taps": { "key": { "group": "all", "attach": {{attach}}, "columns": { "v": "{{logged}}" }{{(context is null ? "" : $$""", "context": { "w": "{{context}}" }""")}} } },
           "nodes": {
             "recall": { "order": 100, "op": "MultiSourceRecall@1", "config": { "quotas_param": "q" } },
-            "next": { "order": 200, "op": "ExpressionScorer@1", "on_failure": "fallback", "fallback": "backup",
+            "next": { "order": 200, "op": "ExpressionScorer@1", {{next}} "on_failure": "fallback", "fallback": "backup",
               "config": { "output_col": "score.t", "expr": "{{primary}}" } },
             {{(laterReader ? """ "later": { "order": 300, "op": "ExpressionScorer@1", "config": { "output_col": "score.l", "expr": "double(col.creator.pop)" } }, """ : "")}}
             "backup": { "role": "fallback", "op": "ExpressionScorer@1", "config": { "output_col": "score.t", "expr": "{{backup}}" } } },
-          "output": { "limit_param": "k", "columns": { "score": "col.score.t" } } }
+          "output": { "limit_param": "k", "columns": { "score": "{{output}}" } } }
         """;
 
     private static PlanCompilation Compile(string pipeline)

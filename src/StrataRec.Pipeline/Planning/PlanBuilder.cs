@@ -1017,10 +1017,24 @@ public sealed class PlanBuilder
                 }
             }
 
-            MarkFetched(fetched, node.ReadFeatures);
             if (fallback is not null)
             {
                 MarkContextFetched(fetched, fallback.ReadFeatures);
+            }
+
+            // A node its 'when' or 'min_remaining_ms' skips fills nothing, and its fallback does not run: after it, only the
+            // context features they read, which the prefetch stores for every request, are there whatever ran (review 85).
+            // A tap attached to it is captured only once it or its fallback has run, so it may log all the node reads.
+            HashSet<int>? here = fetched;
+            if (MaySkip(node))
+            {
+                MarkContextFetched(fetched, node.ReadFeatures);
+                here = AttachedTo(taps, node.NodeId) ? [.. fetched] : null;
+            }
+
+            if (here is not null)
+            {
+                MarkFetched(here, node.ReadFeatures);
             }
 
             later.Remove(node.NodeId);
@@ -1030,7 +1044,7 @@ public sealed class PlanBuilder
                 {
                     if (tap.AttachAfter == node.NodeId)
                     {
-                        ValidateTap(tap, possible, fetched, later, ordered, fallbacks, artifact);
+                        ValidateTap(tap, possible, here!, later, ordered, fallbacks, output, artifact);
                     }
                 }
             }
@@ -1053,7 +1067,7 @@ public sealed class PlanBuilder
             {
                 if (tap.AttachOutput)
                 {
-                    ValidateTap(tap, possible, fetched, later, ordered, fallbacks, artifact);
+                    ValidateTap(tap, possible, fetched, later, ordered, fallbacks, output, artifact);
                 }
             }
         }
@@ -1589,8 +1603,26 @@ public sealed class PlanBuilder
 
     /// <summary>A node whose position always leaves its writes: no <c>when</c> or time limit, and a failure fails the request.</summary>
     private static bool Unskippable(CompiledNode node, CompiledNode? fallback) =>
-        node.When is null && node.MinRemainingMs is null
-        && (node.OnFailure == FailurePolicy.FailRequest || (fallback is not null && fallback.OnFailure == FailurePolicy.FailRequest));
+        !MaySkip(node) && (node.OnFailure == FailurePolicy.FailRequest || (fallback is not null && fallback.OnFailure == FailurePolicy.FailRequest));
+
+    /// <summary>Whether the node may not run at all, its fallback neither: its <c>when</c> or <c>min_remaining_ms</c> skips it.</summary>
+    private static bool MaySkip(CompiledNode node) => node.When is not null || node.MinRemainingMs is not null;
+
+    private static bool AttachedTo(IReadOnlyList<CompiledTap>? taps, string nodeId)
+    {
+        if (taps is not null)
+        {
+            foreach (var tap in taps)
+            {
+                if (tap.AttachAfter == nodeId)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// For each position that may append rows (by its node or its fallback): the non-nullable columns something after it
@@ -1743,7 +1775,7 @@ public sealed class PlanBuilder
     /// <param name="ordered">The combination's nodes in their order.</param>
     private void ValidateTap(
         CompiledTap tap, Dictionary<int, string> possible, HashSet<int> fetched, HashSet<string> later, List<CompiledNode> ordered,
-        IReadOnlyDictionary<string, CompiledNode> fallbacks, string artifact)
+        IReadOnlyDictionary<string, CompiledNode> fallbacks, OutputPlan? output, string artifact)
     {
         var pointer = "/log_taps/" + JsonPointer.Escape(tap.TapId);
         var where = tap.AttachOutput ? "the output" : $"'{tap.AttachAfter}'";
@@ -1773,31 +1805,69 @@ public sealed class PlanBuilder
             {
                 _diagnostics.Error("TAP_FEATURE_NOT_FETCHED", artifact, pointer,
                     $"Tap '{tap.TapId}' reads feature '{_features[feature].Definition.Name}', which is not fetched before {where}; taps never trigger fetches.",
-                    NotFetchedHint(feature, later, ordered, fallbacks));
+                    NotFetchedHint(feature, later, ordered, fallbacks, output));
             }
         }
     }
 
     /// <summary>
     /// Where a tap can log a candidate feature that is not fetched before its attach point: after the first later node
-    /// whose fill writes it, if one does; a fallback that reads it is named with the reason it does not count.
+    /// whose fill writes it, or at the output if it reads it, or after an earlier node that reads it but may be skipped
+    /// (with why a later point cannot count on it); a fallback that reads it is named with the reason it does not count.
     /// </summary>
-    private string NotFetchedHint(int feature, HashSet<string> later, List<CompiledNode> ordered, IReadOnlyDictionary<string, CompiledNode> fallbacks)
+    private string NotFetchedHint(
+        int feature, HashSet<string> later, List<CompiledNode> ordered, IReadOnlyDictionary<string, CompiledNode> fallbacks, OutputPlan? output)
     {
         var name = _features[feature].Definition.Name;
         var reads = new HashSet<int>();
+        string? skippable = null;
         foreach (var node in ordered)
         {
-            if (later.Contains(node.NodeId) && Reads(node))
+            if (Reads(node.ReadFeatures))
             {
-                return $"attach the tap after '{node.NodeId}', the first node after this point that reads '{name}'";
+                if (later.Contains(node.NodeId))
+                {
+                    // A tap attached to a node is captured only once it ran: one that may be skipped counts there too.
+                    return $"attach the tap after '{node.NodeId}', the first node after this point that reads '{name}'";
+                }
+
+                if (MaySkip(node))
+                {
+                    skippable ??= node.NodeId;
+                }
             }
+        }
+
+        // The output reads its columns' features for every row it returns (review 85: the hint only named nodes).
+        if (output is not null)
+        {
+            foreach (var (_, expression) in output.Columns)
+            {
+                reads.Clear();
+                foreach (var symbol in expression.Reads)
+                {
+                    if (symbol.Kind == SymbolKind.Column && Schema.Columns[symbol.Id].FeatureIndex is >= 0 and var f)
+                    {
+                        MarkFetched(reads, f);
+                    }
+                }
+
+                if (reads.Contains(feature))
+                {
+                    return $"attach the tap to the output (\"attach\": {{ \"output\": true }}), which reads '{name}'";
+                }
+            }
+        }
+
+        if (skippable is not null)
+        {
+            return $"attach the tap after '{skippable}', which reads '{name}': its 'when' or 'min_remaining_ms' may skip it, and then nothing writes the feature for a later point";
         }
 
         string? reader = null;
         foreach (var (id, fallback) in fallbacks)
         {
-            if ((reader is null || string.CompareOrdinal(id, reader) < 0) && Reads(fallback))
+            if ((reader is null || string.CompareOrdinal(id, reader) < 0) && Reads(fallback.ReadFeatures))
             {
                 reader = id;
             }
@@ -1807,10 +1877,10 @@ public sealed class PlanBuilder
             ? $"attach the tap after a node that reads '{name}'"
             : $"attach the tap after a node that reads '{name}': fallback '{reader}' reads it, but a fallback's candidate features are written only when it runs";
 
-        bool Reads(CompiledNode node)
+        bool Reads(ImmutableArray<int> features)
         {
             reads.Clear();
-            MarkFetched(reads, node.ReadFeatures);
+            MarkFetched(reads, features);
             return reads.Contains(feature);
         }
     }

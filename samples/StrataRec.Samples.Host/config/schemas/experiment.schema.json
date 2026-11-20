@@ -1175,6 +1175,7 @@
                   ]
                 },
                 "fetch_missing": {
+                  "description": "Reserved: only false is accepted. A tap never triggers a fetch; it logs what the serving path fetched before its point.",
                   "type": [
                     "boolean",
                     "null"

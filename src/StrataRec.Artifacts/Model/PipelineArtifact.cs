@@ -151,6 +151,7 @@ public sealed class LogTapSpec
     /// <summary>Expands to a model node's inputs, e.g. <c>ctr_ranker.inputs</c>.</summary>
     public string? ColumnsFrom { get; init; }
 
+    /// <summary>Reserved: only <c>false</c> is accepted. A tap never triggers a fetch; it logs what the serving path fetched before its point.</summary>
     public bool? FetchMissing { get; init; }
 }
 
