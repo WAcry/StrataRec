@@ -46,5 +46,6 @@ dotnet run --project src/StrataRec.Cli -- --help
 
 - C# 14、文件级命名空间、启用 nullable、`TreatWarningsAsErrors`。私有字段用 `_camelCase`。
 - `src/` 中禁止 LINQ（理由见 `docs/development.md` 第 4 节），由 `BannedSymbols.txt`（RS0030）和移除隐式 `System.Linq` using（`Directory.Build.targets`）在构建时强制。
+- 锁是 `System.Threading.Lock` 字段（理由见 `docs/development.md` 第 2 节）。专门用来加锁的 `object` 字段由 IDE0330 在构建时报错（`EnforceCodeStyleInBuild`，严重级别在 `.editorconfig`）；对 `this` 或集合加锁没有分析器能查出，靠评审。
 - 改了配置类型，或改了会序列化的成员的 XML 文档注释（它们是 Schema 里的描述），要重新生成示例的 Schema，否则测试失败（失败信息里有命令）：`dotnet run --project src/StrataRec.Cli -- schema --out samples/home_feed/schemas`，以及在 `samples/StrataRec.Samples.Host` 下 `dotnet run -- stratarec schema --out config/schemas`。
 - CI 只用 Linux（`.github/workflows/ci.yml`），用 SDK 10 构建，测试跑在 .NET 10 运行时上。
