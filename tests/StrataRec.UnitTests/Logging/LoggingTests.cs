@@ -1,6 +1,7 @@
 using System.Text.Json;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
+using StrataRec.Hosting;
 using StrataRec.Logging;
 
 namespace StrataRec.UnitTests.Logging;
@@ -514,6 +515,79 @@ public sealed class LogPipelineTests
 
         await pipeline.FlushAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         Assert.Contains(pipeline.Stats(), s => s is { TapId: "served", Delivered: 0, Dropped: 3 });
+    }
+
+    /// <summary>
+    /// Pre-release assessment: once a batch is delivered and a flush completed, the pipeline holds nothing of it. The
+    /// consumer cleared its list only when the next batch came, so an idle queue kept its last write's batches alive.
+    /// </summary>
+    [Fact]
+    public async Task ADeliveredBatch_IsNotKeptAlive_ByAnIdleConsumer()
+    {
+        var sink = new FlakySink(failures: 0); // counts, keeps nothing
+        await using var pipeline = new LogPipeline(sink);
+        var durable = SubmitAndForget(pipeline, LogDelivery.Durable);
+        var bestEffort = SubmitAndForget(pipeline, LogDelivery.BestEffort);
+        await pipeline.FlushAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        Assert.Equal(2, sink.Written);
+        Assert.False(durable.IsAlive);
+        Assert.False(bestEffort.IsAlive);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static WeakReference SubmitAndForget(LogPipeline pipeline, LogDelivery delivery)
+    {
+        var batch = Batch("served", delivery);
+        Assert.Equal(LogAdmission.Queued, pipeline.Submit(batch));
+        return new WeakReference(batch);
+    }
+
+    /// <summary>
+    /// Pre-release assessment: options that cannot work fail before the consumers start, naming the option, both where
+    /// the pipeline is made and where a host registers it. No batches per write left a consumer handing the sink empty
+    /// lists forever with the pending count never reaching 0; a negative one failed the consumer as it started.
+    /// </summary>
+    [Theory]
+    [InlineData(0, 10_000, 5_000, "MaxBatchesPerWrite")]
+    [InlineData(-1, 10_000, 5_000, "MaxBatchesPerWrite")]
+    [InlineData(256, -1, 5_000, "DrainTimeout")]
+    [InlineData(256, 10_000, 0, "MaxRetryDelay")]
+    public void OptionsThatCannotWork_AreRefused_WhereThePipelineIsMadeAndWhereAHostRegistersIt(
+        int maxBatchesPerWrite, int drainMs, int retryMs, string option)
+    {
+        var options = new LogPipelineOptions
+        {
+            MaxBatchesPerWrite = maxBatchesPerWrite, DrainTimeout = TimeSpan.FromMilliseconds(drainMs), MaxRetryDelay = TimeSpan.FromMilliseconds(retryMs),
+        };
+
+        var made = Assert.Throws<ArgumentOutOfRangeException>(() => new LogPipeline(new InMemoryLogSink(), options));
+        var registered = Assert.Throws<ArgumentOutOfRangeException>(() => new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+            .AddStrataRec(o => (o.LogSink, o.LogPipeline) = (new InMemoryLogSink(), options)));
+
+        Assert.Equal((option, option), (made.ParamName, registered.ParamName));
+    }
+
+    /// <summary>The smallest write size works: every batch is delivered, one per write.</summary>
+    [Fact]
+    public async Task OneBatchPerWrite_DeliversEveryBatch()
+    {
+        var sink = new InMemoryLogSink();
+        await using (var pipeline = new LogPipeline(sink, new LogPipelineOptions { MaxBatchesPerWrite = 1 }))
+        {
+            for (var i = 0; i < 3; i++)
+            {
+                pipeline.Submit(Batch("served", LogDelivery.Durable));
+            }
+
+            await pipeline.FlushAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        }
+
+        Assert.Equal(3, sink.Snapshot().Count);
     }
 
     private sealed class StuckSink(Task release) : ILogSink

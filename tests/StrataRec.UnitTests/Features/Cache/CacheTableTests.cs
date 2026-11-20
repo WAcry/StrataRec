@@ -17,7 +17,7 @@ public class CacheTableTests
     [Fact]
     public void AWriteBackPastTheQueuesBytes_IsDropped_AndCounted_AndTheQueueTakesBatchesAgainOnceDrained()
     {
-        var record = Batch(Table(maxBytes: 1 << 20).Cache, 0, 1).Bytes; // 34 B
+        var record = Batch(Table(maxBytes: 1 << 20).Cache, 0, 1).Bytes; // 66 B: a 34-byte record, its key and its slots
         var (table, cache, clock) = Table(maxBytes: 1 << 20, writeQueueBytes: (record * 7) / 2); // room for three and a half
         using var dropped = new Counted(StrataRecMetrics.Names.CacheWrites, "dropped");
 
@@ -32,6 +32,40 @@ public class CacheTableTests
         Assert.True(cache.TryWriteBack(Batch(cache, clock.NowMs, 4, 5)));
         cache.WriteQueued(table.Writer);
         Assert.Equal(5, table.Pin().RecordCount);
+    }
+
+    /// <summary>
+    /// Pre-release assessment: a write-back is charged what it holds while it waits, its keys' strings with its records.
+    /// A 10,000-char key with an 18-byte record held 20 KB against a queue that counted 18 B, in either tier.
+    /// </summary>
+    [Fact]
+    public async Task AWriteBack_IsChargedItsKeys_NotOnlyItsRecords_InEitherTier()
+    {
+        var schema = new LocalTableSchema("s", "item", EntityKeyType.String, LocalTableMode.Cache, [new("clicks", ColumnType.Float64)]);
+        var table = new LocalFeatureTable(schema, new LocalFeatureTableOptions
+        {
+            MaxBytes = 1 << 20,
+            PageSize = 16 << 10,
+            CompactionMinBytes = 0,
+            Cache = new CacheTableOptions { TtlMs = 60_000, WriteQueueBytes = 4096, Clock = new ManualClock() },
+        });
+        var cache = table.Cache!;
+        var writer = new CacheRecordWriter(cache.Layout, 64);
+        writer.Begin(0, cache.Fingerprint, absent: false);
+        writer.Float64(0, 1);
+        var (offset, length) = writer.End();
+        var record = writer.Bytes.AsMemory(offset, length);
+        var key = new string('k', 10_000);
+        using var dropped = new Counted(StrataRecMetrics.Names.CacheWrites, "dropped");
+
+        var batch = new CacheWriteBatch([EntityKey.FromString(key)], [record], 1);
+        Assert.InRange(batch.Bytes, 20_000, 20_100);
+        Assert.False(cache.TryWriteBack(batch));
+
+        await using var tier = new DistributedCacheTier(new FakeCacheStore(), queueBytes: 4096);
+        Assert.False(tier.TryWrite(cache, [new CacheStoreEntry(key, record, TimeSpan.FromMinutes(1))], 1));
+        Assert.True(tier.TryWrite(cache, [new CacheStoreEntry("k", record, TimeSpan.FromMinutes(1))], 1));
+        Assert.Equal(2, dropped.Total);
     }
 
     [Fact]

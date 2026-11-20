@@ -36,7 +36,7 @@ public sealed class LogPipelineOptions
     /// </summary>
     public Action<LogBatch, Exception>? Rejected { get; init; }
 
-    /// <summary>Batches handed to the sink per write.</summary>
+    /// <summary>Batches handed to the sink per write; at least 1.</summary>
     public int MaxBatchesPerWrite { get; init; } = 256;
 
     /// <summary>
@@ -45,7 +45,34 @@ public sealed class LogPipelineOptions
     /// </summary>
     public TimeSpan DrainTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// The longest wait between two attempts to write a durable batch the sink failed; the waits double from 10 ms up to
+    /// it. Positive: without a wait a failing sink would be retried in a busy loop.
+    /// </summary>
     public TimeSpan MaxRetryDelay { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Throws an <see cref="ArgumentOutOfRangeException"/> naming the first option out of its range. The pipeline checks
+    /// its options before it starts its consumers, and a host checks them when it registers the pipeline: a value that
+    /// cannot work (no batches per write left a consumer handing the sink empty lists forever) fails at startup, not once
+    /// logs are written.
+    /// </summary>
+    public void Validate()
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(DurableMaxBytes, nameof(DurableMaxBytes));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(BestEffortMaxBytes, nameof(BestEffortMaxBytes));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxBatchesPerWrite, nameof(MaxBatchesPerWrite));
+        var longest = TimeSpan.FromMilliseconds(uint.MaxValue - 1.0); // a timer's limit
+        if (DrainTimeout < TimeSpan.Zero || DrainTimeout > longest)
+        {
+            throw new ArgumentOutOfRangeException(nameof(DrainTimeout), DrainTimeout, $"DrainTimeout must be between 0 and {longest}.");
+        }
+
+        if (MaxRetryDelay <= TimeSpan.Zero || MaxRetryDelay > longest)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaxRetryDelay), MaxRetryDelay, $"MaxRetryDelay must be positive and at most {longest}.");
+        }
+    }
 }
 
 /// <summary>What happened to a submitted batch.</summary>
@@ -129,8 +156,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
         _events = loggerFactory is null ? null : new RequestEventLog(_logger);
         _stop = new SinkStop(_logger);
         ProducerId = producerId ?? $"{Environment.MachineName}/{Environment.ProcessId}/{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.DurableMaxBytes, nameof(LogPipelineOptions.DurableMaxBytes));
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.BestEffortMaxBytes, nameof(LogPipelineOptions.BestEffortMaxBytes));
+        _options.Validate();
 
         // Unbounded channels, bounded by the bytes their batches hold (Reserve): a writer never waits either way.
         _durable = Channel.CreateUnbounded<LogBatch>(new UnboundedChannelOptions { SingleReader = true });
@@ -321,32 +347,17 @@ public sealed partial class LogPipeline : IAsyncDisposable
     private async Task RunAsync(ChannelReader<LogBatch> reader, bool durable)
     {
         var buffer = new List<LogBatch>(_options.MaxBatchesPerWrite);
+        var rejected = new HashSet<LogBatch>(ReferenceEqualityComparer.Instance);
         var token = _stop.Token;
-        var depthTags = durable ? DurableTags : BestEffortTags;
         try
         {
+            // The batches are taken and settled outside this method, so no local of its state machine keeps one alive
+            // while it waits for the next.
             while (await reader.WaitToReadAsync(token).ConfigureAwait(false))
             {
-                buffer.Clear();
-                while (buffer.Count < _options.MaxBatchesPerWrite && reader.TryRead(out var batch))
-                {
-                    buffer.Add(batch);
-                }
-
-                var rejected = new HashSet<LogBatch>(ReferenceEqualityComparer.Instance);
+                Take(reader, buffer);
                 var delivered = await WriteAsync(buffer, durable, rejected, token).ConfigureAwait(false);
-                long written = 0;
-                foreach (var batch in buffer)
-                {
-                    var ok = delivered && !rejected.Contains(batch);
-                    Count(batch.TapId, ok ? 1 : 0, ok ? 0 : 1);
-                    written += batch.ApproximateBytes;
-                }
-
-                // The batches stay in the queue's budget until the sink has them: a stuck sink fills the budget, not memory.
-                Interlocked.Add(ref durable ? ref _durableBytes : ref _bestEffortBytes, -written);
-                Interlocked.Add(ref _pending, -buffer.Count);
-                StrataRecMetrics.LogQueueDepth.Add(-buffer.Count, depthTags);
+                Settle(buffer, rejected, delivered, durable);
             }
         }
         finally
@@ -367,9 +378,43 @@ public sealed partial class LogPipeline : IAsyncDisposable
             {
                 Interlocked.Add(ref durable ? ref _durableBytes : ref _bestEffortBytes, -bytes);
                 Interlocked.Add(ref _pending, -abandoned);
-                StrataRecMetrics.LogQueueDepth.Add(-abandoned, depthTags);
+                StrataRecMetrics.LogQueueDepth.Add(-abandoned, durable ? DurableTags : BestEffortTags);
             }
         }
+    }
+
+    private void Take(ChannelReader<LogBatch> reader, List<LogBatch> buffer)
+    {
+        while (buffer.Count < _options.MaxBatchesPerWrite && reader.TryRead(out var batch))
+        {
+            buffer.Add(batch);
+        }
+    }
+
+    /// <summary>
+    /// Counts each batch of a write as delivered or dropped and gives its bytes back to the queue's budget, then lets go
+    /// of the batches before the loop waits for more: an idle loop kept the last write's batches (a wide candidate tap's
+    /// among them) alive until its queue was written to again (pre-release assessment). They are let go of before the
+    /// pending count drops, so a completed <see cref="FlushAsync"/> holds none.
+    /// </summary>
+    private void Settle(List<LogBatch> buffer, HashSet<LogBatch> rejected, bool delivered, bool durable)
+    {
+        long written = 0;
+        foreach (var batch in buffer)
+        {
+            var ok = delivered && !rejected.Contains(batch);
+            Count(batch.TapId, ok ? 1 : 0, ok ? 0 : 1);
+            written += batch.ApproximateBytes;
+        }
+
+        var count = buffer.Count;
+        buffer.Clear();
+        rejected.Clear();
+
+        // The batches stay in the queue's budget until the sink has them: a stuck sink fills the budget, not memory.
+        Interlocked.Add(ref durable ? ref _durableBytes : ref _bestEffortBytes, -written);
+        Interlocked.Add(ref _pending, -count);
+        StrataRecMetrics.LogQueueDepth.Add(-count, durable ? DurableTags : BestEffortTags);
     }
 
     /// <summary>

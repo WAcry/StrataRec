@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Channels;
 using StrataRec.Core.Diagnostics;
@@ -18,8 +19,9 @@ public sealed class CacheTableOptions
     public long StaleIfErrorMs { get; init; }
 
     /// <summary>
-    /// The most record bytes waiting for the table's writer; a write-back past it is dropped and counted (the key is
-    /// fetched again on its next miss). 0 takes a sixteenth of <c>max_bytes</c>, between 1 MiB and 64 MiB.
+    /// The most bytes waiting for the table's writer (<see cref="CacheWriteBatch.Bytes"/>: records and keys); a write-back
+    /// past it is dropped and counted (the key is fetched again on its next miss). 0 takes a sixteenth of
+    /// <c>max_bytes</c>, between 1 MiB and 64 MiB.
     /// </summary>
     public long WriteQueueBytes { get; init; }
 
@@ -98,14 +100,27 @@ internal sealed class CacheWriteBatch(EntityKey[] keys, ReadOnlyMemory<byte>[] r
 
     public int Count { get; } = count;
 
-    public long Bytes { get; } = SumBytes(records, count);
+    /// <summary>
+    /// What the batch holds while it waits, charged to the writer's queue: its records' bytes, its two arrays and its keys'
+    /// strings. A long string key (a composite one, say) with a short record holds more in its key than in its record, and
+    /// the records' bytes alone let the queue hold several times its limit (pre-release assessment).
+    /// </summary>
+    public long Bytes { get; } = Footprint(keys, records, count, partCount);
 
-    private static long SumBytes(ReadOnlyMemory<byte>[] records, int count)
+    private static long Footprint(EntityKey[] keys, ReadOnlyMemory<byte>[] records, int count, int partCount)
     {
-        long bytes = 0;
+        var bytes = ((long)keys.Length * Unsafe.SizeOf<EntityKey>()) + ((long)records.Length * Unsafe.SizeOf<ReadOnlyMemory<byte>>());
         for (var i = 0; i < count; i++)
         {
             bytes += records[i].Length;
+        }
+
+        for (var k = 0; k < count * partCount; k++)
+        {
+            if (keys[k].StringValue is { } text)
+            {
+                bytes += TableVersion.StringObjectBytes(text.Length);
+            }
         }
 
         return bytes;

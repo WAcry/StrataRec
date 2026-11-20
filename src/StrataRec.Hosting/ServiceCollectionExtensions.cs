@@ -140,6 +140,7 @@ public static class ServiceCollectionExtensions
 
         if (options.LogSink is { } sink)
         {
+            options.LogPipeline.Validate(); // at registration: the pipeline itself is made when first resolved
             // Disposed by the container on shutdown, which drains durable batches (design 8.6 item 4).
             services.AddSingleton(provider => new Logging.LogPipeline(sink, options.LogPipeline, loggerFactory: provider.GetService<ILoggerFactory>()));
         }

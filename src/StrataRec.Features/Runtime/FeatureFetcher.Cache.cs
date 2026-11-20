@@ -303,7 +303,6 @@ public sealed partial class FeatureFetcher
         var cache = read.Cache;
         var layout = cache.Layout;
         int hits = 0, missing = 0, expired = 0, mismatched = 0, failed = 0;
-        long nowMs = 0;
         for (var c = 0; c < chunks; c++)
         {
             var offset = c * chunkSize;
@@ -314,7 +313,9 @@ public sealed partial class FeatureFetcher
                 continue;
             }
 
-            nowMs = nowMs == 0 ? cache.NowMs() : nowMs;
+            // Each chunk is judged when it answered: a later chunk may answer after a record it carries expired, so the
+            // time an earlier chunk was judged at would serve it as fresh (pre-release assessment).
+            var nowMs = cache.NowMs();
             for (var m = offset; m < offset + count; m++)
             {
                 var record = read.Stored[m];

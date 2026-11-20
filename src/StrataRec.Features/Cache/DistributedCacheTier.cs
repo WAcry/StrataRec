@@ -1,6 +1,8 @@
+using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Threading;
+using StrataRec.Features.Local;
 
 namespace StrataRec.Features.Cache;
 
@@ -12,7 +14,7 @@ namespace StrataRec.Features.Cache;
 /// <remarks>
 /// <para><b>Writes never wait.</b> A read hands what the connector returned to <see cref="TryWrite"/>, which queues it and
 /// returns; one background loop per instance writes the queued batches one after another, one store round trip each.
-/// Past <see cref="QueueBytes"/> waiting record bytes a batch is dropped and counted (<c>stratarec.cache.writes</c>,
+/// Past <see cref="QueueBytes"/> waiting bytes (records, keys and entries) a batch is dropped and counted (<c>stratarec.cache.writes</c>,
 /// outcome <c>dropped</c>): the keys are fetched again on their next miss, which is what the tier exists to avoid, so
 /// the metric says when the store cannot keep up. A failed write is counted (<c>failed</c>) and forgotten.</para>
 /// <para><b>The queue belongs to the instance, not to a table.</b> Plans that share the instance share its queue, and
@@ -24,7 +26,11 @@ namespace StrataRec.Features.Cache;
 /// </remarks>
 public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
 {
-    /// <summary>The most record bytes waiting to be written: 16 MiB, a few seconds of misses at a high miss rate.</summary>
+    /// <summary>
+    /// The most bytes waiting to be written: 16 MiB, a few seconds of misses at a high miss rate. A batch is charged what it
+    /// holds, its records' bytes and its entries with their key texts: a long key text with a short record holds more in
+    /// its key (pre-release assessment).
+    /// </summary>
     public const long DefaultQueueBytes = 16L << 20;
 
     private readonly Channel<PendingWrite> _queue = Channel.CreateUnbounded<PendingWrite>(new UnboundedChannelOptions { SingleReader = true });
@@ -66,10 +72,10 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
             return true;
         }
 
-        long bytes = 0;
+        var bytes = (long)entries.Length * Unsafe.SizeOf<CacheStoreEntry>();
         for (var i = 0; i < count; i++)
         {
-            bytes += entries[i].Record.Length;
+            bytes += entries[i].Record.Length + TableVersion.StringObjectBytes(entries[i].Key.Length);
         }
 
         if (Interlocked.Add(ref _queuedBytes, bytes) > QueueBytes || !_queue.Writer.TryWrite(new PendingWrite(cache, entries, count, bytes)))

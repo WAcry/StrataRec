@@ -245,19 +245,32 @@ public sealed class GroupAggregateFactory : IOperatorFactory
                 return ValueTask.CompletedTask;
             }
 
+            // Every buffer here is over once the outputs are written: scratch, given back at once, so the outputs reuse
+            // each other's buffers and a high-cardinality grouping holds them only while this node runs.
             var memory = context.Memory;
-            var groupOf = memory.Rent<int>(live.Length);
+            var groupOf = memory.RentScratch<int>(live.Length);
+            var perRow = memory.RentScratch<double>(live.Length);
+            var present = memory.RentScratch<bool>(live.Length);
             var groups = group is { } g ? RowGroups.Assign(context.Read(g), live, groupOf, memory) : One(groupOf.AsSpan(0, live.Length));
-            var perRow = memory.Rent<double>(live.Length);
             foreach (var output in outputs)
             {
                 var values = perRow.AsSpan(0, live.Length);
-                var present = output.Function == Function.Rank
-                    ? Rank(context, output, live, groupOf, values)
-                    : Aggregate(context, output, live, groupOf, groups, values);
-                Write(context.Output(output.Column), live, values, present);
+                var has = present.AsSpan(0, live.Length);
+                if (output.Function == Function.Rank)
+                {
+                    Rank(context, output, live, groupOf, values, has);
+                }
+                else
+                {
+                    Aggregate(context, output, live, groupOf, groups, values, has);
+                }
+
+                Write(context.Output(output.Column), live, values, has);
             }
 
+            memory.ReturnScratch(present);
+            memory.ReturnScratch(perRow);
+            memory.ReturnScratch(groupOf);
             return ValueTask.CompletedTask;
         }
 
@@ -267,16 +280,19 @@ public sealed class GroupAggregateFactory : IOperatorFactory
             return 1;
         }
 
-        /// <summary>Each row's group statistic into <paramref name="values"/>; whether each row has one.</summary>
-        private static Span<bool> Aggregate(
-            OperatorContext context, Output output, ReadOnlySpan<int> live, int[] groupOf, int groups, Span<double> values)
+        /// <summary>Each row's group statistic into <paramref name="values"/>; whether each row has one into <paramref name="present"/>.</summary>
+        private static void Aggregate(
+            OperatorContext context, Output output, ReadOnlySpan<int> live, int[] groupOf, int groups, Span<double> values, Span<bool> present)
         {
             var memory = context.Memory;
             var n = live.Length;
             var column = output.Value is { } v ? context.Read(v) : null;
-            var counts = memory.RentCleared<long>(groups);
-            var totals = memory.RentCleared<double>(groups); // the sum, min or max; the running mean for mean and std
-            var squares = output.Function == Function.Std ? memory.RentCleared<double>(groups) : null;
+            var counts = memory.RentScratch<long>(groups);
+            var totals = memory.RentScratch<double>(groups); // the sum, min or max; the running mean for mean and std
+            var peaks = output.Function == Function.Std ? memory.RentScratch<double>(groups) : null; // the largest |x|
+            counts.AsSpan(0, groups).Clear();
+            totals.AsSpan(0, groups).Clear();
+            peaks?.AsSpan(0, groups).Clear();
             for (var i = 0; i < n; i++)
             {
                 var g = groupOf[i];
@@ -310,23 +326,28 @@ public sealed class GroupAggregateFactory : IOperatorFactory
                         totals[g] = k == 1 ? x : totals[g] + x;
                         break;
                     default:
-                        // Welford's update, in row order: equal values leave the mean exactly the value and the squares 0
-                        // (a mean from the sum is off by its rounding, and the deviations from it made a std of equal
-                        // values > 0, a z-score of ±1). The step is x/k − mean/k, not (x − mean)/k: neither a sum nor the
-                        // difference of two large values of opposite signs overflows (review 45).
+                        // The running mean, in row order: equal values leave it exactly the value (a mean from the sum is
+                        // off by its rounding, and the deviations from it made a std of equal values > 0, a z-score of ±1).
+                        // The step is x/k − mean/k, not (x − mean)/k: neither a sum nor the difference of two large values
+                        // of opposite signs overflows (review 45).
                         var mean = totals[g];
-                        var next = mean + ((x / k) - (mean / k));
-                        if (squares is not null)
+                        totals[g] = mean + ((x / k) - (mean / k));
+                        if (peaks is not null)
                         {
-                            squares[g] += (x - mean) * (x - next);
+                            peaks[g] = Math.Max(peaks[g], Math.Abs(x));
                         }
 
-                        totals[g] = next;
                         break;
                 }
             }
 
-            var present = context.Memory.Rent<bool>(n).AsSpan(0, n);
+            double[]? scales = null, squares = null;
+            if (output.Function == Function.Std)
+            {
+                (scales, squares) = (memory.RentScratch<double>(groups), memory.RentScratch<double>(groups));
+                Deviations(column!, live, groupOf, totals, peaks!, scales, squares, groups);
+            }
+
             for (var i = 0; i < n; i++)
             {
                 var g = groupOf[i];
@@ -336,29 +357,90 @@ public sealed class GroupAggregateFactory : IOperatorFactory
                     values[i] = output.Function switch
                     {
                         Function.Count => counts[g],
-                        Function.Std => Math.Sqrt(Math.Max(0, squares![g] / counts[g])), // a rounding below 0 is 0
+                        Function.Std => scales![g] == 0 ? 0 : scales[g] * Math.Sqrt(squares![g] / counts[g]) / peaks![g],
                         _ => totals[g],
                     };
                 }
             }
 
-            return present;
+            if (scales is not null)
+            {
+                memory.ReturnScratch(squares!);
+                memory.ReturnScratch(scales);
+                memory.ReturnScratch(peaks!);
+            }
+
+            memory.ReturnScratch(totals);
+            memory.ReturnScratch(counts);
         }
 
-        private static Span<bool> Rank(OperatorContext context, Output output, ReadOnlySpan<int> live, int[] groupOf, Span<double> values)
+        /// <summary>
+        /// The sum of squared deviations from each group's mean, as <c>scale² · squares</c> with the deviations divided by
+        /// the group's largest (LAPACK's dlassq): no square of a large deviation overflows and none of a small one
+        /// underflows, so the std is right at every scale a float64 holds (±1e200 has std 1e200 and ±1e-200 has 1e-200;
+        /// summing the squares themselves made the first infinite and the second 0, pre-release assessment).
+        /// </summary>
+        /// <remarks>
+        /// A group whose largest |x| is over half the largest float64 takes its values and mean halved, so that a
+        /// deviation between values of opposite signs does not overflow; <paramref name="peaks"/> becomes each group's
+        /// factor (0.5 or 1), which the std is divided by. Halving is exact but for subnormals, which in such a group are
+        /// far below the deviations' rounding; every other group's values are taken as they are.
+        /// </remarks>
+        private static void Deviations(
+            ColumnBuffer column, ReadOnlySpan<int> live, int[] groupOf, double[] means, double[] peaks, double[] scales, double[] squares,
+            int groups)
+        {
+            for (var g = 0; g < groups; g++)
+            {
+                peaks[g] = peaks[g] > double.MaxValue / 2 ? 0.5 : 1;
+                scales[g] = 0;
+                squares[g] = 0;
+            }
+
+            for (var i = 0; i < live.Length; i++)
+            {
+                var g = groupOf[i];
+                if (g < 0 || !column.IsValid(live[i]))
+                {
+                    continue;
+                }
+
+                var factor = peaks[g];
+                var d = Math.Abs((Read(column, live[i]) * factor) - (means[g] * factor));
+                if (d == 0)
+                {
+                    continue; // equal to the mean: adds nothing, and the std of equal values stays exactly 0
+                }
+
+                if (scales[g] < d)
+                {
+                    var r = scales[g] / d;
+                    squares[g] = 1 + (squares[g] * r * r);
+                    scales[g] = d;
+                }
+                else
+                {
+                    var r = d / scales[g];
+                    squares[g] += r * r;
+                }
+            }
+        }
+
+        /// <summary>Each row's rank within its group into <paramref name="values"/>; whether it has one into <paramref name="present"/>.</summary>
+        private static void Rank(
+            OperatorContext context, Output output, ReadOnlySpan<int> live, int[] groupOf, Span<double> values, Span<bool> present)
         {
             var n = live.Length;
-            var ranks = context.Memory.Rent<long>(n);
+            var ranks = context.Memory.RentScratch<long>(n);
             RowRanking.RankWithinGroups(live, groupOf.AsSpan(0, n), output.Value is { } v ? context.Read(v) : null, context.Table,
                 output.Ascending, ranks, context.Memory);
-            var present = context.Memory.Rent<bool>(n).AsSpan(0, n);
             for (var i = 0; i < n; i++)
             {
                 present[i] = groupOf[i] >= 0;
                 values[i] = ranks[i];
             }
 
-            return present;
+            context.Memory.ReturnScratch(ranks);
         }
 
         private static double Read(ColumnBuffer column, int row) => column switch

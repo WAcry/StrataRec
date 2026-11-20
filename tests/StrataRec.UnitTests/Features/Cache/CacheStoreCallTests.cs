@@ -167,6 +167,83 @@ public class CacheStoreCallTests
     }
 
     /// <summary>
+    /// Pre-release assessment: each chunk of the tier's read is judged when it answered. The first chunk answers at once
+    /// and is fresh; the second answers after the records' TTL passed (50 ms against 10 ms) and goes to the connector. The
+    /// time the first chunk was judged at made the second's record a fresh hit.
+    /// </summary>
+    [Fact]
+    public async Task AChunkThatAnswersAfterItsRecordsExpired_SendsItsKeysToTheConnector_WhileAnEarlierChunkStaysAHit()
+    {
+        var store = new SecondChunkWaits();
+        var connector = ScriptedConnector.Values((key, _) => key * 1.0);
+        var rig = new FeatureTestRig().CacheSource("item_store", connector, ttlMs: 10, distributed: store, maxBatch: 1);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+        store.Prepare(rig.Tables["item_store"].Cache!, rig.Clock.NowMs, 111.0);
+        rig.Clock.HoldTimestamps(); // the tier's time never runs out
+
+        var request = rig.NewRequest([1, 2]); // two chunks
+        var fill = request.EnsureAsync(clicks).AsTask();
+        await store.SecondSent.WaitAsync(TestContext.Current.CancellationToken);
+        rig.Clock.AdvanceMs(50);
+        store.Answer();
+        var result = await fill;
+
+        Assert.Equal(FeatureState.Ok, result.State);
+        Assert.Equal(111.0, request.Value(clicks, 0).AsFloat64()); // the first chunk's hit
+        Assert.Equal(2.0, request.Value(clicks, 1).AsFloat64()); // not 111: expired when it arrived
+        Assert.Equal(new long[] { 2 }, connector.Calls.SelectMany(c => c.Keys).Select(k => k.Int64Value));
+    }
+
+    /// <summary>
+    /// A store whose first read answers at once and whose later reads wait for <see cref="Answer"/>; each answers a record
+    /// written at the time <see cref="Prepare"/> was given.
+    /// </summary>
+    private sealed class SecondChunkWaits : IFeatureCacheStore
+    {
+        private readonly TaskCompletionSource _sent = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _answer = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private ReadOnlyMemory<byte> _record;
+        private int _calls;
+
+        public string StoreType => TestCacheStoreFactory.Type;
+
+        public Task SecondSent => _sent.Task;
+
+        public void Prepare(LocalTableCache cache, long writtenMs, double value)
+        {
+            var writer = new CacheRecordWriter(cache.Layout, 64);
+            writer.Begin(writtenMs, cache.Fingerprint, absent: false);
+            writer.Float64(0, value);
+            var (offset, length) = writer.End();
+            _record = writer.Bytes.AsMemory(offset, length);
+        }
+
+        public void Answer() => _answer.TrySetResult();
+
+        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref _calls) == 1)
+            {
+                records.Span.Fill(_record);
+                return ValueTask.CompletedTask;
+            }
+
+            _sent.TrySetResult();
+            return new ValueTask(AnswerLaterAsync(records));
+        }
+
+        public ValueTask SetAsync(CacheKeyspace keyspace, ReadOnlyMemory<CacheStoreEntry> entries, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+
+        private async Task AnswerLaterAsync(Memory<ReadOnlyMemory<byte>> records)
+        {
+            await _answer.Task;
+            records.Span.Fill(_record);
+        }
+    }
+
+    /// <summary>
     /// A store that runs <paramref name="whileSending"/> in its synchronous part (where the test moves the clock), then
     /// answers a fresh record for every key.
     /// </summary>

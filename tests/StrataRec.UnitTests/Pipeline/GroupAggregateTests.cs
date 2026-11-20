@@ -200,6 +200,63 @@ public sealed class GroupAggregateTests
     }
 
     /// <summary>
+    /// Pre-release assessment: the std is right at every scale a float64 holds. Summing squared deviations made ±1e200
+    /// infinite (the node failed) and ±1e-200 zero; a group near the largest float64 and one of subnormals are covered too.
+    /// </summary>
+    [Theory]
+    [InlineData(1e200, -1e200, 1e200)]
+    [InlineData(1e-200, -1e-200, 1e-200)]
+    [InlineData(1.7e308, -1.7e308, 1.7e308)] // the deviations overflow unless halved
+    [InlineData(1e308, 1e308, 0.0)]
+    [InlineData(4.9406564584124654E-324, -4.9406564584124654E-324, 4.9406564584124654E-324)] // the smallest subnormal
+    [InlineData(3.0, 1.0, 1.0)]
+    public async Task Std_AtTheEdgesOfFloat64_IsThePopulationStd(double first, double second, double std)
+    {
+        (long, long?, string, double?, double)[] items = [(1, 1, "a", first, 0), (2, 1, "a", second, 0)];
+        var plan = TryCompileOver(items, ("agg", """
+            { "op": "GroupAggregate@1", "order": 200, "config": { "outputs": { "author.std": { "fn": "std", "value_col": "item.score" } } } }
+            """)).Plan!;
+
+        var result = await Run(plan);
+
+        Assert.Null(result.Error);
+        Assert.All(ById(result).Values, row => Assert.Equal(std, row["author_std"].AsFloat64(), 1e-12 * std));
+    }
+
+    /// <summary>
+    /// The node's buffers are scratch, given back once its outputs are written: outputs computed one after another over
+    /// the same reused buffers each start clean (a sum, a std and a count after a rank, as when computed alone).
+    /// </summary>
+    [Fact]
+    public async Task OutputsComputedOverReusedBuffers_EachStartClean()
+    {
+        var plan = Compile("""
+            { "op": "GroupAggregate@1", "order": 200, "config": { "group_col": "item.author", "outputs": {
+                "author.rank": { "fn": "rank", "value_col": "item.score" }, "author.sum": { "fn": "sum", "value_col": "item.score" },
+                "author.std": { "fn": "std", "value_col": "item.score" }, "author.count": { "fn": "count" } } } }
+            """);
+        var alone = Compile("""
+            { "op": "GroupAggregate@1", "order": 200, "config": { "group_col": "item.author", "outputs": {
+                "author.std": { "fn": "std", "value_col": "item.score" } } } }
+            """, """
+            { "op": "GroupAggregate@1", "order": 210, "config": { "group_col": "item.author", "outputs": {
+                "author.sum": { "fn": "sum", "value_col": "item.score" }, "author.count": { "fn": "count" } } } }
+            """);
+
+        var together = ById(await Run(plan));
+        var separate = ById(await Run(alone));
+
+        Assert.Equal(6, separate.Count);
+        foreach (var (id, row) in separate)
+        {
+            foreach (var column in new[] { "author_sum", "author_std", "author_count" })
+            {
+                Assert.Equal(row[column], together[id][column]);
+            }
+        }
+    }
+
+    /// <summary>
     /// Review 71: both grouping operators group by a string entity_id. A string column groups by string equality (equal
     /// values that are other instances are one group), numbered as they first appear; a missing value is in no group.
     /// </summary>
