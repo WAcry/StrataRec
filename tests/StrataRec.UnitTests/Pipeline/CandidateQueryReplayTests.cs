@@ -67,6 +67,9 @@ public sealed class CandidateQueryReplayTests
     [InlineData("float64", """{"x":1}""", "/runs/0/candidate_calls/0/query/q/value")]
     [InlineData("list<float64>", """["a"]""", "/runs/0/candidate_calls/0/query/q/value")]
     [InlineData("list<float64,3>", "[1, 2]", "/runs/0/candidate_calls/0/query/q/value")]
+    [InlineData("float64", "1e400", "/runs/0/candidate_calls/0/query/q/value")] // review 84: read as an infinity, it borrowed a real one's answer
+    [InlineData("float32", "-1e400", "/runs/0/candidate_calls/0/query/q/value")]
+    [InlineData("list<float64>", "[1, 1e400]", "/runs/0/candidate_calls/0/query/q/value")]
     public void ARecordedValueNotOfItsType_IsRejectedAtItsPointer(string type, string value, string pointer)
     {
         var run = RunReplayTests.Run();

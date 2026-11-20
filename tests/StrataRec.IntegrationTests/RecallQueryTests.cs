@@ -7,6 +7,7 @@ using StrataRec.Features.Connectors;
 using StrataRec.Features.Runtime;
 using StrataRec.Hosting;
 using StrataRec.Pipeline.Execution;
+using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Pipeline.Replay;
 using StrataRec.Pipeline.Sources;
@@ -449,6 +450,77 @@ public sealed class RecallQueryTests
         Assert.Equal(NodeOutcomeKind.Degraded, recall.Kind);
         Assert.StartsWith("recall sources failed: two_tower: its query reads a context feature that failed (", recall.Detail, StringComparison.Ordinal);
         Assert.False(sources.Called("two_tower").IsCompleted);
+    }
+
+    /// <summary>
+    /// Review 84: once the node's budget has run out, no read is settled, even when a settled callback ran past it and the
+    /// read was stored meanwhile. The first callback (the user's features, stored at once) holds on until the 500 ms budget
+    /// cancels the node token, then lets geo_store answer and waits until the country's region is stored (region_store,
+    /// keyed by it, has started). The next round found the region stored, Task.WhenAny of a completed task returned at once
+    /// and the timed wait never timed out, so the second read was settled after the deadline.
+    /// </summary>
+    [Fact]
+    public async Task AReadStoredAfterTheDeadline_IsNeverSettled_HoweverLongACallbackRan()
+    {
+        var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
+            "\"recall\": {", "\"late_reads\": { \"order\": 50, \"op\": \"LateReads@1\", \"timeout_ms\": 500, \"config\": {} }, \"recall\": {"));
+        using var connectors = new TwoGateConnectors();
+        var probe = new LateReadsFactory(connectors);
+        await using var engine = new RecEngine(new PlanEnvironment
+        {
+            BaseDirectory = host.Root,
+            Connectors = FeatureConnectorRegistry.CreateDefault().Add(connectors),
+            Operators = OperatorRegistry.CreateDefault().Add(probe),
+        });
+        var load = engine.Load(host.Request);
+        Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
+
+        RecResult result;
+        try
+        {
+            result = await engine.ExecuteAsync(WithCountry("req-late-reads"), TestContext.Current.CancellationToken).AsTask()
+                .WaitAsync(Patience, TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            connectors.OpenGeo.TrySetResult();
+            connectors.OpenRegion.TrySetResult();
+        }
+
+        Assert.Equal("timed out after 500 ms", result.Trace!.Single(n => n.NodeId == "late_reads").Detail);
+        Assert.Equal([0], probe.Settled);
+    }
+
+    /// <summary><c>LateReads@1</c>: waits for the user's embedding, then the country's region, noting each read settled.</summary>
+    private sealed class LateReadsFactory(TwoGateConnectors connectors) : IOperatorFactory
+    {
+        public TwoGateConnectors Connectors { get; } = connectors;
+
+        public OperatorDescriptor Descriptor { get; } = new("LateReads", 1, Effects.ColumnWriter, typeof(NoSettings), "Settles two reads, the first slowly.");
+
+        public ConcurrentQueue<int> Settled { get; } = new();
+
+        public Operator? Compile(OperatorCompileContext context)
+        {
+            var user = context.CompileAwaitedExpression("ctx.user.embedding", "/user");
+            var region = context.CompileAwaitedExpression("ctx.country.region", "/region");
+            return user is null || region is null ? null : new LateReads(this, [context.AwaitedReadsOf([user]), context.AwaitedReadsOf([region])]);
+        }
+
+        private sealed class LateReads(LateReadsFactory owner, AwaitedReads[] reads) : Operator
+        {
+            public override async ValueTask ExecuteAsync(OperatorContext context) =>
+                await context.WhenEachReadyAsync(reads, (index, _) =>
+                {
+                    owner.Settled.Enqueue(index);
+                    if (index == 0)
+                    {
+                        Assert.True(context.CancellationToken.WaitHandle.WaitOne(Patience)); // the budget runs out
+                        owner.Connectors.OpenGeo.TrySetResult();
+                        owner.Connectors.RegionStarted.Task.WaitAsync(Patience).GetAwaiter().GetResult(); // the region is stored
+                    }
+                });
+        }
     }
 
     internal static RecRequest WithCountry(string requestId)

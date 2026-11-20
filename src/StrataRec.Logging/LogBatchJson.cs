@@ -246,7 +246,16 @@ public static class LogBatchJson
                 value = ScalarValue.FromInt64(integer);
                 return true;
             case StorageKind.Float32 or StorageKind.Float64 when json.ValueKind == JsonValueKind.Number:
-                value = Float(type, json.GetDouble());
+                // A JSON number is finite: one beyond the float64 range reads as an infinity, which a writer would have
+                // spelled "Infinity". Read as one, it compared equal to a real infinity (review 84).
+                var number = json.GetDouble();
+                if (!double.IsFinite(number))
+                {
+                    error = $"{json.GetRawText()} is beyond the float64 range";
+                    return false;
+                }
+
+                value = Float(type, number);
                 return true;
             case StorageKind.Float32 or StorageKind.Float64 when nonFiniteAsStrings && TryNonFinite(json, out var named):
                 value = Float(type, named);

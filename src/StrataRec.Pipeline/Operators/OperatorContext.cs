@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
@@ -140,8 +141,9 @@ public sealed class OperatorContext
     /// <para><paramref name="settled"/> runs on the operator's flow, one call at a time; what it throws ends the wait.</para>
     /// <para>The wait is bounded on its own by the attempt's deadline and the caller, as a call is
     /// (<see cref="RetrieveAsync"/>), not by <see cref="CancellationToken"/>, which a client's callback could hold up; and a
-    /// prefetch that faulted is rethrown as it is, not taken for the deadline. An operator that stopped waiting reads nothing
-    /// more of the request's.</para>
+    /// prefetch that faulted is rethrown as it is, not taken for the deadline. The bound is also checked before each round
+    /// and before each callback, so what is stored after it passed is never settled, however long a callback ran. An
+    /// operator that stopped waiting reads nothing more of the request's.</para>
     /// </remarks>
     /// <exception cref="OperationCanceledException">The attempt's budget ran out or the caller gave up first: the reads not
     /// settled by then never are, and the operator stops, as when a call it sent is cut off.</exception>
@@ -173,6 +175,7 @@ public sealed class OperatorContext
         var pending = new List<Task>();
         while (true)
         {
+            ThrowIfBoundPassed();
             tasks.Clear();
             stored.Clear();
             pending.Clear();
@@ -199,6 +202,7 @@ public sealed class OperatorContext
                 var i = waiting[w];
                 if (Settled(features, reads[i].Features, tasks, stored, out var result))
                 {
+                    ThrowIfBoundPassed(); // the callback before may have run past it
                     waiting.RemoveAt(w--);
                     settled(i, result);
                 }
@@ -218,10 +222,28 @@ public sealed class OperatorContext
             }
             catch (TimeoutException)
             {
-                throw new OperationCanceledException("The node's budget ran out while it waited for context features.", Budget.Token);
+                throw BudgetRanOut();
             }
         }
     }
+
+    /// <summary>
+    /// The bound of <see cref="WhenEachReadyAsync"/> outside its wait: a settled callback that ran past the deadline (or
+    /// until the caller gave up) must not let the next round, or the next read of this one, settle what was stored late.
+    /// The wait itself would not say so: a task already completed makes <c>Task.WhenAny</c> complete at once, and a timed
+    /// wait on a completed task never times out (review 84).
+    /// </summary>
+    private void ThrowIfBoundPassed()
+    {
+        Budget.Caller.ThrowIfCancellationRequested();
+        if (Budget.Token.IsCancellationRequested || Stopwatch.GetTimestamp() >= Budget.Deadline)
+        {
+            throw BudgetRanOut();
+        }
+    }
+
+    private OperationCanceledException BudgetRanOut() =>
+        new("The node's budget ran out while it waited for context features.", Budget.Token);
 
     /// <summary>Whether one round's observation settles <paramref name="features"/>, and with which state (see <see cref="WhenEachReadyAsync"/>).</summary>
     private static bool Settled(FeatureFetcher fetcher, ImmutableArray<int> features, List<Task> tasks, List<bool> stored, out FeatureFillResult result)
