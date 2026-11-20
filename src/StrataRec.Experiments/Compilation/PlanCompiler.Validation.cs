@@ -61,7 +61,8 @@ internal sealed partial class UnifiedCompilation
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var allLayers = new List<int>(choices.Keys);
-        if (Combinations(choices, allLayers) <= _request.MaxCombinationsChecked)
+        var all = Combinations(choices, allLayers);
+        if (all <= _request.MaxCombinationsChecked)
         {
             Enumerate(choices, allLayers, combination => Check(combination, timeline, fallbacks, output, seen, report));
             return;
@@ -107,7 +108,8 @@ internal sealed partial class UnifiedCompilation
         }
 
         var enumerated = new HashSet<string>(StringComparer.Ordinal);
-        var counted = new Dictionary<string, long>(StringComparer.Ordinal); // rules of one set of layers count it once
+        // Rules of one set of layers count it once; a rule of every layer has the count above.
+        var counted = new Dictionary<string, long>(StringComparer.Ordinal) { [string.Join(",", allLayers)] = all };
         var reported = new HashSet<string>(StringComparer.Ordinal);
         foreach (var scope in _builder.DataFlowScopes(nodes, taps, output, Conditional))
         {
@@ -669,8 +671,8 @@ internal sealed partial class UnifiedCompilation
     /// <summary>
     /// How many combinations of <paramref name="layers"/> run (<see cref="Enumerate"/>): the product of the layers'
     /// choices without yields; with them, counted up to the limit, and <see cref="long.MaxValue"/> above it. A yield
-    /// removes the combinations with both experiments, as one layer would, so declaring one instead of merging two layers
-    /// costs no more checks.
+    /// removes the combinations with arms of both experiments: for two layers of one experiment each, those merging the
+    /// two layers would remove.
     /// </summary>
     private long Combinations(SortedDictionary<int, List<int>> choices, List<int> layers)
     {

@@ -222,6 +222,38 @@ public sealed class ExperimentYieldTests
     }
 
     /// <summary>
+    /// A replay's arms come from the request's assignment record (review 99): an edited assignment replays as edited and
+    /// shows as replayed arms that differ from those the primary run recorded, rather than replaying the run's arms
+    /// silently; an ignored id listed twice runs once and is noted once.
+    /// </summary>
+    [Fact]
+    public async Task AReplay_RunsTheAssignmentRecord_AndNotesAnIdOnce()
+    {
+        await using var sample = MetricsTests.LoadEngine(HomeFeedTestHost.Load()).Engine;
+        await using var withShortFeed = MetricsTests.LoadEngine(HomeFeedTestHost.LoadModified(root =>
+        {
+            ShortFeed(root);
+            QualityYields(root);
+        })).Engine;
+        var token = TestContext.Current.CancellationToken;
+        var strong = await sample.ExecuteAsync(Request("req-strong", forced: false, "exp_quality_weight/strong", record: true), token);
+        var unknown = await sample.ExecuteAsync(Request("req-unknown", forced: false, "exp_short_feed/short", record: true), token);
+        var edited = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(strong.Recording!));
+        edited.Request.Assignment.Arms[0] = "exp_quality_weight/control";
+        var twice = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(unknown.Recording!));
+        twice.Request.Assignment.Ignored.Add(twice.Request.Assignment.Ignored[0]);
+
+        var control = await sample.ReplayAsync(edited, cancellationToken: token);
+        var once = await withShortFeed.ReplayAsync(twice, cancellationToken: token);
+
+        Assert.Equal(10, control.Result.Items.Count);
+        Assert.Equal(["exp_quality_weight/strong"], control.Report.RecordedArms);
+        Assert.Equal(["exp_quality_weight/control"], control.Report.ReplayedArms);
+        Assert.Equal(5, once.Result.Items.Count);
+        Assert.Single(once.Report.Notes, n => n.Contains("was ignored in the recording", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// A yield changes what a request in both experiments runs, which no combination the default diff compares shows, so
     /// it is a structural change; a reversed one is one removed and one added (review 96). An effective plan is the one a
     /// request in the arms runs, without the arm that yields, as the executor runs it.

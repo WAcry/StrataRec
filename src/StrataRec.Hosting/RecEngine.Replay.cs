@@ -113,13 +113,16 @@ public sealed partial class RecEngine
             // those it ignored for any reason; they go through the platform's rule again, so a changed plan ignores (an
             // unknown arm, a layer conflict), runs or yields them as it would the request. Forced arms, and arms passed to
             // the replay, are strict, as forced arms are in a request: an arm the plan does not have is left out with a
-            // note, two of one layer reject the replay. Yields come last, for every source.
+            // note, two of one layer reject the replay. Yields come last, for every source. The input is the request's
+            // assignment record (the arms of its primary run are what the report compares with): in a bundle the engine
+            // wrote they agree, and an edited assignment shows as replayed arms that differ from the recorded ones.
+            var recordedAssigned = recordedRequest.Assignment.Arms;
             var recordedIgnored = options?.Arms is null ? IgnoredArms(recordedRequest.Assignment) : Array.Empty<IgnoredArm>();
             RequestArms arms;
             IgnoredArm[] ignored;
             if (options?.Arms is null && recordedRequest.Assignment.Source is "external" or "provider")
             {
-                var sent = new List<string>(recordedArms);
+                var sent = new List<string>(recordedAssigned);
                 foreach (var arm in recordedIgnored)
                 {
                     sent.Add(arm.Id);
@@ -130,7 +133,7 @@ public sealed partial class RecEngine
             else
             {
                 // A forced recording's yielded arms were forced too.
-                var forced = new List<string>(options?.Arms ?? recordedArms);
+                var forced = new List<string>(options?.Arms ?? recordedAssigned);
                 foreach (var arm in recordedIgnored)
                 {
                     if (arm.Reason == IgnoredArmReason.Yielded)
@@ -167,7 +170,7 @@ public sealed partial class RecEngine
 
             var assigned = arms;
             arms = ExternalArms.Yield(plan, assigned, ignored, out ignored);
-            Notes(plan, recordedArms, recordedIgnored, assigned, arms, ignored, notes);
+            Notes(plan, recordedAssigned, recordedIgnored, assigned, arms, ignored, notes);
 
             // The recorded configuration override, applied again over the replayed plan with the replayed arms, as the
             // request applied it (DebugOptions.ConfigOverride); its run has the arms merged in.
@@ -708,12 +711,15 @@ public sealed partial class RecEngine
 
         foreach (var arm in recordedIgnored)
         {
-            if (plan.TryGetArm(arm.Id, out var info) && running.ArmIn(info.LayerIndex) == info.Index)
+            // An id listed twice (an edited bundle) runs once and is noted once.
+            if (plan.TryGetArm(arm.Id, out var info) && running.ArmIn(info.LayerIndex) == info.Index && !Contains(notes, Ran(arm)))
             {
-                notes.Add($"arm '{arm.Id}' was ignored in the recording ({IgnoredArm.Name(arm.Reason)}) and runs in the replayed plan");
+                notes.Add(Ran(arm));
             }
         }
     }
+
+    private static string Ran(IgnoredArm arm) => $"arm '{arm.Id}' was ignored in the recording ({IgnoredArm.Name(arm.Reason)}) and runs in the replayed plan";
 
     private static bool Contains(IReadOnlyList<string> ids, string id)
     {
