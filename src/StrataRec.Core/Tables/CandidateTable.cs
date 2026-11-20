@@ -214,6 +214,29 @@ public sealed class CandidateTable
     }
 
     /// <summary>
+    /// True when each of <paramref name="rows"/> (physical rows) is filled in the slot: the check of a fill that covers
+    /// some rows only (the output's returned rows), one bit per row rather than a word of every live row.
+    /// </summary>
+    public bool IsFilled(int slot, ReadOnlySpan<int> rows)
+    {
+        var filled = _filled[slot];
+        if (filled is null)
+        {
+            return rows.IsEmpty;
+        }
+
+        foreach (var row in rows)
+        {
+            if (!Bits.Get(filled, row))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Number of live rows that have no value in the slot: all of them when the slot was never created. Checked a word of
     /// rows at a time, so a slot with a value on every live row costs no per-row work.
     /// </summary>

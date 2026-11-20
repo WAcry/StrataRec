@@ -58,7 +58,7 @@ public sealed partial class FeatureFetcher
     /// </summary>
     public void StartContextFetch(ReadOnlySpan<int> features, CancellationToken cancellationToken)
     {
-        var closure = Closure(features, out var member);
+        var closure = Closure(features, out var member, scratch: false); // read by the background fetch after this returns
         if (!AnyContext(closure))
         {
             _contextTask = Task.CompletedTask;

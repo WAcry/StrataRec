@@ -74,12 +74,26 @@ public sealed partial class FeatureFetcher
     /// One read of a candidate (or foreign-key) cache group: the rows <see cref="LookUp"/> selects. Fills the fresh keys'
     /// rows now; a read with misses is left resolving on the wave's list.
     /// </summary>
-    private void ReadCached(FetchGroup group, ReadOnlySpan<int> features, CancellationToken cancellationToken)
+    private void ReadCached(FetchGroup group, ReadOnlySpan<int> features, RowScope scope, CancellationToken cancellationToken)
     {
         var cache = group.Supply.Table!.Table.Cache!;
         var started = _hook is null ? 0 : Stopwatch.GetTimestamp();
         var version = Pin(group);
-        var batch = LookUp(group, features, version);
+        var batch = LookUp(group, features, version, scope);
+        try
+        {
+            ReadCached(group, features, cache, version, batch, started, cancellationToken);
+        }
+        finally
+        {
+            batch.Return(_memory); // a read that goes on resolving has copied what it needs of the batch
+        }
+    }
+
+    private void ReadCached(
+        FetchGroup group, ReadOnlySpan<int> features, LocalTableCache cache, TableVersion version, in LocalReadBatch batch, long started,
+        CancellationToken cancellationToken)
+    {
         if (batch.Rows.Length == 0)
         {
             SetReadState(group, features);
@@ -117,29 +131,38 @@ public sealed partial class FeatureFetcher
         }
 
         var read = new CacheRead(group, features.ToArray(), version, keys, hashes, misses, batch.Rows.Length, isContext: false, _memory);
-        var hitRows = _memory.Rent<int>(batch.Rows.Length);
-        var hitRecords = _memory.Rent<LocalRecordRef>(batch.Rows.Length);
         batch.KeyRecords.CopyTo(read.Records);
-
         SortMisses(read, nowMs);
-        var hits = 0;
-        for (var i = 0; i < batch.Rows.Length; i++)
+
+        // The hits are filled now, from scratch lists; the misses' rows go to the read, which fills them once resolved.
+        var hitRows = _memory.RentScratch<int>(batch.Rows.Length);
+        var hitRecords = _memory.RentScratch<LocalRecordRef>(batch.Rows.Length);
+        try
         {
-            var entry = batch.RowKeys[i];
-            if (entry >= 0 && read.MissOf[entry] >= 0)
+            var hits = 0;
+            for (var i = 0; i < batch.Rows.Length; i++)
             {
-                read.AddRow(batch.Rows[i], read.MissOf[entry]);
+                var entry = batch.RowKeys[i];
+                if (entry >= 0 && read.MissOf[entry] >= 0)
+                {
+                    read.AddRow(batch.Rows[i], read.MissOf[entry]);
+                }
+                else
+                {
+                    hitRows[hits] = batch.Rows[i];
+                    hitRecords[hits++] = batch.RowRecords[i];
+                }
             }
-            else
+
+            if (hits > 0)
             {
-                hitRows[hits] = batch.Rows[i];
-                hitRecords[hits++] = batch.RowRecords[i];
+                Fill(group, features, version, hitRows.AsSpan(0, hits), hitRecords.AsSpan(0, hits));
             }
         }
-
-        if (hits > 0)
+        finally
         {
-            Fill(group, features, version, hitRows.AsSpan(0, hits), hitRecords.AsSpan(0, hits));
+            _memory.ReturnScratch(hitRows);
+            _memory.ReturnScratch(hitRecords);
         }
 
         Resolve(read, started, cancellationToken);
@@ -898,55 +921,68 @@ public sealed partial class FeatureFetcher
         var layout = read.Cache.Layout;
         var tableFields = group.Supply.Table!.TableFields;
 
-        // The slots each table field fills, grouped by field (two features may read one field).
-        var starts = _memory.RentCleared<int>(layout.FieldCount + 1);
-        foreach (var f in read.Features)
+        // Scratch, given back before this returns: the fill writes into the table's slots and keeps nothing.
+        var starts = _memory.RentScratch<int>(layout.FieldCount + 1);
+        var targets = _memory.RentScratch<CacheTarget>(read.Features.Length);
+        var next = _memory.RentScratch<int>(layout.FieldCount);
+        var staleRows = _memory.RentScratch<int>(read.RowCount);
+        var staleRecords = _memory.RentScratch<LocalRecordRef>(read.RowCount);
+        try
         {
-            starts[tableFields[_plan.Features[f].FieldIndex] + 1]++;
-        }
-
-        for (var t = 0; t < layout.FieldCount; t++)
-        {
-            starts[t + 1] += starts[t];
-        }
-
-        var targets = _memory.Rent<CacheTarget>(read.Features.Length);
-        var next = _memory.Rent<int>(layout.FieldCount);
-        starts.AsSpan(0, layout.FieldCount).CopyTo(next);
-        foreach (var f in read.Features)
-        {
-            var info = _plan.Features[f];
-            targets[next[tableFields[info.FieldIndex]]++] = new CacheTarget(info, _table.GetOrCreateSlot(info.Slot));
-        }
-
-        var stale = 0;
-        var staleRows = _memory.Rent<int>(read.RowCount);
-        var staleRecords = _memory.Rent<LocalRecordRef>(read.RowCount);
-        var fill = new ColumnFill(this, targets, starts, read.Strings);
-        for (var i = 0; i < read.RowCount; i++)
-        {
-            var m = read.RowMiss[i];
-            fill.Row = read.Rows[i];
-            switch (read.Sources[m])
+            // The slots each table field fills, grouped by field (two features may read one field).
+            Array.Clear(starts, 0, layout.FieldCount + 1);
+            foreach (var f in read.Features)
             {
-                case CacheSource.Distributed or CacheSource.Origin or CacheSource.OriginPartial or CacheSource.StaleDistributed:
-                    CacheRecord.Read(read.Bytes[m].Span, layout, ref fill); // checked well formed (or encoded here) already
-                    break;
-                case CacheSource.StaleLocal:
-                    staleRows[stale] = read.Rows[i];
-                    staleRecords[stale++] = read.Records[read.MissKey[m]];
-                    break;
-                case CacheSource.Failed:
-                    fill.AllMissing(layout.FieldCount);
-                    break;
-                case CacheSource.Pending or CacheSource.StaleCandidate:
-                    throw new InvalidOperationException("A cache read is filled after it settled.");
+                starts[tableFields[_plan.Features[f].FieldIndex] + 1]++;
+            }
+
+            for (var t = 0; t < layout.FieldCount; t++)
+            {
+                starts[t + 1] += starts[t];
+            }
+
+            starts.AsSpan(0, layout.FieldCount).CopyTo(next);
+            foreach (var f in read.Features)
+            {
+                var info = _plan.Features[f];
+                targets[next[tableFields[info.FieldIndex]]++] = new CacheTarget(info, _table.GetOrCreateSlot(info.Slot));
+            }
+
+            var stale = 0;
+            var fill = new ColumnFill(this, targets, starts, read.Strings);
+            for (var i = 0; i < read.RowCount; i++)
+            {
+                var m = read.RowMiss[i];
+                fill.Row = read.Rows[i];
+                switch (read.Sources[m])
+                {
+                    case CacheSource.Distributed or CacheSource.Origin or CacheSource.OriginPartial or CacheSource.StaleDistributed:
+                        CacheRecord.Read(read.Bytes[m].Span, layout, ref fill); // checked well formed (or encoded here) already
+                        break;
+                    case CacheSource.StaleLocal:
+                        staleRows[stale] = read.Rows[i];
+                        staleRecords[stale++] = read.Records[read.MissKey[m]];
+                        break;
+                    case CacheSource.Failed:
+                        fill.AllMissing(layout.FieldCount);
+                        break;
+                    case CacheSource.Pending or CacheSource.StaleCandidate:
+                        throw new InvalidOperationException("A cache read is filled after it settled.");
+                }
+            }
+
+            if (stale > 0)
+            {
+                Fill(group, read.Features, read.Version, staleRows.AsSpan(0, stale), staleRecords.AsSpan(0, stale));
             }
         }
-
-        if (stale > 0)
+        finally
         {
-            Fill(group, read.Features, read.Version, staleRows.AsSpan(0, stale), staleRecords.AsSpan(0, stale));
+            _memory.ReturnScratch(starts);
+            _memory.ReturnScratch(targets);
+            _memory.ReturnScratch(next);
+            _memory.ReturnScratch(staleRows);
+            _memory.ReturnScratch(staleRecords);
         }
     }
 

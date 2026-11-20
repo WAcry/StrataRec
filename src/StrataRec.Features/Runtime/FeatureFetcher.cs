@@ -178,27 +178,36 @@ public sealed partial class FeatureFetcher
     /// </summary>
     public void Prefetch(ReadOnlySpan<int> features, CancellationToken cancellationToken)
     {
-        var closure = Closure(features, out var member);
+        var closure = Closure(features, out var member, scratch: true);
         var groups = GroupsOf(closure, wave: 0);
-        for (var i = 0; i < groups.Count; i++)
+        try
         {
-            // A group keyed by a feature that is not available yet (e.g. a derived key computed by EnsureAsync) would
-            // find no keys now; EnsureAsync fetches it once the key exists.
-            var group = _plan.Groups[groups.Items[i]];
-            if (!Prefetches(group))
+            for (var i = 0; i < groups.Count; i++)
             {
-                continue;
-            }
+                // A group keyed by a feature that is not available yet (e.g. a derived key computed by EnsureAsync) would
+                // find no keys now; EnsureAsync fetches it once the key exists.
+                var group = _plan.Groups[groups.Items[i]];
+                if (!Prefetches(group))
+                {
+                    continue;
+                }
 
-            if (!KeyFeaturesFilled(group))
-            {
-                continue;
-            }
+                if (!KeyFeaturesFilled(group))
+                {
+                    continue;
+                }
 
-            if (FeaturesToFetch(group, member, skipInFlight: true) is { } fetch)
-            {
-                _pending.Add(Start(group, fetch, cancellationToken));
+                if (FeaturesToFetch(group, member, skipInFlight: true, RowScope.Live) is { } fetch)
+                {
+                    _pending.Add(Start(group, fetch, RowScope.Live, cancellationToken));
+                }
             }
+        }
+        finally
+        {
+            // Nothing a started fetch keeps refers to them: it has its own feature array, keys and staging.
+            _memory.ReturnScratch(groups.Items);
+            ReturnClosure(closure, member);
         }
     }
 
@@ -217,97 +226,173 @@ public sealed partial class FeatureFetcher
             return new ValueTask<FeatureFillResult>(new FeatureFillResult(FeatureState.Ok));
         }
 
-        var closure = Closure(features, out var member);
-        return EnsureClosureAsync(closure, member, cancellationToken);
+        var closure = Closure(features, out var member, scratch: true);
+        return EnsureClosureAsync(closure, member, RowScope.Live, cancellationToken);
     }
 
-    private async ValueTask<FeatureFillResult> EnsureClosureAsync(IndexList closure, bool[] member, CancellationToken cancellationToken)
+    /// <summary>
+    /// Ensures every listed feature is filled for <paramref name="rows"/> only: distinct live physical rows, the output's
+    /// returned rows (design 3.4), known once the final order is, when no reader is left for the other live rows. The waves
+    /// of <see cref="EnsureAsync(ReadOnlySpan{int}, CancellationToken)"/>, but a fetch or a table read takes the keys of these
+    /// rows, a derived feature is computed for them, and only they are marked filled, so a later whole fill fills the
+    /// rest. A fetch already in flight (a prefetch) carrying a needed feature is completed for every live row it covers, as
+    /// for any reader. With no rows nothing is filled or waited for, context features included: no row reads them.
+    /// </summary>
+    /// <remarks>
+    /// <para>The state, one per feature for the request, is recorded by the rules of a whole fill applied to the rows this
+    /// fill fills, and a failure is never lowered. So a row-scoped fill cannot mislead a later whole fill: a failure it
+    /// records is one on live rows, which a whole fill covers as well (a value they cannot hold, a source that failed for
+    /// every key it was asked, as for rows appended after a fill); an ok or degraded state it records covers its rows alone,
+    /// and the rows it leaves unfilled are filled, and their failure recorded, by the next fill that needs them. The state
+    /// returned is the features' state for the request, so one that failed in an earlier fill fails here too.</para>
+    /// <para>The features and rows are read before this returns, so the caller may reuse their storage.</para>
+    /// </remarks>
+    public ValueTask<FeatureFillResult> EnsureAsync(ReadOnlySpan<int> features, ReadOnlySpan<int> rows, CancellationToken cancellationToken)
     {
-        if (_contextTask is not null && AnyContext(closure))
+        if (features.IsEmpty || rows.IsEmpty)
         {
-            await ContextReadyAsync(closure).ConfigureAwait(false);
+            return new ValueTask<FeatureFillResult>(new FeatureFillResult(FeatureState.Ok));
         }
 
-        // member marks the whole closure, context features included: every lookup below is of a candidate feature.
-        ComputeDerivedOfWave(-1, member);
-        for (var wave = 0; wave <= _plan.MaxWave; wave++)
+        var closure = Closure(features, out var member, scratch: true);
+        var scoped = _memory.RentScratch<int>(rows.Length);
+        rows.CopyTo(scoped);
+        return EnsureClosureAsync(closure, member, new RowScope(scoped, rows.Length), cancellationToken);
+    }
+
+    /// <summary>
+    /// The fill of both <see cref="EnsureAsync(ReadOnlySpan{int}, CancellationToken)"/> overloads, wave by wave (design 6.8).
+    /// It owns the fill's temporaries, scratch buffers each given back as soon as nothing refers to them (design 4.8): the
+    /// closure, its marks and a row-scoped fill's rows when it ends, however it ends; a wave's groups and its started
+    /// fetches at the wave's end. What a started fetch keeps (its feature array, keys, staging and calls) is its own, on
+    /// the request's ledger, since its connector calls may outlive the fill. One method, so a fill that waits costs one
+    /// state machine, not one per wave.
+    /// </summary>
+    /// <param name="closure">Scratch, from <see cref="Closure"/>; given back here.</param>
+    /// <param name="member">Scratch, from <see cref="Closure"/>; given back here.</param>
+    /// <param name="scope">The rows to fill: every live row, or a row-scoped fill's scratch copy of its rows, given back here.</param>
+    private async ValueTask<FeatureFillResult> EnsureClosureAsync(IndexList closure, bool[] member, RowScope scope, CancellationToken cancellationToken)
+    {
+        try
         {
-            // In-flight (prefetched) fetches carrying a needed feature first; their keys may cover most rows.
-            for (var i = 0; i < _pending.Count; i++)
+            if (_contextTask is not null && AnyContext(closure))
             {
-                var pending = _pending[i];
-                if (pending.Group.Wave == wave && Intersects(pending.Features, member))
+                await ContextReadyAsync(closure).ConfigureAwait(false);
+            }
+
+            // member marks the whole closure, context features included: every lookup below is of a candidate feature.
+            ComputeDerivedOfWave(-1, member, scope);
+            for (var wave = 0; wave <= _plan.MaxWave; wave++)
+            {
+                // In-flight (prefetched) fetches carrying a needed feature first; their keys may cover most rows.
+                for (var i = 0; i < _pending.Count; i++)
                 {
-                    _pending.RemoveAt(i--);
-                    await CompleteAsync(pending).ConfigureAwait(false);
+                    var pending = _pending[i];
+                    if (pending.Group.Wave == wave && Intersects(pending.Features, member))
+                    {
+                        _pending.RemoveAt(i--);
+                        await CompleteAsync(pending).ConfigureAwait(false);
+                    }
+                }
+
+                // Then anything still unfilled (rows appended since, fields not prefetched, or never prefetched): fetches
+                // first, then the local and cache reads, which run while the fetches are in flight.
+                var groups = GroupsOf(closure, wave);
+                PendingFetch[]? started = null;
+                try
+                {
+                    var startedCount = 0;
+                    var locals = false;
+                    for (var g = 0; g < groups.Count; g++)
+                    {
+                        var group = _plan.Groups[groups.Items[g]];
+                        if (ReadsLocally(group))
+                        {
+                            locals = true;
+                        }
+                        else if (FeaturesToFetch(group, member, skipInFlight: false, scope) is { } fetch && !FailIfKeyFailed(group, fetch))
+                        {
+                            started ??= _memory.RentScratch<PendingFetch>(groups.Count);
+                            started[startedCount++] = Start(group, fetch, scope, cancellationToken);
+                        }
+                    }
+
+                    if (locals)
+                    {
+                        ReadLocalGroups(groups, member, scope, cancellationToken);
+                    }
+
+                    for (var s = 0; s < startedCount; s++)
+                    {
+                        await CompleteAsync(started![s]).ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    // Each fetch is completed above; one an exception left behind holds the request memory through its
+                    // calls, not through this array (cleared as it is given back).
+                    if (started is not null)
+                    {
+                        _memory.ReturnScratch(started);
+                    }
+
+                    _memory.ReturnScratch(groups.Items);
+                }
+
+                // The cache reads that missed resolve their misses meanwhile (the distributed tier, then the connector).
+                while (TakeCacheRead() is { } read)
+                {
+                    await CompleteCacheReadAsync(read).ConfigureAwait(false);
+                }
+
+                ComputeDerivedOfWave(wave, member, scope);
+            }
+
+            var worst = FeatureState.Ok;
+            string? error = null;
+            for (var i = 0; i < closure.Count; i++)
+            {
+                var f = closure.Items[i];
+                if (_state[f] > worst)
+                {
+                    worst = _state[f];
+                    error = _errors[f];
                 }
             }
 
-            // Then anything still unfilled (rows appended since, fields not prefetched, or never prefetched): fetches
-            // first, then the local and cache reads, which run while the fetches are in flight.
-            var groups = GroupsOf(closure, wave);
-            PendingFetch[]? started = null;
-            var startedCount = 0;
-            var locals = false;
-            for (var g = 0; g < groups.Count; g++)
-            {
-                var group = _plan.Groups[groups.Items[g]];
-                if (ReadsLocally(group))
-                {
-                    locals = true;
-                }
-                else if (FeaturesToFetch(group, member, skipInFlight: false) is { } fetch && !FailIfKeyFailed(group, fetch))
-                {
-                    started ??= _memory.Rent<PendingFetch>(groups.Count);
-                    started[startedCount++] = Start(group, fetch, cancellationToken);
-                }
-            }
-
-            if (locals)
-            {
-                ReadLocalGroups(groups, member, cancellationToken);
-            }
-
-            for (var s = 0; s < startedCount; s++)
-            {
-                await CompleteAsync(started![s]).ConfigureAwait(false);
-            }
-
-            // The cache reads that missed resolve their misses meanwhile (the distributed tier, then the connector).
-            while (TakeCacheRead() is { } read)
-            {
-                await CompleteCacheReadAsync(read).ConfigureAwait(false);
-            }
-
-            ComputeDerivedOfWave(wave, member);
+            return new FeatureFillResult(worst, error);
         }
-
-        var worst = FeatureState.Ok;
-        string? error = null;
-        for (var i = 0; i < closure.Count; i++)
+        finally
         {
-            var f = closure.Items[i];
-            if (_state[f] > worst)
+            ReturnClosure(closure, member);
+            if (scope.Rows is { } rows)
             {
-                worst = _state[f];
-                error = _errors[f];
+                _memory.ReturnScratch(rows);
             }
         }
-
-        return new FeatureFillResult(worst, error);
     }
 
     /// <summary>
     /// The features plus everything they depend on, in dependency order (<see cref="FeaturePlan.Closure(IEnumerable{int})"/>),
-    /// in arrays rented from the request memory: an ensure runs for every node, and its closure was a set, a list and a
-    /// boxed enumerator each time. <paramref name="member"/> marks the closure by feature index.
+    /// in arrays from the request memory: an ensure runs for every node, and its closure was a set, a list and a boxed
+    /// enumerator each time. <paramref name="member"/> marks the closure by feature index.
     /// </summary>
-    private IndexList Closure(ReadOnlySpan<int> features, out bool[] member)
+    /// <param name="scratch">True for a fill or a prefetch, which give both back (<see cref="ReturnClosure"/>) once they are
+    /// done; false for the context prefetch, which reads them on after it has returned, so they stay on the ledger.</param>
+    private IndexList Closure(ReadOnlySpan<int> features, out bool[] member, bool scratch)
     {
         var length = Math.Max(1, _plan.Features.Count);
-        var order = _memory.Rent<int>(length);
-        member = _memory.RentCleared<bool>(length);
+        var order = scratch ? _memory.RentScratch<int>(length) : _memory.Rent<int>(length);
+        member = scratch ? _memory.RentScratch<bool>(length) : _memory.Rent<bool>(length);
+        Array.Clear(member, 0, length);
         return new IndexList(order, _plan.Closure(features, order, member));
+    }
+
+    /// <summary>Gives back a scratch <see cref="Closure"/>.</summary>
+    private void ReturnClosure(IndexList closure, bool[] member)
+    {
+        _memory.ReturnScratch(closure.Items);
+        _memory.ReturnScratch(member);
     }
 
     private bool AnyContext(IndexList features)
@@ -336,12 +421,16 @@ public sealed partial class FeatureFetcher
         return false;
     }
 
-    /// <summary>Indices of the distinct candidate fetch groups of the given features in one wave, in group order.</summary>
+    /// <summary>
+    /// Indices of the distinct candidate fetch groups of the given features in one wave, in group order, in a scratch
+    /// array the caller gives back once it has started their fetches and reads.
+    /// </summary>
     private IndexList GroupsOf(IndexList features, int wave)
     {
         var length = Math.Max(1, _plan.Groups.Count);
-        var seen = _memory.RentCleared<bool>(length);
-        var result = _memory.Rent<int>(length);
+        var seen = _memory.RentScratch<bool>(length);
+        Array.Clear(seen, 0, length);
+        var result = _memory.RentScratch<int>(length);
         var count = 0;
         for (var i = 0; i < features.Count; i++)
         {
@@ -355,25 +444,38 @@ public sealed partial class FeatureFetcher
             result[count++] = info.GroupIndex;
         }
 
+        _memory.ReturnScratch(seen);
         return new IndexList(result, count);
     }
 
     /// <summary>
     /// The members of <paramref name="group"/> this request needs now and does not have yet (late materialization,
-    /// design 5.4/6.8): requested (directly or as a dependency), not failed, and unfilled on some live row — optionally
-    /// excluding members an in-flight fetch already carries. Returned in group order; <c>null</c> when none.
+    /// design 5.4/6.8): requested (directly or as a dependency), not failed, and unfilled on some row of
+    /// <paramref name="scope"/> — optionally excluding members an in-flight fetch already carries. Returned in group order;
+    /// <c>null</c> when none.
     /// </summary>
-    private int[]? FeaturesToFetch(FetchGroup group, bool[] member, bool skipInFlight)
+    private int[]? FeaturesToFetch(FetchGroup group, bool[] member, bool skipInFlight, RowScope scope)
     {
         var members = group.FeatureIndexArray;
-        Span<int> selected = members.Length <= 128 ? stackalloc int[members.Length] : _memory.Rent<int>(members.Length);
-        var count = SelectNeeded(group, member, skipInFlight, selected);
-        if (count == 0)
+        if (members.Length <= 128)
         {
-            return null;
+            Span<int> selected = stackalloc int[members.Length];
+            return Selected(members, selected, SelectNeeded(group, member, skipInFlight, scope, selected));
         }
 
-        return count == members.Length ? members : selected[..count].ToArray();
+        var rented = _memory.RentScratch<int>(members.Length);
+        try
+        {
+            return Selected(members, rented, SelectNeeded(group, member, skipInFlight, scope, rented));
+        }
+        finally
+        {
+            _memory.ReturnScratch(rented);
+        }
+
+        // The fetch keeps an array of its own (all the members, or a copy of the selection): it outlives this call.
+        static int[]? Selected(int[] members, ReadOnlySpan<int> selected, int count) =>
+            count == 0 ? null : count == members.Length ? members : selected[..count].ToArray();
     }
 
     /// <summary>
@@ -381,12 +483,12 @@ public sealed partial class FeatureFetcher
     /// <paramref name="selected"/> (at least as long as the group), in group order; returns how many. The one rule of
     /// what a fetch or a local read supplies (late materialization, design 5.4/6.8).
     /// </summary>
-    private int SelectNeeded(FetchGroup group, bool[] member, bool skipInFlight, Span<int> selected)
+    private int SelectNeeded(FetchGroup group, bool[] member, bool skipInFlight, RowScope scope, Span<int> selected)
     {
         var count = 0;
         foreach (var f in group.FeatureIndices)
         {
-            if (member[f] && _state[f] != FeatureState.Failed && !_table.IsFilledForLiveRows(_plan.Features[f].Slot)
+            if (member[f] && _state[f] != FeatureState.Failed && !IsFilled(_plan.Features[f].Slot, scope)
                 && !(skipInFlight && InFlight(group, f)))
             {
                 selected[count++] = f;
@@ -487,10 +589,10 @@ public sealed partial class FeatureFetcher
         return true;
     }
 
-    private PendingFetch Start(FetchGroup group, int[] features, CancellationToken cancellationToken)
+    private PendingFetch Start(FetchGroup group, int[] features, RowScope scope, CancellationToken cancellationToken)
     {
         var fields = FieldBindings(group, features);
-        // Collect distinct keys of live rows that still miss any of the fetched features. The index, the key array and
+        // Collect distinct keys of the scope's rows that still miss any of the fetched features. The index, the key array and
         // the per-chunk arrays are rented from the request memory (design 4.8), so a fetch allocates nothing per key.
         // Lifetimes: the index and the chunk arrays are read only on the request's thread (Backfill, CompleteAsync),
         // before the request releases the memory. The key array is read by connector calls, which may outlive the
@@ -507,7 +609,7 @@ public sealed partial class FeatureFetcher
         var noSharedKey = !TrySharedKey(group, shared);
         if (!noSharedKey)
         {
-            var live = _table.Rows.Order;
+            var live = RowsOf(scope);
             var varyingBuffer = default(KeyPartBuffer);
             Span<EntityKey> varying = varyingBuffer;
             varying = varying[..layout.VaryingCount];
@@ -519,7 +621,7 @@ public sealed partial class FeatureFetcher
                 {
                     if (!index.IsSet)
                     {
-                        // Sized to the live rows, an upper bound on the distinct keys: the index never grows.
+                        // Sized to the rows, an upper bound on the distinct keys: the index never grows.
                         index.Reset(_memory, layout, shared[..(layout.PartCount - layout.VaryingCount)], live.Length, key);
                     }
 
@@ -536,7 +638,7 @@ public sealed partial class FeatureFetcher
         var chunkCount = Batching.Count(keyCount, chunkSize);
         if (chunkCount == 0)
         {
-            return new PendingFetch(group, features, index, chunkSize, 0, null, Array.Empty<ValueTask<FetchStatus>>(), Array.Empty<bool>(), noSharedKey);
+            return new PendingFetch(group, features, scope, index, chunkSize, 0, null, Array.Empty<ValueTask<FetchStatus>>(), Array.Empty<bool>(), noSharedKey);
         }
 
         var all = index.Batch(_memory);
@@ -551,7 +653,7 @@ public sealed partial class FeatureFetcher
                 RecordUnsent(group, ChunkKeys(all, chunkSize, c), fields, NoTimeLeft, IoOutcome.Timeout);
             }
 
-            return new PendingFetch(group, features, index, chunkSize, chunkCount, null, calls, chunkFailed, noSharedKey);
+            return new PendingFetch(group, features, scope, index, chunkSize, chunkCount, null, calls, chunkFailed, noSharedKey);
         }
 
         var staging = new StagingArea(fields, keyCount, chunkSize, _memory);
@@ -589,7 +691,7 @@ public sealed partial class FeatureFetcher
             cancellation?.Release(); // the fetch's own reference; every sent chunk holds one until its connector completes
         }
 
-        return new PendingFetch(group, features, index, chunkSize, chunkCount, staging, calls, chunkFailed, noSharedKey);
+        return new PendingFetch(group, features, scope, index, chunkSize, chunkCount, staging, calls, chunkFailed, noSharedKey);
     }
 
     private static EntityKeyBatch ChunkKeys(in EntityKeyBatch keys, int chunkSize, int chunk)
@@ -1082,17 +1184,18 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>
-    /// Copies staged values into the live rows that are still unfilled, matching by key (design 4.5). Key index k belongs
-    /// to chunk k / max_batch. A value is read only if its chunk succeeded and the connector wrote that field for that
-    /// key; anything else takes the default or becomes missing, and so does a list of another length than a
-    /// <c>list&lt;E,N&gt;</c> feature's, counted out of range (design 4.3).
+    /// Copies staged values into the rows of the fetch's scope that are still unfilled (the live rows now, for a fetch of
+    /// every live row), matching by key (design 4.5). Key index k belongs to chunk k / max_batch. A value is read only if
+    /// its chunk succeeded and the connector wrote that field for that key; anything else takes the default or becomes
+    /// missing, and so does a list of another length than a <c>list&lt;E,N&gt;</c> feature's, counted out of range
+    /// (design 4.3).
     /// </summary>
     private void Backfill(PendingFetch pending, FeatureRuntimeInfo feature, int fieldIndex, ref BackfillScratch scratch)
     {
         var definition = feature.Definition;
         var column = _table.GetOrCreateSlot(feature.Slot);
         var filled = _table.GetFilled(feature.Slot);
-        var order = _table.Rows.Order;
+        var order = RowsOf(pending.Scope);
         if (scratch.Keys is null)
         {
             scratch.Keys = _memory.RentScratch<int>(Math.Max(1, order.Length));
@@ -1155,7 +1258,7 @@ public sealed partial class FeatureFetcher
         }
     }
 
-    private void ComputeDerivedOfWave(int wave, bool[] member)
+    private void ComputeDerivedOfWave(int wave, bool[] member, RowScope scope)
     {
         var order = _plan.DerivedOrder;
         for (var i = 0; i < order.Count; i++) // an interface foreach would box the enumerator, twice per ensure
@@ -1164,12 +1267,12 @@ public sealed partial class FeatureFetcher
             var info = _plan.Features[f];
             if (member[f] && !info.IsContext && info.Wave == wave)
             {
-                ComputeDerived(info);
+                ComputeDerived(info, scope);
             }
         }
     }
 
-    private void ComputeDerived(FeatureRuntimeInfo feature)
+    private void ComputeDerived(FeatureRuntimeInfo feature, RowScope scope)
     {
         var (worst, error) = WorstDependency(feature);
         if (worst == FeatureState.Failed)
@@ -1179,10 +1282,11 @@ public sealed partial class FeatureFetcher
             return;
         }
 
-        var buffer = _memory.RentScratch<int>(Math.Max(1, _table.Rows.Count));
+        var rows = RowsOf(scope);
+        var buffer = _memory.RentScratch<int>(Math.Max(1, rows.Length));
         try
         {
-            ComputeDerived(feature, worst, error, buffer);
+            ComputeDerived(feature, worst, error, rows, buffer);
         }
         finally
         {
@@ -1190,12 +1294,13 @@ public sealed partial class FeatureFetcher
         }
     }
 
+    /// <summary>Computes the feature for those of <paramref name="rows"/> it is not filled on, and sets its state by them.</summary>
     /// <param name="buffer">Scratch for the rows the feature fills, returned by the caller.</param>
-    private void ComputeDerived(FeatureRuntimeInfo feature, FeatureState worst, string? error, int[] buffer)
+    private void ComputeDerived(FeatureRuntimeInfo feature, FeatureState worst, string? error, ReadOnlySpan<int> rows, int[] buffer)
     {
         var filled = _table.GetFilled(feature.Slot);
         var count = 0;
-        foreach (var row in _table.Rows.Order)
+        foreach (var row in rows)
         {
             if (!Bits.Get(filled, row))
             {
@@ -1453,6 +1558,7 @@ public sealed partial class FeatureFetcher
     private sealed class PendingFetch(
         FetchGroup group,
         int[] features,
+        RowScope scope,
         FetchKeys keys,
         int chunkSize,
         int chunkCount,
@@ -1465,6 +1571,9 @@ public sealed partial class FeatureFetcher
 
         /// <summary>Fetched features; staging field i holds <c>Features[i]</c>.</summary>
         public int[] Features { get; } = features;
+
+        /// <summary>The rows backfilled: the live ones when it completes, or a row-scoped fill's, which completes it itself.</summary>
+        public RowScope Scope { get; } = scope;
 
         /// <summary>Key → key index; key index k belongs to chunk k / ChunkSize. Not set when no live row had a key.</summary>
         public FetchKeys Keys { get; } = keys;
@@ -1489,6 +1598,24 @@ public sealed partial class FeatureFetcher
 
     /// <summary>Feature or group indices in an array rented from the request memory, valid up to <see cref="Count"/>.</summary>
     private readonly record struct IndexList(int[] Items, int Count);
+
+    /// <summary>
+    /// The rows a fill covers: every live row (<see cref="Live"/>, a node's reads), or the first <see cref="Count"/> of
+    /// <see cref="Rows"/> (a row-scoped fill's, <see cref="EnsureAsync(ReadOnlySpan{int}, ReadOnlySpan{int}, CancellationToken)"/>).
+    /// Every step of a fill that looks at rows (what is still unfilled, the keys a fetch or a table read takes, the rows a
+    /// fetch backfills, the rows a derived feature is computed for) takes them from here, so the two kinds share one path.
+    /// </summary>
+    private readonly record struct RowScope(int[]? Rows, int Count)
+    {
+        public static RowScope Live => default;
+    }
+
+    /// <summary>The rows of <paramref name="scope"/>: the live rows as they are now, or the scope's own.</summary>
+    private ReadOnlySpan<int> RowsOf(RowScope scope) => scope.Rows is null ? _table.Rows.Order : scope.Rows.AsSpan(0, scope.Count);
+
+    /// <summary>Whether the slot is filled on every row of <paramref name="scope"/>.</summary>
+    private bool IsFilled(int slot, RowScope scope) =>
+        scope.Rows is null ? _table.IsFilledForLiveRows(slot) : _table.IsFilled(slot, scope.Rows.AsSpan(0, scope.Count));
 
     /// <summary>
     /// The cancellation of one fetch: a single source for all its chunks' connectors, linked to the caller's token and

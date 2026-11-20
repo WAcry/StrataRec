@@ -1114,29 +1114,34 @@ internal sealed class PipelineExecutor
         var rows = FirstRows(state.Table, limit);
         var count = rows.Length;
 
-        // Output expressions may read features (design 3.4); make sure they are present for the returned rows. A feature
-        // that failed (a source failure, or a non-nullable derived int32 that did not fit) cannot be served as typed:
-        // expressions compiled against it skip validity checks. The request fails, as a node reading it would.
-        var outputFeatures = new List<int>();
-        foreach (var (_, expression) in output.Columns)
+        // Output expressions may read features (design 3.4); make sure they are present for the returned rows, and for
+        // those only: no one reads the others, so nothing is fetched or computed for them, and a value of theirs that
+        // cannot be served does not fail the request. A feature that failed on a returned row (a source failure, or a
+        // non-nullable derived int32 that did not fit) cannot be served as typed: expressions compiled against it skip
+        // validity checks. The request fails, as a node reading it would.
+        if (count > 0)
         {
-            var reads = expression.Reads;
-            for (var i = 0; i < reads.Count; i++) // an interface foreach would box the enumerator
+            var outputFeatures = new List<int>();
+            foreach (var (_, expression) in output.Columns)
             {
-                if (FeatureOf(plan, reads[i]) is >= 0 and var f)
+                var reads = expression.Reads;
+                for (var i = 0; i < reads.Count; i++) // an interface foreach would box the enumerator
                 {
-                    outputFeatures.Add(f);
+                    if (FeatureOf(plan, reads[i]) is >= 0 and var f)
+                    {
+                        outputFeatures.Add(f);
+                    }
                 }
             }
-        }
 
-        if (outputFeatures.Count > 0)
-        {
-            var fill = await state.Features.EnsureAsync(CollectionsMarshal.AsSpan(outputFeatures), cancellationToken).ConfigureAwait(false);
-            if (fill.Failed)
+            if (outputFeatures.Count > 0)
             {
-                return Failed(plan, request, "output reads a feature that failed: " + fill.Error, start, state.Outcomes, state.Triggered,
-                    state.NonFinite + state.Features.NonFiniteReplaced, state.Counters.OutOfRange);
+                var fill = await state.Features.EnsureAsync(CollectionsMarshal.AsSpan(outputFeatures), rows, cancellationToken).ConfigureAwait(false);
+                if (fill.Failed)
+                {
+                    return Failed(plan, request, "output reads a feature that failed: " + fill.Error, start, state.Outcomes, state.Triggered,
+                        state.NonFinite + state.Features.NonFiniteReplaced, state.Counters.OutOfRange);
+                }
             }
         }
 
