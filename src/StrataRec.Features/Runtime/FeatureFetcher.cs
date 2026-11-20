@@ -683,7 +683,7 @@ public sealed partial class FeatureFetcher
 
         // Each max_batch chunk is an independent call, and chunks run concurrently. They share the fetch's staging area
         // (each writes only its own region of it, see StagingArea), its time budget and its cancellation source.
-        var chunkSize = group.Supply.MaxBatch;
+        var chunkSize = Batching.Size(keyCount, group.Supply.MaxBatch); // the fewest chunks, even
         var chunkCount = Batching.Count(keyCount, chunkSize);
         if (chunkCount == 0)
         {

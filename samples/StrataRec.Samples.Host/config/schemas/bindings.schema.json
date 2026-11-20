@@ -49,7 +49,7 @@
             ]
           },
           "max_batch": {
-            "description": "Modes fetch and cache: maximum keys per connector call (default 1000); larger batches are split and sent concurrently. For cache, also the keys per read of the distributed cache.",
+            "description": "Modes fetch and cache: maximum keys per connector call (default 1000); larger batches are split into the fewest calls, of even size (9 keys at most 4 a call go as 3, 3 and 3), sent concurrently. For cache, also the keys per read of the distributed cache.",
             "type": [
               "integer",
               "null"

@@ -317,7 +317,7 @@ public sealed partial class FeatureFetcher
     /// <summary>Reads the misses from the distributed tier, chunk by chunk, and sorts what it had by freshness.</summary>
     private async ValueTask ReadDistributedAsync(CacheRead read, DistributedCacheTier tier, CancellationToken cancellationToken)
     {
-        var chunkSize = read.IsContext ? 1 : read.Supply.MaxBatch;
+        var chunkSize = Batching.Size(read.MissCount, read.IsContext ? 1 : read.Supply.MaxBatch); // the fewest chunks, even
         var chunks = Batching.Count(read.MissCount, chunkSize);
         var calls = _memory.Rent<ValueTask<long>>(chunks);
         for (var c = 0; c < chunks; c++)
@@ -577,7 +577,7 @@ public sealed partial class FeatureFetcher
         var layout = group.KeyLayout;
         var keys = read.KeyBatch.Select(keyOf.AsSpan(0, count), _memory.Rent<EntityKey>((layout.VaryingCount * count) + layout.PartCount - layout.VaryingCount));
 
-        var chunkSize = read.IsContext ? 1 : read.Supply.MaxBatch;
+        var chunkSize = Batching.Size(count, read.IsContext ? 1 : read.Supply.MaxBatch); // the fewest chunks, even
         var chunks = Batching.Count(count, chunkSize);
         var staging = new StagingArea(group.Fields.AsSpan(), count, chunkSize, _memory);
         var calls = _memory.Rent<ValueTask<FetchStatus>>(chunks);

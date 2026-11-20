@@ -25,7 +25,7 @@ public sealed class PairwiseRankerConfig : ModelCallConfig
     /// </summary>
     public int MaxPairs { get; init; } = 1225;
 
-    /// <summary>Pairs per model call; the calls run concurrently.</summary>
+    /// <summary>Most pairs per model call: the pairs are split into the fewest calls, of even size, which run concurrently.</summary>
     public int BatchSize { get; init; } = 256;
 
     /// <summary>
@@ -161,21 +161,22 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
                 }
             }
 
+            var stride = Batching.Size(pairs, batchSize); // the fewest batches, even
             var inputs = call.Inputs;
             var values = new GatheredInput[inputs.Length];
             for (var k = 0; k < inputs.Length; k++)
             {
-                values[k] = inputs[k].Gather(context, pairRows.AsSpan(0, 2 * pairs), Math.Min(pairs, batchSize));
+                values[k] = inputs[k].Gather(context, pairRows.AsSpan(0, 2 * pairs), stride);
             }
 
             var version = call.Version(context);
-            var batches = Batching.Count(pairs, batchSize);
+            var batches = Batching.Count(pairs, stride);
             var writers = new ModelOutputWriter[batches];
             var calls = new Task<ModelStatus>[batches];
             for (var b = 0; b < batches; b++)
             {
-                var offset = b * batchSize;
-                var count = Math.Min(batchSize, pairs - offset);
+                var offset = b * stride;
+                var count = Math.Min(stride, pairs - offset);
                 var named = new NamedInput[inputs.Length];
                 for (var k = 0; k < inputs.Length; k++)
                 {
@@ -228,6 +229,7 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
         private bool Aggregate(OperatorContext context, int[] rows, int n, ModelOutputWriter[] writers, double[] scores)
         {
             var pairs = PairCount(n);
+            var stride = Batching.Size(pairs, batchSize); // as the batches were sent
             var batch = 0;
             var index = 0;
             ReadOnlySpan<float> preferences = default;
@@ -237,7 +239,7 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
                 {
                     if (index == 0)
                     {
-                        var count = Math.Min(batchSize, pairs - (batch * batchSize));
+                        var count = Math.Min(stride, pairs - (batch * stride));
                         if (!writers[batch].TryGet(output, out var values) || values.Length < count)
                         {
                             context.Fail($"model '{call.Model}' did not return output '{output}' for every pair");

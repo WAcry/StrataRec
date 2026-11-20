@@ -99,9 +99,10 @@ public sealed class FeatureSourceBinding
         "read of the keys a request misses (the distributed cache, then the connector) stays within it.")]
     public int? TimeoutMs { get; init; }
 
-    /// <summary>Maximum keys per connector call; larger batches are split and sent concurrently.</summary>
-    [Description("Modes fetch and cache: maximum keys per connector call (default 1000); larger batches are split and sent " +
-        "concurrently. For cache, also the keys per read of the distributed cache.")]
+    /// <summary>Maximum keys per connector call; larger batches are split into the fewest calls, of even size, sent concurrently.</summary>
+    [Description("Modes fetch and cache: maximum keys per connector call (default 1000); larger batches are split into the " +
+        "fewest calls, of even size (9 keys at most 4 a call go as 3, 3 and 3), sent concurrently. For cache, also the keys per " +
+        "read of the distributed cache.")]
     public int? MaxBatch { get; init; }
 
     /// <summary>Modes <c>local</c> and <c>cache</c>: the most memory each of the source's tables may take, e.g. <c>"512MiB"</c>.</summary>

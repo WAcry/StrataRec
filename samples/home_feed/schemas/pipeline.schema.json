@@ -858,6 +858,7 @@
                       }
                     },
                     "batch_size": {
+                      "description": "Most rows per model call: the rows are split into the fewest calls, of even size, which run concurrently.",
                       "type": "integer"
                     }
                   },
@@ -984,7 +985,7 @@
                       "type": "integer"
                     },
                     "batch_size": {
-                      "description": "Pairs per model call; the calls run concurrently.",
+                      "description": "Most pairs per model call: the pairs are split into the fewest calls, of even size, which run concurrently.",
                       "type": "integer"
                     },
                     "score_col": {

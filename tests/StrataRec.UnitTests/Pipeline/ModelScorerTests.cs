@@ -69,11 +69,12 @@ public sealed class ModelScorerTests
     private static readonly float[] UserEmb = { 0.5f, -0.25f, 8f };
 
     [Theory]
-    [InlineData(2)]
-    [InlineData(3)]
-    [InlineData(256)]
-    [InlineData(int.MaxValue)] // one batch: the batch count must not overflow (review 27)
-    public async Task EachInput_IsSentAsItsTypeGivesIt_WithEveryRowsValue_InBatchesOfBatchSize(int batchSize)
+    [InlineData(2, new[] { 2, 2, 1 })]
+    [InlineData(3, new[] { 3, 2 })]
+    [InlineData(4, new[] { 3, 2 })] // the fewest batches, even: not 4 and 1
+    [InlineData(256, new[] { 5 })]
+    [InlineData(int.MaxValue, new[] { 5 })] // one batch: the batch count must not overflow (review 27)
+    public async Task EachInput_IsSentAsItsTypeGivesIt_WithEveryRowsValue_InBatchesOfBatchSize(int batchSize, int[] sizes)
     {
         var models = new CapturingModels(AllKindsSignature);
         var plan = Compile(models, AllKinds, batchSize);
@@ -84,8 +85,7 @@ public sealed class ModelScorerTests
         Assert.Equal(5, result.Items.Count);
         Assert.All(result.Items, item => Assert.Equal(0.5, item.Columns["p"].AsFloat64())); // every batch's output was written back
         var calls = models.Calls;
-        var expectedSizes = Enumerable.Range(0, Batching.Count(5, batchSize)).Select(b => Math.Min(batchSize, 5 - (b * batchSize)));
-        Assert.Equal(expectedSizes.Order(), calls.Select(c => c.BatchSize).Order());
+        Assert.Equal(sizes.Order(), calls.Select(c => c.BatchSize).Order());
         var seen = new List<long>();
         foreach (var call in calls)
         {

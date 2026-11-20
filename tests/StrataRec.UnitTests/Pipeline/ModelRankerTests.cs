@@ -67,11 +67,12 @@ public sealed class ModelRankerTests
     private static readonly Dictionary<long, int> Strengths = new() { [30] = 0, [10] = 3, [50] = 1, [20] = 1, [40] = 0, [60] = 0, [70] = 0 };
 
     [Theory]
-    [InlineData(1)]
-    [InlineData(4)]
-    [InlineData(6)]
-    [InlineData(256)]
-    public async Task Pairwise_SendsEachPairOfTheWindowOnce_ColumnsAsTwoRows_ContextOncePerPair_InBatchesOfBatchSize(int batchSize)
+    [InlineData(1, new[] { 1, 1, 1, 1, 1, 1 })]
+    [InlineData(4, new[] { 3, 3 })] // the fewest batches, even: not 4 and 2
+    [InlineData(5, new[] { 3, 3 })]
+    [InlineData(6, new[] { 6 })]
+    [InlineData(256, new[] { 6 })]
+    public async Task Pairwise_SendsEachPairOfTheWindowOnce_ColumnsAsTwoRows_ContextOncePerPair_InBatchesOfBatchSize(int batchSize, int[] sizes)
     {
         var models = new TestModels(_ => PairAll, Prefer(Strengths));
         var plan = Compile(models, "PairwiseRanker@1", $$"""{ "model": "m", "inputs": {{AllKinds}}, "output": "p", "window": 4, "batch_size": {{batchSize}} }""");
@@ -80,8 +81,7 @@ public sealed class ModelRankerTests
 
         Assert.True(result.Succeeded, result.Error);
         var calls = models.Calls;
-        var expectedSizes = Enumerable.Range(0, (6 + batchSize - 1) / batchSize).Select(b => Math.Min(batchSize, 6 - (b * batchSize)));
-        Assert.Equal(expectedSizes.Order(), calls.Select(c => c.BatchSize).Order());
+        Assert.Equal(sizes.Order(), calls.Select(c => c.BatchSize).Order());
         var sent = new List<int>();
         foreach (var call in calls)
         {
@@ -95,7 +95,7 @@ public sealed class ModelRankerTests
             AssertTensor(call["user_id"], TensorElementType.Int64, n);
             AssertTensor(call["weight"], TensorElementType.Float32, n);
             var first = Array.IndexOf(PairsOf4, (call["id"].Int64[0], call["id"].Int64[1]));
-            Assert.True(first >= 0 && first % batchSize == 0, $"a batch starts at pair {first}");
+            Assert.True(first >= 0 && first % sizes[0] == 0, $"a batch starts at pair {first}");
             for (var p = 0; p < n; p++)
             {
                 sent.Add(first + p);

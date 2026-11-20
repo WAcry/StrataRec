@@ -229,6 +229,36 @@ public class FeatureRuntimeReviewRegressionTests
     }
 
     [Fact]
+    public async Task Batches_AreTheFewestChunksOfMaxBatch_EvenlySized()
+    {
+        // Nine keys at most four a chunk: three chunks of three, not 4, 4 and 1, each still its own window.
+        var windows = new List<(int Keys, int Offset)>();
+        var connector = new ScriptedConnector((keys, fields, writer, _) =>
+        {
+            Assert.True(MemoryMarshal.TryGetArray<double>(writer.GetValues<double>(0), out var segment));
+            lock (windows)
+            {
+                windows.Add((writer.KeyCount, segment.Offset));
+            }
+
+            ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 1.5);
+            return ValueTask.FromResult(FetchStatus.Ok);
+        });
+        var rig = new FeatureTestRig().Source("item_store", connector, maxBatch: 4);
+        var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+        var request = rig.NewRequest(new long[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 });
+
+        await request.EnsureAsync(score);
+
+        Assert.Equal(new[] { (3, 0), (3, 3), (3, 6) }, windows.OrderBy(w => w.Offset));
+        for (var row = 0; row < 9; row++)
+        {
+            Assert.Equal((row + 1) * 1.5, request.Value(score, row).AsFloat64());
+        }
+    }
+
+    [Fact]
     public async Task Batches_AMaxBatchOfInt32Max_IsOneChunkOfEveryKey()
     {
         // "Everything in one chunk": the chunk count overflowed to 0, so no call was sent and no key was fetched (review 27).

@@ -12,6 +12,7 @@ public sealed class ModelScorerConfig : ModelCallConfig
     /// <summary>Model output name → column to write (float32 or float64).</summary>
     public required Dictionary<string, string> Outputs { get; init; }
 
+    /// <summary>Most rows per model call: the rows are split into the fewest calls, of even size, which run concurrently.</summary>
     public int BatchSize { get; init; } = 256;
 }
 
@@ -113,21 +114,22 @@ public sealed class ModelScorerFactory : IOperatorFactory
             var memory = context.Memory;
             var rows = memory.Rent<int>(n);
             context.LiveRows.CopyTo(rows);
+            var stride = Batching.Size(n, batchSize); // the fewest batches, even
             var inputs = call.Inputs;
             var values = new GatheredInput[inputs.Length];
             for (var i = 0; i < inputs.Length; i++)
             {
-                values[i] = inputs[i].Gather(context, rows.AsSpan(0, n), Math.Min(n, batchSize));
+                values[i] = inputs[i].Gather(context, rows.AsSpan(0, n), stride);
             }
 
             var version = call.Version(context);
-            var batches = Batching.Count(n, batchSize);
+            var batches = Batching.Count(n, stride);
             var writers = new ModelOutputWriter[batches];
             var calls = new Task<ModelStatus>[batches];
             for (var b = 0; b < batches; b++)
             {
-                var offset = b * batchSize;
-                var count = Math.Min(batchSize, n - offset);
+                var offset = b * stride;
+                var count = Math.Min(stride, n - offset);
                 var named = new NamedInput[inputs.Length];
                 for (var i = 0; i < inputs.Length; i++)
                 {
@@ -155,13 +157,14 @@ public sealed class ModelScorerFactory : IOperatorFactory
 
         private void WriteOutputs(OperatorContext context, ReadOnlySpan<int> rows, ModelOutputWriter[] writers)
         {
+            var stride = Batching.Size(rows.Length, batchSize); // as the batches were sent
             foreach (var (name, column) in outputs)
             {
                 var destination = context.Output(column);
                 for (var b = 0; b < writers.Length; b++)
                 {
-                    var offset = b * batchSize;
-                    var count = Math.Min(batchSize, rows.Length - offset);
+                    var offset = b * stride;
+                    var count = Math.Min(stride, rows.Length - offset);
                     if (!writers[b].TryGet(name, out var values) || values.Length < count)
                     {
                         context.Fail($"model '{call.Model}' did not return output '{name}' for every row");
