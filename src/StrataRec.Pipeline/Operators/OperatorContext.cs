@@ -157,10 +157,11 @@ public sealed class OperatorContext
 
         // One pass over the operator's list, which reads each read once and never again: one with nothing to wait for is
         // settled as it is read, the others are kept with their features (no copy of the list: none for an operator that
-        // waits for nothing). The bound is checked before each call into the operator's code, its list's indexer as its
-        // callback: indexed in each round, a slow list let a callback run after the bound passed (review 89) and a faulted
+        // waits for nothing). The bound is checked before each call into the operator's code, its list's Count and indexer
+        // as its callback (review 95: Count too): indexed in each round, a slow list let a callback run after the bound passed (review 89) and a faulted
         // prefetch stand for it (91); read up front without a check, the rest of the list was read after it (93).
         List<(int Index, ImmutableArray<int> Features)>? waiting = null;
+        ThrowIfBoundPassed();
         var count = reads.Count;
         for (var i = 0; i < count; i++)
         {

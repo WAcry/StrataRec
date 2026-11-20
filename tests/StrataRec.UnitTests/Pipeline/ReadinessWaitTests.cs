@@ -78,6 +78,32 @@ public sealed class ReadinessWaitTests
         budget.Release();
     }
 
+    /// <summary>
+    /// Review 95: entered with the bound already passed, the wait calls none of the operator's code, not even its list's
+    /// Count, whose exception would otherwise stand for the timeout or the cancellation.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EnteredWithTheBoundPassed_TheListIsNotAskedForItsCount(bool callerCancels)
+    {
+        using var caller = new CancellationTokenSource();
+        if (callerCancels)
+        {
+            caller.Cancel();
+        }
+
+        var budget = new AttemptBudget(caller.Token, callerCancels ? long.MaxValue : Stopwatch.GetTimestamp() - 1);
+        var context = new OperatorContext(null!, "n", Effects.ColumnWriter, budget);
+        var reads = new ListReads(static _ => { }, countThrows: true);
+
+        var error = await Record.ExceptionAsync(async () => await context.WhenEachReadyAsync(reads, Ignore));
+
+        Assert.IsAssignableFrom<OperationCanceledException>(error);
+        Assert.False(reads.CountAsked);
+        budget.Release();
+    }
+
     /// <summary>A null in the list is the caller's error, said with its index.</summary>
     [Fact]
     public async Task ANullRead_IsRejectedWithItsIndex()
@@ -92,12 +118,24 @@ public sealed class ReadinessWaitTests
         budget.Release();
     }
 
-    /// <summary>Three reads with nothing to wait for, running <paramref name="onAsked"/> each time one is asked for.</summary>
-    private sealed class ListReads(Action<int> onAsked) : IReadOnlyList<AwaitedReads>
+    /// <summary>
+    /// Three reads with nothing to wait for, running <paramref name="onAsked"/> each time one is asked for; its Count throws
+    /// when <paramref name="countThrows"/>.
+    /// </summary>
+    private sealed class ListReads(Action<int> onAsked, bool countThrows = false) : IReadOnlyList<AwaitedReads>
     {
         public List<int> Asked { get; } = new();
 
-        public int Count => 3;
+        public bool CountAsked { get; private set; }
+
+        public int Count
+        {
+            get
+            {
+                CountAsked = true;
+                return countThrows ? throw new InvalidOperationException("Count was asked for") : 3;
+            }
+        }
 
         public AwaitedReads this[int index]
         {
@@ -111,7 +149,7 @@ public sealed class ReadinessWaitTests
 
         public IEnumerator<AwaitedReads> GetEnumerator()
         {
-            for (var i = 0; i < Count; i++)
+            for (var i = 0; i < 3; i++)
             {
                 yield return this[i];
             }
