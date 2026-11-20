@@ -47,7 +47,7 @@ public enum PromptScope : byte
 /// once when present, and inside it <c>{{name}}</c> (or <c>{{.}}</c>) renders the value. An inverted section renders when
 /// the list is empty, the bool false or the value missing. A section over a value that always has one (a non-nullable
 /// string or number) is a load error: it would always render.</para>
-/// <para><b>Missing is explicit</b> (AGENTS.md): <c>{{x}}</c> of a nullable reference must be inside a <c>{{#x}}</c>
+/// <para><b>Missing is explicit</b> (docs/development.md section 5): <c>{{x}}</c> of a nullable reference must be inside a <c>{{#x}}</c>
 /// section on the same name, or it is a load error (<c>MUSTACHE_NULLABLE</c>): a missing value is never rendered as empty
 /// text silently.</para>
 /// <para><b>Errors</b> are reported at the template's config pointer with the character offset of the tag at fault and a

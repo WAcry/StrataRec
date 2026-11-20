@@ -1,7 +1,7 @@
 namespace StrataRec.Core.Diagnostics;
 
 /// <summary>
-/// "Did you mean ...?" for misspelled names, so an error can say how to fix it (AGENTS.md conventions; design 11.3 typo
+/// "Did you mean ...?" for misspelled names, so an error can say how to fix it (docs/development.md section 6; design 11.3 typo
 /// example <c>diversty_cap</c>). In Core so that configuration (artifacts) and the bindings' own settings (clients and
 /// connectors, which see only Core) suggest names by one rule.
 /// </summary>

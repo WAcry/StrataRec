@@ -2,10 +2,11 @@
 
 StrataRec 是面向 .NET 10+ 的进程内推荐执行引擎：列式候选表、编译一次的算子流水线、CEL 风格表达式 `ColumnExpr`，以及用 RFC 7396 合并补丁表达的多层实验。
 
-- `docs/design.md`：整体设计，代码注释中的 “design 4.6” 指它的章节号。
-- `docs/decisions.md`：实现中的决定和理由。改变设计或做出取舍时在这里补一条。
+开始改动之前先读 `docs/development.md`：项目的核心目标、取舍标准和必须守的规则（可演进性、性能与分配、缺失与确定性、配置与错误信息、兼容与版本、范围、测试、文档），以及每条规则的理由。
 
-文档用中文，代码、标识符和代码注释用英文。文档只记录读代码看不出来的东西：决定、取舍、理由和整体架构。
+- `docs/development.md`：开发理念、取舍和规则，适用于每一次改动。
+- `docs/decisions.md`：实现中的决定和理由。改变设计或做出取舍时在这里补一条。
+- `docs/design.md`：整体设计（最初的草稿，优先级最低），代码注释中的 “design 4.6” 指它的章节号。
 
 ## 构建、测试、运行
 
@@ -41,14 +42,9 @@ dotnet run --project src/StrataRec.Cli -- --help
 
 ## 约定
 
+规则和理由在 `docs/development.md`，这里只列操作上的约定。
+
 - C# 14、文件级命名空间、启用 nullable、`TreatWarningsAsErrors`。私有字段用 `_camelCase`。
-- 公开类型写 XML 文档注释，说明为什么这样设计，不要复述名字。
-- **`src/` 中禁止 LINQ。** 请求可能携带大量候选，引擎采用列式（SoA）正是为了减少分配；LINQ 会分配枚举器、闭包和中间集合。用显式循环、数组、`List<T>`、`Dictionary`/`HashSet`、带序数比较器的 `Array.Sort`/`List.Sort`。构建时由 `BannedSymbols.txt`（RS0030）和移除隐式 `System.Linq` using（`Directory.Build.targets`）强制。测试和基准可以用 LINQ。
-- 热路径（按行或按请求执行的代码）不能按行分配。请求生命周期内的缓冲从 `RequestMemory` 租借（`Rent`），算子不自己归还；在一个方法里用完、之后没有任何引用的临时缓冲（行列表、掩码、选择）用 `RentScratch` 租、用完 `ReturnScratch` 立即归还。
-- 配置只使用标准语法：JSON(C)、RFC 7396 合并补丁、RFC 6901 指针、RFC 8785 规范化、JSON Schema 2020-12、CEL 风格表达式、Mustache。不要发明 DSL。
-- 配置错误必须说明位置（JSON 指针或表达式偏移）和修复方法（hint）。
+- `src/` 中禁止 LINQ（理由见 `docs/development.md` 第 4 节），由 `BannedSymbols.txt`（RS0030）和移除隐式 `System.Linq` using（`Directory.Build.targets`）在构建时强制。
 - 改了配置类型，或改了会序列化的成员的 XML 文档注释（它们是 Schema 里的描述），要重新生成示例的 Schema，否则测试失败（失败信息里有命令）：`dotnet run --project src/StrataRec.Cli -- schema --out samples/home_feed/schemas`，以及在 `samples/StrataRec.Samples.Host` 下 `dotnet run -- stratarec schema --out config/schemas`。
-- 缺失值是显式的：可空类型（`T?`）、`??`、`has()`。绝不把缺失静默变成 0。
-- 确定性：平分时按 `entity_id` 升序；随机性只来自 `hash01` / `StableHash`。
-- 框架不做个人数据过滤（见 `docs/decisions.md`）。
 - CI 只用 Linux（`.github/workflows/ci.yml`），用 SDK 10 构建，测试跑在 .NET 10 运行时上。

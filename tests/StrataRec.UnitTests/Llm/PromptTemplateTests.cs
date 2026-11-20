@@ -250,7 +250,7 @@ public sealed class PromptTemplateTests
 
 /// <summary>
 /// What rendering a prompt allocates: the prompt string and nothing else, however many rows, lists and sections the
-/// template has (design 5.9; AGENTS.md: no per-row allocation on the request path).
+/// template has (design 5.9; docs/development.md section 4: no per-row allocation on the request path).
 /// </summary>
 [Collection(AllocationMeasurement.Name)]
 public sealed class PromptTemplateAllocationTests
