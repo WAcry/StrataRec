@@ -180,7 +180,7 @@ public sealed class TapCandidateKeyTests
 
         var error = Assert.Single(Compile(appended, operators).Diagnostics, d => d.IsError);
         Assert.Equal(("TAP_FEATURE_NOT_FETCHED", "/log_taps/key"), (error.Code, error.Pointer));
-        Assert.Equal("attach the tap after a later node that reads 'item.base': the rows 'next' or its fallback appends have no value for it", error.Hint);
+        Assert.Equal("attach the tap after a node after 'next' that reads 'item.base': the rows 'next' or its fallback appends have no value for it", error.Hint);
 
         var refilled = Compile(Appending(Pipeline("""{ "after": "later" }""", "col.item.base", primary: "item.base", backup: "", next: next,
             laterReader: true, output: "1.0")), operators);
@@ -408,20 +408,53 @@ public sealed class TapCandidateKeyTests
     /// Review 90: a row source that runs only after the tap is captured appends no row it logs, but was in a scope of the
     /// tap's candidate feature: with the layers changing the tap and its reader, that scope was past the combination limit,
     /// and a plan every combination of which is valid was rejected. Only a row source that may run before the tap counts.
+    /// Review 92: one at the largest order (taken for no order, and so for the first), a row-source fallback of a node
+    /// there, one nothing falls back to, a node a row source only in an arm (its order as a scorer counted), and a tap an
+    /// arm moves to the output to log other things (every row source counted for the feature) were still counted.
     /// </summary>
-    [Fact]
-    public void ARowSourceAfterTheTap_IsNotInAScopeOfItsCandidateFeature()
+    [Theory]
+    [InlineData("later")]
+    [InlineData("max_order")]
+    [InlineData("max_order_fallback")]
+    [InlineData("unreferenced_fallback")]
+    [InlineData("row_source_in_an_arm")]
+    [InlineData("tap_moved_to_the_output")]
+    public void ARowSourceAfterTheTap_IsNotInAScopeOfItsCandidateFeature(string variant)
     {
         var baseline = Pipeline("""{ "after": "next" }""", "col.item.base", primary: "double(col.item.base)", backup: "1.0", output: "1.0")
             .Replace("\"score.l\": { \"type\": \"float64\", \"default\": 0.0 }",
                 "\"score.l\": { \"type\": \"float64\", \"default\": 0.0 }, \"score.app\": { \"type\": \"float64?\" }", StringComparison.Ordinal);
+        if (variant == "row_source_in_an_arm")
+        {
+            baseline = baseline.Replace("\"backup\": {", """
+                "more": { "order": 150, "op": "ExpressionScorer@1", "config": { "output_col": "score.app", "expr": "1.0" } }, "backup": {
+                """, StringComparison.Ordinal);
+        }
+
+        const string late = """{ "nodes": { "more": { "order": 950, "op": "AppendsOne@1", "config": { "output_col": "score.app" } } } }""";
+        var rowSource = variant switch
+        {
+            "max_order" => late.Replace("950", "2147483647", StringComparison.Ordinal),
+            "max_order_fallback" => """
+                { "nodes": {
+                   "more": { "order": 2147483647, "op": "FailsAfterReading@1", "on_failure": "fallback", "fallback": "more_backup",
+                       "config": { "output_col": "score.app", "expr": "entity_id" } },
+                   "more_backup": { "role": "fallback", "op": "AppendsOne@1", "config": { "output_col": "score.app" } } } }
+                """,
+            "unreferenced_fallback" => """{ "nodes": { "more_backup": { "role": "fallback", "op": "AppendsOne@1", "config": { "output_col": "score.app" } } } }""",
+            "row_source_in_an_arm" => """{ "nodes": { "more": { "order": 950, "op": "AppendsOne@1", "config": { "output_col": "score.app", "expr": null } } } }""",
+            _ => late,
+        };
+        var tap = variant == "tap_moved_to_the_output"
+            ? """{ "log_taps": { "key": { "attach": { "after": null, "output": true }, "columns": { "v": null, "id": "col.entity_id" } } } }"""
+            : """{ "log_taps": { "key": { "columns": { "v": "col.item.base", "id": "col.entity_id" } } } }""";
         var placements = new[]
         {
-            Layer("a", """{ "log_taps": { "key": { "columns": { "v": "col.item.base", "id": "col.entity_id" } } } }"""),
+            Layer("a", tap),
             Layer("b", """{ "nodes": { "next": { "config": { "expr": "double(col.item.base) + 1.0" } } } }"""),
-            Layer("c", """{ "nodes": { "more": { "order": 950, "op": "AppendsOne@1", "config": { "output_col": "score.app" } } } }"""),
+            Layer("c", rowSource),
         };
-        var operators = OperatorRegistry.CreateDefault().Add(new AppendsOneFactory());
+        var operators = OperatorRegistry.CreateDefault().Add(new AppendsOneFactory()).Add(new FailsAfterReadingFactory());
         var (request, environment) = Inputs(baseline, operators);
 
         var exhaustive = PlanCompiler.Compile(CombinationLimitTests.With(request, placements, 8), environment);
@@ -460,6 +493,59 @@ public sealed class TapCandidateKeyTests
 
         var accepted = Compile(pipeline.Replace("""{ "after": "recall" }""", """{ "after": "later" }""", StringComparison.Ordinal), operators);
         Assert.True(accepted.Succeeded, string.Join("\n", accepted.Diagnostics));
+    }
+
+    /// <summary>
+    /// Review 92: when every later reader's position appends rows (by it or its fallback) and the output does not read the
+    /// feature, the hint asked for "a node that reads" it and named none; moved after the only reader, the tap was refused
+    /// again. It names the last such reader, after which a node must read it.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TheHint_WhenEveryLaterReaderAppends_NamesTheLast(bool useFallback)
+    {
+        var basePipeline = Pipeline("""{ "after": "recall" }""", "col.item.base", primary: "double(col.item.base)",
+            backup: useFallback ? "" : "1.0", output: "1.0");
+        var pipeline = useFallback
+            ? Appending(basePipeline.Replace("double(col.item.base)", "item.base", StringComparison.Ordinal))
+            : basePipeline
+                .Replace("\"score.t\": { \"type\": \"float64\", \"default\": 0.0 }", "\"score.t\": { \"type\": \"float64?\" }", StringComparison.Ordinal)
+                .Replace("\"next\": { \"order\": 200, \"op\": \"ExpressionScorer@1\"",
+                    "\"next\": { \"order\": 200, \"op\": \"ReadsAndAppends@1\"", StringComparison.Ordinal)
+                .Replace("double(col.item.base)", "item.base", StringComparison.Ordinal);
+        var operators = OperatorRegistry.CreateDefault().Add(new AppendsOneFactory())
+            .Add(new FailsAfterReadingFactory()).Add(new ReadsAndAppendsFactory());
+
+        var error = Assert.Single(Compile(pipeline, operators).Diagnostics, d => d.IsError);
+
+        Assert.Equal("TAP_FEATURE_NOT_FETCHED", error.Code);
+        Assert.Equal("attach the tap after a node after 'next' that reads 'item.base': the rows 'next' or its fallback appends have no value for it", error.Hint);
+    }
+
+    /// <summary>
+    /// Review 92: a tap of entered or dropped rows after a later node, where the reader's fallback appended rows, was told
+    /// to look for a later reader; attached after the reader it logs rows that were live when it filled them.
+    /// </summary>
+    [Theory]
+    [InlineData("entered")]
+    [InlineData("dropped")]
+    public void TheHint_ForEnteredOrDroppedRows_NamesTheReaderWhosePositionAppends(string scope)
+    {
+        var pipeline = Appending(Pipeline("""{ "after": "plain" }""", "col.item.base", primary: "item.base", backup: "", output: "1.0"))
+            .Replace("\"key\": { \"group\": \"all\",", $"\"key\": {{ \"group\": \"all\", \"rows\": {{ \"scope\": \"{scope}\" }},", StringComparison.Ordinal)
+            .Replace("\"backup\": {", """
+                "plain": { "order": 400, "op": "AppendsOne@1", "config": { "output_col": "score.l", "id": 3 } }, "backup": {
+                """, StringComparison.Ordinal)
+            .Replace("\"score.l\": { \"type\": \"float64\", \"default\": 0.0 }", "\"score.l\": { \"type\": \"float64?\" }", StringComparison.Ordinal);
+        var operators = OperatorRegistry.CreateDefault().Add(new FailsAfterReadingFactory()).Add(new AppendsOneFactory());
+
+        var error = Assert.Single(Compile(pipeline, operators).Diagnostics, d => d.IsError);
+
+        Assert.Equal("TAP_FEATURE_NOT_FETCHED", error.Code);
+        Assert.Equal($"attach the tap after 'next', which reads 'item.base': a tap of {scope} rows there logs rows that were live when it filled them", error.Hint);
+        var moved = Compile(pipeline.Replace("""{ "after": "plain" }""", """{ "after": "next" }""", StringComparison.Ordinal), operators);
+        Assert.True(moved.Succeeded, string.Join("\n", moved.Diagnostics));
     }
 
     /// <summary>Review 88: each of two row sources needs a later reader to fill its rows; context features are not affected.</summary>

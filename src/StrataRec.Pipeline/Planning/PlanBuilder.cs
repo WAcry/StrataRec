@@ -1443,26 +1443,44 @@ public sealed class PlanBuilder
             return latest;
         }
 
-        // The earliest order a node may run at: its own, or for a fallback that of a node falling back to it; a node with
-        // neither in any variant counts as running first.
-        int Earliest(string id)
+        // The earliest order a row source may append at: that of a variant that is a row source, or for one that is a fallback,
+        // of a variant of a node falling back to it; null when nothing may run it (a fallback nothing falls back to). Review
+        // 92: every variant counted, one at int.MaxValue was taken for no order and so for the first, and so was a fallback
+        // nothing falls back to.
+        int? Earliest(string id)
         {
-            var earliest = int.MaxValue;
-            foreach (var related in new[] { new SortedSet<string>(StringComparer.Ordinal) { id }, referrers.GetValueOrDefault(id) ?? none })
+            int? earliest = null;
+            var asFallback = false;
+            foreach (var variant in nodes[id])
             {
-                foreach (var node in related)
+                if (IsRowSource(variant))
                 {
-                    if (orders.TryGetValue(node, out var at))
+                    if (variant.Order is { } order)
                     {
-                        foreach (var order in at.Orders)
+                        earliest = Math.Min(earliest ?? order, order);
+                    }
+                    else
+                    {
+                        asFallback = true;
+                    }
+                }
+            }
+
+            if (asFallback)
+            {
+                foreach (var referrer in referrers.GetValueOrDefault(id) ?? none)
+                {
+                    foreach (var variant in nodes[referrer])
+                    {
+                        if (variant.OnFailure == FailurePolicy.Fallback && variant.FallbackNodeId == id && variant.Order is { } order)
                         {
-                            earliest = Math.Min(earliest, order);
+                            earliest = Math.Min(earliest ?? order, order);
                         }
                     }
                 }
             }
 
-            return earliest == int.MaxValue ? int.MinValue : earliest;
+            return earliest;
         }
         void Scope(string subject, string pointer, SortedSet<string> involved, string? tap = null, IReadOnlyCollection<string>? moreTaps = null)
         {
@@ -1633,15 +1651,19 @@ public sealed class PlanBuilder
                 Scope($"tap '{tapId}' reading '{schema.Columns[logical].Name}'", pointer, With(attach, producers.GetValueOrDefault(logical) ?? none), tapId);
             }
 
-            // The latest order the tap may be captured after; a row source that never runs before it appends no row it logs.
-            var latest = int.MinValue;
-            foreach (var tap in variants)
-            {
-                latest = Math.Max(latest, tap.AttachAfter is { } after && orders.TryGetValue(after, out var at) ? Latest(at.Orders) : int.MaxValue);
-            }
-
             foreach (var feature in features)
             {
+                // The latest order a variant logging the feature may be captured after (review 92: of every variant, one
+                // at the output logging other things too); a row source that never appends before it adds no row it logs.
+                var latest = int.MinValue;
+                foreach (var tap in variants)
+                {
+                    if (tap.ReadFeatures.Contains(feature))
+                    {
+                        latest = Math.Max(latest, tap.AttachAfter is { } after && orders.TryGetValue(after, out var at) ? Latest(at.Orders) : int.MaxValue);
+                    }
+                }
+
                 var name = _features[feature].Definition.Name;
                 var deciding = With(attach, featureReaders.GetValueOrDefault(feature) ?? none);
                 Scope($"tap '{tapId}' reading feature '{name}'", pointer, deciding, tapId);
@@ -1649,10 +1671,12 @@ public sealed class PlanBuilder
                 // A row source between the last reader and the tap leaves the rows it appends without the feature: one
                 // such position decides it with the readers (review 88: a layer adding a row source was not in the scope).
                 // Only one that may run before the tap is captured (review 90: one after it made a scope of more layers,
-                // which past the combination limit rejects the plan).
+                // which past the combination limit rejects the plan). Orders and attach points are taken across variants,
+                // not paired by combination: an arm moving both, or a fallback a later node also falls back to, still
+                // counts (see docs/decisions.md).
                 foreach (var rowSource in rowSources)
                 {
-                    if (Earliest(rowSource) <= latest)
+                    if (Earliest(rowSource) is { } earliest && earliest <= latest)
                     {
                         Scope($"tap '{tapId}' reading feature '{name}' and row source '{rowSource}'", pointer, With(deciding, new[] { rowSource }), tapId);
                     }
@@ -1919,6 +1943,7 @@ public sealed class PlanBuilder
         string? reader = null; // the last node before this point that reads it, whether it may be skipped,
         var readerMaySkip = false;
         string? appender = null; // and the first position from it on that may append rows
+        string? laterAppender = null; // the last reader after this point passed over because its position appends
         foreach (var node in ordered)
         {
             var before = !later.Contains(node.NodeId);
@@ -1934,6 +1959,8 @@ public sealed class PlanBuilder
                     {
                         return $"attach the tap after '{node.NodeId}', the first node after this point that reads '{name}'";
                     }
+
+                    laterAppender = node.NodeId;
                 }
                 else
                 {
@@ -1969,11 +1996,22 @@ public sealed class PlanBuilder
             }
         }
 
-        if (appender is not null)
+        if (appender is not null && appender != reader)
         {
-            return appender == reader
-                ? $"attach the tap after a later node that reads '{name}': the rows '{appender}' or its fallback appends have no value for it"
-                : $"attach the tap after '{reader}', which reads '{name}': the rows '{appender}' or its fallback appends after it have no value for it";
+            return $"attach the tap after '{reader}', which reads '{name}': the rows '{appender}' or its fallback appends after it have no value for it";
+        }
+
+        if (appender is not null && scope != TapScope.Survived)
+        {
+            // Rows a tap of entered or dropped rows logs there were live when the node filled (review 92: it was told to
+            // look for a later reader).
+            return $"attach the tap after '{reader}', which reads '{name}': a tap of {(scope == TapScope.Entered ? "entered" : "dropped")} rows there logs rows that were live when it filled them";
+        }
+
+        if ((laterAppender ?? appender) is { } last)
+        {
+            // Every later reader appends rows (review 92: the hint asked for a node that reads it, and named none).
+            return $"attach the tap after a node after '{last}' that reads '{name}': the rows '{last}' or its fallback appends have no value for it";
         }
 
         if (reader is not null && readerMaySkip)

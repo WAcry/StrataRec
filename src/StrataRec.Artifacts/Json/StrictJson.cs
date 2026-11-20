@@ -95,8 +95,8 @@ public static class StrictJson
     /// tree again would write its CLR values again, and a value may write something else the second time.</para>
     /// </remarks>
     /// <param name="copy">When there is no problem, a copy of the tree as checked, which shares no node with it: each
-    /// wrapped CLR value is the JSON it wrote here, read back (but a number or string the canonical form reports), and
-    /// every object compares names by ordinal. Null when there is a problem (or <paramref name="node"/> is null).</param>
+    /// wrapped CLR value is the JSON it wrote here, read back (but a number or string the canonical form reports, and a
+    /// <see cref="JsonElement"/>, copied from the element), and every object compares names by ordinal. Null when there is a problem (or <paramref name="node"/> is null).</param>
     /// <returns>The first problem, at its pointer relative to <paramref name="node"/>; null when there is none. The copy
     /// of a tree that has none reads without throwing anything this check looks for.</returns>
     public static JsonBindingError? Check(JsonNode? node, int maxDepth, out JsonNode? copy)
