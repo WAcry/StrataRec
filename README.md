@@ -29,7 +29,7 @@ dotnet run --project src/StrataRec.Cli -- schema pipeline          # 各类产�
 dotnet run --project src/StrataRec.Cli -- operators                # 算子及其声明的效果
 ```
 
-`validate` 对示例会报一个预期内的警告：MMR 实验读取的分数会被另一层的校准实验修改，而这两个臂可能同时分配。
+示例里 MMR 实验读取的分数会被另一层的校准实验修改，而这两个臂可能同时分配。`exp_mmr_diversity` 在 `reviewed_interactions` 里声明这个交互已经审阅过，所以 `validate` 报 0 个警告；删掉这一项就能看到 `validate` 怎样报告未审阅的交互。
 
 从零开始写一条流水线时，先生成一份最小的工作区，再在上面改：
 
