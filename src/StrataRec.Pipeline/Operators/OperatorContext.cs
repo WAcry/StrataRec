@@ -118,6 +118,23 @@ public sealed class OperatorContext
 
     public ScalarValue ContextValue(int contextId) => _state.Context[contextId];
 
+    /// <summary>
+    /// Waits until the context features of <paramref name="reads"/> are stored and returns their worst state; then the
+    /// awaited expressions they come from (<see cref="OperatorCompileContext.CompileAwaitedExpression"/>) can be evaluated
+    /// (<see cref="EvalContext"/>). A failed feature is the operator's to handle, as it handles a failed call: its value is
+    /// missing. The features were prefetched when the request started, so this waits only for what is still in flight,
+    /// and an operator sending several calls starts each once its own features are stored. Waits may run concurrently;
+    /// evaluate the expressions on the operator's own flow. The wait is not bounded by the node's budget: wait together
+    /// with <see cref="CancellationToken"/>.
+    /// </summary>
+    public ValueTask<Features.Runtime.FeatureFillResult> WhenReadyAsync(AwaitedReads reads)
+    {
+        ArgumentNullException.ThrowIfNull(reads);
+        return reads.IsEmpty
+            ? new ValueTask<Features.Runtime.FeatureFillResult>(new Features.Runtime.FeatureFillResult(Features.Runtime.FeatureState.Ok))
+            : _state.Features.WhenContextStoredAsync(reads.Features);
+    }
+
     /// <summary>Drops rows whose rank position is not flagged. Requires <see cref="Effects.RowFilter"/>.</summary>
     public void Retain(ReadOnlySpan<bool> keepByRank)
     {
@@ -192,7 +209,7 @@ public sealed class OperatorContext
         }
 
         var recorder = _state.Recorder;
-        var sequence = recorder?.BeginCandidateCall(NodeId, target.Name, query.Limit) ?? 0;
+        var sequence = recorder?.BeginCandidateCall(NodeId, target.Name, query.Limit, query.Values) ?? 0;
         var result = await BoundedCall.RunAsync<CandidateSourceStatus, RetrieveCall>(
             new RetrieveCall(source, query, buffer, recorder, sequence), Budget, _state.Memory, target, timeoutMs, query.RequestId, _state.Events)
             .ConfigureAwait(false);

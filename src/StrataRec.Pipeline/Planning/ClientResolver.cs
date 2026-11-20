@@ -39,7 +39,8 @@ public sealed class CandidateSourceRegistry
 {
     private readonly Dictionary<string, ICandidateSourceFactory> _factories = new(StringComparer.Ordinal);
 
-    public static CandidateSourceRegistry CreateDefault() => new CandidateSourceRegistry().Add(new MemoryListCandidateSourceFactory());
+    public static CandidateSourceRegistry CreateDefault() =>
+        new CandidateSourceRegistry().Add(new MemoryListCandidateSourceFactory()).Add(new MemoryVectorsCandidateSourceFactory());
 
     public IEnumerable<string> Types => ModelClientRegistry.SortedKeys(_factories);
 

@@ -125,7 +125,7 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         "FUNNEL_NO_KEY", "/funnel_groups/deep_trace/key", "\"key\": []")]
     [InlineData("experiments/exp_mmr_diversity.jsonc", "\"diversity_cap\": null,", "\"diversty_cap\": null,",
         "PATCH_DELETE_MISSING", "/arms/mmr/nodes/diversty_cap", "\"diversty_cap\"")] // the arm's parameters are not reported again
-    [InlineData("bindings/local.jsonc", "\"fixtures/recall_two_tower.json\"", "\"fixtures/no_such_file.json\"",
+    [InlineData("bindings/local.jsonc", "\"fixtures/recall_vectors.json\"", "\"fixtures/no_such_file.json\"",
         "CANDIDATE_SOURCE_CONFIG", "/candidate_sources/two_tower/data_file", "\"data_file\": \"fixtures/no_such_file.json\"")] // at the binding, and the
         // recall columns are still declared: the output that reads one is not reported unknown
     [InlineData("bindings/local.jsonc", "\"activation\": \"sigmoid\"", "\"activaton\": \"sigmoid\"",
@@ -133,6 +133,13 @@ public sealed class DiagnosticLocationCliTests : IDisposable
     // An operator's error is at the setting to change, with a hint (they were at the config or the other column, without).
     [InlineData(Pipeline, "\"source_order\": [\"two_tower\", \"popular\"]", "\"source_order\": [\"two_tower\", \"populr\"]",
         "RECALL_UNKNOWN_SOURCE", "/nodes/recall/config/source_order/1", "\"populr\"")]
+    // A recall source's query (design 5.4): a source without a quota, a value without a name, a candidate column.
+    [InlineData(Pipeline, "\"queries\": { \"two_tower\": {", "\"queries\": { \"two_towr\": {",
+        "RECALL_UNKNOWN_SOURCE", "/nodes/recall/config/queries/two_towr", "\"two_towr\"")]
+    [InlineData(Pipeline, "{ \"user_embedding\": \"ctx.user.embedding\" }", "{ \"\": \"ctx.user.embedding\" }",
+        "RECALL_QUERY_NAME", "/nodes/recall/config/queries/two_tower/", "\"\": \"ctx.user.embedding\"")]
+    [InlineData(Pipeline, "{ \"user_embedding\": \"ctx.user.embedding\" }", "{ \"user_embedding\": \"col.item.report_rate\" }",
+        "EXPR_ROW_REFERENCE_IN_REQUEST_LEVEL", "/nodes/recall/config/queries/two_tower/user_embedding", "col.item.report_rate")]
     [InlineData(Pipeline, "\"window\": 3, \"max_per_window\": 1", "\"window\": 3, \"max_per_window\": 0",
         "QUOTA_BAD_CONFIG", "/nodes/diversity_cap/config/max_per_window", "\"max_per_window\": 0")]
     [InlineData("experiments/exp_mmr_diversity.jsonc", "\"score_col\": \"score.final\"", "\"score_col\": \"item.category\"",

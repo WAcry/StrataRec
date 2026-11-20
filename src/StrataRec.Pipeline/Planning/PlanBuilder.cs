@@ -389,7 +389,8 @@ public sealed class PlanBuilder
             Compact = compact,
             ReadColumns = ToSortedArray(context.ReadColumns),
             CurrentReads = ToSortedArray(context.CurrentReads),
-            ReadFeatures = ToSortedArray(context.ReadFeatures),
+            ReadFeatures = ToSortedArray(Union(context.ReadFeatures, context.AwaitedFeatures)),
+            FilledFeatures = ToSortedArray(context.ReadFeatures),
             RequiredOutputs = ToSortedArray(context.RequiredOutputs),
             ReadParams = ToSortedArray(context.ReadParams),
             VersionReads = ToSortedArray(context.VersionReads),
@@ -2236,6 +2237,13 @@ public sealed class PlanBuilder
         var list = new List<string>(keys);
         list.Sort(StringComparer.Ordinal);
         return list;
+    }
+
+    private static HashSet<int> Union(IReadOnlyCollection<int> first, IReadOnlyCollection<int> second)
+    {
+        var union = new HashSet<int>(first);
+        union.UnionWith(second);
+        return union;
     }
 
     private static ImmutableArray<int> ToSortedArray(IReadOnlyCollection<int> values)

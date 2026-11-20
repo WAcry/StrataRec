@@ -108,8 +108,18 @@ public sealed class CompiledNode
     /// </summary>
     public ImmutableArray<int> CurrentReads { get; init; } = [];
 
-    /// <summary>Feature indices read directly (expanded to dependencies by the fetcher).</summary>
+    /// <summary>
+    /// Feature indices read directly (expanded to dependencies by the fetcher), including the context features the operator
+    /// waits for itself (<see cref="Operators.OperatorCompileContext.CompileAwaitedExpression"/>): what the node reads, for
+    /// prefetching, data-flow checks, footprints and taps.
+    /// </summary>
     public required ImmutableArray<int> ReadFeatures { get; init; }
+
+    /// <summary>
+    /// The features filled before the node runs: <see cref="ReadFeatures"/> but those only awaited expressions read, which
+    /// the operator waits for call by call while it runs (a recall source's query, design 5.4).
+    /// </summary>
+    public required ImmutableArray<int> FilledFeatures { get; init; }
 
     /// <summary>Non-nullable output columns read through bindings; must be produced before the node runs (design 11.5 step 4).</summary>
     public required ImmutableArray<int> RequiredOutputs { get; init; }

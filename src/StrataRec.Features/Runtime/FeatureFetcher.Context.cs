@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Runtime.ExceptionServices;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
@@ -100,6 +101,47 @@ public sealed partial class FeatureFetcher
                 await (_contextReady?[f] ?? _contextTask!).ConfigureAwait(false);
             }
         }
+    }
+
+    /// <summary>
+    /// Waits until each of <paramref name="features"/>, context features the plan prefetches, is stored, as a reader of them
+    /// would (<see cref="ContextReadyAsync"/>), and returns their worst state: the wait of an operator that reads context
+    /// features while it runs rather than before it starts, once per call it sends (a recall source's query values, design
+    /// 5.9), so each call waits for its own features and not another call's. It only waits for the prefetch's tasks and
+    /// reads the states they stored, so several waits may run at once, alongside the request's other work.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">A listed feature is not a context feature (the operator's defect), or
+    /// the prefetch has not started (<see cref="StartContextFetch"/>, which the executor calls before any node runs).</exception>
+    public async ValueTask<FeatureFillResult> WhenContextStoredAsync(ImmutableArray<int> features)
+    {
+        if (_contextTask is null)
+        {
+            throw new InvalidOperationException("Context features are waited for before the context prefetch has started: they would never be stored.");
+        }
+
+        var worst = FeatureState.Ok;
+        string? error = null;
+        foreach (var f in features)
+        {
+            if (!_plan.Features[f].IsContext)
+            {
+                throw new InvalidOperationException($"Feature '{_plan.Features[f].Definition.Name}' is not a context feature: only those are waited for this way.");
+            }
+
+            if ((_contextReady?[f] ?? _contextTask) is { } stored)
+            {
+                // Awaited even when complete, so a fault is observed; a completed task does not yield.
+                await stored.ConfigureAwait(false);
+            }
+
+            if (_state[f] > worst)
+            {
+                worst = _state[f];
+                error = _errors[f];
+            }
+        }
+
+        return new FeatureFillResult(worst, error);
     }
 
     /// <summary>Whether context feature <paramref name="feature"/> is stored (or will never be: no prefetch was started),

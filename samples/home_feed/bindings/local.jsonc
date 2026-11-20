@@ -31,7 +31,9 @@
     }
   },
   "candidate_sources": {
-    "two_tower": { "client": "memory_list@1", "data_file": "fixtures/recall_two_tower.json" },
+    // The two-tower service's stand-in: an in-memory index scored by the dot product with the query's user_embedding
+    // (the recall node's queries). Items below min_score are not returned.
+    "two_tower": { "client": "memory_vectors@1", "data_file": "fixtures/recall_vectors.json", "query": "user_embedding", "min_score": 0.01 },
     "popular":   { "client": "memory_list@1", "data_file": "fixtures/recall_popular.json" }
   }
 }

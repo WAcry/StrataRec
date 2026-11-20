@@ -3,6 +3,7 @@ using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
+using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Features.Connectors;
 
@@ -16,11 +17,91 @@ public sealed class CandidateQuery
     /// <summary>Maximum candidates to return (the source's quota); extra results are truncated and counted.</summary>
     public required int Limit { get; init; }
 
+    /// <summary>The request's inputs as the caller passed them (a user id, a session id, a query text).</summary>
     public required RequestInputs Inputs { get; init; }
+
+    /// <summary>
+    /// The values the pipeline computed for this source (<c>MultiSourceRecall@1</c>'s <c>queries</c>, design 5.4): a
+    /// user's embedding, recent items, a segment, from the feature catalog. Empty for a source the node gives none.
+    /// </summary>
+    public CandidateQueryValues Values { get; init; } = CandidateQueryValues.Empty;
 
     public required string RequestId { get; init; }
 
     public long Seed { get; init; }
+}
+
+/// <summary>
+/// The named values of one source's query, each of the type its expression has (<c>MultiSourceRecall@1</c>'s
+/// <c>queries</c>, design 5.4). A recall service needs more than the request's inputs to retrieve, a two-tower model the
+/// user's features or embedding above all; the pipeline reads them from the feature catalog, where they are fetched,
+/// cached, recorded and replayed like every feature, and an experiment can change which ones a source gets. A missing
+/// value (a user without an embedding, a source that failed) is <see cref="ScalarValue.Missing"/>, never a zero: the source
+/// decides what it does without it.
+/// </summary>
+/// <remarks>The names and types are the node's, fixed when it compiles; the values are this call's. A type is its
+/// expression's, promoted as expressions see every context value: a <c>list&lt;float32,N&gt;</c> embedding is a
+/// <c>list&lt;float64,N&gt;</c> (<see cref="ScalarValue.AsFloat64List"/>) whose elements are exactly the float32s.</remarks>
+public sealed class CandidateQueryValues
+{
+    private readonly string[] _names;
+    private readonly ColumnType[] _types;
+    private readonly ScalarValue[] _values;
+
+    /// <summary>A query of <paramref name="names"/> (distinct), each of its type and value, at the same index.</summary>
+    public CandidateQueryValues(string[] names, ColumnType[] types, ScalarValue[] values)
+    {
+        ArgumentNullException.ThrowIfNull(names);
+        ArgumentNullException.ThrowIfNull(types);
+        ArgumentNullException.ThrowIfNull(values);
+        if (types.Length != names.Length || values.Length != names.Length)
+        {
+            throw new ArgumentException($"{names.Length} name(s), {types.Length} type(s) and {values.Length} value(s): give one of each per value.");
+        }
+
+        (_names, _types, _values) = (names, types, values);
+    }
+
+    /// <summary>No values: the source gets the request's inputs alone.</summary>
+    public static CandidateQueryValues Empty { get; } = new([], [], []);
+
+    public int Count => _names.Length;
+
+    /// <summary>The value named <paramref name="name"/>; missing when it is missing or the query has no such value.</summary>
+    public ScalarValue this[string name] => IndexOf(name) is >= 0 and var i ? _values[i] : ScalarValue.Missing;
+
+    public string Name(int index) => _names[index];
+
+    /// <summary>The type of value <paramref name="index"/>: its expression's, nullable when it may be missing.</summary>
+    public ColumnType Type(int index) => _types[index];
+
+    public ScalarValue Value(int index) => _values[index];
+
+    /// <summary>Whether the query has a value named <paramref name="name"/>, and its type and value.</summary>
+    public bool TryGet(string name, out ColumnType type, out ScalarValue value)
+    {
+        if (IndexOf(name) is >= 0 and var i)
+        {
+            (type, value) = (_types[i], _values[i]);
+            return true;
+        }
+
+        (type, value) = (default, ScalarValue.Missing);
+        return false;
+    }
+
+    private int IndexOf(string name)
+    {
+        for (var i = 0; i < _names.Length; i++)
+        {
+            if (string.Equals(_names[i], name, StringComparison.Ordinal))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
 }
 
 /// <summary>Receives retrieved candidates in rank order.</summary>

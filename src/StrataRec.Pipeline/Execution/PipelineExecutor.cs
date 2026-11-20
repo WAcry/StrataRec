@@ -660,7 +660,8 @@ internal sealed class PipelineExecutor
             }
         }
 
-        var fill = await state.Features.EnsureAsync(node.ReadFeatures.AsSpan(), cancellationToken).ConfigureAwait(false);
+        // What the node reads but waits for itself (a recall source's query, design 5.4) is not filled here.
+        var fill = await state.Features.EnsureAsync(node.FilledFeatures.AsSpan(), cancellationToken).ConfigureAwait(false);
         if (fill.Failed)
         {
             return new Attempt(AttemptKind.Failed, "feature fetch failed: " + fill.Error);

@@ -68,7 +68,9 @@ public sealed class Review4RegressionTests
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             var bindings = Path.Combine(root, "bindings", "local.jsonc");
-            File.WriteAllText(bindings, File.ReadAllText(bindings).Replace("\"client\": \"memory_list@1\",", "\"client\": \"memory_list@1\", \"latency_ms\": 5000,", StringComparison.Ordinal));
+            File.WriteAllText(bindings, File.ReadAllText(bindings)
+                .Replace("\"client\": \"memory_list@1\",", "\"client\": \"memory_list@1\", \"latency_ms\": 5000,", StringComparison.Ordinal)
+                .Replace("\"client\": \"memory_vectors@1\",", "\"client\": \"memory_vectors@1\", \"latency_ms\": 5000,", StringComparison.Ordinal));
         });
         var plan = host.Plan();
         var sink = new InMemoryLogSink();
@@ -202,7 +204,9 @@ public sealed class Review4RegressionTests
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             var bindings = Path.Combine(root, "bindings", "local.jsonc");
-            File.WriteAllText(bindings, File.ReadAllText(bindings).Replace("\"client\": \"memory_list@1\",", "\"client\": \"memory_list@1\", \"latency_ms\": 5000,", StringComparison.Ordinal));
+            File.WriteAllText(bindings, File.ReadAllText(bindings)
+                .Replace("\"client\": \"memory_list@1\",", "\"client\": \"memory_list@1\", \"latency_ms\": 5000,", StringComparison.Ordinal)
+                .Replace("\"client\": \"memory_vectors@1\",", "\"client\": \"memory_vectors@1\", \"latency_ms\": 5000,", StringComparison.Ordinal));
         });
         var plan = host.Plan();
         var sink = new InMemoryLogSink();

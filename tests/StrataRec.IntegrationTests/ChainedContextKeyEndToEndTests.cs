@@ -98,7 +98,7 @@ public sealed class ChainedContextKeyEndToEndTests
         });
         var plan = host.Plan();
         Assert.Equal(
-            ["country.region", "region.boost"],
+            ["country.region", "region.boost", "user.embedding"], // and the recall query's embedding, read in every plan
             plan.ContextFeatures.Select(f => plan.Features.Features[f].Definition.Name).Order(StringComparer.Ordinal));
         var baseline = host.CompileMerged([]);
         Assert.True(baseline.Succeeded, string.Join("\n", baseline.Diagnostics));

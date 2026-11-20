@@ -449,7 +449,8 @@
             "description": "Required: client type and version, e.g. 'linear@1' or 'random@1' for a model, 'memory_list@1' for a candidate source. The other members are the client's own settings, which the schema describes for each type of the binary that wrote it.",
             "type": "string",
             "examples": [
-              "memory_list@1"
+              "memory_list@1",
+              "memory_vectors@1"
             ]
           },
           "timeout_ms": {
@@ -526,6 +527,88 @@
                   ]
                 }
               },
+              "additionalProperties": false
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "client": {
+                  "const": "memory_vectors@1"
+                }
+              },
+              "required": [
+                "client"
+              ]
+            },
+            "then": {
+              "properties": {
+                "client": {},
+                "timeout_ms": {},
+                "query": {
+                  "description": "The query value holding the query vector (MultiSourceRecall@1's queries), such as \"user_embedding\": a list of floats of the items' vectors' length.",
+                  "type": "string"
+                },
+                "min_score": {
+                  "description": "The least score an item is returned with; without it, every item may be.",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "data_file": {
+                  "description": "A JSON file of the items ({ \"items\": [ … ] }): a path relative to the configuration directory, an absolute path or a file:// URI. Items in the binding are the binding's.",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1
+                },
+                "latency_ms": {
+                  "description": "Simulated latency of every retrieval, in milliseconds (default 0).",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "fail": {
+                  "description": "Fail every retrieval (fault injection).",
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "items": {
+                  "description": "The indexed items, each { \"id\": …, \"vector\": [ … ] }; every vector of one length.",
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "description": "The candidate's id: a string or an int64."
+                      },
+                      "vector": {
+                        "description": "Its vector, scored by its dot product with the query vector.",
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        }
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "vector"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "query"
+              ],
               "additionalProperties": false
             }
           }

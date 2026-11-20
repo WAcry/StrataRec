@@ -29,7 +29,12 @@
   "nodes": {
     "recall": {
       "order": 100, "op": "MultiSourceRecall@1",
-      "config": { "quotas_param": "recall_quotas", "source_order": ["two_tower", "popular"] }
+      "config": {
+        "quotas_param": "recall_quotas", "source_order": ["two_tower", "popular"],
+        // The two-tower service searches with the user's embedding from the catalog (design 5.4): two_tower is sent once
+        // the user's features are stored, while popular, which needs none, starts at once.
+        "queries": { "two_tower": { "user_embedding": "ctx.user.embedding" } }
+      }
     },
     "safety_filter": {
       "order": 200, "op": "ExpressionFilter@1",

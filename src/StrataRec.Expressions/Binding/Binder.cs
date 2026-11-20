@@ -240,7 +240,7 @@ internal sealed class Binder
             Report(ExpressionErrorCodes.RowReferenceInRequestLevel,
                 $"'{name}' is a candidate column, but this is a request-level expression evaluated once per request",
                 n.Start, n.Length,
-                "request-level sites (when, funnel keys, context features) can only read ctx.* and param.*");
+                "request-level sites (when, funnel keys, context features, recall queries) can only read ctx.* and param.*");
         }
 
         return IrNode.Read(symbol, type, n.Start, n.Length);

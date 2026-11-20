@@ -114,7 +114,8 @@ internal sealed class RunRecorder : IFeatureCallHook
         throw new InvalidOperationException("A recorder does not replay calls.");
 
     /// <summary>Registers a candidate source call about to be sent; returns its sequence for <see cref="CandidateCall"/>.</summary>
-    public int BeginCandidateCall(string node, string source, int limit)
+    /// <param name="values">The query's values as sent (design 5.4): recorded, so a replay can tell when they changed.</param>
+    public int BeginCandidateCall(string node, string source, int limit, CandidateQueryValues values)
     {
         var sequence = NextSequence();
         Pending(_pendingCandidates, sequence, new ReplayCandidateCall
@@ -123,10 +124,28 @@ internal sealed class RunRecorder : IFeatureCallHook
             Node = node,
             Source = source,
             Limit = limit,
+            Query = Query(values),
             Status = ReplayJson.Outstanding,
             Error = ReplayJson.OutstandingError,
         });
         return sequence;
+    }
+
+    /// <summary>A query's values as a bundle records them; null for none.</summary>
+    internal static Dictionary<string, ReplayTypedValue>? Query(CandidateQueryValues values)
+    {
+        if (values.Count == 0)
+        {
+            return null;
+        }
+
+        var query = new Dictionary<string, ReplayTypedValue>(values.Count, StringComparer.Ordinal);
+        for (var i = 0; i < values.Count; i++)
+        {
+            query[values.Name(i)] = ReplayJson.Typed(values.Type(i), values.Value(i));
+        }
+
+        return query;
     }
 
     /// <summary>Records a finished candidate source call, as the request saw it.</summary>
@@ -157,6 +176,7 @@ internal sealed class RunRecorder : IFeatureCallHook
             Node = begun.Node,
             Source = begun.Source,
             Limit = begun.Limit,
+            Query = begun.Query,
             Status = IoCall.OutcomeName(outcome),
             Error = error,
             DurationMs = duration.TotalMilliseconds,

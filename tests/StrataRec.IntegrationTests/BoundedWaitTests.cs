@@ -225,7 +225,7 @@ public sealed class BoundedWaitTests
             {
                 BaseDirectory = host.Root,
                 Models = models is null ? ModelClientRegistry.CreateDefault() : new ModelClientRegistry().Add(models),
-                CandidateSources = sources is null ? CandidateSourceRegistry.CreateDefault() : new CandidateSourceRegistry().Add(sources),
+                CandidateSources = sources is null ? CandidateSourceRegistry.CreateDefault() : CandidateSourceRegistry.CreateDefault().Add(sources),
             },
             executor: new PipelineExecutor(pool, null, events));
         var load = engine.Load(host.Request);

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Model;
@@ -23,12 +24,16 @@ public sealed class OperatorCompileContext
     private readonly HashSet<int> _readColumns = new();
     private readonly HashSet<int> _currentReads = new();
     private readonly HashSet<int> _readFeatures = new();
+    private readonly HashSet<int> _awaitedFeatures = new();
     private readonly HashSet<int> _requiredOutputs = new();
     private readonly HashSet<int> _readParams = new();
     private readonly HashSet<VersionRead> _versionReads = new();
     private readonly HashSet<NameRef> _requires = new();
     private readonly List<ColumnDeclaration> _declares = new();
     private readonly List<OutputColumn> _outputs = new();
+
+    /// <summary>Set while an awaited expression's reads are recorded (<see cref="CompileAwaitedExpression"/>).</summary>
+    private bool _awaiting;
 
     internal OperatorCompileContext(
         PlanSchema schema,
@@ -78,7 +83,11 @@ public sealed class OperatorCompileContext
 
     internal IReadOnlyCollection<int> CurrentReads => _currentReads;
 
+    /// <summary>The features filled before the node runs: every feature it reads but those only awaited expressions read.</summary>
     internal IReadOnlyCollection<int> ReadFeatures => _readFeatures;
+
+    /// <summary>The context features awaited expressions read (<see cref="CompileAwaitedExpression"/>), which the operator waits for itself.</summary>
+    internal IReadOnlyCollection<int> AwaitedFeatures => _awaitedFeatures;
 
     internal IReadOnlyCollection<int> RequiredOutputs => _requiredOutputs;
 
@@ -252,6 +261,61 @@ public sealed class OperatorCompileContext
         }
 
         return expression;
+    }
+
+    /// <summary>
+    /// Compiles a request-level expression (<c>ctx.*</c> and <c>param.*</c>; <c>col.*</c> is an error) whose context features
+    /// the operator waits for itself while it runs (<see cref="OperatorContext.WhenReadyAsync"/>), instead of the executor
+    /// filling them before the node starts. For an operator that sends several calls of which only some read context
+    /// features (a recall source's query, design 5.4): each call waits for its own features and the others start at once,
+    /// where a feature filled before the node would hold back every call. The features remain reads of the node: they are
+    /// prefetched with the request's context, and data-flow checks, experiment footprints and taps see them. Returns null
+    /// after reporting errors.
+    /// </summary>
+    /// <param name="expectedType">The result type the operator needs, or null for any; the result may be nullable.</param>
+    public CompiledExpression? CompileAwaitedExpression(string? source, string configKey, ColumnType? expectedType = null)
+    {
+        _awaiting = true;
+        try
+        {
+            return CompileExpression(source, configKey, new CompileOptions { ExpectedType = expectedType, AllowNullableResult = true, RequestLevelOnly = true });
+        }
+        finally
+        {
+            _awaiting = false;
+        }
+    }
+
+    /// <summary>
+    /// The context features <paramref name="expressions"/> read, compiled by <see cref="CompileAwaitedExpression"/>: what one
+    /// call of the operator waits for before it evaluates them (<see cref="OperatorContext.WhenReadyAsync"/>). Request
+    /// inputs and parameters are not waited for; expressions reading only those give <see cref="AwaitedReads.None"/>.
+    /// </summary>
+    public AwaitedReads AwaitedReadsOf(IReadOnlyList<CompiledExpression> expressions)
+    {
+        ArgumentNullException.ThrowIfNull(expressions);
+        var features = new List<int>();
+        for (var e = 0; e < expressions.Count; e++)
+        {
+            var reads = expressions[e].Reads;
+            for (var i = 0; i < reads.Count; i++) // an interface foreach would box the enumerator
+            {
+                var symbol = reads[i];
+                if (symbol.Kind == SymbolKind.Context && _schema.ContextFields[symbol.Id] is { Kind: ContextFieldKind.Feature } field
+                    && !features.Contains(field.FeatureIndex))
+                {
+                    features.Add(field.FeatureIndex);
+                }
+            }
+        }
+
+        if (features.Count == 0)
+        {
+            return AwaitedReads.None;
+        }
+
+        features.Sort();
+        return new AwaitedReads([.. features]);
     }
 
     /// <summary>Resolves a parameter leaf the operator reads.</summary>
@@ -514,7 +578,7 @@ public sealed class OperatorCompileContext
                 var field = _schema.ContextFields[symbol.Id];
                 if (field.Kind == ContextFieldKind.Feature)
                 {
-                    _readFeatures.Add(field.FeatureIndex);
+                    (_awaiting ? _awaitedFeatures : _readFeatures).Add(field.FeatureIndex);
                 }
 
                 break;
@@ -523,4 +587,22 @@ public sealed class OperatorCompileContext
                 break;
         }
     }
+}
+
+/// <summary>
+/// The context features some awaited expressions read (<see cref="OperatorCompileContext.AwaitedReadsOf"/>), which an
+/// operator waits for while it runs, with <see cref="OperatorContext.WhenReadyAsync"/>. Built once, when the node compiles.
+/// </summary>
+public sealed class AwaitedReads
+{
+    internal AwaitedReads(ImmutableArray<int> features) => Features = features;
+
+    /// <summary>Nothing to wait for: the expressions read request inputs and parameters only.</summary>
+    public static AwaitedReads None { get; } = new(ImmutableArray<int>.Empty);
+
+    /// <summary>True when there is nothing to wait for.</summary>
+    public bool IsEmpty => Features.IsEmpty;
+
+    /// <summary>The features, by index in the plan's feature list, ascending.</summary>
+    internal ImmutableArray<int> Features { get; }
 }

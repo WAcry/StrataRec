@@ -288,7 +288,7 @@ public sealed class MetricsTests
             BaseDirectory = host.Environment.BaseDirectory,
             Models = client == "model" ? new ModelClientRegistry().Add(new TimingOutModels(new LinearModelClientFactory())) : ModelClientRegistry.CreateDefault(),
             CandidateSources = client == "recall"
-                ? new CandidateSourceRegistry().Add(new TimingOutSources(new MemoryListCandidateSourceFactory()))
+                ? new CandidateSourceRegistry().Add(new TimingOutSources(new MemoryListCandidateSourceFactory())).Add(new TimingOutSources(new MemoryVectorsCandidateSourceFactory()))
                 : CandidateSourceRegistry.CreateDefault(),
         };
         var engine = new RecEngine(environment);
@@ -349,8 +349,14 @@ public sealed class MetricsTests
     {
         var bindings = Path.Combine(root, "bindings", "local.jsonc");
         var text = File.ReadAllText(bindings);
-        var client = what == "model" ? "\"client\": \"linear@1\"," : "\"client\": \"memory_list@1\",";
-        var edited = text.Replace(client, client + " \"latency_ms\": 60000," + (tightTimeout ? " \"timeout_ms\": 50," : string.Empty), StringComparison.Ordinal);
+        // The model, or every recall source: the lists and the vector index.
+        string[] clients = what == "model" ? ["\"client\": \"linear@1\","] : ["\"client\": \"memory_list@1\",", "\"client\": \"memory_vectors@1\","];
+        var edited = text;
+        foreach (var client in clients)
+        {
+            edited = edited.Replace(client, client + " \"latency_ms\": 60000," + (tightTimeout ? " \"timeout_ms\": 50," : string.Empty), StringComparison.Ordinal);
+        }
+
         Assert.NotEqual(text, edited);
         File.WriteAllText(bindings, edited);
     }

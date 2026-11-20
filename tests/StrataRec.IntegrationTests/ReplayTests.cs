@@ -77,7 +77,12 @@ public sealed class ReplayTests
         Assert.Equal(ReplayTiming.Ran, Assert.Single(recall.Attempts).Timing);
 
         // Candidate calls with the returned candidates, feature calls with the values per key, model outputs per row.
-        Assert.Equal(new[] { ("two_tower", 40), ("popular", 19) }, run.CandidateCalls.Select(c => (c.Source, c.Ids!.Value.GetArrayLength())));
+        // popular is sent at once; two_tower once the user's embedding its query reads is stored (design 5.4), with it.
+        Assert.Equal(new[] { ("popular", 19), ("two_tower", 40) }, run.CandidateCalls.Select(c => (c.Source, c.Ids!.Value.GetArrayLength())));
+        Assert.Null(run.CandidateCalls[0].Query);
+        var embedding = Assert.Single(run.CandidateCalls[1].Query!);
+        // The expression's type: the catalog's float32 list promoted, as expressions see it.
+        Assert.Equal(("user_embedding", "list<float64,3>", "[1,0,0]"), (embedding.Key, embedding.Value.Type, embedding.Value.Value!.Value.GetRawText()));
         Assert.All(run.CandidateCalls, c => Assert.Equal("ok", c.Status));
         var items = run.FeatureCalls.Where(c => c.Source == "item_store").ToList();
         Assert.True(items.Count >= 3, "max_batch 25 splits the 59 recalled items into chunks");

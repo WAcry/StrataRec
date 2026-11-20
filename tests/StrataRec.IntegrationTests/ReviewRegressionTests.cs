@@ -77,7 +77,9 @@ public sealed class ReviewRegressionTests
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             var bindings = Path.Combine(root, "bindings", "local.jsonc");
-            File.WriteAllText(bindings, File.ReadAllText(bindings).Replace("\"client\": \"memory_list@1\",", "\"client\": \"memory_list@1\", \"fail\": true,", StringComparison.Ordinal));
+            File.WriteAllText(bindings, File.ReadAllText(bindings)
+                .Replace("\"client\": \"memory_list@1\",", "\"client\": \"memory_list@1\", \"fail\": true,", StringComparison.Ordinal)
+                .Replace("\"client\": \"memory_vectors@1\",", "\"client\": \"memory_vectors@1\", \"fail\": true,", StringComparison.Ordinal));
         });
         var request = With(host.Request, new[]
         {

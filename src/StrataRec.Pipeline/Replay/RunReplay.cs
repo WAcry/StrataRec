@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Columns;
@@ -188,6 +189,12 @@ internal sealed class RunReplay : IFeatureCallHook
             if (exact is not null)
             {
                 exact.Consumed = true;
+                if (ChangedValue(exact.Query, RunRecorder.Query(query.Values)) is { } changed)
+                {
+                    // Answered as recorded all the same: the recording has no answer to the new values.
+                    AddGap("candidate_source", source, changed, "query_changed", 1, node);
+                }
+
                 if (exact.Outcome != IoOutcome.Ok)
                 {
                     return CandidateSourceStatus.Failed(exact.Error ?? "timed out");
@@ -216,6 +223,41 @@ internal sealed class RunReplay : IFeatureCallHook
             Copy(longest, node, query, buffer);
             return CandidateSourceStatus.Ok;
         }
+    }
+
+    /// <summary>
+    /// The name of the first query value (in name order) whose type or value differs between a recorded call and its replay,
+    /// or that only one of them has; null when they agree. A query the configuration changed, or a feature it reads whose
+    /// replayed value differs, gets the recorded answer to other values, which the replay reports.
+    /// </summary>
+    private static string? ChangedValue(Dictionary<string, ReplayTypedValue>? recorded, Dictionary<string, ReplayTypedValue>? replayed)
+    {
+        var names = new SortedSet<string>(StringComparer.Ordinal);
+        if (recorded is not null)
+        {
+            names.UnionWith(recorded.Keys);
+        }
+
+        if (replayed is not null)
+        {
+            names.UnionWith(replayed.Keys);
+        }
+
+        foreach (var name in names)
+        {
+            ReplayTypedValue? before = null, after = null;
+            _ = recorded?.TryGetValue(name, out before);
+            _ = replayed?.TryGetValue(name, out after);
+            if (before is null || after is null || before.Type != after.Type || !SameJson(before.Value, after.Value))
+            {
+                return name;
+            }
+        }
+
+        return null;
+
+        static bool SameJson(JsonElement? a, JsonElement? b) =>
+            a is { } x ? b is { } y && JsonElement.DeepEquals(x, y) : b is null;
     }
 
     /// <summary>
@@ -874,7 +916,7 @@ internal sealed class RunReplay : IFeatureCallHook
                 throw new ReplayBundleException(at + "/scores", $"{call.Scores.Count} score(s) for {ids.Length} id(s)", "record one score per id");
             }
 
-            _candidateCalls.Add(new CandidateEntry(call.Seq, call.Node, call.Source, call.Limit, outcome, call.Error, ids, call.Scores.ToArray()));
+            _candidateCalls.Add(new CandidateEntry(call.Seq, call.Node, call.Source, call.Limit, call.Query, outcome, call.Error, ids, call.Scores.ToArray()));
         }
 
         _candidateCalls.Sort(static (a, b) => a.Seq.CompareTo(b.Seq));
@@ -975,9 +1017,14 @@ internal sealed class RunReplay : IFeatureCallHook
         public bool Consumed { get; set; }
     }
 
-    private sealed class CandidateEntry(int seq, string? node, string source, int limit, IoOutcome outcome, string? error, EntityKey[] ids, double[] scores)
+    private sealed class CandidateEntry(
+        int seq, string? node, string source, int limit, Dictionary<string, ReplayTypedValue>? query, IoOutcome outcome, string? error, EntityKey[] ids,
+        double[] scores)
     {
         public int Seq { get; } = seq;
+
+        /// <summary>The query's values as recorded; null for a call that had none.</summary>
+        public Dictionary<string, ReplayTypedValue>? Query { get; } = query;
 
         public string? Node { get; } = node;
 

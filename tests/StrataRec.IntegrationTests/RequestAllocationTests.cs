@@ -269,7 +269,7 @@ public sealed class RequestAllocationTests
         // Two thirds from the personalized source, the rest from the popular list; the lists overlap.
         var twoTower = candidates * 2 / 3;
         var popular = candidates - twoTower;
-        File.WriteAllText(Path.Combine(root, "fixtures", "recall_two_tower.json"), RecallList(1, twoTower));
+        File.WriteAllText(Path.Combine(root, "fixtures", "recall_vectors.json"), RecallVectors(1, twoTower));
         File.WriteAllText(Path.Combine(root, "fixtures", "recall_popular.json"), RecallList(candidates - popular - (popular / 2) + 1, popular));
 
         var pipeline = Path.Combine(root, "pipelines", "home_feed.jsonc");
@@ -305,6 +305,23 @@ public sealed class RequestAllocationTests
                 features[$"author.unused_{i}"] = new JsonObject { ["type"] = "float32", ["source"] = "author_store", ["field"] = $"a_unused_{i}" };
             }
         });
+    }
+
+    /// <summary>
+    /// The two-tower index: <paramref name="count"/> items from <paramref name="firstId"/>, each vector <c>[s, s, s]</c>, so
+    /// every user embedding of the sample (a unit axis, or the cold-start default) retrieves them in id order, scores from 1
+    /// down to above 0.5 (above the binding's <c>min_score</c>).
+    /// </summary>
+    private static string RecallVectors(int firstId, int count)
+    {
+        var items = new StringBuilder("{ \"items\": [");
+        for (var i = 0; i < count; i++)
+        {
+            var s = (1.0 - (0.5 * i / count)).ToString("F5", CultureInfo.InvariantCulture);
+            items.Append(i == 0 ? string.Empty : ", ").Append(CultureInfo.InvariantCulture, $"{{ \"id\": {firstId + i}, \"vector\": [{s}, {s}, {s}] }}");
+        }
+
+        return items.Append("] }").ToString();
     }
 
     private static string RecallList(int firstId, int count)
