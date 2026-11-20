@@ -212,6 +212,7 @@ internal static class BoundedCall
                 pending = ValueTask.FromException<T>(ex);
             }
 
+            io.Sent(); // the caller's next call is not a child of this one
             if (!pending.IsCompleted)
             {
                 return AwaitAsync(call, pending.AsTask(), io, budget, memory, own, token, deadline, timeoutMs, requestId, events);

@@ -37,15 +37,49 @@ public sealed class BoundedCallSpanTests
         Assert.True(memory.IsReturned);
     }
 
-    /// <summary>Answers 42 at once and keeps the current activity each send saw.</summary>
-    private readonly struct Traced(List<Activity?> sent) : IBoundedCall<int>
+    /// <summary>
+    /// Two bounded calls in one traced flow whose clients answer later. A pending call is completed on the flow that awaits
+    /// it, so its span stayed current on the caller's flow and the second call was a child of the first.
+    /// </summary>
+    [Fact]
+    public async Task TwoCallsWhoseClientsAnswerLater_AreBothUnderTheRequest()
+    {
+        using var flow = new TracedFlow();
+        var memory = new RequestMemory();
+        var budget = new AttemptBudget(CancellationToken.None, Stopwatch.GetTimestamp() + (600L * Stopwatch.Frequency));
+        var first = new Traced(new List<Activity?>(), later: true);
+        var second = new Traced(new List<Activity?>(), later: true);
+
+        var firstResult = await BoundedCall.RunAsync<int, Traced>(first, budget, memory, new IoTarget(IoKind.CandidateSource, "first"), null, "req", null);
+        var secondResult = await BoundedCall.RunAsync<int, Traced>(second, budget, memory, new IoTarget(IoKind.CandidateSource, "second"), null, "req", null);
+
+        Assert.Equal((42, 42), (firstResult.Value, secondResult.Value));
+        var firstSpan = Assert.Single(flow.Named("recall first"));
+        var secondSpan = Assert.Single(flow.Named("recall second"));
+        Assert.Same(firstSpan, Assert.Single(first.Sent)); // each client ran under its own span
+        Assert.Same(secondSpan, Assert.Single(second.Sent));
+        Assert.Same(flow.Request, secondSpan.Parent);
+        Assert.Same(flow.Request, Activity.Current);
+        budget.Release();
+        memory.Release();
+        Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, TimeSpan.FromSeconds(20)));
+    }
+
+    /// <summary>Answers 42, at once or after a yield, and keeps the current activity each send saw.</summary>
+    private readonly struct Traced(List<Activity?> sent, bool later = false) : IBoundedCall<int>
     {
         public List<Activity?> Sent { get; } = sent;
 
         public ValueTask<int> Send(CancellationToken token)
         {
             Sent.Add(Activity.Current);
-            return new ValueTask<int>(42);
+            return later ? new ValueTask<int>(AnswerLaterAsync()) : new ValueTask<int>(42);
+        }
+
+        private static async Task<int> AnswerLaterAsync()
+        {
+            await Task.Yield();
+            return 42;
         }
 
         public bool Succeeded(int value, out string? error)

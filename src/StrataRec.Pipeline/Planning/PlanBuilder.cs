@@ -1020,7 +1020,7 @@ public sealed class PlanBuilder
             MarkFetched(fetched, node.ReadFeatures);
             if (fallback is not null)
             {
-                MarkFetched(fetched, fallback.ReadFeatures);
+                MarkContextFetched(fetched, fallback.ReadFeatures);
             }
 
             later.Remove(node.NodeId);
@@ -1030,7 +1030,7 @@ public sealed class PlanBuilder
                 {
                     if (tap.AttachAfter == node.NodeId)
                     {
-                        ValidateTap(tap, possible, fetched, later, artifact);
+                        ValidateTap(tap, possible, fetched, later, ordered, fallbacks, artifact);
                     }
                 }
             }
@@ -1053,7 +1053,7 @@ public sealed class PlanBuilder
             {
                 if (tap.AttachOutput)
                 {
-                    ValidateTap(tap, possible, fetched, later, artifact);
+                    ValidateTap(tap, possible, fetched, later, ordered, fallbacks, artifact);
                 }
             }
         }
@@ -1739,7 +1739,11 @@ public sealed class PlanBuilder
     /// attach point, and every candidate feature must already have been fetched there. A pinned version
     /// (<c>col.x@node</c>) must not be written in the future (<see cref="ValidateVersionRead"/> checks that it is written).
     /// </summary>
-    private void ValidateTap(CompiledTap tap, Dictionary<int, string> possible, HashSet<int> fetched, HashSet<string> later, string artifact)
+    /// <param name="later">The nodes after the attach point.</param>
+    /// <param name="ordered">The combination's nodes in their order.</param>
+    private void ValidateTap(
+        CompiledTap tap, Dictionary<int, string> possible, HashSet<int> fetched, HashSet<string> later, List<CompiledNode> ordered,
+        IReadOnlyDictionary<string, CompiledNode> fallbacks, string artifact)
     {
         var pointer = "/log_taps/" + JsonPointer.Escape(tap.TapId);
         var where = tap.AttachOutput ? "the output" : $"'{tap.AttachAfter}'";
@@ -1769,8 +1773,45 @@ public sealed class PlanBuilder
             {
                 _diagnostics.Error("TAP_FEATURE_NOT_FETCHED", artifact, pointer,
                     $"Tap '{tap.TapId}' reads feature '{_features[feature].Definition.Name}', which is not fetched before {where}; taps never trigger fetches.",
-                    "attach the tap after a node that reads the feature");
+                    NotFetchedHint(feature, later, ordered, fallbacks));
             }
+        }
+    }
+
+    /// <summary>
+    /// Where a tap can log a candidate feature that is not fetched before its attach point: after the first later node
+    /// whose fill writes it, if one does; a fallback that reads it is named with the reason it does not count.
+    /// </summary>
+    private string NotFetchedHint(int feature, HashSet<string> later, List<CompiledNode> ordered, IReadOnlyDictionary<string, CompiledNode> fallbacks)
+    {
+        var name = _features[feature].Definition.Name;
+        var reads = new HashSet<int>();
+        foreach (var node in ordered)
+        {
+            if (later.Contains(node.NodeId) && Reads(node))
+            {
+                return $"attach the tap after '{node.NodeId}', the first node after this point that reads '{name}'";
+            }
+        }
+
+        string? reader = null;
+        foreach (var (id, fallback) in fallbacks)
+        {
+            if ((reader is null || string.CompareOrdinal(id, reader) < 0) && Reads(fallback))
+            {
+                reader = id;
+            }
+        }
+
+        return reader is null
+            ? $"attach the tap after a node that reads '{name}'"
+            : $"attach the tap after a node that reads '{name}': fallback '{reader}' reads it, but a fallback's candidate features are written only when it runs";
+
+        bool Reads(CompiledNode node)
+        {
+            reads.Clear();
+            MarkFetched(reads, node.ReadFeatures);
+            return reads.Contains(feature);
         }
     }
 
@@ -1793,19 +1834,34 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
-    /// Marks features as fetched with everything that is available whenever they are (design 6.7, 6.8): the features a
-    /// derived one is computed from, and the context key features of a physical one's entity, along the chains.
+    /// Marks what a fallback's reads make available before the taps after its node, whether or not it runs: its context
+    /// features, with what they need (<see cref="MarkFetched(HashSet{int}, int)"/>), which the context prefetch stores for
+    /// every request. Its candidate features, and the candidate keys they are fetched by, are written into the table only by
+    /// the fallback's own fill, when it runs; the prefetch for it never backfills. Counted as fetched, they let a tap after
+    /// the node log a column nobody had written when the fallback did not run, and the request threw once the tap was
+    /// sampled (review 83: <c>col.creator.pop</c>, which only the fallback reads, and its key <c>col.item.base</c>).
+    /// </summary>
+    private void MarkContextFetched(HashSet<int> fetched, ImmutableArray<int> features)
+    {
+        foreach (var f in features)
+        {
+            if (_features[f].IsContext)
+            {
+                MarkFetched(fetched, f);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Marks features as fetched with everything a fill or the prefetch makes available first for them (design 6.7, 6.8):
+    /// the features a derived one is computed from, and the key features of a physical one's entity, along the chains.
     /// </summary>
     /// <remarks>
-    /// <para>The feature plan makes the key features a physical feature's dependencies when it groups the features, after
-    /// these checks run, so the context ones follow the entity's key here: a tap logging <c>ctx.country.region</c>, the key
-    /// of the <c>ctx.region.boost</c> a node reads, was told no node reads it, although the prefetch fetches it for every
-    /// request that runs the node (review 80). A key feature is registered with the features keyed by it.</para>
-    /// <para>Only context keys: the context prefetch stores a context key whatever reads it, but a candidate key (the
-    /// <c>col.item.base</c> keying <c>col.creator.pop</c>) is written into the table only by a fill that consumes the
-    /// feature keyed by it, never by a prefetch. Followed, it let a tap after a node log the key of a feature that only the
-    /// node's fallback reads; the request then threw when a sampled tap read the column nobody had written (review 83).
-    /// A tap logs a candidate key after a node that reads the key itself.</para>
+    /// The feature plan makes the key features a physical feature's dependencies when it groups the features, after these
+    /// checks run, so they follow the entity's key here: a tap logging <c>ctx.country.region</c>, the key of the
+    /// <c>ctx.region.boost</c> a node reads, was told no node reads it, although the prefetch fetches it for every request
+    /// that runs the node (review 80). A key feature is registered with the features keyed by it. What a fallback's reads
+    /// make available is less (<see cref="MarkContextFetched"/>).
     /// </remarks>
     private void MarkFetched(HashSet<int> fetched, ImmutableArray<int> features)
     {
@@ -1831,7 +1887,7 @@ public sealed class PlanBuilder
 
         foreach (var part in info.Definition.Entity.Key)
         {
-            if (part.Kind == EntityKeyPartKind.ContextFeature && Schema.RegisteredContextFeature(part.Name) is >= 0 and var key)
+            if (part.IsFeature && Schema.RegisteredFeature(part.Name, part.Kind == EntityKeyPartKind.ContextFeature) is >= 0 and var key)
             {
                 MarkFetched(fetched, key);
             }
