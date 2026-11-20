@@ -524,6 +524,32 @@ public sealed class TapCandidateKeyTests
     }
 
     /// <summary>
+    /// Review 94: the reader before the tap may be skipped and its position does not append, and the only later reader
+    /// appends rows: attached after the reader, the tap runs only when it does. The hint went to the later reader and named
+    /// a node after it that does not exist.
+    /// </summary>
+    [Fact]
+    public void TheHint_NamesASkippableEarlierReader_BeforeLaterReadersThatAppend()
+    {
+        var pipeline = Pipeline("""{ "after": "plain" }""", "col.item.base", primary: "double(col.item.base)", backup: "1.0",
+                next: "\"when\": \"true\",", output: "1.0")
+            .Replace("\"score.l\": { \"type\": \"float64\", \"default\": 0.0 }",
+                "\"score.l\": { \"type\": \"float64\", \"default\": 0.0 }, \"score.app\": { \"type\": \"float64?\" }", StringComparison.Ordinal)
+            .Replace("\"backup\": {", """
+                "plain": { "order": 400, "op": "ExpressionScorer@1", "config": { "output_col": "score.l", "expr": "1.0" } },
+                "future": { "order": 500, "op": "ReadsAndAppends@1", "config": { "output_col": "score.app", "expr": "item.base" } }, "backup": {
+                """, StringComparison.Ordinal);
+        var operators = OperatorRegistry.CreateDefault().Add(new ReadsAndAppendsFactory());
+
+        var error = Assert.Single(Compile(pipeline, operators).Diagnostics, d => d.IsError);
+
+        Assert.Equal("TAP_FEATURE_NOT_FETCHED", error.Code);
+        Assert.Equal("attach the tap after 'next', which reads 'item.base': its 'when' or 'min_remaining_ms' may skip it, and then nothing writes the feature for a later point", error.Hint);
+        var moved = Compile(pipeline.Replace("""{ "after": "plain" }""", """{ "after": "next" }""", StringComparison.Ordinal), operators);
+        Assert.True(moved.Succeeded, string.Join("\n", moved.Diagnostics));
+    }
+
+    /// <summary>
     /// Review 92: a tap of entered or dropped rows after a later node, where the reader's fallback appended rows, was told
     /// to look for a later reader; attached after the reader it logs rows that were live when it filled them.
     /// </summary>

@@ -288,7 +288,8 @@ public readonly struct IoCall
     /// the call site's context, as the call's own. A call started where the execution context does not flow
     /// (<see cref="ExecutionContext.SuppressFlow"/>) has none to stop it in: it is stopped on the flow completing it, whose
     /// listeners and handlers see that flow, and the flow is given back its activity after the span stops, unless that
-    /// activity has stopped (the setter refuses it, and the flow stays under this call's request).</para>
+    /// activity has stopped: the setter refuses it, and the flow stays where the stop left it (under this call's request,
+    /// or still on that activity when a stop listener threw before the stop moved it).</para>
     /// </remarks>
     /// <param name="keys">Keys sent (feature sources), or -1.</param>
     /// <param name="requestId">Sample request id for failure summaries.</param>

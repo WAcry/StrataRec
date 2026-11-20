@@ -2008,15 +2008,16 @@ public sealed class PlanBuilder
             return $"attach the tap after '{reader}', which reads '{name}': a tap of {(scope == TapScope.Entered ? "entered" : "dropped")} rows there logs rows that were live when it filled them";
         }
 
+        if (reader is not null && readerMaySkip && appender is null)
+        {
+            // A tap there runs only when the node does (review 94: one after it went to a later reader that appends).
+            return $"attach the tap after '{reader}', which reads '{name}': its 'when' or 'min_remaining_ms' may skip it, and then nothing writes the feature for a later point";
+        }
+
         if ((laterAppender ?? appender) is { } last)
         {
             // Every later reader appends rows (review 92: the hint asked for a node that reads it, and named none).
             return $"attach the tap after a node after '{last}' that reads '{name}': the rows '{last}' or its fallback appends have no value for it";
-        }
-
-        if (reader is not null && readerMaySkip)
-        {
-            return $"attach the tap after '{reader}', which reads '{name}': its 'when' or 'min_remaining_ms' may skip it, and then nothing writes the feature for a later point";
         }
 
         string? fallbackReader = null;
