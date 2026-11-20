@@ -464,7 +464,7 @@ internal sealed class RequestMemory
 **离开请求的数据不使用请求的缓冲区。**
 
 1. 返回给宿主的 `RecResult` 在池外分配，归宿主所有，通常只有几十个结果。
-2. 探针在请求线程上把列切片复制到日志管道自己租借的缓冲区（第 8.6 节）。切片在编码完成后归还，编码后的字节在 sink 确认或丢弃后归还；`fetch_missing` 的后台拉取（第 8.5 节）使用同一份探针缓冲区。
+2. 探针在请求线程上把列切片复制到日志管道自己租借的缓冲区（第 8.6 节）。切片在编码完成后归还，编码后的字节在 sink 确认或丢弃后归还。
 3. trace 和回放捕获只出现在调试或采样请求中，正常分配。
 
 **初始化与清理。** 从池中租到的数组可能带着上一个请求的数据。引擎只清零它依赖的部分：有效位图、填充位图和输出绑定表在租借时清零，5,000 行的位图只有 625 字节；数值数组不清零，因为每个值在被读取之前都受填充位和有效位保护。测试在归还时用固定的字节模式填满数组，让“归还后仍在使用”的缺陷尽早暴露；这由运行期开关 `StrataRec.PoisonReturnedBuffers` 打开，所有测试项目都打开，Debug 和 Release 构建一样（CI 测的是 Release 构建），生产不打开。
@@ -1317,10 +1317,8 @@ internal sealed class MultiplyNode : VecNode
     "group": "deep_trace",
     "attach": { "after": "coarse_top_k" },
     "rows": { "scope": "dropped", "filter": "col.score.coarse > 0.35", "max_rows": 50 },
-    "fetch_missing": true,
     "columns": {
-      "coarse": "col.score.coarse",
-      "age_hours": "col.item.age_hours"
+      "coarse": "col.score.coarse"
     }
   },
   "ranker_inputs": {
@@ -1352,9 +1350,9 @@ internal sealed class MultiplyNode : VecNode
 | `context` | 每个请求记录一次的上下文字段 |
 | `columns` | 日志列名到表达式的映射；值可以是任意 `ColumnExpr`，结果可以是可空类型 |
 | `columns_from` | 展开为某个模型节点的全部输入（第 6.9 节） |
-| `fetch_missing` | 默认 `false`；为 `true` 时允许引用挂载点之前没有产生的特征列（第 8.5 节） |
+| `fetch_missing` | 只能是 `false`（默认）：为探针在挂载点之后补拉特征不做，`true` 报 `TAP_FETCH_MISSING_UNSUPPORTED`（第 8.5 节） |
 
-探针引用的列必须在挂载点之前已经产生，除非探针设置了 `fetch_missing: true`，这时只有特征列可以晚于挂载点。CI 对每个实验桶单独检查这条规则。`coarse_dropped` 记录被粗排淘汰的候选的 `item.age_hours`，这个特征要到精排前才会补齐，被淘汰的行在服务链路里永远不会有它，所以探针声明了 `fetch_missing`。
+探针引用的列必须在挂载点之前已经产生。CI 对每个实验桶单独检查这条规则。`coarse_dropped` 只能记录被粗排淘汰的候选在粗排时已有的列：精排前才补齐的特征（例如 `item.age_hours`），被淘汰的行在服务链路里永远不会有。
 
 探针可以直接记录可空值。缺失记在批次的有效位图里（第 8.7 节），不需要写成 `?? -1.0` 这样的哨兵值；`ctx.request.user_id` 对匿名请求为空，`served` 照样记录。
 
@@ -1386,7 +1384,7 @@ internal sealed class MultiplyNode : VecNode
 
 ### 8.5 采样门控的额外拉取
 
-默认情况下探针是被动的观察者，不会触发额外的拉取。探针能记录的特征是服务链路在每个实验组合里、挂载点之前一定已经拉取的：节点或输出读到的特征、后备读到的上下文特征，以及拉取它们之前要先拉的特征（衍生特征的输入、实体键读到的特征，例如 `ctx.region.boost` 的键 `ctx.country.region`、`col.creator.pop` 的键 `col.item.base`）。后备读到的候选特征不算：后备只在运行时才把它们写进候选表，为后备发出的预取不回填；要记录它们，把探针挂在读它们的节点之后。离线训练有时需要在少量样本上记录服务链路本身用不到的特征，这时可以设置 `"fetch_missing": true`：
+默认情况下探针是被动的观察者，不会触发额外的拉取。探针能记录的特征是服务链路在每个实验组合里、挂载点之前一定已经拉取的：节点或输出读到的特征、后备读到的上下文特征，以及拉取它们之前要先拉的特征（衍生特征的输入、实体键读到的特征，例如 `ctx.region.boost` 的键 `ctx.country.region`、`col.creator.pop` 的键 `col.item.base`）。后备读到的候选特征不算：后备只在运行时才把它们写进候选表，为后备发出的预取不回填；要记录它们，把探针挂在读它们的节点之后。离线训练有时需要在少量样本上记录服务链路本身用不到的特征。原设计为此提供 `"fetch_missing": true`，在响应返回后为被选中的行补拉；这项没有实现，`true` 报 `TAP_FETCH_MISSING_UNSUPPORTED`（理由见 `decisions.md`），训练需要的额外特征由离线按记录的主键和时间关联。下面是原设计的描述，留作以后需要时的起点：
 
 1. **只为被选中的行拉取。** 请求命中该探针的组采样、探针实际触发时，请求线程只记下被选中行的主键和已有的列切片。
 2. **在响应返回之后执行。** 缺失的特征由后台任务在响应返回后拉取，请求延迟不受影响，命中采样和没有命中采样的请求在服务链路上表现完全一样。
@@ -1406,10 +1404,7 @@ flowchart LR
         D --> E["请求结束时提交批次"]
     end
     subgraph Bg["后台"]
-        E --> M{"需要 fetch_missing？"}
-        M -- "是" --> N["响应返回后异步拉取<br/>只写探针缓冲区"]
-        M -- "否" --> Q["有界队列<br/>durable 与 best_effort 分开"]
-        N --> Q
+        E --> Q["有界队列<br/>durable 与 best_effort 分开"]
         Q --> G["编码与压缩<br/>Arrow IPC / Parquet / JSON"]
         G --> H["ILogSink<br/>消息队列、对象存储等"]
     end
