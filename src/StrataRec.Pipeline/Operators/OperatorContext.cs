@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Runtime.ExceptionServices;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
@@ -120,63 +121,136 @@ public sealed class OperatorContext
     public ScalarValue ContextValue(int contextId) => _state.Context[contextId];
 
     /// <summary>
-    /// Whether the context features of <paramref name="reads"/> are settled: true with their worst state once every one
-    /// is stored, or at once with <see cref="FeatureState.Failed"/> when one already failed; false while one is still in
-    /// flight (wait with <see cref="WhenAnyReadyAsync"/>). Then the awaited expressions they come from
-    /// (<see cref="OperatorCompileContext.CompileAwaitedExpression"/>) can be evaluated (<see cref="EvalContext"/>). A failed
+    /// Waits until the context features of each of <paramref name="reads"/> are settled, and calls
+    /// <paramref name="settled"/> for each as soon as it is, with its index and the worst state of its features: once every
+    /// one is stored, or at once with <see cref="FeatureState.Failed"/> when one failed, since the operator gives up on what
+    /// reads it whatever the others do. Then the awaited expressions they come from
+    /// (<see cref="OperatorCompileContext.CompileAwaitedExpression"/>) can be evaluated (<see cref="EvalContext"/>); a failed
     /// feature is the operator's to handle, as it handles a failed call: its value is missing.
     /// </summary>
     /// <remarks>
-    /// <para>For an operator sending several calls (a recall source's query, design 5.4): it asks for every call still
-    /// waiting, in its own order, and sends each that is ready, so calls whose features are stored together are sent in
-    /// that order; then it waits for any of the rest. The features were prefetched when the request started, so only what
-    /// is still in flight is waited for.</para>
-    /// <para>Call it on the operator's flow while the attempt runs: it reads the request's state.</para>
+    /// <para>For an operator sending several calls (a recall source's query, design 5.4), each as soon as its own features
+    /// are stored; a call with no awaited reads is settled at once. The features were prefetched when the request started, so
+    /// only what is still in flight is waited for.</para>
+    /// <para>Each round observes the prefetch once, then settles, in the order of <paramref name="reads"/>, every read that
+    /// this one observation settles, so reads whose features are stored together are settled in that order whenever the
+    /// store happens; then it waits for any feature it observed in flight, so one stored meanwhile starts the next round at
+    /// once (review 82: each read observed the tasks on its own, so a store between two reads put them in different rounds,
+    /// and one between the check and the wait was missed until another feature was stored).</para>
+    /// <para><paramref name="settled"/> runs on the operator's flow, one call at a time; what it throws ends the wait.</para>
+    /// <para>The wait is bounded on its own by the attempt's deadline and the caller, as a call is
+    /// (<see cref="RetrieveAsync"/>), not by <see cref="CancellationToken"/>, which a client's callback could hold up; and a
+    /// prefetch that faulted is rethrown as it is, not taken for the deadline. An operator that stopped waiting reads nothing
+    /// more of the request's.</para>
     /// </remarks>
-    public bool TryGetReady(AwaitedReads reads, out FeatureFillResult result)
+    /// <exception cref="OperationCanceledException">The attempt's budget ran out or the caller gave up first: the reads not
+    /// settled by then never are, and the operator stops, as when a call it sent is cut off.</exception>
+    public async ValueTask WhenEachReadyAsync(IReadOnlyList<AwaitedReads> reads, Action<int, FeatureFillResult> settled)
     {
         ArgumentNullException.ThrowIfNull(reads);
-        if (reads.IsEmpty)
+        ArgumentNullException.ThrowIfNull(settled);
+        List<int>? waiting = null;
+        for (var i = 0; i < reads.Count; i++)
         {
-            result = new FeatureFillResult(FeatureState.Ok);
-            return true;
+            if (reads[i].IsEmpty)
+            {
+                settled(i, new FeatureFillResult(FeatureState.Ok));
+            }
+            else
+            {
+                (waiting ??= new List<int>(reads.Count)).Add(i);
+            }
         }
 
-        return _state.Features.TryGetContextStored(reads.Features, out result);
-    }
-
-    /// <summary>
-    /// Waits until one more context feature of <paramref name="reads"/> is stored, at once when none is pending; then ask
-    /// <see cref="TryGetReady"/> again. The wait is bounded on its own by the attempt's deadline and the caller, as a call
-    /// is (<see cref="RetrieveAsync"/>), not by <see cref="CancellationToken"/>, which a client's callback could hold up.
-    /// </summary>
-    /// <exception cref="OperationCanceledException">The attempt's budget ran out or the caller gave up: the operator stops,
-    /// as when a call it sent is cut off.</exception>
-    public async ValueTask WhenAnyReadyAsync(IReadOnlyList<AwaitedReads> reads)
-    {
-        ArgumentNullException.ThrowIfNull(reads);
-        var pending = new List<Task>();
-        for (var r = 0; r < reads.Count; r++)
-        {
-            _state.Features.AddUnstoredContextTasks(reads[r].Features, pending);
-        }
-
-        if (pending.Count == 0)
+        if (waiting is null)
         {
             return;
         }
 
-        var any = pending.Count == 1 ? pending[0] : Task.WhenAny(pending);
-        try
+        var features = _state.Features;
+        var tasks = new List<Task>(); // this round's observation: each task the waiting reads wait for, once,
+        var stored = new List<bool>(); // and whether it had completed
+        var pending = new List<Task>();
+        while (true)
         {
-            // The prefetch's own tasks, awaited without reading anything of the request's: a wait cut off at the deadline
-            // leaves nothing behind that could read the request's memory after it was returned.
-            await any.WaitAsync(AttemptBudget.Until(Budget.Deadline), Budget.Caller).ConfigureAwait(false);
+            tasks.Clear();
+            stored.Clear();
+            pending.Clear();
+            foreach (var i in waiting)
+            {
+                foreach (var f in reads[i].Features)
+                {
+                    var task = features.ContextStoredTask(f);
+                    if (!tasks.Contains(task))
+                    {
+                        var completed = task.IsCompleted;
+                        tasks.Add(task);
+                        stored.Add(completed);
+                        if (!completed)
+                        {
+                            pending.Add(task);
+                        }
+                    }
+                }
+            }
+
+            for (var w = 0; w < waiting.Count; w++)
+            {
+                var i = waiting[w];
+                if (Settled(features, reads[i].Features, tasks, stored, out var result))
+                {
+                    waiting.RemoveAt(w--);
+                    settled(i, result);
+                }
+            }
+
+            if (waiting.Count == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                // Task.WhenAny never faults, so a timeout here is the deadline's alone; a prefetch that faulted is rethrown by
+                // the next round's ContextStoredState. The tasks are the prefetch's own: a wait cut off at the deadline
+                // leaves nothing behind that reads the request's state.
+                await Task.WhenAny(pending).WaitAsync(AttemptBudget.Until(Budget.Deadline), Budget.Caller).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                throw new OperationCanceledException("The node's budget ran out while it waited for context features.", Budget.Token);
+            }
         }
-        catch (TimeoutException)
+    }
+
+    /// <summary>Whether one round's observation settles <paramref name="features"/>, and with which state (see <see cref="WhenEachReadyAsync"/>).</summary>
+    private static bool Settled(FeatureFetcher fetcher, ImmutableArray<int> features, List<Task> tasks, List<bool> stored, out FeatureFillResult result)
+    {
+        var worst = new FeatureFillResult(FeatureState.Ok);
+        var all = true;
+        foreach (var f in features)
         {
-            throw new OperationCanceledException("The node's budget ran out while it waited for context features.", Budget.Token);
+            if (!stored[tasks.IndexOf(fetcher.ContextStoredTask(f))])
+            {
+                all = false;
+                continue;
+            }
+
+            var state = fetcher.ContextStoredState(f);
+            if (state.Failed)
+            {
+                result = state;
+                return true;
+            }
+
+            if (state.State > worst.State)
+            {
+                worst = state;
+            }
         }
+
+        result = all ? worst : default;
+        return all;
     }
 
     /// <summary>Drops rows whose rank position is not flagged. Requires <see cref="Effects.RowFilter"/>.</summary>

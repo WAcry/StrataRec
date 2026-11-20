@@ -265,7 +265,7 @@ public sealed class OperatorCompileContext
 
     /// <summary>
     /// Compiles a request-level expression (<c>ctx.*</c> and <c>param.*</c>; <c>col.*</c> is an error) whose context features
-    /// the operator waits for itself while it runs (<see cref="OperatorContext.TryGetReady"/>), instead of the executor
+    /// the operator waits for itself while it runs (<see cref="OperatorContext.WhenEachReadyAsync"/>), instead of the executor
     /// filling them before the node starts. For an operator that sends several calls of which only some read context
     /// features (a recall source's query, design 5.4): each call waits for its own features and the others start at once,
     /// where a feature filled before the node would hold back every call. The features remain reads of the node: they are
@@ -288,7 +288,7 @@ public sealed class OperatorCompileContext
 
     /// <summary>
     /// The context features <paramref name="expressions"/> read, compiled by <see cref="CompileAwaitedExpression"/>: what one
-    /// call of the operator waits for before it evaluates them (<see cref="OperatorContext.TryGetReady"/>). Request
+    /// call of the operator waits for before it evaluates them (<see cref="OperatorContext.WhenEachReadyAsync"/>). Request
     /// inputs and parameters are not waited for; expressions reading only those give <see cref="AwaitedReads.None"/>.
     /// </summary>
     public AwaitedReads AwaitedReadsOf(IReadOnlyList<CompiledExpression> expressions)
@@ -591,7 +591,7 @@ public sealed class OperatorCompileContext
 
 /// <summary>
 /// The context features some awaited expressions read (<see cref="OperatorCompileContext.AwaitedReadsOf"/>), which an
-/// operator waits for while it runs, with <see cref="OperatorContext.TryGetReady"/>. Built once, when the node compiles.
+/// operator waits for while it runs, with <see cref="OperatorContext.WhenEachReadyAsync"/>. Built once, when the node compiles.
 /// </summary>
 public sealed class AwaitedReads
 {

@@ -66,6 +66,7 @@ public sealed class CandidateQueryReplayTests
     [InlineData("nonsense", "1", "/runs/0/candidate_calls/0/query/q/type")]
     [InlineData("float64", """{"x":1}""", "/runs/0/candidate_calls/0/query/q/value")]
     [InlineData("list<float64>", """["a"]""", "/runs/0/candidate_calls/0/query/q/value")]
+    [InlineData("list<float64,3>", "[1, 2]", "/runs/0/candidate_calls/0/query/q/value")]
     public void ARecordedValueNotOfItsType_IsRejectedAtItsPointer(string type, string value, string pointer)
     {
         var run = RunReplayTests.Run();
@@ -74,6 +75,22 @@ public sealed class CandidateQueryReplayTests
         var error = Assert.Throws<ReplayBundleException>(() => RunReplay.Create(run, "/runs/0"));
 
         Assert.Equal(pointer, error.Pointer);
+    }
+
+    [Fact]
+    public void AValueRecordedInAnotherSpelling_ComparesAsWhatItDecodesTo()
+    {
+        // " bool " with 1 and "bool" with true decode to the same value as the replayed true; "bool" with 0 is false and
+        // answered the longest list. The raw JSON was compared, so the false call's answer was borrowed (review 82).
+        var run = RunReplayTests.Run();
+        run.CandidateCalls.Add(Recorded("a", " bool ", RunReplayTests.Json("1"), "ok", 1));
+        run.CandidateCalls.Add(Recorded("b", "bool", RunReplayTests.Json("true"), "ok", 2));
+        run.CandidateCalls.Add(Recorded("c", "bool", RunReplayTests.Json("0"), "ok", 3, 4, 5));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        Assert.Equal(new long[] { 1 }, Retrieve(replay, "a", ColumnType.Bool, ScalarValue.FromBool(true)).Ids);
+        Assert.Equal(new long[] { 1 }, Retrieve(replay, "added", ColumnType.Bool, ScalarValue.FromBool(true)).Ids); // a true call, not c's
+        Assert.Empty(replay.Gaps);
     }
 
     private static ReplayCandidateCall Recorded(string node, string type, JsonElement? value, string status, params long[] ids) => new()

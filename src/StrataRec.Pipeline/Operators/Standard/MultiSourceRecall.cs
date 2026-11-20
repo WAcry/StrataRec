@@ -325,11 +325,21 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
 
                 // The sources whose queries read context features, each sent as soon as its own are stored (design 5.4), while
                 // the calls above run: a source reading the user's embedding does not hold back one that needs nothing.
+                // Each round sends, in source order, every source its observation settles, so sources whose features are
+                // stored together are sent in that order; a source whose query reads a failed feature is refused at once.
                 if (waiting is not null)
                 {
-                    refused = new string?[sources.Length];
-                    degraded = new string?[sources.Length];
-                    await SendWhenReadyAsync(context, waiting, calls, buffers, refused, degraded).ConfigureAwait(false);
+                    List<int> order = waiting;
+                    var notSent = refused = new string?[sources.Length];
+                    var weak = degraded = new string?[sources.Length];
+                    var reads = new AwaitedReads[order.Count];
+                    for (var w = 0; w < reads.Length; w++)
+                    {
+                        reads[w] = sources[order[w]].Query!.Reads;
+                    }
+
+                    await context.WhenEachReadyAsync(reads, (w, fill) => SendWith(context, order[w], fill, calls, buffers, notSent, weak))
+                        .ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
@@ -411,44 +421,9 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         }
 
         /// <summary>
-        /// Sends each waiting source once the context features its query reads are stored, and refuses one as soon as one of
-        /// them failed (<paramref name="refused"/> says why), whatever its other features do. Each round handles every source
-        /// that is settled, in source order, so sources whose features are stored together are sent in that order; then it
-        /// waits for any feature still pending. The wait is bounded by the node's deadline and the caller, and throws when
-        /// either ends it; the queries are evaluated here, on the operator's flow, one at a time.
+        /// Sends source <paramref name="i"/> with its query evaluated now, its features settled as <paramref name="fill"/>
+        /// says, or refuses it (<paramref name="refused"/> says why) when one of them failed.
         /// </summary>
-        private async Task SendWhenReadyAsync(
-            OperatorContext context, List<int> waiting, Task<CandidateSourceStatus>?[] calls, CandidateBuffer?[] buffers, string?[] refused, string?[] degraded)
-        {
-            List<AwaitedReads>? pending = null;
-            while (true)
-            {
-                for (var w = 0; w < waiting.Count; w++)
-                {
-                    var i = waiting[w];
-                    if (context.TryGetReady(sources[i].Query!.Reads, out var fill))
-                    {
-                        waiting.RemoveAt(w--);
-                        SendWith(context, i, fill, calls, buffers, refused, degraded);
-                    }
-                }
-
-                if (waiting.Count == 0)
-                {
-                    return;
-                }
-
-                pending ??= new List<AwaitedReads>(waiting.Count);
-                pending.Clear();
-                foreach (var i in waiting)
-                {
-                    pending.Add(sources[i].Query!.Reads);
-                }
-
-                await context.WhenAnyReadyAsync(pending).ConfigureAwait(false);
-            }
-        }
-
         private void SendWith(
             OperatorContext context, int i, FeatureFillResult fill, Task<CandidateSourceStatus>?[] calls, CandidateBuffer?[] buffers,
             string?[] refused, string?[] degraded)

@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 using StrataRec.Core.Bindings;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Features.Connectors;
 using StrataRec.Features.Runtime;
@@ -23,7 +25,7 @@ namespace StrataRec.IntegrationTests;
 /// </remarks>
 public sealed class RecallQueryTests
 {
-    private static readonly TimeSpan Patience = TimeSpan.FromSeconds(30);
+    internal static readonly TimeSpan Patience = TimeSpan.FromSeconds(30);
 
     [Fact]
     public async Task ASourceWithoutAQuery_IsSentAtOnce_AndOneWithAQuery_OnceItsFeaturesAreStored()
@@ -352,14 +354,111 @@ public sealed class RecallQueryTests
         }
     }
 
-    private static RecRequest WithCountry(string requestId)
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFeatureStoredWhileTheSourcesAreChecked_StartsTheNextRound_AndSourcesStoredTogetherGoInSourceOrder(bool together)
+    {
+        // Source order two_tower, popular, regional. two_tower reads the user's embedding and the country's region (geo_store,
+        // held); popular the user's tenure, stored at once; regional the region's boost (region_store, keyed by the region and
+        // held) or, together, the country's region as two_tower does. popular's call opens geo_store and waits until
+        // region_store has started, so the country's region is stored after two_tower was checked and before the round
+        // waits. Each source observed the tasks on its own (review 82): that store was missed until region_store answered,
+        // and with together, regional, checked after the store, was sent before two_tower.
+        var host = HomeFeedTestHost.LoadModified(root =>
+        {
+            ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"two_tower\": 40, \"popular\": 20", "\"two_tower\": 40, \"popular\": 20, \"regional\": 5");
+            ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"source_order\": [\"two_tower\", \"popular\"]", "\"source_order\": [\"two_tower\", \"popular\", \"regional\"]");
+            ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"queries\": { \"two_tower\": { \"user_embedding\": \"ctx.user.embedding\" } }",
+                "\"queries\": { \"two_tower\": { \"user_embedding\": \"ctx.user.embedding\", \"country_region\": \"ctx.country.region\" }, " +
+                "\"popular\": { \"tenure\": \"ctx.user.tenure_days\" }, " +
+                (together ? "\"regional\": { \"region\": \"ctx.country.region\" } }" : "\"regional\": { \"boost\": \"ctx.region.boost\" } }"));
+            ReplayTests.Edit(root, "bindings/local.jsonc", "\"popular\":   { \"client\": \"memory_list@1\", \"data_file\": \"fixtures/recall_popular.json\" }",
+                "\"popular\":   { \"client\": \"memory_list@1\", \"data_file\": \"fixtures/recall_popular.json\" }, \"regional\": { \"client\": \"memory_list@1\", \"items\": [7, 8, 9] }");
+        });
+        using var connectors = new TwoGateConnectors();
+        var sources = new ProbeSources
+        {
+            BeforeRetrieve = (query, _) =>
+            {
+                if (query.SourceName == "popular")
+                {
+                    connectors.OpenGeo.TrySetResult();
+                    connectors.RegionStarted.Task.WaitAsync(Patience).GetAwaiter().GetResult(); // the country's region is stored
+                }
+
+                return ValueTask.CompletedTask;
+            },
+        };
+        await using var engine = Engine(host, sources, connectors);
+        var running = engine.ExecuteAsync(WithCountry($"req-stored-mid-round-{together}"), TestContext.Current.CancellationToken).AsTask();
+        try
+        {
+            await sources.Called("two_tower").WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+            Assert.False(connectors.OpenRegion.Task.IsCompleted); // sent while region_store is still held
+            if (together)
+            {
+                await sources.Called("regional").WaitAsync(Patience, TestContext.Current.CancellationToken);
+            }
+            else
+            {
+                Assert.False(sources.Called("regional").IsCompleted);
+            }
+        }
+        finally
+        {
+            connectors.OpenGeo.TrySetResult();
+            connectors.OpenRegion.TrySetResult();
+        }
+
+        var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal("eu", sources.Query("two_tower")["country_region"].AsString());
+        Assert.Equal(["popular", "two_tower", "regional"], result.Recording!.Runs[0].CandidateCalls.OrderBy(c => c.Seq).Select(c => c.Source));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AQueryReadingADerivedFeature_IsRefusedAsSoonAsOneOfItsInputsFails(bool derived)
+    {
+        // user_store fails; geo_store, which region.boost waits for, is held past the node's budget. A query reading tenure
+        // and boost itself is refused at once; one reading a feature derived from both waited for boost, up to the node's
+        // budget (review 82).
+        var host = HomeFeedTestHost.LoadModified(root =>
+        {
+            ReplayTests.Edit(root, "bindings/local.jsonc", "\"user_store\":   { \"connector\": \"memory@1\",", "\"user_store\":   { \"connector\": \"memory@1\", \"fail\": true,");
+            ReplayTests.Edit(root, "catalog/home_feed.jsonc", "\"derived_features\": {",
+                "\"derived_features\": { \"user.query_gate\": { \"type\": \"float64\", \"expr\": \"ctx.user.tenure_days + ctx.region.boost\" },");
+            ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"user_embedding\": \"ctx.user.embedding\"", derived
+                ? "\"user_embedding\": \"[1.0, 0.0, 0.0]\", \"signal\": \"ctx.user.query_gate\""
+                : "\"user_embedding\": \"[1.0, 0.0, 0.0]\", \"tenure\": \"ctx.user.tenure_days\", \"region\": \"ctx.region.boost\"");
+            ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"order\": 100, \"op\": \"MultiSourceRecall@1\",", "\"order\": 100, \"op\": \"MultiSourceRecall@1\", \"timeout_ms\": 500,");
+        });
+        using var geo = new GatedConnectors("geo_store");
+        var sources = new ProbeSources();
+        await using var engine = Engine(host, sources, geo);
+        var running = engine.ExecuteAsync(WithCountry($"req-derived-failed-{derived}"), TestContext.Current.CancellationToken).AsTask();
+        await geo.Started.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        _ = Task.Delay(1500, TestContext.Current.CancellationToken).ContinueWith(_ => geo.Open(), TaskScheduler.Default);
+
+        var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        var recall = result.Trace!.Single(n => n.NodeId == "recall");
+        Assert.Equal(NodeOutcomeKind.Degraded, recall.Kind);
+        Assert.StartsWith("recall sources failed: two_tower: its query reads a context feature that failed (", recall.Detail, StringComparison.Ordinal);
+        Assert.False(sources.Called("two_tower").IsCompleted);
+    }
+
+    internal static RecRequest WithCountry(string requestId)
     {
         var request = Request(requestId);
         request.Inputs.Set("country", "DE");
         return request;
     }
 
-    private static RecRequest Request(string requestId, long? userId = 1001) => new()
+    internal static RecRequest Request(string requestId, long? userId = 1001) => new()
     {
         PipelineId = "home_feed",
         RequestId = requestId,
@@ -369,7 +468,7 @@ public sealed class RecallQueryTests
         Debug = new DebugOptions { Record = true, Trace = true, ForceArms = ReplayTests.ControlArms },
     };
 
-    private static RecEngine Engine(HomeFeedTestHost host, ProbeSources sources, IFeatureConnectorFactory? connectors = null)
+    internal static RecEngine Engine(HomeFeedTestHost host, ProbeSources sources, IFeatureConnectorFactory? connectors = null)
     {
         var engine = new RecEngine(new PlanEnvironment
         {
@@ -384,8 +483,53 @@ public sealed class RecallQueryTests
 
     private static List<(long, int)> Items(RecResult result) => result.Items.Select(i => (i.Id.Int64Value, i.Rank)).ToList();
 
+    /// <summary>memory@1 connectors where geo_store waits for <see cref="OpenGeo"/> and region_store for <see cref="OpenRegion"/>.</summary>
+    private sealed class TwoGateConnectors : IFeatureConnectorFactory, IDisposable
+    {
+        private readonly MemoryFeatureConnectorFactory _inner = new();
+
+        public TaskCompletionSource OpenGeo { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource OpenRegion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Completes when region_store is asked: the country's region it is keyed by is stored.</summary>
+        public TaskCompletionSource RegionStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public string ConnectorType => _inner.ConnectorType;
+
+        public Type SettingsType => _inner.SettingsType;
+
+        public IFeatureSourceConnector Create(BindingContext context) => context.Name switch
+        {
+            "geo_store" => new Connector(_inner.Create(context), OpenGeo.Task, null),
+            "region_store" => new Connector(_inner.Create(context), OpenRegion.Task, RegionStarted),
+            _ => _inner.Create(context),
+        };
+
+        public void Dispose()
+        {
+            OpenGeo.TrySetResult();
+            OpenRegion.TrySetResult();
+        }
+
+        private sealed class Connector(IFeatureSourceConnector inner, Task gate, TaskCompletionSource? started) : IFeatureSourceConnector
+        {
+            public string ConnectorType => inner.ConnectorType;
+
+            public bool Supports(EntityKeyLayout layout) => inner.Supports(layout);
+
+            public async ValueTask<FetchStatus> FetchAsync(
+                EntityKeyBatch keys, ReadOnlyMemory<CompiledFieldBinding> fields, IFeatureBatchWriter writer, CancellationToken cancellationToken)
+            {
+                started?.TrySetResult();
+                await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                return await inner.FetchAsync(keys, fields, writer, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
     /// <summary>The built-in lists and vector index, noting each call's query when it is sent.</summary>
-    private sealed class ProbeSources
+    internal sealed class ProbeSources
     {
         private readonly ConcurrentDictionary<string, (TaskCompletionSource Called, CandidateQuery? Query)> _calls = new(StringComparer.Ordinal);
 
@@ -447,7 +591,7 @@ public sealed class RecallQueryTests
     /// memory@1 connectors where <paramref name="gated"/>'s fetches wait for the gate (open it before a request that should
     /// not wait), and with <paramref name="partial"/> report a partial answer: its features are degraded.
     /// </summary>
-    private sealed class GatedConnectors(string gated, bool partial = false) : IFeatureConnectorFactory, IDisposable
+    internal sealed class GatedConnectors(string gated, bool partial = false) : IFeatureConnectorFactory, IDisposable
     {
         private readonly MemoryFeatureConnectorFactory _inner = new();
         private readonly ManualResetEventSlim _gate = new();
@@ -485,5 +629,55 @@ public sealed class RecallQueryTests
         }
 
         private bool _partialAnswer => partial;
+    }
+}
+
+/// <summary>
+/// A prefetch that faults while a recall source waits for it (here a host's metric listener throwing a TimeoutException as
+/// it measures user_store's values) is the node's exception, the same whether it faulted before the wait or during it: the
+/// wait took a fault of the one task it waited for for the node's deadline (review 82). Process-wide: a MeterListener.
+/// </summary>
+[Collection(ProcessWideListenersCollection.Name)]
+public sealed class RecallQueryListenerTests
+{
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task APrefetchThatFaults_IsTheNodesException_NotItsDeadline(bool whileWaiting)
+    {
+        var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
+            "\"order\": 100, \"op\": \"MultiSourceRecall@1\",", "\"order\": 100, \"op\": \"MultiSourceRecall@1\", \"timeout_ms\": 4000,"));
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, observer) =>
+        {
+            if (instrument.Meter.Name == StrataRecTelemetry.Name && instrument.Name == StrataRecMetrics.Names.SourceValues)
+            {
+                observer.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        {
+            foreach (var (key, value) in tags)
+            {
+                if (key == StrataRecTags.Source && (string?)value == "user_store")
+                {
+                    throw new TimeoutException("a host's metric listener timed out");
+                }
+            }
+        });
+        listener.Start();
+        using var users = new RecallQueryTests.GatedConnectors("user_store"); // when waiting; otherwise memory@1 answers at once
+        var sources = new RecallQueryTests.ProbeSources();
+        await using var engine = RecallQueryTests.Engine(host, sources, whileWaiting ? users : null);
+        var running = engine.ExecuteAsync(RecallQueryTests.Request($"req-prefetch-fault-{whileWaiting}"), TestContext.Current.CancellationToken).AsTask();
+        if (whileWaiting)
+        {
+            await sources.Called("popular").WaitAsync(RecallQueryTests.Patience, TestContext.Current.CancellationToken); // the node waits
+            users.Open();
+        }
+
+        var result = await running.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        Assert.Equal("TimeoutException: a host's metric listener timed out", result.Trace!.Single(n => n.NodeId == "recall").Detail);
     }
 }

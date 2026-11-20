@@ -935,8 +935,11 @@ internal sealed class RunReplay : IFeatureCallHook
                 throw new ReplayBundleException(at + "/scores", $"{call.Scores.Count} score(s) for {ids.Length} id(s)", "record one score per id");
             }
 
-            // The query's values are compared as JSON, so each must be a value of its type, as a recording writes it
-            // (review 80: a type of "nonsense" and an object for a value were indexed, and reported as a changed query).
+            // Each query value must be a value of its type, and is kept in the form a recording writes, which is what the
+            // replayed values are compared with: review 80 found a type of "nonsense" and an object indexed and reported as a
+            // changed query; review 82 a list of another length than its type's, and other spellings of a value (" bool "
+            // and 1 for true) taken as different from what they decode to.
+            Dictionary<string, ReplayTypedValue>? query = null;
             foreach (var (name, typed) in call.Query ?? [])
             {
                 var value = $"{at}/query/{JsonPointer.Escape(name)}";
@@ -945,10 +948,18 @@ internal sealed class RunReplay : IFeatureCallHook
                     throw new ReplayBundleException(value, "a query value is null", "record each query value as { \"type\": …, \"value\": … }");
                 }
 
-                _ = ReplayJson.Value(typed.Value, ReplayJson.Type(typed.Type, value + "/type"), value + "/value");
+                var type = ReplayJson.Type(typed.Type, value + "/type");
+                var decoded = ReplayJson.Value(typed.Value, type, value + "/value");
+                if (type.FixedLength > 0 && !decoded.IsMissing && decoded.ListLength != type.FixedLength)
+                {
+                    throw new ReplayBundleException(value + "/value", $"a list of {decoded.ListLength} element(s) for type {type}",
+                        $"record {type.FixedLength} elements, as the type says");
+                }
+
+                (query ??= new Dictionary<string, ReplayTypedValue>(StringComparer.Ordinal))[name] = ReplayJson.Typed(type, decoded);
             }
 
-            _candidateCalls.Add(new CandidateEntry(call.Seq, call.Node, call.Source, call.Limit, call.Query, outcome, call.Error, ids, call.Scores.ToArray()));
+            _candidateCalls.Add(new CandidateEntry(call.Seq, call.Node, call.Source, call.Limit, query, outcome, call.Error, ids, call.Scores.ToArray()));
         }
 
         _candidateCalls.Sort(static (a, b) => a.Seq.CompareTo(b.Seq));
@@ -1055,7 +1066,7 @@ internal sealed class RunReplay : IFeatureCallHook
     {
         public int Seq { get; } = seq;
 
-        /// <summary>The query's values as recorded; null for a call that had none.</summary>
+        /// <summary>The query's values as a recording writes them (checked and rewritten when indexed); null for a call that had none.</summary>
         public Dictionary<string, ReplayTypedValue>? Query { get; } = query;
 
         public string? Node { get; } = node;

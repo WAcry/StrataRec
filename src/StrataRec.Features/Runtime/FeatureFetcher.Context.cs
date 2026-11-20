@@ -106,80 +106,43 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>
-    /// Whether <paramref name="features"/>, context features the plan prefetches, are settled for an operator that reads them
-    /// while it runs rather than before it starts (a recall source's query values, design 5.4): true with their worst state
-    /// once every one is stored, or at once with <see cref="FeatureState.Failed"/> when one already failed, since the
-    /// operator gives up on what reads it whatever the others do; false while one is still in flight
-    /// (<see cref="AddUnstoredContextTasks"/>). Each is stored when its group is, or a derived one a key or such an operator
-    /// reads when it is computed (<see cref="FeatureRuntimeInfo.ComputedEarly"/>), any other derived one when the whole
-    /// prefetch is.
+    /// The task that has stored context feature <paramref name="feature"/>, one the plan prefetches: its group's, a derived
+    /// one's computed early (<see cref="FeatureRuntimeInfo.ComputedEarly"/>, a key or an operator reads it), or for any
+    /// other derived one the whole prefetch's. Features stored together share a task. For an operator that reads context
+    /// features while it runs rather than before it starts (a recall source's query values, design 5.4): it waits for these
+    /// tasks, then reads each feature's state with <see cref="ContextStoredState"/>.
     /// </summary>
-    /// <remarks>Synchronous, and it reads the request's arrays: call it only while the request runs, on the operator's
-    /// flow. A wait that gave up (the node's budget) then reads nothing more, so nothing outlives the request's memory.</remarks>
-    /// <exception cref="InvalidOperationException">A listed feature is not a context feature (the operator's defect), or
-    /// the prefetch has not started (<see cref="StartContextFetch"/>, which the executor calls before any node runs).</exception>
-    public bool TryGetContextStored(ImmutableArray<int> features, out FeatureFillResult result)
+    /// <remarks>Call it on the operator's flow while the request runs. An operator that stopped waiting (the node's budget)
+    /// reads nothing more of the request's, so nothing it does outlives the request's memory.</remarks>
+    /// <exception cref="InvalidOperationException">The feature is not a context feature (the operator's defect), or the
+    /// prefetch has not started (<see cref="StartContextFetch"/>, which the executor calls before any node runs).</exception>
+    public Task ContextStoredTask(int feature)
     {
-        var worst = FeatureState.Ok;
-        string? error = null;
-        var stored = true;
-        foreach (var f in features)
+        if (!_plan.Features[feature].IsContext)
         {
-            var task = ContextReadiness(f);
-            if (!task.IsCompleted)
-            {
-                stored = false;
-                continue;
-            }
-
-            task.GetAwaiter().GetResult(); // a prefetch that faulted (a defect) or was cancelled rethrows here
-            if (_state[f] == FeatureState.Failed)
-            {
-                result = new FeatureFillResult(FeatureState.Failed, _errors[f]);
-                return true;
-            }
-
-            if (_state[f] > worst)
-            {
-                worst = _state[f];
-                error = _errors[f];
-            }
+            throw new InvalidOperationException($"Feature '{_plan.Features[feature].Definition.Name}' is not a context feature: only those are waited for this way.");
         }
 
-        result = stored ? new FeatureFillResult(worst, error) : default;
-        return stored;
+        return _contextReady?[feature] ?? _contextTask
+            ?? throw new InvalidOperationException("Context features are waited for before the context prefetch has started: they would never be stored.");
     }
 
     /// <summary>
-    /// Adds to <paramref name="tasks"/> the readiness tasks of <paramref name="features"/> not stored yet, each task once: an
-    /// operator waits for any of them (<c>Task.WhenAny</c>), then asks <see cref="TryGetContextStored"/> again. The tasks are
-    /// the prefetch's own, so features stored together complete together, and the operator handles them in its order.
+    /// The state of context feature <paramref name="feature"/> once its task (<see cref="ContextStoredTask"/>) has completed:
+    /// final from then on. A prefetch that faulted (a defect) or was cancelled rethrows here.
     /// </summary>
-    /// <remarks>As <see cref="TryGetContextStored"/>: synchronous, on the operator's flow while the request runs. The tasks
-    /// themselves hold nothing of the request's.</remarks>
-    public void AddUnstoredContextTasks(ImmutableArray<int> features, List<Task> tasks)
+    /// <remarks>As <see cref="ContextStoredTask"/>: on the operator's flow while the request runs.</remarks>
+    /// <exception cref="InvalidOperationException">Its task has not completed: the state may still change.</exception>
+    public FeatureFillResult ContextStoredState(int feature)
     {
-        ArgumentNullException.ThrowIfNull(tasks);
-        foreach (var f in features)
+        var task = ContextStoredTask(feature);
+        if (!task.IsCompleted)
         {
-            var task = ContextReadiness(f);
-            if (!task.IsCompleted && !tasks.Contains(task))
-            {
-                tasks.Add(task);
-            }
-        }
-    }
-
-    /// <summary>The task that has stored context feature <paramref name="f"/>: its own, or the whole prefetch's.</summary>
-    private Task ContextReadiness(int f)
-    {
-        if (!_plan.Features[f].IsContext)
-        {
-            throw new InvalidOperationException($"Feature '{_plan.Features[f].Definition.Name}' is not a context feature: only those are waited for this way.");
+            throw new InvalidOperationException($"Context feature '{_plan.Features[feature].Definition.Name}' is not stored yet: wait for its task first.");
         }
 
-        return _contextReady?[f] ?? _contextTask
-            ?? throw new InvalidOperationException("Context features are waited for before the context prefetch has started: they would never be stored.");
+        task.GetAwaiter().GetResult();
+        return new FeatureFillResult(_state[feature], _errors[feature]);
     }
 
     /// <summary>Whether context feature <paramref name="feature"/> is stored (or will never be: no prefetch was started),
@@ -340,16 +303,52 @@ public sealed partial class FeatureFetcher
         await StartContextGroup(group, features, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>A derived context feature computed early (<see cref="FeatureRuntimeInfo.ComputedEarly"/>): as soon as what it reads is stored.</summary>
+    /// <summary>
+    /// A derived context feature computed early (<see cref="FeatureRuntimeInfo.ComputedEarly"/>): as soon as what it reads is
+    /// stored, or failed as soon as one of its inputs failed, since the others cannot change that (review 82: a recall query
+    /// reading the derived value waited for its other inputs, up to the node's budget, though a query reading the inputs
+    /// themselves gave up at once).
+    /// </summary>
     private async Task ComputeEarlyDerivedAsync(FeatureRuntimeInfo info)
     {
         var ready = _contextReady!;
-        foreach (var d in info.Dependencies)
+        List<Task>? pending = null;
+        while (true)
         {
-            if (ready[d] is { } stored)
+            pending?.Clear();
+            foreach (var d in info.Dependencies)
             {
-                await stored.ConfigureAwait(false);
+                if (ready[d] is not { } stored)
+                {
+                    continue;
+                }
+
+                if (!stored.IsCompleted)
+                {
+                    pending ??= new List<Task>();
+                    if (!pending.Contains(stored))
+                    {
+                        pending.Add(stored);
+                    }
+
+                    continue;
+                }
+
+                await stored.ConfigureAwait(false); // completed: observes a fault, without yielding
+                if (_state[d] == FeatureState.Failed)
+                {
+                    _state[info.Index] = FeatureState.Failed; // what WorstDependency gives, without waiting for the rest
+                    _errors[info.Index] = _errors[d];
+                    return;
+                }
             }
+
+            if (pending is not { Count: > 0 })
+            {
+                break;
+            }
+
+            await Task.WhenAny(pending).ConfigureAwait(false); // never faults: the next pass observes what completed
         }
 
         ComputeContextDerived(info);
