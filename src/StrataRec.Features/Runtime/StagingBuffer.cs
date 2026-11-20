@@ -37,7 +37,8 @@ internal sealed class StagingArea
     private readonly int _bitsPerChunk;
     private readonly int _bitsPerField;
 
-    /// <param name="chunkSize">Keys per chunk (the source's <c>max_batch</c>); the last chunk may be shorter.</param>
+    /// <param name="chunkSize">Keys per chunk (<c>Batching.Size</c> of the keys and the source's <c>max_batch</c>); the last
+    /// chunk may be shorter.</param>
     public StagingArea(ReadOnlySpan<CompiledFieldBinding> fields, int keyCount, int chunkSize, RequestMemory memory)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(keyCount);

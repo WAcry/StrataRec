@@ -1237,7 +1237,7 @@ public sealed partial class FeatureFetcher
 
     /// <summary>
     /// Copies staged values into the rows of the fetch's scope that are still unfilled (the live rows now, for a fetch of
-    /// every live row), matching by key (design 4.5). Key index k belongs to chunk k / max_batch. A value is read only if
+    /// every live row), matching by key (design 4.5). Key index k belongs to chunk k / the fetch's chunk size (Batching.Size, at most max_batch). A value is read only if
     /// its chunk succeeded and the connector wrote that field for that key; anything else takes the default or becomes
     /// missing, and so does a list of another length than a <c>list&lt;E,N&gt;</c> feature's, counted out of range
     /// (design 4.3).

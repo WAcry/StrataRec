@@ -142,7 +142,8 @@ public sealed class OperatorContext
     /// <para>The wait is bounded on its own by the attempt's deadline and the caller, as a call is
     /// (<see cref="RetrieveAsync"/>), not by <see cref="CancellationToken"/>, which a client's callback could hold up; and a
     /// prefetch that faulted is rethrown as it is, not taken for the deadline. The bound is also checked before each round
-    /// and before each callback, so what is stored after it passed is never settled, however long a callback ran. An
+    /// and before each read is judged (an empty one's callback included), so what is stored after it passed is never
+    /// settled, and a fault is not reported for a deadline that came first, however long a callback ran. An
     /// operator that stopped waiting reads nothing more of the request's.</para>
     /// </remarks>
     /// <exception cref="OperationCanceledException">The attempt's budget ran out or the caller gave up first: the reads not
@@ -156,6 +157,7 @@ public sealed class OperatorContext
         {
             if (reads[i].IsEmpty)
             {
+                ThrowIfBoundPassed(); // the callback before may have run past it (review 86)
                 settled(i, new FeatureFillResult(FeatureState.Ok));
             }
             else
@@ -200,9 +202,11 @@ public sealed class OperatorContext
             for (var w = 0; w < waiting.Count; w++)
             {
                 var i = waiting[w];
+                // Before the read's state is read, not only before its callback: a faulted prefetch rethrown there must not
+                // stand for a deadline or a caller that came first (review 86).
+                ThrowIfBoundPassed();
                 if (Settled(features, reads[i].Features, tasks, stored, out var result))
                 {
-                    ThrowIfBoundPassed(); // the callback before may have run past it
                     waiting.RemoveAt(w--);
                     settled(i, result);
                 }
