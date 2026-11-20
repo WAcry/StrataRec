@@ -59,6 +59,13 @@ public sealed class ConfigOverrideTests
     // An integer beyond 2^53 RFC 8785 cannot hold exactly: the compiler's hash of the node threw out of the request.
     [InlineData("""{ "nodes": { "coarse_top_k": { "order": 1152921504606846976 } } }""",
         "CONFIG_OVERRIDE_NOT_CANONICAL request/config_override/nodes/coarse_top_k/order", "/config_override/nodes/coarse_top_k/order")]
+    // Review 79: a host's JsonNode.Parse keeps a repeated member, and the object threw ArgumentException out of the request
+    // when the compiler first enumerated it (the patch's sections, or a nested object when it was canonicalized).
+    [InlineData("""{ "params": { "final_top_k": 3 }, "params": { "final_top_k": 4 } }""",
+        "CONFIG_OVERRIDE_INVALID request/config_override/params: Member 'params' is given more than once. (hint: give each member once", "/config_override/params")]
+    [InlineData("""{ "params": { "final_top_k": 3, "final_top_k": 4 } }""",
+        "CONFIG_OVERRIDE_INVALID request/config_override/params/final_top_k: Member 'final_top_k' is given more than once. (hint: give each member once",
+        "/config_override/params/final_top_k")]
     public async Task AnOverrideThatDoesNotCompile_RejectsTheRequestAsInvalid_NamingTheError(string patch, string error, string? pointer)
     {
         var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());

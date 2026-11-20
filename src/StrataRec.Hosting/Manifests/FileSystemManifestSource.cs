@@ -31,10 +31,14 @@ public sealed class FileSystemManifestSource : IManifestSource
 
     /// <summary>
     /// How to name a pipeline or an environment whose pointer this source keeps (<see cref="GetPointerPath"/>): the hint of
-    /// every tool that reports a name it refused.
+    /// every tool that reports a name it refused, and of a host that cannot read its pointer under such a name. Earlier
+    /// versions wrote pointers under names starting with '.', so it says how to move such a release (review 79): renaming
+    /// the directory is not enough, since a manifest names its environment and a node refuses one naming another.
     /// </summary>
     public const string NameHint =
-        "pipeline ids and environment names are the file names of pointers: use letters, digits, '_', '-' and '.', and do not start with '.'";
+        "pipeline ids and environment names are the file names of pointers: use letters, digits, '_', '-' and '.', and do not start with '.'; " +
+        "to move a release an earlier version published under such a name, build and publish it again under a name without the leading '.' " +
+        "and point the hosts at that name (renaming the pointer's directory is not enough: the manifest names its environment)";
 
     /// <summary>
     /// The pointer file of a pipeline in an environment, whether or not it exists. Both names become path segments, so

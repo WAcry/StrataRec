@@ -214,7 +214,7 @@ internal static class BuildCommand
         {
             diagnostics.Error("POINTER_UNREADABLE", storeRoot, string.Empty,
                 $"Pipeline '{pipelineId}' in environment '{environment}' has no pointer file name, so the next sequence is unknown: {ex.Message}",
-                FileSystemManifestSource.NameHint + ", or pass --seq");
+                FileSystemManifestSource.NameHint + "; or pass --seq");
             return (false, null);
         }
 

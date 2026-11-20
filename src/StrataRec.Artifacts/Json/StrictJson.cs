@@ -1,6 +1,8 @@
+using System.Buffers;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Unicode;
 
 namespace StrataRec.Artifacts.Json;
@@ -53,6 +55,36 @@ public static class StrictJson
             default:
                 return null;
         }
+    }
+
+    /// <summary>
+    /// <see cref="Check(in JsonElement)"/> for a node tree a host built in code, before anything enumerates it: an object
+    /// <see cref="JsonNode.Parse(string, JsonNodeOptions?, JsonDocumentOptions)"/> made from text that repeats a member
+    /// keeps both, and throws <see cref="ArgumentException"/> when its members are first enumerated, at whatever level
+    /// that happens (review 79). The tree is checked as the JSON it writes: an object not enumerated yet writes the text it
+    /// was parsed from, repeated members included. Null when there is no problem, or when the tree cannot be written at all,
+    /// which is not this check's to report (the canonical form reports such a value at its pointer). Allocates the text.
+    /// </summary>
+    public static JsonBindingError? Check(JsonNode? node)
+    {
+        if (node is null)
+        {
+            return null;
+        }
+
+        var text = new ArrayBufferWriter<byte>();
+        try
+        {
+            using var writer = new Utf8JsonWriter(text);
+            node.WriteTo(writer);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or NotSupportedException or JsonException)
+        {
+            return null;
+        }
+
+        using var document = JsonDocument.Parse(text.WrittenMemory);
+        return Check(document.RootElement);
     }
 
     private const string UnicodeHint = "use a complete surrogate pair such as \\ud83d\\ude00, or write the character directly";

@@ -45,6 +45,7 @@ public class ConfigValuesTests
 
     // ---- integers, exactly (review 32 #1: through a double, 9007199254740993.0 became 9007199254740992) ----------------
 
+    /// <summary>A request's integers (a <see cref="JsonElement"/>) are read as written: a request is never stored canonical.</summary>
     [Theory]
     [InlineData("9007199254740993.0", "int64", 9007199254740993L)]
     [InlineData("9.007199254740993e15", "int64", 9007199254740993L)]
@@ -53,7 +54,8 @@ public class ConfigValuesTests
     [InlineData("-2.147483648e9", "int32", -2147483648L)]
     public void ABigIntegerWrittenWithAFractionOrAnExponent_IsExact(string json, string type, long expected)
     {
-        Assert.True(ConfigValues.TryToScalar(JsonNode.Parse(json), ColumnType.Parse(type), out var value, out var error), error);
+        using var document = JsonDocument.Parse(json);
+        Assert.True(ConfigValues.TryToScalar(document.RootElement, ColumnType.Parse(type), out var value, out var error), error);
 
         Assert.Equal(expected, value.AsInt64());
     }
@@ -63,7 +65,8 @@ public class ConfigValuesTests
     [InlineData("[2147483647, 2147483647.0, 2.147483647e9]", "list<int32>", 2147483647L)]
     public void ABigIntegerElementWrittenWithAFractionOrAnExponent_IsExact(string json, string type, long expected)
     {
-        Assert.True(ConfigValues.TryToScalar(JsonNode.Parse(json), ColumnType.Parse(type), out var value, out var error), error);
+        using var document = JsonDocument.Parse(json);
+        Assert.True(ConfigValues.TryToScalar(document.RootElement, ColumnType.Parse(type), out var value, out var error), error);
 
         Assert.Equal(new[] { expected, expected, expected }, value.AsInt64List());
     }
@@ -131,9 +134,54 @@ public class ConfigValuesTests
     [InlineData("1e18", "int64", 1_000_000_000_000_000_000L)]
     public void AnInteger_IsReadFromItsDigits(string json, string type, long expected)
     {
-        Assert.True(ConfigValues.TryToScalar(JsonNode.Parse(json), ColumnType.Parse(type), out var value, out var error), error);
+        using var document = JsonDocument.Parse(json);
+        Assert.True(ConfigValues.TryToScalar(document.RootElement, ColumnType.Parse(type), out var value, out var error), error);
 
         Assert.Equal(expected, value.AsInt64());
+    }
+
+    /// <summary>
+    /// Review 79: configuration is stored canonical (RFC 8785), where a number written with a fraction or an exponent is a
+    /// double. Past ±2^53 its canonical form can be another integer: an int64 parameter written <c>1152921504606846976.0</c>
+    /// validated, a run from the workspace returned 2^60 and a run from the manifest built from it 1152921504606847000. In
+    /// configuration such an integer is an error, scalar or element, in the canonicalizer's words; a request reads it as
+    /// written.
+    /// </summary>
+    [Theory]
+    [InlineData("1152921504606846976.0", "int64",
+        "must be an integer (int64) that RFC 8785 represents exactly, got the number 1152921504606846976.0, whose canonical form would be 1152921504606847000, a different integer; write integers beyond ±2^53 (9007199254740992) as strings, of a string type")]
+    [InlineData("9007199254740993.0", "int64?",
+        "must be an integer (int64) that RFC 8785 represents exactly, got the number 9007199254740993.0, whose canonical form would be 9007199254740992, a different integer; write integers beyond ±2^53 (9007199254740992) as strings, of a string type")]
+    [InlineData("9.223372036854775807e18", "int64", // long.MaxValue, whose canonical form is beyond int64
+        "must be an integer (int64) that RFC 8785 represents exactly, got the number 9.223372036854775807e18, whose canonical form would be 9223372036854776000, a different integer; write integers beyond ±2^53 (9007199254740992) as strings, of a string type")]
+    [InlineData("[1, -1152921504606846976e0]", "list<int64>",
+        "must be an array of integers (list<int64>) that RFC 8785 represents exactly; element 1 is the number -1152921504606846976e0, whose canonical form would be -1152921504606847000, a different integer; write integers beyond ±2^53 (9007199254740992) as strings, of a string type")]
+    public void InConfiguration_AnIntegerItsCanonicalFormWouldChange_IsAnError(string json, string type, string error)
+    {
+        Assert.False(ConfigValues.TryToScalar(JsonNode.Parse(json), ColumnType.Parse(type), out _, out var actual));
+        using var document = JsonDocument.Parse(json);
+        Assert.True(ConfigValues.TryToScalar(document.RootElement, ColumnType.Parse(type), out _, out var requestError), requestError);
+
+        Assert.Equal(error, actual);
+    }
+
+    /// <summary>
+    /// An integer its canonical form keeps is configuration like any other: up to 2^53 every one, past it one whose
+    /// shortest double digits are itself. Plain digits past 2^53 are the canonicalizer's to refuse, where the artifact or
+    /// override holding them is hashed.
+    /// </summary>
+    [Theory]
+    [InlineData("1e18", 1_000_000_000_000_000_000L)]
+    [InlineData("1000000000000000000.0", 1_000_000_000_000_000_000L)]
+    [InlineData("9007199254740992.0", 9007199254740992L)]
+    [InlineData("-9.007199254740992e15", -9007199254740992L)]
+    [InlineData("1152921504606846976", 1152921504606846976L)]
+    public void InConfiguration_AnIntegerItsCanonicalFormKeeps_IsRead(string json, long expected)
+    {
+        Assert.True(ConfigValues.TryToScalar(JsonNode.Parse(json), ColumnType.Parse("int64"), out var value, out var error), error);
+        Assert.True(ConfigValues.TryToScalar(JsonNode.Parse($"[{json}]"), ColumnType.Parse("list<int64>"), out var list, out error), error);
+
+        Assert.Equal((expected, expected), (value.AsInt64(), list.AsInt64List()[0]));
     }
 
     [Theory]

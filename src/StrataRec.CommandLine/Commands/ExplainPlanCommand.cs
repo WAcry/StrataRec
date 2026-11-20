@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.CommandLine;
 using System.Globalization;
 using System.Text.Json;
+using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
@@ -83,6 +84,19 @@ internal static class ExplainPlanCommand
             {
                 errors.WriteLine(ex.Message);
                 return 2;
+            }
+
+            try
+            {
+                _ = selected.ToDocument(); // what the output prints: a value it cannot print is a diagnostic, before any output
+            }
+            catch (JsonCanonicalizationException ex)
+            {
+                diagnostics.Error("PLAN_NOT_CANONICAL", "--arms", ex.Pointer.ToString(),
+                    $"The plan of {PlanDiff.Label(selected.ArmIds)} holds a value RFC 8785 cannot hold exactly, and plans are shown in that form: {ex.Reason}",
+                    ex.Hint ?? "write the value so that RFC 8785 holds it exactly");
+                Output.Diagnostics(diagnostics.Items, format, errors, locator: reference.Locator());
+                return 1;
             }
         }
 

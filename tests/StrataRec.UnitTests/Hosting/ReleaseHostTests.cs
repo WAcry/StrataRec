@@ -476,6 +476,26 @@ public sealed class ReleaseHostTests : IDisposable
     }
 
     /// <summary>
+    /// Review 79: earlier versions published under environment names starting with '.', which pointers now refuse, so a
+    /// host restarted on such an environment fails to start. The error says how to move the release, not to check that
+    /// the manifest source can be reached: renaming the directory is not enough, as the manifest names its environment.
+    /// </summary>
+    [Fact]
+    public async Task AHostOnAnEnvironmentStartingWithADot_IsToldHowToMoveTheRelease()
+    {
+        using var host = Build(["p"], _clock, environment: ".preview");
+
+        var thrown = await Assert.ThrowsAsync<ConfigException>(() => host.StartAsync(TestContext.Current.CancellationToken))
+            .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        var error = Assert.Single(thrown.Diagnostics);
+        Assert.Equal(("RELEASE_POINTER_UNREADABLE", "pipeline:p"), (error.Code, error.Artifact));
+        Assert.Contains("'.preview' cannot name a pointer file: it starts with '.'", error.Message);
+        Assert.Equal(FileSystemManifestSource.NameHint, error.Hint);
+        Assert.Contains("build and publish it again under a name without the leading '.'", error.Hint);
+    }
+
+    /// <summary>
     /// Review 36 #2:an attempt that threw before it set its outcome (here describing the store's exception threw) left the
     /// new manifest with the last one's final outcome, so the polling, alive, never loaded it. The store fails once: the
     /// manifest is applied when it is tried again.
@@ -527,7 +547,8 @@ public sealed class ReleaseHostTests : IDisposable
 
     private IHost Build(
         string[] pipelines, TimeProvider? clock = null, TimeSpan? maxRetry = null, IArtifactStore? store = null, ReleaseLog? log = null,
-        IManifestSource? source = null, IReleaseStatusReporter? reporter = null, TimeSpan? pointerTimeout = null, TimeSpan? reportTimeout = null)
+        IManifestSource? source = null, IReleaseStatusReporter? reporter = null, TimeSpan? pointerTimeout = null, TimeSpan? reportTimeout = null,
+        string environment = "local")
     {
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
         {
@@ -542,7 +563,7 @@ public sealed class ReleaseHostTests : IDisposable
         builder.Services.AddStrataRec(options =>
         {
             options.ConfigRoot = _fixture.Root; // where the bindings' relative paths resolve
-            options.Environment = "local";
+            options.Environment = environment;
             options.Pipelines.AddRange(pipelines);
             options.Releases = new ReleaseOptions
             {

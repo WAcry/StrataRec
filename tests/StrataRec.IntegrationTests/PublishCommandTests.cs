@@ -258,6 +258,10 @@ public sealed class PublishCommandTests
             TestContext.Current.CancellationToken));
         Assert.Contains("error POINTER_NAME_INVALID --env", status.ToString());
         Assert.Contains(Hint, status.ToString());
+
+        // Review 79: earlier versions published under such names; the hint says how to move such a release.
+        Assert.Contains("build and publish it again under a name without the leading '.' and point the hosts at that name " +
+            "(renaming the pointer's directory is not enough: the manifest names its environment)", status.ToString());
     }
 
     private static ReleaseManifest Renumbered(ReleaseManifest manifest, string environment, long seq) => new()

@@ -556,6 +556,13 @@ public sealed partial class RecEngine
         {
             runs[i].Role = i == 0 ? "primary" : "fallback_pipeline";
             elapsedMs += runs[i].Result.ElapsedMs;
+
+            // A run that finished (the primary, its fallback pipeline aborted) captured its batches for a result the caller
+            // never gets: they went nowhere, as the aborted run's did (review 79).
+            if (runs[i].Sampling.Logs == "captured")
+            {
+                runs[i].Sampling.Logs = "none";
+            }
         }
 
         return new ReplayBundle

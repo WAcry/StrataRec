@@ -111,6 +111,16 @@ internal static class DiffCommand
             errors.WriteLine(ex.Message);
             return 2;
         }
+        catch (PlanDiffCanonicalizationException ex)
+        {
+            // Not expected (what compiled passed the same check), but reported as any configuration error, not as a stack.
+            var at = ex.Canonicalization;
+            diagnostics.Error("PLAN_NOT_CANONICAL", "--" + ex.Side, at.Pointer.ToString(),
+                $"The plan of {ex.Combination} holds a value RFC 8785 cannot hold exactly, and plans are compared in that form: {at.Reason}",
+                at.Hint ?? "write the value so that RFC 8785 holds it exactly");
+            Output.Diagnostics(diagnostics.Items, format, errors);
+            return 2;
+        }
 
         if (format == "json")
         {

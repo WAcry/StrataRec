@@ -112,7 +112,9 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
                     : ExceptionText.Of(ex);
                 errors.Error("RELEASE_POINTER_UNREADABLE", PipelineLabel(pipelineId), string.Empty,
                     $"The manifest pointer of pipeline '{pipelineId}' in environment '{_environment}' could not be read: {why}",
-                    "check the manifest source the host registered (IManifestSource) and that it can be reached");
+                    _source is FileSystemManifestSource && ex is ArgumentException
+                        ? FileSystemManifestSource.NameHint // a name the file system source refuses: one an earlier version accepted
+                        : "check the manifest source the host registered (IManifestSource) and that it can be reached");
                 statuses.Add($"{pipelineId}: pointer unreadable");
                 continue;
             }

@@ -316,7 +316,7 @@ internal sealed class PipelineExecutor
                 var rejected = Failed(plan, request, inputError, start, Array.Empty<NodeOutcome>(), Array.Empty<bool>());
                 if (recorder is not null)
                 {
-                    rejected.Recording = recorder.Build(plan, request, null, rejected, LogDestination(request));
+                    rejected.Recording = recorder.Build(plan, request, null, rejected, LogDestination(request, returned: true), ConsumesLogs(request));
                     Deliver(plan, request, rejected.Recording, events);
                 }
 
@@ -383,7 +383,7 @@ internal sealed class PipelineExecutor
             };
 
             fetcher.StartContextFetch(plan.ContextFeatures.AsSpan(), cancellationToken);
-            if (Writes(request) || Returns(request))
+            if (ConsumesLogs(request))
             {
                 // Without a consumer every captured batch would be discarded: skip sampling and capture entirely.
                 await TapCapture.SelectAsync(state, cancellationToken).ConfigureAwait(false);
@@ -416,7 +416,7 @@ internal sealed class PipelineExecutor
 
             if (recorder is not null)
             {
-                result.Recording = recorder.Build(plan, request, parameters, result, LogDestination(request));
+                result.Recording = recorder.Build(plan, request, parameters, result, LogDestination(request, returned: true), ConsumesLogs(request));
                 Deliver(plan, request, result.Recording, events);
             }
 
@@ -445,7 +445,7 @@ internal sealed class PipelineExecutor
                 try
                 {
                     // A snapshot, taken while the request still holds its memory; calls in flight stay outstanding in it.
-                    Deliver(plan, request, recorder.Build(plan, request, state.Params, aborted, LogDestination(request), aborted: true), events);
+                    Deliver(plan, request, recorder.Build(plan, request, state.Params, aborted, LogDestination(request, returned: false), ConsumesLogs(request), aborted: true), events);
                 }
                 catch (Exception recordError)
                 {
@@ -1289,9 +1289,17 @@ internal sealed class PipelineExecutor
     /// </summary>
     private bool Writes(PipelineRequest request) => _logs is not null && request.WriteLogs && !Returns(request);
 
-    /// <summary>Where the run's log batches go, as a bundle records it.</summary>
-    private string LogDestination(PipelineRequest request) =>
-        request.CaptureLogs ? "captured" : Writes(request) ? "pipeline" : "none";
+    /// <summary>Whether anything takes the run's log batches, so that it samples its taps and captures them.</summary>
+    private bool ConsumesLogs(PipelineRequest request) => Writes(request) || Returns(request);
+
+    /// <summary>
+    /// Where the run's log batches went, as a bundle records it: <c>captured</c> only when they were returned, with the
+    /// run's result. An aborted run returns nothing, and one that captures writes nothing either, so its batches went
+    /// nowhere (<c>none</c>), though it sampled its taps; it recorded <c>captured</c> (review 79).
+    /// </summary>
+    /// <param name="returned">The run returns a result (<see cref="PublishLogs"/>'s <c>returned</c>).</param>
+    private string LogDestination(PipelineRequest request, bool returned) =>
+        returned && request.CaptureLogs ? "captured" : Writes(request) ? "pipeline" : "none";
 
     /// <summary>Hands a run's recording to <see cref="PipelineRequest.OnRecording"/>; a callback that throws never changes the run's outcome.</summary>
     private static void Deliver(ExecutionPlan plan, PipelineRequest request, ReplayRunRecord run, RequestEventLog? events)

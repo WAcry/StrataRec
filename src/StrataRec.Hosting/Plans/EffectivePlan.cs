@@ -153,7 +153,7 @@ public sealed class EffectivePlan
             nodes[node.Id] = JsonObject.Create(node.Node.Definition); // a tree of its own: the definition is the plan's
         }
 
-        return Sorted(nodes);
+        return Sorted(nodes, "nodes");
     }
 
     public JsonObject ParamsDocument()
@@ -164,7 +164,7 @@ public sealed class EffectivePlan
             parameters[param.Leaf.Name] = ToJson(param.Value);
         }
 
-        return Sorted(parameters);
+        return Sorted(parameters, "params");
     }
 
     public JsonObject TapsDocument()
@@ -204,7 +204,7 @@ public sealed class EffectivePlan
             };
         }
 
-        return Sorted(taps);
+        return Sorted(taps, "taps");
     }
 
     public JsonObject GroupsDocument()
@@ -227,21 +227,36 @@ public sealed class EffectivePlan
             document[name] = new JsonObject { ["key"] = keys, ["rate"] = group.Rate };
         }
 
-        return Sorted(document);
+        return Sorted(document, "funnel_groups");
     }
 
     public JsonObject OutputDocument() => Sorted(new JsonObject
     {
         ["limit_param"] = Output.Limit.Name,
         ["columns"] = Expressions(Output.Columns),
-    });
+    }, "output");
 
     /// <summary>
     /// The RFC 8785 form of a document: members in ordinal order at every level, numbers in their canonical spelling. A
     /// workspace and a manifest built from it hold the same definitions in different member orders (the store keeps
     /// canonical bytes), so only this form prints the same for both.
     /// </summary>
-    private static JsonObject Sorted(JsonObject document) => (JsonObject)JsonNode.Parse(JsonCanonicalizer.CanonicalizeToString(document))!;
+    /// <param name="section">The document's member in <see cref="ToDocument"/>, which prefixes the pointer of a value the
+    /// form cannot hold.</param>
+    /// <exception cref="JsonCanonicalizationException">A value has no exact canonical form, at its pointer into <see cref="ToDocument"/>.
+    /// What compiled has passed the same check (an artifact when it is hashed, an integer parameter when it is bound), so
+    /// this is not expected; the commands report it as a diagnostic all the same.</exception>
+    private static JsonObject Sorted(JsonObject document, string section)
+    {
+        try
+        {
+            return (JsonObject)JsonNode.Parse(JsonCanonicalizer.CanonicalizeToString(document))!;
+        }
+        catch (JsonCanonicalizationException ex)
+        {
+            throw new JsonCanonicalizationException(ex.Reason, JsonPointer.Parse("/" + section + ex.Pointer), ex.Hint);
+        }
+    }
 
     /// <summary>A parameter value as JSON: exact numbers (no rounding), and NaN or ±∞ as their names.</summary>
     public static JsonNode? ToJson(in ScalarValue value)

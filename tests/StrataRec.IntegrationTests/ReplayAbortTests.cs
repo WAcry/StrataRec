@@ -277,14 +277,41 @@ public sealed class ReplayAbortTests
         Assert.Contains("cut the call off", threw.GetProperty("description").GetString());
     }
 
-    private static RecRequest WithCallback(RecRequest request, Action<ReplayBundle> onRecording) => new()
+    /// <summary>
+    /// Review 79: a request that captures its logs, cancelled while it runs, returns no batches and writes none, yet its
+    /// recording said they were captured. They went nowhere; the sampling decisions it made are kept.
+    /// </summary>
+    [Fact]
+    public async Task ACapturingRequestCancelled_RecordsThatItsBatchesWentNowhere()
+    {
+        var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
+            "\"on_failure\": \"fallback\", \"fallback\": \"ctr_backup\"", "\"on_failure\": \"fail_request\""));
+        var models = new BlockingModels();
+        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Models = new ModelClientRegistry().Add(models) });
+        Assert.True(engine.Load(host.Request).Applied);
+        ReplayBundle? delivered = null;
+        using var cancel = new CancellationTokenSource();
+
+        var running = engine.ExecuteAsync(WithCallback(ReplayTests.Request("req-captured", 1001, "home", ReplayTests.ControlArms),
+            bundle => delivered = bundle, captureLogs: true), cancel.Token).AsTask();
+        await models.Started.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+        cancel.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
+        var sampling = Assert.Single(delivered!.Runs).Sampling;
+        Assert.Equal("none", sampling.Logs);
+        Assert.Contains(sampling.Groups, g => g is { Group: "all", EffectiveRate: 1.0, Sampled: true });
+        Assert.Contains(sampling.Taps, t => t is { Tap: "served", Active: true });
+    }
+
+    private static RecRequest WithCallback(RecRequest request, Action<ReplayBundle> onRecording, bool captureLogs = false) => new()
     {
         PipelineId = request.PipelineId,
         RequestId = request.RequestId,
         Inputs = request.Inputs,
         Deadline = request.Deadline,
         TimeMs = request.TimeMs,
-        Debug = new DebugOptions { ForceArms = request.Debug?.ForceArms, OnRecording = onRecording },
+        Debug = new DebugOptions { ForceArms = request.Debug?.ForceArms, OnRecording = onRecording, CaptureLogs = captureLogs },
     };
 
     /// <summary>The baseline pipeline without experiments or taps, with ctr_ranker replaced by an operator that calls a stuck client.</summary>

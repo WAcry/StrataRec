@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
 
 namespace StrataRec.UnitTests.Artifacts;
@@ -41,6 +42,30 @@ public sealed class StrictJsonTests
         Assert.NotNull(error);
         Assert.Equal((pointer, $"Member '{name}' is given more than once."), (error.Pointer, error.Message));
         Assert.Equal("give each member once: which of two values would count is not defined", error.Hint);
+    }
+
+    /// <summary>
+    /// Review 79: a node tree a host parsed (<c>JsonNode.Parse</c> keeps a repeated member; the object throws when it is
+    /// first enumerated) is checked without enumerating it, also when an outer object was enumerated already and the
+    /// repeated member is in one of its values, not yet read. A tree built in code has no repeated member.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "params": { "k": 3 }, "params": { "k": 4 } }""", "/params", false)]
+    [InlineData("""{ "params": { "k": 3, "k": 4 } }""", "/params/k", false)]
+    [InlineData("""{ "params": { "k": 3, "k": 4 } }""", "/params/k", true)]
+    public void ANodeTreeAHostParsed_IsCheckedWithoutEnumeratingIt(string json, string pointer, bool outerEnumerated)
+    {
+        var node = JsonNode.Parse(json)!.AsObject();
+        if (outerEnumerated)
+        {
+            Assert.Single(node); // reads the outer object, not params
+        }
+
+        var error = StrictJson.Check(node);
+
+        Assert.Equal(pointer, error?.Pointer);
+        Assert.Null(StrictJson.Check(new JsonObject { ["params"] = new JsonObject { ["k"] = 3 } }));
+        Assert.Null(StrictJson.Check((JsonNode?)null));
     }
 
     [Fact]

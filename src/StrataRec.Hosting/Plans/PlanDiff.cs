@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
 using StrataRec.Pipeline.Planning;
 
@@ -30,6 +31,31 @@ public sealed record StructureChange(string Kind, string Id, StructureChangeKind
 public sealed record CombinationDiff(string Label, IReadOnlyList<string> Arms, string? MissingOn, string? MissingReason, IReadOnlyList<JsonChange> Changes);
 
 /// <summary>
+/// One side's plan of a combination holds a value RFC 8785 cannot hold exactly (<see cref="EffectivePlan.ToDocument"/>
+/// compares plans in that form), so the sides cannot be compared. It names the side and the combination, so that a tool
+/// reports where, as a diagnostic: <c>diff --format json</c> printed the canonicalizer's stack instead (review 79).
+/// </summary>
+public sealed class PlanDiffCanonicalizationException : Exception
+{
+    public PlanDiffCanonicalizationException(string side, string combination, JsonCanonicalizationException inner)
+        : base($"The {side} configuration's plan of {combination} cannot be compared: {inner.Message}", inner)
+    {
+        Side = side;
+        Combination = combination;
+        Canonicalization = inner;
+    }
+
+    /// <summary><c>from</c> or <c>to</c>.</summary>
+    public string Side { get; }
+
+    /// <summary>The combination's label (<see cref="PlanDiff.Label"/>).</summary>
+    public string Combination { get; }
+
+    /// <summary>The value at fault, its pointer into <see cref="EffectivePlan.ToDocument"/>.</summary>
+    public JsonCanonicalizationException Canonicalization { get; }
+}
+
+/// <summary>
 /// The semantic difference of two compiled configurations by arm combination (design 13.4 item 3): per combination, the
 /// nodes, parameters, taps, funnel groups and output a request with it executes, compared leaf by leaf
 /// (<see cref="EffectivePlan"/>, <see cref="JsonDiff"/>); and the layers, experiments and arms either side lacks.
@@ -58,6 +84,7 @@ public sealed class PlanDiff
     /// forcing those arms is (<see cref="ExecutionPlan.ArmsFromIds"/>).
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="arms"/> is valid on neither side (an unknown arm, or two arms of one layer).</exception>
+    /// <exception cref="PlanDiffCanonicalizationException">A side's plan holds a value RFC 8785 cannot hold exactly.</exception>
     public static PlanDiff Compare(ExecutionPlan from, ExecutionPlan to, IReadOnlyList<string>? arms = null)
     {
         ArgumentNullException.ThrowIfNull(from);
@@ -107,7 +134,7 @@ public sealed class PlanDiff
                 continue;
             }
 
-            var changes = JsonDiff.Compare(EffectivePlan.Create(from, fromArms).ToDocument(), EffectivePlan.Create(to, toArms).ToDocument());
+            var changes = JsonDiff.Compare(Document(from, fromArms, "from", label), Document(to, toArms, "to", label));
             if (changes.Count > 0)
             {
                 diffs.Add(new CombinationDiff(label, combination, null, null, changes));
@@ -119,6 +146,19 @@ public sealed class PlanDiff
 
     /// <summary><c>baseline</c>, or the arms joined with <c> + </c>.</summary>
     public static string Label(IReadOnlyList<string> arms) => arms.Count == 0 ? "baseline" : string.Join(" + ", arms);
+
+    /// <summary>One side's plan of a combination, as compared; a value it cannot hold exactly is reported with the side.</summary>
+    private static JsonObject Document(ExecutionPlan plan, RequestArms arms, string side, string label)
+    {
+        try
+        {
+            return EffectivePlan.Create(plan, arms).ToDocument();
+        }
+        catch (JsonCanonicalizationException ex)
+        {
+            throw new PlanDiffCanonicalizationException(side, label, ex);
+        }
+    }
 
     /// <summary>The combination on one side, or why it does not exist there (the conditions of <see cref="ExecutionPlan.ArmsFromIds"/>).</summary>
     private static (RequestArms Arms, string? Error) Resolve(ExecutionPlan plan, IReadOnlyList<string> arms)

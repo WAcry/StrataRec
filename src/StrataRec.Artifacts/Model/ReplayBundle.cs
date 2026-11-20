@@ -298,8 +298,9 @@ public sealed class ReplayModelCall
 /// <summary>Effective log sampling of the run (design 8.2, 8.4).</summary>
 public sealed class ReplaySamplingRecord
 {
-    [Description("none (no log consumer, so nothing was sampled), pipeline (written to the log pipeline) or captured (returned to the caller).")]
-    public required string Logs { get; init; }
+    [Description("Where the run's log batches went: none (neither written nor returned: no log consumer, so nothing was sampled, or a request that " +
+                 "captured them was aborted, so nothing was returned), pipeline (written to the log pipeline) or captured (returned to the caller).")]
+    public required string Logs { get; set; }
 
     public List<ReplayGroupSampling> Groups { get; init; } = new();
 

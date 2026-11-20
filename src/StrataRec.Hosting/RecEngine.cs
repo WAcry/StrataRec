@@ -252,7 +252,10 @@ public sealed class RecResult
 
     public IReadOnlyList<NodeOutcome>? Trace { get; init; }
 
-    /// <summary>Captured log batches when <see cref="DebugOptions.CaptureLogs"/> was set.</summary>
+    /// <summary>
+    /// Captured log batches when <see cref="DebugOptions.CaptureLogs"/> was set: of every run of the request in run order,
+    /// the primary pipeline's and then, when it served, the fallback pipeline's, each naming its pipeline and manifest.
+    /// </summary>
     public IReadOnlyList<Logging.LogBatch>? LogBatches { get; init; }
 
     /// <summary>
@@ -1129,10 +1132,37 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         ServedBy = fallbackId,
         ColumnProducers = converted.ColumnProducers,
         Trace = converted.Trace,
-        LogBatches = converted.LogBatches,
+        LogBatches = converted.LogBatches is { } fallbackBatches ? BothRuns(executed.LogBatches, fallbackBatches) : null,
         Explanation = converted.Explanation, // of the run that served
         ElapsedMs = executed.ElapsedMs + served.ElapsedMs,
     };
+
+    /// <summary>
+    /// The captured batches of a request its fallback pipeline served: the primary run's, then the fallback's, each with
+    /// the pipeline and manifest of the run that captured it. Both ran for the request, and a request that is not captured
+    /// writes both to the sink; only the fallback's were returned, so a capture lost what the primary logged before it
+    /// failed (its taps, and its <c>$experiments</c> record of the arms it ran, review 79).
+    /// </summary>
+    private static IReadOnlyList<Logging.LogBatch> BothRuns(IReadOnlyList<Logging.LogBatch> primary, IReadOnlyList<Logging.LogBatch> fallback)
+    {
+        if (primary.Count == 0)
+        {
+            return fallback;
+        }
+
+        var batches = new List<Logging.LogBatch>(primary.Count + fallback.Count);
+        foreach (var batch in primary)
+        {
+            batches.Add(batch);
+        }
+
+        foreach (var batch in fallback)
+        {
+            batches.Add(batch);
+        }
+
+        return batches;
+    }
 
     /// <param name="merged">The arms a configuration override's plan merged in: the run had none of its own, and they are
     /// the request's assignment; null for every other run.</param>

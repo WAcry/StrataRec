@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
@@ -16,10 +17,17 @@ namespace StrataRec.Features.Catalog;
 /// <see cref="ScalarValue"/> a host passed is checked with the words the same value would get as JSON. So a request input
 /// of the wrong type reads alike whether a host, the CLI or the engine reports it. No input makes these methods throw: a
 /// value they cannot represent (a number beyond its type, a string escape that is not Unicode) is an error like any other.
+/// One rule tells the two JSON forms apart: configuration is stored canonical (RFC 8785), so an integer it holds must be
+/// one its canonical form keeps (<see cref="NotCanonical(in JsonElement, long)"/>); a request is never stored so, and
+/// reads <c>9007199254740993.0</c> as the integer written.
 /// </remarks>
 public static class ConfigValues
 {
-    /// <summary>Converts <paramref name="node"/> to a value of <paramref name="type"/> (promoted storage).</summary>
+    /// <summary>
+    /// Converts <paramref name="node"/>, a configuration value, to a value of <paramref name="type"/> (promoted storage). An
+    /// integer written with a fraction or an exponent beyond ±2^53 whose canonical form (RFC 8785) is another integer is an
+    /// error: the configuration is stored in that form, and a plan built from it would read the other integer (review 79).
+    /// </summary>
     /// <param name="error">
     /// What is wrong, in the words of the JSON written (<see cref="JsonWords"/>), as the rest of a sentence whose subject
     /// the caller knows: <c>must be an integer (int64), got the string "1001"</c>. Callers write
@@ -29,7 +37,7 @@ public static class ConfigValues
     {
         if (node is null)
         {
-            return TryToScalar(default(JsonElement), type, out value, out error);
+            return TryToScalar(default(JsonElement), type, canonical: true, out value, out error);
         }
 
         if (!TryAsElement(node, out var element))
@@ -44,15 +52,20 @@ public static class ConfigValues
             return false;
         }
 
-        return TryToScalar(element, type, out value, out error);
+        return TryToScalar(element, type, canonical: true, out value, out error);
     }
 
     /// <summary>
-    /// Converts <paramref name="element"/> to a value of <paramref name="type"/> (promoted storage); JSON <c>null</c> and an
-    /// absent value (<see cref="JsonValueKind.Undefined"/>) are missing. Allocates only the value (a string, an array).
+    /// Converts <paramref name="element"/>, a request's value, to a value of <paramref name="type"/> (promoted storage); JSON
+    /// <c>null</c> and an absent value (<see cref="JsonValueKind.Undefined"/>) are missing. Allocates only the value (a
+    /// string, an array).
     /// </summary>
     /// <param name="error">As for <see cref="TryToScalar(JsonNode?, ColumnType, out ScalarValue, out string?)"/>.</param>
-    public static bool TryToScalar(in JsonElement element, ColumnType type, out ScalarValue value, [NotNullWhen(false)] out string? error)
+    public static bool TryToScalar(in JsonElement element, ColumnType type, out ScalarValue value, [NotNullWhen(false)] out string? error) =>
+        TryToScalar(element, type, canonical: false, out value, out error);
+
+    /// <param name="canonical">The value is configuration, stored canonical: an integer must keep its value in that form.</param>
+    private static bool TryToScalar(in JsonElement element, ColumnType type, bool canonical, out ScalarValue value, [NotNullWhen(false)] out string? error)
     {
         value = ScalarValue.Missing;
         error = null;
@@ -87,6 +100,12 @@ public static class ConfigValues
                     return false;
                 }
 
+                if (canonical && NotCanonical(element, integer) is { } stored)
+                {
+                    error = NotCanonical(type, element.GetRawText(), stored);
+                    return false;
+                }
+
                 value = ScalarValue.FromInt64(integer);
                 return true;
             case StorageKind.Float32 or StorageKind.Float64 when kind == JsonValueKind.Number:
@@ -114,7 +133,7 @@ public static class ConfigValues
                 value = ScalarValue.FromString(text);
                 return true;
             case StorageKind.List when kind == JsonValueKind.Array:
-                return TryList(element, type, out value, out error);
+                return TryList(element, type, canonical, out value, out error);
         }
 
         error = Expected(type, JsonWords.Value(element));
@@ -124,7 +143,7 @@ public static class ConfigValues
     /// <summary>A JSON array as a list of <paramref name="type"/>'s elements, each read as a scalar of the element type
     /// is (an int32 element within int32, a float within float64), and as many as a <c>list&lt;E,N&gt;</c> holds; held
     /// promoted, as every list value is.</summary>
-    private static bool TryList(in JsonElement array, ColumnType type, out ScalarValue value, [NotNullWhen(false)] out string? error)
+    private static bool TryList(in JsonElement array, ColumnType type, bool canonical, out ScalarValue value, [NotNullWhen(false)] out string? error)
     {
         value = ScalarValue.Missing;
         error = null;
@@ -168,6 +187,12 @@ public static class ConfigValues
                     if (type.Element == StorageKind.Int32 && !Int32Range.Fits(longs[index]))
                     {
                         error = OutOfRange(type, JsonWords.Value(item), fitsInt64: true, index);
+                        return false;
+                    }
+
+                    if (canonical && NotCanonical(item, longs[index]) is { } stored)
+                    {
+                        error = NotCanonical(type, item.GetRawText(), stored, index);
                         return false;
                     }
 
@@ -400,4 +425,36 @@ public static class ConfigValues
     /// </summary>
     private static bool TryInteger(in JsonElement number, out long integer) =>
         number.TryGetInt64(out integer) || JsonIntegers.TryParse(number.GetRawText(), out integer);
+
+    /// <summary>
+    /// The canonical form (RFC 8785) of an integer written with a fraction or an exponent (<c>1152921504606846976.0</c>)
+    /// when that form is a different integer; null otherwise. Configuration is stored canonical, where such a number is a
+    /// double: past ±2^53 its shortest digits can be another integer (2^60 becomes <c>1152921504606847000</c>), so a plan
+    /// run from the workspace and the same plan run from its manifest bound different values, and the effective plan
+    /// <c>diff</c> canonicalizes failed (review 79). The canonicalizer refuses such an integer written as plain digits
+    /// (<see cref="JsonCanonicalizer"/>, when an artifact or an override is hashed), but cannot tell <c>….0</c> from a
+    /// float; the binding can. One whose canonical form is itself (<c>1e18</c>) is kept, as plain digits are. Allocates
+    /// only for such a number past 2^53.
+    /// </summary>
+    private static string? NotCanonical(in JsonElement number, long integer)
+    {
+        const long TwoPow53 = 1L << 53;
+        if (integer is >= -TwoPow53 and <= TwoPow53 || JsonMarshal.GetRawUtf8Value(number).IndexOfAny((byte)'.', (byte)'e', (byte)'E') < 0)
+        {
+            return null; // up to 2^53 every integer is a double, written as its digits
+        }
+
+        var canonical = JsonCanonicalizer.FormatNumber(number.GetDouble());
+        return JsonIntegers.TryParse(canonical, out var stored) && stored == integer ? null : canonical;
+    }
+
+    /// <summary>An integer its canonical form would change (<see cref="NotCanonical(in JsonElement, long)"/>), in the canonicalizer's words.</summary>
+    private static string NotCanonical(ColumnType type, string literal, string canonical, int element = -1)
+    {
+        var got = $"the number {literal}, whose canonical form would be {canonical}, a different integer; " +
+                  "write integers beyond ±2^53 (9007199254740992) as strings, of a string type";
+        return element < 0
+            ? $"must be {Describe(type)} that RFC 8785 represents exactly, got {got}"
+            : $"must be {Describe(type)} that RFC 8785 represents exactly; element {element} is {got}";
+    }
 }

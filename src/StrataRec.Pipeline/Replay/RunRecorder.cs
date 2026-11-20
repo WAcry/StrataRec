@@ -308,8 +308,11 @@ internal sealed class RunRecorder : IFeatureCallHook
     /// </summary>
     /// <param name="result">What the run returned; for an aborted run, the failure its logs were published with.</param>
     /// <param name="logs">none, pipeline or captured: where the run's log batches went.</param>
+    /// <param name="logsConsumed">Something took the run's logs, so it sampled: the groups' effective rates are their rates.
+    /// Apart from <paramref name="logs"/>, since an aborted run that captured its logs sampled them and returned none.</param>
     /// <param name="aborted">The run was aborted (cancelled by its caller, or a defect) and returned no result.</param>
-    public ReplayRunRecord Build(ExecutionPlan plan, PipelineRequest request, ScalarValue[]? parameters, PipelineResult result, string logs, bool aborted = false)
+    public ReplayRunRecord Build(
+        ExecutionPlan plan, PipelineRequest request, ScalarValue[]? parameters, PipelineResult result, string logs, bool logsConsumed, bool aborted = false)
     {
         var parameterValues = new Dictionary<string, ReplayTypedValue>(StringComparer.Ordinal);
         if (parameters is not null)
@@ -348,7 +351,7 @@ internal sealed class RunRecorder : IFeatureCallHook
             CandidateCalls = candidates,
             FeatureCalls = features,
             ModelCalls = models,
-            Sampling = BuildSampling(plan, request.Arms, logs),
+            Sampling = BuildSampling(plan, request.Arms, logs, logsConsumed),
             Result = Result(plan, result, null, aborted),
         };
     }
@@ -425,7 +428,7 @@ internal sealed class RunRecorder : IFeatureCallHook
         }
     }
 
-    private ReplaySamplingRecord BuildSampling(ExecutionPlan plan, in RequestArms arms, string logs)
+    private ReplaySamplingRecord BuildSampling(ExecutionPlan plan, in RequestArms arms, string logs, bool logsConsumed)
     {
         var log = plan.Log;
         var groups = new List<ReplayGroupSampling>(log.Groups.Length);
@@ -436,7 +439,7 @@ internal sealed class RunRecorder : IFeatureCallHook
             {
                 Group = group.Name,
                 Rate = group.Rate,
-                EffectiveRate = logs == "none" ? 0.0 : rate,
+                EffectiveRate = logsConsumed ? rate : 0.0,
                 Sampled = _sampled is { } sampled ? sampled[group.Index] : null,
             });
         }

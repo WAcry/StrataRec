@@ -100,6 +100,15 @@ public static class PlanCompiler
 
         if (configOverride is not null)
         {
+            // A host may build the override from text that repeats a member (JsonNode.Parse keeps both, and the object throws
+            // when it is first enumerated): the override's mistake, at its pointer, checked before anything enumerates it,
+            // not an ArgumentException out of the request (review 79).
+            if (StrictJson.Check(configOverride) is { } invalid)
+            {
+                diagnostics.Error("CONFIG_OVERRIDE_INVALID", OverrideArtifact, OverridePointer + invalid.Pointer, invalid.Message, invalid.Hint);
+                return new PlanCompilation { Diagnostics = diagnostics.Items, Report = UnifiedCompilation.EmptyReport };
+            }
+
             var known = true;
             foreach (var (section, _) in configOverride)
             {
