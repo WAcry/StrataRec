@@ -28,7 +28,8 @@ public sealed partial class RecEngine
     /// <para>A bundle of an aborted request is not replayed: nothing executes, and the outcome carries the recorded reason,
     /// the node that was running and the recorded node decisions (<see cref="ReplayOutcome.NotReplayed"/>).</para>
     /// </remarks>
-    /// <exception cref="ReplayBundleException">The bundle is malformed; the pointer says where.</exception>
+    /// <exception cref="ReplayBundleException">The bundle is malformed or of another format (checked here too, for a bundle
+    /// a host deserialized itself); the pointer says where.</exception>
     /// <exception cref="ObjectDisposedException">The engine is disposed (and the bundle is one to replay).</exception>
     public async ValueTask<ReplayOutcome> ReplayAsync(ReplayBundle bundle, ReplayOptions? options = null, CancellationToken cancellationToken = default)
     {
@@ -234,6 +235,7 @@ public sealed partial class RecEngine
     public static ReplayOutcome? Aborted(ReplayBundle bundle)
     {
         ArgumentNullException.ThrowIfNull(bundle);
+        ReplayBundleFile.CheckFormat(bundle); // a bundle object a host deserialized itself is checked as a file is (review 89)
         if (!bundle.Result.Aborted)
         {
             return null;

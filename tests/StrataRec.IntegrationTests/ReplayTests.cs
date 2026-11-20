@@ -132,6 +132,44 @@ public sealed class ReplayTests
         Assert.Empty(withArms.Result.Experiments.Ignored); // arms given to the replay replace the external assignment
     }
 
+    /// <summary>
+    /// Review 89: a bundle a host deserialized itself (from its own store, say), not read by <see cref="ReplayBundleFile"/>,
+    /// is refused at its format all the same, a finished request's as an aborted one's: the layout of 2026-11-20.1 is
+    /// this build's, so deserializing it succeeds, and its calls were batched at other boundaries.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ABundleObjectOfThePreviousFormat_IsRefusedAtTheFormat_HoweverItWasRead(bool aborted)
+    {
+        var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
+        var recorded = await engine.ExecuteAsync(Request("req-old-object", 1001, "home", null), TestContext.Current.CancellationToken);
+        var json = JsonNode.Parse(ReplayBundleFile.Serialize(recorded.Recording!))!;
+        json["format"] = "stratarec.replay_bundle/2026-11-20.1";
+        if (aborted)
+        {
+            json["result"]!["aborted"] = true;
+        }
+
+        var bundle = ArtifactSerializer.Deserialize<ReplayBundle>(json.ToJsonString());
+
+        var replay = await Assert.ThrowsAsync<ReplayBundleException>(async () =>
+            await engine.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken));
+        var first = Assert.Throws<ReplayBundleException>(() => RecEngine.Aborted(bundle));
+
+        Assert.Equal(("/format", "/format"), (replay.Pointer, first.Pointer));
+        Assert.Contains("record the request again", replay.Hint, StringComparison.Ordinal);
+    }
+
+    /// <summary>Review 89: the schema of a bundle names this build's format, not any string.</summary>
+    [Fact]
+    public void TheBundleSchema_RequiresThisBuildsFormat()
+    {
+        var schema = ArtifactSchemas.Artifact("replay_bundle", []);
+
+        Assert.Equal(ReplayBundle.CurrentFormat, schema["properties"]!["format"]!["const"]!.GetValue<string>());
+    }
+
     [Fact]
     public async Task ABundleWithAnIgnoredArmReasonThisBuildDoesNotKnow_IsRejectedAtTheReason()
     {

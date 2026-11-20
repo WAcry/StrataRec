@@ -45,12 +45,22 @@ public static class ReplayBundleFile
                 ex.Hint ?? "run 'stratarec schema replay_bundle' for the JSON Schema of a bundle");
         }
 
+        CheckFormat(bundle);
+        return bundle;
+    }
+
+    /// <summary>
+    /// Refuses a bundle of another format, at <c>/format</c>: every entry that takes a bundle (a file, or an object a host
+    /// deserialized from its own store) checks it before reading anything else. A format can change while the layout stays
+    /// (2026-11-20.2 batches calls evenly), so deserializing a bundle proves nothing about its version (review 89).
+    /// </summary>
+    /// <exception cref="ReplayBundleException">The bundle is of another format.</exception>
+    internal static void CheckFormat(ReplayBundle bundle)
+    {
         if (bundle.Format != ReplayBundle.CurrentFormat)
         {
             throw UnsupportedFormat(bundle.Format);
         }
-
-        return bundle;
     }
 
     private static ReplayBundleException UnsupportedFormat(string format) =>

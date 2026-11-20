@@ -207,6 +207,7 @@ public sealed class OperatorContext
                 ThrowIfBoundPassed();
                 if (Settled(features, reads[i].Features, tasks, stored, out var result))
                 {
+                    ThrowIfBoundPassed(); // and again before the callback: judging it (a caller's list, say) took time too (review 89)
                     waiting.RemoveAt(w--);
                     settled(i, result);
                 }

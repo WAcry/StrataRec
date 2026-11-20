@@ -141,9 +141,24 @@ public static class ArtifactSchemas
             "pipeline" => Pipeline(Sorted(operators)),
             "experiment" => Experiment(Sorted(operators)),
             "bindings" => Bindings(bindings ?? Array.Empty<BindingSchemaSource>()),
+            "replay_bundle" => ReplayBundleSchema(Export(type, Describe, inline: editable)),
             _ => Export(type, Describe, inline: editable),
         };
         return Document(schema, type.Name, editable ? kind : null);
+    }
+
+    /// <summary>
+    /// A bundle's <c>format</c> is this build's (<see cref="ReplayBundle.CurrentFormat"/>): a format may change while the
+    /// layout stays (2026-11-20.2), so a schema check that left it a string accepted a bundle the engine refuses (review 89).
+    /// </summary>
+    private static JsonObject ReplayBundleSchema(JsonObject schema)
+    {
+        if (schema["properties"] is JsonObject properties && properties["format"] is JsonObject format)
+        {
+            format["const"] = ReplayBundle.CurrentFormat;
+        }
+
+        return schema;
     }
 
     /// <summary>

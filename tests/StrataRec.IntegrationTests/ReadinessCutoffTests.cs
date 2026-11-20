@@ -48,6 +48,44 @@ public sealed class ReadinessCutoffTests
         Assert.False(factory.Returned);
     }
 
+    /// <summary>
+    /// Review 89: the bound is checked again right before a read's callback, not only before it is judged. The reads come
+    /// from the operator's own list, whose indexer, asked for the second read once the first was settled, holds on until
+    /// the budget runs out (or cancels the caller): that read is judged settled, but its callback never runs.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TheBoundPassingWhileAReadIsJudged_StopsItsCallback(bool callerCancels)
+    {
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var factory = new CutoffProbeFactory(empty: false, static (_, _) => { }, whileJudgingTheSecond: context =>
+        {
+            if (callerCancels)
+            {
+                caller.Cancel();
+            }
+            else
+            {
+                Assert.True(context.CancellationToken.WaitHandle.WaitOne(RecallQueryTests.Patience));
+            }
+        });
+        await using var engine = Engine(factory);
+
+        if (callerCancels)
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.ExecuteAsync(RecallQueryTests.Request("req-judged-caller"), caller.Token).AsTask());
+        }
+        else
+        {
+            var result = await engine.ExecuteAsync(RecallQueryTests.Request("req-judged-deadline"), caller.Token);
+            Assert.Equal("timed out after 500 ms", result.Trace!.Single(n => n.NodeId == "cutoff").Detail);
+        }
+
+        Assert.Equal([0], factory.Settled);
+        Assert.False(factory.Returned);
+    }
+
     /// <summary>A callback's own exception is still the node's failure, and the read after it is not settled.</summary>
     [Fact]
     public async Task ACallbacksException_IsTheNodesFailure_AndTheNextReadIsNotSettled()
@@ -93,7 +131,8 @@ public sealed class ReadinessCutoffTests
     /// <c>CutoffProbe@1</c>: settles two reads, noting each and running <paramref name="onSettled"/> for it: two empty
     /// ones, the user's embedding twice, or the user's embedding and then the country's region.
     /// </summary>
-    internal sealed class CutoffProbeFactory(bool empty, Action<OperatorContext, int> onSettled, bool region = false) : IOperatorFactory
+    internal sealed class CutoffProbeFactory(
+        bool empty, Action<OperatorContext, int> onSettled, bool region = false, Action<OperatorContext>? whileJudgingTheSecond = null) : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } = new("CutoffProbe", 1, Effects.ColumnWriter, typeof(NoSettings), "Settles two reads.");
 
@@ -102,6 +141,9 @@ public sealed class ReadinessCutoffTests
         public bool Returned { get; private set; }
 
         public Action<OperatorContext, int> OnSettled { get; } = onSettled;
+
+        /// <summary>Runs when the operator's list is asked for the second read after the first was settled.</summary>
+        public Action<OperatorContext>? WhileJudgingTheSecond { get; } = whileJudgingTheSecond;
 
         public Operator? Compile(OperatorCompileContext context)
         {
@@ -130,13 +172,40 @@ public sealed class ReadinessCutoffTests
         {
             public override async ValueTask ExecuteAsync(OperatorContext context)
             {
-                await context.WhenEachReadyAsync(reads, (i, _) =>
+                IReadOnlyList<AwaitedReads> list = owner.WhileJudgingTheSecond is { } hold ? new HoldingReads(reads, owner, () => hold(context)) : reads;
+                await context.WhenEachReadyAsync(list, (i, _) =>
                 {
                     owner.Settled.Enqueue(i);
                     owner.OnSettled(context, i);
                 });
                 owner.Returned = true;
             }
+        }
+
+        /// <summary>The reads, holding on (once) when the second is asked for after the first was settled.</summary>
+        private sealed class HoldingReads(AwaitedReads[] reads, CutoffProbeFactory owner, Action hold) : IReadOnlyList<AwaitedReads>
+        {
+            private bool _held;
+
+            public int Count => reads.Length;
+
+            public AwaitedReads this[int index]
+            {
+                get
+                {
+                    if (index == 1 && !owner.Settled.IsEmpty && !_held)
+                    {
+                        _held = true;
+                        hold();
+                    }
+
+                    return reads[index];
+                }
+            }
+
+            public IEnumerator<AwaitedReads> GetEnumerator() => ((IEnumerable<AwaitedReads>)reads).GetEnumerator();
+
+            System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
         }
     }
 }
