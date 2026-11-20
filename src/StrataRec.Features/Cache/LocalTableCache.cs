@@ -319,11 +319,24 @@ public sealed class LocalTableCache
         return true;
     }
 
+    /// <summary>
+    /// Counts a read's keys by tier and outcome. Never throws: a read counts its distributed tier's and its stale keys while
+    /// it resolves, after its store calls and before it is recorded, so a metric listener that threw there left a read that
+    /// had answered unrecorded and failed its fill (review 80). The measurement is lost instead, as in
+    /// <see cref="IoCall.Complete"/>.
+    /// </summary>
     internal void CountKeys(CacheTier tier, CacheKeyOutcome outcome, int keys)
     {
         if (keys > 0)
         {
-            StrataRecMetrics.CacheKeys.Add(keys, _keyTags[((int)tier * _keyTags.Length / 2) + (int)outcome]);
+            try
+            {
+                StrataRecMetrics.CacheKeys.Add(keys, _keyTags[((int)tier * _keyTags.Length / 2) + (int)outcome]);
+            }
+            catch (Exception)
+            {
+                // See the summary.
+            }
         }
     }
 

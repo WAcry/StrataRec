@@ -62,6 +62,44 @@ public sealed class TapCombinationTests
         Assert.DoesNotContain(Single(await Serve(plan), "served").Context, c => c.Name == "tenure");
     }
 
+    /// <summary>
+    /// Review 80: a tap may log the key of a chain a node reads. Here the two-tower recall's query alone reads
+    /// <c>ctx.region.boost</c> (the fusion's regional weight is a constant), and the output tap logs its key,
+    /// <c>ctx.country.region</c>. What a combination fetches followed a feature's derived inputs, not its entity's key
+    /// features, which the feature plan adds after these checks: the tap was rejected (TAP_FEATURE_NOT_FETCHED in the
+    /// baseline and in the arm that patches the tap) although the prefetch fetches the region for every request. The
+    /// unified compile checks every combination; the region is logged.
+    /// </summary>
+    [Fact]
+    public async Task ATapLoggingTheKeyOfAChainOnlyAQueryReads_IsAccepted_AndLogsIt()
+    {
+        var host = HomeFeedTestHost.LoadModified(root =>
+        {
+            const string Pipeline = "pipelines/home_feed.jsonc";
+            ReplayTests.Edit(root, Pipeline, "\"region\": \"ctx.region.boost\"", "\"region\": \"1.0\"");
+            ReplayTests.Edit(root, Pipeline,
+                "\"queries\": { \"two_tower\": { \"user_embedding\": \"ctx.user.embedding\" } }",
+                "\"queries\": { \"two_tower\": { \"user_embedding\": \"ctx.user.embedding\", \"region\": \"ctx.region.boost\" } }");
+            ReplayTests.Edit(root, Pipeline,
+                "\"context\": { \"user_id\": \"ctx.request.user_id\", \"surface\": \"ctx.request.surface\" }",
+                "\"context\": { \"user_id\": \"ctx.request.user_id\", \"surface\": \"ctx.request.surface\", \"region\": \"ctx.country.region\" }");
+        });
+
+        var plan = host.Plan();
+
+        var result = await new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
+        {
+            RequestId = "req-region-tap",
+            Inputs = HomeFeedTestHost.Inputs(1001, "home").Set("country", "DE"),
+            Deadline = HomeFeedTestHost.Deadline,
+            TimeMs = 1_767_225_600_000,
+            CaptureLogs = true,
+            WriteLogs = false,
+        }, TestContext.Current.CancellationToken);
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal("eu", Single(result.LogBatches, "served").Context.Single(c => c.Name == "region").Value.AsString()); // DE's region
+    }
+
     [Fact]
     public void PastTheLimit_AContextFeatureThatOnlyThreeArmsTogetherStopReading_IsRejected()
     {

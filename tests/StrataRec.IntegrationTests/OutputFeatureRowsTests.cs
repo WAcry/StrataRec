@@ -105,6 +105,44 @@ public class OutputFeatureRowsTests
         }
     }
 
+    /// <summary>
+    /// Review 80: the first recall appends item 1; the second (no fetch barrier) appends item 2 after the prefetch of the
+    /// next node's fallback's <c>item.base</c> started, for key 1, which fails. The node succeeds, the fallback never runs,
+    /// and a filter keeps item 2 alone. The output fills item 2, which the prefetch never asked for: it is not waited for
+    /// (waiting failed the request with key 1's failure, the connector never asked for key 2), and key 2 is fetched.
+    /// </summary>
+    [Fact]
+    public async Task APrefetchOfOtherKeys_ThatFails_DoesNotFailTheOutput_WhoseRowsItNeverAskedFor()
+    {
+        var (plan, calls) = Compile(
+            1,
+            1,
+            """{ "first": { "client": "memory_list@1", "items": [1] }, "second": { "client": "memory_list@1", "items": [2] } }""",
+            """
+            { "pipeline_id": "p",
+              "columns": { "score.t": { "type": "float64", "default": 0.0 } },
+              "param_schema": { "q1": { "type": "map<string,int64>" }, "q2": { "type": "map<string,int64>" }, "k": { "type": "int64" } },
+              "params": { "q1": { "first": 10 }, "q2": { "second": 10 }, "k": 1 },
+              "nodes": {
+                "recall_first": { "order": 100, "op": "MultiSourceRecall@1", "config": { "quotas_param": "q1" } },
+                "recall_second": { "order": 200, "op": "MultiSourceRecall@1", "fetch_barrier": false, "config": { "quotas_param": "q2" } },
+                "next": { "order": 300, "op": "ExpressionScorer@1", "on_failure": "fallback", "fallback": "backup",
+                  "config": { "output_col": "score.t", "expr": "1.0" } },
+                "keep": { "order": 400, "op": "ExpressionFilter@1", "config": { "predicate": "col.entity_id == 2" } },
+                "backup": { "role": "fallback", "op": "ExpressionScorer@1", "config": { "output_col": "score.t", "expr": "double(col.item.base)" } } },
+              "output": { "limit_param": "k", "columns": { "narrow": "col.item.narrow" } } }
+            """,
+            failing: 1);
+
+        var result = await Execute(plan);
+
+        Assert.True(result.Succeeded, result.Error);
+        var item = Assert.Single(result.Items);
+        Assert.Equal(2, item.Id.Int64Value);
+        Assert.Equal(1_500_000_000, item.Columns["narrow"].AsInt64());
+        Assert.Equal(new long[][] { [1], [2] }, calls);
+    }
+
     private static Task<PipelineResult> Execute(ExecutionPlan plan) => new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
     {
         RequestId = "r", Inputs = new RequestInputs(), Deadline = TimeSpan.FromSeconds(5), TimeMs = 1_767_225_600_000,

@@ -5,6 +5,7 @@ using StrataRec.Core.Memory;
 using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Sources;
 using StrataRec.UnitTests.Features;
+using StrataRec.UnitTests.Features.Cache;
 using StrataRec.Testing;
 
 namespace StrataRec.UnitTests.Pipeline;
@@ -613,6 +614,64 @@ public sealed class BoundedCallTests
             lock (_ended)
             {
                 _ended.Add((result, live));
+            }
+        }
+    }
+}
+
+/// <summary>
+/// Review 80, rule 5: a host's metric listener that throws while a call completes loses its measurement. The call is still
+/// recorded, with the outcome it had, the caller gets its result rather than the listener's exception, and the call lets
+/// go of the memory: the call site completed the call before recording it, so the throw left a call that had answered
+/// unrecorded (outstanding in a recording) and threw out of the node.
+/// </summary>
+[Collection(MetricMeasurement.Name)]
+public sealed class BoundedCallListenerTests
+{
+    private static readonly TimeSpan Patience = TimeSpan.FromSeconds(20);
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AListenerThatThrowsWhenACallCompletes_LosesItsMeasurement_AndTheCallIsStillRecorded(bool synchronously)
+    {
+        var target = new IoTarget(IoKind.CandidateSource, "review80_listener");
+        using var listener = MeasurementHook.Throwing(StrataRecMetrics.Names.SourceDuration, (StrataRecTags.Source, target.Name));
+        var memory = new RequestMemory();
+        var budget = new AttemptBudget(CancellationToken.None, Stopwatch.GetTimestamp() + (600L * Stopwatch.Frequency));
+        var answer = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var call = new Recording(synchronously ? new ValueTask<int>(5) : new ValueTask<int>(answer.Task));
+
+        var running = BoundedCall.RunAsync<int, Recording>(call, budget, memory, target, null, "req", null).AsTask();
+        answer.TrySetResult(5);
+        var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((CallEnd.Answered, 5, IoOutcome.Ok), (result.End, result.Value, result.Outcome));
+        Assert.Equal(IoOutcome.Ok, Assert.Single(call.Results).Outcome);
+        Assert.Equal(1, listener.Calls); // it ran, and threw
+        budget.Release();
+        memory.Release();
+        Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
+    }
+
+    /// <summary>Answers with <paramref name="answer"/> and keeps what each end recorded.</summary>
+    private readonly struct Recording(ValueTask<int> answer) : IBoundedCall<int>
+    {
+        public List<CallResult<int>> Results { get; } = new();
+
+        public ValueTask<int> Send(CancellationToken token) => answer;
+
+        public bool Succeeded(int value, out string? error)
+        {
+            error = null;
+            return true;
+        }
+
+        public void Ended(in CallResult<int> result, TimeSpan duration)
+        {
+            lock (Results)
+            {
+                Results.Add(result);
             }
         }
     }

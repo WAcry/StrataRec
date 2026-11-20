@@ -419,7 +419,7 @@ public sealed partial class FeatureFetcher
         {
             try
             {
-                return new ValueTask<long>(AnsweredAt(read, StoreObserved(io, read, count, call, cancellationToken)));
+                return new ValueTask<long>(StoreObserved(io, read, count, call, cancellationToken));
             }
             finally
             {
@@ -472,9 +472,9 @@ public sealed partial class FeatureFetcher
                 error = StoreFailure(read, outcome, ex);
             }
 
-            return AnsweredAt(read, observeNow
+            return observeNow
                 ? StoreObserved(io, read, count, new ValueTask(task), cancellationToken)
-                : StoreCompleted(io, count, outcome, error));
+                : StoreCompleted(io, read, count, outcome, error);
         }
         finally
         {
@@ -485,9 +485,9 @@ public sealed partial class FeatureFetcher
     /// <summary>
     /// Settles a store read found completed without an installed wait to decide it (the rule of <see cref="Observed"/>):
     /// it counts only if observed within the tier's bound, that is now; otherwise it is timed out or cancelled and its
-    /// records are never read.
+    /// records are never read. Returns what <see cref="StoreCompleted"/> does.
     /// </summary>
-    private bool StoreObserved(in IoCall io, CacheRead read, int count, ValueTask completed, CancellationToken cancellationToken)
+    private long StoreObserved(in IoCall io, CacheRead read, int count, ValueTask completed, CancellationToken cancellationToken)
     {
         IoOutcome? cutOff = cancellationToken.IsCancellationRequested ? IoOutcome.Cancelled
             : read.Cache.Clock.GetTimestamp() >= read.StoreDeadline || read.Cancellation!.Token.IsCancellationRequested ? IoOutcome.Timeout
@@ -510,17 +510,24 @@ public sealed partial class FeatureFetcher
             error = StoreFailure(read, late, null);
         }
 
-        return StoreCompleted(io, count, outcome, error);
+        return StoreCompleted(io, read, count, outcome, error);
     }
 
-    /// <summary>The cache clock's time now when a store read answered in time (just seen to); <see cref="ChunkNotAnswered"/> otherwise.</summary>
-    private static long AnsweredAt(CacheRead read, bool answered) => answered ? read.Cache.NowMs() : ChunkNotAnswered;
-
-    /// <summary>Records a finished store read (metrics, source health, span) and says whether its records may be read.</summary>
-    private bool StoreCompleted(in IoCall io, int count, IoOutcome outcome, string? error)
+    /// <summary>
+    /// Records a finished store read (metrics, source health, span). Returns the cache clock's time (ms) when it was seen
+    /// to answer in time, which its records are judged at, or <see cref="ChunkNotAnswered"/> when its records must not be
+    /// read.
+    /// </summary>
+    /// <remarks>
+    /// The time is taken as soon as the outcome is known, before <see cref="IoCall.Complete"/> calls the host's listeners:
+    /// one that took time, or moved the cache's clock, made a record fresh when the store answered look expired, and sent
+    /// its key to the connector (review 80).
+    /// </remarks>
+    private long StoreCompleted(in IoCall io, CacheRead read, int count, IoOutcome outcome, string? error)
     {
+        var answeredAt = outcome == IoOutcome.Ok ? read.Cache.NowMs() : ChunkNotAnswered;
         io.Complete(outcome, count, _requestId, error, _events);
-        return outcome == IoOutcome.Ok;
+        return answeredAt;
     }
 
     private static string StoreFailure(CacheRead read, IoOutcome outcome, Exception? ex) => outcome switch

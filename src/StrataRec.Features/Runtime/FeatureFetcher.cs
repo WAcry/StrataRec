@@ -237,9 +237,9 @@ public sealed partial class FeatureFetcher
     /// returned rows (design 3.4), known once the final order is, when no reader is left for the other live rows. The waves
     /// of <see cref="EnsureAsync(ReadOnlySpan{int}, CancellationToken)"/>, but a fetch or a table read takes the keys of these
     /// rows, a derived feature is computed for them, and only they are marked filled, so a later whole fill fills the
-    /// rest. A fetch already in flight (a prefetch) carrying a needed feature that is unfilled on some of these rows is
-    /// completed for every live row it covers, as for any reader; one whose needed features are all filled on these rows
-    /// is not waited for. With no rows nothing is filled or waited for, context features included: no row reads them.
+    /// rest. A fetch already in flight (a prefetch) that asked for the key of one of these rows still unfilled on a needed
+    /// feature is completed for every live row it covers, as for any reader; any other is not waited for. With no rows
+    /// nothing is filled or waited for, context features included: no row reads them.
     /// </summary>
     /// <remarks>
     /// <para>The state, one per feature for the request, is recorded by the rules of a whole fill applied to the rows this
@@ -248,11 +248,14 @@ public sealed partial class FeatureFetcher
     /// every key it was asked, as for rows appended after a fill); an ok or degraded state it records covers its rows alone,
     /// and the rows it leaves unfilled are filled, and their failure recorded, by the next fill that needs them. The state
     /// returned is the features' state for the request, so one that failed in an earlier fill fails here too.</para>
-    /// <para>A prefetch these rows need nothing from is left in flight, settled as an unread one when the request ends:
-    /// one started for rows not returned (a fallback's declared reads, say) that failed for all its keys set the feature
-    /// failed, and failed the output whose rows were filled already (review 79). One that covers an unfilled row of these
-    /// is completed, its failure recorded, as before; whether it covers that row's key is not looked at, so a prefetch of
-    /// other keys is waited for too while any of these rows is unfilled.</para>
+    /// <para>A prefetch these rows need nothing from is left in flight, settled as an unread one when the request ends (or
+    /// completed by a later whole fill). Waiting for one that failed for all its keys set the feature failed and failed
+    /// the output: one started for rows not returned (a fallback's declared reads, say) when the returned rows were filled
+    /// already (review 79), or when their keys were not among its keys, the rows having been appended after it started,
+    /// so that the connector was never asked for them (review 80). Need is judged by key, as the prefetch's backfill
+    /// matches rows: a row of these still unfilled on a feature it carries, whose key is one of its keys. One such row is
+    /// enough: the prefetch is completed, its failure recorded, as before, and the rows whose keys it lacks are fetched
+    /// by this fill.</para>
     /// <para>The features and rows are read before this returns, so the caller may reuse their storage.</para>
     /// </remarks>
     public ValueTask<FeatureFillResult> EnsureAsync(ReadOnlySpan<int> features, ReadOnlySpan<int> rows, CancellationToken cancellationToken)
@@ -293,13 +296,14 @@ public sealed partial class FeatureFetcher
             for (var wave = 0; wave <= _plan.MaxWave; wave++)
             {
                 // In-flight (prefetched) fetches carrying a needed feature first; their keys may cover most rows. A
-                // row-scoped fill leaves one whose needed features are filled on its rows already: it was started for other
-                // rows, and nothing this fill reads comes from it (see the remarks of the row-scoped overload).
+                // row-scoped fill takes only one that asked for the key of a row it still has to fill: any other was
+                // started for other rows, and nothing this fill reads comes from it (see the remarks of the row-scoped
+                // overload).
                 for (var i = 0; i < _pending.Count; i++)
                 {
                     var pending = _pending[i];
                     if (pending.Group.Wave == wave && Intersects(pending.Features, member)
-                        && (scope.Rows is null || AnyUnfilled(pending.Features, member, scope)))
+                        && (scope.Rows is null || CoversAnUnfilledRow(pending, member, scope)))
                     {
                         _pending.RemoveAt(i--);
                         await CompleteAsync(pending).ConfigureAwait(false);
@@ -419,12 +423,32 @@ public sealed partial class FeatureFetcher
         return false;
     }
 
-    /// <summary>Whether a feature of <paramref name="features"/> in <paramref name="member"/> is unfilled on a row of <paramref name="scope"/>.</summary>
-    private bool AnyUnfilled(int[] features, bool[] member, RowScope scope)
+    /// <summary>
+    /// Whether a row of <paramref name="scope"/> needs what <paramref name="pending"/> fetches: a feature of it in
+    /// <paramref name="member"/> is unfilled on the row, and the row's key is one of the fetch's keys (review 80). The key
+    /// is looked up as the fetch's backfill looks it up (<see cref="FetchKeyOf"/>: its varying parts, composite or read from
+    /// a key feature this fill filled in an earlier wave; the shared parts are the request's, the same for every fetch),
+    /// so a fetch this finds no row for would have filled none of them. Allocates nothing.
+    /// </summary>
+    private bool CoversAnUnfilledRow(PendingFetch pending, bool[] member, RowScope scope)
+    {
+        foreach (var row in RowsOf(scope))
+        {
+            if (AnyUnfilled(pending.Features, member, row) && FetchKeyOf(pending, row) >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Whether a feature of <paramref name="features"/> in <paramref name="member"/> is unfilled on <paramref name="row"/>.</summary>
+    private bool AnyUnfilled(int[] features, bool[] member, int row)
     {
         foreach (var f in features)
         {
-            if (member[f] && !IsFilled(_plan.Features[f].Slot, scope))
+            if (member[f] && !Bits.Get(_table.GetFilled(_plan.Features[f].Slot), row))
             {
                 return true;
             }
@@ -922,7 +946,8 @@ public sealed partial class FeatureFetcher
 
     /// <summary>
     /// Records a finished call (metrics, source health, span; and the call itself when the request records) and passes its
-    /// status through. Staged values are recorded only for a call that answered within its budget.
+    /// status through. Staged values are recorded only for a call that answered within its budget. Completing the call
+    /// never throws (<see cref="IoCall.Complete"/>), so a host's metric listener cannot leave it unrecorded (review 80).
     /// </summary>
     private FetchStatus Completed(
         in IoCall io, FetchGroup group, in EntityKeyBatch batch, CompiledFieldBinding[] fields, StagingBuffer writer, int sequence, FetchStatus status,

@@ -162,7 +162,8 @@ internal interface IBoundedCall<T>
 /// buffers and <c>stratarec.io.abandoned</c> counts it once; (3) the tokens the client holds stay alive until it
 /// completes; (4) the outcome is <c>cancelled</c> when the caller cancelled (neither timed nor counted against the
 /// dependency), <c>timeout</c> for a timeout, the budget or a client's <see cref="TimeoutException"/>, and <c>error</c>
-/// otherwise; (5) the call is completed (metrics, health, span) and recorded exactly once, at the call site; (6) a client
+/// otherwise; (5) the call is completed (metrics, health, span) and recorded exactly once, at the call site, whatever the
+/// host's metric and activity listeners throw (they lose their measurement); (6) a client
 /// that answers synchronously costs no lease, continuation or wait, and a call that shares the node's budget allocates
 /// nothing at all; a call with an own timeout shorter than the budget costs one linked token source and its timer (about
 /// 210 B), created before it is sent so that the client's token carries the timeout; (7) the timeout cancels the
@@ -291,7 +292,11 @@ internal static class BoundedCall
         }
     }
 
-    /// <summary>Rule 5: completes the call's metrics, health and span, and has the call site record it, once.</summary>
+    /// <summary>
+    /// Rule 5: completes the call's metrics, health and span, and has the call site record it, once. Completing never
+    /// throws (<see cref="IoCall.Complete"/>): a host's metric listener that threw there left a call that had answered
+    /// unrecorded, outstanding in a recording, and threw out of the node in place of its result (review 80).
+    /// </summary>
     private static void End<T, TCall>(TCall call, in IoCall io, in CallResult<T> result, string requestId, RequestEventLog? events)
         where TCall : struct, IBoundedCall<T>
     {

@@ -1792,14 +1792,43 @@ public sealed class PlanBuilder
         }
     }
 
-    /// <summary>Marks features (and the features derived ones are computed from) as fetched.</summary>
+    /// <summary>
+    /// Marks features as fetched with everything a fill or the prefetch makes available first for them (design 6.7, 6.8):
+    /// the features a derived one is computed from, and the key features of a physical one's entity, along the chains.
+    /// </summary>
+    /// <remarks>
+    /// The feature plan makes the key features a physical feature's dependencies when it groups the features, after these
+    /// checks run, so they follow the entity's key here: a tap logging <c>ctx.country.region</c>, the key of the
+    /// <c>ctx.region.boost</c> a node reads, was told no node reads it, although the prefetch fetches it for every request
+    /// that runs the node (review 80). A key feature is registered with the features keyed by it.
+    /// </remarks>
     private void MarkFetched(HashSet<int> fetched, ImmutableArray<int> features)
     {
         foreach (var f in features)
         {
-            if (fetched.Add(f))
+            MarkFetched(fetched, f);
+        }
+    }
+
+    private void MarkFetched(HashSet<int> fetched, int feature)
+    {
+        if (!fetched.Add(feature))
+        {
+            return;
+        }
+
+        var info = _features[feature];
+        MarkFetched(fetched, info.Dependencies);
+        if (info.IsDerived)
+        {
+            return;
+        }
+
+        foreach (var part in info.Definition.Entity.Key)
+        {
+            if (part.IsFeature && Schema.RegisteredFeature(part.Name, part.Kind == EntityKeyPartKind.ContextFeature) is >= 0 and var key)
             {
-                MarkFetched(fetched, _features[f].Dependencies);
+                MarkFetched(fetched, key);
             }
         }
     }

@@ -147,9 +147,17 @@ public readonly struct IoCall
     public TimeSpan Elapsed => _target is null ? TimeSpan.Zero : Stopwatch.GetElapsedTime(_started);
 
     /// <summary>
-    /// Records the call: duration, keys and errors as metrics; health and windowed failure summaries in
-    /// <paramref name="events"/> (design 13.2); and ends the span.
+    /// Records the call: health and windowed failure summaries in <paramref name="events"/> (design 13.2); duration, keys
+    /// and errors as metrics; and ends the span. Never throws.
     /// </summary>
+    /// <remarks>
+    /// The metrics and the span call the host's listeners (a <c>MeterListener</c>'s measurement callback, an
+    /// <c>ActivityListener</c>'s stop callback) on this thread. What one throws loses that measurement or the span's end,
+    /// as for plan loads and the log pipeline: every call site completes a call here and then records it and lets go of
+    /// it, so a throw here left a call that had answered recorded as outstanding and failed its node or fill with the
+    /// listener's exception (review 80). The health comes first: it is the engine's own and reaches the operator whatever
+    /// the listeners do.
+    /// </remarks>
     /// <param name="keys">Keys sent (feature sources), or -1.</param>
     /// <param name="requestId">Sample request id for failure summaries.</param>
     /// <param name="error">Error text of a failed call.</param>
@@ -163,27 +171,41 @@ public readonly struct IoCall
 
         if (outcome != IoOutcome.Cancelled)
         {
-            target.Record(Stopwatch.GetElapsedTime(_started).TotalSeconds, outcome, keys);
             events?.RecordIo(target, outcome, requestId, error);
+            try
+            {
+                target.Record(Stopwatch.GetElapsedTime(_started).TotalSeconds, outcome, keys);
+            }
+            catch (Exception)
+            {
+                // A metric listener threw: see the remarks.
+            }
         }
 
         if (_span is { } span)
         {
-            if (span.IsAllDataRequested)
+            try
             {
-                if (keys >= 0)
+                if (span.IsAllDataRequested)
                 {
-                    span.SetTag(StrataRecTags.Keys, keys);
+                    if (keys >= 0)
+                    {
+                        span.SetTag(StrataRecTags.Keys, keys);
+                    }
+
+                    span.SetTag(StrataRecTags.Outcome, OutcomeName(outcome));
+                    if (outcome is IoOutcome.Timeout or IoOutcome.Error)
+                    {
+                        span.SetStatus(ActivityStatusCode.Error, error);
+                    }
                 }
 
-                span.SetTag(StrataRecTags.Outcome, OutcomeName(outcome));
-                if (outcome is IoOutcome.Timeout or IoOutcome.Error)
-                {
-                    span.SetStatus(ActivityStatusCode.Error, error);
-                }
+                span.Dispose();
             }
-
-            span.Dispose();
+            catch (Exception)
+            {
+                // An activity listener threw: see the remarks.
+            }
         }
     }
 

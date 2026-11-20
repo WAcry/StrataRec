@@ -1,6 +1,8 @@
+using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
+using StrataRec.Features.Catalog;
 using StrataRec.Features.Connectors;
 using StrataRec.Features.Runtime;
 
@@ -194,6 +196,150 @@ public class RowScopedFillTests
         }
     }
 
+    /// <summary>
+    /// Review 80: a prefetch that asked for other keys is not waited for, although a row of the fill is unfilled: a row
+    /// appended after it started. Waiting set the feature failed when the prefetch failed for all its keys and failed the
+    /// fill, though the connector was never asked for the row's key; the fill now fetches that key itself. A prefetch that
+    /// asked for the key of one of the fill's rows is waited for, as before, though another row's key is not among its
+    /// keys: its failure fails the fill, and that key is not fetched.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFetchInFlight_IsWaitedForOnlyWhenItAskedForTheKeyOfARowToFill(bool overlapping)
+    {
+        var connector = new ScriptedConnector((keys, fields, writer, _) =>
+        {
+            if (keys.Key(0, 0).Int64Value == 1)
+            {
+                return ValueTask.FromResult(FetchStatus.Failed("only key 1 failed"));
+            }
+
+            ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key);
+            return ValueTask.FromResult(FetchStatus.Ok);
+        });
+        var (rig, @base, tenfold) = BaseRig(connector);
+        var request = rig.NewRequest([1], capacity: 3);
+        request.Fetcher.Prefetch([@base], CancellationToken.None); // key 1, which fails
+        request.Table.AppendRows([2, 3]); // after it started: keys it never asked for
+
+        var result = await request.Fetcher.EnsureAsync([tenfold], overlapping ? [1, 0] : [1], CancellationToken.None);
+
+        if (overlapping)
+        {
+            Assert.Equal(new long[][] { [1] }, connector.Calls.Select(c => c.Keys.Select(k => k.Int64Value).ToArray()));
+            Assert.Equal(FeatureState.Failed, result.State);
+            Assert.Contains("only key 1 failed", result.Error);
+        }
+        else
+        {
+            Assert.Equal(new long[][] { [1], [2] }, connector.Calls.Select(c => c.Keys.Select(k => k.Int64Value).ToArray()));
+            Assert.Equal(FeatureState.Ok, result.State);
+            Assert.Equal(20, request.Value(tenfold, 1).AsInt64());
+            Assert.False(request.IsFilled(@base, 0)); // the prefetch is still unread
+            Assert.False(request.IsFilled(@base, 2));
+            request.Fetcher.EndRequest(); // settles it
+        }
+    }
+
+    /// <summary>
+    /// A prefetch that asked for some of the fill's keys is waited for, as before, and fills every live row it covers; the
+    /// fill then fetches the keys it lacks, and only those.
+    /// </summary>
+    [Fact]
+    public async Task AFetchInFlight_ThatAskedForSomeOfTheRowsKeys_IsWaitedFor_AndTheOtherKeysAreFetchedAfterIt()
+    {
+        var (rig, connector, @base, tenfold) = BaseRig("col.item.base * 10", ColumnType.Int64);
+        var request = rig.NewRequest([1, 2], capacity: 3);
+        request.Fetcher.Prefetch([@base], CancellationToken.None); // keys 1 and 2
+        request.Table.AppendRows([3]);
+
+        var result = await request.Fetcher.EnsureAsync([tenfold], [2, 1], CancellationToken.None);
+
+        Assert.Equal(FeatureState.Ok, result.State);
+        Assert.Equal(new long[][] { [1, 2], [3] }, connector.Calls.Select(c => c.Keys.Select(k => k.Int64Value).ToArray()));
+        Assert.Equal((20L, 30L), (request.Value(tenfold, 1).AsInt64(), request.Value(tenfold, 2).AsInt64()));
+        Assert.True(request.IsFilled(@base, 0)); // the prefetch's other row
+        Assert.False(request.IsFilled(tenfold, 0));
+    }
+
+    public enum KeyKind
+    {
+        /// <summary>A foreign key: <c>item.creator_id</c>, a derived candidate feature (the entity id / 10).</summary>
+        Creator,
+
+        /// <summary>Two varying parts: the entity id and <c>item.creator_id</c>.</summary>
+        ItemAndCreator,
+
+        /// <summary>A varying part beside a shared one: the entity id and the request's country.</summary>
+        ItemAndCountry,
+    }
+
+    /// <summary>
+    /// Review 80: whether a prefetch holds the key of a row of the fill is judged by the whole key, as its backfill matches
+    /// rows: a key read from a candidate feature (computed by the fill for an appended row before its fetches), two
+    /// varying parts, a varying part beside a request input. The prefetch of items 11 and 21 fails; item 12 is appended
+    /// after it. Its foreign key, creator 1, is the prefetch's (11 / 10): waited for, the fill fails. Its pairs (12, 1)
+    /// and (12, "US") are not, though a part of each is: the fill fetches them itself.
+    /// </summary>
+    [Theory]
+    [InlineData(KeyKind.Creator, true)]
+    [InlineData(KeyKind.ItemAndCreator, false)]
+    [InlineData(KeyKind.ItemAndCountry, false)]
+    public async Task AKeyOfSeveralPartsOrReadFromAFeature_IsMatchedWhole(KeyKind kind, bool waited)
+    {
+        var sent = 0;
+        var connector = new ScriptedConnector((keys, fields, writer, _) =>
+        {
+            if (Interlocked.Increment(ref sent) == 1)
+            {
+                return ValueTask.FromResult(FetchStatus.Failed("the prefetch failed"));
+            }
+
+            ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 1.0);
+            return ValueTask.FromResult(FetchStatus.Ok);
+        });
+        var rig = new FeatureTestRig().Source("score_store", connector);
+        var country = rig.RequestInput("country");
+        var creatorId = rig.Derived("item.creator_id", FeatureTestRig.Item, ColumnType.Int64, TestExpression.EntityIdDividedBy(10), []);
+        var entity = kind switch
+        {
+            KeyKind.Creator => FeatureTestRig.ForeignKey("creator", "item.creator_id"),
+            KeyKind.ItemAndCreator => EntityDefinition.Of(
+                "item_creator", EntityKeyPartDefinition.EntityId(EntityKeyType.Int64), EntityKeyPartDefinition.Feature("item.creator_id", EntityKeyType.Int64)),
+            _ => EntityDefinition.Of(
+                "item_country", EntityKeyPartDefinition.EntityId(EntityKeyType.Int64), EntityKeyPartDefinition.RequestInput("country", EntityKeyType.String)),
+        };
+        var score = rig.Physical(entity.Name + ".score", entity, ColumnType.Float64, "score_store");
+        rig.Build();
+        Assert.Equal(0, rig.Plan.Features[score].Wave); // prefetched
+        var request = rig.NewRequest([11, 21], capacity: 3);
+        request.Context[country] = ScalarValue.FromString("US");
+        Assert.Equal(FeatureState.Ok, (await request.EnsureAsync(creatorId)).State); // the key a prefetch takes
+        request.Fetcher.Prefetch([score], CancellationToken.None);
+        request.Table.AppendRows([12]);
+
+        var result = await request.Fetcher.EnsureAsync([score], [2], CancellationToken.None);
+
+        if (waited)
+        {
+            Assert.Single(connector.Calls);
+            Assert.Equal(FeatureState.Failed, result.State);
+            Assert.Contains("the prefetch failed", result.Error);
+        }
+        else
+        {
+            Assert.Equal(2, connector.Calls.Count);
+            Assert.Equal(
+                kind == KeyKind.ItemAndCreator ? [EntityKey.FromInt64(12), EntityKey.FromInt64(1)] : new[] { EntityKey.FromInt64(12), EntityKey.FromString("US") },
+                Assert.Single(connector.Calls.Last().Tuples));
+            Assert.Equal(FeatureState.Ok, result.State);
+            Assert.Equal(12.0, request.Value(score, 2).AsFloat64());
+            Assert.False(request.IsFilled(score, 0));
+            request.Fetcher.EndRequest();
+        }
+    }
+
     [Fact]
     public async Task ALocalTable_IsReadForTheRowsOnly()
     {
@@ -241,6 +387,18 @@ public class RowScopedFillTests
         await request.EnsureAsync(clicks);
         Assert.Equal(new long[] { 2 }, connector.Calls.Last().Keys.Select(k => k.Int64Value));
         Assert.Equal(2.0, request.Value(clicks, 1).AsFloat64());
+    }
+
+    /// <summary><c>item.base</c> from <paramref name="connector"/> and <c>item.derived</c>, ten times it.</summary>
+    private static (FeatureTestRig Rig, int Base, int Derived) BaseRig(ScriptedConnector connector)
+    {
+        var rig = new FeatureTestRig().Source("item_store", connector);
+        var @base = rig.Physical("item.base", FeatureTestRig.Item, ColumnType.Int64, "item_store", ScalarValue.FromInt64(0));
+        var scope = new DictionaryScope().Add(new Symbol(SymbolKind.Column, "col.item.base", ColumnType.Int64, 1, rig.SlotOf(@base)));
+        var tenfold = rig.Derived("item.derived", FeatureTestRig.Item, ColumnType.Int64,
+            ExpressionCompiler.Compile("col.item.base * 10", scope, CompileOptions.Any), [@base]);
+        rig.Build();
+        return (rig, @base, tenfold);
     }
 
     /// <summary>

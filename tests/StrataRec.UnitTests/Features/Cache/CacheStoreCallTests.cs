@@ -233,6 +233,77 @@ public class CacheStoreCallTests
     }
 
     /// <summary>
+    /// Review 80: a chunk is judged at the cache clock's time when it was seen to answer in time, taken before the call is
+    /// completed. A host's metric listener runs at the completion; one that took time (here it moves the clock 50 ms, past
+    /// the record's 10 ms TTL) made the record, fresh when the store answered, look expired, and its key went to the
+    /// connector (the value 1, not 111). Both ways a chunk is found answered: at once, and after a wait.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AChunkIsJudgedWhenItAnswered_NotAfterTheListenersOfItsCompletionRan(bool synchronously)
+    {
+        var answers = new ClockedStore(() => { });
+        var waits = new FirstChunkWaits();
+        var connector = ScriptedConnector.Values((key, _) => key * 1.0);
+        var rig = new FeatureTestRig().CacheSource("review80_cache", connector, ttlMs: 10, distributed: synchronously ? answers : waits);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "review80_cache");
+        rig.Build();
+        answers.Prepare(rig.Tables["review80_cache"].Cache!, rig.Clock.NowMs, 111.0);
+        waits.Prepare(rig.Tables["review80_cache"].Cache!, rig.Clock.NowMs, 111.0);
+        rig.Clock.HoldTimestamps(); // the tier's time never runs out
+        using var listener = new MeasurementHook(StrataRecMetrics.Names.SourceDuration, () => rig.Clock.AdvanceMs(50),
+            (StrataRecTags.Source, "review80_cache"), (StrataRecTags.SourceKind, "feature_cache"));
+
+        var request = rig.NewRequest([1]);
+        var fill = request.EnsureAsync(clicks).AsTask();
+        waits.Answer();
+        var result = await fill;
+
+        Assert.Equal(FeatureState.Ok, result.State);
+        Assert.Equal(111.0, request.Value(clicks, 0).AsFloat64());
+        Assert.Empty(connector.Calls);
+        Assert.Equal(1, listener.Calls);
+        await request.Fetcher.WhenIoCompleteAsync();
+        request.Memory.Release();
+    }
+
+    /// <summary>
+    /// Review 80: a host's metric listener that throws while a cache read resolves, where its store call completes or where
+    /// it counts the distributed tier's keys, loses its measurement. The read serves the store's record and is recorded as
+    /// it ended; the throw faulted the read's resolution, so the read was never recorded (outstanding in a recording) and
+    /// its fill threw the listener's exception.
+    /// </summary>
+    [Theory]
+    [InlineData(StrataRecMetrics.Names.SourceDuration)]
+    [InlineData(StrataRecMetrics.Names.CacheKeys)]
+    public async Task AListenerThatThrowsWhileACacheReadResolves_LosesItsMeasurement_AndTheReadIsRecorded(string instrument)
+    {
+        var store = new ClockedStore(() => { });
+        var connector = ScriptedConnector.Values((key, _) => key * 1.0);
+        var rig = new FeatureTestRig().CacheSource("review80_cache", connector, distributed: store);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "review80_cache");
+        rig.Build();
+        store.Prepare(rig.Tables["review80_cache"].Cache!, rig.Clock.NowMs, 111.0);
+        using var listener = MeasurementHook.Throwing(instrument, (StrataRecTags.Source, "review80_cache"),
+            instrument == StrataRecMetrics.Names.CacheKeys ? (StrataRecTags.CacheTier, "distributed") : (StrataRecTags.SourceKind, "feature_cache"));
+        var hook = new FeatureCallHookTests.ListHook();
+        var request = rig.NewRequest([1], hook: hook);
+
+        var result = await request.EnsureAsync(clicks);
+
+        Assert.Equal(FeatureState.Ok, result.State);
+        Assert.Equal(111.0, request.Value(clicks, 0).AsFloat64());
+        Assert.Empty(connector.Calls);
+        var read = Assert.Single(hook.Recorded);
+        Assert.Equal(IoOutcome.Ok, read.Outcome);
+        Assert.Equal(new double?[] { 111.0 }, read.Values);
+        Assert.Equal(1, listener.Calls);
+        await request.Fetcher.WhenIoCompleteAsync();
+        Assert.Equal(0, request.Memory.Release());
+    }
+
+    /// <summary>
     /// A store whose first read waits for <see cref="Answer"/> and whose later reads answer at once; each answers a record
     /// written at the time <see cref="Prepare"/> was given.
     /// </summary>
