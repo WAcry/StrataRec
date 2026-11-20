@@ -278,6 +278,24 @@ public sealed class ManifestRefCliTests
         Assert.Same(first.Engine, second.Engine);
     }
 
+    /// <summary>
+    /// Review 91: the engines a bundle replays on are found only for a bundle of this format, whoever read it: an object
+    /// deserialized without <see cref="ReplayBundleFile"/> is refused at /format before its runs are read.
+    /// </summary>
+    [Fact]
+    public async Task ReplayEngines_RefuseABundleObjectOfThePreviousFormat_BeforeReadingItsRuns()
+    {
+        var store = ManifestStores.NewStore();
+        var json = ReplayCliTests.MinimalBundle("[]").Replace(ReplayBundle.CurrentFormat, "stratarec.replay_bundle/2026-11-20.1", StringComparison.Ordinal);
+        var bundle = ArtifactSerializer.Deserialize<ReplayBundle>(json);
+
+        await using var engines = (await ReplayEngines.CreateAsync(Tool.Environment, null, store, "local", "text", TextWriter.Null, CancellationToken.None))!;
+        var error = await Assert.ThrowsAsync<StrataRec.Pipeline.Replay.ReplayBundleException>(() => engines.ForAsync(bundle, CancellationToken.None));
+
+        Assert.Equal("/format", error.Pointer);
+        Assert.Contains("record the request again", error.Hint, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Compare_TakesManifestsOnBothSides()
     {

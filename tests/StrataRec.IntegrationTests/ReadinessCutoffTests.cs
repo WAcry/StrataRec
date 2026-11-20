@@ -49,17 +49,31 @@ public sealed class ReadinessCutoffTests
     }
 
     /// <summary>
-    /// Review 89: the bound is checked again right before a read's callback, not only before it is judged. The reads come
-    /// from the operator's own list, whose indexer, asked for the second read once the first was settled, holds on until
-    /// the budget runs out (or cancels the caller): that read is judged settled, but its callback never runs.
+    /// Reviews 89 and 91: the operator's list is read once per read, before any callback runs. Indexed later, between a
+    /// bound check and what it guarded, a slow list let a callback run after the bound passed (89), and let a faulted
+    /// prefetch be read after it, standing for the timeout or the cancellation (91).
     /// </summary>
+    [Fact]
+    public async Task TheOperatorsList_IsReadOncePerRead_BeforeAnyCallback()
+    {
+        var factory = new CutoffProbeFactory(empty: false, static (_, _) => { }, recordList: true);
+        await using var engine = Engine(factory);
+
+        var result = await engine.ExecuteAsync(RecallQueryTests.Request("req-list-once"), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal([0, 1], factory.Settled);
+        Assert.Equal([(0, 0), (1, 0)], factory.ListReads); // (index, reads settled when it was asked for)
+    }
+
+    /// <summary>A list that holds on while it is read until the budget runs out, or cancels the caller: nothing is settled.</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task TheBoundPassingWhileAReadIsJudged_StopsItsCallback(bool callerCancels)
+    public async Task TheBoundPassingWhileTheListIsRead_SettlesNothing(bool callerCancels)
     {
         using var caller = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        var factory = new CutoffProbeFactory(empty: false, static (_, _) => { }, whileJudgingTheSecond: context =>
+        var factory = new CutoffProbeFactory(empty: false, static (_, _) => { }, recordList: true, whileReadingTheSecond: context =>
         {
             if (callerCancels)
             {
@@ -74,15 +88,15 @@ public sealed class ReadinessCutoffTests
 
         if (callerCancels)
         {
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.ExecuteAsync(RecallQueryTests.Request("req-judged-caller"), caller.Token).AsTask());
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.ExecuteAsync(RecallQueryTests.Request("req-list-caller"), caller.Token).AsTask());
         }
         else
         {
-            var result = await engine.ExecuteAsync(RecallQueryTests.Request("req-judged-deadline"), caller.Token);
+            var result = await engine.ExecuteAsync(RecallQueryTests.Request("req-list-deadline"), caller.Token);
             Assert.Equal("timed out after 500 ms", result.Trace!.Single(n => n.NodeId == "cutoff").Detail);
         }
 
-        Assert.Equal([0], factory.Settled);
+        Assert.Empty(factory.Settled);
         Assert.False(factory.Returned);
     }
 
@@ -132,7 +146,8 @@ public sealed class ReadinessCutoffTests
     /// ones, the user's embedding twice, or the user's embedding and then the country's region.
     /// </summary>
     internal sealed class CutoffProbeFactory(
-        bool empty, Action<OperatorContext, int> onSettled, bool region = false, Action<OperatorContext>? whileJudgingTheSecond = null) : IOperatorFactory
+        bool empty, Action<OperatorContext, int> onSettled, bool region = false, bool recordList = false,
+        Action<OperatorContext>? whileReadingTheSecond = null) : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } = new("CutoffProbe", 1, Effects.ColumnWriter, typeof(NoSettings), "Settles two reads.");
 
@@ -142,8 +157,14 @@ public sealed class ReadinessCutoffTests
 
         public Action<OperatorContext, int> OnSettled { get; } = onSettled;
 
-        /// <summary>Runs when the operator's list is asked for the second read after the first was settled.</summary>
-        public Action<OperatorContext>? WhileJudgingTheSecond { get; } = whileJudgingTheSecond;
+        /// <summary>Each time the operator's list was asked for a read: its index, and how many reads were settled then.</summary>
+        public ConcurrentQueue<(int Index, int Settled)> ListReads { get; } = new();
+
+        /// <summary>Whether the operator passes its reads as a list that notes each read it is asked for.</summary>
+        public bool RecordList { get; } = recordList;
+
+        /// <summary>Runs when that list is asked for the second read.</summary>
+        public Action<OperatorContext>? WhileReadingTheSecond { get; } = whileReadingTheSecond;
 
         public Operator? Compile(OperatorCompileContext context)
         {
@@ -172,7 +193,7 @@ public sealed class ReadinessCutoffTests
         {
             public override async ValueTask ExecuteAsync(OperatorContext context)
             {
-                IReadOnlyList<AwaitedReads> list = owner.WhileJudgingTheSecond is { } hold ? new HoldingReads(reads, owner, () => hold(context)) : reads;
+                IReadOnlyList<AwaitedReads> list = owner.RecordList ? new RecordingReads(reads, owner, context, owner.WhileReadingTheSecond) : reads;
                 await context.WhenEachReadyAsync(list, (i, _) =>
                 {
                     owner.Settled.Enqueue(i);
@@ -182,21 +203,20 @@ public sealed class ReadinessCutoffTests
             }
         }
 
-        /// <summary>The reads, holding on (once) when the second is asked for after the first was settled.</summary>
-        private sealed class HoldingReads(AwaitedReads[] reads, CutoffProbeFactory owner, Action hold) : IReadOnlyList<AwaitedReads>
+        /// <summary>The reads, noting each time one is asked for, and running <paramref name="hold"/> when the second is.</summary>
+        private sealed class RecordingReads(AwaitedReads[] reads, CutoffProbeFactory owner, OperatorContext context, Action<OperatorContext>? hold)
+            : IReadOnlyList<AwaitedReads>
         {
-            private bool _held;
-
             public int Count => reads.Length;
 
             public AwaitedReads this[int index]
             {
                 get
                 {
-                    if (index == 1 && !owner.Settled.IsEmpty && !_held)
+                    owner.ListReads.Enqueue((index, owner.Settled.Count));
+                    if (index == 1)
                     {
-                        _held = true;
-                        hold();
+                        hold?.Invoke(context);
                     }
 
                     return reads[index];

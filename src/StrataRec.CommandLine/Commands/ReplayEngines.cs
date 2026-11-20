@@ -1,6 +1,7 @@
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Hosting;
+using StrataRec.Hosting.Replay;
 
 namespace StrataRec.CommandLine.Commands;
 
@@ -88,8 +89,11 @@ internal sealed class ReplayEngines : IAsyncDisposable
     }
 
     /// <summary>The engine to replay <paramref name="bundle"/> on, or why there is none and how to replay it instead.</summary>
+    /// <exception cref="StrataRec.Pipeline.Replay.ReplayBundleException">The bundle is of another format: checked here as every entry that takes a
+    /// bundle checks it, before its runs are read (review 91).</exception>
     public async Task<(RecEngine? Engine, string? Problem, string? Hint)> ForAsync(ReplayBundle bundle, CancellationToken cancellationToken)
     {
+        ReplayBundleFile.CheckFormat(bundle);
         var configurations = new List<(string Pipeline, string Source)>();
         foreach (var run in Runs(bundle))
         {
