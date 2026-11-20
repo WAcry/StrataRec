@@ -405,6 +405,35 @@ public sealed class TapCandidateKeyTests
     }
 
     /// <summary>
+    /// Review 90: a row source that runs only after the tap is captured appends no row it logs, but was in a scope of the
+    /// tap's candidate feature: with the layers changing the tap and its reader, that scope was past the combination limit,
+    /// and a plan every combination of which is valid was rejected. Only a row source that may run before the tap counts.
+    /// </summary>
+    [Fact]
+    public void ARowSourceAfterTheTap_IsNotInAScopeOfItsCandidateFeature()
+    {
+        var baseline = Pipeline("""{ "after": "next" }""", "col.item.base", primary: "double(col.item.base)", backup: "1.0", output: "1.0")
+            .Replace("\"score.l\": { \"type\": \"float64\", \"default\": 0.0 }",
+                "\"score.l\": { \"type\": \"float64\", \"default\": 0.0 }, \"score.app\": { \"type\": \"float64?\" }", StringComparison.Ordinal);
+        var placements = new[]
+        {
+            Layer("a", """{ "log_taps": { "key": { "columns": { "v": "col.item.base", "id": "col.entity_id" } } } }"""),
+            Layer("b", """{ "nodes": { "next": { "config": { "expr": "double(col.item.base) + 1.0" } } } }"""),
+            Layer("c", """{ "nodes": { "more": { "order": 950, "op": "AppendsOne@1", "config": { "output_col": "score.app" } } } }"""),
+        };
+        var operators = OperatorRegistry.CreateDefault().Add(new AppendsOneFactory());
+        var (request, environment) = Inputs(baseline, operators);
+
+        var exhaustive = PlanCompiler.Compile(CombinationLimitTests.With(request, placements, 8), environment);
+        Assert.True(exhaustive.Report.CombinationCheckExhaustive);
+        Assert.True(exhaustive.Succeeded, string.Join("\n", exhaustive.Diagnostics));
+
+        var scoped = PlanCompiler.Compile(CombinationLimitTests.With(request, placements, 4), environment);
+        Assert.False(scoped.Report.CombinationCheckExhaustive);
+        Assert.True(scoped.Succeeded, string.Join("\n", scoped.Diagnostics));
+    }
+
+    /// <summary>
     /// Review 88: the hint named the first later node that reads the feature, though rows its position appends (by it or
     /// its fallback) have no value for it: moved there, the tap was refused again. It names the first that keeps it.
     /// </summary>

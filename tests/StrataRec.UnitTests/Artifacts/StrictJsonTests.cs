@@ -329,6 +329,24 @@ public sealed class StrictJsonTests
         Assert.Contains("default JsonElement", undefined!.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Review 90: a wrapped element's depth was checked by the copy, after its text check had walked all of it; one a host
+    /// built many levels deep took that walk past the stack. One walk checks both and stops at the first container too deep.
+    /// </summary>
+    [Fact]
+    public void AWrappedElementTooDeep_IsRefusedAtTheFirstLevelPastTheLimit_WithoutWalkingFurther()
+    {
+        var options = new JsonSerializerOptions { TypeInfoResolver = new DefaultJsonTypeInfoResolver() };
+        options.Converters.Add(new ElementConverter(throws: true)); // wraps an array element; never run
+        var info = (JsonTypeInfo<JsonElement>)options.GetTypeInfo(typeof(JsonElement));
+        const int levels = 200_000;
+        using var deep = JsonDocument.Parse(new string('[', levels) + new string(']', levels), new JsonDocumentOptions { MaxDepth = levels + 1 });
+
+        var error = StrictJson.Check(new JsonObject { ["p"] = JsonValue.Create(deep.RootElement, info) }, 62, out _);
+
+        Assert.Equal("/p" + string.Concat(Enumerable.Repeat("/0", 61)), error?.Pointer); // level 63, the root being 1
+    }
+
     /// <summary>Writes every element as 59 nested arrays, or throws.</summary>
     private sealed class ElementConverter(bool throws) : JsonConverter<JsonElement>
     {

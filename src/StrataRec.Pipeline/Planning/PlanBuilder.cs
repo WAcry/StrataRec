@@ -1431,6 +1431,39 @@ public sealed class PlanBuilder
 
         var none = new SortedSet<string>(StringComparer.Ordinal);
         var scopes = new List<DataFlowScope>();
+
+        static int Latest(HashSet<int> set)
+        {
+            var latest = int.MinValue;
+            foreach (var order in set)
+            {
+                latest = Math.Max(latest, order);
+            }
+
+            return latest;
+        }
+
+        // The earliest order a node may run at: its own, or for a fallback that of a node falling back to it; a node with
+        // neither in any variant counts as running first.
+        int Earliest(string id)
+        {
+            var earliest = int.MaxValue;
+            foreach (var related in new[] { new SortedSet<string>(StringComparer.Ordinal) { id }, referrers.GetValueOrDefault(id) ?? none })
+            {
+                foreach (var node in related)
+                {
+                    if (orders.TryGetValue(node, out var at))
+                    {
+                        foreach (var order in at.Orders)
+                        {
+                            earliest = Math.Min(earliest, order);
+                        }
+                    }
+                }
+            }
+
+            return earliest == int.MaxValue ? int.MinValue : earliest;
+        }
         void Scope(string subject, string pointer, SortedSet<string> involved, string? tap = null, IReadOnlyCollection<string>? moreTaps = null)
         {
             // A position is its node or its fallback: close over both directions until nothing is added.
@@ -1600,6 +1633,13 @@ public sealed class PlanBuilder
                 Scope($"tap '{tapId}' reading '{schema.Columns[logical].Name}'", pointer, With(attach, producers.GetValueOrDefault(logical) ?? none), tapId);
             }
 
+            // The latest order the tap may be captured after; a row source that never runs before it appends no row it logs.
+            var latest = int.MinValue;
+            foreach (var tap in variants)
+            {
+                latest = Math.Max(latest, tap.AttachAfter is { } after && orders.TryGetValue(after, out var at) ? Latest(at.Orders) : int.MaxValue);
+            }
+
             foreach (var feature in features)
             {
                 var name = _features[feature].Definition.Name;
@@ -1608,9 +1648,14 @@ public sealed class PlanBuilder
 
                 // A row source between the last reader and the tap leaves the rows it appends without the feature: one
                 // such position decides it with the readers (review 88: a layer adding a row source was not in the scope).
+                // Only one that may run before the tap is captured (review 90: one after it made a scope of more layers,
+                // which past the combination limit rejects the plan).
                 foreach (var rowSource in rowSources)
                 {
-                    Scope($"tap '{tapId}' reading feature '{name}' and row source '{rowSource}'", pointer, With(deciding, new[] { rowSource }), tapId);
+                    if (Earliest(rowSource) <= latest)
+                    {
+                        Scope($"tap '{tapId}' reading feature '{name}' and row source '{rowSource}'", pointer, With(deciding, new[] { rowSource }), tapId);
+                    }
                 }
             }
         }

@@ -33,17 +33,23 @@ public static class StrictJson
     public static JsonBindingError? Check(in JsonElement value) => Check(value, ignoreCase: false);
 
     /// <param name="ignoreCase">Whether two names that differ only in case are one, as they are to a node read with <see cref="JsonNodeOptions.PropertyNameCaseInsensitive"/>.</param>
-    private static JsonBindingError? Check(in JsonElement value, bool ignoreCase)
+    /// <param name="level">The level of <paramref name="value"/>, the root being 1.</param>
+    /// <param name="maxDepth">The levels an object or array may be at; the first one deeper is the problem. Text the
+    /// reader parsed is bounded by its own limit; an element built in code is not, and is not walked past this.</param>
+    private static JsonBindingError? Check(in JsonElement value, bool ignoreCase, int level = 1, int maxDepth = int.MaxValue)
     {
         switch (value.ValueKind)
         {
+            case JsonValueKind.Object when level > maxDepth:
+            case JsonValueKind.Array when level > maxDepth:
+                return TooDeep(maxDepth);
             case JsonValueKind.Object:
-                return CheckObject(value, ignoreCase);
+                return CheckObject(value, ignoreCase, level, maxDepth);
             case JsonValueKind.Array:
                 var index = 0;
                 foreach (var item in value.EnumerateArray())
                 {
-                    if (Check(item, ignoreCase) is { } inner)
+                    if (Check(item, ignoreCase, level + 1, maxDepth) is { } inner)
                     {
                         return Under(index.ToString(System.Globalization.CultureInfo.InvariantCulture), inner);
                     }
@@ -213,8 +219,9 @@ public static class StrictJson
     /// written by the value, whose converter may be the host's (review 87: one given a <c>JsonTypeInfo&lt;JsonElement&gt;</c>
     /// was checked as the element and copied by <see cref="JsonNode.DeepClone"/>, which ran the converter outside the
     /// check: what it wrote was used unchecked, and what it threw went out of the request). Its strings and names are
-    /// checked as text first (<see cref="Check(in JsonElement)"/>, at the pointer of the one at fault), then the element is
-    /// walked and copied, its depth counted from its place in the tree. Walked, not read back from its text (review 88):
+    /// checked as text, with its depth counted from its place in the tree, by one walk that stops at the first problem
+    /// (review 90: the depth was checked by the copy, after a walk of the whole element, which a host's element thousands
+    /// of levels deep took past the stack); then it is copied. Walked, not read back from its text (review 88):
     /// the text of an element read from JSONC keeps its comments and trailing commas, one read with a larger depth limit
     /// went past the reader's own, and getting the text of one holding bytes that are not UTF-8 threw. A default element
     /// holds no JSON at all.
@@ -228,67 +235,38 @@ public static class StrictJson
                 "wrap an element read from JSON, or leave the member out");
         }
 
-        if (Check(element) is { } invalid)
+        if (Check(element, ignoreCase: false, level, maxDepth) is { } invalid)
         {
             return invalid;
         }
 
-        return CopyElement(element.Clone(), level, maxDepth, out copy);
+        copy = Copy(element.Clone());
+        return null;
     }
 
-    /// <summary>Copies an element whose strings and names were checked, stopping at the first object or array too deep.</summary>
-    private static JsonBindingError? CopyElement(JsonElement element, int level, int maxDepth, out JsonNode? copy)
+    /// <summary>Copies an element the check passed: its names are text, none twice, and its depth is within the limit.</summary>
+    private static JsonNode? Copy(JsonElement element)
     {
-        copy = null;
         switch (element.ValueKind)
         {
             case JsonValueKind.Object:
-            {
-                if (level > maxDepth)
-                {
-                    return TooDeep(maxDepth);
-                }
-
-                var copied = new JsonObject();
+                var obj = new JsonObject();
                 foreach (var member in element.EnumerateObject())
                 {
-                    if (CopyElement(member.Value, level + 1, maxDepth, out var value) is { } inner)
-                    {
-                        return Under(member.Name, inner);
-                    }
-
-                    copied.Add(member.Name, value); // unique by ordinal: the check found none twice
+                    obj.Add(member.Name, Copy(member.Value));
                 }
 
-                copy = copied;
-                return null;
-            }
+                return obj;
             case JsonValueKind.Array:
-            {
-                if (level > maxDepth)
-                {
-                    return TooDeep(maxDepth);
-                }
-
-                var copied = new JsonArray();
-                var index = 0;
+                var array = new JsonArray();
                 foreach (var item in element.EnumerateArray())
                 {
-                    if (CopyElement(item, level + 1, maxDepth, out var value) is { } inner)
-                    {
-                        return Under(index.ToString(System.Globalization.CultureInfo.InvariantCulture), inner);
-                    }
-
-                    copied.Add(value);
-                    index++;
+                    array.Add(Copy(item));
                 }
 
-                copy = copied;
-                return null;
-            }
+                return array;
             default:
-                copy = JsonValue.Create(element); // null for JSON null
-                return null;
+                return JsonValue.Create(element); // null for JSON null
         }
     }
 
@@ -366,7 +344,7 @@ public static class StrictJson
 
     private const string Utf8Hint = "send the body as UTF-8 (Content-Type: application/json; charset=utf-8)";
 
-    private static JsonBindingError? CheckObject(in JsonElement value, bool ignoreCase)
+    private static JsonBindingError? CheckObject(in JsonElement value, bool ignoreCase, int level, int maxDepth)
     {
         var count = 0;
         var escaped = false;
@@ -402,7 +380,7 @@ public static class StrictJson
 
         foreach (var member in value.EnumerateObject())
         {
-            if (Check(member.Value, ignoreCase) is { } inner)
+            if (Check(member.Value, ignoreCase, level + 1, maxDepth) is { } inner)
             {
                 return Under(member.Name, inner);
             }
