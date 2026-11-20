@@ -32,13 +32,19 @@ public sealed class FileSystemManifestSource : IManifestSource
     /// <summary>
     /// How to name a pipeline or an environment whose pointer this source keeps (<see cref="GetPointerPath"/>): the hint of
     /// every tool that reports a name it refused, and of a host that cannot read its pointer under such a name. Earlier
-    /// versions wrote pointers under names starting with '.', so it says how to move such a release (review 79): renaming
-    /// the directory is not enough, since a manifest names its environment and a node refuses one naming another.
+    /// versions wrote pointers under names starting with '.', so it says how to move such a release (reviews 79 and 81).
+    /// Renaming the directory is not enough (a manifest names its environment, and a node refuses one naming another), so
+    /// the release is built again; a build takes its experiments from its environment's release file and knows nothing of
+    /// the stops published under another name. Built without the old file it released none of three experiments, and an
+    /// experiment revoked under the old name came back. So the hint names an unused name, carries the release file over,
+    /// and has what the new manifest releases and revokes compared with what the old pointer serves before hosts move.
     /// </summary>
     public const string NameHint =
         "pipeline ids and environment names are the file names of pointers: use letters, digits, '_', '-' and '.', and do not start with '.'; " +
-        "to move a release an earlier version published under such a name, build and publish it again under a name without the leading '.' " +
-        "and point the hosts at that name (renaming the pointer's directory is not enough: the manifest names its environment)";
+        "to move a release an earlier version published under such a name, choose a new environment name nothing uses yet, " +
+        "copy releases/<pipeline>.<old name>.jsonc to releases/<pipeline>.<new name>.jsonc with its \"environment\" set to the new name " +
+        "and bindings for that environment, build and publish it, and before pointing the hosts at it compare its experiments and " +
+        "revocations ('stratarec status') with those the old pointer serves (an earlier version's 'stratarec status' reads it)";
 
     /// <summary>
     /// The pointer file of a pipeline in an environment, whether or not it exists. Both names become path segments, so

@@ -479,6 +479,9 @@ public sealed class ReleaseHostTests : IDisposable
     /// Review 79: earlier versions published under environment names starting with '.', which pointers now refuse, so a
     /// host restarted on such an environment fails to start. The error says how to move the release, not to check that
     /// the manifest source can be reached: renaming the directory is not enough, as the manifest names its environment.
+    /// Review 81: followed as it was, the hint could change the experiments served (a build under a name with no release
+    /// file of the old one's, or one that never saw the old name's stops); it says to carry the release file over to an
+    /// unused name and to compare what the new manifest releases and revokes before the hosts move.
     /// </summary>
     [Fact]
     public async Task AHostOnAnEnvironmentStartingWithADot_IsToldHowToMoveTheRelease()
@@ -492,7 +495,10 @@ public sealed class ReleaseHostTests : IDisposable
         Assert.Equal(("RELEASE_POINTER_UNREADABLE", "pipeline:p"), (error.Code, error.Artifact));
         Assert.Contains("'.preview' cannot name a pointer file: it starts with '.'", error.Message);
         Assert.Equal(FileSystemManifestSource.NameHint, error.Hint);
-        Assert.Contains("build and publish it again under a name without the leading '.'", error.Hint);
+        Assert.Contains("choose a new environment name nothing uses yet", error.Hint);
+        Assert.Contains("copy releases/<pipeline>.<old name>.jsonc to releases/<pipeline>.<new name>.jsonc with its \"environment\" set to the new name " +
+            "and bindings for that environment", error.Hint);
+        Assert.Contains("before pointing the hosts at it compare its experiments and revocations ('stratarec status') with those the old pointer serves", error.Hint);
     }
 
     /// <summary>

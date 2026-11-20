@@ -46,14 +46,16 @@ public sealed class StrictJsonTests
 
     /// <summary>
     /// Review 79: a node tree a host parsed (<c>JsonNode.Parse</c> keeps a repeated member; the object throws when it is
-    /// first enumerated) is checked without enumerating it, also when an outer object was enumerated already and the
-    /// repeated member is in one of its values, not yet read. A tree built in code has no repeated member.
+    /// first enumerated) is reported at the repeated member, also when an outer object was enumerated already and the
+    /// repeated member is in one of its values, not yet read. A tree built in code has no repeated member. Once checked,
+    /// a tree reads without throwing.
     /// </summary>
     [Theory]
     [InlineData("""{ "params": { "k": 3 }, "params": { "k": 4 } }""", "/params", false)]
     [InlineData("""{ "params": { "k": 3, "k": 4 } }""", "/params/k", false)]
     [InlineData("""{ "params": { "k": 3, "k": 4 } }""", "/params/k", true)]
-    public void ANodeTreeAHostParsed_IsCheckedWithoutEnumeratingIt(string json, string pointer, bool outerEnumerated)
+    [InlineData("""{ "params": { "k": [1, { "a": 1, "a": 2 }] } }""", "/params/k/1/a", false)]
+    public void ANodeTreeAHostParsed_IsReportedAtTheRepeatedMember(string json, string pointer, bool outerEnumerated)
     {
         var node = JsonNode.Parse(json)!.AsObject();
         if (outerEnumerated)
@@ -61,11 +63,110 @@ public sealed class StrictJsonTests
             Assert.Single(node); // reads the outer object, not params
         }
 
-        var error = StrictJson.Check(node);
+        var error = StrictJson.Check(node, Jsonc.MaxDepth);
 
         Assert.Equal(pointer, error?.Pointer);
-        Assert.Null(StrictJson.Check(new JsonObject { ["params"] = new JsonObject { ["k"] = 3 } }));
-        Assert.Null(StrictJson.Check((JsonNode?)null));
+        Assert.Equal("give each member once: which of two values would count is not defined", error?.Hint);
+        var clean = new JsonObject { ["params"] = new JsonObject { ["k"] = 3 } };
+        Assert.Null(StrictJson.Check(clean, Jsonc.MaxDepth));
+        Assert.Null(StrictJson.Check(null, Jsonc.MaxDepth));
+        var parsed = JsonNode.Parse("""{ "params": { "k": [1, { "a": 1 }] } }""");
+        Assert.Null(StrictJson.Check(parsed, Jsonc.MaxDepth));
+        Assert.Equal("""{"params":{"k":[1,{"a":1}]}}""", JsonCanonicalizer.CanonicalizeToString(parsed));
+    }
+
+    /// <summary>
+    /// Review 81: the check wrote the tree and read the text back by ordinal names, so two names that differ only in case
+    /// passed, and the object, parsed with <see cref="JsonNodeOptions.PropertyNameCaseInsensitive"/>, threw when first
+    /// enumerated. The object's own comparison of names decides.
+    /// </summary>
+    [Fact]
+    public void ANodeTreeParsedIgnoringCase_IsReportedAtTheNameThatRepeatsAnotherIgnoringCase()
+    {
+        const string Json = """{ "params": { "final_top_k": 3, "FINAL_TOP_K": 4 } }""";
+        var insensitive = JsonNode.Parse(Json, new JsonNodeOptions { PropertyNameCaseInsensitive = true });
+
+        var error = StrictJson.Check(insensitive, Jsonc.MaxDepth);
+
+        Assert.NotNull(error);
+        Assert.Equal("/params/FINAL_TOP_K", error.Pointer);
+        Assert.Equal("Member 'FINAL_TOP_K' is given more than once: the object compares names ignoring case (JsonNodeOptions.PropertyNameCaseInsensitive).",
+            error.Message);
+        Assert.Null(StrictJson.Check(JsonNode.Parse(Json), Jsonc.MaxDepth)); // two names, by ordinal comparison
+    }
+
+    /// <summary>
+    /// Review 81: a tree JSON cannot write (a NaN) was not checked at all, since the check wrote the tree; an object it
+    /// held that repeats a member then threw when it was first enumerated. The NaN is not this check's (the canonical
+    /// form reports it); the repeated member is, wherever it is.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ARepeatedMember_IsReportedBesideAValueJsonCannotWrite(bool nanFirst)
+    {
+        var nan = new JsonObject { ["final_top_k"] = double.NaN };
+        var repeated = JsonNode.Parse("""{ "coarse_top_k": { "order": 1 }, "coarse_top_k": { "order": 2 } }""");
+        var tree = nanFirst ? new JsonObject { ["params"] = nan, ["nodes"] = repeated } : new JsonObject { ["nodes"] = repeated, ["params"] = nan };
+
+        Assert.Equal("/nodes/coarse_top_k", StrictJson.Check(tree, Jsonc.MaxDepth)?.Pointer);
+        Assert.Null(StrictJson.Check(new JsonObject { ["params"] = new JsonObject { ["final_top_k"] = double.NaN } }, Jsonc.MaxDepth));
+    }
+
+    /// <summary>
+    /// A name that is not Unicode stops an object read from text from being enumerated, and from being written: reported at
+    /// the object, as for a request, in the words of what threw. It threw out of the canonical form before.
+    /// </summary>
+    [Fact]
+    public void ANameThatIsNotUnicode_InANodeTree_IsReportedAtItsObject()
+    {
+        var error = StrictJson.Check(JsonNode.Parse("""{ "x": { "ok": 1, "\uD800": 2 } }"""), Jsonc.MaxDepth);
+
+        Assert.NotNull(error);
+        Assert.Equal("/x", error.Pointer);
+        Assert.StartsWith("The members of this object cannot be read: ", error.Message, StringComparison.Ordinal);
+        Assert.Equal("give each member once, under a name that is valid Unicode (a complete surrogate pair such as \\ud83d\\ude00, or the character directly)",
+            error.Hint);
+    }
+
+    /// <summary>
+    /// Review 81: the check wrote the tree and read it back at the reader's default depth, which threw for a deeper tree.
+    /// A tree as deep as the limit passes; one level more is reported at the first object or array past it, nothing
+    /// deeper read.
+    /// </summary>
+    [Theory]
+    [InlineData(5, 5)]
+    [InlineData(6, 5)]
+    [InlineData(10_000, 5)]
+    [InlineData(64, 64)]
+    [InlineData(65, 64)]
+    [InlineData(70, 64)] // the review's: 70 levels at /params/final_top_k
+    public void ATreeNestedPastTheLimit_IsReportedAtTheFirstLevelTooDeep(int levels, int maxDepth)
+    {
+        var error = StrictJson.Check(Nested(levels), maxDepth);
+
+        if (levels <= maxDepth)
+        {
+            Assert.Null(error);
+            return;
+        }
+
+        Assert.NotNull(error);
+        Assert.Equal("/a" + string.Concat(Enumerable.Repeat("/0", maxDepth - 1)), error.Pointer); // "/a" is level 2
+        Assert.Equal($"Objects and arrays nest deeper than {maxDepth} levels here: this one is level {maxDepth + 1}.", error.Message);
+        Assert.Equal($"nest objects and arrays at most {maxDepth} levels deep, counting the outermost", error.Hint);
+    }
+
+    /// <summary>An object holding <c>"a"</c>, an array of an array … of <c>1</c>: <paramref name="levels"/> objects and arrays in all.</summary>
+    internal static JsonObject Nested(int levels)
+    {
+        JsonNode value = 1;
+        for (var i = 1; i < levels; i++)
+        {
+            value = new JsonArray(value);
+        }
+
+        return new JsonObject { ["a"] = value };
     }
 
     [Fact]

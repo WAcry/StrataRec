@@ -85,7 +85,7 @@ public static class StrataRecMetrics
     /// <summary>1 KiB to 1 GiB, ratio 2, 21 boundaries.</summary>
     private static readonly long[] ByteBuckets = PowersOfTwo(10, 30);
 
-    private static readonly Meter Meter = StrataRecTelemetry.Meter;
+    private static readonly GuardedMeter Meter = new(StrataRecTelemetry.Meter);
 
     // Requests: recorded once per IRecEngine request (assignment, the pipeline and its fallback pipeline).
 
@@ -406,5 +406,82 @@ public static class StrataRecMetrics
         }
 
         return bounds;
+    }
+
+    /// <summary>
+    /// Creates the instruments on <see cref="StrataRecTelemetry.Meter"/>, in this type's initializer. Creating an instrument
+    /// tells every <see cref="MeterListener"/> of it, on this thread: a host's listener that threw there failed the
+    /// initializer, and every later read of any instrument threw <see cref="TypeInitializationException"/> for the rest of
+    /// the process, in a plan load as in a log submission (review 81). An instrument whose creation throws is made again
+    /// on a meter disposed before it, which tells no listener and records nothing: the engine runs on without that
+    /// instrument's measurements. The listeners after the one that threw were not told of it either, which only the host
+    /// can mend, by fixing its listener.
+    /// </summary>
+    private sealed class GuardedMeter(Meter meter)
+    {
+        private Meter? _unpublished; // the initializer runs on one thread
+
+        public Counter<T> CreateCounter<T>(string name, string? unit, string? description)
+            where T : struct
+        {
+            try
+            {
+                return meter.CreateCounter<T>(name, unit, description);
+            }
+            catch (Exception)
+            {
+                return Unpublished().CreateCounter<T>(name, unit, description);
+            }
+        }
+
+        public UpDownCounter<T> CreateUpDownCounter<T>(string name, string? unit, string? description)
+            where T : struct
+        {
+            try
+            {
+                return meter.CreateUpDownCounter<T>(name, unit, description);
+            }
+            catch (Exception)
+            {
+                return Unpublished().CreateUpDownCounter<T>(name, unit, description);
+            }
+        }
+
+        public Gauge<T> CreateGauge<T>(string name, string? unit, string? description)
+            where T : struct
+        {
+            try
+            {
+                return meter.CreateGauge<T>(name, unit, description);
+            }
+            catch (Exception)
+            {
+                return Unpublished().CreateGauge<T>(name, unit, description);
+            }
+        }
+
+        public Histogram<T> CreateHistogram<T>(string name, string? unit, string? description, IEnumerable<KeyValuePair<string, object?>>? tags, InstrumentAdvice<T>? advice)
+            where T : struct
+        {
+            try
+            {
+                return meter.CreateHistogram(name, unit, description, tags, advice);
+            }
+            catch (Exception)
+            {
+                return Unpublished().CreateHistogram(name, unit, description, tags, advice);
+            }
+        }
+
+        private Meter Unpublished()
+        {
+            if (_unpublished is null)
+            {
+                _unpublished = new Meter(meter.Name, meter.Version);
+                _unpublished.Dispose(); // an instrument of a disposed meter is published to no listener
+            }
+
+            return _unpublished;
+        }
     }
 }

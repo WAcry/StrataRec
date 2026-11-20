@@ -32,6 +32,16 @@ public static class PlanCompiler
     /// <summary>The override's place in a request file (<c>stratarec run</c>); the paths below it are those of the patch.</summary>
     public const string OverridePointer = "/config_override";
 
+    /// <summary>
+    /// How deep a configuration override may nest objects and arrays, the override itself being the first level; deeper is
+    /// <c>CONFIG_OVERRIDE_INVALID</c> at the first level too deep. A recording holds the override two levels down
+    /// (<c>/request/config_override</c>) in a file written and read at most <see cref="Jsonc.MaxDepth"/> levels deep, as
+    /// every configuration file is: so every override that runs can be recorded and replayed from its file, and a request
+    /// file (<c>stratarec run</c>, one level down) holds any. Before the limit, a host's override nested deeper than a
+    /// reader's default depth threw out of the request where it was checked (review 81).
+    /// </summary>
+    public const int OverrideMaxDepth = Jsonc.MaxDepth - 2;
+
     /// <param name="bindings">
     /// Where the plan's local feature tables, clients and connectors come from (design 6.4, 6.6): the engine passes the
     /// plan's binding lease, which shares and loads them. Null gives ones that are never loaded, for compiling without
@@ -56,7 +66,8 @@ public static class PlanCompiler
     /// <param name="configOverride">
     /// A request's configuration override (design 13.3), applied after the arms, so it wins over them: an RFC 7396 merge
     /// patch of the patchable view (<see cref="PatchableView.Sections"/>), checked as the baseline is, not by the
-    /// experiment policy. Its own mistakes are reported at <see cref="OverrideArtifact"/>, <see cref="OverridePointer"/>.
+    /// experiment policy. Its own mistakes are reported at <see cref="OverrideArtifact"/>, <see cref="OverridePointer"/>,
+    /// and so is what the compile finds at a value it sets or within an object it patches (<see cref="InOverride"/>).
     /// </param>
     public static PlanCompilation CompileMerged(
         PlanCompileRequest request, IReadOnlyList<string> armIds, PlanEnvironment? environment = null, IPlanBindings? bindings = null,
@@ -101,9 +112,10 @@ public static class PlanCompiler
         if (configOverride is not null)
         {
             // A host may build the override from text that repeats a member (JsonNode.Parse keeps both, and the object throws
-            // when it is first enumerated): the override's mistake, at its pointer, checked before anything enumerates it,
-            // not an ArgumentException out of the request (review 79).
-            if (StrictJson.Check(configOverride) is { } invalid)
+            // when it is first enumerated, also under a case-insensitive comparison), or nest it as deep as it likes: the
+            // override's mistake, at its pointer, found before anything else reads it, not an exception out of the request
+            // (reviews 79 and 81). What passes has been enumerated throughout, so nothing below throws reading it.
+            if (StrictJson.Check(configOverride, OverrideMaxDepth) is { } invalid)
             {
                 diagnostics.Error("CONFIG_OVERRIDE_INVALID", OverrideArtifact, OverridePointer + invalid.Pointer, invalid.Message, invalid.Hint);
                 return new PlanCompilation { Diagnostics = diagnostics.Items, Report = UnifiedCompilation.EmptyReport };
@@ -143,7 +155,56 @@ public static class PlanCompiler
         }
 
         var plain = UnifiedCompilation.WithoutExperiments(request);
-        return new UnifiedCompilation(plain, environment ?? new PlanEnvironment(), view, diagnostics, buildPlan: true, bindings ?? new UnloadedBindings()).Run();
+        var start = diagnostics.Count;
+        var compilation = new UnifiedCompilation(plain, environment ?? new PlanEnvironment(), view, diagnostics, buildPlan: true, bindings ?? new UnloadedBindings()).Run();
+        if (configOverride is not null && diagnostics.Count > start)
+        {
+            // The compilation's diagnostics are the bag's: moved in place, they are what it reports.
+            var pipeline = "pipeline:" + request.Pipeline.PipelineId;
+            var catalog = "catalog:" + request.Catalog.CatalogId;
+            foreach (var d in diagnostics.RemoveFrom(start))
+            {
+                diagnostics.Add((d.Artifact == pipeline || d.Artifact == catalog) && InOverride(configOverride, d.Pointer)
+                    ? d with { Artifact = OverrideArtifact, Pointer = OverridePointer + d.Pointer }
+                    : d);
+            }
+        }
+
+        return compilation;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="pointer"/>, a location in the patchable view (where the pipeline's and the catalog's
+    /// sections are), is one <paramref name="configOverride"/> writes: at or under a value it sets (a scalar, an array,
+    /// null), or an object it patches into. The compile of the merged configuration reports what it finds at the
+    /// pipeline's or catalog's pointer, though the value came from the override: an integer the canonical form cannot tell
+    /// from a float (<c>-90071992547409930E-1</c>) passed the override's own checks and was refused by the parameter's
+    /// binding at <c>pipeline:home_feed/params/big</c>, with no pointer for the caller, while the same integer written as
+    /// digits was refused at <c>/config_override/params/big</c> (review 81). Such a diagnostic keeps its code, message and
+    /// hint and moves to the override, as an arm's moves to the arm whose patch touches it.
+    /// </summary>
+    private static bool InOverride(JsonObject configOverride, string pointer)
+    {
+        if (!JsonPointer.TryParse(pointer, out var parsed) || parsed.Depth == 0)
+        {
+            return false;
+        }
+
+        JsonNode? node = configOverride;
+        foreach (var token in parsed.Tokens)
+        {
+            if (node is not JsonObject patched)
+            {
+                return true; // under a value the override sets whole
+            }
+
+            if (!patched.TryGetPropertyValue(token, out node))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

@@ -225,8 +225,9 @@ public sealed class RecResult
     /// <summary>
     /// For <see cref="RecErrorKind.InvalidRequest"/> caused by an input, the input's JSON pointer relative to a request body
     /// of the shape <c>{ "inputs": { … } }</c>, e.g. <c>/inputs/user_id</c>; for a mistake in the request's configuration
-    /// override itself, its pointer in a request file, e.g. <c>/config_override/params/k</c> (one in the configuration the
-    /// override produced is in <see cref="Error"/>, at the pipeline's pointer); null otherwise.
+    /// override, its pointer in a request file, e.g. <c>/config_override/params/k</c>: one in the override itself, or one
+    /// the compile finds at a value the override sets or within an object it patches (one elsewhere in the configuration
+    /// the override produced is in <see cref="Error"/>, at the pipeline's or catalog's pointer); null otherwise.
     /// </summary>
     public string? ErrorPointer { get; init; }
 

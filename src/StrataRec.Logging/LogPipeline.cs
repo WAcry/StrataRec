@@ -208,10 +208,11 @@ public sealed partial class LogPipeline : IAsyncDisposable
     public LogAdmission Submit(LogBatch batch)
     {
         batch.ProducerId = ProducerId;
+        var durable = batch.Delivery == LogDelivery.Durable;
         if (Volatile.Read(ref _disposed) != 0)
         {
             Count(batch.TapId, delivered: 0, dropped: 1);
-            if (batch.Delivery == LogDelivery.Durable)
+            if (durable)
             {
                 Overflow();
             }
@@ -219,49 +220,71 @@ public sealed partial class LogPipeline : IAsyncDisposable
             return LogAdmission.Closed;
         }
 
-        var bytes = batch.ApproximateBytes;
-        Interlocked.Increment(ref _pending);
-        if (batch.Delivery == LogDelivery.Durable)
+        if (durable)
         {
             batch.Seq = Interlocked.Increment(ref _seq);
-            if (Reserve(ref _durableBytes, bytes, _options.DurableMaxBytes))
-            {
-                QueueDepth(1, durable: true); // before the consumer can see the batch (see QueueDepth)
-                if (_durable.Writer.TryWrite(batch))
-                {
-                    return LogAdmission.Queued;
-                }
+        }
 
-                QueueDepth(-1, durable: true);
-                Interlocked.Add(ref _durableBytes, -bytes); // completed by a concurrent dispose
-            }
+        if (TryQueue(batch, durable))
+        {
+            return LogAdmission.Queued;
+        }
 
-            Interlocked.Decrement(ref _pending);
+        if (durable)
+        {
             if (Spill(batch))
             {
                 return LogAdmission.Spilled;
             }
 
             Overflow();
-            Count(batch.TapId, 0, 1);
-            return LogAdmission.Dropped;
-        }
-
-        if (Reserve(ref _bestEffortBytes, bytes, _options.BestEffortMaxBytes))
-        {
-            QueueDepth(1, durable: false);
-            if (_bestEffort.Writer.TryWrite(batch))
-            {
-                return LogAdmission.Queued;
-            }
-
-            QueueDepth(-1, durable: false);
-            Interlocked.Add(ref _bestEffortBytes, -bytes);
         }
 
         Count(batch.TapId, 0, 1);
-        Interlocked.Decrement(ref _pending);
         return LogAdmission.Dropped;
+    }
+
+    /// <summary>
+    /// Queues a batch within its queue's budget. The pending count, the batch's bytes and the queue depth are taken before
+    /// its consumer can see it (see <see cref="QueueDepth"/>), and given back when it is not queued, whatever happens on the
+    /// way: the first use of the metric instruments threw after the bytes were reserved (a host's listener that throws
+    /// when an instrument is published), and they stayed reserved for a batch nobody would write, so a flush never
+    /// returned (review 81).
+    /// </summary>
+    private bool TryQueue(LogBatch batch, bool durable)
+    {
+        var bytes = batch.ApproximateBytes;
+        ref var budget = ref durable ? ref _durableBytes : ref _bestEffortBytes;
+        Interlocked.Increment(ref _pending);
+        var reserved = false;
+        var queued = false;
+        try
+        {
+            reserved = Reserve(ref budget, bytes, durable ? _options.DurableMaxBytes : _options.BestEffortMaxBytes);
+            if (reserved)
+            {
+                QueueDepth(1, durable); // before the consumer can see the batch (see QueueDepth)
+                queued = (durable ? _durable : _bestEffort).Writer.TryWrite(batch);
+                if (!queued)
+                {
+                    QueueDepth(-1, durable); // completed by a concurrent dispose
+                }
+            }
+        }
+        finally
+        {
+            if (!queued)
+            {
+                if (reserved)
+                {
+                    Interlocked.Add(ref budget, -bytes);
+                }
+
+                Interlocked.Decrement(ref _pending);
+            }
+        }
+
+        return queued;
     }
 
     /// <summary>Memory the durable queue holds now (<see cref="LogBatch.ApproximateBytes"/> of its batches).</summary>
@@ -294,7 +317,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
     private void Overflow()
     {
         Interlocked.Increment(ref _durableOverflow);
-        Measure(StrataRecMetrics.LogDurableOverflow, 1, default);
+        Measure(static () => StrataRecMetrics.LogDurableOverflow, 1, default);
     }
 
     private bool Spill(LogBatch batch)
@@ -310,7 +333,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _events?.Report(RequestEvent.LogSpillFailed, batch.TapId, batch.RequestId, ex.Message);
+            _events?.Report(RequestEvent.LogSpillFailed, batch.TapId, batch.RequestId, ExceptionText.Of(ex));
             return false;
         }
     }
@@ -348,6 +371,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
         _durable.Writer.TryComplete();
         _bestEffort.Writer.TryComplete();
         _stop.CancelAfterObserved(_options.DrainTimeout); // the sink's callbacks run on the pool, never on the timer's thread
+        var stuck = false;
         try
         {
             // Bounded even if a sink ignores cancellation: shutdown must not hang on one stuck write. A write still in
@@ -357,17 +381,38 @@ public sealed partial class LogPipeline : IAsyncDisposable
         catch (OperationCanceledException)
         {
             // Drain timed out; remaining durable batches show up as a sequence gap.
-            LogDrainTimedOut(_logger, _options.DrainTimeout.TotalSeconds, Interlocked.Read(ref _pending));
+            Diagnose(static (logger, self) => LogDrainTimedOut(logger, self._options.DrainTimeout.TotalSeconds, Interlocked.Read(ref self._pending)));
         }
         catch (TimeoutException)
         {
-            LogSinkStuck(_logger, _options.DrainTimeout.TotalSeconds, Interlocked.Read(ref _pending));
-            _events?.Dispose();
-            return; // the loops still use _stop; leave it to the finalizer
+            stuck = true; // the loops still use _stop; leave it to the finalizer
+            Diagnose(static (logger, self) => LogSinkStuck(logger, self._options.DrainTimeout.TotalSeconds, Interlocked.Read(ref self._pending)));
         }
+        finally
+        {
+            // The last window's summaries (2001) go to the same logger: what it throws loses them, not the cleanup.
+            Diagnose(static (_, self) => self._events?.Dispose());
+            if (!stuck)
+            {
+                _stop.Dispose();
+            }
+        }
+    }
 
-        _events?.Dispose();
-        _stop.Dispose();
+    /// <summary>
+    /// Writes a diagnostic of the disposal. A logger that throws loses the record and nothing else: the events 3003 and
+    /// 3004 and the last summaries threw out of <see cref="DisposeAsync"/> and skipped the rest of its cleanup (review 81).
+    /// </summary>
+    private void Diagnose(Action<ILogger, LogPipeline> write)
+    {
+        try
+        {
+            write(_logger, this);
+        }
+        catch (Exception)
+        {
+            // See the summary.
+        }
     }
 
     /// <remarks>
@@ -392,7 +437,13 @@ public sealed partial class LogPipeline : IAsyncDisposable
                 var delivered = false;
                 try
                 {
-                    delivered = await WriteAsync(buffer, durable, rejected, token).ConfigureAwait(false);
+                    (delivered, var rejection) = await WriteAsync(buffer, durable, rejected, token).ConfigureAwait(false);
+                    if (rejection is not null)
+                    {
+                        // The outcome is settled before the host hears of the rejection: nothing its callback does, or
+                        // what it throws, can count the batches the sink wrote as dropped (review 81).
+                        ReportRejected(rejected, rejection);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -440,7 +491,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
     /// of the batches before the loop waits for more: an idle loop kept the last write's batches (a wide candidate tap's
     /// among them) alive until its queue was written to again (pre-release assessment). They are let go of, and every
     /// measurement of them published, before the pending count drops: a completed <see cref="FlushAsync"/> holds none and
-    /// has seen the queue depth come back down. Nothing here throws (<see cref="Measure(Counter{long}, long, ReadOnlySpan{KeyValuePair{string, object}})"/>).
+    /// has seen the queue depth come back down. Nothing here throws (<see cref="Measure(Func{Counter{long}}, long, ReadOnlySpan{KeyValuePair{string, object}})"/>).
     /// </summary>
     private void Settle(List<LogBatch> buffer, HashSet<LogBatch> rejected, bool delivered, bool durable)
     {
@@ -464,9 +515,12 @@ public sealed partial class LogPipeline : IAsyncDisposable
 
     /// <summary>
     /// Writes <paramref name="batches"/>; durable writes are retried until the sink accepts them. Batches the sink
-    /// rejects permanently are removed from the retry set and reported, so they cannot block the batches behind them.
+    /// rejects permanently go to <paramref name="rejected"/> and are not retried, so they cannot block the batches behind
+    /// them; the caller reports them (<see cref="ReportRejected"/>) once it holds the outcome.
     /// </summary>
-    private async Task<bool> WriteAsync(List<LogBatch> batches, bool durable, HashSet<LogBatch> rejected, CancellationToken token)
+    /// <returns>Whether the sink has the batches (all but the rejected ones), and its rejection, if any.</returns>
+    private async Task<(bool Delivered, LogBatchRejectedException? Rejection)> WriteAsync(
+        List<LogBatch> batches, bool durable, HashSet<LogBatch> rejected, CancellationToken token)
     {
         var delay = RetryDelay(null, _options.MaxRetryDelay);
         while (true)
@@ -475,11 +529,11 @@ public sealed partial class LogPipeline : IAsyncDisposable
             {
                 await _sink.WriteAsync(batches, token).ConfigureAwait(false);
                 SinkSucceeded(durable);
-                return true;
+                return (true, null);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
-                return false;
+                return (false, null);
             }
             catch (LogBatchRejectedException ex)
             {
@@ -488,22 +542,20 @@ public sealed partial class LogPipeline : IAsyncDisposable
                     if (rejected.Add(batch))
                     {
                         Interlocked.Increment(ref _rejected);
-                        Measure(StrataRecMetrics.LogRejected, 1, default);
-                        _events?.Report(RequestEvent.LogBatchRejected, batch.TapId, batch.RequestId, ex.Message);
-                        NotifyRejected(batch, ex);
+                        Measure(static () => StrataRecMetrics.LogRejected, 1, default);
                     }
                 }
 
                 // The sink wrote everything else in this call.
                 SinkSucceeded(durable);
-                return true;
+                return (true, ex);
             }
             catch (Exception ex)
             {
                 SinkFailed(durable, ex);
                 if (!durable)
                 {
-                    return false;
+                    return (false, null);
                 }
             }
 
@@ -513,10 +565,26 @@ public sealed partial class LogPipeline : IAsyncDisposable
             }
             catch (OperationCanceledException)
             {
-                return false;
+                return (false, null);
             }
 
             delay = RetryDelay(delay, _options.MaxRetryDelay);
+        }
+    }
+
+    /// <summary>
+    /// Tells the event summary and the host's <see cref="LogPipelineOptions.Rejected"/> callback of each batch the sink
+    /// rejected, after the write's outcome is settled: reported while the outcome was still open, a callback that threw an
+    /// exception whose message threw too took the whole write with it, and the batches the sink had written were counted
+    /// as dropped (review 81). Nothing here throws.
+    /// </summary>
+    private void ReportRejected(HashSet<LogBatch> rejected, LogBatchRejectedException reason)
+    {
+        var text = ExceptionText.Of(reason);
+        foreach (var batch in rejected)
+        {
+            _events?.Report(RequestEvent.LogBatchRejected, batch.TapId, batch.RequestId, text);
+            NotifyRejected(batch, reason);
         }
     }
 
@@ -537,7 +605,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _events?.Report(RequestEvent.LogRejectedHandlerFailed, batch.TapId, batch.RequestId, ex.Message);
+            _events?.Report(RequestEvent.LogRejectedHandlerFailed, batch.TapId, batch.RequestId, ExceptionText.Of(ex));
         }
     }
 
@@ -602,13 +670,13 @@ public sealed partial class LogPipeline : IAsyncDisposable
         if (delivered > 0)
         {
             Interlocked.Add(ref counters.Delivered, delivered);
-            Measure(StrataRecMetrics.LogBatches, delivered, counters.DeliveredTags);
+            Measure(static () => StrataRecMetrics.LogBatches, delivered, counters.DeliveredTags);
         }
 
         if (dropped > 0)
         {
             Interlocked.Add(ref counters.Dropped, dropped);
-            Measure(StrataRecMetrics.LogBatches, dropped, counters.DroppedTags);
+            Measure(static () => StrataRecMetrics.LogBatches, dropped, counters.DroppedTags);
         }
     }
 
@@ -618,18 +686,20 @@ public sealed partial class LogPipeline : IAsyncDisposable
     /// its −1 first and the series went below zero, and a flush could return before the last −1 (review 78).
     /// </summary>
     private static void QueueDepth(long delta, bool durable) =>
-        Measure(StrataRecMetrics.LogQueueDepth, delta, durable ? DurableTags : BestEffortTags);
+        Measure(static () => StrataRecMetrics.LogQueueDepth, delta, durable ? DurableTags : BestEffortTags);
 
     /// <summary>
     /// Adds to a metric. What a listener throws is lost with its measurement, as for plan loads (design 13.2), and never
     /// cuts the accounting of a submission or a settlement short: one that threw while the consumer settled a write left
     /// the write's batches pending, so <see cref="FlushAsync"/> never returned and their bytes stayed in the budget (review 78).
+    /// The instrument is read inside the isolation too: its first read runs the instruments' initializer, where a listener
+    /// is told of every instrument (review 81).
     /// </summary>
-    private static void Measure(Counter<long> counter, long value, ReadOnlySpan<KeyValuePair<string, object?>> tags)
+    private static void Measure(Func<Counter<long>> counter, long value, ReadOnlySpan<KeyValuePair<string, object?>> tags)
     {
         try
         {
-            counter.Add(value, tags);
+            counter().Add(value, tags);
         }
         catch (Exception)
         {
@@ -637,16 +707,16 @@ public sealed partial class LogPipeline : IAsyncDisposable
         }
     }
 
-    /// <summary>As <see cref="Measure(Counter{long}, long, ReadOnlySpan{KeyValuePair{string, object}})"/>, for the queue depth.</summary>
-    private static void Measure(UpDownCounter<long> counter, long value, ReadOnlySpan<KeyValuePair<string, object?>> tags)
+    /// <summary>As <see cref="Measure(Func{Counter{long}}, long, ReadOnlySpan{KeyValuePair{string, object}})"/>, for the queue depth.</summary>
+    private static void Measure(Func<UpDownCounter<long>> counter, long value, ReadOnlySpan<KeyValuePair<string, object?>> tags)
     {
         try
         {
-            counter.Add(value, tags);
+            counter().Add(value, tags);
         }
         catch (Exception)
         {
-            // See Measure(Counter<long>, ...).
+            // See Measure(Func<Counter<long>>, ...).
         }
     }
 

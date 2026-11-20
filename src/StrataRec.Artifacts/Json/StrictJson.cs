@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Unicode;
+using StrataRec.Core.Diagnostics;
 
 namespace StrataRec.Artifacts.Json;
 
@@ -29,17 +30,20 @@ public static class StrictJson
     /// The first problem in <paramref name="value"/>, at the pointer of the value at fault relative to it (a duplicate member
     /// at its second occurrence); null when there is none.
     /// </summary>
-    public static JsonBindingError? Check(in JsonElement value)
+    public static JsonBindingError? Check(in JsonElement value) => Check(value, ignoreCase: false);
+
+    /// <param name="ignoreCase">Whether two names that differ only in case are one, as they are to a node read with <see cref="JsonNodeOptions.PropertyNameCaseInsensitive"/>.</param>
+    private static JsonBindingError? Check(in JsonElement value, bool ignoreCase)
     {
         switch (value.ValueKind)
         {
             case JsonValueKind.Object:
-                return CheckObject(value);
+                return CheckObject(value, ignoreCase);
             case JsonValueKind.Array:
                 var index = 0;
                 foreach (var item in value.EnumerateArray())
                 {
-                    if (Check(item) is { } inner)
+                    if (Check(item, ignoreCase) is { } inner)
                     {
                         return Under(index.ToString(System.Globalization.CultureInfo.InvariantCulture), inner);
                     }
@@ -58,40 +62,122 @@ public static class StrictJson
     }
 
     /// <summary>
-    /// <see cref="Check(in JsonElement)"/> for a node tree a host built in code, before anything enumerates it: an object
-    /// <see cref="JsonNode.Parse(string, JsonNodeOptions?, JsonDocumentOptions)"/> made from text that repeats a member
-    /// keeps both, and throws <see cref="ArgumentException"/> when its members are first enumerated, at whatever level
-    /// that happens (review 79). The tree is checked as the JSON it writes: an object not enumerated yet writes the text it
-    /// was parsed from, repeated members included. Null when there is no problem, or when the tree cannot be written at all,
-    /// which is not this check's to report (the canonical form reports such a value at its pointer). Allocates the text.
+    /// <see cref="Check(in JsonElement)"/> for a node tree a host built in code, before the engine reads it, so that no
+    /// later read throws (review 79, review 81). Each object is enumerated once here, inside a catch: an object
+    /// <see cref="JsonNode.Parse(string, JsonNodeOptions?, JsonDocumentOptions)"/> made from text keeps that text until it
+    /// is first enumerated, and then throws when two members have one name (by ordinal comparison, or ignoring case when
+    /// its <see cref="JsonNodeOptions.PropertyNameCaseInsensitive"/> says so) or a name is not Unicode, at whatever level
+    /// and in whatever reader that happens. Such an object is reported at the member at fault, found in the text it still
+    /// writes; one whose fault cannot be found there, at the object. A string read from text is checked as a request's is.
+    /// A tree nested deeper than <paramref name="maxDepth"/> objects and arrays (the outermost is the first) is reported at
+    /// the first one too deep, without reading further. What the tree holds that JSON cannot write (NaN, a CLR value) is
+    /// not this check's: the canonical form reports it at its pointer.
     /// </summary>
-    public static JsonBindingError? Check(JsonNode? node)
+    /// <returns>The first problem, at its pointer relative to <paramref name="node"/>; null when there is none. A tree
+    /// that has none has been enumerated throughout: reading it again throws nothing this check looks for.</returns>
+    public static JsonBindingError? Check(JsonNode? node, int maxDepth)
     {
-        if (node is null)
-        {
-            return null;
-        }
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxDepth);
+        return CheckNode(node, 1, maxDepth);
+    }
 
-        var text = new ArrayBufferWriter<byte>();
+    private static JsonBindingError? CheckNode(JsonNode? node, int level, int maxDepth)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                if (level > maxDepth)
+                {
+                    return TooDeep(maxDepth);
+                }
+
+                if (Enumerate(obj) is { } unreadable)
+                {
+                    return unreadable;
+                }
+
+                foreach (var (name, value) in obj)
+                {
+                    if (CheckNode(value, level + 1, maxDepth) is { } inner)
+                    {
+                        return Under(name, inner);
+                    }
+                }
+
+                return null;
+            case JsonArray array:
+                if (level > maxDepth)
+                {
+                    return TooDeep(maxDepth);
+                }
+
+                for (var i = 0; i < array.Count; i++)
+                {
+                    if (CheckNode(array[i], level + 1, maxDepth) is { } inner)
+                    {
+                        return Under(i.ToString(System.Globalization.CultureInfo.InvariantCulture), inner);
+                    }
+                }
+
+                return null;
+            case JsonValue value when value.TryGetValue(out JsonElement element):
+                return Check(element); // read from text: a string's escapes and bytes (JsonValue holds no element of an object or array)
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
+    /// Enumerates <paramref name="obj"/>, which an object read from text does only once its members are first read; null
+    /// when that succeeds. One that throws is still the text it was read from, and the same checks on that text, under
+    /// the object's own comparison of names, find the member at fault.
+    /// </summary>
+    private static JsonBindingError? Enumerate(JsonObject obj)
+    {
         try
         {
-            using var writer = new Utf8JsonWriter(text);
-            node.WriteTo(writer);
-        }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or NotSupportedException or JsonException)
-        {
+            _ = obj.Count;
             return null;
         }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            var ignoreCase = obj.Options is { PropertyNameCaseInsensitive: true };
+            try
+            {
+                var text = new ArrayBufferWriter<byte>();
+                using (var writer = new Utf8JsonWriter(text))
+                {
+                    obj.WriteTo(writer);
+                }
 
-        using var document = JsonDocument.Parse(text.WrittenMemory);
-        return Check(document.RootElement);
+                using var document = JsonDocument.Parse(text.WrittenMemory, new JsonDocumentOptions { MaxDepth = WrittenDepth });
+                if (Check(document.RootElement, ignoreCase) is { } found)
+                {
+                    return found;
+                }
+            }
+            catch (Exception unreadable) when (unreadable is ArgumentException or InvalidOperationException or JsonException)
+            {
+                // Its text cannot be written either (a name that is not Unicode is unescaped to be written): at the object.
+            }
+
+            return new JsonBindingError(string.Empty, $"The members of this object cannot be read: {ExceptionText.Of(ex)}",
+                "give each member once, under a name that is valid Unicode (a complete surrogate pair such as \\ud83d\\ude00, or the character directly)");
+        }
     }
+
+    /// <summary>How deep the text of an object that failed to enumerate may nest: what a <see cref="Utf8JsonWriter"/> writes by default.</summary>
+    private const int WrittenDepth = 1000;
+
+    private static JsonBindingError TooDeep(int maxDepth) =>
+        new(string.Empty, $"Objects and arrays nest deeper than {maxDepth} levels here: this one is level {maxDepth + 1}.",
+            $"nest objects and arrays at most {maxDepth} levels deep, counting the outermost");
 
     private const string UnicodeHint = "use a complete surrogate pair such as \\ud83d\\ude00, or write the character directly";
 
     private const string Utf8Hint = "send the body as UTF-8 (Content-Type: application/json; charset=utf-8)";
 
-    private static JsonBindingError? CheckObject(in JsonElement value)
+    private static JsonBindingError? CheckObject(in JsonElement value, bool ignoreCase)
     {
         var count = 0;
         var escaped = false;
@@ -117,15 +203,17 @@ public static class StrictJson
             }
         }
 
-        if (Duplicate(value, count, escaped) is { } duplicate)
+        if (Duplicate(value, count, escaped, ignoreCase) is { } duplicate)
         {
-            return new JsonBindingError("/" + JsonPointer.Escape(duplicate), $"Member '{duplicate}' is given more than once.",
-                "give each member once: which of two values would count is not defined");
+            var message = ignoreCase
+                ? $"Member '{duplicate}' is given more than once: the object compares names ignoring case (JsonNodeOptions.PropertyNameCaseInsensitive)."
+                : $"Member '{duplicate}' is given more than once.";
+            return new JsonBindingError("/" + JsonPointer.Escape(duplicate), message, "give each member once: which of two values would count is not defined");
         }
 
         foreach (var member in value.EnumerateObject())
         {
-            if (Check(member.Value) is { } inner)
+            if (Check(member.Value, ignoreCase) is { } inner)
             {
                 return Under(member.Name, inner);
             }
@@ -135,17 +223,17 @@ public static class StrictJson
     }
 
     /// <summary>The name of the first member that repeats an earlier one, or null.</summary>
-    private static string? Duplicate(in JsonElement value, int count, bool escaped)
+    private static string? Duplicate(in JsonElement value, int count, bool escaped, bool ignoreCase)
     {
         if (count < 2)
         {
             return null;
         }
 
-        if (escaped || count > PairwiseLimit)
+        if (escaped || ignoreCase || count > PairwiseLimit)
         {
             // Escapes compare after unescaping ("a" and "a" are one name); a large object would cost pairs squared.
-            var names = new HashSet<string>(count, StringComparer.Ordinal);
+            var names = new HashSet<string>(count, ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
             foreach (var member in value.EnumerateObject())
             {
                 if (!names.Add(member.Name))

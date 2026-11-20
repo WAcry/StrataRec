@@ -197,6 +197,215 @@ public sealed class LogPipelineAccountingTests
     }
 
     /// <summary>
+    /// Review 81: the sink wrote one batch of a write and rejected the other, and the host's rejection callback threw an
+    /// exception whose message threw as well. Describing it threw out of the write, which was then settled as a failure:
+    /// both batches counted as dropped, the one the sink had written among them. The outcome is settled before the
+    /// callback runs, and the exception is described by its type.
+    /// </summary>
+    [Fact]
+    public async Task ARejectionCallbackThatThrows_CannotCountTheBatchesTheSinkWroteAsDropped()
+    {
+        var sink = new ScriptedSink();
+        var logger = new RecordingLoggerFactory(throwOn: null);
+        var called = 0;
+        var pipeline = new LogPipeline(sink, new LogPipelineOptions
+        {
+            Rejected = (_, _) =>
+            {
+                Interlocked.Increment(ref called);
+                throw new UnreadableMessageException();
+            },
+        }, loggerFactory: logger);
+
+        // The first write is held until both batches are queued, so the second write takes them together.
+        Assert.Equal(LogAdmission.Queued, pipeline.Submit(LogPipelineTests.Batch("first", LogDelivery.Durable)));
+        await sink.HeldStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        Assert.Equal(LogAdmission.Queued, pipeline.Submit(LogPipelineTests.Batch("written", LogDelivery.Durable)));
+        Assert.Equal(LogAdmission.Queued, pipeline.Submit(LogPipelineTests.Batch("rejected", LogDelivery.Durable)));
+        sink.Release.SetResult();
+        await pipeline.FlushAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await pipeline.DisposeAsync();
+
+        Assert.Equal(1, Volatile.Read(ref called));
+        Assert.Equal(["first", "written"], sink.Written);
+        var stats = pipeline.Stats();
+        Assert.Contains(stats, s => s is { TapId: "written", Delivered: 1, Dropped: 0 });
+        Assert.Contains(stats, s => s is { TapId: "rejected", Delivered: 0, Dropped: 1 });
+        Assert.Equal((1L, 0L), (pipeline.Rejected, pipeline.DurableQueuedBytes));
+        Assert.Contains(logger.Records, r => r.EventId == 2001 && r.Message.Contains(
+            $"LogRejectedHandlerFailed for 'rejected': 1 time(s)", StringComparison.Ordinal) && r.Message.Contains(
+            $"{typeof(UnreadableMessageException).FullName} (reading its message threw)", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Records, r => r.EventId == 3006);
+    }
+
+    /// <summary>
+    /// Review 81: the logger threw when disposal logged the drain timeout (3003), a sink that did not stop (3004), or the
+    /// last window's summaries (2001): the exception left <see cref="LogPipeline.DisposeAsync"/> and the rest of its
+    /// cleanup was skipped, the summaries among it. The logger loses that record; disposal completes, and writes the
+    /// summaries.
+    /// </summary>
+    [Theory]
+    [InlineData(3003)]
+    [InlineData(3004)]
+    [InlineData(2001)]
+    public async Task ALoggerThatThrowsWhileThePipelineIsDisposed_LosesOnlyThatRecord(int throwOn)
+    {
+        var sink = new ScriptedSink { Hold = throwOn == 3003 ? Holding.UntilCancelled : throwOn == 3004 ? Holding.IgnoringCancellation : Holding.None };
+        var logger = new RecordingLoggerFactory(throwOn);
+        var pipeline = new LogPipeline(sink, new LogPipelineOptions { DrainTimeout = TimeSpan.FromMilliseconds(50) }, loggerFactory: logger);
+
+        // A rejection leaves a summary for the last window.
+        Assert.Equal(LogAdmission.Queued, pipeline.Submit(LogPipelineTests.Batch("rejected", LogDelivery.BestEffort)));
+        await pipeline.FlushAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        if (sink.Hold != Holding.None)
+        {
+            Assert.Equal(LogAdmission.Queued, pipeline.Submit(LogPipelineTests.Batch("first", LogDelivery.Durable)));
+            await sink.HeldStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        }
+
+        try
+        {
+            await pipeline.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            sink.Release.TrySetResult();
+        }
+
+        Assert.Contains(logger.Attempts, id => id == throwOn);
+        if (throwOn != 2001)
+        {
+            Assert.Contains(logger.Records, r => r.EventId == 2001 && r.Message.Contains("LogBatchRejected for 'rejected'", StringComparison.Ordinal));
+        }
+    }
+
+    /// <summary>A sink that rejects the batches of the tap <c>rejected</c>, and can hold the write of the tap <c>first</c>.</summary>
+    private sealed class ScriptedSink : ILogSink
+    {
+        private readonly List<string> _written = new();
+
+        public Holding Hold { get; init; } = Holding.UntilReleased;
+
+        public TaskCompletionSource HeldStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public List<string> Written
+        {
+            get
+            {
+                lock (_written)
+                {
+                    return new List<string>(_written);
+                }
+            }
+        }
+
+        public async ValueTask WriteAsync(IReadOnlyList<LogBatch> batches, CancellationToken cancellationToken)
+        {
+            if (batches.Any(b => b.TapId == "first"))
+            {
+                HeldStarted.TrySetResult();
+                switch (Hold)
+                {
+                    case Holding.UntilReleased:
+                        await Release.Task;
+                        break;
+                    case Holding.UntilCancelled:
+                        await Task.Delay(Timeout.Infinite, cancellationToken);
+                        break;
+                    case Holding.IgnoringCancellation:
+                        await Release.Task;
+                        break;
+                }
+            }
+
+            var rejected = batches.Where(b => b.TapId == "rejected").ToList();
+            lock (_written)
+            {
+                _written.AddRange(batches.Where(b => b.TapId != "rejected").Select(b => b.TapId));
+            }
+
+            if (rejected.Count > 0)
+            {
+                throw new LogBatchRejectedException(rejected);
+            }
+        }
+    }
+
+    private enum Holding
+    {
+        None,
+        UntilReleased,
+        UntilCancelled,
+        IgnoringCancellation,
+    }
+
+    /// <summary>An exception of a host's whose message cannot be read.</summary>
+    private sealed class UnreadableMessageException : Exception
+    {
+        public override string Message => throw new InvalidOperationException("the message cannot be read");
+    }
+
+    /// <summary>Loggers that record what they write, and throw on one event id.</summary>
+    private sealed class RecordingLoggerFactory(int? throwOn) : ILoggerFactory, ILogger
+    {
+        private readonly List<(int EventId, string Message)> _records = new();
+        private readonly List<int> _attempts = new();
+
+        public List<(int EventId, string Message)> Records
+        {
+            get
+            {
+                lock (_records)
+                {
+                    return new List<(int, string)>(_records);
+                }
+            }
+        }
+
+        public List<int> Attempts
+        {
+            get
+            {
+                lock (_records)
+                {
+                    return new List<int>(_attempts);
+                }
+            }
+        }
+
+        public ILogger CreateLogger(string categoryName) => this;
+
+        public void AddProvider(ILoggerProvider provider)
+        {
+        }
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            lock (_records)
+            {
+                _attempts.Add(eventId.Id);
+                if (eventId.Id == throwOn)
+                {
+                    throw new InvalidOperationException("the logger is broken");
+                }
+
+                _records.Add((eventId.Id, formatter(state, exception)));
+            }
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+
+    /// <summary>
     /// The queue-depth measurements of the pipelines it creates. A +1 can wait for a −1 to be recorded first (which only a
     /// batch already visible to its consumer can give), and a −1 can take a while to be recorded.
     /// </summary>

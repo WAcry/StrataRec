@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Bindings;
 using StrataRec.Hosting.Replay;
@@ -53,9 +54,24 @@ public sealed class ConfigOverrideTests
     }
 
     [Theory]
-    [InlineData("""{ "params": { "final_top_k": "three" } }""", "PARAM_BAD_VALUE pipeline:home_feed/params/final_top_k", null)]
+    // What the compile of the merged configuration finds at a value the override sets is the override's, at its pointer
+    // (review 81): it was at the pipeline's pointer, and the request had no ErrorPointer.
+    [InlineData("""{ "params": { "final_top_k": "three" } }""", "PARAM_BAD_VALUE request/config_override/params/final_top_k: Parameter 'final_top_k'",
+        "/config_override/params/final_top_k")]
     [InlineData("""{ "nodez": {} }""", "CONFIG_OVERRIDE_UNKNOWN_SECTION request/config_override/nodez", "/config_override/nodez")]
-    [InlineData("""{ "nodes": { "rank_sort": { "config": { "score_col": "no.such_column" } } } }""", "pipeline:home_feed/nodes/rank_sort", null)]
+    [InlineData("""{ "nodes": { "rank_sort": { "config": { "score_col": "no.such_column" } } } }""",
+        "request/config_override/nodes/rank_sort/config/score_col", "/config_override/nodes/rank_sort/config/score_col")]
+    // Review 81: an integer the canonical form cannot tell from a float passes the override's own check and is refused by
+    // the parameter's binding: at the override, with the binding's code and words, as the same integer written as digits is.
+    [InlineData("""{ "params": { "final_top_k": -90071992547409930E-1 } }""",
+        "PARAM_BAD_VALUE request/config_override/params/final_top_k: Parameter 'final_top_k' must be an integer (int64) that RFC 8785 represents exactly, " +
+        "got the number -90071992547409930E-1, whose canonical form would be -9007199254740992, a different integer; " +
+        "write integers beyond ±2^53 (9007199254740992) as strings", "/config_override/params/final_top_k")]
+    [InlineData("""{ "params": { "recall_quotas": { "popular": -90071992547409930E-1 } } }""",
+        "PARAM_BAD_VALUE request/config_override/params/recall_quotas/popular: Parameter 'recall_quotas.popular' must be an integer (int64) that RFC 8785",
+        "/config_override/params/recall_quotas/popular")]
+    [InlineData("""{ "features": { "item.clicks_7d": { "default": "many" } } }""", "request/config_override/features/item.clicks_7d/default",
+        "/config_override/features/item.clicks_7d/default")]
     // An integer beyond 2^53 RFC 8785 cannot hold exactly: the compiler's hash of the node threw out of the request.
     [InlineData("""{ "nodes": { "coarse_top_k": { "order": 1152921504606846976 } } }""",
         "CONFIG_OVERRIDE_NOT_CANONICAL request/config_override/nodes/coarse_top_k/order", "/config_override/nodes/coarse_top_k/order")]
@@ -79,6 +95,77 @@ public sealed class ConfigOverrideTests
         Assert.Equal(pointer, result.ErrorPointer);
         Assert.Equal(TreatmentArms.Order(), result.Experiments.Assigned.Order());
         Assert.Null(result.Recording); // nothing ran
+    }
+
+    /// <summary>
+    /// Review 81: what a host builds in code, beyond what its text can say. Each was an exception out of the request (or,
+    /// for the integer, an error with no pointer): names that differ only in case under a case-insensitive parse, which the
+    /// check passed and the object threw on when first enumerated; an object repeating a member beside a NaN, which made
+    /// the check give up and the canonical form throw; a tree nested deeper than a reader's default depth, which threw in
+    /// the check. Each is an invalid request at the override's pointer.
+    /// </summary>
+    [Theory]
+    [InlineData("ignore_case", "CONFIG_OVERRIDE_INVALID request/config_override/params/FINAL_TOP_K: Member 'FINAL_TOP_K' is given more than once",
+        "/config_override/params/FINAL_TOP_K")]
+    [InlineData("repeated_beside_nan", "CONFIG_OVERRIDE_INVALID request/config_override/nodes/coarse_top_k: Member 'coarse_top_k' is given more than once",
+        "/config_override/nodes/coarse_top_k")]
+    [InlineData("nan", "CONFIG_OVERRIDE_NOT_CANONICAL request/config_override/params/final_top_k", "/config_override/params/final_top_k")]
+    public async Task AHostBuiltOverride_ThatCannotBeRead_RejectsTheRequestAtItsPointer(string shape, string error, string pointer)
+    {
+        var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
+        var configOverride = shape switch
+        {
+            "ignore_case" => JsonNode.Parse("""{ "params": { "final_top_k": 3, "FINAL_TOP_K": 4 } }""",
+                new JsonNodeOptions { PropertyNameCaseInsensitive = true })!.AsObject(),
+            "repeated_beside_nan" => new JsonObject
+            {
+                ["params"] = new JsonObject { ["final_top_k"] = double.NaN },
+                ["nodes"] = JsonNode.Parse("""{ "coarse_top_k": { "order": 1 }, "coarse_top_k": { "order": 2 } }"""),
+            },
+            _ => new JsonObject { ["params"] = new JsonObject { ["final_top_k"] = double.NaN } },
+        };
+
+        var result = await engine.ExecuteAsync(Request("host", TreatmentArms, configOverride), TestContext.Current.CancellationToken);
+
+        Assert.Equal(RecErrorKind.InvalidRequest, result.ErrorKind);
+        Assert.Contains(error, result.Error, StringComparison.Ordinal);
+        Assert.Equal(pointer, result.ErrorPointer);
+    }
+
+    /// <summary>
+    /// Review 81: an override nested deeper than a reader's default depth (64) threw out of the request where it was
+    /// checked. It may nest <see cref="PlanCompiler.OverrideMaxDepth"/> levels (62), so that every override that runs can be
+    /// recorded and replayed from its file: at the limit it compiles as before (an array is no value of final_top_k), one
+    /// level more is an invalid request at the first level too deep.
+    /// </summary>
+    [Theory]
+    [InlineData(62)]
+    [InlineData(63)]
+    [InlineData(70)] // the review's
+    public async Task AnOverrideNestedPastTheLimit_IsAnInvalidRequest_AtTheFirstLevelTooDeep(int levels)
+    {
+        var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
+        JsonNode value = 3;
+        for (var level = 3; level <= levels; level++) // the override is level 1, params level 2
+        {
+            value = new JsonArray(value);
+        }
+
+        var result = await engine.ExecuteAsync(Request("deep", TreatmentArms, new JsonObject { ["params"] = new JsonObject { ["final_top_k"] = value } }),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(RecErrorKind.InvalidRequest, result.ErrorKind);
+        if (levels <= PlanCompiler.OverrideMaxDepth)
+        {
+            Assert.Contains("PARAM_BAD_VALUE request/config_override/params/final_top_k: ", result.Error, StringComparison.Ordinal);
+            Assert.Equal("/config_override/params/final_top_k", result.ErrorPointer);
+            return;
+        }
+
+        var deepest = "/config_override/params/final_top_k" + string.Concat(Enumerable.Repeat("/0", PlanCompiler.OverrideMaxDepth - 2)); // level 63
+        Assert.Contains($"CONFIG_OVERRIDE_INVALID request{deepest}: Objects and arrays nest deeper than 62 levels here: this one is level 63. " +
+            "(hint: nest objects and arrays at most 62 levels deep, counting the outermost)", result.Error, StringComparison.Ordinal);
+        Assert.Equal(deepest, result.ErrorPointer);
     }
 
     /// <summary>What a configuration nobody released produced never reaches the log sinks; asked for, it is captured.</summary>

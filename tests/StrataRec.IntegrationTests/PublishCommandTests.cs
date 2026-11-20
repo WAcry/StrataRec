@@ -242,6 +242,7 @@ public sealed class PublishCommandTests
         Assert.Contains("error POINTER_UNREADABLE", errors.ToString());
         Assert.Contains("'.preview' cannot name a pointer file: it starts with '.'", errors.ToString());
         Assert.Contains(Hint, errors.ToString());
+        Assert.Contains("hint: pass --seq to build without reading the pointer; pipeline ids and environment names", errors.ToString());
 
         // With --seq the store's pointers are not read, and build writes the manifest; publishing it is refused.
         var file = Path.Combine(store, "preview.json");
@@ -259,9 +260,11 @@ public sealed class PublishCommandTests
         Assert.Contains("error POINTER_NAME_INVALID --env", status.ToString());
         Assert.Contains(Hint, status.ToString());
 
-        // Review 79: earlier versions published under such names; the hint says how to move such a release.
-        Assert.Contains("build and publish it again under a name without the leading '.' and point the hosts at that name " +
-            "(renaming the pointer's directory is not enough: the manifest names its environment)", status.ToString());
+        // Review 79: earlier versions published under such names; the hint says how to move such a release. Review 81: to an
+        // unused name, with the old release file, and compared with what the old pointer serves before the hosts move.
+        Assert.Contains("to move a release an earlier version published under such a name, choose a new environment name nothing uses yet, " +
+            "copy releases/<pipeline>.<old name>.jsonc to releases/<pipeline>.<new name>.jsonc", status.ToString());
+        Assert.Contains("compare its experiments and revocations ('stratarec status') with those the old pointer serves", status.ToString());
     }
 
     private static ReleaseManifest Renumbered(ReleaseManifest manifest, string environment, long seq) => new()
