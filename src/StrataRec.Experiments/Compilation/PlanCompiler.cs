@@ -67,7 +67,8 @@ public static class PlanCompiler
     /// A request's configuration override (design 13.3), applied after the arms, so it wins over them: an RFC 7396 merge
     /// patch of the patchable view (<see cref="PatchableView.Sections"/>), checked as the baseline is, not by the
     /// experiment policy. Its own mistakes are reported at <see cref="OverrideArtifact"/>, <see cref="OverridePointer"/>,
-    /// and so is what the compile finds at a value it sets or within an object it patches (<see cref="InOverride"/>).
+    /// and so is what the compile finds at a value it sets or within an object it patches (<see cref="InOverride"/>). It is
+    /// read once, by its check, and compiled as read (<see cref="PlanCompilation.ConfigOverride"/>).
     /// </param>
     public static PlanCompilation CompileMerged(
         PlanCompileRequest request, IReadOnlyList<string> armIds, PlanEnvironment? environment = null, IPlanBindings? bindings = null,
@@ -109,20 +110,23 @@ public static class PlanCompiler
             view = merged;
         }
 
+        JsonObject? checkedOverride = null;
         if (configOverride is not null)
         {
             // A host may build the override from text that repeats a member (JsonNode.Parse keeps both, and the object throws
-            // when it is first enumerated, also under a case-insensitive comparison), or nest it as deep as it likes: the
-            // override's mistake, at its pointer, found before anything else reads it, not an exception out of the request
-            // (reviews 79 and 81). What passes has been enumerated throughout, so nothing below throws reading it.
-            if (StrictJson.Check(configOverride, OverrideMaxDepth) is { } invalid)
+            // when it is first enumerated, also under a case-insensitive comparison), nest it as deep as it likes, or wrap a
+            // CLR object that writes either (JsonValue.Create): the override's mistake, at its pointer, found before anything
+            // else reads it, not an exception out of the request (reviews 79, 81 and 83). Everything below reads the copy the
+            // check made, never the host's tree, which would write its CLR values again, perhaps differently.
+            if (StrictJson.Check(configOverride, OverrideMaxDepth, out var read) is { } invalid)
             {
                 diagnostics.Error("CONFIG_OVERRIDE_INVALID", OverrideArtifact, OverridePointer + invalid.Pointer, invalid.Message, invalid.Hint);
                 return new PlanCompilation { Diagnostics = diagnostics.Items, Report = UnifiedCompilation.EmptyReport };
             }
 
+            checkedOverride = read!.AsObject();
             var known = true;
-            foreach (var (section, _) in configOverride)
+            foreach (var (section, _) in checkedOverride)
             {
                 if (Array.IndexOf(PatchableView.Sections, section) < 0)
                 {
@@ -137,7 +141,7 @@ public static class PlanCompiler
             // exactly (an integer beyond 2^53) is the override's mistake, at its pointer, not an exception out of the request.
             try
             {
-                JsonCanonicalizer.CanonicalizeToString(configOverride);
+                JsonCanonicalizer.CanonicalizeToString(checkedOverride);
             }
             catch (JsonCanonicalizationException ex)
             {
@@ -146,7 +150,7 @@ public static class PlanCompiler
                 known = false;
             }
 
-            if (!known || view.Apply(configOverride, diagnostics, OverrideArtifact, OverridePointer) is not { } overridden)
+            if (!known || view.Apply(checkedOverride, diagnostics, OverrideArtifact, OverridePointer) is not { } overridden)
             {
                 return new PlanCompilation { Diagnostics = diagnostics.Items, Report = UnifiedCompilation.EmptyReport };
             }
@@ -157,19 +161,20 @@ public static class PlanCompiler
         var plain = UnifiedCompilation.WithoutExperiments(request);
         var start = diagnostics.Count;
         var compilation = new UnifiedCompilation(plain, environment ?? new PlanEnvironment(), view, diagnostics, buildPlan: true, bindings ?? new UnloadedBindings()).Run();
-        if (configOverride is not null && diagnostics.Count > start)
+        if (checkedOverride is not null && diagnostics.Count > start)
         {
             // The compilation's diagnostics are the bag's: moved in place, they are what it reports.
             var pipeline = "pipeline:" + request.Pipeline.PipelineId;
             var catalog = "catalog:" + request.Catalog.CatalogId;
             foreach (var d in diagnostics.RemoveFrom(start))
             {
-                diagnostics.Add((d.Artifact == pipeline || d.Artifact == catalog) && InOverride(configOverride, d.Pointer)
+                diagnostics.Add((d.Artifact == pipeline || d.Artifact == catalog) && InOverride(checkedOverride, d.Pointer)
                     ? d with { Artifact = OverrideArtifact, Pointer = OverridePointer + d.Pointer }
                     : d);
             }
         }
 
+        compilation.ConfigOverride = checkedOverride;
         return compilation;
     }
 
@@ -181,7 +186,10 @@ public static class PlanCompiler
     /// from a float (<c>-90071992547409930E-1</c>) passed the override's own checks and was refused by the parameter's
     /// binding at <c>pipeline:home_feed/params/big</c>, with no pointer for the caller, while the same integer written as
     /// digits was refused at <c>/config_override/params/big</c> (review 81). Such a diagnostic keeps its code, message and
-    /// hint and moves to the override, as an arm's moves to the arm whose patch touches it.
+    /// hint and moves to the override, as an arm's moves to the arm whose patch touches it. Names are compared by ordinal,
+    /// as RFC 7396 merging compares them (<see cref="JsonMergePatch"/>): a <c>FINAL_TOP_K</c> the override sets is another
+    /// parameter than the baseline's <c>final_top_k</c>, whatever the host's object compares (review 83: one parsed with
+    /// <see cref="JsonNodeOptions.PropertyNameCaseInsensitive"/> moved the baseline's error to the override).
     /// </summary>
     private static bool InOverride(JsonObject configOverride, string pointer)
     {
@@ -198,13 +206,29 @@ public static class PlanCompiler
                 return true; // under a value the override sets whole
             }
 
-            if (!patched.TryGetPropertyValue(token, out node))
+            if (!TryGetMember(patched, token, out node))
             {
                 return false;
             }
         }
 
         return true;
+    }
+
+    /// <summary>The member of <paramref name="obj"/> named <paramref name="name"/> by ordinal comparison, as the merge finds it.</summary>
+    private static bool TryGetMember(JsonObject obj, string name, out JsonNode? value)
+    {
+        foreach (var (key, member) in obj)
+        {
+            if (string.Equals(key, name, StringComparison.Ordinal))
+            {
+                value = member;
+                return true;
+            }
+        }
+
+        value = null;
+        return false;
     }
 
     /// <summary>

@@ -1,10 +1,13 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Bindings;
 using StrataRec.Hosting.Replay;
 using StrataRec.Logging;
 using StrataRec.Pipeline.Execution;
+using StrataRec.Pipeline.Operators;
 
 namespace StrataRec.IntegrationTests;
 
@@ -166,6 +169,218 @@ public sealed class ConfigOverrideTests
         Assert.Contains($"CONFIG_OVERRIDE_INVALID request{deepest}: Objects and arrays nest deeper than 62 levels here: this one is level 63. " +
             "(hint: nest objects and arrays at most 62 levels deep, counting the outermost)", result.Error, StringComparison.Ordinal);
         Assert.Equal(deepest, result.ErrorPointer);
+    }
+
+    /// <summary>
+    /// Review 83: a CLR value the host wraps (JsonValue.Create) is JSON only once it is written, and the check passed it as a
+    /// leaf: an object holding one name twice (a property and extension data) threw ArgumentException out of the request
+    /// where the canonical form wrote it (before review 81 it was an invalid request at its member), and a cycle threw
+    /// JsonException there. Each is an invalid request at its pointer.
+    /// </summary>
+    [Theory]
+    [InlineData("repeated", "/config_override/nodes/probe/config/payload/A", "Member 'A' is given more than once.")]
+    [InlineData("cycle", "/config_override/nodes/probe/config/payload", "This value cannot be written as JSON: A possible object cycle was detected.")]
+    public async Task AWrappedClrValue_ThatJsonCannotHold_IsAnInvalidRequest_AtItsPointer(string shape, string pointer, string error)
+    {
+        await using var engine = OpaqueEngine();
+        var cycle = new Cycle();
+        cycle.Next = cycle;
+        var payload = shape == "repeated" ? JsonValue.Create(new RepeatedName()) : JsonValue.Create(cycle);
+
+        var result = await engine.ExecuteAsync(Request("wrapped", null, Probe(payload)), TestContext.Current.CancellationToken);
+
+        Assert.Equal(RecErrorKind.InvalidRequest, result.ErrorKind);
+        Assert.Contains($"CONFIG_OVERRIDE_INVALID request{pointer}: {error}", result.Error, StringComparison.Ordinal);
+        Assert.Equal(pointer, result.ErrorPointer);
+    }
+
+    /// <summary>
+    /// Review 83: a wrapped CLR <c>object[]</c> nested past the limit ran, and writing its recording threw JsonException at
+    /// <c>$.Request.ConfigOverride</c>; the same arrays built of JsonArray were an invalid request. Wrapped or not, an
+    /// override of 62 levels runs, and its recording is written, read and replayed; one of 63 is an invalid request at level 63.
+    /// </summary>
+    [Theory]
+    [InlineData(62, false)]
+    [InlineData(62, true)]
+    [InlineData(63, false)]
+    [InlineData(63, true)]
+    public async Task AWrappedClrArray_NestsNoDeeperThanAJsonArray(int levels, bool wrapped)
+    {
+        await using var engine = OpaqueEngine();
+        const int PayloadLevel = 5; // the override, nodes, probe, config, then the payload
+        object clr = 1;
+        JsonNode explicitNodes = 1;
+        for (var level = PayloadLevel; level <= levels; level++)
+        {
+            clr = new object[] { clr };
+            explicitNodes = new JsonArray(explicitNodes);
+        }
+
+        var result = await engine.ExecuteAsync(Request("deep", null, Probe(wrapped ? JsonValue.Create(clr) : explicitNodes)), TestContext.Current.CancellationToken);
+
+        if (levels > PlanCompiler.OverrideMaxDepth)
+        {
+            var deepest = "/config_override/nodes/probe/config/payload" + string.Concat(Enumerable.Repeat("/0", PlanCompiler.OverrideMaxDepth + 1 - PayloadLevel));
+            Assert.Equal(RecErrorKind.InvalidRequest, result.ErrorKind);
+            Assert.Contains($"CONFIG_OVERRIDE_INVALID request{deepest}: Objects and arrays nest deeper than 62 levels here: this one is level 63.", result.Error,
+                StringComparison.Ordinal);
+            Assert.Equal(deepest, result.ErrorPointer);
+            return;
+        }
+
+        Assert.True(result.Succeeded, result.Error);
+        var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(result.Recording!));
+        var outcome = await engine.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(outcome.Report.Diff.Identical, ReplayTests.Describe(outcome.Report));
+    }
+
+    /// <summary>
+    /// Review 83: every reader of a wrapped CLR value writes it anew, and a value may write something else the second time:
+    /// the canonical form, the merge and the recording each wrote this one, which writes another popular quota each time,
+    /// so the recording held a quota that did not run. It is written by the check, and what it wrote then runs and is
+    /// recorded: the replay is identical, and nothing writes it after the request.
+    /// </summary>
+    [Fact]
+    public async Task AWrappedClrValue_IsWrittenOnce_AndRunsAndIsRecordedAsItWasWritten()
+    {
+        var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
+        var quotas = new CountingQuota();
+
+        var recorded = await engine.ExecuteAsync(Request("counting", null, Quotas(JsonValue.Create(quotas))), TestContext.Current.CancellationToken);
+
+        Assert.True(recorded.Succeeded, recorded.Error);
+        var writes = quotas.Writes;
+        var ran = recorded.Recording!.Runs[0].Params["recall_quotas.popular"].Value!.Value.GetRawText();
+        var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!));
+        Assert.Equal(ran, bundle.Request.ConfigOverride!["params"]!["recall_quotas"]!["popular"]!.ToJsonString());
+        var outcome = await engine.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(outcome.Report.Diff.Identical, ReplayTests.Describe(outcome.Report));
+        Assert.Empty(outcome.Report.Params);
+        Assert.Equal(writes, quotas.Writes);
+    }
+
+    /// <summary>
+    /// Review 83: a wrapped CLR value that writes an object is merged as RFC 7396 merges an object, as the same object
+    /// built of JsonObject is: the merge set it whole, a leaf to it, and the baseline's two_tower quota was dropped
+    /// (RECALL_UNKNOWN_SOURCE). The JSON of a patch, not how the host built it, decides how it merges.
+    /// </summary>
+    [Fact]
+    public async Task AWrappedClrObject_MergesAsTheObjectItWrites()
+    {
+        var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
+
+        var wrapped = await engine.ExecuteAsync(Request("quotas", null, Quotas(JsonValue.Create(new Dictionary<string, int> { ["popular"] = 5 }))),
+            TestContext.Current.CancellationToken);
+        var built = await engine.ExecuteAsync(Request("quotas", null, Quotas(new JsonObject { ["popular"] = 5 })), TestContext.Current.CancellationToken);
+
+        Assert.True(wrapped.Succeeded, wrapped.Error);
+        Assert.True(built.Succeeded, built.Error);
+        foreach (var result in new[] { wrapped, built })
+        {
+            var parameters = result.Recording!.Runs[0].Params;
+            Assert.Equal(("5", "40"), (parameters["recall_quotas.popular"].Value!.Value.GetRawText(), parameters["recall_quotas.two_tower"].Value!.Value.GetRawText()));
+        }
+
+        Assert.Equal(built.Items.Select(i => i.Id), wrapped.Items.Select(i => i.Id));
+    }
+
+    private static JsonObject Quotas(JsonNode? quotas) => new() { ["params"] = new JsonObject { ["recall_quotas"] = quotas } };
+
+    /// <summary>
+    /// Review 83: what the merged compile finds at the baseline's <c>final_top_k</c> (its value, below the minimum the
+    /// override sets) stays at the baseline when the override sets only <c>FINAL_TOP_K</c>, another parameter to the
+    /// merge, which compares names by ordinal. Traced back through a host's object parsed ignoring case, it moved to
+    /// <c>/config_override/params/final_top_k</c>, a member the override does not have. Only the host's options differ.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ADiagnosticAtTheBaseline_StaysThere_HoweverTheHostsObjectComparesNames(bool ignoreCase)
+    {
+        var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
+        var configOverride = JsonNode.Parse("""{ "param_schema": { "final_top_k": { "min": 1000 } }, "params": { "FINAL_TOP_K": 1000 } }""",
+            new JsonNodeOptions { PropertyNameCaseInsensitive = ignoreCase })!.AsObject();
+
+        var result = await engine.ExecuteAsync(Request("case", null, configOverride), TestContext.Current.CancellationToken);
+
+        Assert.Equal(RecErrorKind.InvalidRequest, result.ErrorKind);
+        Assert.Contains("PARAM_OUT_OF_RANGE pipeline:home_feed/params/final_top_k: Parameter 'final_top_k': 10 is below the minimum 1000.", result.Error,
+            StringComparison.Ordinal);
+        Assert.Null(result.ErrorPointer);
+    }
+
+    /// <summary>An engine on home_feed with <c>Opaque@1</c>, a node that takes any JSON as its <c>payload</c> and does nothing.</summary>
+    private static RecEngine OpaqueEngine()
+    {
+        var host = HomeFeedTestHost.Load();
+        var engine = new RecEngine(host.Environment with { Operators = OperatorRegistry.CreateDefault().Add(new OpaqueFactory()) });
+        var load = engine.Load(host.Request);
+        Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
+        return engine;
+    }
+
+    /// <summary>An override adding an <c>Opaque@1</c> node <c>probe</c> with <paramref name="payload"/>, at level 5.</summary>
+    private static JsonObject Probe(JsonNode? payload) => new()
+    {
+        ["nodes"] = new JsonObject
+        {
+            ["probe"] = new JsonObject { ["op"] = "Opaque@1", ["order"] = 1200, ["config"] = new JsonObject { ["payload"] = payload } },
+        },
+    };
+
+    /// <summary>Writes <c>{"A":1,"A":2}</c>: a property, and extension data holding its name.</summary>
+    public sealed class RepeatedName
+    {
+        public int A { get; } = 1;
+
+        [JsonExtensionData]
+        public Dictionary<string, object> More { get; } = new() { ["A"] = 2 };
+    }
+
+    public sealed class Cycle
+    {
+        public Cycle? Next { get; set; }
+    }
+
+    /// <summary>
+    /// Writes the quota map <c>{"two_tower": 40, "popular": n}</c>, n one more on each write: the second write is not the
+    /// first. Both quotas, so that it runs however it is merged.
+    /// </summary>
+    [JsonConverter(typeof(CountingQuotaConverter))]
+    public sealed class CountingQuota
+    {
+        public int Writes { get; set; }
+    }
+
+    public sealed class CountingQuotaConverter : JsonConverter<CountingQuota>
+    {
+        public override CountingQuota Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => throw new NotSupportedException();
+
+        public override void Write(Utf8JsonWriter writer, CountingQuota value, JsonSerializerOptions options)
+        {
+            value.Writes++;
+            writer.WriteStartObject();
+            writer.WriteNumber("two_tower", 40);
+            writer.WriteNumber("popular", 20 + value.Writes);
+            writer.WriteEndObject();
+        }
+    }
+
+    public sealed class OpaqueConfig
+    {
+        public required JsonElement Payload { get; init; }
+    }
+
+    private sealed class OpaqueFactory : IOperatorFactory
+    {
+        public OperatorDescriptor Descriptor { get; } = new("Opaque", 1, Effects.None, typeof(OpaqueConfig), "Takes any JSON as its payload, and does nothing.");
+
+        public Operator? Compile(OperatorCompileContext context) => context.BindConfig<OpaqueConfig>() is null ? null : new Opaque();
+
+        private sealed class Opaque : Operator
+        {
+            public override ValueTask ExecuteAsync(OperatorContext context) => ValueTask.CompletedTask;
+        }
     }
 
     /// <summary>What a configuration nobody released produced never reaches the log sinks; asked for, it is captured.</summary>

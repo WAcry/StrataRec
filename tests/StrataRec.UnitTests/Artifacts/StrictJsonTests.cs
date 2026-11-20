@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using StrataRec.Artifacts.Json;
 
 namespace StrataRec.UnitTests.Artifacts;
@@ -63,15 +64,15 @@ public sealed class StrictJsonTests
             Assert.Single(node); // reads the outer object, not params
         }
 
-        var error = StrictJson.Check(node, Jsonc.MaxDepth);
+        var error = StrictJson.Check(node, Jsonc.MaxDepth, out _);
 
         Assert.Equal(pointer, error?.Pointer);
         Assert.Equal("give each member once: which of two values would count is not defined", error?.Hint);
         var clean = new JsonObject { ["params"] = new JsonObject { ["k"] = 3 } };
-        Assert.Null(StrictJson.Check(clean, Jsonc.MaxDepth));
-        Assert.Null(StrictJson.Check(null, Jsonc.MaxDepth));
+        Assert.Null(StrictJson.Check(clean, Jsonc.MaxDepth, out _));
+        Assert.Null(StrictJson.Check(null, Jsonc.MaxDepth, out _));
         var parsed = JsonNode.Parse("""{ "params": { "k": [1, { "a": 1 }] } }""");
-        Assert.Null(StrictJson.Check(parsed, Jsonc.MaxDepth));
+        Assert.Null(StrictJson.Check(parsed, Jsonc.MaxDepth, out _));
         Assert.Equal("""{"params":{"k":[1,{"a":1}]}}""", JsonCanonicalizer.CanonicalizeToString(parsed));
     }
 
@@ -86,13 +87,13 @@ public sealed class StrictJsonTests
         const string Json = """{ "params": { "final_top_k": 3, "FINAL_TOP_K": 4 } }""";
         var insensitive = JsonNode.Parse(Json, new JsonNodeOptions { PropertyNameCaseInsensitive = true });
 
-        var error = StrictJson.Check(insensitive, Jsonc.MaxDepth);
+        var error = StrictJson.Check(insensitive, Jsonc.MaxDepth, out _);
 
         Assert.NotNull(error);
         Assert.Equal("/params/FINAL_TOP_K", error.Pointer);
         Assert.Equal("Member 'FINAL_TOP_K' is given more than once: the object compares names ignoring case (JsonNodeOptions.PropertyNameCaseInsensitive).",
             error.Message);
-        Assert.Null(StrictJson.Check(JsonNode.Parse(Json), Jsonc.MaxDepth)); // two names, by ordinal comparison
+        Assert.Null(StrictJson.Check(JsonNode.Parse(Json), Jsonc.MaxDepth, out _)); // two names, by ordinal comparison
     }
 
     /// <summary>
@@ -109,8 +110,8 @@ public sealed class StrictJsonTests
         var repeated = JsonNode.Parse("""{ "coarse_top_k": { "order": 1 }, "coarse_top_k": { "order": 2 } }""");
         var tree = nanFirst ? new JsonObject { ["params"] = nan, ["nodes"] = repeated } : new JsonObject { ["nodes"] = repeated, ["params"] = nan };
 
-        Assert.Equal("/nodes/coarse_top_k", StrictJson.Check(tree, Jsonc.MaxDepth)?.Pointer);
-        Assert.Null(StrictJson.Check(new JsonObject { ["params"] = new JsonObject { ["final_top_k"] = double.NaN } }, Jsonc.MaxDepth));
+        Assert.Equal("/nodes/coarse_top_k", StrictJson.Check(tree, Jsonc.MaxDepth, out _)?.Pointer);
+        Assert.Null(StrictJson.Check(new JsonObject { ["params"] = new JsonObject { ["final_top_k"] = double.NaN } }, Jsonc.MaxDepth, out _));
     }
 
     /// <summary>
@@ -120,7 +121,7 @@ public sealed class StrictJsonTests
     [Fact]
     public void ANameThatIsNotUnicode_InANodeTree_IsReportedAtItsObject()
     {
-        var error = StrictJson.Check(JsonNode.Parse("""{ "x": { "ok": 1, "\uD800": 2 } }"""), Jsonc.MaxDepth);
+        var error = StrictJson.Check(JsonNode.Parse("""{ "x": { "ok": 1, "\uD800": 2 } }"""), Jsonc.MaxDepth, out _);
 
         Assert.NotNull(error);
         Assert.Equal("/x", error.Pointer);
@@ -143,7 +144,7 @@ public sealed class StrictJsonTests
     [InlineData(70, 64)] // the review's: 70 levels at /params/final_top_k
     public void ATreeNestedPastTheLimit_IsReportedAtTheFirstLevelTooDeep(int levels, int maxDepth)
     {
-        var error = StrictJson.Check(Nested(levels), maxDepth);
+        var error = StrictJson.Check(Nested(levels), maxDepth, out _);
 
         if (levels <= maxDepth)
         {
@@ -167,6 +168,137 @@ public sealed class StrictJsonTests
         }
 
         return new JsonObject { ["a"] = value };
+    }
+
+    /// <summary>
+    /// Review 83: a CLR value the host wraps (<see cref="JsonValue.Create{T}(T, JsonNodeOptions?)"/>) is JSON only once it
+    /// is written, and the check passed it as a leaf. It is checked as the JSON it writes, at pointers into it: an object
+    /// holding one name twice (a property and extension data) at the second, by ordinal comparison as the merge compares
+    /// names, so two names that differ in case are two.
+    /// </summary>
+    [Fact]
+    public void AWrappedClrObject_IsCheckedAsTheJsonItWrites()
+    {
+        var error = StrictJson.Check(new JsonObject { ["x"] = JsonValue.Create(new RepeatedName()) }, Jsonc.MaxDepth, out var copy);
+
+        Assert.NotNull(error);
+        Assert.Equal(("/x/A", "Member 'A' is given more than once."), (error.Pointer, error.Message));
+        Assert.Null(copy);
+        var cased = new JsonObject { ["x"] = JsonValue.Create(new Dictionary<string, int> { ["a"] = 1, ["A"] = 2 }) };
+        Assert.Null(StrictJson.Check(cased, Jsonc.MaxDepth, out copy));
+        Assert.Equal("""{"x":{"A":2,"a":1}}""", JsonCanonicalizer.CanonicalizeToString(copy));
+    }
+
+    /// <summary>
+    /// Review 83: a wrapped CLR <c>object[]</c> nested past the limit passed. Its depth counts from its place in the tree:
+    /// it is reported where the same arrays built of <see cref="JsonArray"/> are, and as deep as the limit it passes.
+    /// </summary>
+    [Theory]
+    [InlineData(5, 5)]
+    [InlineData(6, 5)]
+    [InlineData(62, 62)]
+    [InlineData(63, 62)]
+    public void AWrappedClrArray_NestedPastTheLimit_IsReportedWhereAJsonArrayIs(int levels, int maxDepth)
+    {
+        object value = 1;
+        for (var i = 1; i < levels; i++)
+        {
+            value = new object[] { value };
+        }
+
+        var error = StrictJson.Check(new JsonObject { ["a"] = JsonValue.Create(value) }, maxDepth, out _);
+
+        Assert.Equal(StrictJson.Check(Nested(levels), maxDepth, out _), error);
+        Assert.Equal(levels > maxDepth, error is not null);
+    }
+
+    /// <summary>
+    /// Review 83: a wrapped CLR value JSON cannot write (a cycle, a NaN inside it) threw out of the request where it was
+    /// first written. It is reported at its pointer, in the words of what threw. A lone NaN is still the canonical form's.
+    /// </summary>
+    [Fact]
+    public void AWrappedClrValueThatCannotBeWritten_IsReportedAtItsPointer()
+    {
+        var cycle = new Cycle();
+        cycle.Next = cycle;
+        var nan = new Dictionary<string, double> { ["k"] = double.NaN };
+
+        foreach (var (value, words) in new (JsonNode?, string)[]
+                 {
+                     (JsonValue.Create(cycle), "A possible object cycle was detected"),
+                     (JsonValue.Create(nan), ".NET number values such as positive and negative infinity cannot be written as valid JSON"),
+                 })
+        {
+            var error = StrictJson.Check(new JsonObject { ["x"] = new JsonArray(1, value) }, Jsonc.MaxDepth, out var copy);
+
+            Assert.NotNull(error);
+            Assert.Equal("/x/1", error.Pointer);
+            Assert.StartsWith("This value cannot be written as JSON: " + words, error.Message, StringComparison.Ordinal);
+            Assert.Equal("give a value System.Text.Json can write (no cycle, no NaN or infinity), or build it from JsonObject and JsonArray", error.Hint);
+            Assert.Null(copy);
+        }
+
+        Assert.Null(StrictJson.Check(new JsonObject { ["x"] = double.NaN }, Jsonc.MaxDepth, out var lone));
+        Assert.Throws<JsonCanonicalizationException>(() => JsonCanonicalizer.CanonicalizeToString(lone));
+    }
+
+    /// <summary>
+    /// Review 83: what is read after the check is what the check read. The copy holds what a wrapped CLR value wrote when
+    /// it was checked, read back as JSON, however it writes later; it shares no node with the host's tree, and its objects
+    /// compare names by ordinal, whatever the host's compared.
+    /// </summary>
+    [Fact]
+    public void TheCopy_IsTheTreeAsChecked()
+    {
+        var counting = new Counting();
+        var tree = JsonNode.Parse("""{ "params": { "k": 1 } }""", new JsonNodeOptions { PropertyNameCaseInsensitive = true })!.AsObject();
+        tree["params"]!["n"] = JsonValue.Create(counting);
+
+        Assert.Null(StrictJson.Check(tree, Jsonc.MaxDepth, out var copy));
+
+        var writes = counting.Writes;
+        var checkedText = "{\"params\":{\"k\":1,\"n\":{\"writes\":" + writes + "}}}";
+        Assert.Equal(checkedText, JsonCanonicalizer.CanonicalizeToString(copy));
+        Assert.Equal(checkedText, JsonCanonicalizer.CanonicalizeToString(copy!.DeepClone()));
+        Assert.Equal(writes, counting.Writes); // the copy never writes the host's value again
+        Assert.IsType<JsonObject>(copy["params"]!["n"]);
+        Assert.NotSame(tree["params"], copy["params"]);
+        Assert.False(copy["params"]!.AsObject().ContainsKey("K"));
+        Assert.True(tree["params"]!.AsObject().ContainsKey("K"));
+    }
+
+    /// <summary>Writes <c>{"A":1,"A":2}</c>: a property, and extension data holding its name.</summary>
+    public sealed class RepeatedName
+    {
+        public int A { get; } = 1;
+
+        [JsonExtensionData]
+        public Dictionary<string, object> More { get; } = new() { ["A"] = 2 };
+    }
+
+    public sealed class Cycle
+    {
+        public Cycle? Next { get; set; }
+    }
+
+    /// <summary>Writes <c>{"writes":n}</c>, n counting its writes: what it writes the second time is not what it wrote the first.</summary>
+    [JsonConverter(typeof(CountingConverter))]
+    public sealed class Counting
+    {
+        public int Writes { get; set; }
+    }
+
+    public sealed class CountingConverter : JsonConverter<Counting>
+    {
+        public override Counting Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => throw new NotSupportedException();
+
+        public override void Write(Utf8JsonWriter writer, Counting value, JsonSerializerOptions options)
+        {
+            value.Writes++;
+            writer.WriteStartObject();
+            writer.WriteNumber("writes", value.Writes);
+            writer.WriteEndObject();
+        }
     }
 
     [Fact]

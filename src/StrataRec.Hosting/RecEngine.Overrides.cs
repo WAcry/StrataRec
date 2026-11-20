@@ -62,6 +62,7 @@ public sealed partial class RecEngine
                 Bindings = lease,
                 Layout = new PlanLayout(plan),
                 Source = served.Source,
+                ConfigOverride = compilation.ConfigOverride,
             };
             handedOut = lease.TryEnter(); // a lease nothing has retired: always entered
             return (pipeline, null, RecErrorKind.None, null);

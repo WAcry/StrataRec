@@ -481,7 +481,9 @@ public sealed class ReleaseHostTests : IDisposable
     /// the manifest source can be reached: renaming the directory is not enough, as the manifest names its environment.
     /// Review 81: followed as it was, the hint could change the experiments served (a build under a name with no release
     /// file of the old one's, or one that never saw the old name's stops); it says to carry the release file over to an
-    /// unused name and to compare what the new manifest releases and revokes before the hosts move.
+    /// unused name and to compare what the new manifest releases and revokes before the hosts move. Review 83: the old
+    /// version's status it named for that lists nothing under such a name; it names the files that hold the old release's
+    /// revocations, to leave them out of the new release file.
     /// </summary>
     [Fact]
     public async Task AHostOnAnEnvironmentStartingWithADot_IsToldHowToMoveTheRelease()
@@ -498,7 +500,8 @@ public sealed class ReleaseHostTests : IDisposable
         Assert.Contains("choose a new environment name nothing uses yet", error.Hint);
         Assert.Contains("copy releases/<pipeline>.<old name>.jsonc to releases/<pipeline>.<new name>.jsonc with its \"environment\" set to the new name " +
             "and bindings for that environment", error.Hint);
-        Assert.Contains("before pointing the hosts at it compare its experiments and revocations ('stratarec status') with those the old pointer serves", error.Hint);
+        Assert.Contains("leave out of it each experiment the old release revoked (in the store, pointers/<old name>/<pipeline>.json names the manifest " +
+            "sha256:<hex>, blobs/sha256/<hex> holds it", error.Hint);
     }
 
     /// <summary>

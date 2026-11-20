@@ -70,22 +70,48 @@ public static class StrictJson
     /// and in whatever reader that happens. Such an object is reported at the member at fault, found in the text it still
     /// writes; one whose fault cannot be found there, at the object. A string read from text is checked as a request's is.
     /// A tree nested deeper than <paramref name="maxDepth"/> objects and arrays (the outermost is the first) is reported at
-    /// the first one too deep, without reading further. What the tree holds that JSON cannot write (NaN, a CLR value) is
-    /// not this check's: the canonical form reports it at its pointer.
+    /// the first one too deep, without reading further.
     /// </summary>
-    /// <returns>The first problem, at its pointer relative to <paramref name="node"/>; null when there is none. A tree
-    /// that has none has been enumerated throughout: reading it again throws nothing this check looks for.</returns>
-    public static JsonBindingError? Check(JsonNode? node, int maxDepth)
+    /// <remarks>
+    /// <para>A CLR value the host wrapped (<see cref="JsonValue.Create{T}(T, JsonNodeOptions?)"/>) is JSON only once it is
+    /// written, and it is written anew by every reader: a CLR object that writes an object or an array (a property and
+    /// <see cref="System.Text.Json.Serialization.JsonExtensionDataAttribute"/> holding one name twice, an
+    /// <c>object[]</c> nested deeper than the limit) passed as a leaf, and threw where the canonical form or a recording
+    /// wrote it (review 83). So such a value is written once, here, and read back from that text, with names compared by
+    /// ordinal (as RFC 7396 merging compares them, <see cref="JsonMergePatch"/>): its objects and arrays get the same
+    /// checks, its depth counted from its place in the tree, at pointers into it. One whose writing throws (a cycle, a
+    /// NaN inside it) is reported at its pointer, in the words of what threw. A CLR primitive (a number, string or boolean
+    /// System.Text.Json writes itself) is kept as it is: JSON cannot write a NaN, nor a string that is not Unicode (the
+    /// writer puts U+FFFD in its place), and the canonical form reports both at their pointers.</para>
+    /// <para>What the check read is what the caller must read from then on, <paramref name="copy"/>: reading the host's
+    /// tree again would write its CLR values again, and a value may write something else the second time.</para>
+    /// </remarks>
+    /// <param name="copy">When there is no problem, a copy of the tree as checked, which shares no node with it: each
+    /// wrapped CLR value but a primitive is the JSON it wrote here, read back, and every object compares names by
+    /// ordinal. Null when there is a problem (or <paramref name="node"/> is null).</param>
+    /// <returns>The first problem, at its pointer relative to <paramref name="node"/>; null when there is none. The copy
+    /// of a tree that has none reads without throwing anything this check looks for.</returns>
+    public static JsonBindingError? Check(JsonNode? node, int maxDepth, out JsonNode? copy)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxDepth);
-        return CheckNode(node, 1, maxDepth);
+        var error = CheckNode(node, 1, maxDepth, out copy);
+        if (error is not null)
+        {
+            copy = null;
+        }
+
+        return error;
     }
 
-    private static JsonBindingError? CheckNode(JsonNode? node, int level, int maxDepth)
+    private static JsonBindingError? CheckNode(JsonNode? node, int level, int maxDepth, out JsonNode? copy)
     {
+        copy = null;
         switch (node)
         {
+            case null:
+                return null;
             case JsonObject obj:
+            {
                 if (level > maxDepth)
                 {
                     return TooDeep(maxDepth);
@@ -96,35 +122,99 @@ public static class StrictJson
                     return unreadable;
                 }
 
+                var copied = new JsonObject();
                 foreach (var (name, value) in obj)
                 {
-                    if (CheckNode(value, level + 1, maxDepth) is { } inner)
+                    if (CheckNode(value, level + 1, maxDepth, out var member) is { } inner)
                     {
                         return Under(name, inner);
                     }
+
+                    copied.Add(name, member); // unique by ordinal: the object's own comparison found none twice
                 }
 
+                copy = copied;
                 return null;
+            }
             case JsonArray array:
+            {
                 if (level > maxDepth)
                 {
                     return TooDeep(maxDepth);
                 }
 
+                var copied = new JsonArray();
                 for (var i = 0; i < array.Count; i++)
                 {
-                    if (CheckNode(array[i], level + 1, maxDepth) is { } inner)
+                    if (CheckNode(array[i], level + 1, maxDepth, out var item) is { } inner)
                     {
                         return Under(i.ToString(System.Globalization.CultureInfo.InvariantCulture), inner);
                     }
+
+                    copied.Add(item);
                 }
 
+                copy = copied;
                 return null;
+            }
             case JsonValue value when value.TryGetValue(out JsonElement element):
-                return Check(element); // read from text: a string's escapes and bytes (JsonValue holds no element of an object or array)
-            default:
+                // Read from text: a string's escapes and bytes (JsonValue holds no element of an object or array).
+                if (Check(element) is { } invalid)
+                {
+                    return invalid;
+                }
+
+                copy = value.DeepClone();
                 return null;
+            case JsonValue value:
+                return CheckClrValue(value, level, maxDepth, out copy);
+            default:
+                throw new ArgumentException($"Unsupported node type {node.GetType().Name}.", nameof(node));
         }
+    }
+
+    /// <summary>
+    /// A value the host gave as a CLR object (see the remarks of <see cref="Check(JsonNode?, int, out JsonNode?)"/>). Its
+    /// kind is known without writing it for a CLR primitive, and written for any other value (once, then kept). An object
+    /// or an array is written again here and read back: that text is what is checked and copied. Anything else is copied
+    /// with <see cref="JsonNode.DeepClone"/>, which keeps a CLR primitive as it is and writes any other value, once.
+    /// </summary>
+    private static JsonBindingError? CheckClrValue(JsonValue value, int level, int maxDepth, out JsonNode? copy)
+    {
+        copy = null;
+        JsonNode? read;
+        try
+        {
+            read = value.GetValueKind() is JsonValueKind.Object or JsonValueKind.Array
+                ? JsonNode.Parse(Write(value).Span, documentOptions: new JsonDocumentOptions { MaxDepth = WrittenDepth }) // names by ordinal
+                : value.DeepClone();
+        }
+        catch (Exception ex)
+        {
+            // The host's own code (a converter, a getter) or what it holds: whatever it throws is the value's mistake.
+            return new JsonBindingError(string.Empty, $"This value cannot be written as JSON: {ExceptionText.Of(ex)}",
+                "give a value System.Text.Json can write (no cycle, no NaN or infinity), or build it from JsonObject and JsonArray");
+        }
+
+        if (read is JsonValue leaf && !leaf.TryGetValue(out JsonElement _))
+        {
+            copy = leaf; // a CLR primitive, as it was (the canonical form reports a NaN or a string that is not Unicode)
+            return null;
+        }
+
+        return CheckNode(read, level, maxDepth, out copy); // read from the text it wrote: no CLR value is left in it
+    }
+
+    /// <summary>The text <paramref name="node"/> writes: at most <see cref="WrittenDepth"/> levels, which a <see cref="Utf8JsonWriter"/> writes by default.</summary>
+    private static ReadOnlyMemory<byte> Write(JsonNode node)
+    {
+        var text = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(text))
+        {
+            node.WriteTo(writer);
+        }
+
+        return text.WrittenMemory;
     }
 
     /// <summary>
@@ -144,13 +234,7 @@ public static class StrictJson
             var ignoreCase = obj.Options is { PropertyNameCaseInsensitive: true };
             try
             {
-                var text = new ArrayBufferWriter<byte>();
-                using (var writer = new Utf8JsonWriter(text))
-                {
-                    obj.WriteTo(writer);
-                }
-
-                using var document = JsonDocument.Parse(text.WrittenMemory, new JsonDocumentOptions { MaxDepth = WrittenDepth });
+                using var document = JsonDocument.Parse(Write(obj), new JsonDocumentOptions { MaxDepth = WrittenDepth });
                 if (Check(document.RootElement, ignoreCase) is { } found)
                 {
                     return found;
@@ -166,7 +250,7 @@ public static class StrictJson
         }
     }
 
-    /// <summary>How deep the text of an object that failed to enumerate may nest: what a <see cref="Utf8JsonWriter"/> writes by default.</summary>
+    /// <summary>How deep the text written here (<see cref="Write"/>) may nest when it is read back: what a <see cref="Utf8JsonWriter"/> writes by default.</summary>
     private const int WrittenDepth = 1000;
 
     private static JsonBindingError TooDeep(int maxDepth) =>

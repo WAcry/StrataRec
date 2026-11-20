@@ -140,7 +140,9 @@ public sealed class DebugOptions
     /// configuration nobody released produced must not reach training data under the served manifest's id.
     /// Its record lists the arms applied and no triggered experiment, since the plan it ran has none. A recording carries
     /// the override, and replaying it applies the override again. The fallback pipeline, when it serves, runs as
-    /// configured.
+    /// configured. The engine reads the object once, when it checks it: a CLR value wrapped in it
+    /// (<see cref="JsonValue.Create{T}(T, JsonNodeOptions?)"/>) is written then, and the JSON it wrote is what is compiled
+    /// and recorded; what the host does with the object afterwards changes neither.
     /// </remarks>
     public JsonObject? ConfigOverride { get; init; }
 
@@ -303,6 +305,12 @@ public sealed class LoadedPipeline
 
     /// <summary>What the plan was compiled from, copied at the load: a request's configuration override compiles it again (<see cref="DebugOptions.ConfigOverride"/>).</summary>
     internal PlanSource Source { get; init; } = null!;
+
+    /// <summary>
+    /// The configuration override the plan of a request was compiled with, as the compile read it
+    /// (<see cref="PlanCompilation.ConfigOverride"/>), which the request's recording holds; null for a plan the engine serves.
+    /// </summary>
+    internal JsonObject? ConfigOverride { get; init; }
 
     /// <summary>Request-level metric tags of the plan (design 13.1), built once per loaded plan.</summary>
     internal RequestTelemetry Telemetry =>
@@ -805,7 +813,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             {
                 degraded = executed.Degraded;
                 result = ToResult(request, running, executed, ignored, request.PipelineId, merged);
-                return result = record ? Recorded(request, pipeline, seed!.Value, timeMs!.Value, result, executed, null) : result;
+                return result = record ? Recorded(request, pipeline, seed!.Value, timeMs!.Value, result, executed, null, overridden?.ConfigOverride) : result;
             }
 
             // The pipeline failed: serve its fallback pipeline, without experiments, within what is left (design 5.6), with
@@ -815,13 +823,13 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                 cancellationToken).ConfigureAwait(false);
             var converted = ToResult(request, fallback, served, ignored, fallbackId);
             result = Combine(request, executed, converted, served, ignored, fallbackId, merged);
-            return result = record ? Recorded(request, pipeline, seed!.Value, timeMs!.Value, result, executed, served) : result;
+            return result = record ? Recorded(request, pipeline, seed!.Value, timeMs!.Value, result, executed, served, overridden?.ConfigOverride) : result;
         }
         catch (Exception) when (runs is { Runs.Count: > 0 } && pipeline is not null)
         {
             // Aborted while (or after) a pipeline ran: the caller gets the exception, the recording callback the bundle of
             // what ran up to the abort. Nothing here waits for calls still in flight.
-            Deliver(request, AbortedBundle(request, pipeline, seed!.Value, timeMs!.Value, runs.Runs, ignored, merged));
+            Deliver(request, AbortedBundle(request, pipeline, seed!.Value, timeMs!.Value, runs.Runs, ignored, merged, overridden?.ConfigOverride));
             throw;
         }
         finally

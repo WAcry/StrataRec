@@ -261,10 +261,14 @@ public sealed class PublishCommandTests
         Assert.Contains(Hint, status.ToString());
 
         // Review 79: earlier versions published under such names; the hint says how to move such a release. Review 81: to an
-        // unused name, with the old release file, and compared with what the old pointer serves before the hosts move.
+        // unused name, with the old release file. Review 83: leaving out what the old release revoked, read from the files
+        // that hold it, since no version's status lists a pointer under such a name.
         Assert.Contains("to move a release an earlier version published under such a name, choose a new environment name nothing uses yet, " +
             "copy releases/<pipeline>.<old name>.jsonc to releases/<pipeline>.<new name>.jsonc", status.ToString());
-        Assert.Contains("compare its experiments and revocations ('stratarec status') with those the old pointer serves", status.ToString());
+        Assert.Contains("leave out of it each experiment the old release revoked (in the store, pointers/<old name>/<pipeline>.json names the manifest " +
+            "sha256:<hex>, blobs/sha256/<hex> holds it, and those experiments are under its \"revoked\" and not under its \"experiments\"), " +
+            "then build and publish it and point the hosts at the new name", status.ToString());
+        Assert.DoesNotContain("'stratarec status'", status.ToString());
     }
 
     private static ReleaseManifest Renumbered(ReleaseManifest manifest, string environment, long seq) => new()

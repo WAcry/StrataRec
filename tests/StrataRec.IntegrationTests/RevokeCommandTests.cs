@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Artifacts.Storage;
 using StrataRec.CommandLine;
@@ -164,6 +165,52 @@ public sealed class RevokeCommandTests
         File.WriteAllText(releaseFile, withIt);
         (code, errors) = await Build(root, store);
         Assert.True(code == 0, errors);
+    }
+
+    /// <summary>
+    /// Review 83: the move <see cref="FileSystemManifestSource.NameHint"/> describes for a release an earlier version
+    /// published under a name starting with '.', step by step (the old release is under <c>local</c> here: the files are
+    /// laid out alike, and no version's status lists one under such a name, so the hint names them). The pointer names the
+    /// manifest, the store holds it under its digest as JSON, and what it revoked is under <c>revoked</c> and not under
+    /// <c>experiments</c>; left out of the release file copied to the new name, it stays out of what that name publishes,
+    /// which releases what the old pointer did. Built from the copy as it was, the revoked experiment came back (review 81).
+    /// </summary>
+    [Fact]
+    public async Task TheMoveTheNameHintDescribes_KeepsWhatTheOldReleaseRevokedOut()
+    {
+        var root = ManifestStores.Workspace();
+        var store = ManifestStores.NewStore();
+        await BuildAndPublishAsync(root, store);
+        Assert.Equal(0, (await Revoke(store, "exp_quality_weight")).Code);
+
+        // In the store, pointers/<old name>/<pipeline>.json names the manifest sha256:<hex>, blobs/sha256/<hex> holds it.
+        var id = JsonNode.Parse(File.ReadAllText(Path.Combine(store, "pointers", "local", "home_feed.json")))!["manifest"]!.GetValue<string>();
+        var old = JsonNode.Parse(File.ReadAllText(Path.Combine(store, "blobs", "sha256", id["sha256:".Length..])))!;
+        var released = old["experiments"]!.AsObject();
+        var revoked = old["revoked"]!.AsObject().Select(m => m.Key).Where(name => !released.ContainsKey(name)).ToList();
+        Assert.Equal(["exp_quality_weight"], revoked);
+
+        // The release file, copied to the new name with its environment and bindings for it, without those experiments.
+        var release = (JsonObject)Jsonc.Parse(File.ReadAllBytes(Path.Combine(root, "releases", "home_feed.local.jsonc")), "release")!;
+        release["environment"] = "preview";
+        release["bindings"] = "preview";
+        foreach (var name in revoked)
+        {
+            Assert.True(release["experiments"]!.AsObject().Remove(name));
+        }
+
+        File.WriteAllText(Path.Combine(root, "releases", "home_feed.preview.jsonc"), release.ToJsonString());
+        File.WriteAllText(Path.Combine(root, "bindings", "preview.jsonc"), File.ReadAllText(Path.Combine(root, "bindings", "local.jsonc"))
+            .Replace("\"environment\":\"local\"", "\"environment\":\"preview\"", StringComparison.Ordinal));
+        var (code, errors) = await Build(root, store, "-e", "preview");
+        Assert.True(code == 0, errors);
+        var manifest = errors.Split(' ', '\n').First(word => word.StartsWith("sha256:", StringComparison.Ordinal));
+        Assert.Equal(0, await StrataRecCommandLine.InvokeAsync(["publish", "-s", store, manifest], Tool.Environment, TextWriter.Null, TextWriter.Null,
+            TestContext.Current.CancellationToken));
+
+        var moved = await ReadAsync(new FileSystemArtifactStore(store),
+            (await new FileSystemManifestSource(store).GetManifestIdAsync("home_feed", "preview", TestContext.Current.CancellationToken))!);
+        Assert.Equal(released.Select(m => m.Key).Order(StringComparer.Ordinal), moved.Experiments.Keys.Order(StringComparer.Ordinal));
     }
 
     /// <summary>

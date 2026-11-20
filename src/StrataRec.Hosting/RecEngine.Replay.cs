@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
@@ -500,8 +501,10 @@ public sealed partial class RecEngine
     };
 
     /// <summary>The result of a recorded request with its bundle, which also goes to <see cref="DebugOptions.OnRecording"/>.</summary>
+    /// <param name="configOverride">The request's configuration override as its plan was compiled with it (<see cref="LoadedPipeline.ConfigOverride"/>); null without one.</param>
     private RecResult Recorded(
-        RecRequest request, LoadedPipeline pipeline, long seed, long timeMs, RecResult result, PipelineResult executed, PipelineResult? served)
+        RecRequest request, LoadedPipeline pipeline, long seed, long timeMs, RecResult result, PipelineResult executed, PipelineResult? served,
+        JsonObject? configOverride)
     {
         if (executed.Recording is not { } primary)
         {
@@ -520,7 +523,7 @@ public sealed partial class RecEngine
         var bundle = new ReplayBundle
         {
             Format = ReplayBundle.CurrentFormat,
-            Request = RequestRecord(request, pipeline, seed, timeMs, result.Experiments.Assigned, result.Experiments.Ignored),
+            Request = RequestRecord(request, pipeline, seed, timeMs, result.Experiments.Assigned, result.Experiments.Ignored, configOverride),
             Manifest = ManifestRecord(pipeline),
             Runs = runs,
             Result = new ReplayResultRecord
@@ -545,9 +548,10 @@ public sealed partial class RecEngine
     /// snapshot taken at the abort) and an aborted result.
     /// </summary>
     /// <param name="merged">The arms a configuration override's plan merged in; its run records none (see <see cref="ToResult"/>).</param>
+    /// <param name="configOverride">That override as the plan was compiled with it (<see cref="LoadedPipeline.ConfigOverride"/>); null without one.</param>
     private ReplayBundle AbortedBundle(
         RecRequest request, LoadedPipeline pipeline, long seed, long timeMs, List<ReplayRunRecord> runs, IReadOnlyList<IgnoredArm> ignored,
-        IReadOnlyList<string>? merged)
+        IReadOnlyList<string>? merged, JsonObject? configOverride)
     {
         var primary = runs[0];
         var last = runs[^1];
@@ -568,7 +572,7 @@ public sealed partial class RecEngine
         return new ReplayBundle
         {
             Format = ReplayBundle.CurrentFormat,
-            Request = RequestRecord(request, pipeline, seed, timeMs, merged ?? primary.Arms, ignored),
+            Request = RequestRecord(request, pipeline, seed, timeMs, merged ?? primary.Arms, ignored, configOverride),
             Manifest = ManifestRecord(pipeline),
             Runs = new List<ReplayRunRecord>(runs),
             Result = new ReplayResultRecord
@@ -584,8 +588,14 @@ public sealed partial class RecEngine
         };
     }
 
+    /// <param name="configOverride">
+    /// The request's configuration override as its plan was compiled with it, not the host's tree (<see cref="DebugOptions.ConfigOverride"/>):
+    /// copying that would write the CLR values the host wrapped once more, and a value that writes something else the
+    /// second time would be recorded as what did not run (review 83).
+    /// </param>
     private ReplayRequestRecord RequestRecord(
-        RecRequest request, LoadedPipeline pipeline, long seed, long timeMs, IReadOnlyList<string> arms, IReadOnlyList<IgnoredArm> ignored)
+        RecRequest request, LoadedPipeline pipeline, long seed, long timeMs, IReadOnlyList<string> arms, IReadOnlyList<IgnoredArm> ignored,
+        JsonObject? configOverride)
     {
         var inputs = new Dictionary<string, ReplayTypedValue>(StringComparer.Ordinal);
         foreach (var (name, value) in request.Inputs)
@@ -617,7 +627,7 @@ public sealed partial class RecEngine
                 Arms = new List<string>(arms),
                 Ignored = IgnoredRecords(ignored),
             },
-            ConfigOverride = request.Debug?.ConfigOverride?.DeepClone().AsObject(), // the caller's own may change after
+            ConfigOverride = configOverride?.DeepClone().AsObject(), // each bundle its own: the caller may change it
         };
     }
 

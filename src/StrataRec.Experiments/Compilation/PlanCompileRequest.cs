@@ -1,3 +1,5 @@
+using System.Text.Json.Nodes;
+using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Pipeline.Planning;
 
@@ -82,6 +84,15 @@ public sealed class PlanCompilation
     /// tells the baseline's from each experiment's.
     /// </summary>
     public IReadOnlyList<string> Requires { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// The configuration override <see cref="PlanCompiler.CompileMerged"/> compiled, as its check read it
+    /// (<see cref="StrictJson.Check(JsonNode?, int, out JsonNode?)"/>): a copy of the host's tree in which every CLR value
+    /// it wrapped but a primitive is the JSON it wrote once. Whoever keeps the override for this
+    /// compile (a recording of the request) keeps this one: the host's tree would write those values again, perhaps
+    /// differently (review 83). Null without an override, or when the override failed its check.
+    /// </summary>
+    public JsonObject? ConfigOverride { get; internal set; }
 
     public bool Succeeded => Plan is not null;
 
