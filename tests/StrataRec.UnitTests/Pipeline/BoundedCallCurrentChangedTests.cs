@@ -48,7 +48,7 @@ public sealed class BoundedCallCurrentChangedTests
             Activity.CurrentChanged -= Changed;
         }
 
-        Assert.Equal(1, thrown);
+        Assert.Equal(pending ? 2 : 1, thrown); // a pending call's span is also stopped in the call site's context (review 87)
         Assert.Equal((IoOutcome.Ok, 42), (result.Outcome, result.Value));
         Assert.True(Assert.Single(flow.Named("recall " + target)).IsStopped);
         Assert.Equal(new[] { "sent", "ended" }, client.Observed);

@@ -88,7 +88,8 @@ public sealed class PlanCompilation
     /// <summary>
     /// The configuration override <see cref="PlanCompiler.CompileMerged"/> compiled, as its check read it
     /// (<see cref="StrictJson.Check(JsonNode?, int, out JsonNode?)"/>): a copy of the host's tree in which every CLR value
-    /// it wrapped but a primitive is the JSON it wrote once. Whoever keeps the override for this
+    /// it wrapped is the JSON it wrote once (but a number or string the canonical form reports), and a wrapped
+    /// <see cref="System.Text.Json.JsonElement"/> the JSON of the element. Whoever keeps the override for this
     /// compile (a recording of the request) keeps this one: the host's tree would write those values again, perhaps
     /// differently (review 83). Null without an override, or when the override failed its check.
     /// </summary>

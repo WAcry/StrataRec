@@ -159,14 +159,7 @@ public static class StrictJson
                 return null;
             }
             case JsonValue value when value.TryGetValue(out JsonElement element):
-                // Read from text: a string's escapes and bytes (JsonValue holds no element of an object or array).
-                if (Check(element) is { } invalid)
-                {
-                    return invalid;
-                }
-
-                copy = value.DeepClone();
-                return null;
+                return CheckElement(element, level, maxDepth, out copy);
             case JsonValue value:
                 return CheckClrValue(value, level, maxDepth, out copy);
             default:
@@ -212,6 +205,47 @@ public static class StrictJson
         }
 
         return CheckNode(read, level, maxDepth, out copy); // read from the text it wrote: no CLR value is left in it
+    }
+
+    /// <summary>
+    /// A value holding a <see cref="JsonElement"/>: the JSON the element is, read from the element and copied from it, never
+    /// written by the value, whose converter may be the host's (review 87: one given a <c>JsonTypeInfo&lt;JsonElement&gt;</c>
+    /// was checked as the element and copied by <see cref="JsonNode.DeepClone"/>, which ran the converter outside the
+    /// check: what it wrote was used unchecked, and what it threw went out of the request). A string's escapes and bytes
+    /// are checked as text; an object or array (which only such a value holds) is read back from its text and checked as
+    /// one, its depth counted from its place in the tree.
+    /// </summary>
+    private static JsonBindingError? CheckElement(JsonElement element, int level, int maxDepth, out JsonNode? copy)
+    {
+        copy = null;
+        if (element.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+        {
+            if (level > maxDepth)
+            {
+                return TooDeep(maxDepth);
+            }
+
+            JsonNode? read;
+            try
+            {
+                read = JsonNode.Parse(element.GetRawText(), documentOptions: new JsonDocumentOptions { MaxDepth = WrittenDepth });
+            }
+            catch (JsonException ex)
+            {
+                return new JsonBindingError(string.Empty, $"This value cannot be read as JSON: {ExceptionText.Of(ex)}",
+                    "build it from JsonObject and JsonArray");
+            }
+
+            return CheckNode(read, level, maxDepth, out copy);
+        }
+
+        if (Check(element) is { } invalid)
+        {
+            return invalid;
+        }
+
+        copy = JsonValue.Create(element.Clone());
+        return null;
     }
 
     /// <summary>Whether <paramref name="text"/> has no unpaired UTF-16 surrogate.</summary>

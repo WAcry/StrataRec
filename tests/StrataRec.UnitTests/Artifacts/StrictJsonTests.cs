@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using StrataRec.Artifacts.Json;
 
 namespace StrataRec.UnitTests.Artifacts;
@@ -270,6 +271,55 @@ public sealed class StrictJsonTests
         var refused = Assert.Throws<JsonCanonicalizationException>(() => JsonCanonicalizer.CanonicalizeToString(copy));
         Assert.Equal("/x/1", refused.Pointer.ToString());
         Assert.Equal("NaN and Infinity are not JSON numbers (RFC 8785 section 3.2.2.3).", refused.Reason);
+    }
+
+    /// <summary>
+    /// Review 87: a value holding a <see cref="JsonElement"/> is the JSON of the element, whatever converter it was given.
+    /// It was checked as the element and copied by DeepClone, which ran a converter of the host's outside the check: what
+    /// that wrote was used unchecked (a tree too deep to record), and what it threw went out of the request. An object or
+    /// array element gets the checks of one, its depth counted from its place in the tree.
+    /// </summary>
+    [Theory]
+    [InlineData("writes")]
+    [InlineData("throws")]
+    public void AWrappedElement_IsTheJsonOfTheElement_NeverWhatItsConverterWrites(string converter)
+    {
+        var options = new JsonSerializerOptions { TypeInfoResolver = new DefaultJsonTypeInfoResolver() };
+        options.Converters.Add(new ElementConverter(converter == "throws"));
+        var info = (JsonTypeInfo<JsonElement>)options.GetTypeInfo(typeof(JsonElement));
+        using var number = JsonDocument.Parse("7");
+        using var nested = JsonDocument.Parse("""{ "a": [[1]] }""");
+
+        Assert.Null(StrictJson.Check(new JsonObject { ["x"] = JsonValue.Create(number.RootElement, info) }, Jsonc.MaxDepth, out var copy));
+        Assert.Equal("""{"x":7}""", copy!.ToJsonString());
+        Assert.Null(StrictJson.Check(new JsonObject { ["x"] = JsonValue.Create(nested.RootElement, info) }, Jsonc.MaxDepth, out copy));
+        Assert.Equal("""{"x":{"a":[[1]]}}""", copy!.ToJsonString());
+        var deep = StrictJson.Check(new JsonObject { ["x"] = JsonValue.Create(nested.RootElement, info) }, 3, out _);
+        Assert.Equal("/x/a/0", deep?.Pointer);
+    }
+
+    /// <summary>Writes every element as 59 nested arrays, or throws.</summary>
+    private sealed class ElementConverter(bool throws) : JsonConverter<JsonElement>
+    {
+        public override JsonElement Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => throw new NotSupportedException();
+
+        public override void Write(Utf8JsonWriter writer, JsonElement value, JsonSerializerOptions options)
+        {
+            if (throws)
+            {
+                throw new InvalidOperationException("the host's converter failed");
+            }
+
+            for (var i = 0; i < 59; i++)
+            {
+                writer.WriteStartArray();
+            }
+
+            for (var i = 0; i < 59; i++)
+            {
+                writer.WriteEndArray();
+            }
+        }
     }
 
     /// <summary>

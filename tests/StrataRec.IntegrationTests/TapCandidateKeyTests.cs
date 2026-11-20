@@ -1,10 +1,12 @@
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Columns;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Features.Runtime;
 using StrataRec.Hosting.Workspace;
 using StrataRec.Logging;
 using StrataRec.Pipeline.Execution;
+using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
@@ -158,6 +160,135 @@ public sealed class TapCandidateKeyTests
         Assert.Equal(10L, ((long[])Assert.Single(Assert.Single(result.LogBatches, b => b.TapId == "key").Columns).Values)[0]);
     }
 
+    /// <summary>
+    /// Review 87: a fill writes the rows live when it runs, and a tap never fills. A node read <c>col.item.base</c> and
+    /// failed; its fallback, a row source, appended candidate 2, and a tap after the node logged candidate 2's value from
+    /// storage nobody wrote, as a valid value. After a position that may append rows, a candidate feature filled before is
+    /// fetched again only by a later node that reads it, which fills every live row.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("\"when\": \"true\",")]
+    public async Task RowsAFallbackAppends_HaveNoValueForWhatTheNodeFilled_UntilALaterNodeFillsIt(string next)
+    {
+        var operators = OperatorRegistry.CreateDefault().Add(new FailsAfterReadingFactory()).Add(new AppendsOneFactory());
+        var appended = Appending(Pipeline("""{ "after": "next" }""", "col.item.base", primary: "item.base", backup: "", next: next, output: "1.0"));
+
+        var error = Assert.Single(Compile(appended, operators).Diagnostics, d => d.IsError);
+        Assert.Equal(("TAP_FEATURE_NOT_FETCHED", "/log_taps/key"), (error.Code, error.Pointer));
+        Assert.Equal("attach the tap after a later node that reads 'item.base': the rows 'next' or its fallback appends have no value for it", error.Hint);
+
+        var refilled = Compile(Appending(Pipeline("""{ "after": "later" }""", "col.item.base", primary: "item.base", backup: "", next: next,
+            laterReader: true, output: "1.0")), operators);
+        Assert.True(refilled.Succeeded, string.Join("\n", refilled.Diagnostics));
+        var result = await Execute(refilled.Plan!, capture: true, write: false);
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal("backup", result.Outcomes.Single(o => o.NodeId == "next").ProducedBy);
+        var batch = Assert.Single(result.LogBatches, b => b.TapId == "key");
+        var column = Assert.Single(batch.Columns);
+        Assert.Equal(new long[] { 1, 2 }, batch.Int64EntityIds);
+        Assert.Equal(new long[] { 10, 0 }, (long[])column.Values); // candidate 2 has no record: the default, as filled by 'later'
+    }
+
+    /// <summary>A row source after the node that read the feature: the hint names both.</summary>
+    [Fact]
+    public void RowsALaterRowSourceAppends_HaveNoValueForWhatAnEarlierNodeFilled()
+    {
+        var pipeline = Pipeline("""{ "output": true }""", "col.item.base", primary: "double(col.item.base)", backup: "1.0", output: "1.0")
+            .Replace("\"backup\": {", "\"more\": { \"order\": 250, \"op\": \"AppendsOne@1\", \"config\": { \"output_col\": \"score.l\" } }, \"backup\": {", StringComparison.Ordinal)
+            .Replace("\"score.l\": { \"type\": \"float64\", \"default\": 0.0 }", "\"score.l\": { \"type\": \"float64?\" }", StringComparison.Ordinal);
+
+        var error = Assert.Single(Compile(pipeline, OperatorRegistry.CreateDefault().Add(new AppendsOneFactory())).Diagnostics, d => d.IsError);
+
+        Assert.Equal("TAP_FEATURE_NOT_FETCHED", error.Code);
+        Assert.Equal("attach the tap after 'next', which reads 'item.base': the rows 'more' or its fallback appends after it have no value for it", error.Hint);
+    }
+
+    /// <summary>Review 87: the output is suggested only to a tap of survived rows, the only scope a tap there may have.</summary>
+    [Theory]
+    [InlineData("entered")]
+    [InlineData("dropped")]
+    public void ATapOfEnteredOrDroppedRows_IsNotToldToAttachToTheOutput(string scope)
+    {
+        var pipeline = Pipeline("""{ "after": "next" }""", "col.item.base", primary: "1.0", backup: "1.0", output: "double(col.creator.pop)")
+            .Replace("\"key\": { \"group\": \"all\",", $"\"key\": {{ \"group\": \"all\", \"rows\": {{ \"scope\": \"{scope}\" }},", StringComparison.Ordinal);
+
+        var error = Assert.Single(Compile(pipeline).Diagnostics, d => d.IsError);
+
+        Assert.Equal("TAP_FEATURE_NOT_FETCHED", error.Code);
+        Assert.Equal("attach the tap after a node that reads 'item.base'", error.Hint);
+    }
+
+    /// <summary>
+    /// <c>next</c> runs <c>FailsAfterReading@1</c>, whose fallback <c>backup</c> is <c>AppendsOne@1</c>, a row source;
+    /// <c>score.t</c> is nullable, as the appended row is the only one the fallback writes.
+    /// </summary>
+    private static string Appending(string pipeline) => pipeline
+        .Replace("\"k\": 1", "\"k\": 2", StringComparison.Ordinal)
+        .Replace("\"score.t\": { \"type\": \"float64\", \"default\": 0.0 }", "\"score.t\": { \"type\": \"float64?\" }", StringComparison.Ordinal)
+        .Replace("\"next\": { \"order\": 200, \"op\": \"ExpressionScorer@1\"", "\"next\": { \"order\": 200, \"op\": \"FailsAfterReading@1\"", StringComparison.Ordinal)
+        .Replace("\"backup\": { \"role\": \"fallback\", \"op\": \"ExpressionScorer@1\", \"config\": { \"output_col\": \"score.t\", \"expr\": \"\" } }",
+            "\"backup\": { \"role\": \"fallback\", \"op\": \"AppendsOne@1\", \"config\": { \"output_col\": \"score.t\" } }", StringComparison.Ordinal);
+
+    public sealed class ReadingConfig
+    {
+        public required string OutputCol { get; init; }
+
+        public required string Expr { get; init; }
+    }
+
+    public sealed class AppendingConfig
+    {
+        public required string OutputCol { get; init; }
+    }
+
+    /// <summary>Reads a column (its node fills the feature), then fails.</summary>
+    private sealed class FailsAfterReadingFactory : IOperatorFactory
+    {
+        public OperatorDescriptor Descriptor { get; } = new("FailsAfterReading", 1, Effects.ColumnWriter, typeof(ReadingConfig), "Reads a column, then fails.");
+
+        public Operator? Compile(OperatorCompileContext context)
+        {
+            var config = context.BindConfig<ReadingConfig>()!;
+            return context.TryReadColumn(config.Expr, "/expr", out _) && context.TryWriteColumn(config.OutputCol, "/output_col", null, out _)
+                ? new Fails()
+                : null;
+        }
+
+        private sealed class Fails : Operator
+        {
+            public override ValueTask ExecuteAsync(OperatorContext context)
+            {
+                context.Fail("the primary does not serve");
+                return ValueTask.CompletedTask;
+            }
+        }
+    }
+
+    /// <summary>Appends candidate 2 and writes its column for that row only.</summary>
+    private sealed class AppendsOneFactory : IOperatorFactory
+    {
+        public OperatorDescriptor Descriptor { get; } = new("AppendsOne", 1, Effects.RowSource, typeof(AppendingConfig), "Appends candidate 2.");
+
+        public Operator? Compile(OperatorCompileContext context)
+        {
+            var config = context.BindConfig<AppendingConfig>()!;
+            return context.TryWriteColumn(config.OutputCol, "/output_col", null, out var output) ? new Appends(output) : null;
+        }
+
+        private sealed class Appends(OutputColumn output) : Operator
+        {
+            public override int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => 1;
+
+            public override ValueTask ExecuteAsync(OperatorContext context)
+            {
+                var row = context.AppendRows(new long[] { 2 });
+                ((ScalarColumn<double>)context.Output(output)).Set(row, 2.0);
+                return ValueTask.CompletedTask;
+            }
+        }
+    }
+
     /// <summary>A context feature only the fallback reads is prefetched for every request: the tap logs it.</summary>
     [Fact]
     public async Task ATapLoggingAContextFeatureOnlyAFallbackReads_LogsIt()
@@ -210,7 +341,7 @@ public sealed class TapCandidateKeyTests
           "output": { "limit_param": "k", "columns": { "score": "{{output}}" } } }
         """;
 
-    private static PlanCompilation Compile(string pipeline)
+    private static PlanCompilation Compile(string pipeline, OperatorRegistry? operators = null)
     {
         var root = Directory.CreateTempSubdirectory("stratarec-tap-key-").FullName;
         foreach (var dir in new[] { "catalog", "bindings", "pipelines" })
@@ -231,6 +362,9 @@ public sealed class TapCandidateKeyTests
         var diagnostics = new DiagnosticBag();
         var request = ConfigWorkspace.Load(root, diagnostics).CreateCompileRequest("p", "local", diagnostics);
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
-        return PlanCompiler.Compile(request!, new PlanEnvironment { BaseDirectory = root, Connectors = FeatureConnectorRegistry.CreateDefault() });
+        return PlanCompiler.Compile(request!, new PlanEnvironment
+        {
+            BaseDirectory = root, Connectors = FeatureConnectorRegistry.CreateDefault(), Operators = operators ?? OperatorRegistry.CreateDefault(),
+        });
     }
 }

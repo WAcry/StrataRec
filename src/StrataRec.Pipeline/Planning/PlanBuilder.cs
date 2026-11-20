@@ -1022,11 +1022,21 @@ public sealed class PlanBuilder
                 MarkContextFetched(fetched, fallback.ReadFeatures);
             }
 
+            // A fill writes the rows live when it runs, and a tap never fills: the rows this position may append (by the node
+            // or its fallback) have no value for any candidate feature filled before them, the node's own reads too, until a
+            // later node fills it again (review 87: a tap after a node whose row-source fallback served logged the appended
+            // row's value from storage nobody wrote). Context features, which the prefetch stores, stay.
             // A node its 'when' or 'min_remaining_ms' skips fills nothing, and its fallback does not run: after it, only the
-            // context features they read, which the prefetch stores for every request, are there whatever ran (review 85).
-            // A tap attached to it is captured only once it or its fallback has run, so it may log all the node reads.
+            // context features they read are there whatever ran (review 85). A tap attached to it is captured only once it
+            // or its fallback has run, so it may log all the node reads.
             HashSet<int>? here = fetched;
-            if (MaySkip(node))
+            if (appender is not null)
+            {
+                ForgetCandidateFeatures(fetched);
+                MarkContextFetched(fetched, node.ReadFeatures);
+                here = null;
+            }
+            else if (MaySkip(node))
             {
                 MarkContextFetched(fetched, node.ReadFeatures);
                 here = AttachedTo(taps, node.NodeId) ? [.. fetched] : null;
@@ -1044,7 +1054,7 @@ public sealed class PlanBuilder
                 {
                     if (tap.AttachAfter == node.NodeId)
                     {
-                        ValidateTap(tap, possible, here!, later, ordered, fallbacks, output, artifact);
+                        ValidateTap(tap, possible, here ?? fetched, later, ordered, fallbacks, output, artifact);
                     }
                 }
             }
@@ -1608,6 +1618,26 @@ public sealed class PlanBuilder
     /// <summary>Whether the node may not run at all, its fallback neither: its <c>when</c> or <c>min_remaining_ms</c> skips it.</summary>
     private static bool MaySkip(CompiledNode node) => node.When is not null || node.MinRemainingMs is not null;
 
+    private void ForgetCandidateFeatures(HashSet<int> fetched)
+    {
+        List<int>? candidate = null;
+        foreach (var f in fetched)
+        {
+            if (!_features[f].IsContext)
+            {
+                (candidate ??= new List<int>()).Add(f);
+            }
+        }
+
+        if (candidate is not null)
+        {
+            foreach (var f in candidate)
+            {
+                fetched.Remove(f);
+            }
+        }
+    }
+
     private static bool AttachedTo(IReadOnlyList<CompiledTap>? taps, string nodeId)
     {
         if (taps is not null)
@@ -1805,41 +1835,51 @@ public sealed class PlanBuilder
             {
                 _diagnostics.Error("TAP_FEATURE_NOT_FETCHED", artifact, pointer,
                     $"Tap '{tap.TapId}' reads feature '{_features[feature].Definition.Name}', which is not fetched before {where}; taps never trigger fetches.",
-                    NotFetchedHint(feature, later, ordered, fallbacks, output));
+                    NotFetchedHint(feature, tap.Scope, later, ordered, fallbacks, output));
             }
         }
     }
 
     /// <summary>
     /// Where a tap can log a candidate feature that is not fetched before its attach point: after the first later node
-    /// whose fill writes it, or at the output if it reads it, or after an earlier node that reads it but may be skipped
-    /// (with why a later point cannot count on it); a fallback that reads it is named with the reason it does not count.
+    /// whose fill writes it, or at the output if it reads it (a tap of survived rows), or after an earlier node that reads
+    /// it before rows were appended, or one that may be skipped (each with why a later point cannot count on it); a
+    /// fallback that reads it is named with the reason it does not count.
     /// </summary>
     private string NotFetchedHint(
-        int feature, HashSet<string> later, List<CompiledNode> ordered, IReadOnlyDictionary<string, CompiledNode> fallbacks, OutputPlan? output)
+        int feature, TapScope scope, HashSet<string> later, List<CompiledNode> ordered, IReadOnlyDictionary<string, CompiledNode> fallbacks,
+        OutputPlan? output)
     {
         var name = _features[feature].Definition.Name;
         var reads = new HashSet<int>();
-        string? skippable = null;
+        string? reader = null; // the last node before this point that reads it, whether it may be skipped,
+        var readerMaySkip = false;
+        string? appender = null; // and the first position from it on that may append rows
         foreach (var node in ordered)
         {
+            var before = !later.Contains(node.NodeId);
             if (Reads(node.ReadFeatures))
             {
-                if (later.Contains(node.NodeId))
+                if (!before)
                 {
                     // A tap attached to a node is captured only once it ran: one that may be skipped counts there too.
                     return $"attach the tap after '{node.NodeId}', the first node after this point that reads '{name}'";
                 }
 
-                if (MaySkip(node))
-                {
-                    skippable ??= node.NodeId;
-                }
+                (reader, readerMaySkip, appender) = (node.NodeId, MaySkip(node), null);
+            }
+
+            if (before && reader is not null && appender is null
+                && (IsRowSource(node) || (node.OnFailure == FailurePolicy.Fallback && node.FallbackNodeId is { } id
+                    && fallbacks.TryGetValue(id, out var fallback) && IsRowSource(fallback))))
+            {
+                appender = node.NodeId;
             }
         }
 
-        // The output reads its columns' features for every row it returns (review 85: the hint only named nodes).
-        if (output is not null)
+        // The output reads its columns' features for every row it returns (review 85: the hint only named nodes); a tap
+        // there logs those rows only (review 87: an entered or dropped tap was told to attach where its scope is refused).
+        if (output is not null && scope == TapScope.Survived)
         {
             foreach (var (_, expression) in output.Columns)
             {
@@ -1859,23 +1899,30 @@ public sealed class PlanBuilder
             }
         }
 
-        if (skippable is not null)
+        if (appender is not null)
         {
-            return $"attach the tap after '{skippable}', which reads '{name}': its 'when' or 'min_remaining_ms' may skip it, and then nothing writes the feature for a later point";
+            return appender == reader
+                ? $"attach the tap after a later node that reads '{name}': the rows '{appender}' or its fallback appends have no value for it"
+                : $"attach the tap after '{reader}', which reads '{name}': the rows '{appender}' or its fallback appends after it have no value for it";
         }
 
-        string? reader = null;
+        if (reader is not null && readerMaySkip)
+        {
+            return $"attach the tap after '{reader}', which reads '{name}': its 'when' or 'min_remaining_ms' may skip it, and then nothing writes the feature for a later point";
+        }
+
+        string? fallbackReader = null;
         foreach (var (id, fallback) in fallbacks)
         {
-            if ((reader is null || string.CompareOrdinal(id, reader) < 0) && Reads(fallback.ReadFeatures))
+            if ((fallbackReader is null || string.CompareOrdinal(id, fallbackReader) < 0) && Reads(fallback.ReadFeatures))
             {
-                reader = id;
+                fallbackReader = id;
             }
         }
 
-        return reader is null
+        return fallbackReader is null
             ? $"attach the tap after a node that reads '{name}'"
-            : $"attach the tap after a node that reads '{name}': fallback '{reader}' reads it, but a fallback's candidate features are written only when it runs";
+            : $"attach the tap after a node that reads '{name}': fallback '{fallbackReader}' reads it, but a fallback's candidate features are written only when it runs";
 
         bool Reads(ImmutableArray<int> features)
         {

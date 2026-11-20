@@ -77,6 +77,56 @@ public sealed class IoCallSpanTests
         Assert.True(Assert.Single(flow.Named("fetch detached")).IsStopped);
         Assert.Same(flow.Request, Activity.Current);
     }
+
+    /// <summary>
+    /// Review 87: the call's span is stopped in the call site's context, so the flow completing it is not touched at all.
+    /// Stopped on that flow and given its activity back afterwards, one whose activity had already stopped (which the
+    /// setter refuses) stayed in this call's request, and the host's CurrentChanged handlers saw it moved there.
+    /// </summary>
+    [Fact]
+    public async Task ACallCompletedOnAFlowWhoseActivityStopped_LeavesIt_AndTheFlowIsNeverMovedToTheRequest()
+    {
+        using var flow = new TracedFlow();
+        var call = new IoTarget(IoKind.CandidateSource, "late").Start();
+        call.Sent();
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Activity foreign;
+        Task<(Activity? Before, Activity? After, bool Moved, ActivityTraceId Next)> completing;
+        using (foreign = new Activity("another request").SetParentId(ActivityTraceId.CreateRandom(), ActivitySpanId.CreateRandom()).Start())
+        {
+            completing = Task.Run(async () =>
+            {
+                await resume.Task;
+                var before = Activity.Current;
+                var moved = false;
+                void Changed(object? sender, ActivityChangedEventArgs args) =>
+                    moved |= ReferenceEquals(args.Previous, before) && ReferenceEquals(args.Current, flow.Request);
+                Activity.CurrentChanged += Changed;
+                try
+                {
+                    call.Complete(IoOutcome.Ok);
+                }
+                finally
+                {
+                    Activity.CurrentChanged -= Changed;
+                }
+
+                var after = Activity.Current;
+                using var next = new Activity("the flow goes on").Start();
+                return (before, after, moved, next.TraceId);
+            }, TestContext.Current.CancellationToken);
+        }
+
+        resume.SetResult();
+        var (before, after, moved, nextTrace) = await completing;
+
+        Assert.True(foreign.IsStopped);
+        Assert.Same(foreign, before);
+        Assert.Same(foreign, after);
+        Assert.False(moved);
+        Assert.Equal(foreign.TraceId, nextTrace);
+        Assert.True(Assert.Single(flow.Named("recall late")).IsStopped);
+    }
 }
 
 /// <summary>

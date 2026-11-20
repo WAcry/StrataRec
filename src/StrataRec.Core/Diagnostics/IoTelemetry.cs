@@ -91,7 +91,7 @@ public sealed class IoTarget
     /// <summary>
     /// Starts timing one call, and a child span when the request is traced (<see cref="StrataRecTracing.IsRecording"/>).
     /// Call it where the call starts so the span becomes the ambient parent of the client's own spans, and
-    /// <see cref="IoCall.Sent"/> once the client has returned. Never throws: a host <c>ActivityListener</c> whose sampler
+    /// <see cref="IoCall.Sent"/> once the client has returned with the call still running. Never throws: a host <c>ActivityListener</c> whose sampler
     /// or start callback throws leaves the call without a span, as a listener that throws when the call completes loses
     /// only that measurement (<see cref="IoCall.Complete"/>). The call sites hold the request's memory before they start
     /// the call, so a throw here would keep it held.
@@ -107,6 +107,7 @@ public sealed class IoTarget
     {
         var ambient = Activity.Current;
         Activity? span = null;
+        ExecutionContext? context = null;
         try
         {
             if (StrataRecTracing.IsRecording)
@@ -123,6 +124,7 @@ public sealed class IoTarget
                     }
 
                     span.Start();
+                    context = ExecutionContext.Capture(); // the call site's, with the span current: see IoCall.Complete
                 }
             }
         }
@@ -133,10 +135,11 @@ public sealed class IoTarget
             {
                 IoCall.Restore(span, ambient);
                 span = null;
+                context = null;
             }
         }
 
-        return new IoCall(this, Stopwatch.GetTimestamp(), span, ambient);
+        return new IoCall(this, Stopwatch.GetTimestamp(), span, ambient, context);
     }
 
     /// <summary>
@@ -199,13 +202,15 @@ public readonly struct IoCall
     private readonly long _started;
     private readonly Activity? _span;
     private readonly Activity? _ambient;
+    private readonly ExecutionContext? _context;
 
-    internal IoCall(IoTarget target, long started, Activity? span, Activity? ambient)
+    internal IoCall(IoTarget target, long started, Activity? span, Activity? ambient, ExecutionContext? context)
     {
         _target = target;
         _started = started;
         _span = span;
         _ambient = ambient;
+        _context = context;
     }
 
     /// <summary>Time since the call started (zero for a call that was never started); what a replay bundle records.</summary>
@@ -231,7 +236,8 @@ public readonly struct IoCall
     /// <summary>
     /// Gives the flow back <paramref name="ambient"/> while <paramref name="span"/>, which a call made current, still is
     /// its current activity. A flow whose current activity is another one (another call's, or the client's own) is left
-    /// as it is: this flow is not the one the call changed. Never throws (<see cref="SetCurrent"/>).
+    /// as it is: this flow is not the one the call changed. Never throws (<see cref="SetCurrent"/>, the one place the
+    /// engine sets the current activity of an external call's flow).
     /// </summary>
     internal static void Restore(Activity span, Activity? ambient)
     {
@@ -274,8 +280,12 @@ public readonly struct IoCall
     /// the flow back the activity it had: the flow gets it here, or the stopped span stayed the parent of the flow's later
     /// calls (review 83).</para>
     /// <para><see cref="Activity.Stop"/> makes the activity the span started over current, whatever the flow's current
-    /// one: a flow whose current activity is not the span keeps the one it has, or one completing a call it did not start,
-    /// in another request's activity, went on as a child of this call's request (review 85).</para>
+    /// one. A span that is not the current activity here (a call still running when its client returned, completed on the
+    /// flow that awaited it or on another) is stopped in the call site's context as it was when the call started
+    /// (<see cref="ExecutionContext.Run"/>), which that change leaves as it was: the flow completing the call keeps its own
+    /// activity. Stopped on that flow, one running another request's activity went on as a child of this call's request
+    /// (review 85), and one whose activity had stopped could not be given it back (review 87). The host's listeners run in
+    /// the call site's context, as the call's own.</para>
     /// </remarks>
     /// <param name="keys">Keys sent (feature sources), or -1.</param>
     /// <param name="requestId">Sample request id for failure summaries.</param>
@@ -296,7 +306,6 @@ public readonly struct IoCall
 
         if (_span is { } span)
         {
-            var current = Activity.Current;
             try
             {
                 if (span.IsAllDataRequested)
@@ -312,22 +321,33 @@ public readonly struct IoCall
                         span.SetStatus(ActivityStatusCode.Error, error);
                     }
                 }
-
-                span.Dispose();
             }
             catch (Exception)
             {
-                // An activity listener threw: see the remarks.
+                // Tags call no listener; nothing here may throw out of Complete.
             }
 
-            if (ReferenceEquals(current, span))
+            if (!ReferenceEquals(Activity.Current, span) && _context is { } context)
             {
+                ExecutionContext.Run(context, static span => Stop((Activity)span!), span); // see the remarks
+            }
+            else
+            {
+                Stop(span);
                 Restore(span, _ambient); // a stop callback threw before Stop gave the flow its activity back
             }
-            else if (!ReferenceEquals(current, _ambient) && ReferenceEquals(Activity.Current, _ambient))
-            {
-                SetCurrent(current); // Stop made the span's predecessor current on a flow that had another one
-            }
+        }
+    }
+
+    private static void Stop(Activity span)
+    {
+        try
+        {
+            span.Dispose();
+        }
+        catch (Exception)
+        {
+            // An activity listener threw: see the remarks of Complete.
         }
     }
 
