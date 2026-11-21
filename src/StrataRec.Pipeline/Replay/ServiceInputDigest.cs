@@ -40,7 +40,7 @@ internal static class ServiceInputDigest
     public static void Rows(ServiceCall call, int[] order, Span<ulong> digests)
     {
         var inputs = call.Inputs.Span;
-        Span<Segment> segments = order.Length < MaxStackInputs ? stackalloc Segment[order.Length + 1] : new Segment[order.Length + 1];
+        Span<Segment> segments = order.Length <= MaxStackInputs ? stackalloc Segment[order.Length + 1] : new Segment[order.Length + 1];
         var builder = default(StableHash.Builder);
         var part = default(StableHash.Builder);
         var alike = default(StableHash.Builder);
@@ -89,7 +89,7 @@ internal static class ServiceInputDigest
     /// The format of service cache keys (docs/decisions.md, IO step 3). A change of what a record holds or of how a key is
     /// built changes it: the records another build wrote are then misses, never misread.
     /// </summary>
-    private const string CacheFormat = "stratarec.service_cache/2026-11-21.6";
+    private const string CacheFormat = "stratarec.service_cache/2026-11-21.7";
 
     /// <summary>
     /// The key of a call about no items in its service's cache: the format, the binding's answer identity, the service
@@ -130,7 +130,7 @@ internal static class ServiceInputDigest
     public static void CacheItemKeys(ServiceCall call, int[] order, string identity, Span<UInt128> keys)
     {
         var inputs = call.Inputs.Span;
-        Span<Segment> segments = order.Length < MaxStackInputs ? stackalloc Segment[order.Length + 1] : new Segment[order.Length + 1];
+        Span<Segment> segments = order.Length <= MaxStackInputs ? stackalloc Segment[order.Length + 1] : new Segment[order.Length + 1];
         var builder = default(StableHash.Builder);
         var part = default(StableHash.Builder);
         var alike = default(StableHash.Builder);
@@ -176,14 +176,17 @@ internal static class ServiceInputDigest
     }
 
     /// <summary>Inputs a call's layout of its rows' digests or keys takes on the stack (more take an array).</summary>
-    private const int MaxStackInputs = 32;
+    private const int MaxStackInputs = 64;
 
     /// <summary>
     /// Values a row's view of an input holds inline in its digest or key (see the remarks); a view of more, or of strings
-    /// or a text, enters as a 128-bit digest of its own. Few: a shared input inline is encoded again for every row (review
-    /// of 3a0d9e8: 32 shared vectors of 16 values each made a call of 2,048 rows seven times as slow as their digests).
+    /// or a text, enters as a 128-bit digest of its own. A row's own view as a digest costs the row one more hash; a shared
+    /// view inline is copied into every row's bytes (encoded once, <see cref="Segments"/>) and hashed with each, where its
+    /// digest is 16 bytes. Sixteen: for 2,048 rows, 32 per-row vectors of 5 values take 1.8 ms inline and 6.5 ms as
+    /// digests, and 32 shared vectors of 16 values 0.4 ms inline and 0.1 ms as digests (review of 5e07f1b; at 3a0d9e8 a
+    /// shared view inline was encoded again for every row, and four was the better bound then).
     /// </summary>
-    private const int MaxInlineValues = 4;
+    private const int MaxInlineValues = 16;
 
     /// <summary>
     /// A run of what every row of a call adds alike to its digest or key, encoded once for the call, then what a row adds
@@ -201,6 +204,11 @@ internal static class ServiceInputDigest
 
         /// <summary>The row's own part is its few values, encoded after the input's header (which ends the run); otherwise its slice's digest.</summary>
         public bool Inline;
+
+        /// <summary>Of a row's own digest: where the input's header is among the call's encoded parts (outside every run), which each row's digest starts with.</summary>
+        public int HeaderStart;
+
+        public int HeaderLength;
     }
 
     /// <summary>
@@ -242,10 +250,20 @@ internal static class ServiceInputDigest
 
             if (inline)
             {
+                AddHeader(ref alike, input, view.Normalized); // the run's end
+                segments[count++] = new Segment { Start = start, Length = alike.Encoded.Length - start, Input = i, Inline = true };
+            }
+            else
+            {
+                // The header of the row's own digest, after the run and outside every run: encoded once, not once a row.
+                var end = alike.Encoded.Length;
                 AddHeader(ref alike, input, view.Normalized);
+                segments[count++] = new Segment
+                {
+                    Start = start, Length = end - start, Input = i, HeaderStart = end, HeaderLength = alike.Encoded.Length - end,
+                };
             }
 
-            segments[count++] = new Segment { Start = start, Length = alike.Encoded.Length - start, Input = i, Inline = inline };
             start = alike.Encoded.Length;
         }
 
@@ -274,13 +292,18 @@ internal static class ServiceInputDigest
             }
 
             ref readonly var input = ref inputs[segment.Input];
+            var view = new View(input, batch, row);
             if (segment.Inline)
             {
-                AddBody(ref builder, input, new View(input, batch, row));
+                AddBody(ref builder, input, view);
             }
             else
             {
-                AddDigest(ref builder, Seen(ref part, input, batch, row));
+                // The digest of the header and the row's values, as Seen has it.
+                part.Reset();
+                part.AddEncoded(alike.Slice(segment.HeaderStart, segment.HeaderLength));
+                AddBody(ref part, input, view);
+                AddDigest(ref builder, part.Finish128());
             }
         }
     }

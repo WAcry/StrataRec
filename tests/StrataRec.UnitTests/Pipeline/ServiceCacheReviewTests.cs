@@ -114,6 +114,8 @@ public sealed class ServiceCacheReviewTests
     /// <remarks>A view of a few values enters a key inline, one of more as its own digest (<paramref name="width"/> 64): both alike in a batch of one and of two, for a shared input and for an item's own.</remarks>
     [Theory]
     [InlineData(2)]
+    [InlineData(16)]
+    [InlineData(17)]
     [InlineData(64)]
     public async Task AnItemWithASharedInput_HasOneKey_InABatchOfOneAndOfTwo(int width)
     {

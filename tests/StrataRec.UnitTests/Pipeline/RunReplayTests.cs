@@ -650,6 +650,8 @@ public sealed class RunReplayTests
     [Theory]
     [InlineData(new long[] { 1, 2 }, new long[] { 1 }, 2)]
     [InlineData(new long[] { 1 }, new long[] { 2, 1 }, 2)]
+    [InlineData(new long[] { 1, 2 }, new long[] { 1 }, 16)]
+    [InlineData(new long[] { 1 }, new long[] { 2, 1 }, 17)]
     [InlineData(new long[] { 1, 2 }, new long[] { 1 }, 64)]
     [InlineData(new long[] { 1 }, new long[] { 2, 1 }, 64)]
     public void AnItemWithASharedInput_IsAnsweredInABatchOfOneAndOfTwo(long[] recorded, long[] replayed, int width)

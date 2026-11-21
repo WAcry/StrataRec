@@ -430,10 +430,11 @@ public sealed class OperatorContext : IServiceCallScope
     /// <summary>
     /// Each input is named once: a service reads an input by its name (<see cref="ServiceCall.TryGetInput"/> finds the
     /// first), and a replay's digests and a cache's keys take every input in name order, so a second of a name is one the
-    /// service never reads that the key does, and two orders of the two were one key (review of 3a0d9e8). Hashes first, so
-    /// a call of many inputs compares few names, and nothing is allocated for up to 256.
+    /// service never reads that the key does, and two orders of the two were one key (review of 3a0d9e8). By the names'
+    /// hashes, sorted with the inputs' indices: only names of one hash are compared (review of 5e07f1b: one collision
+    /// compared every pair of names), and nothing is allocated for up to 256 inputs.
     /// </summary>
-    private static void CheckInputs(ServiceCall call)
+    internal static void CheckInputs(ServiceCall call)
     {
         var inputs = call.Inputs.Span;
         if (inputs.Length < 2)
@@ -441,34 +442,35 @@ public sealed class OperatorContext : IServiceCallScope
             return;
         }
 
-        Span<int> hashes = inputs.Length <= 256 ? stackalloc int[inputs.Length] : new int[inputs.Length];
+        // The hash in the high half, the index in the low: sorted, the inputs of one hash are adjacent.
+        Span<long> keyed = inputs.Length <= 256 ? stackalloc long[inputs.Length] : new long[inputs.Length];
         for (var i = 0; i < inputs.Length; i++)
         {
-            hashes[i] = string.GetHashCode(inputs[i].Name, StringComparison.Ordinal);
+            keyed[i] = ((long)string.GetHashCode(inputs[i].Name, StringComparison.Ordinal) << 32) | (uint)i;
         }
 
-        hashes.Sort();
-        for (var i = 1; i < hashes.Length; i++)
+        keyed.Sort();
+        for (var start = 0; start < keyed.Length;)
         {
-            if (hashes[i] == hashes[i - 1])
+            var end = start + 1;
+            while (end < keyed.Length && keyed[end] >> 32 == keyed[start] >> 32)
             {
-                ThrowIfNamedTwice(inputs);
-                return; // a hash collision of two names
+                end++;
             }
-        }
 
-        static void ThrowIfNamedTwice(ReadOnlySpan<NamedInput> inputs)
-        {
-            for (var i = 1; i < inputs.Length; i++)
+            for (var a = start + 1; a < end; a++)
             {
-                for (var j = 0; j < i; j++)
+                for (var b = start; b < a; b++)
                 {
-                    if (string.Equals(inputs[i].Name, inputs[j].Name, StringComparison.Ordinal))
+                    var name = inputs[(int)(uint)keyed[a]].Name;
+                    if (string.Equals(name, inputs[(int)(uint)keyed[b]].Name, StringComparison.Ordinal))
                     {
-                        throw new ArgumentException($"The call names input '{inputs[i].Name}' twice: name each input once, as the service reads it by its name.", "call");
+                        throw new ArgumentException($"The call names input '{name}' twice: name each input once, as the service reads it by its name.", "call");
                     }
                 }
             }
+
+            start = end;
         }
     }
 

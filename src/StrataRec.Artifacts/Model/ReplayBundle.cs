@@ -57,11 +57,11 @@ public sealed class ReplayBundle
     /// same item in a batch of one another. 2026-11-21.12 adds what an item saw of each input to its digest as a digest of
     /// its own, so a shared input is hashed once for a call, not once for every item; 2026-11-21.13 only when it is more
     /// than a few values, and a few inline; 2026-11-21.14 only when it is more than four numbers or bools, and strings
-    /// always so.
+    /// always so; 2026-11-21.15 when it is more than sixteen numbers or bools, or strings.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.14";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.15";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.14\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.15\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }

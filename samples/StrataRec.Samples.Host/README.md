@@ -12,7 +12,7 @@
 | `Components/LogisticModelClient.cs` | `logistic@1` | `IServiceClient` | 模型算子调用的服务：自己的签名（加载期校验节点的输入输出）；不会看到缺失值；输入不对返回失败状态，由节点的 `on_failure` 兜底 |
 | `Components/CategoryBoost.cs` | `CategoryBoost@1` | `IOperatorFactory` | 配置类即 JSON Schema；只声明 `ColumnWriter`；检查都在编译期；执行时从 `RequestMemory` 租缓冲，不按行分配 |
 | `Components/StockService.cs` | `stock@1` | `IServiceClient` | 过滤节点调用的业务服务：回答关于物品的调用，每项一个 bool（`in_stock`）；一项的回答只取决于这一项，所以引擎可以随意分批、逐项缓存（绑定声明了 `cache`）和逐项回放；回答不了的调用返回失败状态并说明它回答什么 |
-| `Components/StockFilter.cs` | `StockFilter@1` | `IOperatorFactory` | 调用外部服务的自定义算子：编译期按绑定名取服务（`OperatorCompileContext.Service`），执行时把存活行作为调用的物品经 `OperatorContext.CallAsync` 发出（有界等待、缓存、录制和回放都由引擎做），按回答删行；调用失败交给节点的 `on_failure`（示例里 `skip`，保留全部候选），回答用不了也算失败，从不猜；改了流水线之后回放，没有录制过的候选是回放报告里的缺口：录制里这个节点有过这个输出时按 bool 缺口的值 false 回答，所以被删掉，看缺口才能和真没库存的区分；录制里根本没有这个输出（节点是录制之后加的）时调用失败，按 `on_failure` 保留全部候选 |
+| `Components/StockFilter.cs` | `StockFilter@1` | `IOperatorFactory` | 调用外部服务的自定义算子：编译期按绑定名取服务（`OperatorCompileContext.Service`），执行时把存活行作为调用的物品经 `OperatorContext.CallAsync` 发出（有界等待、缓存、录制和回放都由引擎做），按回答删行；调用失败交给节点的 `on_failure`（示例里 `skip`，保留全部候选），回答用不了也算失败，从不猜；改了流水线之后回放，没有录制过的候选是回放报告里的缺口：录制里这个服务（同一版本，哪个节点调用的都算）有过这个输出时按 bool 缺口的值 false 回答，所以被删掉，看缺口才能和真没库存的区分；录制里这个服务根本没有这个输出（录制时没有调用它）时调用失败，按 `on_failure` 保留全部候选 |
 
 每个文件的注释写了契约的规则（取消、预算、分配、缺失值）以及这个实现为什么这样写。
 

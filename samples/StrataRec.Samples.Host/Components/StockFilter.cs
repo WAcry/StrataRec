@@ -35,10 +35,10 @@ public sealed class StockFilterConfig
 /// every candidate, rather than failing the request. An answer the operator cannot use (the output missing, or not one bool
 /// per row) is a failure too; it never guesses which rows to keep.</item>
 /// <item>Replayed after the pipeline was edited, a candidate no recorded call asked about has no answer: the replay
-/// reports it as a gap (<c>not_recorded</c>, with the item) and, when a recorded call of the node had the output, answers
-/// it as false, the value a gap of a bool has, so the filter drops it; the report's gaps tell such a row from one out of
-/// stock. With no recorded call that had the output (the node was added after the recording), the call fails, and
-/// <c>on_failure</c> keeps every candidate.</item>
+/// reports it as a gap (<c>not_recorded</c>, with the item) and, when a recorded call of the service (and version) had
+/// the output, of this node or another, answers it as false, the value a gap of a bool has, so the filter drops it; the
+/// report's gaps tell such a row from one out of stock. With no recorded call of the service that had the output (it was
+/// not called when the run was recorded), the call fails, and <c>on_failure</c> keeps every candidate.</item>
 /// <item>The answer is read while the call's memory is the request's: the keep flags are the response's own buffer, by
 /// rank position, handed to <see cref="OperatorContext.Retain"/>. Nothing is allocated per row.</item>
 /// </list>
