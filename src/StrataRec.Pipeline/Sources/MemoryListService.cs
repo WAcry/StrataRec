@@ -117,8 +117,12 @@ public sealed class MemoryListService : IServiceClient
                 return input.Int32.Span[0].ToString(CultureInfo.InvariantCulture);
             case TensorElementType.Bool:
                 return input.Bool.Span[0] ? "true" : "false";
+            case TensorElementType.Float64:
+                return input.Float64.Span[0].ToString("R", CultureInfo.InvariantCulture); // as a value prints: 1.25
+            case TensorElementType.Float32:
+                return input.Float32.Span[0].ToString("R", CultureInfo.InvariantCulture);
             default:
-                error = $"The input '{input.Name}' must be a string, an integer or a bool; it is {TensorValues.Name(input.ElementType)}.";
+                error = $"The input '{input.Name}' must be a single value; it is {TensorValues.Name(input.ElementType)}.";
                 return null;
         }
     }

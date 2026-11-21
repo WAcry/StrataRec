@@ -328,7 +328,8 @@ public sealed class RandomModelClient : IServiceClient
 
     /// <summary>
     /// The call's input <paramref name="j"/> (in hash order) has the declared element type and rank, every fixed dimension
-    /// equal, its first dimension the batch if it is per element of some output, and data for its whole shape.
+    /// equal, its first dimension the batch if it is per element of some output, and a value (its data is its shape's, by
+    /// <see cref="NamedInput"/>), not a missing one.
     /// </summary>
     private bool Fits(in NamedInput input, int j, int batch)
     {
@@ -347,7 +348,7 @@ public sealed class RandomModelClient : IServiceClient
             }
         }
 
-        return Elements(shape, 0, shape.Length) <= Available(input);
+        return !input.IsMissing;
     }
 
     private string Mismatch(in NamedInput input, int j, int batch)
@@ -360,10 +361,8 @@ public sealed class RandomModelClient : IServiceClient
 
         var expected = _batched[j] ? $"{Describe(spec)} with the call's batch size ({batch}) as its first dimension" : Describe(spec);
         var sent = input.Shape is { } shape ? Dims(shape, shape.Length) : "[]";
-        return $"Input '{spec.Name}' must be {expected}; the call sends {TypeName(input.ElementType)} {sent} with {Available(input)} values.";
+        return $"Input '{spec.Name}' must be {expected}; the call sends {(input.IsMissing ? "a missing " : "")}{TypeName(input.ElementType)} {sent}.";
     }
-
-    private static int Available(in NamedInput input) => input.Values.Length;
 
     /// <summary>Elements [<paramref name="start"/>, +<paramref name="length"/>) in the canonical encoding (see the type's remarks).</summary>
     private static void AddValues(ref StableHash.Builder hash, in TensorValues values, int start, int length)

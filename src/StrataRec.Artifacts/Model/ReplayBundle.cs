@@ -40,11 +40,13 @@ public sealed class ReplayBundle
     /// (<c>max(col.x)</c>) is no longer a reference: result types and model input digests of a bundle before can differ.
     /// 2026-11-21.4 records every call but a feature fetch as one service call (<c>service_calls</c>, design 6.9), a
     /// model's and a recall's alike: a recall's query is a digest of its inputs, as a model's, and only the outputs the
-    /// operator reads are recorded.
+    /// operator reads are recorded. 2026-11-21.5 has the same layout, but a service sees only its call's inputs: in a bundle
+    /// before, a recall service could pick its answer by a request field that no digest covers, and a replay that no longer
+    /// sends it would still find that answer, and call the run identical.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.4";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.5";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.4\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.5\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }

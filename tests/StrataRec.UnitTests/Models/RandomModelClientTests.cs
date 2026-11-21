@@ -465,18 +465,20 @@ public sealed class RandomModelClientTests
         Assert.True(Pair(3, Final(new[] { 3, 2 }, 7), Ids(3), Quality(3)).Succeeded); // a longer backing buffer
         Assert.Empty(TryCall(pair, 0, 1, Final(new[] { 0, 2 }, 0), Ids(0), Quality(0)).Outputs["p_first"]);
         Assert.Equal(ServiceStatus.Failed("Missing input 'item_id'."), Pair(3, Final(new[] { 3, 2 }, 6), Quality(3)));
-        Assert.Equal(ServiceStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends int64 [3, 2] with 6 values."),
+        Assert.Equal(ServiceStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends int64 [3, 2]."),
             Pair(3, L("final", new[] { 3, 2 }, new long[6]), Ids(3), Quality(3)));
-        Assert.Equal(ServiceStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends float32 [6] with 6 values."),
+        Assert.Equal(ServiceStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends float32 [6]."),
             Pair(3, Final(new[] { 6 }, 6), Ids(3), Quality(3)));
-        Assert.Equal(ServiceStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends float32 [3, 3] with 9 values."),
+        Assert.Equal(ServiceStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends float32 [3, 3]."),
             Pair(3, Final(new[] { 3, 3 }, 9), Ids(3), Quality(3)));
-        Assert.Equal(ServiceStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends float32 [2, 2] with 4 values."),
+        Assert.Equal(ServiceStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends float32 [2, 2]."),
             Pair(3, Final(new[] { 2, 2 }, 4), Ids(3), Quality(3)));
         // Fewer values than the shape holds, or a negative dimension, is not a tensor: rejected where it is built, so no
         // client reads beyond its data.
         Assert.Throws<ArgumentException>(() => Final(new[] { 3, 2 }, 5));
         Assert.Throws<ArgumentException>(() => Final(new[] { 3, -2 }, 6));
+        Assert.Equal(ServiceStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends a missing float32 [3, 2]."),
+            Pair(3, NamedInput.FromMissing("final", TensorElementType.Float32, [3, 2]), Ids(3), Quality(3))); // no data to read
         Assert.Equal(ServiceStatus.Failed("Input 'quality' must be float32 with one value per row (3)."), Pair(3, Final(new[] { 3, 2 }, 6), Ids(3), Quality(2)));
 
         var list = Create(ListSettings);
@@ -487,9 +489,9 @@ public sealed class RandomModelClientTests
         Assert.True(List(1, 4, 4).Succeeded);
         Assert.Equal(ServiceStatus.Failed("Inputs 'emb' and 'final' give output 'scores' (float32 [1, -1]) different shapes, [1, 3] and [1, 4]: the inputs scored per element " +
             "of an output must agree on its dimensions."), List(1, 4, 3));
-        Assert.Equal(ServiceStatus.Failed("Input 'emb' must be float32 [1, -1, 2] with the call's batch size (2) as its first dimension; the call sends float32 [1, 4, 2] with 8 values."),
+        Assert.Equal(ServiceStatus.Failed("Input 'emb' must be float32 [1, -1, 2] with the call's batch size (2) as its first dimension; the call sends float32 [1, 4, 2]."),
             List(2, 4, 4));
-        Assert.Equal(ServiceStatus.Failed("Input 'user' must be float32 [1, 3]; the call sends float32 [1, 2] with 3 values."), List(1, 4, 4, user: new[] { 1, 2 }));
+        Assert.Equal(ServiceStatus.Failed("Input 'user' must be float32 [1, 3]; the call sends float32 [1, 2]."), List(1, 4, 4, user: new[] { 1, 2 }));
         Assert.Throws<ArgumentException>(() => List(1, 4, 4, userValues: 2)); // fewer values than its shape: not a tensor
         Assert.Equal(ServiceStatus.Failed("Input 'id' must be int64 with one value per row (2)."),
             TryCall(Create("""{ "inputs": { "id": { "type": "int64", "shape": [-1] } }, "outputs": ["p"] }"""), 2, 1, L("id", new[] { 1 }, new long[1])).Status);

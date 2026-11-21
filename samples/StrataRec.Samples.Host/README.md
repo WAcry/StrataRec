@@ -8,7 +8,7 @@
 | 组件 | 类型名 | 契约 | 演示什么 |
 | --- | --- | --- | --- |
 | `Components/KeyValueFeatureConnector.cs` | `kv_store@1` | `IFeatureSourceConnector` | `Create` 只读设置、`ILoadable` 里做 I/O；按列解码，取数时不按行分配；缺失值不写，类型不符就让这次拉取失败 |
-| `Components/TrendingService.cs` | `trending@1` | `IServiceClient` | 召回节点调用的服务：创建时排好序（平分按 id 升序）；按请求输入 `region` 选列表，没有 region 就用总榜；同步返回 |
+| `Components/TrendingService.cs` | `trending@1` | `IServiceClient` | 召回节点调用的服务：创建时排好序（平分按 id 升序）；按调用的输入 `region` 选列表（召回节点的 `queries` 把 `ctx.request.region` 送给它；服务只看到调用送的值），值缺失时用总榜；同步返回 |
 | `Components/LogisticModelClient.cs` | `logistic@1` | `IServiceClient` | 模型算子调用的服务：自己的签名（加载期校验节点的输入输出）；不会看到缺失值；输入不对返回失败状态，由节点的 `on_failure` 兜底 |
 | `Components/CategoryBoost.cs` | `CategoryBoost@1` | `IOperatorFactory` | 配置类即 JSON Schema；只声明 `ColumnWriter`；检查都在编译期；执行时从 `RequestMemory` 租缓冲，不按行分配 |
 

@@ -58,6 +58,9 @@ public sealed class ServiceCallTests
         Assert.Throws<ArgumentException>(() => NamedInput.FromString("x", [], ReadOnlyMemory<string>.Empty)); // a scalar is one value
 
         Assert.Equal([2], NamedInput.FromFloat32("x", [2], new float[5]).Shape); // a rented buffer: the shape says how many
+        Assert.Equal(2, NamedInput.FromFloat32("x", [2], new float[5]).Float32.Length); // and the value is that many: no slack
+        Assert.Throws<ArgumentException>(() => NamedInput.FromFloat32("x", [int.MaxValue, int.MaxValue, 3], ReadOnlyMemory<float>.Empty)); // overflowed past the check
+        Assert.Equal(0, NamedInput.FromFloat32("x", [0, int.MaxValue], ReadOnlyMemory<float>.Empty).Float32.Length); // an empty tensor
         Assert.Equal([-1], NamedInput.FromMissing("x", TensorElementType.Float32, [-1]).Shape); // a missing list of any length
     }
 

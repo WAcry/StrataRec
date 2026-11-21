@@ -156,7 +156,10 @@ public static class StrataRecMetrics
     /// </summary>
     public static readonly Counter<long> IoErrors = Meter.CreateCounter<long>(Names.IoErrors, "{call}", "Failed calls of external dependencies.");
 
-    /// <summary>Keys per keyed call (feature connectors and distributed caches). Tags: <c>stratarec.io.role</c>, <c>stratarec.io.target</c>.</summary>
+    /// <summary>
+    /// Keys per keyed call sent (feature connectors, distributed caches, service calls about items). Tags:
+    /// <c>stratarec.io.role</c>, <c>stratarec.io.target</c>.
+    /// </summary>
     public static readonly Histogram<long> IoKeys = Meter.CreateHistogram<long>(Names.IoKeys, "{key}",
         "Keys per call of an external dependency.", null, new InstrumentAdvice<long> { HistogramBucketBoundaries = CountBuckets });
 

@@ -16,8 +16,8 @@ namespace StrataRec.Pipeline.Replay;
 /// out, so the same row in a differently sized batch has the same digest. A missing input contributes its name, element
 /// type and declared shape, and that it is missing: it is neither a zero nor an absent input. A call's
 /// <see cref="ServiceCallOptions.MaxOutputTokens"/> is part of every digest when it is set: a generative model answers
-/// differently under another limit, so a recorded answer is not served to a call with another one. The seed and the
-/// request's inputs are not: they are the request's, which the bundle replays. Nor is the call's
+/// differently under another limit, so a recorded answer is not served to a call with another one. The seed is not:
+/// it is the request's, which the bundle replays. Nor is the call's
 /// <see cref="ServiceCall.Limit"/>: a recorded list answers a call asking for fewer items.
 /// </remarks>
 internal static class ServiceInputDigest

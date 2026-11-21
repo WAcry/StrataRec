@@ -204,8 +204,9 @@ public readonly struct NamedInput
     public int[] Shape { get; }
 
     /// <summary>
-    /// The tensor's elements; default (none) for text and for a missing value. The data may be a longer buffer (one rented
-    /// from a pool): the tensor is its first <see cref="Shape"/>-many elements, the product of the dimensions.
+    /// The tensor's elements, exactly the product of the <see cref="Shape"/>'s dimensions; default (none) for text and for a
+    /// missing value. Built from a longer buffer (one rented from a pool), it is that buffer's first elements: the slack is
+    /// no part of the value, for a client or a digest.
     /// </summary>
     public TensorValues Values { get; }
 
@@ -237,6 +238,7 @@ public readonly struct NamedInput
     {
         ArgumentNullException.ThrowIfNull(shape);
         long elements = 1;
+        var empty = false;
         foreach (var dimension in shape)
         {
             if (dimension < 0)
@@ -244,15 +246,21 @@ public readonly struct NamedInput
                 throw new ArgumentException($"Input '{name}' has shape [{string.Join(", ", shape)}]: a value's dimensions are 0 or more (-1 is only a missing value's declared length).", nameof(shape));
             }
 
-            elements = Math.Min(elements * dimension, long.MaxValue / 2);
+            empty |= dimension == 0;
+            if (elements <= data.Length)
+            {
+                elements *= dimension; // at most int.MaxValue squared: multiplying stops once past the data, so it cannot overflow
+            }
         }
 
+        elements = empty ? 0 : elements;
         if (data.Length < elements)
         {
-            throw new ArgumentException($"Input '{name}' has shape [{string.Join(", ", shape)}], of {elements} element(s), and {data.Length} value(s).", nameof(data));
+            throw new ArgumentException($"Input '{name}' has shape [{string.Join(", ", shape)}] and {data.Length} value(s), fewer than the shape holds.", nameof(data));
         }
 
-        return new(name, shape, TensorValues.Of(data), null);
+        // The value is the shape's elements: a longer (pooled) buffer's slack is no part of it, for a client or a digest.
+        return new(name, shape, TensorValues.Of(data[..(int)elements]), null);
     }
 
     public static NamedInput FromBool(string name, int[] shape, ReadOnlyMemory<bool> data) => FromValues(name, shape, data);

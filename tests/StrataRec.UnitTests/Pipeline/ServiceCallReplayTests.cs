@@ -120,6 +120,32 @@ public sealed class ServiceCallReplayTests
         Assert.Empty(replay.Gaps);
     }
 
+    /// <summary>
+    /// A recorded call that asked for no items says nothing about the items the service has: it does not answer a call
+    /// asking for 3, which another call with the same inputs answers, nor, alone, the same node asking for 3 now (a shortfall
+    /// the recording cannot tell, <c>limit_exceeds_recording</c>). It answered both with no items and no gap (verification
+    /// of IO step 2).
+    /// </summary>
+    [Fact]
+    public void ACallThatAskedForNoItems_AnswersNoCallThatAsksForSome()
+    {
+        var run = RunReplayTests.Run();
+        run.ServiceCalls.Add(Recorded("none", Query(1, limit: 0), "ok"));
+        run.ServiceCalls.Add(Recorded("three", Query(1, limit: 3), "ok", 7, 8, 9));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        Assert.Equal(("7,8,9", true), Retrieve(replay, "added", Query(1, limit: 3)));
+        Assert.Empty(replay.Gaps);
+
+        var alone = RunReplayTests.Run();
+        alone.ServiceCalls.Add(Recorded("none", Query(1, limit: 0), "ok"));
+        var raised = RunReplay.Create(alone, "/runs/0");
+
+        Assert.Equal(("", true), Retrieve(raised, "none", Query(1, limit: 3)));
+        var gap = Assert.Single(raised.Gaps);
+        Assert.Equal(("limit_exceeds_recording", 3), (gap.Reason, gap.Count));
+    }
+
     /// <summary>The same for outputs: a node reading <c>b</c> borrows the call with the same inputs that has it.</summary>
     [Fact]
     public void ANodeWithoutACall_BorrowsTheSameInputsAnswerWithTheOutputItReads()

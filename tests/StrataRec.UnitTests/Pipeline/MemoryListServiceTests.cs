@@ -67,12 +67,13 @@ public sealed class MemoryListServiceTests
     public async Task ByInput_PicksTheListByTheCallsInput_AMissingValueGetsTheFallback_AndAnAbsentInputFails()
     {
         var source = new MemoryListServiceFactory().Create(new BindingContext("s",
-            Settings("""{ "by_input": "segment", "lists": { "x": [7], "42": [8], "*": [9] } }"""), Path.GetTempPath(), null));
+            Settings("""{ "by_input": "segment", "lists": { "x": [7], "42": [8], "1.25": [6], "*": [9] } }"""), Path.GetTempPath(), null));
         var memory = new StrataRec.Core.Memory.RequestMemory();
         NamedInput Segment(StrataRec.Core.Types.ColumnType type, ScalarValue value) => StrataRec.Pipeline.Operators.ServiceInputs.Create("segment", type, value, memory);
 
         Assert.Equal([7L], (await RetrieveAsync(source, Segment(StrataRec.Core.Types.ColumnType.String, ScalarValue.FromString("x")))).Ids);
         Assert.Equal([8L], (await RetrieveAsync(source, Segment(StrataRec.Core.Types.ColumnType.Int64, ScalarValue.FromInt64(42)))).Ids);
+        Assert.Equal([6L], (await RetrieveAsync(source, Segment(StrataRec.Core.Types.ColumnType.Float64, ScalarValue.FromFloat64(1.25)))).Ids); // as the value prints
         Assert.Equal([9L], (await RetrieveAsync(source, Segment(StrataRec.Core.Types.ColumnType.String.AsNullable(), ScalarValue.Missing))).Ids);
         Assert.Equal([9L], (await RetrieveAsync(source, Segment(StrataRec.Core.Types.ColumnType.String, ScalarValue.FromString("other")))).Ids);
 

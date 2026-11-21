@@ -141,6 +141,93 @@ public sealed class RunReplayTests
     }
 
     /// <summary>
+    /// A recorded call of the same items and inputs answers as recorded when it lacks an output the call reads now: its
+    /// text and the order of repeated items stay, and only the new output is a gap. It was synthesized item by item, which
+    /// lost the text (a gap, and a failed call) and took the first row for each repeat (verification of IO step 2).
+    /// </summary>
+    [Fact]
+    public void AnExactRecording_ThatLacksAnOutputReadNow_AnswersAsRecorded_WithAGapOfThatOutputOnly()
+    {
+        var run = Run();
+        var text = TextCall("p");
+        run.ServiceCalls.Add(TextCallOf(0, text, new long[] { 1 }, "ONE"));
+        var repeated = Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new float[] { 1, 1 }));
+        run.ServiceCalls.Add(ModelCallOf(1, repeated, new long[] { 5, 5 }, 10, 99));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var answered = new ArrayOutputWriter();
+        var status = replay.InvokeModel(text.Reading("answer", "new_score"), answered, [EntityKey.FromInt64(1)], "annotator");
+        var scores = new ArrayOutputWriter();
+        var scored = replay.InvokeModel(repeated.Reading("score", "new"), scores, [EntityKey.FromInt64(5), EntityKey.FromInt64(5)]);
+
+        Assert.True(status.Succeeded && scored.Succeeded);
+        Assert.Equal("ONE", answered.Texts["answer"]);
+        Assert.Equal(new float[] { 10, 99 }, scores.Floats["score"]);
+        Assert.Equal(new[] { ("new", "not_recorded"), ("new_score", "not_recorded") }, replay.Gaps.Select(g => (g.Field!, g.Reason)).OrderBy(g => g.Item1, StringComparer.Ordinal).ToArray());
+    }
+
+    /// <summary>
+    /// A call about items that reads only its status (a check of each candidate) has no answer when none of its items is
+    /// recorded with these inputs: it was synthesized as a success, so the caller kept candidates no recording vouched for.
+    /// </summary>
+    [Fact]
+    public void ACallAboutItemsReadingOnlyItsStatus_FailsWhenNoItemIsRecorded()
+    {
+        var replay = RunReplay.Create(Run(), "/runs/0");
+        var check = new ServiceCall { Service = "m", BatchSize = 1, Inputs = new[] { NamedInput.FromFloat32("x", new[] { 1 }, new float[] { 1 }) } };
+
+        var status = replay.InvokeModel(check, new ArrayOutputWriter(), [EntityKey.FromInt64(1)]);
+
+        Assert.False(status.Succeeded);
+        Assert.Equal("not_recorded", Assert.Single(replay.Gaps).Reason);
+    }
+
+    /// <summary>
+    /// A row's digest covers its own values: built from a longer (pooled) buffer, an input is its shape's elements, so the
+    /// slack does not shift the rows (a buffer of 4 for a shape of [2] made each row two values wide, and row 42's digest
+    /// covered row 41's value, verification of IO step 2).
+    /// </summary>
+    [Fact]
+    public void ARowsDigest_IsOfItsOwnValues_WhateverTheBufferHoldsBeyondTheShape()
+    {
+        var run = Run();
+        run.ServiceCalls.Add(ModelCallOf(0, Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new float[] { 1, 2, 90, 99 })), new long[] { 41, 42 }, 10, 20));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var (status, scores) = Invoke(replay, Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new float[] { 1, 3 })), 41, 42);
+
+        Assert.True(status.Succeeded);
+        Assert.Equal(10f, scores[0]);
+        Assert.True(float.IsNaN(scores[1]));
+        var gap = Assert.Single(replay.Gaps);
+        Assert.Equal(("inputs_changed", "42"), (gap.Reason, Assert.Single(gap.Examples)));
+    }
+
+    /// <summary>
+    /// An output a recorded call has, not of whole rows, exempts from its gap only the rows of that call: the node failed on
+    /// it when recorded. A row of another call that has no such output is a gap of it (it was exempt by the name alone).
+    /// </summary>
+    [Fact]
+    public void AMalformedRecordedOutput_ExemptsOnlyItsOwnRows_FromTheOutputsGap()
+    {
+        var run = Run();
+        var first = Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new float[] { 1, 2 }));
+        var malformed = ModelCallOf(0, first, new long[] { 1, 2 }, 10, 20);
+        malformed.Outputs["extra"] = new ReplayOutput { Type = "float32", Values = JsonSerializer.SerializeToElement(new float[] { 1, 2, 3 }) };
+        run.ServiceCalls.Add(malformed);
+        run.ServiceCalls.Add(ModelCallOf(1, Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new float[] { 3, 4 })), new long[] { 3, 4 }, 30, 40));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var status = replay.InvokeModel(
+            Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new float[] { 1, 3 })).Reading("score", "extra"), new ArrayOutputWriter(),
+            [EntityKey.FromInt64(1), EntityKey.FromInt64(3)]);
+
+        Assert.True(status.Succeeded);
+        var gap = Assert.Single(replay.Gaps);
+        Assert.Equal(("extra", "not_recorded", "3"), (gap.Field, gap.Reason, Assert.Single(gap.Examples)));
+    }
+
+    /// <summary>
     /// A rebatched call of an item the recording has, reading only an output no recorded call has: a gap of that output,
     /// not of the item (it was reported without its output's name, review of IO step 2).
     /// </summary>

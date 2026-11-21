@@ -234,7 +234,7 @@ internal static class BoundedCall
         {
             try
             {
-                End(call, io, result, requestId, events);
+                End(call, io, result, requestId, events, sent: unsent == Winner.Client);
             }
             finally
             {
@@ -287,7 +287,7 @@ internal static class BoundedCall
         {
             try
             {
-                End(call, io, result, requestId, events);
+                End(call, io, result, requestId, events, sent: true);
             }
             finally
             {
@@ -301,10 +301,12 @@ internal static class BoundedCall
     /// throws (<see cref="IoCall.Complete"/>): a host's metric listener that threw there left a call that had answered
     /// unrecorded, outstanding in a recording, and threw out of the node in place of its result (review 80).
     /// </summary>
-    private static void End<T, TCall>(TCall call, in IoCall io, in CallResult<T> result, string requestId, RequestEventLog? events)
+    /// <param name="sent">Whether the client was called: a call not sent counts no keys (none went to the dependency), and
+    /// its timeout is counted as any other.</param>
+    private static void End<T, TCall>(TCall call, in IoCall io, in CallResult<T> result, string requestId, RequestEventLog? events, bool sent)
         where TCall : struct, IBoundedCall<T>
     {
-        io.Complete(result.Outcome, call.Keys, requestId, result.Error, events);
+        io.Complete(result.Outcome, sent ? call.Keys : -1, requestId, result.Error, events);
         call.Ended(result, io.Elapsed);
     }
 

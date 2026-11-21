@@ -230,7 +230,9 @@ internal sealed class RunReplay : IFeatureCallHook
                 return Unanswered(call, response, Answer(ownCall, call, response, kind, node), kind, node, keys);
             }
 
-            var same = Find(calls, entry => entry.Outcome == IoOutcome.Ok && Same(entry) && Answers(entry, call));
+            // A recorded call of these items and inputs answers as recorded, with gaps for what it lacks: synthesizing it item
+            // by item would lose its texts and the order of repeated items.
+            var same = Best(calls, entry => entry.Outcome == IoOutcome.Ok && Same(entry), call);
             return same is not null
                 ? Unanswered(call, response, Answer(same, call, response, kind, node), kind, node, keys)
                 : Synthesize(call, calls, response, keys, digests, node, kind);
@@ -251,8 +253,16 @@ internal sealed class RunReplay : IFeatureCallHook
             }
         }
 
-        return call.Limit <= entry.Ids.Length || entry.Limit <= 0 || entry.Ids.Length < entry.Limit;
+        return Shortfall(entry, call) == 0;
     }
+
+    /// <summary>
+    /// How many more items <paramref name="call"/> asks for than the recorded call can tell: 0 when it has as many, or it
+    /// stopped short of a positive limit of its own (the service had no more). A call that asked for none (a limit of 0)
+    /// says nothing about the items the service has.
+    /// </summary>
+    private static int Shortfall(ServiceEntry entry, ServiceCall call) =>
+        call.Limit <= entry.Ids.Length || (entry.Limit > 0 && entry.Ids.Length < entry.Limit) ? 0 : call.Limit - entry.Ids.Length;
 
     /// <summary>
     /// The matching recorded call that answers <paramref name="call"/> (<see cref="Answers"/>), else the one with the most
@@ -470,9 +480,9 @@ internal sealed class RunReplay : IFeatureCallHook
             response.AddItem(entry.Ids[i], entry.Scores[i]);
         }
 
-        if (call.Limit > entry.Ids.Length && entry.Limit > 0 && entry.Ids.Length >= entry.Limit)
+        if (Shortfall(entry, call) is > 0 and var shortfall)
         {
-            AddGap(kind, entry.Service, null, "limit_exceeds_recording", call.Limit - entry.Ids.Length, node);
+            AddGap(kind, entry.Service, null, "limit_exceeds_recording", shortfall, node);
         }
 
         return ServiceStatus.Ok with { OutputTokens = entry.OutputTokens, Truncated = entry.Truncated };
@@ -553,7 +563,6 @@ internal sealed class RunReplay : IFeatureCallHook
         // list<int32,3> one); an output none of them has (every row's inputs changed), as this node's calls have it, then
         // as any call has it. Each recorded call is looked at once.
         var seen = new HashSet<ServiceEntry>(ReferenceEqualityComparer.Instance);
-        HashSet<string>? unsplit = null; // outputs the matched calls have, not of whole rows: the node fails on them as recorded
         for (var r = 0; r < keys.Length; r++)
         {
             if (rows.TryGetValue((keys[r], digests[r]), out var recorded))
@@ -562,7 +571,7 @@ internal sealed class RunReplay : IFeatureCallHook
                 {
                     if (seen.Add(entry))
                     {
-                        AddLayout(layout, entry, call.Outputs.Span, ref unsplit);
+                        AddLayout(layout, entry, call.Outputs.Span);
                     }
                 }
             }
@@ -575,8 +584,7 @@ internal sealed class RunReplay : IFeatureCallHook
                 if (entry.Outcome == IoOutcome.Ok && entry.Keys is not null && (pass == 1 || string.Equals(entry.Node, node, StringComparison.Ordinal))
                     && seen.Add(entry))
                 {
-                    HashSet<string>? ignored = null;
-                    AddLayout(layout, entry, call.Outputs.Span, ref ignored);
+                    AddLayout(layout, entry, call.Outputs.Span);
                 }
             }
         }
@@ -591,21 +599,36 @@ internal sealed class RunReplay : IFeatureCallHook
         ReportUnmatched(kind, call.Service, keys, matched, scored);
 
         // An output the call reads that no recorded row of it has (a text, which belongs to a whole call, or one no call
-        // was asked for): a gap of that output for every row the recording has.
+        // was asked for): a gap of that output for every row the recording has, but one whose recorded value was not of
+        // whole rows (the node failed on it when recorded, and fails on its absence now).
+        var lacking = new bool[keys.Length];
         foreach (var name in call.Outputs.Span)
         {
-            if (!Has(layout, name) && unsplit?.Contains(name) != true)
+            if (!Has(layout, name))
             {
-                AddOutputGap(kind, call.Service, name, node, keys, matched);
+                for (var r = 0; r < keys.Length; r++)
+                {
+                    lacking[r] = matched[r] && !Unsplit(rows[(keys[r], digests[r])], name);
+                }
+
+                if (Array.IndexOf(lacking, true) >= 0)
+                {
+                    AddOutputGap(kind, call.Service, name, node, keys, lacking);
+                }
             }
+        }
+
+        // A call that reads no output answers by its status alone: with none of its items recorded with these inputs,
+        // nothing vouches for it. (One that reads outputs gives each such row the gap value, which says so.)
+        if (call.Outputs.IsEmpty && Array.IndexOf(matched, true) < 0)
+        {
+            return ServiceStatus.Failed($"{kind} '{call.Service}': none of the call's items is in the replay bundle with these inputs");
         }
 
         if (layout.Count == 0 && !call.Outputs.IsEmpty)
         {
             return ServiceStatus.Failed($"{kind} '{call.Service}' has no recorded output in the replay bundle");
         }
-
-        var lacking = new bool[keys.Length];
 
         foreach (var (name, type, perRow) in layout)
         {
@@ -645,7 +668,7 @@ internal sealed class RunReplay : IFeatureCallHook
                     else
                     {
                         slice.Fill(gap);
-                        lacking[r] = matched[r]; // an unmatched row is a gap of the row already
+                        lacking[r] = matched[r] && !Unsplit(rows[(keys[r], digests[r])], name); // an unmatched row is a gap of the row already
                     }
                 }
 
@@ -665,25 +688,30 @@ internal sealed class RunReplay : IFeatureCallHook
         // does not read (a call-level value such as a loss) is not needed.
         static bool ByRow(ServiceEntry entry, Array values) => entry.BatchSize > 0 && values.Length % entry.BatchSize == 0;
 
-        // Only the outputs the call reads (a call-level value such as a loss is not needed); one not of whole rows is noted.
-        static void AddLayout(List<(string Name, TensorElementType Type, int PerRow)> layout, ServiceEntry entry, ReadOnlySpan<string> read, ref HashSet<string>? unsplit)
+        // Only the outputs the call reads (a call-level value such as a loss is not needed), of whole rows.
+        static void AddLayout(List<(string Name, TensorElementType Type, int PerRow)> layout, ServiceEntry entry, ReadOnlySpan<string> read)
         {
             foreach (var (name, values) in entry.Outputs)
             {
-                if (read.IndexOf(name) < 0 || Has(layout, name))
-                {
-                    continue;
-                }
-
-                if (ByRow(entry, values.Values))
+                if (read.IndexOf(name) >= 0 && !Has(layout, name) && ByRow(entry, values.Values))
                 {
                     layout.Add((name, values.Type, PerRow(entry, values.Values)));
                 }
-                else
+            }
+        }
+
+        // A recorded row of the item had the output, not of whole rows: the node failed on it when recorded.
+        static bool Unsplit(List<(ServiceEntry Entry, int Row)> recorded, string name)
+        {
+            foreach (var (entry, _) in recorded)
+            {
+                if (entry.Outputs.TryGetValue(name, out var tensor) && !ByRow(entry, tensor.Values))
                 {
-                    (unsplit ??= new HashSet<string>(StringComparer.Ordinal)).Add(name);
+                    return true;
                 }
             }
+
+            return false;
         }
 
         static bool Has(List<(string Name, TensorElementType Type, int PerRow)> layout, string name)

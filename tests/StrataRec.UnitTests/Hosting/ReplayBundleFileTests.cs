@@ -10,7 +10,7 @@ public sealed class ReplayBundleFileTests
 {
     private const string Minimal = """
         {
-          "format": "stratarec.replay_bundle/2026-11-21.4",
+          "format": "stratarec.replay_bundle/2026-11-21.5",
           "request": { "pipeline_id": "p", "request_id": "r", "seed": 1, "time_ms": 0, "deadline_ms": 100, "assignment": { "source": "none" } },
           "manifest": { "id": "m" },
           "runs": [
@@ -31,17 +31,18 @@ public sealed class ReplayBundleFileTests
     [Fact]
     public void ABundleOfThePreviousFormat_IsRejectedAtTheFormat()
     {
-        // 2026-11-21.4 records model and recall calls as service calls, by the digest of their inputs; 2026-11-21.3 records
+        // 2026-11-21.5 is .4's layout where a service sees only its call's inputs (in .4 a recall could read a request field no
+        // digest covers); 2026-11-21.4 records model and recall calls as service calls, by the digest of their inputs; 2026-11-21.3 records
         // request inputs at the host's types, which 2026-11-21.2 (laid out alike) recorded at the primary's; .2 replays a float32 request input as the nearest float, which .1 replayed as the double given;
         // 2026-11-20.3 has float32 model outputs only, as bare arrays. There are no old readers.
-        foreach (var previous in new[] { "2026-11-21.3", "2026-11-21.2", "2026-11-21.1", "2026-11-20.3" })
+        foreach (var previous in new[] { "2026-11-21.4", "2026-11-21.3", "2026-11-21.2", "2026-11-21.1", "2026-11-20.3" })
         {
-            var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(Minimal.Replace("2026-11-21.4", previous, StringComparison.Ordinal)));
+            var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(Minimal.Replace("2026-11-21.5", previous, StringComparison.Ordinal)));
 
             Assert.Equal("/format", error.Pointer);
         }
 
-        Assert.Equal("stratarec.replay_bundle/2026-11-21.4", ReplayBundle.CurrentFormat);
+        Assert.Equal("stratarec.replay_bundle/2026-11-21.5", ReplayBundle.CurrentFormat);
     }
 
     [Fact]
@@ -176,7 +177,7 @@ public sealed class ReplayBundleFileTests
         // Review 32 #4: "\uD800" (an unpaired surrogate escape) escaped as InvalidOperationException.
         var unpaired = "\"" + (char)92 + "uD800\"";
         var json = member == "seed"
-            ? """{"format":"stratarec.replay_bundle/2026-11-21.4","request":{"seed":""" + unpaired + "}}"
+            ? """{"format":"stratarec.replay_bundle/2026-11-21.5","request":{"seed":""" + unpaired + "}}"
             : """{"format":""" + unpaired + ""","request":{}}""";
 
         var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(json));
