@@ -16,11 +16,13 @@ namespace StrataRec.Pipeline.Replay;
 /// shape, so the same values in another layout do not collide; the leading dimension of a row-wise or shared
 /// <c>[1, ...]</c> input is left out, so the same row in a differently sized batch has the same digest, a batch of one
 /// too, whose shared input is row-wise by its shape (review of the IO redesign: there its leading dimension was kept,
-/// and the row's digest changed with the batch). What a row saw of an input enters its digest as a 128-bit digest of its
-/// own, hashed once for the call when every row saw the same (a shared input, a scalar, a text) and once per row only for
-/// a slice: a shared input is not hashed again for every row (review of 43bdf97: a call of 2,048 rows hashed a shared
-/// vector of 4,096 values 2,048 times, which a full cache hit spent its node's budget on), and the same row has the same
-/// digest whether it saw a slice or all of a shared input. A missing input contributes its name, element
+/// and the row's digest changed with the batch). What a row saw of an input enters its digest inline when it is a few
+/// values (at most <see cref="MaxInlineValues"/>) or missing, and as a 128-bit digest of that encoding otherwise (a text
+/// always): which, depends only on what the row saw, so the same row has the same digest whether it saw a slice or all of
+/// a shared input. A digest the rows share is computed once for the call: a shared vector is not hashed again for every
+/// row (review of 43bdf97: a call of 2,048 rows hashed a shared vector of 4,096 values 2,048 times, which a full cache
+/// hit spent its node's budget on), and a row's scalar is not hashed twice (review of f0f6871: every view as a digest
+/// made a call of many per-row inputs half as slow again). A missing input contributes its name, element
 /// type and declared shape, and that it is missing: it is neither a zero nor an absent input; its declared shape says
 /// whether it is row-wise, as a present one's does (missing on every row). A call's
 /// <see cref="ServiceCallOptions.MaxOutputTokens"/> is part of every digest when it is set: a generative model answers
@@ -37,19 +39,21 @@ internal static class ServiceInputDigest
     public static void Rows(ServiceCall call, int[] order, Span<ulong> digests)
     {
         var inputs = call.Inputs.Span;
-        Span<UInt128> seen = order.Length <= MaxStackInputs ? stackalloc UInt128[order.Length] : new UInt128[order.Length];
+        var stack = order.Length <= MaxStackInputs;
+        Span<UInt128> seen = stack ? stackalloc UInt128[order.Length] : new UInt128[order.Length];
+        Span<Form> forms = stack ? stackalloc Form[order.Length] : new Form[order.Length];
         var builder = default(StableHash.Builder);
         var part = default(StableHash.Builder);
         try
         {
-            var sliced = Shared(ref part, call, order, seen, all: true);
+            Shared(ref part, call, order, seen, forms, all: true);
             for (var row = 0; row < digests.Length; row++)
             {
                 builder.Reset();
                 AddOptions(ref builder, call.Options);
                 for (var k = 0; k < order.Length; k++)
                 {
-                    Add(ref builder, sliced && PerRow(inputs[order[k]], call.BatchSize) ? Seen(ref part, inputs[order[k]], call.BatchSize, row) : seen[k]);
+                    AddSeen(ref builder, ref part, inputs[order[k]], call.BatchSize, row, forms[k], seen[k]);
                 }
 
                 digests[row] = builder.Finish();
@@ -88,7 +92,7 @@ internal static class ServiceInputDigest
     /// The format of service cache keys (docs/decisions.md, IO step 3). A change of what a record holds or of how a key is
     /// built changes it: the records another build wrote are then misses, never misread.
     /// </summary>
-    private const string CacheFormat = "stratarec.service_cache/2026-11-21.4";
+    private const string CacheFormat = "stratarec.service_cache/2026-11-21.5";
 
     /// <summary>
     /// The key of a call about no items in its service's cache: the format, the binding's answer identity, the service
@@ -129,7 +133,9 @@ internal static class ServiceInputDigest
     public static void CacheItemKeys(ServiceCall call, int[] order, string identity, Span<UInt128> keys)
     {
         var inputs = call.Inputs.Span;
-        Span<UInt128> seen = order.Length <= MaxStackInputs ? stackalloc UInt128[order.Length] : new UInt128[order.Length];
+        var stack = order.Length <= MaxStackInputs;
+        Span<UInt128> seen = stack ? stackalloc UInt128[order.Length] : new UInt128[order.Length];
+        Span<Form> forms = stack ? stackalloc Form[order.Length] : new Form[order.Length];
         var builder = default(StableHash.Builder);
         var part = default(StableHash.Builder);
         try
@@ -145,7 +151,7 @@ internal static class ServiceInputDigest
             }
 
             var shared = builder.Finish128();
-            var sliced = Shared(ref part, call, order, seen, all: false);
+            Shared(ref part, call, order, seen, forms, all: false);
             var items = call.Items.Span;
             for (var row = 0; row < keys.Length; row++)
             {
@@ -166,7 +172,7 @@ internal static class ServiceInputDigest
                     var input = inputs[order[k]];
                     if (RowView(input, call.BatchSize))
                     {
-                        Add(ref builder, sliced && PerRow(input, call.BatchSize) ? Seen(ref part, input, call.BatchSize, row) : seen[k]);
+                        AddSeen(ref builder, ref part, input, call.BatchSize, row, forms[k], seen[k]);
                     }
                 }
 
@@ -184,45 +190,78 @@ internal static class ServiceInputDigest
     private const int MaxStackInputs = 32;
 
     /// <summary>
-    /// What every row saw of each input that is the same for all of them, into <paramref name="seen"/> by name order: of
-    /// every input (<paramref name="all"/>), or of those with a leading dimension of rows. Returns whether any input is
-    /// one each row has a slice of, which <see cref="Seen"/> hashes per row.
+    /// Values a row's view of an input holds inline in its digest or key (see the remarks); a view of more, or a text,
+    /// enters as a 128-bit digest of its own.
     /// </summary>
-    private static bool Shared(ref StableHash.Builder part, ServiceCall call, int[] order, scoped Span<UInt128> seen, bool all)
+    private const int MaxInlineValues = 16;
+
+    /// <summary>How what a row saw of an input enters its digest or key.</summary>
+    private enum Form : byte
+    {
+        /// <summary>Its encoding: a view of a few values, or a missing input. Each row encodes it.</summary>
+        Inline,
+
+        /// <summary>The digest of its encoding, the same for every row: computed once for the call.</summary>
+        Shared,
+
+        /// <summary>The digest of its encoding, the row's own slice: computed for each row.</summary>
+        PerRow,
+    }
+
+    /// <summary>
+    /// How each input enters a row's digest or key, by name order, of every input (<paramref name="all"/>) or of those
+    /// with a leading dimension of rows, into <paramref name="forms"/>; the digest of each <see cref="Form.Shared"/> one
+    /// into <paramref name="seen"/>.
+    /// </summary>
+    private static void Shared(ref StableHash.Builder part, ServiceCall call, int[] order, scoped Span<UInt128> seen, scoped Span<Form> forms, bool all)
     {
         var inputs = call.Inputs.Span;
-        var sliced = false;
         for (var k = 0; k < order.Length; k++)
         {
             var input = inputs[order[k]];
-            if (PerRow(input, call.BatchSize))
+            if (!all && !RowView(input, call.BatchSize))
             {
-                sliced = true;
+                continue;
             }
-            else if (all || RowView(input, call.BatchSize))
+
+            var view = new View(input, call.BatchSize, 0); // the count is every row's
+            forms[k] = input.IsMissing || (input.ElementType != TensorElementType.Text && view.Count <= MaxInlineValues) ? Form.Inline
+                : PerRow(input, call.BatchSize) ? Form.PerRow
+                : Form.Shared;
+            if (forms[k] == Form.Shared)
             {
-                seen[k] = Seen(ref part, input, call.BatchSize, 0); // the same for every row
+                seen[k] = Seen(ref part, input, call.BatchSize, 0);
             }
         }
-
-        return sliced;
     }
 
     /// <summary>Each row has a slice of its own of the input, which differs by row: row-wise in a batch of more than one, present, of whole rows.</summary>
     private static bool PerRow(in NamedInput input, int batch) => batch > 1 && !input.IsMissing && Splits(input, batch);
 
-    /// <summary>What row <paramref name="row"/> saw of the input, as the 128-bit digest it adds to the row's (see the remarks).</summary>
+    /// <summary>
+    /// What row <paramref name="row"/> saw of the input, into its digest or key, in its <paramref name="form"/>: inline,
+    /// or as a digest (starting with an int64, where an inline view starts with the input's name, so the two cannot be
+    /// read as each other).
+    /// </summary>
+    private static void AddSeen(ref StableHash.Builder builder, ref StableHash.Builder part, in NamedInput input, int batch, int row, Form form, UInt128 shared)
+    {
+        if (form == Form.Inline)
+        {
+            AddInput(ref builder, input, batch, row);
+            return;
+        }
+
+        var digest = form == Form.Shared ? shared : Seen(ref part, input, batch, row);
+        builder.Add((long)(ulong)(digest >> 64));
+        builder.Add((long)(ulong)digest);
+    }
+
+    /// <summary>The 128-bit digest of what row <paramref name="row"/> saw of the input.</summary>
     private static UInt128 Seen(ref StableHash.Builder part, in NamedInput input, int batch, int row)
     {
         part.Reset();
         AddInput(ref part, input, batch, row);
         return part.Finish128();
-    }
-
-    private static void Add(ref StableHash.Builder builder, UInt128 digest)
-    {
-        builder.Add((long)(ulong)(digest >> 64));
-        builder.Add((long)(ulong)digest);
     }
 
     /// <summary>The input is split by row in a row's digest and key: row-wise, of whole rows.</summary>
@@ -297,19 +336,14 @@ internal static class ServiceInputDigest
     /// <param name="row">The row whose digest is being built; -1 hashes every input whole.</param>
     private static void AddInput(ref StableHash.Builder builder, in NamedInput input, int batch, int row)
     {
-        var length = input.ElementType == TensorElementType.Text ? 0 : input.Values.Length;
-
-        // Row-wise data that does not split evenly into rows is malformed; it is hashed whole, which can only miss a match.
-        // A shared [1, ...] input is what every row saw, all of it (in a batch of one, it is row-wise and its slice is all).
-        var sliced = row >= 0 && IsRowWise(input, batch) && length % batch == 0;
-        var shared = row >= 0 && !sliced && RowView(input, batch) && input.Shape[0] == 1;
+        var view = new View(input, batch, row);
         builder.Add(input.Name);
         builder.AddIndex((int)input.ElementType);
         var shape = input.Shape;
         builder.AddIndex(shape.Length);
         for (var d = 0; d < shape.Length; d++)
         {
-            builder.AddIndex((sliced || shared) && d == 0 ? -1 : shape[d]); // the rows' dimension, normalized
+            builder.AddIndex(view.Normalized && d == 0 ? -1 : shape[d]); // the rows' dimension, normalized
         }
 
         if (input.IsMissing)
@@ -324,8 +358,8 @@ internal static class ServiceInputDigest
             return;
         }
 
-        var count = sliced ? length / batch : length;
-        var start = sliced ? row * count : 0;
+        var count = view.Count;
+        var start = view.Start;
         builder.AddIndex(count);
         var values = input.Values;
         switch (values.ElementType)
@@ -373,5 +407,29 @@ internal static class ServiceInputDigest
 
                 break;
         }
+    }
+
+    /// <summary>
+    /// What a row sees of an input: whether the rows' dimension is left out of its shape, and which of its values. Row-wise
+    /// data that does not split evenly into rows is malformed; it is seen whole, which can only miss a match. A shared
+    /// <c>[1, ...]</c> input is what every row saw, all of it (in a batch of one, it is row-wise and its slice is all).
+    /// </summary>
+    private readonly struct View
+    {
+        /// <param name="row">The row that sees it; -1 sees every input whole.</param>
+        public View(in NamedInput input, int batch, int row)
+        {
+            var length = input.ElementType == TensorElementType.Text ? 0 : input.Values.Length;
+            var sliced = row >= 0 && IsRowWise(input, batch) && length % batch == 0;
+            Normalized = sliced || (row >= 0 && RowView(input, batch) && input.Shape[0] == 1);
+            Count = sliced ? length / batch : length;
+            Start = sliced ? row * Count : 0;
+        }
+
+        public bool Normalized { get; }
+
+        public int Start { get; }
+
+        public int Count { get; }
     }
 }

@@ -99,6 +99,103 @@ public sealed class FetchSetupReviewTests
         }
     }
 
+    /// <summary>
+    /// A host's clock that throws when a cache read takes its time fails the read without leaving its bound behind, and
+    /// one that stalls there does not move the deadline: the clock is read before the bound is made, and the bound ends
+    /// at the deadline taken with the budget (review of f0f6871: the bound was made first, and each throw left a timer).
+    /// </summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task ACacheReadsClock_ThatThrowsOrStalls_LeavesNoBound_AndKeepsTheDeadline(bool context, bool stalls)
+    {
+        const int attempts = 32;
+        var connector = ScriptedConnector.Values((key, _) => (double)key);
+        var store = new FakeCacheStore();
+        var rig = new FeatureTestRig().CacheSource("test", connector, distributed: store, timeoutMs: stalls ? 5000 : 60_000);
+        var feature = rig.Physical(context ? "user.pop" : "item.pop", context ? FeatureTestRig.User : FeatureTestRig.Item, ColumnType.Float64, "test");
+        rig.Build();
+        using var caller = new CancellationTokenSource();
+        var reads = 0;
+        rig.Clock.BeforeTimestamp = () =>
+        {
+            if (reads++ == 0 || !stalls)
+            {
+                if (stalls)
+                {
+                    Thread.Sleep(500);
+                }
+                else
+                {
+                    throw new IOException("the host's clock failed");
+                }
+            }
+        };
+
+        if (stalls)
+        {
+            var request = rig.NewRequest([7], userId: 7, deadlineMs: 250);
+            try
+            {
+                if (context)
+                {
+                    request.Fetcher.StartContextFetch([feature], caller.Token);
+                }
+
+                var result = await request.Fetcher.EnsureAsync([feature], caller.Token);
+
+                Assert.Empty(store.Gets);
+                Assert.Empty(connector.Calls);
+                Assert.Equal(FeatureState.Failed, result.State);
+            }
+            finally
+            {
+                await request.Fetcher.WhenIoCompleteAsync();
+                request.Memory.Release();
+            }
+
+            return;
+        }
+
+        await ThrowOnce();
+        var before = Timer.ActiveCount;
+        for (var i = 0; i < attempts; i++)
+        {
+            await ThrowOnce();
+        }
+
+        Assert.Equal(attempts + 1, reads);
+        Assert.Empty(store.Gets);
+        Assert.Empty(connector.Calls);
+        Assert.True(Timer.ActiveCount - before < attempts / 4, $"{Timer.ActiveCount - before} timers outlived {attempts} failed cache reads");
+
+        async Task ThrowOnce()
+        {
+            var request = rig.NewRequest([7], userId: 7, deadlineMs: 60_000);
+            try
+            {
+                await Assert.ThrowsAsync<IOException>(async () =>
+                {
+                    if (context)
+                    {
+                        request.Fetcher.StartContextFetch([feature], caller.Token);
+                        await request.Fetcher.ContextStoredTask(feature);
+                    }
+                    else
+                    {
+                        await request.Fetcher.EnsureAsync([feature], caller.Token);
+                    }
+                });
+            }
+            finally
+            {
+                request.Memory.Release();
+            }
+        }
+    }
+
     private sealed class RefusingPool : IBufferPool
     {
         public bool Refuse { get; set; }

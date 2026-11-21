@@ -269,10 +269,12 @@ public sealed partial class FeatureFetcher
         read.BudgetMs = budget;
         if (read.BudgetMs > 0)
         {
-            read.Cancellation = new CallBound(CancellationSite.Fetch, cancellationToken, deadline, _events, _requestId);
+            // The host's clock is read before the bound is made, which ResolveAsync releases: a clock that throws leaves no
+            // bound behind (review of f0f6871). The bound ends at the deadline taken with the budget all the same.
             read.StoreBudgetMs = Math.Min(read.BudgetMs, read.Supply.DistributedTimeoutMs ?? Math.Max(1, read.BudgetMs / 2));
             var clock = read.Cache.Clock; // the cache's clock times the tier too (a test moves it by hand)
             read.StoreDeadline = clock.GetTimestamp() + (read.StoreBudgetMs * clock.TimestampFrequency / 1000);
+            read.Cancellation = new CallBound(CancellationSite.Fetch, cancellationToken, deadline, _events, _requestId);
         }
 
         // Tracked, as the context fetch is: it may start an origin call after every call the request has sent so far

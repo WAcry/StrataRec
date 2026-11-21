@@ -646,13 +646,18 @@ public sealed class RunReplayTests
     /// in a batch of two and in a batch of the item alone (review of the IO redesign: in a batch of one the shared input
     /// was per item by its shape, the item's digest changed, and its score was the gap value).
     /// </summary>
+    /// <remarks>A view of a few values enters a digest inline, one of more as its own digest (<paramref name="width"/> 64): both alike in a batch of one and of two, for a shared input and for an item's own.</remarks>
     [Theory]
-    [InlineData(new long[] { 1, 2 }, new long[] { 1 })]
-    [InlineData(new long[] { 1 }, new long[] { 2, 1 })]
-    public void AnItemWithASharedInput_IsAnsweredInABatchOfOneAndOfTwo(long[] recorded, long[] replayed)
+    [InlineData(new long[] { 1, 2 }, new long[] { 1 }, 2)]
+    [InlineData(new long[] { 1 }, new long[] { 2, 1 }, 2)]
+    [InlineData(new long[] { 1, 2 }, new long[] { 1 }, 64)]
+    [InlineData(new long[] { 1 }, new long[] { 2, 1 }, 64)]
+    public void AnItemWithASharedInput_IsAnsweredInABatchOfOneAndOfTwo(long[] recorded, long[] replayed, int width)
     {
-        static ServiceCall WithShared(long[] keys) => Call(
-            keys.Length, NamedInput.FromFloat32("x", [keys.Length], keys.Select(k => (float)k).ToArray()), NamedInput.FromFloat32("u", [1, 2], new float[] { 8, 9 }));
+        ServiceCall WithShared(long[] keys) => Call(
+            keys.Length, NamedInput.FromFloat32("x", [keys.Length], keys.Select(k => (float)k).ToArray()),
+            NamedInput.FromFloat32("u", [1, width], Enumerable.Range(0, width).Select(i => (float)i).ToArray()),
+            NamedInput.FromFloat32("e", [keys.Length, width], keys.SelectMany(k => Enumerable.Range(0, width).Select(i => (float)((k * 100) + i))).ToArray()));
         var run = Run();
         run.ServiceCalls.Add(ModelCallOf(0, WithShared(recorded), recorded, recorded.Select(k => (float)k).ToArray()));
         var replay = RunReplay.Create(run, "/runs/0");
@@ -667,24 +672,21 @@ public sealed class RunReplayTests
 
     /// <summary>
     /// The digests of a call's items read a shared input once for the call, not once an item (review of 43bdf97: a
-    /// recording of 2,048 items hashed a shared vector 2,048 times, and so did the replay): what an item saw of an input
-    /// enters its digest as a digest of its own. An item's digest is still its own, and a whole input (a scalar) is read
-    /// once too.
+    /// recording of 2,048 items hashed a shared vector 2,048 times, and so did the replay): an item's view of more than a
+    /// few values enters its digest as a digest of its own, the same for every item. An item's digest is still its own.
     /// </summary>
     [Fact]
     public void ACallsItemDigests_ReadASharedInputOnce()
     {
         const int count = 64;
-        var shared = new ReadCountingMemory<float>([8, 9]);
-        var scalar = new ReadCountingMemory<float>([0.5f]);
+        var shared = new ReadCountingMemory<float>(Enumerable.Range(0, 64).Select(i => (float)i).ToArray());
         var call = Call(
             count, NamedInput.FromFloat32("x", [count], Enumerable.Range(0, count).Select(i => (float)i).ToArray()),
-            NamedInput.FromFloat32("u", [1, 2], shared.Memory), NamedInput.FromFloat32("t", [], scalar.Memory));
+            NamedInput.FromFloat32("u", [1, 64], shared.Memory));
 
         var digests = RowDigests(call);
 
         Assert.InRange(shared.Reads, 1, 4); // a few (its length is read too), not one an item
-        Assert.InRange(scalar.Reads, 1, 4);
         Assert.Equal(count, digests.Distinct().Count());
     }
 

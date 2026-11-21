@@ -111,16 +111,24 @@ public sealed class ServiceCacheReviewTests
     /// and in a call of the item alone, whose record the other answers (review of the IO redesign: in a batch of one the
     /// shared input was per item by its shape, and the item's key changed with the batch).
     /// </summary>
-    [Fact]
-    public async Task AnItemWithASharedInput_HasOneKey_InABatchOfOneAndOfTwo()
+    /// <remarks>A view of a few values enters a key inline, one of more as its own digest (<paramref name="width"/> 64): both alike in a batch of one and of two, for a shared input and for an item's own.</remarks>
+    [Theory]
+    [InlineData(2)]
+    [InlineData(64)]
+    public async Task AnItemWithASharedInput_HasOneKey_InABatchOfOneAndOfTwo(int width)
     {
         var rig = new ServiceCacheRig();
-        static ServiceCall WithShared(long[] ids, float[] x) => new()
+        ServiceCall WithShared(long[] ids, float[] x) => new()
         {
             Service = "m",
             BatchSize = ids.Length,
             Items = ids.Select(EntityKey.FromInt64).ToArray(),
-            Inputs = new[] { NamedInput.FromFloat32("x", new[] { ids.Length }, x), NamedInput.FromFloat32("u", new[] { 1, 2 }, new float[] { 8, 9 }) },
+            Inputs = new[]
+            {
+                NamedInput.FromFloat32("x", new[] { ids.Length }, x),
+                NamedInput.FromFloat32("u", new[] { 1, width }, Enumerable.Range(0, width).Select(i => (float)i).ToArray()),
+                NamedInput.FromFloat32("e", new[] { ids.Length, width }, ids.SelectMany(id => Enumerable.Range(0, width).Select(i => (float)((id * 100) + i))).ToArray()),
+            },
             Outputs = new[] { "p" },
         };
 
@@ -149,13 +157,13 @@ public sealed class ServiceCacheReviewTests
         var rig = new ServiceCacheRig();
         var ids = Enumerable.Range(1, count).Select(i => (long)i).ToArray();
         var x = ids.Select(i => (float)i).ToArray();
-        var shared = new ReadCountingMemory<float>([8, 9, 10, 11]);
+        var shared = new ReadCountingMemory<float>(Enumerable.Range(0, 64).Select(i => (float)i).ToArray()); // more than a key holds inline
         ServiceCall WithShared() => new()
         {
             Service = "m",
             BatchSize = count,
             Items = ids.Select(EntityKey.FromInt64).ToArray(),
-            Inputs = new[] { NamedInput.FromFloat32("x", new[] { count }, x), NamedInput.FromFloat32("u", new[] { 1, 4 }, shared.Memory) },
+            Inputs = new[] { NamedInput.FromFloat32("x", new[] { count }, x), NamedInput.FromFloat32("u", new[] { 1, 64 }, shared.Memory) },
             Outputs = new[] { "p" },
         };
 

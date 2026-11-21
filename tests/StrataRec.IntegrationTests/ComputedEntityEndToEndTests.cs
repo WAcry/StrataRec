@@ -475,15 +475,47 @@ public sealed class ComputedEntityEndToEndTests
     /// answers the output once, and a feature takes only the type it is declared with (review of 43bdf97: the plan
     /// loaded, and every call failed, whichever type the service answered).
     /// </summary>
-    [Fact]
-    public void TwoFeaturesReadingOneOutputAsTwoTypes_IsALoadError()
+    [Theory]
+    [InlineData("intent.wide", "float64", "score", "as float64, but feature 'intent.score' reads it as float32")]
+    [InlineData("intent.wide", "list<int32>", "topics", "as list<int32>, but feature 'intent.pair' reads it as list<int64,2>")]
+    [InlineData("intent.triple", "list<int64,3>", "topics", "as list<int64,3>, but feature 'intent.pair' reads it as list<int64,2>")]
+    [InlineData("intent.triple", "int64", "topics", "as int64, but feature 'intent.pair' reads it as list<int64,2>")]
+    public void TwoFeaturesReadingOneOutputAsTwoTypes_IsALoadError(string feature, string type, string field, string message)
     {
         var diagnostics = Diagnostics(Workspace(
-            extraFeatures: """, "intent.wide": { "type": "float64", "source": "intent", "field": "score" }""",
-            extraOutput: """, "wide": "ctx.intent.wide" """));
+            extraFeatures: $$"""
+                , "intent.pair": { "type": "list<int64,2>", "source": "intent", "field": "topics" },
+                "{{feature}}": { "type": "{{type}}", "source": "intent", "field": "{{field}}" }
+                """,
+            extraOutput: $$""", "pair": "ctx.intent.pair", "other": "ctx.{{feature}}" """));
 
-        Assert.Contains(diagnostics, d => d.Code == "SERVICE_OUTPUT_TYPE_CONFLICT" && d.Pointer == "/features/intent.wide/type"
-            && d.Message.Contains("as float64, but feature 'intent.score' reads it as float32", StringComparison.Ordinal));
+        Assert.Contains(diagnostics, d => d.Code == "SERVICE_OUTPUT_TYPE_CONFLICT" && d.Pointer == $"/features/{feature}/type"
+            && d.Message.Contains(message, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Readers that one answer can serve load, and are served by one output: a list and a fixed-length list of its type,
+    /// a scalar and a list (review of f0f6871: the load check compared whole types, and rejected the list read as a
+    /// fixed-length list).
+    /// </summary>
+    [Fact]
+    public async Task ReadersOneAnswerServes_Load_AndShareTheOutput()
+    {
+        var service = new IntentService();
+        var plan = Compile(Workspace(
+            extraFeatures: """, "intent.pair": { "type": "list<int64,2>", "source": "intent", "field": "topics" }, "intent.scores": { "type": "list<float32>", "source": "intent", "field": "score" }""",
+            extraOutput: """, "pair": "ctx.intent.pair", "scores": "ctx.intent.scores" """), service);
+
+        var result = await Execute(plan, Inputs(user: 7, query: "shoes", recent: null));
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(["label", "score", "topics"], Assert.Single(service.Calls).Outputs.Order(StringComparer.Ordinal));
+        Assert.All(result.Items, item =>
+        {
+            Assert.Equal([3L, 4L], item.Columns["pair"].AsInt64List().ToArray());
+            Assert.Equal([3L, 4L], item.Columns["topics"].AsInt64List().ToArray());
+            Assert.Equal(0.75, Assert.Single(item.Columns["scores"].AsFloat64List().ToArray()));
+        });
     }
 
     /// <summary>

@@ -370,8 +370,12 @@ internal sealed class ManualClock : TimeProvider
 
     public void AdvanceTimestamps(TimeSpan by) => Interlocked.Add(ref _timestamp, by.Ticks * TimestampFrequency / TimeSpan.TicksPerSecond);
 
+    /// <summary>Runs before each timestamp is read: a test's clock that stalls or throws there.</summary>
+    public Action? BeforeTimestamp { get; set; }
+
     public override long GetTimestamp()
     {
+        BeforeTimestamp?.Invoke();
         var step = Interlocked.Read(ref _stepPerRead);
         return Interlocked.Read(ref _timestamp) < 0 ? base.GetTimestamp() : Interlocked.Add(ref _timestamp, step) - step;
     }

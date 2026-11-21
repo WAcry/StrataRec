@@ -247,16 +247,20 @@ internal sealed class FeatureSourceResolver
         SupplyMode.Fetch => SupportsKey(supply, entity) ? GroupSupply.Fetch(supply.Connector!, supply.TimeoutMs, supply.MaxBatch) : null,
         SupplyMode.Local => LocalTable(supply, entity, members) is { } table ? GroupSupply.Local(table) : null,
         SupplyMode.Cache => CacheGroup(supply, entity, members),
-        SupplyMode.Service => OneTypePerOutput(supply, members) ? GroupSupply.ForService(supply.Service!, supply.TimeoutMs) : null,
+        SupplyMode.Service => OutputsServeTheirReaders(supply, members) ? GroupSupply.ForService(supply.Service!, supply.TimeoutMs) : null,
     };
 
     /// <summary>
-    /// Whether the features of a service's group read each output as one type: the service answers an output once for a
-    /// call, as one tensor, and a feature takes only its declared type (no widening or rounding), so two types of one
-    /// output cannot both be served. A conflict is a <c>SERVICE_OUTPUT_TYPE_CONFLICT</c> at the second feature's type, in
-    /// name order, as a table's field of two types is (review of 43bdf97: such a plan loaded, and every call failed).
+    /// Whether the features of a service's group can all take what the service answers for each output they read: it
+    /// answers an output once for a call, as one tensor, and a feature takes only its declared element type (no widening
+    /// or rounding) and its length (one value for a scalar, its length for a fixed-length list, any for a list). Two
+    /// readers of one output conflict when their element types differ or their lengths do; a scalar and a list of its
+    /// type, or a list and a fixed-length list, can both be served. A conflict is a <c>SERVICE_OUTPUT_TYPE_CONFLICT</c>
+    /// at the later feature's type, in name order, as a table's field of two types is (review of 43bdf97: such a plan
+    /// loaded, and every call failed; then of f0f6871: the first check compared whole types and rejected a list read as a
+    /// fixed-length list too).
     /// </summary>
-    private bool OneTypePerOutput(SourceSupply supply, FeatureRuntimeInfo[] members)
+    private bool OutputsServeTheirReaders(SourceSupply supply, FeatureRuntimeInfo[] members)
     {
         if (members.Length < 2)
         {
@@ -265,28 +269,41 @@ internal sealed class FeatureSourceResolver
 
         var sorted = (FeatureRuntimeInfo[])members.Clone();
         Array.Sort(sorted, static (a, b) => string.CompareOrdinal(a.Definition.Name, b.Definition.Name));
-        var first = new Dictionary<string, FeatureRuntimeInfo>(sorted.Length, StringComparer.Ordinal);
+        var readers = new Dictionary<string, (FeatureRuntimeInfo Typed, FeatureRuntimeInfo? Sized)>(sorted.Length, StringComparer.Ordinal);
         var ok = true;
         foreach (var member in sorted)
         {
             var field = member.Definition.Field!;
-            if (!first.TryGetValue(field, out var other))
+            var length = LengthTaken(member.Type);
+            if (!readers.TryGetValue(field, out var first))
             {
-                first[field] = member;
+                readers[field] = (member, length > 0 ? member : null);
                 continue;
             }
 
-            if (other.Type.AsNonNullable() != member.Type.AsNonNullable())
+            var other = ElementOf(first.Typed.Type) != ElementOf(member.Type) ? first.Typed
+                : length > 0 && first.Sized is { } sized && LengthTaken(sized.Type) != length ? sized
+                : null;
+            if (other is not null)
             {
                 _diagnostics.Error("SERVICE_OUTPUT_TYPE_CONFLICT", _catalogArtifact, member.Definition.Pointer + "/type",
                     $"Feature '{member.Definition.Name}' reads output '{field}' of source '{supply.Name}' as {member.Type.AsNonNullable()}, but feature " +
-                    $"'{other.Definition.Name}' reads it as {other.Type.AsNonNullable()}: the service answers the output once, as one type.",
+                    $"'{other.Definition.Name}' reads it as {other.Type.AsNonNullable()}: the service answers the output once, and no answer is both.",
                     "give every feature that reads the output the same type, or read it through a derived feature");
                 ok = false;
+            }
+            else if (length > 0 && first.Sized is null)
+            {
+                readers[field] = (first.Typed, member);
             }
         }
 
         return ok;
+
+        static Core.Types.StorageKind ElementOf(Core.Types.ColumnType type) => type.IsList ? type.Element : type.Kind;
+
+        // The number of values a feature of the type takes: one for a scalar, the fixed length of a list; 0 for any.
+        static int LengthTaken(Core.Types.ColumnType type) => !type.IsList ? 1 : type.IsFixedLength ? type.FixedLength : 0;
     }
 
     /// <summary>

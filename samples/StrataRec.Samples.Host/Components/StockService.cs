@@ -14,11 +14,12 @@ namespace StrataRec.Samples.Host.Components;
 /// reads another output, is not one it can answer: it fails, saying what it answers.</para>
 /// <para>The rules of the contract, and how this service keeps them:</para>
 /// <list type="bullet">
-/// <item>An item's answer depends on the item alone, as a call about items must: the engine may batch the items as it
-/// likes, cache each item's answer on its own (the binding declares a <c>cache</c>), and replay an item from any recorded
-/// call that had it.</item>
-/// <item>It writes exactly one value per item, into the buffer the response hands it, and allocates nothing. It answers
-/// synchronously, so the engine's bounded wait allocates no task either.</item>
+/// <item>An item's answer depends on the item and what it saw of the call's inputs (its own slice of a per-item input,
+/// all of a shared one) alone, as a call about items must; this one needs only the id. The engine may then batch the
+/// items as it likes, cache each item's answer on its own (the binding declares a <c>cache</c>), and replay an item
+/// from any recorded call that had it.</item>
+/// <item>It writes exactly one value per item, into the buffer the response rents for it from the request, and allocates
+/// nothing per item. It answers synchronously, so the engine's bounded wait allocates no task either.</item>
 /// <item>A failure is a <see cref="ServiceStatus.Failed"/> with a reason; the node's <c>on_failure</c> decides what the
 /// pipeline does without an answer.</item>
 /// </list>
