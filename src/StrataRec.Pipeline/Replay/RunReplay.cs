@@ -690,7 +690,7 @@ internal sealed class RunReplay : IFeatureCallHook
             foreach (var (entry, row) in list)
             {
                 if (entry.Outputs.TryGetValue(name, out var tensor) && tensor.Type == type && ByRow(entry, tensor.Values)
-                    && PerRow(entry, tensor.Values) == perRow && tensor.Values.Length >= (row + 1) * perRow) // a malformed bundle may have more keys than rows
+                    && PerRow(entry, tensor.Values) == perRow && tensor.Values.Length >= (long)(row + 1) * perRow) // a malformed bundle may have more keys than rows
                 {
                     return (tensor.Values, row * perRow);
                 }
