@@ -50,16 +50,16 @@ public sealed class ModelRankerTests
     private const string Ids = """{ "id": "col.entity_id" }""";
 
     private static readonly ModelSignature PairAll = Signature(
-        ("id", TensorElementType.Int64, [-1, 2]), ("code", TensorElementType.Int64, [-1, 2]), ("ctr", TensorElementType.Float32, [-1, 2]),
+        ("id", TensorElementType.Int64, [-1, 2]), ("code", TensorElementType.Int64, [-1, 2]), ("ctr", TensorElementType.Float64, [-1, 2]),
         ("emb", TensorElementType.Float32, [-1, 2, 3]), ("user_emb", TensorElementType.Float32, [-1, 3]), ("user_id", TensorElementType.Int64, [-1]),
-        ("weight", TensorElementType.Float32, [-1]), ("p", TensorElementType.Float32, [-1]));
+        ("weight", TensorElementType.Float64, [-1]), ("p", TensorElementType.Float32, [-1]));
 
     private static readonly ModelSignature PairIds = Signature(("id", TensorElementType.Int64, [-1, 2]), ("p", TensorElementType.Float32, [-1]));
 
     private static readonly ModelSignature ListAll = Signature(
-        ("id", TensorElementType.Int64, [1, -1]), ("code", TensorElementType.Int64, [1, -1]), ("ctr", TensorElementType.Float32, [1, -1]),
+        ("id", TensorElementType.Int64, [1, -1]), ("code", TensorElementType.Int64, [1, -1]), ("ctr", TensorElementType.Float64, [1, -1]),
         ("emb", TensorElementType.Float32, [1, -1, 3]), ("user_emb", TensorElementType.Float32, [1, 3]), ("user_id", TensorElementType.Int64, [1]),
-        ("weight", TensorElementType.Float32, [1]), ("s", TensorElementType.Float32, [1, -1]));
+        ("weight", TensorElementType.Float64, [1]), ("s", TensorElementType.Float32, [1, -1]));
 
     private static readonly ModelSignature ListIds = Signature(("id", TensorElementType.Int64, [1, -1]), ("s", TensorElementType.Float32, [1, -1]));
 
@@ -89,11 +89,11 @@ public sealed class ModelRankerTests
             Assert.Equal(PairAll.Inputs.Select(s => s.Name).Order(StringComparer.Ordinal), call.Inputs.Select(i => i.Name)); // in ordinal order
             AssertTensor(call["id"], TensorElementType.Int64, n, 2);
             AssertTensor(call["code"], TensorElementType.Int64, n, 2);
-            AssertTensor(call["ctr"], TensorElementType.Float32, n, 2);
+            AssertTensor(call["ctr"], TensorElementType.Float64, n, 2);
             AssertTensor(call["emb"], TensorElementType.Float32, n, 2, 3);
             AssertTensor(call["user_emb"], TensorElementType.Float32, n, 3);
             AssertTensor(call["user_id"], TensorElementType.Int64, n);
-            AssertTensor(call["weight"], TensorElementType.Float32, n);
+            AssertTensor(call["weight"], TensorElementType.Float64, n);
             var first = Array.IndexOf(PairsOf4, (call["id"].Int64[0], call["id"].Int64[1]));
             Assert.True(first >= 0 && first % sizes[0] == 0, $"a batch starts at pair {first}");
             for (var p = 0; p < n; p++)
@@ -102,11 +102,11 @@ public sealed class ModelRankerTests
                 var (a, b) = PairsOf4[first + p];
                 Assert.Equal(new[] { a, b }, call["id"].Int64.AsSpan(2 * p, 2).ToArray()); // the batch is a contiguous run of the pairs
                 Assert.Equal(new[] { Items[a].Code, Items[b].Code }, call["code"].Int64.AsSpan(2 * p, 2).ToArray()); // exact
-                Assert.Equal(new[] { (float)Items[a].Ctr, (float)Items[b].Ctr }, call["ctr"].Float32.AsSpan(2 * p, 2).ToArray());
+                Assert.Equal(new[] { Items[a].Ctr, Items[b].Ctr }, call["ctr"].Float64.AsSpan(2 * p, 2).ToArray()); // a float64 as is
                 Assert.Equal(Items[a].Emb.Concat(Items[b].Emb), call["emb"].Float32.AsSpan(6 * p, 6).ToArray()); // row-major [pair, row, N]
                 Assert.Equal(UserEmb, call["user_emb"].Float32.AsSpan(3 * p, 3).ToArray()); // the request's vector in every pair
                 Assert.Equal(Big, call["user_id"].Int64[p]);
-                Assert.Equal(0.75f, call["weight"].Float32[p]);
+                Assert.Equal(0.75, call["weight"].Float64[p]);
             }
         }
 
@@ -128,19 +128,19 @@ public sealed class ModelRankerTests
         Assert.Equal(1, call.BatchSize);
         AssertTensor(call["id"], TensorElementType.Int64, 1, n);
         AssertTensor(call["code"], TensorElementType.Int64, 1, n);
-        AssertTensor(call["ctr"], TensorElementType.Float32, 1, n);
+        AssertTensor(call["ctr"], TensorElementType.Float64, 1, n);
         AssertTensor(call["emb"], TensorElementType.Float32, 1, n, 3);
         AssertTensor(call["user_emb"], TensorElementType.Float32, 1, 3);
         AssertTensor(call["user_id"], TensorElementType.Int64, 1);
-        AssertTensor(call["weight"], TensorElementType.Float32, 1);
+        AssertTensor(call["weight"], TensorElementType.Float64, 1);
         var list = Incoming[..n];
         Assert.Equal(list, call["id"].Int64); // in rank order
         Assert.Equal(list.Select(id => Items[id].Code), call["code"].Int64);
-        Assert.Equal(list.Select(id => (float)Items[id].Ctr), call["ctr"].Float32);
+        Assert.Equal(list.Select(id => Items[id].Ctr), call["ctr"].Float64);
         Assert.Equal(list.SelectMany(id => Items[id].Emb), call["emb"].Float32);
         Assert.Equal(UserEmb, call["user_emb"].Float32);
         Assert.Equal(new[] { Big }, call["user_id"].Int64);
-        Assert.Equal(new[] { 0.75f }, call["weight"].Float32);
+        Assert.Equal(new[] { 0.75 }, call["weight"].Float64);
     }
 
     [Theory]
@@ -178,6 +178,38 @@ public sealed class ModelRankerTests
         Assert.Equal(new long[] { 20, 50, 30, 40, 10, 70, 60 }, IdsOf(result));
         Assert.Equal(new double?[] { 2, 2, 1, null, null, null, null }, ScoresOf(result)); // non-finite scores are missing in the column (design 4.3)
         Assert.Equal(2, result.NonFiniteValues);
+    }
+
+    /// <summary>A score the model returns as float64, as its signature may declare: both rankers read it, and rank the same.</summary>
+    [Fact]
+    public async Task AFloat64Score_IsRead_AndRanksAsTheFloat32One()
+    {
+        var scores = new Dictionary<long, float> { [30] = 1, [10] = 0.5f, [50] = 2, [20] = 3, [40] = -1 };
+        var wideList = Signature(("id", TensorElementType.Int64, [1, -1]), ("s", TensorElementType.Float64, [1, -1]));
+        var widePair = Signature(("id", TensorElementType.Int64, [-1, 2]), ("p", TensorElementType.Float64, [-1]));
+        const string ListConfig = """{ "model": "m", "inputs": { "id": "col.entity_id" }, "output": "s", "window": 5 }""";
+        const string PairConfig = """{ "model": "m", "inputs": { "id": "col.entity_id" }, "output": "p", "window": 5 }""";
+
+        var list = await Run(Compile(new TestModels(_ => wideList, Score(scores), TensorElementType.Float64), "ListwiseReranker@1", ListConfig));
+        var pair = await Run(Compile(new TestModels(_ => widePair, Prefer(Strengths), TensorElementType.Float64), "PairwiseRanker@1", PairConfig));
+
+        Assert.True(list.Succeeded, list.Error);
+        Assert.True(pair.Succeeded, pair.Error);
+        Assert.Equal(IdsOf(await Run(Compile(new TestModels(_ => ListIds, Score(scores)), "ListwiseReranker@1", ListConfig))), IdsOf(list));
+        Assert.Equal(IdsOf(await Run(Compile(new TestModels(_ => PairIds, Prefer(Strengths)), "PairwiseRanker@1", PairConfig))), IdsOf(pair));
+        Assert.Equal(new long[] { 20, 50, 30, 10, 40, 70, 60 }, IdsOf(list));
+    }
+
+    [Fact]
+    public async Task AScoreOfAnotherTypeThanFloat_FailsTheNode_NamingWhatItGot()
+    {
+        var models = new TestModels(_ => ListIds, Score(new Dictionary<long, float>()), TensorElementType.Int64);
+        var plan = Compile(models, "ListwiseReranker@1", """{ "model": "m", "inputs": { "id": "col.entity_id" }, "output": "s", "window": 5 }""");
+
+        var result = await Run(plan);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("model 'm' returned output 's' as int64; a score is float32 or float64, as the signature declares", result.Error);
     }
 
     [Fact]
@@ -354,20 +386,20 @@ public sealed class ModelRankerTests
     [Theory]
     [InlineData("PairwiseRanker@1", new[] { -1, 2 }, null)]
     [InlineData("PairwiseRanker@1", new[] { -1, -1 }, null)]
-    [InlineData("PairwiseRanker@1", new[] { 2, 2 }, "float32 [-1, 2]")]
-    [InlineData("PairwiseRanker@1", new[] { -1, 3 }, "float32 [-1, 2]")]
-    [InlineData("PairwiseRanker@1", new[] { -1 }, "float32 [-1, 2]")]
+    [InlineData("PairwiseRanker@1", new[] { 2, 2 }, "float64 [-1, 2]")]
+    [InlineData("PairwiseRanker@1", new[] { -1, 3 }, "float64 [-1, 2]")]
+    [InlineData("PairwiseRanker@1", new[] { -1 }, "float64 [-1, 2]")]
     [InlineData("ListwiseReranker@1", new[] { 1, -1 }, null)]
     [InlineData("ListwiseReranker@1", new[] { -1, -1 }, null)]
-    [InlineData("ListwiseReranker@1", new[] { 1, 5 }, "float32 [1, -1]")]
-    [InlineData("ListwiseReranker@1", new[] { 2, -1 }, "float32 [1, -1]")]
-    [InlineData("ListwiseReranker@1", new[] { -1 }, "float32 [1, -1]")]
+    [InlineData("ListwiseReranker@1", new[] { 1, 5 }, "float64 [1, -1]")]
+    [InlineData("ListwiseReranker@1", new[] { 2, -1 }, "float64 [1, -1]")]
+    [InlineData("ListwiseReranker@1", new[] { -1 }, "float64 [1, -1]")]
     public void EveryVersionsSignature_IsCheckedAgainstTheLayout(string op, int[] v2Shape, string? sent)
     {
         var pairwise = op == "PairwiseRanker@1";
         var good = pairwise ? new[] { -1, 2 } : new[] { 1, -1 };
         ModelSignature Version(string? version) => Signature(
-            ("id", TensorElementType.Int64, good), ("ctr", TensorElementType.Float32, version == "v2" ? v2Shape : good),
+            ("id", TensorElementType.Int64, good), ("ctr", TensorElementType.Float64, version == "v2" ? v2Shape : good),
             (pairwise ? "p" : "s", TensorElementType.Float32, pairwise ? [-1] : [1, -1]));
         var config = $$"""{ "model": "m", "version_param": "m_version", "inputs": { "id": "col.entity_id", "ctr": "col.item.ctr" }, "output": "{{(pairwise ? "p" : "s")}}" }""";
 
@@ -381,7 +413,7 @@ public sealed class ModelRankerTests
 
         var error = Assert.Single(compilation.Diagnostics, d => d.IsError);
         Assert.Equal(("/nodes/rank/config/inputs/ctr", "MODEL_TENSOR_MISMATCH"), (error.Pointer, error.Code));
-        Assert.Equal($"Model 'm' version 'v2' declares input 'ctr' as float32 [{string.Join(", ", v2Shape)}], but it maps col.item.ctr (float64), which {op} sends as {sent}.",
+        Assert.Equal($"Model 'm' version 'v2' declares input 'ctr' as float64 [{string.Join(", ", v2Shape)}], but it maps col.item.ctr (float64), which {op} sends as {sent}.",
             error.Message);
     }
 
@@ -454,6 +486,7 @@ public sealed class ModelRankerTests
         Assert.Equal(shape, input.Shape);
         var elements = shape.Aggregate(1, (a, d) => a * d);
         Assert.Equal(type == TensorElementType.Float32 ? elements : 0, input.Float32.Length);
+        Assert.Equal(type == TensorElementType.Float64 ? elements : 0, input.Float64.Length);
         Assert.Equal(type == TensorElementType.Int64 ? elements : 0, input.Int64.Length);
     }
 
@@ -531,7 +564,7 @@ public sealed class ModelRankerTests
     }
 
     /// <summary>One input as the client received it, copied: the operator's buffers go back to the pool after the request.</summary>
-    internal sealed record CapturedInput(string Name, TensorElementType ElementType, int[] Shape, float[] Float32, long[] Int64);
+    internal sealed record CapturedInput(string Name, TensorElementType ElementType, int[] Shape, float[] Float32, double[] Float64, long[] Int64);
 
     internal sealed record CapturedCall(int BatchSize, string? Version, IReadOnlyList<CapturedInput> Inputs)
     {
@@ -542,7 +575,10 @@ public sealed class ModelRankerTests
     /// <c>ranker_test@1</c>: declares a signature per version, keeps a copy of every call, and answers its output (the
     /// signature's only one) with what <c>answer</c> computes from the call, or refuses the call when it returns null.
     /// </summary>
-    internal sealed class TestModels(Func<string?, ModelSignature> signature, Func<CapturedCall, float[]?> answer) : IModelClientFactory, IModelClient
+    /// <param name="answerType">The element type the answer is written as: float32, float64 (a model whose signature declares a
+    /// float64 score), or int64 (a client that breaks its signature).</param>
+    internal sealed class TestModels(
+        Func<string?, ModelSignature> signature, Func<CapturedCall, float[]?> answer, TensorElementType answerType = TensorElementType.Float32) : IModelClientFactory, IModelClient
     {
         public const string Type = "ranker_test@1";
 
@@ -573,7 +609,10 @@ public sealed class ModelRankerTests
             var inputs = new List<CapturedInput>();
             foreach (var input in call.Inputs.Span)
             {
-                inputs.Add(new CapturedInput(input.Name, input.ElementType, (int[])input.Shape.Clone(), input.Float32.ToArray(), input.Int64.ToArray()));
+                inputs.Add(new CapturedInput(input.Name, input.ElementType, (int[])input.Shape.Clone(),
+                    input.ElementType == TensorElementType.Float32 ? input.Float32.ToArray() : [],
+                    input.ElementType == TensorElementType.Float64 ? input.Float64.ToArray() : [],
+                    input.ElementType == TensorElementType.Int64 ? input.Int64.ToArray() : []));
             }
 
             var captured = new CapturedCall(call.BatchSize, call.Version, inputs);
@@ -587,7 +626,24 @@ public sealed class ModelRankerTests
                 return ValueTask.FromResult(ModelStatus.Failed("refused"));
             }
 
-            values.CopyTo(outputs.GetFloat32(signature(call.Version).Outputs[0].Name, values.Length).Span);
+            var name = signature(call.Version).Outputs[0].Name;
+            switch (answerType)
+            {
+                case TensorElementType.Float64:
+                    var doubles = outputs.GetValues<double>(name, values.Length).Span;
+                    for (var i = 0; i < values.Length; i++)
+                    {
+                        doubles[i] = values[i];
+                    }
+
+                    break;
+                case TensorElementType.Int64:
+                    outputs.GetValues<long>(name, values.Length).Span.Fill(1);
+                    break;
+                default:
+                    values.CopyTo(outputs.GetValues<float>(name, values.Length).Span);
+                    break;
+            }
             return ValueTask.FromResult(ModelStatus.Ok);
         }
     }

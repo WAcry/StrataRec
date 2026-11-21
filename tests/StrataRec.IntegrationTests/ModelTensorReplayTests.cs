@@ -115,7 +115,7 @@ public sealed class ModelTensorReplayTests
             var ids = Find(inputs, "item_id").Int64.Span;
             var ctr = Find(inputs, "smoothed_ctr").Float32.Span;
             var followers = Find(inputs, "log_followers").Float32.Span;
-            var scores = outputs.GetFloat32("p_click", call.BatchSize).Span;
+            var scores = outputs.GetValues<float>("p_click", call.BatchSize).Span;
             for (var r = 0; r < call.BatchSize; r++)
             {
                 var logit = bias - 1.5f + (12f * ctr[r]) + (0.05f * followers[r]) + (0.1f * (emb[4 * r] - emb[(4 * r) + 3])) + (0.01f * (ids[r] % 7));

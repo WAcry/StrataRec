@@ -95,12 +95,7 @@ internal static class ModelInputDigest
     /// <param name="row">The row whose digest is being built; -1 hashes every input whole.</param>
     private static void AddInput(ref StableHash.Builder builder, in NamedInput input, int batch, int row)
     {
-        var length = input.ElementType switch
-        {
-            TensorElementType.Float32 => input.Float32.Length,
-            TensorElementType.Int64 => input.Int64.Length,
-            _ => 0,
-        };
+        var length = input.ElementType == TensorElementType.Text ? 0 : input.Values.Length;
 
         // Row-wise data that does not split evenly into rows is malformed; it is hashed whole, which can only miss a match.
         var sliced = row >= 0 && IsRowWise(input, batch) && length % batch == 0;
@@ -113,28 +108,59 @@ internal static class ModelInputDigest
             builder.AddIndex(sliced && d == 0 ? -1 : shape[d]); // the batch dimension, normalized
         }
 
+        if (input.ElementType == TensorElementType.Text)
+        {
+            builder.Add(input.Text);
+            return;
+        }
+
         var count = sliced ? length / batch : length;
         var start = sliced ? row * count : 0;
-        switch (input.ElementType)
+        builder.AddIndex(count);
+        var values = input.Values;
+        switch (values.ElementType)
         {
-            case TensorElementType.Float32:
-                builder.AddIndex(count);
-                foreach (var f in input.Float32.Span.Slice(start, count))
+            case TensorElementType.Bool:
+                foreach (var b in values.Bool.Span.Slice(start, count))
                 {
-                    builder.Add((double)f);
+                    builder.Add(b);
+                }
+
+                break;
+            case TensorElementType.Int32:
+                foreach (var i in values.Int32.Span.Slice(start, count))
+                {
+                    builder.Add((long)i);
                 }
 
                 break;
             case TensorElementType.Int64:
-                builder.AddIndex(count);
-                foreach (var l in input.Int64.Span.Slice(start, count))
+                foreach (var l in values.Int64.Span.Slice(start, count))
                 {
                     builder.Add(l);
                 }
 
                 break;
+            case TensorElementType.Float32:
+                foreach (var f in values.Float32.Span.Slice(start, count))
+                {
+                    builder.Add((double)f);
+                }
+
+                break;
+            case TensorElementType.Float64:
+                foreach (var d in values.Float64.Span.Slice(start, count))
+                {
+                    builder.Add(d);
+                }
+
+                break;
             default:
-                builder.Add(input.Text ?? string.Empty);
+                foreach (var text in values.String.Span.Slice(start, count))
+                {
+                    builder.Add(text);
+                }
+
                 break;
         }
     }
@@ -147,15 +173,15 @@ internal static class ModelInputDigest
 internal sealed class RecordingOutputWriter(IModelOutputWriter inner) : IModelOutputWriter
 {
     private readonly object _gate = new();
-    private readonly List<(string Name, Memory<float> Values)> _floats = new();
+    private readonly List<(string Name, TensorValues Values)> _tensors = new();
     private readonly List<(string Name, string Text)> _texts = new();
 
-    public Memory<float> GetFloat32(string name, int elementCount)
+    public Memory<T> GetValues<T>(string name, int elementCount)
     {
-        var buffer = inner.GetFloat32(name, elementCount);
+        var buffer = inner.GetValues<T>(name, elementCount);
         lock (_gate)
         {
-            _floats.Add((name, buffer));
+            _tensors.Add((name, TensorValues.Of<T>(buffer)));
         }
 
         return buffer;
@@ -171,11 +197,11 @@ internal sealed class RecordingOutputWriter(IModelOutputWriter inner) : IModelOu
     }
 
     /// <summary>The outputs by name; a name requested twice keeps its last buffer, as the operator's writer does.</summary>
-    public List<(string Name, Memory<float> Values)> Floats()
+    public List<(string Name, TensorValues Values)> Tensors()
     {
         lock (_gate)
         {
-            return LastByName(_floats);
+            return LastByName(_tensors);
         }
     }
 

@@ -116,7 +116,7 @@ public sealed class LogisticModelClient : IModelClient
         // In double, as the coefficients were checked: in float a large weight and bias that cancel (1e40 and -1e40) would
         // overflow to infinities and give NaN. A logit that is not a number even so (weights that overflow double) is a
         // failed call, never a score: the node's on_failure decides, not a NaN passed on as a probability.
-        var probabilities = outputs.GetFloat32(_output, batch).Span[..batch];
+        var probabilities = outputs.GetValues<float>(_output, batch).Span[..batch];
         for (var r = 0; r < batch; r++)
         {
             var logit = _bias;

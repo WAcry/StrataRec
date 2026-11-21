@@ -128,7 +128,7 @@ public sealed class ReplayClientFailureTests
 
         private sealed class DiscardingWriter : IModelOutputWriter
         {
-            public Memory<float> GetFloat32(string name, int elementCount) => new float[elementCount];
+            public Memory<T> GetValues<T>(string name, int elementCount) => new T[elementCount];
 
             public void SetText(string name, string text)
             {

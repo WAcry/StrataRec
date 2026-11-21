@@ -10,9 +10,10 @@ namespace StrataRec.Models;
 /// </summary>
 /// <remarks>
 /// <para>Intended for local development, tests, replay fixtures and as a cheap fallback model. Its signature declares every
-/// input and output float32 <c>[-1]</c>, one value per row: <c>ModelScorer@1</c> can feed it float32 and float64 columns,
-/// and reports a bool, int or list column mapped to it at load time (the scorer sends those as int64 <c>[rows]</c> and
-/// <c>[rows, N]</c>; a bool weighs in through a float32 derived feature, e.g. <c>is_new ? 1.0 : 0.0</c>). A call with another tensor fails. Settings:</para>
+/// input and output float32 <c>[-1]</c>, one value per row: <c>ModelScorer@1</c> sends every column as its declared type,
+/// so it feeds float32 columns and writes float32 ones, and reports a column of another type mapped to it at load time
+/// (a float64, bool or int one weighs in through a float32 derived feature, e.g. <c>is_new ? 1.0 : 0.0</c>). A call with
+/// another tensor fails. Settings:</para>
 /// <code>
 /// { "client": "linear@1",
 ///   "outputs": { "p_click": { "bias": -2.0, "weights": { "smoothed_ctr": 8.0 }, "activation": "sigmoid" } },
@@ -112,7 +113,7 @@ public sealed class LinearModelClient : IModelClient
         var inputs = call.Inputs.Span;
         foreach (var output in _outputs)
         {
-            var dest = outputs.GetFloat32(output.Name, batch).Span;
+            var dest = outputs.GetValues<float>(output.Name, batch).Span;
             dest.Fill((float)output.Bias);
             foreach (var (name, weight) in output.Weights)
             {

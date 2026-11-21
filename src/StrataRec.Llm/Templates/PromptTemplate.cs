@@ -424,7 +424,7 @@ public sealed class PromptTemplate
 
             var float32 = symbol.Type.ValueKind == StorageKind.Float32
                           || (symbol.Kind == SymbolKind.Context && context.Schema.TryGetContext(name["ctx.".Length..], out var field)
-                              && field.InputType.ValueKind == StorageKind.Float32);
+                              && field.DeclaredType.ValueKind == StorageKind.Float32);
             reference = new Reference(symbol, float32);
             return true;
         }

@@ -133,7 +133,7 @@ public sealed class FixedTextModelClientTests
     {
         public Dictionary<string, string> Texts { get; } = new();
 
-        public Memory<float> GetFloat32(string name, int elementCount) => throw new InvalidOperationException("a text model writes no float32 output");
+        public Memory<T> GetValues<T>(string name, int elementCount) => throw new InvalidOperationException("a text model writes no tensor output");
 
         public void SetText(string name, string text) => Texts[name] = text;
     }

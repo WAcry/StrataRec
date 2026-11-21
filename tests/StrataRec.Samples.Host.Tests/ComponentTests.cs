@@ -117,7 +117,12 @@ public sealed class ComponentTests
     {
         public float[] Values { get; private set; } = Array.Empty<float>();
 
-        public Memory<float> GetFloat32(string name, int elementCount) => Values = new float[elementCount];
+        public Memory<T> GetValues<T>(string name, int elementCount)
+        {
+            var buffer = new T[elementCount];
+            Values = buffer as float[] ?? throw new InvalidOperationException($"the logistic model wrote a {typeof(T).Name} output");
+            return buffer;
+        }
 
         public void SetText(string name, string text) => throw new NotSupportedException();
     }

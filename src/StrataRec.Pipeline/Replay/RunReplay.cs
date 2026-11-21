@@ -463,9 +463,9 @@ internal sealed class RunReplay : IFeatureCallHook
             };
         }
 
-        foreach (var (name, values) in entry.Outputs)
+        foreach (var (name, tensor) in entry.Outputs)
         {
-            values.CopyTo(outputs.GetFloat32(name, values.Length).Span);
+            Write(outputs, name, tensor);
         }
 
         foreach (var (name, text) in entry.Texts)
@@ -476,13 +476,41 @@ internal sealed class RunReplay : IFeatureCallHook
         return ModelStatus.Ok with { OutputTokens = entry.OutputTokens, Truncated = entry.Truncated };
     }
 
+    /// <summary>Writes a recorded tensor output into the operator's writer, as the client wrote it.</summary>
+    private static void Write(IModelOutputWriter outputs, string name, in ReplayTensor tensor)
+    {
+        switch (tensor.Values)
+        {
+            case bool[] b:
+                b.CopyTo(outputs.GetValues<bool>(name, b.Length).Span);
+                break;
+            case int[] i:
+                i.CopyTo(outputs.GetValues<int>(name, i.Length).Span);
+                break;
+            case long[] l:
+                l.CopyTo(outputs.GetValues<long>(name, l.Length).Span);
+                break;
+            case float[] f:
+                f.CopyTo(outputs.GetValues<float>(name, f.Length).Span);
+                break;
+            case double[] d:
+                d.CopyTo(outputs.GetValues<double>(name, d.Length).Span);
+                break;
+            case string?[] t:
+                t.CopyTo(outputs.GetValues<string?>(name, t.Length).Span);
+                break;
+        }
+    }
+
     /// <summary>
     /// A keyed call the recording does not have as such (other batches, or changed inputs): each row's output comes from
     /// a successful recorded call that scored the same entity with the same inputs, whichever call and row that was. An
     /// entity scored only with other inputs is an <c>inputs_changed</c> gap; one never scored is <c>not_recorded</c>.
     /// </summary>
     /// <remarks>
-    /// Float outputs are split by row. Text outputs are not: a text belongs to its whole call, so a multi-row call's text is
+    /// Tensor outputs are split by row; a row the recording cannot answer gets NaN in a float output (which the column
+    /// writer replaces with its default, as any non-finite value) and the type's zero (false, 0, an empty string) in
+    /// another, and is reported as a gap either way. Text outputs are not split: a text belongs to its whole call, so a multi-row call's text is
     /// replayed only with that call. A single-row call is the exception: when a successful recorded call answered that one
     /// entity alone with the same inputs, it is answered as that call was, texts and generation details included (a
     /// per-row generative call, such as <c>LlmAnnotator@1</c>'s, whose recorded call another call of the same entity took).
@@ -491,7 +519,7 @@ internal sealed class RunReplay : IFeatureCallHook
     {
         // Output layout (names and values per row) and the rows by (entity, input digest), from the successful keyed calls
         // of the same model and version. An entity can be scored several times with different inputs.
-        var layout = new List<(string Name, int PerRow)>();
+        var layout = new List<(string Name, TensorElementType Type, int PerRow)>();
         var rows = new Dictionary<(EntityKey Key, string Digest), List<(ModelEntry Entry, int Row)>>();
         var scored = new HashSet<EntityKey>();
         if (calls is not null)
@@ -519,7 +547,7 @@ internal sealed class RunReplay : IFeatureCallHook
                 {
                     if (!layout.Exists(o => o.Name == name))
                     {
-                        layout.Add((name, PerRow(entry, values)));
+                        layout.Add((name, values.Type, PerRow(entry, values.Values)));
                     }
                 }
             }
@@ -538,20 +566,45 @@ internal sealed class RunReplay : IFeatureCallHook
             return ModelStatus.Failed($"model '{call.Model}' has no recorded output in the replay bundle");
         }
 
-        foreach (var (name, perRow) in layout)
+        foreach (var (name, type, perRow) in layout)
         {
-            var destination = outputs.GetFloat32(name, keys.Length * perRow).Span;
-            for (var r = 0; r < keys.Length; r++)
+            switch (type)
             {
-                var slice = destination.Slice(r * perRow, perRow);
-                if (Recorded(rows, keys[r], digests[r], name, perRow) is { } values)
+                case TensorElementType.Bool:
+                    Fill(outputs.GetValues<bool>(name, keys.Length * perRow).Span, false);
+                    break;
+                case TensorElementType.Int32:
+                    Fill(outputs.GetValues<int>(name, keys.Length * perRow).Span, 0);
+                    break;
+                case TensorElementType.Int64:
+                    Fill(outputs.GetValues<long>(name, keys.Length * perRow).Span, 0L);
+                    break;
+                case TensorElementType.Float32:
+                    Fill(outputs.GetValues<float>(name, keys.Length * perRow).Span, float.NaN);
+                    break;
+                case TensorElementType.Float64:
+                    Fill(outputs.GetValues<double>(name, keys.Length * perRow).Span, double.NaN);
+                    break;
+                default:
+                    Fill(outputs.GetValues<string>(name, keys.Length * perRow).Span, string.Empty);
+                    break;
+            }
+
+            // Each row from its recorded row, or the gap value.
+            void Fill<T>(Span<T> destination, T gap)
+            {
+                for (var r = 0; r < keys.Length; r++)
                 {
-                    values.Span.CopyTo(slice);
-                }
-                else
-                {
-                    slice.Fill(float.NaN);
-                    lacking[r] = true;
+                    var slice = destination.Slice(r * perRow, perRow);
+                    if (Recorded(rows, keys[r], digests[r], name, type, perRow) is { } found)
+                    {
+                        ((T[])found.Values).AsSpan(found.Start, perRow).CopyTo(slice);
+                    }
+                    else
+                    {
+                        slice.Fill(gap);
+                        lacking[r] = true;
+                    }
                 }
             }
         }
@@ -559,7 +612,7 @@ internal sealed class RunReplay : IFeatureCallHook
         ReportLacking(call.Model, keys, digests, lacking, rows, scored);
         return ModelStatus.Ok;
 
-        static int PerRow(ModelEntry entry, float[] values) => entry.BatchSize > 0 ? values.Length / entry.BatchSize : 1;
+        static int PerRow(ModelEntry entry, Array values) => entry.BatchSize > 0 ? values.Length / entry.BatchSize : 1;
 
         // The first successful recorded call of this one entity alone, with these inputs, that answered text.
         static ModelEntry? Alone(Dictionary<(EntityKey, string), List<(ModelEntry Entry, int Row)>> rows, EntityKey key, string digest)
@@ -578,8 +631,9 @@ internal sealed class RunReplay : IFeatureCallHook
             return null;
         }
 
-        // The first recorded row of the entity with these inputs that has the output in the same layout.
-        static ReadOnlyMemory<float>? Recorded(Dictionary<(EntityKey, string), List<(ModelEntry Entry, int Row)>> rows, EntityKey key, string digest, string name, int perRow)
+        // The first recorded row of the entity with these inputs that has the output in the same layout and element type.
+        static (Array Values, int Start)? Recorded(
+            Dictionary<(EntityKey, string), List<(ModelEntry Entry, int Row)>> rows, EntityKey key, string digest, string name, TensorElementType type, int perRow)
         {
             if (!rows.TryGetValue((key, digest), out var list))
             {
@@ -588,9 +642,10 @@ internal sealed class RunReplay : IFeatureCallHook
 
             foreach (var (entry, row) in list)
             {
-                if (entry.Outputs.TryGetValue(name, out var values) && PerRow(entry, values) == perRow && values.Length >= (row + 1) * perRow)
+                if (entry.Outputs.TryGetValue(name, out var tensor) && tensor.Type == type && PerRow(entry, tensor.Values) == perRow
+                    && tensor.Values.Length >= (row + 1) * perRow)
                 {
-                    return values.AsMemory(row * perRow, perRow);
+                    return (tensor.Values, row * perRow);
                 }
             }
 
@@ -980,10 +1035,10 @@ internal sealed class RunReplay : IFeatureCallHook
                     "record one digest per key, or one for a call without keys");
             }
 
-            var outputs = new Dictionary<string, float[]>(StringComparer.Ordinal);
+            var outputs = new Dictionary<string, ReplayTensor>(StringComparer.Ordinal);
             foreach (var (name, values) in call.Outputs)
             {
-                outputs[name] = ReplayJson.Floats(values, $"{at}/outputs/{JsonPointer.Escape(name)}");
+                outputs[name] = ReplayJson.Tensor(values, $"{at}/outputs/{JsonPointer.Escape(name)}");
             }
 
             var entry = new ModelEntry(call.Seq, call.Model, call.BatchSize, outcome, call.Error, call.Threw, keys, call.InputDigests.ToArray(), outputs,
@@ -1088,7 +1143,7 @@ internal sealed class RunReplay : IFeatureCallHook
 
     private sealed class ModelEntry(
         int seq, string model, int batchSize, IoOutcome outcome, string? error, bool threw, EntityKey[]? keys, string[] digests,
-        Dictionary<string, float[]> outputs, Dictionary<string, string> texts, int? outputTokens, bool truncated)
+        Dictionary<string, ReplayTensor> outputs, Dictionary<string, string> texts, int? outputTokens, bool truncated)
     {
         public int Seq { get; } = seq;
 
@@ -1106,7 +1161,7 @@ internal sealed class RunReplay : IFeatureCallHook
 
         public string[] Digests { get; } = digests;
 
-        public Dictionary<string, float[]> Outputs { get; } = outputs;
+        public Dictionary<string, ReplayTensor> Outputs { get; } = outputs;
 
         public Dictionary<string, string> Texts { get; } = texts;
 

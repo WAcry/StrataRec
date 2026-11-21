@@ -2,9 +2,9 @@
 
 StrataRec 是面向 .NET 10+ 的进程内推荐执行引擎：列式候选表、编译一次的算子流水线、CEL 风格表达式 `ColumnExpr`，以及用 RFC 7396 合并补丁表达的多层实验。
 
-开始改动之前先读 `docs/development.md`：项目的核心目标、取舍标准和必须守的规则（可演进性、性能与分配、缺失与确定性、配置与错误信息、兼容与版本、范围、测试、文档），以及每条规则的理由。
+开始改动之前先读 `docs/development.md`：项目的核心目标、判断方案的标准和取舍的方向（可演进性、更简单的方案、性能与分配、缺失与确定性、内部类型与边界类型、配置与错误信息、兼容与版本、范围、测试、文档），以及背后的理由。
 
-- `docs/development.md`：开发理念、取舍和规则，适用于每一次改动。
+- `docs/development.md`：开发理念、判断标准和取舍的方向，适用于每一次改动。
 - `docs/decisions.md`：实现中的决定和理由。改变设计或做出取舍时在这里补一条。
 - `docs/design.md`：整体设计（最初的草稿，优先级最低），代码注释中的 “design 4.6” 指它的章节号。
 
@@ -42,7 +42,7 @@ dotnet run --project src/StrataRec.Cli -- --help
 
 ## 约定
 
-规则和理由在 `docs/development.md`，这里只列操作上的约定。
+理念和理由在 `docs/development.md`，具体的决定在 `docs/decisions.md`，这里只列操作上的约定。
 
 - C# 14、文件级命名空间、启用 nullable、`TreatWarningsAsErrors`。私有字段用 `_camelCase`。
 - `src/` 中禁止 LINQ（理由见 `docs/development.md` 第 4 节），由 `BannedSymbols.txt`（RS0030）和移除隐式 `System.Linq` using（`Directory.Build.targets`）在构建时强制。

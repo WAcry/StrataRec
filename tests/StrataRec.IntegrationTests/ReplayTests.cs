@@ -92,7 +92,7 @@ public sealed class ReplayTests
             run.FeatureCalls.Select(c => c.Seq).Concat(run.CandidateCalls.Select(c => c.Seq)).Concat(run.ModelCalls.Select(c => c.Seq)).Order());
         var model = Assert.Single(run.ModelCalls);
         Assert.Equal(("ctr_model", "ok", 30, 30), (model.Model, model.Status, model.Keys!.Value.GetArrayLength(), model.InputDigests.Count));
-        Assert.Equal(30, model.Outputs["p_click"].GetArrayLength());
+        Assert.Equal(("float32", 30), (model.Outputs["p_click"].Type, model.Outputs["p_click"].Values.GetArrayLength()));
 
         Assert.Equal("captured", run.Sampling.Logs);
         Assert.Contains(run.Sampling.Groups, g => g is { Group: "all", Rate: 1.0, EffectiveRate: 1.0, Sampled: true });

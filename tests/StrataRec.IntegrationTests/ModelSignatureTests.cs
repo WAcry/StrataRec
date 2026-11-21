@@ -25,7 +25,7 @@ public sealed class ModelSignatureTests
     [InlineData("int64 input", "/nodes/ctr_ranker/config/inputs/smoothed_ctr", "MODEL_TENSOR_MISMATCH")]
     [InlineData("matrix input", "/nodes/ctr_ranker/config/inputs/smoothed_ctr", "MODEL_TENSOR_MISMATCH")]
     [InlineData("extra input", "/nodes/ctr_ranker/config/model", "MODEL_INPUT_MISSING")]
-    [InlineData("matrix output", "/nodes/ctr_ranker/config/outputs/p_click", "MODEL_TENSOR_UNSUPPORTED")]
+    [InlineData("matrix output", "/nodes/ctr_ranker/config/outputs/p_click", "MODEL_TENSOR_MISMATCH")] // its float32 column takes float32 [-1]
     public void AVersionTheScorerCannotCall_IsALoadError_AtItsConfigKey(string mismatch, string pointer, string code)
     {
         var signature = mismatch switch

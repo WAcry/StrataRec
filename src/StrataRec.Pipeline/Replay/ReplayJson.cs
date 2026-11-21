@@ -8,6 +8,7 @@ using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Features.Connectors;
 using StrataRec.Logging;
+using StrataRec.Models;
 
 namespace StrataRec.Pipeline.Replay;
 
@@ -132,22 +133,136 @@ internal static class ReplayJson
         return Parse(buffer);
     }
 
-    /// <summary>float32 values; a non-finite value is written as its name (<c>"NaN"</c>, <c>"Infinity"</c>, <c>"-Infinity"</c>).</summary>
-    public static JsonElement Floats(ReadOnlySpan<float> values)
+    /// <summary>A model's tensor output as a bundle records it: its element type, and its values in the log encoding.</summary>
+    public static ReplayModelOutput Tensor(in TensorValues values)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var json = new Utf8JsonWriter(buffer))
         {
             json.WriteStartArray();
-            foreach (var value in values)
+            switch (values.ElementType)
             {
-                LogBatchJson.WriteValue(json, ScalarValue.FromFloat64(value), nonFiniteAsStrings: true);
+                case TensorElementType.Bool:
+                    foreach (var value in values.Bool.Span)
+                    {
+                        LogBatchJson.WriteValue(json, ScalarValue.FromBool(value), nonFiniteAsStrings: true);
+                    }
+
+                    break;
+                case TensorElementType.Int32:
+                    foreach (var value in values.Int32.Span)
+                    {
+                        LogBatchJson.WriteValue(json, ScalarValue.FromInt64(value), nonFiniteAsStrings: true);
+                    }
+
+                    break;
+                case TensorElementType.Int64:
+                    foreach (var value in values.Int64.Span)
+                    {
+                        LogBatchJson.WriteValue(json, ScalarValue.FromInt64(value), nonFiniteAsStrings: true);
+                    }
+
+                    break;
+                case TensorElementType.Float32:
+                    foreach (var value in values.Float32.Span)
+                    {
+                        LogBatchJson.WriteValue(json, ScalarValue.FromFloat32(value), nonFiniteAsStrings: true);
+                    }
+
+                    break;
+                case TensorElementType.Float64:
+                    foreach (var value in values.Float64.Span)
+                    {
+                        LogBatchJson.WriteValue(json, ScalarValue.FromFloat64(value), nonFiniteAsStrings: true);
+                    }
+
+                    break;
+                default:
+                    foreach (var value in values.String.Span)
+                    {
+                        // An element the client left unwritten is null; the operator fails the call's node on it, and the bundle keeps it.
+                        LogBatchJson.WriteValue(json, ScalarValue.FromString(value), nonFiniteAsStrings: true);
+                    }
+
+                    break;
             }
 
             json.WriteEndArray();
         }
 
-        return Parse(buffer);
+        return new ReplayModelOutput { Type = TensorValues.Name(values.ElementType), Values = Parse(buffer) };
+    }
+
+    /// <summary>A recorded tensor output: its element type and its values (a <c>bool[]</c>, <c>int[]</c>, <c>long[]</c>, <c>float[]</c>, <c>double[]</c> or <c>string?[]</c>).</summary>
+    public static ReplayTensor Tensor(ReplayModelOutput output, string pointer)
+    {
+        if (!TensorValues.TryParse(output.Type, out var type) || type == TensorElementType.Text)
+        {
+            throw new ReplayBundleException(pointer + "/type", $"'{output.Type}' is not a tensor element type",
+                "an output's type is bool, int32, int64, float32, float64 or string; a text output is under texts");
+        }
+
+        var json = output.Values;
+        if (json.ValueKind != JsonValueKind.Array)
+        {
+            throw new ReplayBundleException(pointer + "/values", $"expected an array of {output.Type} values, got {json.ValueKind}");
+        }
+
+        var count = json.GetArrayLength();
+        Array values = type switch
+        {
+            TensorElementType.Bool => new bool[count],
+            TensorElementType.Int32 => new int[count],
+            TensorElementType.Int64 => new long[count],
+            TensorElementType.Float32 => new float[count],
+            TensorElementType.Float64 => new double[count],
+            _ => new string?[count],
+        };
+        var element = type switch
+        {
+            TensorElementType.Bool => ColumnType.Bool,
+            TensorElementType.Int32 => ColumnType.Int32,
+            TensorElementType.Int64 => ColumnType.Int64,
+            TensorElementType.Float32 => ColumnType.Float32,
+            TensorElementType.Float64 => ColumnType.Float64,
+            _ => ColumnType.String.AsNullable(),
+        };
+        var i = 0;
+        foreach (var item in json.EnumerateArray())
+        {
+            var at = $"{pointer}/values/{i.ToString(CultureInfo.InvariantCulture)}";
+            var value = Value(item, element, at);
+            if (value.IsMissing && type != TensorElementType.String)
+            {
+                throw new ReplayBundleException(at, $"expected a {output.Type} value, got null", "every element of a tensor has a value");
+            }
+
+            switch (values)
+            {
+                case bool[] b:
+                    b[i] = value.AsBool();
+                    break;
+                case int[] n:
+                    n[i] = (int)value.AsInt64(); // the log encoding read it as an int32, in range
+                    break;
+                case long[] l:
+                    l[i] = value.AsInt64();
+                    break;
+                case float[] f:
+                    f[i] = (float)value.AsFloat64();
+                    break;
+                case double[] d:
+                    d[i] = value.AsFloat64();
+                    break;
+                case string?[] t:
+                    t[i] = value.IsMissing ? null : value.AsString();
+                    break;
+            }
+
+            i++;
+        }
+
+        return new ReplayTensor(type, values);
     }
 
     public static ReplayTypedValue Typed(ColumnType type, in ScalarValue value) =>
@@ -283,38 +398,6 @@ internal static class ReplayJson
         return keys;
     }
 
-    /// <summary>float32 values, with non-finite values written as their names.</summary>
-    public static float[] Floats(JsonElement json, string pointer)
-    {
-        if (json.ValueKind != JsonValueKind.Array)
-        {
-            throw new ReplayBundleException(pointer, $"expected an array of numbers, got {json.ValueKind}");
-        }
-
-        var values = new float[json.GetArrayLength()];
-        var i = 0;
-        foreach (var element in json.EnumerateArray())
-        {
-            if (element.ValueKind == JsonValueKind.Number)
-            {
-                values[i] = element.GetSingle();
-            }
-            else if (LogBatchJson.TryNonFinite(element, out var named))
-            {
-                values[i] = (float)named;
-            }
-            else
-            {
-                throw new ReplayBundleException(pointer + "/" + i.ToString(CultureInfo.InvariantCulture), $"expected a number, got {element.GetRawText()}",
-                    "write NaN and infinities as \"NaN\", \"Infinity\" or \"-Infinity\"");
-            }
-
-            i++;
-        }
-
-        return values;
-    }
-
     /// <summary>The status of a call that was still in flight when its request was aborted (design 13.4).</summary>
     public const string Outstanding = "outstanding";
 
@@ -355,3 +438,6 @@ internal static class ReplayJson
         return JsonElement.ParseValue(ref reader);
     }
 }
+
+/// <summary>A model's tensor output read from a bundle: its element type and its values, an array of that type.</summary>
+internal readonly record struct ReplayTensor(TensorElementType Type, Array Values);

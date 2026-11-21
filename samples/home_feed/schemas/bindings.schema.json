@@ -420,7 +420,7 @@
                   "description": "The inputs of the model it stands in for, as the model declares them: their names, each a float32 tensor of shape [-1] ([\"smoothed_ctr\", \"log_followers\"]), or each name mapped to its tensor ({ \"item_id\": { \"type\": \"int64\", \"shape\": [-1, 2] } }). At least one, each once."
                 },
                 "outputs": {
-                  "description": "The outputs, as the model declares them: their names, each a float32 tensor of shape [-1] ([\"p_click\"]), or each name mapped to its shape ({ \"p_first\": { \"shape\": [-1] } }). At least one, each once."
+                  "description": "The outputs, as the model declares them: their names, each a float32 tensor of shape [-1] ([\"p_click\"]), or each name mapped to its shape and, for a float64 score, its type ({ \"p_first\": { \"shape\": [-1] }, \"p_like\": { \"type\": \"float64\", \"shape\": [-1] } }). At least one, each once."
                 },
                 "seed": {
                   "description": "A fixed seed instead of the call's (ctx.request.seed): every request gets the same scores.",

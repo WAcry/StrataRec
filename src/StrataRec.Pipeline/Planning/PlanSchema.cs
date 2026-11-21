@@ -67,17 +67,19 @@ public sealed class ContextField
     public required ColumnType Type { get; init; }
 
     /// <summary>
-    /// For request inputs, the type as declared in <c>request_schema</c>. <see cref="Type"/> is its promoted form, which
-    /// expressions see; incoming values are validated against the declared type, so an <c>int32</c> or
-    /// <c>list&lt;int32&gt;</c> input outside the int32 range is rejected rather than passed through.
+    /// The type as declared: in <c>request_schema</c> for a request input, in the catalog for a context feature.
+    /// <see cref="Type"/> is its promoted form, which expressions see. Incoming values are validated against the declared
+    /// type, so an <c>int32</c> or <c>list&lt;int32&gt;</c> input outside the int32 range is rejected rather than passed
+    /// through; and whatever hands the value on beyond the engine (a model input, a log tap, a prompt) gives it at this
+    /// type, as the user declared it.
     /// </summary>
-    public ColumnType InputType
+    public ColumnType DeclaredType
     {
-        get => _inputType ?? Type;
-        init => _inputType = value;
+        get => _declaredType ?? Type;
+        init => _declaredType = value;
     }
 
-    private readonly ColumnType? _inputType;
+    private readonly ColumnType? _declaredType;
 
     public required ContextFieldKind Kind { get; init; }
 
@@ -353,7 +355,7 @@ public sealed class PlanSchema
         {
             if (field.Kind == ContextFieldKind.RequestInput)
             {
-                copy.AddRequestInput(field.Name["request.".Length..], field.InputType);
+                copy.AddRequestInput(field.Name["request.".Length..], field.DeclaredType);
             }
         }
 
@@ -377,10 +379,11 @@ public sealed class PlanSchema
 
     /// <param name="declared">The type as declared; expressions see its promoted form.</param>
     internal ContextField AddRequestInput(string name, ColumnType declared) =>
-        AddContext("request." + name, declared.Promoted(), ContextFieldKind.RequestInput, inputType: declared);
+        AddContext("request." + name, declared.Promoted(), ContextFieldKind.RequestInput, declaredType: declared);
 
-    internal ContextField AddContextFeature(string featureName, ColumnType type, int featureIndex) =>
-        AddContext(featureName, type, ContextFieldKind.Feature, featureIndex);
+    /// <param name="declared">The type as declared; expressions see its promoted form.</param>
+    internal ContextField AddContextFeature(string featureName, ColumnType declared, int featureIndex) =>
+        AddContext(featureName, declared.Promoted(), ContextFieldKind.Feature, featureIndex, declared);
 
     internal LogicalColumn AddFeatureColumn(string featureName, ColumnType type, int featureIndex, string pointer)
     {
@@ -475,11 +478,11 @@ public sealed class PlanSchema
         return column;
     }
 
-    private ContextField AddContext(string name, ColumnType type, ContextFieldKind kind, int featureIndex = -1, ColumnType? inputType = null)
+    private ContextField AddContext(string name, ColumnType type, ContextFieldKind kind, int featureIndex = -1, ColumnType? declaredType = null)
     {
         var field = new ContextField
         {
-            Id = _contextList.Count, Name = name, Type = type, InputType = inputType ?? type, Kind = kind, FeatureIndex = featureIndex,
+            Id = _contextList.Count, Name = name, Type = type, DeclaredType = declaredType ?? type, Kind = kind, FeatureIndex = featureIndex,
         };
         _context.Add(name, field);
         _contextList.Add(field);

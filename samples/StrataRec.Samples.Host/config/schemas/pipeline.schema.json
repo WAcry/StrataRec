@@ -532,7 +532,7 @@
                       }
                     },
                     "output": {
-                      "description": "The model output read: float32 [1, -1], one score per row of the list, higher first.",
+                      "description": "The model output read: float32 or float64 [1, -1], one score per row of the list, higher first.",
                       "type": "string"
                     },
                     "window": {
@@ -657,7 +657,7 @@
                       }
                     },
                     "outputs": {
-                      "description": "Model output name → column to write (float32 or float64).",
+                      "description": "Model output name → column to write, whose declared type is the output's tensor type (as an input's is).",
                       "type": "object",
                       "additionalProperties": {
                         "type": "string"
@@ -779,7 +779,7 @@
                       }
                     },
                     "output": {
-                      "description": "The model output read: float32 [-1], one value per pair, the probability that the pair's first (higher-ranked) row is preferred.",
+                      "description": "The model output read: float32 or float64 [-1], one value per pair, the probability that the pair's first (higher-ranked) row is preferred.",
                       "type": "string"
                     },
                     "window": {

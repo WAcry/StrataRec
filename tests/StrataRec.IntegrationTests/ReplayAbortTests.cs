@@ -394,7 +394,7 @@ public sealed class ReplayAbortTests
         {
             Started.TrySetResult();
             await Release.Task;
-            outputs.GetFloat32("score", call.BatchSize).Span.Fill(0.5f);
+            outputs.GetValues<float>("score", call.BatchSize).Span.Fill(0.5f);
             Answered.TrySetResult();
             return ModelStatus.Ok;
         }
@@ -426,7 +426,7 @@ public sealed class ReplayAbortTests
 
         private sealed class ArrayWriter : IModelOutputWriter
         {
-            public Memory<float> GetFloat32(string name, int elementCount) => new float[elementCount];
+            public Memory<T> GetValues<T>(string name, int elementCount) => new T[elementCount];
 
             public void SetText(string name, string text)
             {

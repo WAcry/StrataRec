@@ -197,6 +197,54 @@ public sealed class RunReplayTests
     }
 
     /// <summary>
+    /// Outputs of every element type replay as recorded, at their type (an int64 beyond 2^53 exactly, a float64 unrounded),
+    /// in the recorded call and split by row into another batch; a row the recording lacks gets NaN in a float output and
+    /// the type's zero in another, and is a gap.
+    /// </summary>
+    [Fact]
+    public void TypedOutputs_ReplayAsRecorded_ExactlyAndRebatched_AndARowTheRecordingLacks_GetsTheGapValue()
+    {
+        const long Big = 9007199254740993L;
+        var recorded = Call(2, NamedInput.FromInt64("x", new[] { 2 }, new long[] { 1, 2 }));
+        var run = Run();
+        run.ModelCalls.Add(new ReplayModelCall
+        {
+            Seq = 0, Node = "scorer", Model = "m", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(recorded).ToList(),
+            Outputs = new Dictionary<string, ReplayModelOutput>
+            {
+                ["n"] = ReplayJson.Tensor(TensorValues.Of<long>(new long[] { Big, -Big })),
+                ["d"] = ReplayJson.Tensor(TensorValues.Of<double>(new[] { 0.1, 1e300 })),
+                ["label"] = ReplayJson.Tensor(TensorValues.Of<string>(new[] { "a", "b" })),
+                ["ok"] = ReplayJson.Tensor(TensorValues.Of<bool>(new[] { true, true })),
+                ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4 })),
+            },
+        });
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var exact = new ArrayOutputWriter();
+        var exactStatus = replay.InvokeModel(recorded, exact, new[] { EntityKey.FromInt64(1), EntityKey.FromInt64(2) });
+        var rebatched = new ArrayOutputWriter();
+        var rebatchedStatus = replay.InvokeModel(Call(3, NamedInput.FromInt64("x", new[] { 3 }, new long[] { 2, 7, 1 })), rebatched,
+            new[] { EntityKey.FromInt64(2), EntityKey.FromInt64(7), EntityKey.FromInt64(1) });
+
+        Assert.True(exactStatus.Succeeded && rebatchedStatus.Succeeded);
+        Assert.Equal(new long[] { Big, -Big }, (long[])exact.Arrays["n"]);
+        Assert.Equal(new[] { 0.1, 1e300 }, (double[])exact.Arrays["d"]);
+        Assert.Equal(new[] { "a", "b" }, (string[])exact.Arrays["label"]);
+        Assert.Equal(new[] { true, true }, (bool[])exact.Arrays["ok"]);
+        Assert.Equal(new[] { 1, 2, 3, 4 }, (int[])exact.Arrays["v"]);
+        Assert.Equal(new long[] { -Big, 0, Big }, (long[])rebatched.Arrays["n"]);
+        Assert.Equal(1e300, ((double[])rebatched.Arrays["d"])[0]);
+        Assert.True(double.IsNaN(((double[])rebatched.Arrays["d"])[1]));
+        Assert.Equal(0.1, ((double[])rebatched.Arrays["d"])[2]);
+        Assert.Equal(new[] { "b", string.Empty, "a" }, (string[])rebatched.Arrays["label"]);
+        Assert.Equal(new[] { true, false, true }, (bool[])rebatched.Arrays["ok"]);
+        Assert.Equal(new[] { 3, 4, 0, 0, 1, 2 }, (int[])rebatched.Arrays["v"]); // two per row, as recorded
+        var gap = Assert.Single(replay.Gaps);
+        Assert.Equal(("model", "not_recorded", "7"), (gap.Kind, gap.Reason, Assert.Single(gap.Examples)));
+    }
+
+    /// <summary>
     /// Entity 1 was annotated alone twice, with two prompts. The replay's call with the second prompt first takes the call
     /// recorded with the first (same entity, other inputs) and is answered from the one recorded with its own inputs, as
     /// that call was: its text and its generation details.
@@ -333,7 +381,7 @@ public sealed class RunReplayTests
         Status = "ok",
         Keys = Json("[" + string.Join(",", keys) + "]"),
         InputDigests = RowDigests(call).ToList(),
-        Outputs = new Dictionary<string, JsonElement> { ["score"] = JsonSerializer.SerializeToElement(scores) },
+        Outputs = new Dictionary<string, ReplayModelOutput> { ["score"] = new() { Type = "float32", Values = JsonSerializer.SerializeToElement(scores) } },
     };
 
     /// <summary>A generative call of model <c>m</c>: one prompt, <c>user</c>, and a token limit.</summary>
@@ -383,7 +431,20 @@ public sealed class RunReplayTests
 
         public Dictionary<string, string> Texts { get; } = new();
 
-        public Memory<float> GetFloat32(string name, int elementCount) => Floats[name] = new float[elementCount];
+        /// <summary>Every tensor output as written, of any element type.</summary>
+        public Dictionary<string, Array> Arrays { get; } = new();
+
+        public Memory<T> GetValues<T>(string name, int elementCount)
+        {
+            var buffer = new T[elementCount];
+            Arrays[name] = buffer;
+            if (buffer is float[] floats)
+            {
+                Floats[name] = floats;
+            }
+
+            return buffer;
+        }
 
         public void SetText(string name, string text) => Texts[name] = text;
     }

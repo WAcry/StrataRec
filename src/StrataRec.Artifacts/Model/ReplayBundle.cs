@@ -31,11 +31,13 @@ public sealed class ReplayBundle
     /// recorded before holds calls cut at other boundaries, which a replay could not answer as recorded: a model call is
     /// matched as a whole and a recorded timeout belongs to its batch (review 86). 2026-11-20.3 adds the ignored arm's
     /// reason <c>yielded</c> (design 11.1): a build before cannot read it, and refuses such a bundle at its format, with
-    /// a hint to record again, instead of at a reason it does not know (review 96).
+    /// a hint to record again, instead of at a reason it does not know (review 96). 2026-11-21.1 records each model output
+    /// with its element type, and model inputs of every declared type (their digests include it): tensors follow the
+    /// declared column types (design 6.9).
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-20.3";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.1";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-20.3\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.1\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -258,6 +260,16 @@ public sealed class ReplayField
     public required string Type { get; init; }
 }
 
+/// <summary>One tensor output of a recorded model call.</summary>
+public sealed class ReplayModelOutput
+{
+    [Description("Element type, as the model's signature declares it: bool, int32, int64, float32, float64 or string.")]
+    public required string Type { get; init; }
+
+    [Description("The elements, flat: batch_size × values per row. A bool is 0 or 1; NaN and ±∞ floats are the strings \"NaN\", \"Infinity\" and \"-Infinity\".")]
+    public required JsonElement Values { get; init; }
+}
+
 /// <summary>One model call (one batch).</summary>
 public sealed class ReplayModelCall
 {
@@ -287,8 +299,8 @@ public sealed class ReplayModelCall
     [Description("XXH3 of each row's inputs (one per key): the row's slice of inputs whose leading dimension is the batch size and every other input whole, each with its name, element type and shape (batch dimension left out); or of the whole call when there are no keys. Hex.")]
     public List<string> InputDigests { get; init; } = new();
 
-    [Description("Output → flat float32 values, batch_size × values per row; NaN and ±∞ are the strings \"NaN\", \"Infinity\" and \"-Infinity\".")]
-    public Dictionary<string, JsonElement> Outputs { get; init; } = new();
+    [Description("Output → the tensor the model returned: its element type and its values.")]
+    public Dictionary<string, ReplayModelOutput> Outputs { get; init; } = new();
 
     [Description("Output → text, for models that generate text (a recorded answer is replayed as it was, design 13.4 item 7).")]
     public Dictionary<string, string> Texts { get; init; } = new();

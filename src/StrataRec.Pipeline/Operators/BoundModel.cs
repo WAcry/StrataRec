@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Types;
@@ -146,22 +147,27 @@ public sealed class BoundModel
 }
 
 /// <summary>
-/// Receives one call's outputs: float32 outputs into buffers rented from the request, text outputs as the strings the
-/// client sets. A call's writer is read only after the call succeeded: an abandoned client may still be writing it.
+/// Receives one call's outputs: tensors into buffers rented from the request, of the element type the client asks for,
+/// and text outputs as the strings the client sets. A call's writer is read only after the call succeeded: an abandoned
+/// client may still be writing it.
 /// </summary>
 /// <remarks>Public so that model operators outside this assembly read outputs the way the built-in ones do.</remarks>
 public sealed class ModelOutputWriter(RequestMemory memory) : IModelOutputWriter
 {
-    private readonly Dictionary<string, Memory<float>> _outputs = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, TensorValues> _outputs = new(StringComparer.Ordinal);
     private readonly object _gate = new();
     private Dictionary<string, string>? _texts;
 
-    public Memory<float> GetFloat32(string name, int elementCount)
+    public Memory<T> GetValues<T>(string name, int elementCount)
     {
-        var buffer = memory.Rent<float>(Math.Max(1, elementCount)).AsMemory(0, elementCount);
+        ArgumentOutOfRangeException.ThrowIfNegative(elementCount);
+        _ = TensorValues.TypeOf<T>(); // an element type, before anything is rented
+        // A string buffer starts cleared, so an element the client left unwritten reads as null, not as another call's string.
+        var array = RuntimeHelpers.IsReferenceOrContainsReferences<T>() ? memory.RentCleared<T>(Math.Max(1, elementCount)) : memory.Rent<T>(Math.Max(1, elementCount));
+        var buffer = array.AsMemory(0, elementCount);
         lock (_gate)
         {
-            _outputs[name] = buffer;
+            _outputs[name] = TensorValues.Of<T>(buffer);
         }
 
         return buffer;
@@ -176,7 +182,8 @@ public sealed class ModelOutputWriter(RequestMemory memory) : IModelOutputWriter
         }
     }
 
-    public bool TryGet(string name, out Memory<float> values)
+    /// <summary>The output the client wrote under <paramref name="name"/>, of the element type it chose; a name asked for twice keeps the last buffer.</summary>
+    public bool TryGet(string name, out TensorValues values)
     {
         lock (_gate)
         {

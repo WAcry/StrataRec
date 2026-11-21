@@ -28,9 +28,8 @@ public abstract class ModelCallConfig
     public string? VersionParam { get; init; }
 
     /// <summary>
-    /// Model input name → column or context reference (<c>col.*</c> / <c>ctx.*</c>) of a non-nullable float32, float64,
-    /// bool, int32 or int64 type, or a fixed-length <c>list&lt;E,N&gt;</c> of those; the type decides the tensor
-    /// (<see cref="ModelTensorRule"/>).
+    /// Model input name → column or context reference (<c>col.*</c> / <c>ctx.*</c>) of a non-nullable type, a list only of
+    /// a fixed length (<c>list&lt;E,N&gt;</c>); its declared type is the tensor's (<see cref="ModelTensorRule"/>).
     /// </summary>
     [JsonPropertyOrder(-1)]
     public required Dictionary<string, string> Inputs { get; init; }
@@ -103,17 +102,19 @@ internal sealed class ModelCallCompiler
                 continue;
             }
 
+            // The type the user declared decides the tensor: a context value's symbol has its promoted form, which expressions see.
             var symbol = expr.Reads[0];
-            if (!ModelTensorRule.TryGetInputTensor(symbol.Type, out var tensor))
+            var declared = symbol.Kind == SymbolKind.Context ? _context.Schema.ContextFields[symbol.Id].DeclaredType : symbol.Type;
+            if (!ModelTensorRule.TryGetInputTensor(declared, out var tensor))
             {
-                var problem = ModelTensorRule.UnsendableInput(_layout, name, symbol.Name, symbol.Type);
+                var problem = ModelTensorRule.UnsendableInput(name, symbol.Name, declared);
                 _context.Error(problem.ConfigKey, problem.Code, problem.Message, problem.Hint);
                 ok = false;
                 continue;
             }
 
-            _inputs[i] = new ModelInput(name, expr, symbol, tensor);
-            _mapped[i] = new ModelTensorRule.MappedInput(name, symbol.Name, symbol.Type, _inputs[i].Broadcast);
+            _inputs[i] = new ModelInput(name, expr, symbol, declared, tensor);
+            _mapped[i] = new ModelTensorRule.MappedInput(name, symbol.Name, declared, _inputs[i].Broadcast);
         }
 
         return ok;

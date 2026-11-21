@@ -234,13 +234,13 @@ internal sealed class RunRecorder : IFeatureCallHook
             return;
         }
 
-        var floats = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        var tensors = new Dictionary<string, ReplayModelOutput>(StringComparer.Ordinal);
         var texts = new Dictionary<string, string>(StringComparer.Ordinal);
         if (outcome == IoOutcome.Ok)
         {
-            foreach (var (name, values) in outputs.Floats())
+            foreach (var (name, values) in outputs.Tensors())
             {
-                floats[name] = ReplayJson.Floats(values.Span);
+                tensors[name] = ReplayJson.Tensor(values);
             }
 
             foreach (var (name, text) in outputs.Texts())
@@ -262,7 +262,7 @@ internal sealed class RunRecorder : IFeatureCallHook
             DurationMs = duration.TotalMilliseconds,
             Keys = begun.Keys,
             InputDigests = begun.InputDigests,
-            Outputs = floats,
+            Outputs = tensors,
             Texts = texts,
             OutputTokens = status.OutputTokens,
             Truncated = status.Truncated ? true : null,

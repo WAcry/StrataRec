@@ -11,8 +11,8 @@ namespace StrataRec.Pipeline.Operators.Standard;
 public sealed class PairwiseRankerConfig : ModelCallConfig
 {
     /// <summary>
-    /// The model output read: float32 <c>[-1]</c>, one value per pair, the probability that the pair's first (higher-ranked)
-    /// row is preferred.
+    /// The model output read: float32 or float64 <c>[-1]</c>, one value per pair, the probability that the pair's first
+    /// (higher-ranked) row is preferred.
     /// </summary>
     public required string Output { get; init; }
 
@@ -232,27 +232,29 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
             var stride = Batching.Size(pairs, batchSize); // as the batches were sent
             var batch = 0;
             var index = 0;
-            ReadOnlySpan<float> preferences = default;
+            var inBatch = 0;
+            var single = true;
+            ReadOnlySpan<float> singles = default;
+            ReadOnlySpan<double> doubles = default;
             for (var i = 0; i < n; i++)
             {
                 for (var j = i + 1; j < n; j++)
                 {
                     if (index == 0)
                     {
-                        var count = Math.Min(stride, pairs - (batch * stride));
-                        if (!writers[batch].TryGet(output, out var values) || values.Length < count)
+                        inBatch = Math.Min(stride, pairs - (batch * stride));
+                        if (!ModelScores.TryRead(writers[batch], output, inBatch, out single, out singles, out doubles))
                         {
-                            context.Fail($"model '{call.Model}' did not return output '{output}' for every pair");
+                            context.Fail(ModelScores.Missing(call.Model, output, writers[batch], "pair"));
                             return false;
                         }
-
-                        preferences = values.Span[..count];
                     }
 
-                    var preference = preferences[index];
-                    if (!(preference >= 0f && preference <= 1f))
+                    var preference = single ? singles[index] : doubles[index];
+                    if (!(preference >= 0.0 && preference <= 1.0))
                     {
-                        context.Fail($"model '{call.Model}' returned {preference.ToString("R", CultureInfo.InvariantCulture)} as the preference of "
+                        var text = single ? ((float)preference).ToString("R", CultureInfo.InvariantCulture) : preference.ToString("R", CultureInfo.InvariantCulture);
+                        context.Fail($"model '{call.Model}' returned {text} as the preference of "
                             + $"{context.Table.GetKey(rows[i])} over {context.Table.GetKey(rows[j])}, which is not a probability in [0, 1]; "
                             + $"output '{output}' must be the probability that the pair's first row is preferred (apply the sigmoid inside the model)");
                         return false;
@@ -260,7 +262,7 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
 
                     scores[i] += preference;
                     scores[j] += 1.0 - preference;
-                    if (++index == preferences.Length)
+                    if (++index == inBatch)
                     {
                         batch++;
                         index = 0;
@@ -276,7 +278,7 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
 /// <summary>Config of <c>ListwiseReranker@1</c> (design 5.9).</summary>
 public sealed class ListwiseRerankerConfig : ModelCallConfig
 {
-    /// <summary>The model output read: float32 <c>[1, -1]</c>, one score per row of the list, higher first.</summary>
+    /// <summary>The model output read: float32 or float64 <c>[1, -1]</c>, one score per row of the list, higher first.</summary>
     public required string Output { get; init; }
 
     /// <summary>The leading ranks sent as one list and reordered by their scores; later rows keep their order after them.</summary>
@@ -369,17 +371,16 @@ public sealed class ListwiseRerankerFactory : IOperatorFactory
                 return;
             }
 
-            if (!writer.TryGet(output, out var values) || values.Length < n)
+            if (!ModelScores.TryRead(writer, output, n, out var single, out var singles, out var doubles))
             {
-                context.Fail($"model '{call.Model}' did not return output '{output}' for every row of the list");
+                context.Fail(ModelScores.Missing(call.Model, output, writer, "row of the list"));
                 return;
             }
 
             var scores = memory.Rent<double>(n);
-            var span = values.Span;
             for (var i = 0; i < n; i++)
             {
-                scores[i] = span[i];
+                scores[i] = single ? singles[i] : doubles[i];
             }
 
             if (scoreCol is { } column)
@@ -456,4 +457,42 @@ internal static class RankerColumns
                 throw new InvalidOperationException($"Score column '{column.Name}' is {column.Type}, not float32? or float64?.");
         }
     }
+}
+
+/// <summary>
+/// A ranker's score output, which its signature declares float32 or float64 (<see cref="ModelTensorRule.AcceptsScore"/>):
+/// one check of what the client wrote, for both rankers.
+/// </summary>
+internal static class ModelScores
+{
+    /// <summary>The first <paramref name="count"/> scores of output <paramref name="name"/>, float32 or float64; false when the client wrote fewer, or another type.</summary>
+    public static bool TryRead(ModelOutputWriter writer, string name, int count, out bool single, out ReadOnlySpan<float> singles, out ReadOnlySpan<double> doubles)
+    {
+        single = false;
+        singles = default;
+        doubles = default;
+        if (!writer.TryGet(name, out var values) || values.Length < count)
+        {
+            return false;
+        }
+
+        switch (values.ElementType)
+        {
+            case TensorElementType.Float32:
+                single = true;
+                singles = values.Float32.Span[..count];
+                return true;
+            case TensorElementType.Float64:
+                doubles = values.Float64.Span[..count];
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>Why <see cref="TryRead"/> failed, for the node's failure.</summary>
+    public static string Missing(string model, string name, ModelOutputWriter writer, string entry) =>
+        writer.TryGet(name, out var values) && values.ElementType is not (TensorElementType.Float32 or TensorElementType.Float64)
+            ? $"model '{model}' returned output '{name}' as {TensorValues.Name(values.ElementType)}; a score is float32 or float64, as the signature declares"
+            : $"model '{model}' did not return output '{name}' for every {entry}";
 }

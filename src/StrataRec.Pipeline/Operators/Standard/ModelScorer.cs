@@ -2,6 +2,7 @@ using StrataRec.Artifacts.Json;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Memory;
+using StrataRec.Core.Types;
 using StrataRec.Models;
 
 namespace StrataRec.Pipeline.Operators.Standard;
@@ -9,7 +10,7 @@ namespace StrataRec.Pipeline.Operators.Standard;
 /// <summary>Config of <c>ModelScorer@1</c> (design 6.9).</summary>
 public sealed class ModelScorerConfig : ModelCallConfig
 {
-    /// <summary>Model output name → column to write (float32 or float64).</summary>
+    /// <summary>Model output name → column to write, whose declared type is the output's tensor type (as an input's is).</summary>
     public required Dictionary<string, string> Outputs { get; init; }
 
     /// <summary>Most rows per model call: the rows are split into the fewest calls, of even size, which run concurrently.</summary>
@@ -21,14 +22,12 @@ public sealed class ModelScorerConfig : ModelCallConfig
 /// batches called concurrently; outputs commit only when every batch succeeds (design 4.6, 6.9).
 /// </summary>
 /// <remarks>
-/// <para>Each batch sends one tensor per mapped input and reads one float32 per row from each mapped output. The tensor of
-/// an input follows the declared type of the column or context value it maps, not the model: float32 <c>[rows]</c> for
-/// float32 and float64, int64 <c>[rows]</c> for bool (0/1), int32 and int64 (exact), and <c>[rows, N]</c> of the
-/// element's tensor type for a <c>list&lt;E,N&gt;</c> (an embedding <c>list&lt;float32,N&gt;</c> as float32
-/// <c>[rows, N]</c>); a context value is broadcast to every row. Other types, lists of any length among them, are compile
-/// errors at the input.
-/// Every model version the node may use must declare those tensors, and the mapped outputs as float32 <c>[-1]</c>; this
-/// is checked at load time. <see cref="ModelTensorRule"/> holds the rule, and why the column decides.</para>
+/// <para>Each batch sends one tensor per mapped input and reads one per mapped output, each of the declared type of its
+/// column, not the model's: an input of an int32 column is an int32 <c>[rows]</c> tensor, an embedding
+/// <c>list&lt;float32,N&gt;</c> a float32 <c>[rows, N]</c> one, and an output written to a float64 column a float64
+/// <c>[rows]</c> tensor; a context value is broadcast to every row. Nullable inputs and lists of any length are compile
+/// errors at the input. Every model version the node may use must declare those tensors; this is checked at load time.
+/// <see cref="ModelTensorRule"/> holds the rule, and why the column decides.</para>
 /// <para>Inputs are plain references, so each is gathered straight from its column's storage (or its request-level value)
 /// into one dense buffer per call, rented from the request and ordered like the live rows; batches are slices of it
 /// (<see cref="ModelInput"/>, shared with the other model operators).</para>
@@ -70,10 +69,11 @@ public sealed class ModelScorerFactory : IOperatorFactory
                 continue;
             }
 
-            if (!column.Type.IsFloat)
+            if (!ModelTensorRule.TryGetOutputTensor(column.Type, out _))
             {
-                context.Error("/outputs/" + JsonPointer.Escape(outputNames[i]), "COLUMN_TYPE_MISMATCH", $"Model output column '{column.Name}' must be float32 or float64, not {column.Type}.",
-                    $"declare '{column.Name}' as float32 or float64 under /columns");
+                context.Error("/outputs/" + JsonPointer.Escape(outputNames[i]), "COLUMN_TYPE_MISMATCH",
+                    $"Model output column '{column.Name}' is {column.Type}, a list of any length: a model output has the same number of values for every row.",
+                    $"declare '{column.Name}' with its length under /columns, e.g. {ColumnType.List(column.Type.Element, column.Type.Nullable, 64)}");
                 ok = false;
             }
 
@@ -89,7 +89,7 @@ public sealed class ModelScorerFactory : IOperatorFactory
         var read = new List<ModelTensorRule.MappedOutput>(config.Outputs.Count);
         foreach (var (name, _) in config.Outputs)
         {
-            read.Add(new ModelTensorRule.MappedOutput(name, "/outputs/" + JsonPointer.Escape(name)));
+            read.Add(new ModelTensorRule.MappedOutput(name, "/outputs/" + JsonPointer.Escape(name), outputs[outputNames.IndexOf(name)].Column.Type));
         }
 
         var call = compiler.Finish(read);
@@ -160,40 +160,99 @@ public sealed class ModelScorerFactory : IOperatorFactory
             var stride = Batching.Size(rows.Length, batchSize); // as the batches were sent
             foreach (var (name, column) in outputs)
             {
+                ModelTensorRule.TryGetOutputTensor(column.Type, out var tensor);
+                var width = Math.Max(1, tensor.Dimension);
                 var destination = context.Output(column);
                 for (var b = 0; b < writers.Length; b++)
                 {
                     var offset = b * stride;
                     var count = Math.Min(stride, rows.Length - offset);
-                    if (!writers[b].TryGet(name, out var values) || values.Length < count)
+                    if (!writers[b].TryGet(name, out var values) || values.Length < count * width)
                     {
                         context.Fail($"model '{call.Model}' did not return output '{name}' for every row");
                         return;
                     }
 
-                    var span = values.Span;
-                    switch (destination)
+                    if (values.ElementType != tensor.ElementType)
                     {
-                        case ScalarColumn<float> f:
-                            for (var r = 0; r < count; r++)
-                            {
-                                f.Set(rows[offset + r], span[r]);
-                            }
+                        context.Fail($"model '{call.Model}' returned output '{name}' as {TensorValues.Name(values.ElementType)}, but it is written to "
+                            + $"'{column.Name}' ({column.Type}), which takes {TensorValues.Name(tensor.ElementType)} as the signature declares");
+                        return;
+                    }
 
-                            break;
-                        case ScalarColumn<double> d:
-                            for (var r = 0; r < count; r++)
-                            {
-                                d.Set(rows[offset + r], span[r]);
-                            }
+                    var batchRows = rows.Slice(offset, count);
+                    var written = destination switch
+                    {
+                        ScalarColumn<bool> c => Write(c, batchRows, values.Bool.Span),
+                        ScalarColumn<int> c => Write(c, batchRows, values.Int32.Span),
+                        ScalarColumn<long> c => Write(c, batchRows, values.Int64.Span),
+                        ScalarColumn<float> c => Write(c, batchRows, values.Float32.Span),
+                        ScalarColumn<double> c => Write(c, batchRows, values.Float64.Span),
+                        StringColumn c => Write(c, batchRows, values.String.Span),
+                        ListColumn<bool> c => Write(c, batchRows, values.Bool.Span, width),
+                        ListColumn<int> c => Write(c, batchRows, values.Int32.Span, width),
+                        ListColumn<long> c => Write(c, batchRows, values.Int64.Span, width),
+                        ListColumn<float> c => Write(c, batchRows, values.Float32.Span, width),
+                        ListColumn<double> c => Write(c, batchRows, values.Float64.Span, width),
+                        ListColumn<string> c => Write(c, batchRows, values.String.Span, width),
+                        _ => throw new InvalidOperationException($"Output column '{column.Name}' is {column.Type}, which no model output writes."),
+                    };
 
-                            break;
-                        default:
-                            context.Fail($"output column '{column.Name}' must be float32 or float64");
-                            return;
+                    if (!written)
+                    {
+                        context.Fail($"model '{call.Model}' returned no value for some row of output '{name}' (a string output writes every element)");
+                        return;
                     }
                 }
             }
+        }
+
+        private static bool Write<T>(ScalarColumn<T> column, ReadOnlySpan<int> rows, ReadOnlySpan<T> values)
+            where T : unmanaged
+        {
+            for (var r = 0; r < rows.Length; r++)
+            {
+                column.Set(rows[r], values[r]);
+            }
+
+            return true;
+        }
+
+        private static bool Write(StringColumn column, ReadOnlySpan<int> rows, ReadOnlySpan<string> values)
+        {
+            for (var r = 0; r < rows.Length; r++)
+            {
+                if (values[r] is not { } value)
+                {
+                    return false;
+                }
+
+                column.Set(rows[r], value);
+            }
+
+            return true;
+        }
+
+        private static bool Write<T>(ListColumn<T> column, ReadOnlySpan<int> rows, ReadOnlySpan<T> values, int width)
+        {
+            for (var r = 0; r < rows.Length; r++)
+            {
+                var row = values.Slice(r * width, width);
+                if (typeof(T) == typeof(string))
+                {
+                    foreach (var element in row)
+                    {
+                        if (element is null)
+                        {
+                            return false;
+                        }
+                    }
+                }
+
+                column.Set(rows[r], row);
+            }
+
+            return true;
         }
     }
 }

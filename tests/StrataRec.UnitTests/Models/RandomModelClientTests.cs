@@ -27,7 +27,7 @@ public sealed class RandomModelClientTests
         var signature = await lookup;
         Assert.Equal(new[] { "log_followers", "smoothed_ctr" }, signature.Inputs.Select(s => s.Name));
         Assert.Equal(new[] { "p_click", "p_like" }, signature.Outputs.Select(s => s.Name));
-        Assert.All(signature.Inputs.Concat(signature.Outputs), s => Assert.True(ModelTensorRule.AcceptsOutput(TensorLayout.Rows, s), s.ToString()));
+        Assert.All(signature.Inputs.Concat(signature.Outputs), s => Assert.True(ModelTensorRule.AcceptsScore(TensorLayout.Rows, s), s.ToString()));
         Assert.Equal(signature, await client.GetSignatureAsync("ctr_model", null, CancellationToken.None));
 
         // What ModelScorer@1 checks at load for the sample's ctr_ranker node: the stand-in passes as the real model would.
@@ -272,7 +272,7 @@ public sealed class RandomModelClientTests
         Assert.Empty(ModelTensorRule.Check("m", TensorLayout.Pairs,
             new ModelTensorRule.MappedInput[]
             {
-                new("final", "col.score.final", ColumnType.Float32), new("item_id", "col.entity_id", ColumnType.Int64), new("quality", "param.quality_weight", ColumnType.Float64, Broadcast: true),
+                new("final", "col.score.final", ColumnType.Float32), new("item_id", "col.entity_id", ColumnType.Int64), new("quality", "ctx.request.quality", ColumnType.Float32, Broadcast: true),
             },
             new ModelTensorRule.MappedOutput[] { new("p_first", "/output") }, pair));
 
@@ -333,6 +333,48 @@ public sealed class RandomModelClientTests
         var next = Score(0, N, nextIds)["p_click"];
         Assert.NotEqual(scores[5], next[5]);
         Assert.Equal(scores.Where((_, i) => i != 5), next.Where((_, i) => i != 5));
+    }
+
+    /// <summary>
+    /// Every element type a column can have is an input, hashed by value: an integer as int64 (a bool as 0 or 1), a float
+    /// as float64, a string as itself. So the same values at another width score the same, as the remarks promise.
+    /// </summary>
+    [Fact]
+    public void EveryElementType_IsAnInput_AndTheSameValuesAtAnotherWidth_ScoreTheSame()
+    {
+        static IModelClient Of(string type) => Create($$"""{ "inputs": { "x": { "type": "{{type}}", "shape": [-1] } }, "outputs": ["p"] }""");
+        var ints = new[] { int.MinValue, -1, 0, 7, int.MaxValue };
+
+        var asInt64 = Call(Of("int64"), 5, 3, NamedInput.FromInt64("x", new[] { 5 }, ints.Select(i => (long)i).ToArray()))["p"];
+        Assert.Equal(asInt64, Call(Of("int32"), 5, 3, NamedInput.FromInt32("x", new[] { 5 }, ints))["p"]);
+        Assert.Equal(5, asInt64.Distinct().Count());
+
+        var flags = new[] { true, false, true };
+        Assert.Equal(Call(Of("int64"), 3, 3, NamedInput.FromInt64("x", new[] { 3 }, new long[] { 1, 0, 1 }))["p"],
+            Call(Of("bool"), 3, 3, NamedInput.FromBool("x", new[] { 3 }, flags))["p"]);
+
+        var floats = new[] { 0.1f, -2.5f, 1e30f };
+        Assert.Equal(Call(Of("float32"), 3, 3, NamedInput.FromFloat32("x", new[] { 3 }, floats))["p"],
+            Call(Of("float64"), 3, 3, NamedInput.FromFloat64("x", new[] { 3 }, floats.Select(f => (double)f).ToArray()))["p"]);
+
+        var words = Call(Of("string"), 3, 3, NamedInput.FromString("x", new[] { 3 }, new[] { "news", "sports", "news" }))["p"];
+        Assert.Equal(words[0], words[2]);
+        Assert.NotEqual(words[0], words[1]);
+    }
+
+    [Fact]
+    public async Task AFloat64Output_HoldsTheSameScores_AsAFloat32One()
+    {
+        var single = Create("""{ "inputs": { "x": { "type": "int64", "shape": [-1] } }, "outputs": { "p": { "shape": [-1] } } }""");
+        var wide = Create("""{ "inputs": { "x": { "type": "int64", "shape": [-1] } }, "outputs": { "p": { "type": "float64", "shape": [-1] } } }""");
+        var x = NamedInput.FromInt64("x", new[] { 4 }, new long[] { 1, 2, 3, 4 });
+        var outputs = new Outputs();
+
+        var status = await wide.InvokeAsync(new ModelCall { Model = "ctr_model", BatchSize = 4, Inputs = new[] { x }, Options = new ModelCallOptions(Seed: 3) }, outputs,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Equal(Call(single, 4, 3, x)["p"].Select(f => (double)f), (double[])outputs.Arrays["p"]);
     }
 
     [Fact]
@@ -457,7 +499,7 @@ public sealed class RandomModelClientTests
     [InlineData("""{ "inputs": { "a/b": 3 }, "outputs": ["p"] }""", "/inputs/a~1b", "Entry 'a/b' of 'inputs' of random@1 must be an object, got the number 3.")]
     [InlineData("""{ "inputs": { "x": { "shape": [-1] } }, "outputs": ["p"] }""", "/inputs/x/type", "Input 'x' needs a 'type'")]
     [InlineData("""{ "inputs": { "x": { "type": "float32" } }, "outputs": ["p"] }""", "/inputs/x", "'shape' is required in entry 'x' of 'inputs' of random@1.")]
-    [InlineData("""{ "inputs": { "x": { "type": "float64", "shape": [-1] } }, "outputs": ["p"] }""", "/inputs/x/type", "has type \"float64\", but the model operators send float32 and int64")]
+    [InlineData("""{ "inputs": { "x": { "type": "float16", "shape": [-1] } }, "outputs": ["p"] }""", "/inputs/x/type", "has type \"float16\": an input is bool, int32, int64, float32, float64 or string")]
     [InlineData("""{ "inputs": { "x": { "type": "text", "shape": [-1] } }, "outputs": ["p"] }""", "/inputs/x/type", "has type \"text\"")]
     [InlineData("""{ "inputs": { "x": { "type": 1, "shape": [-1] } }, "outputs": ["p"] }""", "/inputs/x/type", "'type' must be a string or null, got the number 1.")]
     [InlineData("""{ "inputs": { "x": { "type": "float32", "shape": [-1], "dtype": "f" } }, "outputs": ["p"] }""", "/inputs/x/dtype", "Unknown key 'dtype' in entry 'x' of 'inputs' of random@1.")]
@@ -470,7 +512,7 @@ public sealed class RandomModelClientTests
     [InlineData("""{ "inputs": { "x": { "type": "float32", "shape": ["-1"] } }, "outputs": ["p"] }""", "/inputs/x/shape/0", "got the string \"-1\"")]
     [InlineData("""{ "inputs": ["x"], "outputs": { "p": [-1] } }""", "/outputs/p", "Entry 'p' of 'outputs' of random@1 must be an object")]
     [InlineData("""{ "inputs": ["x"], "outputs": { "p": {} } }""", "/outputs/p", "'shape' is required in entry 'p' of 'outputs' of random@1.")]
-    [InlineData("""{ "inputs": ["x"], "outputs": { "p": { "type": "int64", "shape": [-1] } } }""", "/outputs/p/type", "the model operators read float32 outputs only")]
+    [InlineData("""{ "inputs": ["x"], "outputs": { "p": { "type": "int64", "shape": [-1] } } }""", "/outputs/p/type", "random@1 produces scores, so an output is float32 or float64")]
     [InlineData("""{ "inputs": ["x"], "outputs": { "p": { "shape": [-1], "activation": "sigmoid" } } }""", "/outputs/p/activation", "Unknown key 'activation' in entry 'p' of 'outputs' of random@1.")]
     [InlineData("""{ "inputs": { "u": { "type": "float32", "shape": [8] } }, "outputs": { "p": { "shape": [-1] } } }""", "/outputs/p/shape",
         "Output 'p' ([-1]) has no input whose shape starts with [-1]")]
@@ -602,7 +644,20 @@ public sealed class RandomModelClientTests
     {
         public Dictionary<string, float[]> Values { get; } = new();
 
-        public Memory<float> GetFloat32(string name, int elementCount) => Values[name] = new float[elementCount];
+        /// <summary>Every output as written, of any element type.</summary>
+        public Dictionary<string, Array> Arrays { get; } = new();
+
+        public Memory<T> GetValues<T>(string name, int elementCount)
+        {
+            var buffer = new T[elementCount];
+            Arrays[name] = buffer;
+            if (buffer is float[] floats)
+            {
+                Values[name] = floats;
+            }
+
+            return buffer;
+        }
 
         public void SetText(string name, string text) => throw new NotSupportedException();
     }
@@ -737,7 +792,7 @@ public sealed class RandomModelClientAllocationTests
             }
         }
 
-        public Memory<float> GetFloat32(string name, int elementCount) => _buffers[name].AsMemory(0, elementCount);
+        public Memory<T> GetValues<T>(string name, int elementCount) => ((T[])(object)_buffers[name]).AsMemory(0, elementCount);
 
         public void SetText(string name, string text) => throw new NotSupportedException();
     }

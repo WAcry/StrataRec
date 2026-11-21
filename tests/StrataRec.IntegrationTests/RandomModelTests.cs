@@ -77,7 +77,7 @@ public sealed class RandomModelTests
         var call = Assert.Single(run.ModelCalls);
         Assert.Equal(("ctr_model", "ok"), (call.Model, call.Status));
         var keys = call.Keys!.Value.EnumerateArray().Select(k => k.GetInt64()).ToArray();
-        var values = call.Outputs["p_click"].EnumerateArray().Select(v => v.GetDouble()).ToArray();
+        var values = call.Outputs["p_click"].Values.EnumerateArray().Select(v => v.GetDouble()).ToArray();
         Assert.Equal(keys.Length, values.Length);
         return keys.Zip(values).ToDictionary(p => p.First, p => p.Second);
     }

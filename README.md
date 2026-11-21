@@ -119,7 +119,7 @@ dotnet run -c Release --project tests/StrataRec.Benchmarks -- --filter '*Pipelin
 
 ## 文档
 
-- [`docs/development.md`](docs/development.md)：开发理念、取舍标准和规则。
+- [`docs/development.md`](docs/development.md)：开发理念、判断标准和取舍的方向。
 - [`docs/design.md`](docs/design.md)：整体设计。代码注释中的“design 4.6”指这里的章节号。
 - [`docs/decisions.md`](docs/decisions.md)：实现中的决定、取舍和尚未实现的部分。
 - [`AGENTS.md`](AGENTS.md)：项目结构与编码约定。

@@ -57,7 +57,7 @@ public sealed class RequestSchema
 
     /// <summary>The schema of a compiled plan: each input bound to its context slot.</summary>
     internal static RequestSchema FromPlan(string pipelineId, IReadOnlyDictionary<string, ContextField> fields) =>
-        new(pipelineId, Sorted(fields.Keys), name => (fields[name].InputType, fields[name].Id));
+        new(pipelineId, Sorted(fields.Keys), name => (fields[name].DeclaredType, fields[name].Id));
 
     public string PipelineId { get; }
 

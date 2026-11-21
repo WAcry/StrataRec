@@ -360,7 +360,7 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
         int slot = -1, contextId = -1;
         if (feature.IsContext)
         {
-            contextId = _schema.AddContextFeature(feature.Name, type.Promoted(), index).Id;
+            contextId = _schema.AddContextFeature(feature.Name, type, index).Id;
         }
         else
         {

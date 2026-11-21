@@ -17,7 +17,7 @@ public sealed class RandomRankerModelTests
     /// <summary>As <c>PairwiseRanker@1</c> sends them: columns as <c>[pairs, 2]</c>, a context value as <c>[pairs]</c>.</summary>
     private const string PairBinding = """
         { "client": "random@1",
-          "inputs": { "final": { "type": "float32", "shape": [-1, 2] }, "item_id": { "type": "int64", "shape": [-1, 2] }, "quality": { "type": "float32", "shape": [-1] } },
+          "inputs": { "final": { "type": "float32", "shape": [-1, 2] }, "item_id": { "type": "int64", "shape": [-1, 2] }, "quality": { "type": "float64", "shape": [-1] } },
           "outputs": { "p_first": { "shape": [-1] } } }
         """;
 
@@ -77,7 +77,7 @@ public sealed class RandomRankerModelTests
 
     /// <summary>The load-time check runs against what the stand-in declares: a shape the operator does not send is an error at the node.</summary>
     [Theory]
-    [InlineData("""{ "client": "random@1", "inputs": { "final": { "type": "float32", "shape": [-1] }, "item_id": { "type": "int64", "shape": [-1, 2] }, "quality": { "type": "float32", "shape": [-1] } }, "outputs": { "p_first": { "shape": [-1] } } }""",
+    [InlineData("""{ "client": "random@1", "inputs": { "final": { "type": "float32", "shape": [-1] }, "item_id": { "type": "int64", "shape": [-1, 2] }, "quality": { "type": "float64", "shape": [-1] } }, "outputs": { "p_first": { "shape": [-1] } } }""",
         ListBinding, "MODEL_TENSOR_MISMATCH", "/nodes/pairwise_rerank/config/inputs/final")]
     [InlineData(PairBinding,
         """{ "client": "random@1", "inputs": { "final": { "type": "float32", "shape": [-1] }, "smoothed_ctr": { "type": "float32", "shape": [-1] }, "seed": { "type": "int64", "shape": [-1] } }, "outputs": ["scores"] }""",

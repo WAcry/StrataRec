@@ -6,8 +6,9 @@ namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary>
 /// The one rule for which tensors the model operators send and which model signatures they accept (design 6.9): the
-/// value of an input follows the type of the column it maps, the operator's layout adds the leading dimensions, and a
-/// model must declare exactly the mapped inputs, each as that tensor, and every read output with the layout's shape. A
+/// tensor of an input has the declared type of the column it maps, the operator's layout adds the leading dimensions, and a
+/// model must declare exactly the mapped inputs, each as that tensor, and every read output with the layout's shape (of
+/// the type of the column it is written to, or float32 or float64 for a ranker's score). A
 /// dynamic dimension must be declared -1; a fixed one (the pair's 2, the list batch's 1, a list's N) as its size or -1.
 /// Each mismatch names where to fix it, what is sent and what to change.
 /// </summary>
@@ -25,21 +26,21 @@ public sealed class ModelTensorRuleTests
 
     [Theory]
     [InlineData("float32", "float32 [-1]")]
-    [InlineData("float64", "float32 [-1]")]
-    [InlineData("bool", "int64 [-1]")] // a category, an exact 0 or 1, as an int is
-    [InlineData("int32", "int64 [-1]")]
+    [InlineData("float64", "float64 [-1]")] // not rounded to float32: the value as declared
+    [InlineData("bool", "bool [-1]")] // not converted to a number
+    [InlineData("int32", "int32 [-1]")] // not widened
     [InlineData("int64", "int64 [-1]")]
+    [InlineData("string", "string [-1]")]
     [InlineData("list<float32,8>", "float32 [-1, 8]")]
-    [InlineData("list<float64,8>", "float32 [-1, 8]")]
-    [InlineData("list<int32,2>", "int64 [-1, 2]")]
+    [InlineData("list<float64,8>", "float64 [-1, 8]")]
+    [InlineData("list<int32,2>", "int32 [-1, 2]")]
     [InlineData("list<int64,1>", "int64 [-1, 1]")]
-    [InlineData("list<bool,3>", "int64 [-1, 3]")]
+    [InlineData("list<bool,3>", "bool [-1, 3]")]
+    [InlineData("list<string,2>", "string [-1, 2]")]
     [InlineData("float32?", null)]
     [InlineData("int64?", null)]
     [InlineData("list<float32,8>?", null)]
-    [InlineData("list<string,2>", null)]
     [InlineData("list<float32>", null)]
-    [InlineData("string", null)]
     [InlineData("list<int32>", null)]
     [InlineData("list<int64>", null)]
     [InlineData("list<string>", null)]
@@ -82,13 +83,15 @@ public sealed class ModelTensorRuleTests
             new("item_emb", "col.item.emb", ColumnType.List(StorageKind.Float32, fixedLength: 8)),
             new("user_emb", "ctx.user.emb", ColumnType.List(StorageKind.Float32, fixedLength: 16), Broadcast: true),
             new("flags", "col.item.flags", ColumnType.List(StorageKind.Bool, fixedLength: 2)),
+            new("category", "col.item.category", ColumnType.String),
         };
         var signature = Signature(
             new[]
             {
-                Float("ctr"), Spec("safe", TensorElementType.Int64, -1), Spec("item_id", TensorElementType.Int64, -1),
-                Spec("category_id", TensorElementType.Int64, -1), Spec("flags", TensorElementType.Int64, -1, 2),
+                Spec("ctr", TensorElementType.Float64, -1), Spec("safe", TensorElementType.Bool, -1), Spec("item_id", TensorElementType.Int64, -1),
+                Spec("category_id", TensorElementType.Int32, -1), Spec("flags", TensorElementType.Bool, -1, 2),
                 Spec("item_emb", TensorElementType.Float32, -1, 8), Spec("user_emb", TensorElementType.Float32, -1, 16),
+                Spec("category", TensorElementType.String, -1),
             },
             new[] { Float("p_click"), Float("p_like") });
 
@@ -108,15 +111,18 @@ public sealed class ModelTensorRuleTests
 
     [Theory]
     [InlineData("int64", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "int64 [-1]", "a float32 derived feature of col.x")]
-    [InlineData("int32", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "int64 [-1]", "a float32 derived feature of col.x")]
+    [InlineData("int32", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "int32 [-1]", "a float32 derived feature of col.x")]
+    [InlineData("int32", TensorElementType.Int64, new[] { -1 }, "int64 [-1]", "int32 [-1]", "an int64 derived feature of col.x")] // no widening
     [InlineData("float32", TensorElementType.Int64, new[] { -1 }, "int64 [-1]", "float32 [-1]", "an int64 derived feature of col.x")]
-    [InlineData("bool", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "int64 [-1]", "a float32 derived feature of col.x")] // bool is int64 0/1
-    [InlineData("list<bool,2>", TensorElementType.Float32, new[] { -1, 2 }, "float32 [-1, 2]", "int64 [-1, 2]", "a list<float32,2> derived feature of col.x")]
+    [InlineData("float64", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "float64 [-1]", "a float32 derived feature of col.x")] // no rounding
+    [InlineData("bool", TensorElementType.Int64, new[] { -1 }, "int64 [-1]", "bool [-1]", "an int64 derived feature of col.x")] // no conversion
+    [InlineData("string", TensorElementType.Int64, new[] { -1 }, "int64 [-1]", "string [-1]", "an int64 derived feature of col.x")]
+    [InlineData("list<bool,2>", TensorElementType.Float32, new[] { -1, 2 }, "float32 [-1, 2]", "bool [-1, 2]", "a list<float32,2> derived feature of col.x")]
     [InlineData("list<float32,8>", TensorElementType.Float32, new[] { -1, 16 }, "float32 [-1, 16]", "float32 [-1, 8]", "a list<float32,16> derived feature of col.x")]
     [InlineData("list<float32,8>", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "float32 [-1, 8]", "a float32 derived feature of col.x")]
     [InlineData("list<float32,8>", TensorElementType.Int64, new[] { -1, 8 }, "int64 [-1, 8]", "float32 [-1, 8]", "a list<int64,8> derived feature of col.x")]
     [InlineData("list<float32,8>", TensorElementType.Text, new[] { -1, 8 }, "text [-1, 8]", "float32 [-1, 8]", null)]
-    [InlineData("float64", TensorElementType.Float32, new[] { -1, 2 }, "float32 [-1, 2]", "float32 [-1]", "a list<float32,2> derived feature of col.x")]
+    [InlineData("float64", TensorElementType.Float32, new[] { -1, 2 }, "float32 [-1, 2]", "float64 [-1]", "a list<float32,2> derived feature of col.x")]
     [InlineData("float32", TensorElementType.Float32, new[] { -1, -1 }, "float32 [-1, -1]", "float32 [-1]", "a list<float32,N> derived feature of col.x")]
     public void AnInputDeclaredOtherwiseThanItsColumnGives_IsAMismatch_SayingWhatIsSentAndHowToFixIt(
         string column, TensorElementType declaredType, int[] declaredShape, string declared, string sent, string? mapInstead)
@@ -159,20 +165,58 @@ public sealed class ModelTensorRuleTests
     }
 
     [Theory]
-    [InlineData(TensorElementType.Int64, new[] { -1 }, "int64 [-1]")]
-    [InlineData(TensorElementType.Float32, new[] { -1, 2 }, "float32 [-1, 2]")]
-    [InlineData(TensorElementType.Float32, new[] { 256 }, "float32 [256]")]
-    [InlineData(TensorElementType.Text, new int[0], "text []")]
-    public void AnOutputTheScorerCannotRead_IsUnsupported_AtItsMapping(TensorElementType type, int[] shape, string described)
+    [InlineData("float32", TensorElementType.Int64, new[] { -1 }, "int64 [-1]", "float32 [-1]")]
+    [InlineData("float32", TensorElementType.Float64, new[] { -1 }, "float64 [-1]", "float32 [-1]")]
+    [InlineData("float32", TensorElementType.Float32, new[] { -1, 2 }, "float32 [-1, 2]", "float32 [-1]")]
+    [InlineData("float32", TensorElementType.Float32, new[] { 256 }, "float32 [256]", "float32 [-1]")]
+    [InlineData("float32", TensorElementType.Text, new int[0], "text []", "float32 [-1]")]
+    [InlineData("int64?", TensorElementType.Int32, new[] { -1 }, "int32 [-1]", "int64 [-1]")]
+    [InlineData("list<float32,4>", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "float32 [-1, 4]")]
+    public void AScorerOutputDeclaredOtherwiseThanItsColumnTakes_IsAMismatch_SayingWhatIsReadAndHowToFixIt(
+        string column, TensorElementType type, int[] shape, string described, string read)
     {
-        var problems = ModelTensorRule.Check("Model 'm' version 'v2'", TensorLayout.Rows, Inputs, Outputs,
+        var outputs = new ModelTensorRule.MappedOutput[] { new("p_click", "/outputs/p_click", ColumnType.Parse(column)) };
+
+        var problems = ModelTensorRule.Check("Model 'm' version 'v2'", TensorLayout.Rows, Inputs, outputs,
             Signature(new[] { Float("ctr"), Float("followers") }, new[] { new TensorSpec("p_click", type, shape) }));
 
         var problem = Assert.Single(problems);
-        Assert.Equal(("/outputs/p_click", "MODEL_TENSOR_UNSUPPORTED"), (problem.ConfigKey, problem.Code));
-        Assert.Equal($"Model 'm' version 'v2' declares output 'p_click' as {described}.", problem.Message);
-        Assert.Equal(ModelTensorRule.TensorHint(TensorLayout.Rows), problem.Hint);
-        Assert.Contains("reads every output as float32 [-1]", problem.Hint);
+        Assert.Equal(("/outputs/p_click", "MODEL_TENSOR_MISMATCH"), (problem.ConfigKey, problem.Code));
+        Assert.Equal($"Model 'm' version 'v2' declares output 'p_click' as {described}, but it is written to a {column} column, which ModelScorer@1 reads as {read}.",
+            problem.Message);
+        Assert.Equal($"declare output 'p_click' as {read} in the model's signature, or write it to a column of the type the model returns", problem.Hint);
+    }
+
+    [Theory]
+    [InlineData("float64", TensorElementType.Float64, new[] { -1 })]
+    [InlineData("int64", TensorElementType.Int64, new[] { -1 })]
+    [InlineData("int32?", TensorElementType.Int32, new[] { -1 })] // every row gets a value; a nullable column may take them
+    [InlineData("bool", TensorElementType.Bool, new[] { -1 })]
+    [InlineData("string", TensorElementType.String, new[] { -1 })]
+    [InlineData("list<float32,4>", TensorElementType.Float32, new[] { -1, 4 })]
+    [InlineData("list<float32,4>", TensorElementType.Float32, new[] { -1, -1 })]
+    public void AScorerOutput_IsReadAsTheTypeOfItsColumn(string column, TensorElementType type, int[] shape)
+    {
+        var outputs = new ModelTensorRule.MappedOutput[] { new("p", "/outputs/p", ColumnType.Parse(column)) };
+
+        Assert.Empty(ModelTensorRule.Check("Model 'm' version 'v2'", TensorLayout.Rows, Inputs, outputs,
+            Signature(new[] { Float("ctr"), Float("followers") }, new[] { new TensorSpec("p", type, shape) })));
+    }
+
+    [Theory]
+    [InlineData(TensorElementType.Int64, new[] { -1 }, "int64 [-1]")]
+    [InlineData(TensorElementType.Float32, new[] { -1, 2 }, "float32 [-1, 2]")]
+    [InlineData(TensorElementType.Text, new int[0], "text []")]
+    public void ARankerScoreThatIsNotAFloatOfTheLayoutsShape_IsUnsupported_AtItsMapping(TensorElementType type, int[] shape, string described)
+    {
+        var inputs = new ModelTensorRule.MappedInput[] { new("x", "col.x", ColumnType.Float32) };
+        var problems = ModelTensorRule.Check("Model 'm' version 'v2'", TensorLayout.Pairs, inputs, new ModelTensorRule.MappedOutput[] { new("p", "/output") },
+            Signature(new[] { new TensorSpec("x", TensorElementType.Float32, new[] { -1, 2 }) }, new[] { new TensorSpec("p", type, shape) }));
+
+        var problem = Assert.Single(problems);
+        Assert.Equal(("/output", "MODEL_TENSOR_UNSUPPORTED"), (problem.ConfigKey, problem.Code));
+        Assert.Equal($"Model 'm' version 'v2' declares output 'p' as {described}.", problem.Message);
+        Assert.Equal(ModelTensorRule.TensorHint(TensorLayout.Pairs), problem.Hint);
     }
 
     [Fact]
@@ -204,38 +248,34 @@ public sealed class ModelTensorRuleTests
     [Theory]
     [InlineData("float32?", "Model input 'x' maps col.x, which is nullable (float32?): a model needs a value in every row.", "make col.x non-nullable (a feature with a default")]
     [InlineData("list<float32,4>?", "Model input 'x' maps col.x, which is nullable (list<float32,4>?): a model needs a value in every row.", "'??'")]
-    [InlineData("string", "Model input 'x' maps col.x (string), which ModelScorer@1 cannot send as a tensor.", "int32 or int64 column or context value, or a list<E,N> of those")]
-    [InlineData("list<string,2>", "Model input 'x' maps col.x (list<string,2>), which ModelScorer@1 cannot send as a tensor.", "an operator that builds other tensors")]
+    [InlineData("list<string>", "Model input 'x' maps col.x (list<string>), a list of any length: a tensor's trailing dimension is the same in every row.",
+        "e.g. list<string,64>")]
     [InlineData("list<int64>", "Model input 'x' maps col.x (list<int64>), a list of any length: a tensor's trailing dimension is the same in every row.",
         "declare the length of col.x, e.g. list<int64,64>")]
     [InlineData("list<float32>", "Model input 'x' maps col.x (list<float32>), a list of any length: a tensor's trailing dimension is the same in every row.",
         "declare the length of col.x, e.g. list<float32,64>")]
     public void AColumnTypeTheScorerCannotSend_IsAnInputTypeError(string type, string message, string hint)
     {
-        var problem = ModelTensorRule.UnsendableInput(TensorLayout.Rows, "x", "col.x", ColumnType.Parse(type));
+        var problem = ModelTensorRule.UnsendableInput("x", "col.x", ColumnType.Parse(type));
 
         Assert.Equal(("/inputs/x", "MODEL_INPUT_TYPE", message), (problem.ConfigKey, problem.Code, problem.Message));
         Assert.Contains(hint, problem.Hint);
     }
 
-    [Theory]
-    [InlineData("Pairs", "PairwiseRanker@1")]
-    [InlineData("List", "ListwiseReranker@1")]
-    public void AnUnsendableType_NamesTheOperatorOfTheLayout(string layoutName, string op)
+    [Fact]
+    public void ASendableType_HasNoInputTypeError()
     {
-        var layout = Enum.Parse<TensorLayout>(layoutName);
-        var problem = ModelTensorRule.UnsendableInput(layout, "x", "col.x", ColumnType.String);
-
-        Assert.Equal($"Model input 'x' maps col.x (string), which {op} cannot send as a tensor.", problem.Message);
+        Assert.Throws<ArgumentException>(() => ModelTensorRule.UnsendableInput("x", "col.x", ColumnType.String));
     }
 
     [Fact]
-    public void TheRowsOutputTest_AcceptsOnlyFloat32WithOneDynamicDimension()
+    public void TheRowsScoreTest_AcceptsOnlyAFloatWithOneDynamicDimension()
     {
-        Assert.True(ModelTensorRule.AcceptsOutput(TensorLayout.Rows, Float("x")));
-        Assert.False(ModelTensorRule.AcceptsOutput(TensorLayout.Rows, new TensorSpec("x", TensorElementType.Int64, Rows)));
-        Assert.False(ModelTensorRule.AcceptsOutput(TensorLayout.Rows, new TensorSpec("x", TensorElementType.Float32, new[] { -1, -1 })));
-        Assert.False(ModelTensorRule.AcceptsOutput(TensorLayout.Rows, new TensorSpec("x", TensorElementType.Float32, new[] { 1 })));
+        Assert.True(ModelTensorRule.AcceptsScore(TensorLayout.Rows, Float("x")));
+        Assert.True(ModelTensorRule.AcceptsScore(TensorLayout.Rows, new TensorSpec("x", TensorElementType.Float64, Rows)));
+        Assert.False(ModelTensorRule.AcceptsScore(TensorLayout.Rows, new TensorSpec("x", TensorElementType.Int64, Rows)));
+        Assert.False(ModelTensorRule.AcceptsScore(TensorLayout.Rows, new TensorSpec("x", TensorElementType.Float32, new[] { -1, -1 })));
+        Assert.False(ModelTensorRule.AcceptsScore(TensorLayout.Rows, new TensorSpec("x", TensorElementType.Float32, new[] { 1 })));
     }
 
     /// <summary>
@@ -245,7 +285,8 @@ public sealed class ModelTensorRuleTests
     [Theory]
     // A pair's column: [-1, 2], [-1, 2, N].
     [InlineData("Pairs", false, "float32", TensorElementType.Float32, new[] { -1, 2 }, true)]
-    [InlineData("Pairs", false, "float64", TensorElementType.Float32, new[] { -1, -1 }, true)]
+    [InlineData("Pairs", false, "float64", TensorElementType.Float64, new[] { -1, -1 }, true)]
+    [InlineData("Pairs", false, "float64", TensorElementType.Float32, new[] { -1, 2 }, false)]
     [InlineData("Pairs", false, "int64", TensorElementType.Int64, new[] { -1, 2 }, true)]
     [InlineData("Pairs", false, "int32", TensorElementType.Float32, new[] { -1, 2 }, false)]
     [InlineData("Pairs", false, "float32", TensorElementType.Float32, new[] { 256, 2 }, false)]
@@ -265,10 +306,12 @@ public sealed class ModelTensorRuleTests
     [InlineData("Pairs", true, "list<float32,4>", TensorElementType.Float32, new[] { -1, 2, 4 }, false)]
     // The list's column: [1, -1], [1, -1, N].
     [InlineData("List", false, "float32", TensorElementType.Float32, new[] { 1, -1 }, true)]
-    [InlineData("List", false, "bool", TensorElementType.Int64, new[] { -1, -1 }, true)]
+    [InlineData("List", false, "bool", TensorElementType.Bool, new[] { -1, -1 }, true)]
+    [InlineData("List", false, "bool", TensorElementType.Int64, new[] { 1, -1 }, false)]
     [InlineData("List", false, "bool", TensorElementType.Float32, new[] { 1, -1 }, false)]
-    [InlineData("List", false, "list<bool,3>", TensorElementType.Int64, new[] { 1, -1, 3 }, true)]
-    [InlineData("List", false, "int32", TensorElementType.Int64, new[] { 1, -1 }, true)]
+    [InlineData("List", false, "list<bool,3>", TensorElementType.Bool, new[] { 1, -1, 3 }, true)]
+    [InlineData("List", false, "int32", TensorElementType.Int32, new[] { 1, -1 }, true)]
+    [InlineData("List", false, "int32", TensorElementType.Int64, new[] { 1, -1 }, false)]
     [InlineData("List", false, "float32", TensorElementType.Float32, new[] { 1, 50 }, false)]
     [InlineData("List", false, "float32", TensorElementType.Float32, new[] { 2, -1 }, false)]
     [InlineData("List", false, "float32", TensorElementType.Float32, new[] { -1 }, false)]
@@ -312,7 +355,7 @@ public sealed class ModelTensorRuleTests
     [InlineData("List", new[] { -1 }, false)]
     [InlineData("List", new[] { 1, 50 }, false)]
     [InlineData("List", new[] { 2, -1 }, false)]
-    public void EachLayout_ReadsAFloat32OutputOfItsShape_AndSaysWhatItReads(string layoutName, int[] shape, bool accepted)
+    public void EachLayout_ReadsAFloatScoreOfItsShape_AndSaysWhatItReads(string layoutName, int[] shape, bool accepted)
     {
         var layout = Enum.Parse<TensorLayout>(layoutName);
         var inputs = new ModelTensorRule.MappedInput[] { new("x", "col.x", ColumnType.Float32) };
@@ -321,8 +364,9 @@ public sealed class ModelTensorRuleTests
         var problems = ModelTensorRule.Check("Model 'm' version 'v2'", layout, inputs, new ModelTensorRule.MappedOutput[] { new("p", "/output") },
             Signature(new[] { x }, new[] { new TensorSpec("p", TensorElementType.Float32, shape) }));
 
-        Assert.Equal(accepted, ModelTensorRule.AcceptsOutput(layout, new TensorSpec("p", TensorElementType.Float32, shape)));
-        Assert.False(ModelTensorRule.AcceptsOutput(layout, new TensorSpec("p", TensorElementType.Int64, shape)));
+        Assert.Equal(accepted, ModelTensorRule.AcceptsScore(layout, new TensorSpec("p", TensorElementType.Float32, shape)));
+        Assert.Equal(accepted, ModelTensorRule.AcceptsScore(layout, new TensorSpec("p", TensorElementType.Float64, shape)));
+        Assert.False(ModelTensorRule.AcceptsScore(layout, new TensorSpec("p", TensorElementType.Int64, shape)));
         if (accepted)
         {
             Assert.Empty(problems);
@@ -332,7 +376,8 @@ public sealed class ModelTensorRuleTests
         var problem = Assert.Single(problems);
         Assert.Equal(("/output", "MODEL_TENSOR_UNSUPPORTED"), (problem.ConfigKey, problem.Code));
         Assert.Equal(ModelTensorRule.TensorHint(layout), problem.Hint);
-        Assert.Contains(layout == TensorLayout.Pairs ? "reads the output as float32 [-1] (one value per pair" : "reads the output as float32 [1, -1]", problem.Hint);
+        Assert.Contains(layout == TensorLayout.Pairs ? "reads the output as float32 or float64 [-1] (one value per pair" : "reads the output as float32 or float64 [1, -1]",
+            problem.Hint);
     }
 
     [Theory]

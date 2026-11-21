@@ -17,8 +17,8 @@ namespace StrataRec.Models;
 /// <remarks>
 /// <para>The settings declare the signature it mimics, so the calling operator's load-time signature check passes as it
 /// would against the real model. The short form names the tensors, every one float32 <c>[-1]</c>: what
-/// <c>ModelScorer@1</c> reads, and sends for float32 and float64 columns. It sends bool, int32 and int64 columns as int64
-/// <c>[-1]</c>, so an input mapped to one of those needs the full form's <c>"type": "int64"</c>:</para>
+/// <c>ModelScorer@1</c> sends for a float32 column and reads into one. It sends every column as its declared type, so an
+/// input mapped to another type (an int64 id, an int32 count) needs the full form's <c>"type"</c>:</para>
 /// <code>
 /// { "client": "random@1",
 ///   "inputs": ["smoothed_ctr", "log_followers"],   // the model's input names
@@ -26,7 +26,8 @@ namespace StrataRec.Models;
 ///   "seed": 42 }                                   // optional: a fixed seed instead of the call's (the same scores in every request)
 /// </code>
 /// <para>The full form maps each name to its tensor as the real model's signature declares it: an input's <c>type</c>
-/// (float32 or int64) and <c>shape</c>, an output's <c>shape</c> (outputs are float32; <c>type</c> may say so). Each
+/// (bool, int32, int64, float32, float64 or string) and <c>shape</c>, an output's <c>shape</c> and <c>type</c> (float32,
+/// the default, or float64: the outputs are scores). Each
 /// dimension is -1 (dynamic) or a positive size. Either form may be used for either setting. A pairwise model, as
 /// <c>PairwiseRanker@1</c> calls it (a column as <c>[pairs, 2]</c>, a context value as <c>[pairs]</c>):</para>
 /// <code>
@@ -43,9 +44,9 @@ namespace StrataRec.Models;
 /// in its canonical encoding, times 2^-24: <c>salt</c> is the hash of the strings <c>(model, o)</c> (the binding's
 /// logical name), <c>seed</c> is the binding's or else the call's <see cref="ModelCallOptions.Seed"/> (the model operators
 /// pass <c>ctx.request.seed</c>), and <c>x_i</c> is input i in ordinal order of the input names: its sub-tensor at the
-/// element's index if it is per element, else the whole input, row-major, float32 values widened exactly to float64 and
-/// int64 values as int64. Names, types and shapes are not hashed, so both forms give the same scores for the same
-/// values. An output's shape in a call is the leading dimensions of its per-element inputs (they must agree, and the
+/// element's index if it is per element, else the whole input, row-major: integers (and a bool as 0 or 1) as int64,
+/// floats as float64 (a float32 widened exactly), strings as strings. Names, types and shapes are not hashed, so both
+/// forms give the same scores for the same values, and so does a value sent at another width. An output's shape in a call is the leading dimensions of its per-element inputs (they must agree, and the
 /// first must be the call's <see cref="ModelCall.BatchSize"/>), so every output needs a per-element input: nothing else
 /// would size it or vary it.</para>
 /// <para>So a score depends only on what the model would see for that element: a row's own values (and the shared
@@ -272,10 +273,13 @@ public sealed class RandomModelClient : IModelClient
                 var rank = _outputRanks[o];
                 var sizing = inputs[slots[_sizing[o]]].Shape;
                 var count = (int)Elements(sizing, 0, rank);
-                var scores = writer.GetFloat32(_outputs[o].Name, count).Span;
-                if (scores.Length < count)
+                var single = _outputs[o].ElementType == TensorElementType.Float32;
+                var floats = single ? writer.GetValues<float>(_outputs[o].Name, count).Span : default;
+                var doubles = single ? default : writer.GetValues<double>(_outputs[o].Name, count).Span;
+                var given = single ? floats.Length : doubles.Length;
+                if (given < count)
                 {
-                    return ModelStatus.Failed($"The output writer gave {scores.Length} values for output '{_outputs[o].Name}', which has {count}.");
+                    return ModelStatus.Failed($"The output writer gave {given} values for output '{_outputs[o].Name}', which has {count}.");
                 }
 
                 if (count == 0)
@@ -300,23 +304,18 @@ public sealed class RandomModelClient : IModelClient
                         ref readonly var input = ref inputs[slots[j]];
                         var length = lengths[j];
                         var start = _perElement[(o * n) + j] ? e * length : 0;
-                        if (input.ElementType == TensorElementType.Int64)
-                        {
-                            foreach (var value in input.Int64.Span.Slice(start, length))
-                            {
-                                hash.Add(value);
-                            }
-                        }
-                        else
-                        {
-                            foreach (var value in input.Float32.Span.Slice(start, length))
-                            {
-                                hash.Add((double)value);
-                            }
-                        }
+                        AddValues(ref hash, input.Values, start, length);
                     }
 
-                    scores[e] = (hash.Finish() >> 40) * Unit;
+                    var score = (hash.Finish() >> 40) * Unit;
+                    if (single)
+                    {
+                        floats[e] = score;
+                    }
+                    else
+                    {
+                        doubles[e] = score;
+                    }
                 }
             }
         }
@@ -365,12 +364,57 @@ public sealed class RandomModelClient : IModelClient
         return $"Input '{spec.Name}' must be {expected}; the call sends {TypeName(input.ElementType)} {sent} with {Available(input)} values.";
     }
 
-    private static int Available(in NamedInput input) => input.ElementType switch
+    private static int Available(in NamedInput input) => input.Values.Length;
+
+    /// <summary>Elements [<paramref name="start"/>, +<paramref name="length"/>) in the canonical encoding (see the type's remarks).</summary>
+    private static void AddValues(ref StableHash.Builder hash, in TensorValues values, int start, int length)
     {
-        TensorElementType.Float32 => input.Float32.Length,
-        TensorElementType.Int64 => input.Int64.Length,
-        _ => 0,
-    };
+        switch (values.ElementType)
+        {
+            case TensorElementType.Bool:
+                foreach (var value in values.Bool.Span.Slice(start, length))
+                {
+                    hash.Add(value ? 1L : 0L);
+                }
+
+                break;
+            case TensorElementType.Int32:
+                foreach (var value in values.Int32.Span.Slice(start, length))
+                {
+                    hash.Add((long)value);
+                }
+
+                break;
+            case TensorElementType.Int64:
+                foreach (var value in values.Int64.Span.Slice(start, length))
+                {
+                    hash.Add(value);
+                }
+
+                break;
+            case TensorElementType.Float32:
+                foreach (var value in values.Float32.Span.Slice(start, length))
+                {
+                    hash.Add((double)value);
+                }
+
+                break;
+            case TensorElementType.Float64:
+                foreach (var value in values.Float64.Span.Slice(start, length))
+                {
+                    hash.Add(value);
+                }
+
+                break;
+            default:
+                foreach (var value in values.String.Span.Slice(start, length))
+                {
+                    hash.Add(value);
+                }
+
+                break;
+        }
+    }
 
     /// <summary>
     /// The number of elements in dimensions [<paramref name="from"/>, <paramref name="to"/>) of a shape with no negative
@@ -445,12 +489,7 @@ public sealed class RandomModelClient : IModelClient
         return text.Append(']').ToString();
     }
 
-    internal static string TypeName(TensorElementType type) => type switch
-    {
-        TensorElementType.Float32 => "float32",
-        TensorElementType.Int64 => "int64",
-        _ => "text",
-    };
+    internal static string TypeName(TensorElementType type) => TensorValues.Name(type);
 }
 
 /// <summary>Settings of <c>random@1</c>.</summary>
@@ -465,7 +504,8 @@ public sealed class RandomSettings
 
     /// <summary>
     /// The outputs, as the model declares them: their names, each a float32 tensor of shape <c>[-1]</c>
-    /// (<c>["p_click"]</c>), or each name mapped to its shape (<c>{ "p_first": { "shape": [-1] } }</c>). At least one, each once.
+    /// (<c>["p_click"]</c>), or each name mapped to its shape and, for a float64 score, its type
+    /// (<c>{ "p_first": { "shape": [-1] }, "p_like": { "type": "float64", "shape": [-1] } }</c>). At least one, each once.
     /// </summary>
     public required JsonElement Outputs { get; init; }
 
@@ -476,8 +516,11 @@ public sealed class RandomSettings
 /// <summary>A tensor of <c>random@1</c>'s inputs or outputs mapped by name, as the model declares it.</summary>
 public sealed class RandomTensorSettings
 {
-    /// <summary>Required for an input: <c>float32</c> or <c>int64</c>. An output is <c>float32</c>.</summary>
-    [AllowedValues("float32", "int64")]
+    /// <summary>
+    /// The element type: required for an input (<c>bool</c>, <c>int32</c>, <c>int64</c>, <c>float32</c>, <c>float64</c> or
+    /// <c>string</c>); an output's is <c>float32</c> (the default) or <c>float64</c>.
+    /// </summary>
+    [AllowedValues("bool", "int32", "int64", "float32", "float64", "string")]
     public string? Type { get; init; }
 
     /// <summary>The dimensions, each -1 (dynamic) or a positive size, e.g. <c>[-1, 2]</c>: at least one.</summary>
@@ -574,21 +617,26 @@ public sealed class RandomModelClientFactory : ModelClientFactory<RandomSettings
         return new Tensors(specs.ToArray(), pointers.ToArray());
     }
 
-    /// <summary>One tensor spec of the full form: <c>{ "type": "int64", "shape": [-1, 2] }</c>; an output's type is float32.</summary>
+    /// <summary>One tensor spec of the full form: <c>{ "type": "int64", "shape": [-1, 2] }</c>; an output's type is float32 unless it says float64.</summary>
     private static TensorSpec Spec(RandomTensorSettings spec, bool input, string name, string pointer)
     {
         var what = (input ? "input '" : "output '") + name + "'";
         var title = (input ? "Input '" : "Output '") + name + "'";
         var hint = SpecHint(input);
-        var type = spec.Type switch
+        TensorElementType type;
+        if (spec.Type is null)
         {
-            null when input => throw new BindingException(pointer + "/type", $"{title} needs a 'type': float32 or int64, as the model declares it.", hint),
-            null or "float32" => TensorElementType.Float32,
-            "int64" when input => TensorElementType.Int64,
-            _ => throw new BindingException(pointer + "/type", input
-                ? $"{title} has type \"{spec.Type}\", but the model operators send float32 and int64 tensors only."
-                : $"{title} has type \"{spec.Type}\", but the model operators read float32 outputs only.", hint),
-        };
+            type = input
+                ? throw new BindingException(pointer + "/type", $"{title} needs a 'type': bool, int32, int64, float32, float64 or string, as the model declares it.", hint)
+                : TensorElementType.Float32;
+        }
+        else if (!TensorValues.TryParse(spec.Type, out type) || type == TensorElementType.Text
+                 || (!input && type is not (TensorElementType.Float32 or TensorElementType.Float64)))
+        {
+            throw new BindingException(pointer + "/type", input
+                ? $"{title} has type \"{spec.Type}\": an input is bool, int32, int64, float32, float64 or string."
+                : $"{title} has type \"{spec.Type}\": {Type} produces scores, so an output is float32 or float64.", hint);
+        }
 
         if (spec.Shape.Count == 0)
         {
@@ -613,8 +661,8 @@ public sealed class RandomModelClientFactory : ModelClientFactory<RandomSettings
           + "or map each name to its shape as the model declares it, e.g. \"outputs\": { \"p_first\": { \"shape\": [-1] } }";
 
     private static string SpecHint(bool input) => input
-        ? "declare the input as the model's signature does, e.g. \"item_id\": { \"type\": \"int64\", \"shape\": [-1, 2] }: the type is float32 or int64, "
-          + "and each dimension is -1 (dynamic) or a positive size"
-        : "declare the output as the model's signature does, e.g. \"p_first\": { \"shape\": [-1] }: outputs are float32, "
-          + "and each dimension is -1 (dynamic) or a positive size";
+        ? "declare the input as the model's signature does, e.g. \"item_id\": { \"type\": \"int64\", \"shape\": [-1, 2] }: the type is the declared "
+          + "type of the column it maps (bool, int32, int64, float32, float64 or string), and each dimension is -1 (dynamic) or a positive size"
+        : "declare the output as the model's signature does, e.g. \"p_first\": { \"shape\": [-1] }: outputs are float32 (the default) or "
+          + "float64, and each dimension is -1 (dynamic) or a positive size";
 }

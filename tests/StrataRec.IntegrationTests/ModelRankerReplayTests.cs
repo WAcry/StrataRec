@@ -180,7 +180,7 @@ public sealed class ModelRankerReplayTests
                 new[]
                 {
                     new TensorSpec("final", TensorElementType.Float32, new[] { -1, 2 }), new TensorSpec("item_id", TensorElementType.Int64, new[] { -1, -1 }),
-                    new TensorSpec("quality", TensorElementType.Float32, new[] { -1 }),
+                    new TensorSpec("quality", TensorElementType.Float64, new[] { -1 }),
                 },
                 new[] { new TensorSpec("p_first", TensorElementType.Float32, new[] { -1 }) }));
 
@@ -197,11 +197,11 @@ public sealed class ModelRankerReplayTests
 
             var final = Find(inputs, "final").Float32.Span;
             var ids = Find(inputs, "item_id").Int64.Span;
-            var quality = Find(inputs, "quality").Float32.Span;
-            var preferences = outputs.GetFloat32("p_first", call.BatchSize).Span;
+            var quality = Find(inputs, "quality").Float64.Span;
+            var preferences = outputs.GetValues<float>("p_first", call.BatchSize).Span;
             for (var p = 0; p < call.BatchSize; p++)
             {
-                var logit = bias + (20f * (final[2 * p] - final[(2 * p) + 1])) + (0.01f * ((ids[2 * p] % 5) - (ids[(2 * p) + 1] % 5))) + (0.1f * quality[p]);
+                var logit = bias + (20f * (final[2 * p] - final[(2 * p) + 1])) + (0.01f * ((ids[2 * p] % 5) - (ids[(2 * p) + 1] % 5))) + (0.1f * (float)quality[p]);
                 preferences[p] = 1f / (1f + MathF.Exp(-logit));
             }
 
@@ -264,7 +264,7 @@ public sealed class ModelRankerReplayTests
                 mean += final[i] / n;
             }
 
-            var scores = outputs.GetFloat32("scores", n).Span;
+            var scores = outputs.GetValues<float>("scores", n).Span;
             for (var i = 0; i < n; i++)
             {
                 scores[i] = bias + final[i] - mean + (0.5f * ctr[i]) + (0.001f * (seed % 3));

@@ -85,7 +85,12 @@ public sealed class LinearModelClientTests
     {
         public Dictionary<string, float[]> Values { get; } = new();
 
-        public Memory<float> GetFloat32(string name, int elementCount) => Values[name] = new float[elementCount];
+        public Memory<T> GetValues<T>(string name, int elementCount)
+        {
+            var buffer = new T[elementCount];
+            Values[name] = buffer as float[] ?? throw new InvalidOperationException($"linear@1 wrote a {typeof(T).Name} output");
+            return buffer;
+        }
 
         public void SetText(string name, string text) => throw new NotSupportedException();
     }
