@@ -13,9 +13,9 @@ namespace StrataRec.Core.Bindings;
 /// an instance lives as long as some plan uses it. <see cref="Create"/> only reads the settings; an instance that must load
 /// or connect first implements <see cref="ILoadable"/>, and one holding resources implements <see cref="IAsyncDisposable"/>
 /// or <see cref="IDisposable"/>. The whole lifetime contract is on <see cref="BindingContext"/>.</para>
-/// <para>The update source of a <c>local</c> table is the exception: one is created per table, with the table, outside the
-/// shared instances, and its context has no secret store. It is never loaded or disposed: it does its I/O, and frees what
-/// it holds, in its <c>RunAsync</c>, which the table's host runs and cancels.</para>
+/// <para>The update source of a <c>local</c> table is the exception (see <see cref="BindingContext"/>): each table runs one,
+/// outside the shared instances, and its context has no secret store. It is never loaded or disposed: it does its I/O,
+/// and frees what it holds, in its <c>RunAsync</c>, which the table's host runs and cancels.</para>
 /// </remarks>
 /// <typeparam name="TInstance">The contract the instance implements, e.g. a model client.</typeparam>
 public interface IBindingFactory<out TInstance>

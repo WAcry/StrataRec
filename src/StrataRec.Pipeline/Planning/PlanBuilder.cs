@@ -49,12 +49,18 @@ public sealed record PlanEnvironment
     /// <summary>Capability ids this binary provides (design 10.4).</summary>
     public List<string> Capabilities()
     {
+        // A type a binding can name: its factory has a contract of a kind. Only the contract is asked, not the settings
+        // type, which is the schema's (a factory may load it lazily from an assembly a manifest's check never needs).
         var caps = new List<string>(Operators.Ids);
-        foreach (var source in BindingSchemaSources())
+        foreach (var factory in Bindings.Factories())
         {
-            if (!caps.Contains(source.Type))
+            foreach (var (_, contract, _) in KindContracts)
             {
-                caps.Add(source.Type); // a factory of two kinds is one capability
+                if (contract.IsInstanceOfType(factory))
+                {
+                    caps.Add(factory.Type); // once, however many kinds it serves
+                    break;
+                }
             }
         }
 
@@ -87,11 +93,11 @@ public sealed record PlanEnvironment
         var sources = new List<BindingSchemaSource>();
         foreach (var factory in Bindings.Factories())
         {
-            foreach (var (kind, settingsOf) in KindContracts)
+            foreach (var (kind, contract, settingsOf) in KindContracts)
             {
-                if (settingsOf(factory) is { } settings)
+                if (contract.IsInstanceOfType(factory))
                 {
-                    sources.Add(new BindingSchemaSource(kind, factory.Type, settings));
+                    sources.Add(new BindingSchemaSource(kind, factory.Type, settingsOf(factory)));
                 }
             }
         }
@@ -101,15 +107,16 @@ public sealed record PlanEnvironment
 
     /// <summary>
     /// The factory contract of each <see cref="BindingKind"/>: what a binding of the kind gets from <see cref="Bindings"/>,
-    /// and the settings type it then binds, through the same interface (null when the factory has no such contract).
+    /// and the settings type it then binds, read through that interface (a factory of two contracts may bind different
+    /// settings for each).
     /// </summary>
-    private static readonly (BindingKind Kind, Func<object, Type?> SettingsOf)[] KindContracts =
+    private static readonly (BindingKind Kind, Type Contract, Func<object, Type> SettingsOf)[] KindContracts =
     [
-        (BindingKind.Model, static f => (f as IBindingFactory<IModelClient>)?.SettingsType),
-        (BindingKind.CandidateSource, static f => (f as IBindingFactory<ICandidateSource>)?.SettingsType),
-        (BindingKind.Connector, static f => (f as IBindingFactory<IFeatureSourceConnector>)?.SettingsType),
-        (BindingKind.UpdateSource, static f => (f as IBindingFactory<IFeatureUpdateSource>)?.SettingsType),
-        (BindingKind.CacheStore, static f => (f as IBindingFactory<IFeatureCacheStore>)?.SettingsType),
+        (BindingKind.Model, typeof(IBindingFactory<IModelClient>), static f => ((IBindingFactory<IModelClient>)f).SettingsType),
+        (BindingKind.CandidateSource, typeof(IBindingFactory<ICandidateSource>), static f => ((IBindingFactory<ICandidateSource>)f).SettingsType),
+        (BindingKind.Connector, typeof(IBindingFactory<IFeatureSourceConnector>), static f => ((IBindingFactory<IFeatureSourceConnector>)f).SettingsType),
+        (BindingKind.UpdateSource, typeof(IBindingFactory<IFeatureUpdateSource>), static f => ((IBindingFactory<IFeatureUpdateSource>)f).SettingsType),
+        (BindingKind.CacheStore, typeof(IBindingFactory<IFeatureCacheStore>), static f => ((IBindingFactory<IFeatureCacheStore>)f).SettingsType),
     ];
 }
 

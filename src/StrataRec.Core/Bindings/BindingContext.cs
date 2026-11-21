@@ -5,8 +5,16 @@ namespace StrataRec.Core.Bindings;
 /// <summary>
 /// What a factory gets to create the instance one binding names (design 6.4): a model client, a candidate source, a
 /// feature connector, a distributed cache store or an update source, built in or written by the user. The remarks are the
-/// lifetime contract of every such instance: what the engine guarantees, and what the implementation must do.
+/// lifetime contract of every such instance but an update source: what the engine guarantees, and what the
+/// implementation must do.
 /// </summary>
+/// <remarks>
+/// <para><b>Update sources.</b> The update source of a <c>local</c> table is not a shared instance. Its <c>Create</c> only
+/// reads and checks the settings too, and may be called for a source that never runs (checking the settings when a plan
+/// compiles); the table's host runs one source per table and cancels it, and that source does its I/O, and frees what it
+/// holds, in its own <c>RunAsync</c>. Its context has no secret store, and it is never loaded or disposed: Sharing, Load
+/// and Dispose below do not apply.</para>
+/// </remarks>
 /// <remarks>
 /// <para><b>Create.</b> The factory's <c>Create</c> is called when a plan is compiled and nothing holds a usable instance
 /// of the binding yet: when an engine loads the first plan with this binding, when a plan follows one whose instance

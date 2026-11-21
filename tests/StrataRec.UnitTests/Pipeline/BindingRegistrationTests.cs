@@ -34,6 +34,16 @@ public sealed class BindingRegistrationTests
     }
 
     [Fact]
+    public void Capabilities_AskNoFactoryForItsSettingsType()
+    {
+        // A manifest's capability check needs the types, not their schemas: a settings type in an assembly the host loads
+        // lazily must not fail a load that does not use it.
+        var environment = new PlanEnvironment { Bindings = PlanEnvironment.DefaultBindings().Add(new LazySettings()) };
+
+        Assert.Contains("lazy@1", environment.Capabilities());
+    }
+
+    [Fact]
     public void ABindingTheFactoryRejects_IsCreatedOnceAndReportedOnce_HoweverManyNodesReadIt()
     {
         var factory = new Rejecting();
@@ -102,6 +112,15 @@ public sealed class BindingRegistrationTests
         public Type SettingsType => typeof(NoSettings);
 
         public object Create(BindingContext context) => new();
+    }
+
+    private sealed class LazySettings : IBindingFactory<IModelClient>
+    {
+        public string Type => "lazy@1";
+
+        public Type SettingsType => throw new FileNotFoundException("the optional settings assembly is not deployed");
+
+        public IModelClient Create(BindingContext context) => throw new NotSupportedException();
     }
 
     private sealed class Rejecting : IBindingFactory<IModelClient>

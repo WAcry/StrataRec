@@ -30,6 +30,24 @@ public sealed class BindingTypeTests
         Assert.Equal(("BINDING_TYPE_UNKNOWN", "bindings:local", pointer, message, hint), (error.Code, error.Artifact, error.Pointer, error.Message, error.Hint));
     }
 
+    /// <summary>
+    /// A load that fails is a failure however often it is tried: the diagnostics bag keeps one of each error, so the
+    /// verdict is the load's own, not the bag's count (a second load of the same bad workspace into the same bag used to
+    /// come back as loaded).
+    /// </summary>
+    [Fact]
+    public async Task LoadingTheSameBadWorkspaceTwice_FailsTwice()
+    {
+        var host = HomeFeedTestHost.LoadModified(root => SampleBindings.RebindModel(root, "ctr_model", """{ "client": "lineer@1" }"""));
+        var config = StrataRec.CommandLine.Commands.ConfigRef.Workspace(host.Root, host.Environment);
+        var diagnostics = new StrataRec.Artifacts.Model.DiagnosticBag();
+        await using var engine = config.CreateReplayEngine();
+
+        Assert.Null(await config.LoadIntoAsync(engine, "local", diagnostics, TestContext.Current.CancellationToken));
+        Assert.Null(await config.LoadIntoAsync(engine, "local", diagnostics, TestContext.Current.CancellationToken));
+        Assert.Single(diagnostics.Items, d => d.IsError && d.Code == "BINDING_TYPE_UNKNOWN");
+    }
+
     private static void Rebind(string root, string section, string name, string binding)
     {
         switch (section)

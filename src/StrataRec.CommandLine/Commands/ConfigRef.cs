@@ -282,20 +282,31 @@ internal sealed class ConfigRef
     /// </summary>
     public async Task<string?> LoadIntoAsync(RecEngine engine, string environment, DiagnosticBag diagnostics, CancellationToken cancellationToken)
     {
-        var errorsBefore = diagnostics.ErrorCount;
+        // Whether this load failed is its own diagnostics' verdict, not the bag's count: an error the bag holds already
+        // is not added again.
         var pipeline = string.Empty;
+        var failed = false;
         if (Kind == ConfigRefKind.Workspace)
         {
-            diagnostics.AddRange(ServiceCollectionExtensions.LoadWorkspace(engine, Text, environment).Items);
+            var loaded = ServiceCollectionExtensions.LoadWorkspace(engine, Text, environment);
+            failed = loaded.HasErrors;
+            diagnostics.AddRange(loaded.Items);
         }
-        else if (await ReadManifestAsync(diagnostics, cancellationToken).ConfigureAwait(false) is { } read)
+        else
         {
-            var result = await engine.LoadManifestAsync(read.Manifest, read.Id, read.Store, cancellationToken).ConfigureAwait(false);
-            diagnostics.AddRange(result.Diagnostics);
-            pipeline = read.Manifest.PipelineId;
+            var read = new DiagnosticBag();
+            if (await ReadManifestAsync(read, cancellationToken).ConfigureAwait(false) is { } manifest)
+            {
+                var result = await engine.LoadManifestAsync(manifest.Manifest, manifest.Id, manifest.Store, cancellationToken).ConfigureAwait(false);
+                read.AddRange(result.Diagnostics);
+                pipeline = manifest.Manifest.PipelineId;
+            }
+
+            failed = read.HasErrors;
+            diagnostics.AddRange(read.Items);
         }
 
-        return diagnostics.ErrorCount == errorsBefore ? pipeline : null;
+        return failed ? null : pipeline;
     }
 
     /// <summary>
