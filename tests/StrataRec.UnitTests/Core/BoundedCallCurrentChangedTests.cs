@@ -1,9 +1,10 @@
+using StrataRec.Core.Threading;
 using System.Diagnostics;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Memory;
 using StrataRec.Pipeline.Operators;
 
-namespace StrataRec.UnitTests.Pipeline;
+namespace StrataRec.UnitTests.Core;
 
 /// <summary>
 /// Review 85: the host's <see cref="Activity.CurrentChanged"/> handler runs whenever a call gives the flow its activity
@@ -38,7 +39,7 @@ public sealed class BoundedCallCurrentChangedTests
         CallResult<int> result;
         try
         {
-            var running = BoundedCall.RunAsync<int, Client>(client, budget, memory, new IoTarget(IoRoles.Recall, target), null, "req", null);
+            var running = BoundedCall.RunAsync<int, Client>(client, budget, memory, new IoTarget(IoRoles.Recall, target), CallDeadline.None);
             Assert.Same(flow.Request, Activity.Current);
             answer.TrySetResult(42);
             result = await running;
@@ -67,10 +68,14 @@ public sealed class BoundedCallCurrentChangedTests
             return new(answer);
         }
 
-        public bool Succeeded(int value, out string? error)
+        public IoOutcome Judge(int value, out string? error)
         {
             error = null;
-            return true;
+            return IoOutcome.Ok;
+        }
+
+        public void Pending(Task done)
+        {
         }
 
         public int Keys => -1;

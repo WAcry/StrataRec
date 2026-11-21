@@ -1,3 +1,4 @@
+using StrataRec.Core.Threading;
 using System.Diagnostics;
 using System.Threading.Tasks.Sources;
 using StrataRec.Core.Diagnostics;
@@ -9,7 +10,7 @@ using StrataRec.UnitTests.Features.Cache;
 using StrataRec.Testing;
 using StrataRec.Core.Services;
 
-namespace StrataRec.UnitTests.Pipeline;
+namespace StrataRec.UnitTests.Core;
 
 /// <summary>
 /// The rules of the framework's I/O boundary for candidate sources and models (<see cref="BoundedCall"/>), checked on the
@@ -43,7 +44,7 @@ public sealed class BoundedCallTests
             return OnThread(gate, () => 1);
         }), budget, memory, timeoutMs: null).AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
 
-        Assert.Equal((CallEnd.BudgetRanOut, IoOutcome.Timeout, true, null), (result.End, result.Outcome, result.Abandoned, result.Error));
+        Assert.Equal((CallEnd.BudgetRanOut, IoOutcome.Timeout, true, "timed out: the time budget ran out"), (result.End, result.Outcome, result.Abandoned, result.Error));
         Assert.IsAssignableFrom<OperationCanceledException>(result.Exception);
         var ended = Assert.Single(site.Recorded);
         Assert.True(ended.MemoryLive); // recorded while the call held the memory
@@ -153,7 +154,7 @@ public sealed class BoundedCallTests
         }), budget, memory, timeoutMs: which == "own" ? 50 : null);
 
         Assert.Equal((which == "own" ? CallEnd.TimedOut : CallEnd.BudgetRanOut, IoOutcome.Timeout, false), (result.End, result.Outcome, result.Abandoned));
-        Assert.Equal(which == "own" ? "timed out after 50 ms" : null, result.Error);
+        Assert.Equal(which == "own" ? "timed out after 50 ms" : "timed out: the time budget ran out", result.Error);
         Assert.Equal(which == "own", result.Exception is null); // the budget's cancellation is thrown on to the operator
     }
 
@@ -325,7 +326,7 @@ public sealed class BoundedCallTests
         var expected = bound switch
         {
             "own" => (CallEnd.TimedOut, IoOutcome.Timeout, "timed out after 10 ms"),
-            "budget" => (CallEnd.BudgetRanOut, IoOutcome.Timeout, (string?)null),
+            "budget" => (CallEnd.BudgetRanOut, IoOutcome.Timeout, (string?)"timed out: the time budget ran out"),
             _ => (CallEnd.Cancelled, IoOutcome.Cancelled, null),
         };
         Assert.Equal((expected.Item1, expected.Item2, expected.Item3, 0, false), (result.End, result.Outcome, result.Error, result.Value, result.Abandoned));
@@ -472,7 +473,7 @@ public sealed class BoundedCallTests
     private static long Deadline(int milliseconds) => Stopwatch.GetTimestamp() + ((long)milliseconds * Stopwatch.Frequency / 1000);
 
     private static ValueTask<CallResult<int>> Run(Site site, AttemptBudget budget, RequestMemory memory, int? timeoutMs) =>
-        BoundedCall.RunAsync<int, Site>(site, budget, memory, Target, timeoutMs, "req", null);
+        BoundedCall.RunAsync<int, Site>(site, budget, memory, Target, CallDeadline.After(timeoutMs));
 
     /// <summary>Completes the call on a dedicated thread once <paramref name="gate"/> is set; the client ignores its token.</summary>
     private static ValueTask<int> OnThread(ManualResetEventSlim gate, Func<int> work)
@@ -593,10 +594,14 @@ public sealed class BoundedCallTests
 
         public ValueTask<int> Send(CancellationToken token) => send!(token);
 
-        public bool Succeeded(int value, out string? error)
+        public IoOutcome Judge(int value, out string? error)
         {
             error = value < 0 ? "negative" : null;
-            return value >= 0;
+            return value >= 0 ? IoOutcome.Ok : IoOutcome.Error;
+        }
+
+        public void Pending(Task done)
+        {
         }
 
         public int Keys => -1;
@@ -645,7 +650,7 @@ public sealed class BoundedCallListenerTests
         var answer = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         var call = new Recording(synchronously ? new ValueTask<int>(5) : new ValueTask<int>(answer.Task));
 
-        var running = BoundedCall.RunAsync<int, Recording>(call, budget, memory, target, null, "req", null).AsTask();
+        var running = BoundedCall.RunAsync<int, Recording>(call, budget, memory, target, CallDeadline.None).AsTask();
         answer.TrySetResult(5);
         var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
@@ -689,7 +694,7 @@ public sealed class BoundedCallListenerTests
         var budget = new AttemptBudget(CancellationToken.None, Stopwatch.GetTimestamp() + (600L * Stopwatch.Frequency));
         var call = new Recording(new ValueTask<int>(5));
 
-        var result = await BoundedCall.RunAsync<int, Recording>(call, budget, memory, target, null, "req", null)
+        var result = await BoundedCall.RunAsync<int, Recording>(call, budget, memory, target, CallDeadline.None)
             .AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.Equal((CallEnd.Answered, 5, IoOutcome.Ok), (result.End, result.Value, result.Outcome));
@@ -706,10 +711,14 @@ public sealed class BoundedCallListenerTests
 
         public ValueTask<int> Send(CancellationToken token) => answer;
 
-        public bool Succeeded(int value, out string? error)
+        public IoOutcome Judge(int value, out string? error)
         {
             error = null;
-            return true;
+            return IoOutcome.Ok;
+        }
+
+        public void Pending(Task done)
+        {
         }
 
         public int Keys => -1;
@@ -756,13 +765,13 @@ public sealed class BoundedCallAllocationTests
         var target = new IoTarget(IoRoles.Recall, "s");
         for (var i = 0; i < 100; i++)
         {
-            Consume(BoundedCall.RunAsync<int, Answering>(default, budget, memory, target, timeoutMs, "req", null));
+            Consume(BoundedCall.RunAsync<int, Answering>(default, budget, memory, target, CallDeadline.After(timeoutMs)));
         }
 
         var before = GC.GetAllocatedBytesForCurrentThread();
         for (var i = 0; i < calls; i++)
         {
-            Consume(BoundedCall.RunAsync<int, Answering>(default, budget, memory, target, timeoutMs, "req", null));
+            Consume(BoundedCall.RunAsync<int, Answering>(default, budget, memory, target, CallDeadline.After(timeoutMs)));
         }
 
         var bytes = (double)(GC.GetAllocatedBytesForCurrentThread() - before) / calls;
@@ -786,10 +795,14 @@ public sealed class BoundedCallAllocationTests
     {
         public ValueTask<int> Send(CancellationToken token) => new(1);
 
-        public bool Succeeded(int value, out string? error)
+        public IoOutcome Judge(int value, out string? error)
         {
             error = null;
-            return true;
+            return IoOutcome.Ok;
+        }
+
+        public void Pending(Task done)
+        {
         }
 
         public int Keys => -1;

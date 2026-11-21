@@ -4,6 +4,7 @@ using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
+using StrataRec.Core.Threading;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
 using StrataRec.Features.Connectors;
@@ -418,41 +419,34 @@ public sealed partial class FeatureFetcher
         ContextFetch fetch;
         if (!TryContextKey(group, out var batch))
         {
-            fetch = new ContextFetch(features, null, new ValueTask<FetchStatus>(FetchStatus.Ok));
+            fetch = new ContextFetch(group, 0, features, null, Answered(FetchStatus.Ok));
         }
         else
         {
             var fields = FieldBindings(group, features);
             var budget = BudgetMs(group);
-            var cancellation = budget <= 0 || _hook is { Replays: true } ? null : new FetchCancellation(cancellationToken, budget, _events, _requestId);
             if (budget <= 0)
             {
-                fetch = new ContextFetch(features, null, new ValueTask<FetchStatus>(NoTimeLeft));
+                fetch = new ContextFetch(group, budget, features, null, Answered(NoTimeLeft));
                 RecordUnsent(group, batch, fields, NoTimeLeft, IoOutcome.Timeout);
-            }
-            else if (cancellation is not null && CutOff(cancellation, cancellationToken) is { } cut)
-            {
-                // As a candidate chunk (FetchCandidates): a context fetch is not sent once the caller has cancelled, or its
-                // time is up (an earlier group's connector ran its synchronous part; review 49).
-                cancellation.Release();
-                var unsent = cut == IoOutcome.Cancelled ? Cancelled(group) : TimedOut(group, budget);
-                fetch = new ContextFetch(features, null, new ValueTask<FetchStatus>(unsent));
-                RecordUnsent(group, batch, fields, unsent, cut);
             }
             else
             {
+                // As a candidate chunk (FetchCandidates): a context fetch is not sent once the caller has cancelled, or its
+                // time is up (an earlier group's connector ran its synchronous part; review 49): BoundedCall's rule 8.
+                var bound = _hook is { Replays: true } ? null : CallBound.After(CancellationSite.Fetch, cancellationToken, budget, _events, _requestId);
                 var staging = new StagingBuffer(fields, 1, _memory);
-                ValueTask<FetchStatus> call;
+                ValueTask<CallResult<FetchStatus>> call;
                 try
                 {
-                    call = CallAsync(group, batch, fields, staging, budget, cancellation, cancellationToken, out _);
+                    call = CallAsync(group, batch, fields, staging, budget, bound, out _);
                 }
                 finally
                 {
-                    cancellation?.Release();
+                    bound?.Release();
                 }
 
-                fetch = new ContextFetch(features, staging, call);
+                fetch = new ContextFetch(group, budget, features, staging, call);
             }
         }
 
@@ -466,7 +460,7 @@ public sealed partial class FeatureFetcher
     /// </summary>
     private async Task StoreContextGroupAsync(ContextFetch fetch)
     {
-        var status = await fetch.Call.ConfigureAwait(false);
+        var status = StatusOf(fetch.Group, fetch.BudgetMs, await fetch.Call.ConfigureAwait(false));
         if (CountsValues && fetch.Staging is { } answered && status.Outcome != FetchOutcome.Failed)
         {
             // The one key was asked for (a missing context key sends nothing) and answered in time.
@@ -587,5 +581,5 @@ public sealed partial class FeatureFetcher
     }
 
     /// <param name="Call">Awaited once, by <see cref="StoreContextGroupAsync"/>.</param>
-    private readonly record struct ContextFetch(int[] Features, StagingBuffer? Staging, ValueTask<FetchStatus> Call);
+    private readonly record struct ContextFetch(FetchGroup Group, int BudgetMs, int[] Features, StagingBuffer? Staging, ValueTask<CallResult<FetchStatus>> Call);
 }

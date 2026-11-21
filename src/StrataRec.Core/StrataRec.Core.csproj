@@ -13,6 +13,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The one I/O boundary (Threading/BoundedCall.cs) is the engine's own: feature fetches and service calls use it,
+         hosts and operators reach it only through OperatorContext.CallAsync. -->
+    <InternalsVisibleTo Include="StrataRec.Features" />
+    <InternalsVisibleTo Include="StrataRec.Pipeline" />
     <InternalsVisibleTo Include="StrataRec.UnitTests" />
     <InternalsVisibleTo Include="StrataRec.IntegrationTests" />
     <InternalsVisibleTo Include="StrataRec.Benchmarks" />

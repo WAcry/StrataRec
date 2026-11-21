@@ -13,6 +13,7 @@ using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Replay;
 using StrataRec.Pipeline.Sources;
 using StrataRec.Core.Services;
+using StrataRec.Core.Threading;
 
 namespace StrataRec.Pipeline.Operators;
 
@@ -404,7 +405,7 @@ public sealed class OperatorContext
         var sequence = recorder?.BeginCall(NodeId, service.Target, call) ?? 0;
         var result = await BoundedCall.RunAsync<ServiceStatus, ServiceInvocation>(
             new ServiceInvocation(service.Client, call, response, service.Target, recorder, sequence), Budget, _state.Memory, service.Target,
-            service.TimeoutMs, RequestId, _state.Events).ConfigureAwait(false);
+            CallDeadline.After(service.TimeoutMs)).ConfigureAwait(false);
         // Every end named, no default arm: a new kind of end does not compile until it is decided here (architecture audit).
         return result.End switch
         {
@@ -488,8 +489,7 @@ public sealed class OperatorContext
     /// </summary>
     internal ValueTask<CallResult<ServiceStatus>> SendAsync(BoundService service, ServiceCall call, ServiceResponse response, int? timeoutMs) =>
         BoundedCall.RunAsync<ServiceStatus, ServiceInvocation>(
-            new ServiceInvocation(service.Client, call, response, service.Target, null, 0), Budget, _state.Memory, service.Target, timeoutMs, RequestId,
-            _state.Events);
+            new ServiceInvocation(service.Client, call, response, service.Target, null, 0), Budget, _state.Memory, service.Target, CallDeadline.After(timeoutMs));
 
     /// <summary>Throws <paramref name="exception"/> with the stack it was thrown with.</summary>
     private static ServiceStatus Rethrow(Exception exception)
@@ -528,10 +528,14 @@ public sealed class OperatorContext
 
         public int Keys => call.Items.IsEmpty ? -1 : call.Items.Length;
 
-        public bool Succeeded(ServiceStatus value, out string? error)
+        public IoOutcome Judge(ServiceStatus value, out string? error)
         {
             error = value.Error;
-            return value.Succeeded;
+            return value.Succeeded ? IoOutcome.Ok : IoOutcome.Error;
+        }
+
+        public void Pending(Task done)
+        {
         }
 
         public void Ended(in CallResult<ServiceStatus> result, TimeSpan duration)

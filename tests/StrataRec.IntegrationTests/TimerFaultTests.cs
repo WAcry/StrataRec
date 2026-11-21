@@ -30,7 +30,7 @@ public sealed class TimerFaultTests
     [Theory]
     [InlineData("call", "recall sources failed: popular: timed out after 300 ms")] // BoundedCall's own timeout
     [InlineData("node", "timed out after")] // the node's budget (AttemptBudget), no timeout of the call's own
-    [InlineData("fetch", "timed out")] // a feature fetch's budget (FeatureFetcher's FetchCancellation)
+    [InlineData("fetch", "timed out")] // a feature fetch's budget (its CallBound)
     [InlineData("assignment", "deadline exceeded during assignment")] // the assignment provider's deadline
     [InlineData("log_drain", "disposed")] // the log pipeline's drain timeout
     [InlineData("caller", "cancelled by the caller")] // the caller's own timer, through the node token linked to it

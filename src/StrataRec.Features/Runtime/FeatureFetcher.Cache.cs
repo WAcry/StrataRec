@@ -8,6 +8,7 @@ using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Types;
+using StrataRec.Core.Threading;
 using StrataRec.Core.Values;
 using StrataRec.Features.Cache;
 using StrataRec.Features.Connectors;
@@ -267,7 +268,7 @@ public sealed partial class FeatureFetcher
         read.BudgetMs = BudgetMs(read.Group);
         if (read.BudgetMs > 0)
         {
-            read.Cancellation = new FetchCancellation(cancellationToken, read.BudgetMs, _events, _requestId);
+            read.Cancellation = CallBound.After(CancellationSite.Fetch, cancellationToken, read.BudgetMs, _events, _requestId);
             read.StoreBudgetMs = Math.Min(read.BudgetMs, read.Supply.DistributedTimeoutMs ?? Math.Max(1, read.BudgetMs / 2));
             var clock = read.Cache.Clock; // the cache's clock times the tier too (a test moves it by hand)
             read.StoreDeadline = clock.GetTimestamp() + (read.StoreBudgetMs * clock.TimestampFrequency / 1000);
@@ -319,15 +320,18 @@ public sealed partial class FeatureFetcher
     {
         var chunkSize = Batching.Size(read.MissCount, read.IsContext ? 1 : read.Supply.MaxBatch); // the fewest chunks, even
         var chunks = Batching.Count(read.MissCount, chunkSize);
-        var calls = _memory.Rent<ValueTask<long>>(chunks);
+        var calls = _memory.Rent<ValueTask<CallResult<bool>>>(chunks);
+        var answeredAt = _memory.Rent<long>(chunks);
+        var deadline = CallDeadline.At(read.Cache.Clock, read.StoreDeadline, read.StoreBudgetMs); // the read's, not each chunk's
         for (var c = 0; c < chunks; c++)
         {
             // A store's synchronous part runs here, unbounded (see ICacheStore.GetAsync): once one has taken the
-            // tier's time, the chunks not sent yet are not sent; their keys go to the connector like a late chunk's.
+            // tier's time, the chunks not sent yet are not sent (BoundedCall's rule 8); their keys go to the connector
+            // like a late chunk's. The tier's time is judged by the cache's clock, which a test holds (review 21 #2).
             var offset = c * chunkSize;
-            calls[c] = read.Cache.Clock.GetTimestamp() >= read.StoreDeadline || read.Cancellation!.Token.IsCancellationRequested || cancellationToken.IsCancellationRequested
-                ? new ValueTask<long>(ChunkNotAnswered)
-                : StoreCall(read, tier, offset, Math.Min(chunkSize, read.MissCount - offset), cancellationToken);
+            calls[c] = BoundedCall.RunAsync<bool, StoreCall>(
+                new StoreCall(this, read, tier, offset, Math.Min(chunkSize, read.MissCount - offset), answeredAt, c), read.Cancellation!, _memory,
+                read.Supply.Io, deadline);
         }
 
         var cache = read.Cache;
@@ -341,7 +345,8 @@ public sealed partial class FeatureFetcher
             // may answer after a record it carries expired, so the time an earlier chunk was judged at would serve it as
             // fresh (pre-release assessment); and one that answered at once, waiting here behind a slow earlier chunk,
             // would be judged late and its fresh records sent to the connector (review 78).
-            var nowMs = await calls[c].ConfigureAwait(false);
+            var answered = await calls[c].ConfigureAwait(false);
+            var nowMs = answered.Outcome == IoOutcome.Ok ? answeredAt[c] : ChunkNotAnswered;
             if (nowMs == ChunkNotAnswered)
             {
                 failed += count; // its region of Stored may still be written: never read
@@ -391,158 +396,59 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>
-    /// Sends one read of the distributed tier: a chunk of the read's misses, one round trip. The rules of a connector call
-    /// (decisions.md, the wait invariants): the request memory is held from before the call until the store really
-    /// completes and the call site is done; the wait is bounded by the tier's deadline and the caller's token, never by
-    /// the store's token; the call is completed exactly once; what the store writes after the read stopped waiting is
-    /// never read. A store that answers synchronously allocates nothing here. The cache clock's time (ms) when the chunk
-    /// was seen to answer in time, which its records are judged at; <see cref="ChunkNotAnswered"/> when it did not.
-    /// </summary>
-    private ValueTask<long> StoreCall(CacheRead read, DistributedCacheTier tier, int offset, int count, CancellationToken cancellationToken)
-    {
-        var cancellation = read.Cancellation!;
-        _memory.Hold();
-        var io = read.Supply.Io.Start();
-        cancellation.AddCall();
-        ValueTask call;
-        try
-        {
-            call = tier.Store.GetAsync(
-                read.Cache.Keyspace, read.MissTexts!.AsMemory(offset, count), read.Stored.AsMemory(offset, count), cancellation.Token);
-        }
-        catch (Exception ex)
-        {
-            call = ValueTask.FromException(ex); // threw before returning a task: completed, writing no more
-        }
-
-        if (call.IsCompleted)
-        {
-            try
-            {
-                return new ValueTask<long>(StoreObserved(io, read, count, call, cancellationToken));
-            }
-            finally
-            {
-                cancellation.Release();
-                _memory.Release();
-            }
-        }
-
-        io.Sent(); // the read's next chunk is not a child of this one
-        return AwaitStoreAsync(io, read, count, call, cancellation, cancellationToken);
-    }
-
-    /// <summary>The rest of a store read that did not complete synchronously; the shape of <see cref="AwaitConnectorAsync"/>.</summary>
-    private async ValueTask<long> AwaitStoreAsync(
-        IoCall io, CacheRead read, int count, ValueTask call, FetchCancellation cancellation, CancellationToken cancellationToken)
-    {
-        var lease = new IoLease(_memory, cancellation);
-        var task = call.AsTask();
-        _ = task.ContinueWith(
-            static (t, state) =>
-            {
-                _ = t.Exception; // observe a late failure nobody awaits any more
-                ((IoLease)state!).ConnectorDone();
-            },
-            lease,
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-        TrackIo(lease.Task); // done once the connector and this call site both are (review 78)
-
-        // The wait decides the outcome; the call is completed once, after it, outside the catch. The outer finally covers
-        // the wait, the classification and the completion alike.
-        try
-        {
-            var outcome = IoOutcome.Ok;
-            string? error = null;
-            var observeNow = false;
-            try
-            {
-                var remaining = read.Cache.Clock.GetElapsedTime(read.Cache.Clock.GetTimestamp(), read.StoreDeadline);
-                var wait = task.WaitAsync(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, cancellationToken);
-                observeNow = ReferenceEquals(wait, task); // completed already: no wait decided, so it is observed now
-                if (!observeNow)
-                {
-                    await wait.ConfigureAwait(false);
-                }
-            }
-            catch (Exception ex)
-            {
-                outcome = Classify(ex, cancellationToken);
-                error = StoreFailure(read, outcome, ex);
-            }
-
-            return observeNow
-                ? StoreObserved(io, read, count, new ValueTask(task), cancellationToken)
-                : StoreCompleted(io, read, count, outcome, error);
-        }
-        finally
-        {
-            lease.CallSiteDone();
-        }
-    }
-
-    /// <summary>
-    /// Settles a store read found completed without an installed wait to decide it (the rule of <see cref="Observed"/>):
-    /// it counts only if observed within the tier's bound, that is now; otherwise it is timed out or cancelled and its
-    /// records are never read. Returns what <see cref="StoreCompleted"/> does.
-    /// </summary>
-    private long StoreObserved(in IoCall io, CacheRead read, int count, ValueTask completed, CancellationToken cancellationToken)
-    {
-        IoOutcome? cutOff = cancellationToken.IsCancellationRequested ? IoOutcome.Cancelled
-            : read.Cache.Clock.GetTimestamp() >= read.StoreDeadline || read.Cancellation!.Token.IsCancellationRequested ? IoOutcome.Timeout
-            : null;
-        var outcome = IoOutcome.Ok;
-        string? error = null;
-        try
-        {
-            completed.GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            outcome = Classify(ex, cancellationToken);
-            error = StoreFailure(read, outcome, ex);
-        }
-
-        if (cutOff is { } late)
-        {
-            outcome = late;
-            error = StoreFailure(read, late, null);
-        }
-
-        return StoreCompleted(io, read, count, outcome, error);
-    }
-
-    /// <summary>
-    /// Records a finished store read (metrics, source health, span). Returns the cache clock's time (ms) when it was seen
-    /// to answer in time, which its records are judged at, or <see cref="ChunkNotAnswered"/> when its records must not be
-    /// read.
+    /// One read of the distributed tier, a chunk of the read's misses in one round trip, as <see cref="BoundedCall"/>'s
+    /// call site: the wait is bounded by the tier's deadline (by the cache's clock) and the caller's token, never by the
+    /// store's token; what the store writes after the read stopped waiting is never read. The store's token carries the
+    /// tier's deadline when it comes before the fetch's (a token source and its timer per chunk, about 210 B), so a store
+    /// that honours it (<c>redis@1</c> does) stops, and gives the request memory back, at the tier's deadline rather than
+    /// the fetch's. It notes the cache clock's time (ms) when the chunk was seen to answer in time, which its records are
+    /// judged at.
     /// </summary>
     /// <remarks>
-    /// The time is taken as soon as the outcome is known, before <see cref="IoCall.Complete"/> calls the host's listeners:
-    /// one that took time, or moved the cache's clock, made a record fresh when the store answered look expired, and sent
-    /// its key to the connector (review 80).
+    /// The time is taken as soon as the outcome is known, before <see cref="IoCall.Complete"/> calls the host's listeners
+    /// (<see cref="BoundedCall"/> has the call site end first): one that took time, or moved the cache's clock, made a
+    /// record fresh when the store answered look expired, and sent its key to the connector (review 80).
     /// </remarks>
-    private long StoreCompleted(in IoCall io, CacheRead read, int count, IoOutcome outcome, string? error)
+    private readonly struct StoreCall(FeatureFetcher fetcher, CacheRead read, DistributedCacheTier tier, int offset, int count, long[] answeredAt, int chunk)
+        : IBoundedCall<bool>
     {
-        var answeredAt = outcome == IoOutcome.Ok ? read.Cache.NowMs() : ChunkNotAnswered;
-        io.Complete(outcome, count, _requestId, error, _events);
-        return answeredAt;
-    }
+        public int Keys => count;
 
-    private static string StoreFailure(CacheRead read, IoOutcome outcome, Exception? ex) => outcome switch
-    {
-        IoOutcome.Timeout => $"distributed cache of source '{read.Group.SourceName}' timed out after {read.StoreBudgetMs} ms",
-        IoOutcome.Cancelled => $"distributed cache of source '{read.Group.SourceName}' was cancelled",
-        _ => $"distributed cache of source '{read.Group.SourceName}' failed: {(ex is null ? "(no exception)" : ExceptionText.Of(ex))}",
-    };
+        public ValueTask<bool> Send(CancellationToken token)
+        {
+            var get = tier.Store.GetAsync(read.Cache.Keyspace, read.MissTexts!.AsMemory(offset, count), read.Stored.AsMemory(offset, count), token);
+            if (get.IsCompleted)
+            {
+                get.GetAwaiter().GetResult(); // a failure is the call's: BoundedCall catches what Send throws
+                return new ValueTask<bool>(true);
+            }
+
+            return Await(get);
+
+            static async ValueTask<bool> Await(ValueTask get)
+            {
+                await get.ConfigureAwait(false);
+                return true;
+            }
+        }
+
+        public IoOutcome Judge(bool value, out string? error)
+        {
+            error = null;
+            return IoOutcome.Ok;
+        }
+
+        public void Pending(Task done) => fetcher.TrackIo(done); // done once the store and this call site both are (review 78)
+
+        public void Ended(in CallResult<bool> result, TimeSpan duration) =>
+            answeredAt[chunk] = result.Outcome == IoOutcome.Ok ? read.Cache.NowMs() : ChunkNotAnswered;
+    }
 
     /// <summary>
     /// Fetches what neither tier had fresh from the connector, in <c>max_batch</c> chunks through the fetch path's call
     /// (not recorded on their own: the read is recorded as one call), and encodes each answered key's record.
     /// </summary>
-    private async ValueTask FetchOriginAsync(CacheRead read, FetchCancellation cancellation, CancellationToken cancellationToken)
+    private async ValueTask FetchOriginAsync(CacheRead read, CallBound bound, CancellationToken cancellationToken)
     {
         var count = 0;
         for (var m = 0; m < read.MissCount; m++)
@@ -555,7 +461,7 @@ public sealed partial class FeatureFetcher
             return;
         }
 
-        if (Stopwatch.GetTimestamp() >= cancellation.DeadlineTimestamp)
+        if (Stopwatch.GetTimestamp() >= bound.Deadline)
         {
             read.Error ??= NoTimeLeft.Error; // the distributed tier took the whole budget
             return;
@@ -580,24 +486,19 @@ public sealed partial class FeatureFetcher
         var chunkSize = Batching.Size(count, read.IsContext ? 1 : read.Supply.MaxBatch); // the fewest chunks, even
         var chunks = Batching.Count(count, chunkSize);
         var staging = new StagingArea(group.Fields.AsSpan(), count, chunkSize, _memory);
-        var calls = _memory.Rent<ValueTask<FetchStatus>>(chunks);
+        var calls = _memory.Rent<ValueTask<CallResult<FetchStatus>>>(chunks);
         var writtenMs = read.Cache.NowMs(); // the version of what this fetch writes back: when it started
         StagingBuffer? writer = null;
         for (var c = 0; c < chunks; c++)
         {
             // As a plain fetch's (FetchCandidates): once the time is up or the caller has cancelled, the chunks not sent
-            // yet are not sent; their keys stay unanswered.
-            if (CutOff(cancellation, cancellationToken) is { } cut)
-            {
-                calls[c] = new ValueTask<FetchStatus>(cut == IoOutcome.Cancelled ? Cancelled(group) : TimedOut(group, read.BudgetMs));
-                continue;
-            }
-
+            // yet are not sent (BoundedCall's rule 8); their keys stay unanswered. Not recorded on their own: the read is
+            // recorded as one call.
             var offset = c * chunkSize;
             var batch = keys.Slice(offset, Math.Min(chunkSize, count - offset));
             writer ??= new StagingBuffer(staging);
             writer.Bind(c);
-            calls[c] = ConnectorCall(group, batch, group.FieldArray, writer, read.BudgetMs, NotRecorded, cancellation, cancellationToken, out var writerHeld);
+            calls[c] = Send(group, batch, group.FieldArray, writer, read.BudgetMs, NotRecorded, bound, out var writerHeld);
             if (writerHeld)
             {
                 writer = null; // the call runs on and may write through this view until it really completes
@@ -608,7 +509,7 @@ public sealed partial class FeatureFetcher
         var spans = _memory.Rent<(int Offset, int Length)>(count);
         for (var c = 0; c < chunks; c++)
         {
-            var status = await calls[c].ConfigureAwait(false);
+            var status = StatusOf(group, read.BudgetMs, await calls[c].ConfigureAwait(false));
             if (status.Outcome == FetchOutcome.Failed)
             {
                 read.Error ??= status.Error; // its keys stay unanswered; its staging is never read
@@ -1138,7 +1039,7 @@ public sealed partial class FeatureFetcher
         public long StoreDeadline { get; set; }
 
         /// <summary>The read's cancellation and deadline, for both tiers; null when it had no time left to send anything.</summary>
-        public FetchCancellation? Cancellation { get; set; }
+        public CallBound? Cancellation { get; set; }
 
         /// <summary>The resolution of the misses (<see cref="ResolveAsync"/>); also tracked by the request's I/O drain.</summary>
         public Task Resolution { get; set; } = Task.CompletedTask;

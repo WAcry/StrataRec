@@ -1,9 +1,10 @@
+using StrataRec.Core.Threading;
 using System.Diagnostics;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Memory;
 using StrataRec.Pipeline.Operators;
 
-namespace StrataRec.UnitTests.Pipeline;
+namespace StrataRec.UnitTests.Core;
 
 /// <summary>
 /// Review 83: two bounded calls in one traced flow, the first answering at once. A host's activity listener that threw
@@ -23,8 +24,8 @@ public sealed class BoundedCallSpanTests
         var first = new Traced(new List<Activity?>());
         var second = new Traced(new List<Activity?>());
 
-        var firstResult = await BoundedCall.RunAsync<int, Traced>(first, budget, memory, new IoTarget(IoRoles.Recall, "first"), null, "req", null);
-        var secondResult = await BoundedCall.RunAsync<int, Traced>(second, budget, memory, new IoTarget(IoRoles.Recall, "second"), null, "req", null);
+        var firstResult = await BoundedCall.RunAsync<int, Traced>(first, budget, memory, new IoTarget(IoRoles.Recall, "first"), CallDeadline.None);
+        var secondResult = await BoundedCall.RunAsync<int, Traced>(second, budget, memory, new IoTarget(IoRoles.Recall, "second"), CallDeadline.None);
 
         Assert.Equal((IoOutcome.Ok, IoOutcome.Ok), (firstResult.Outcome, secondResult.Outcome));
         Assert.Equal(1, flow.Thrown);
@@ -50,8 +51,8 @@ public sealed class BoundedCallSpanTests
         var first = new Traced(new List<Activity?>(), later: true);
         var second = new Traced(new List<Activity?>(), later: true);
 
-        var firstResult = await BoundedCall.RunAsync<int, Traced>(first, budget, memory, new IoTarget(IoRoles.Recall, "first"), null, "req", null);
-        var secondResult = await BoundedCall.RunAsync<int, Traced>(second, budget, memory, new IoTarget(IoRoles.Recall, "second"), null, "req", null);
+        var firstResult = await BoundedCall.RunAsync<int, Traced>(first, budget, memory, new IoTarget(IoRoles.Recall, "first"), CallDeadline.None);
+        var secondResult = await BoundedCall.RunAsync<int, Traced>(second, budget, memory, new IoTarget(IoRoles.Recall, "second"), CallDeadline.None);
 
         Assert.Equal((42, 42), (firstResult.Value, secondResult.Value));
         var firstSpan = Assert.Single(flow.Named("recall first"));
@@ -82,10 +83,14 @@ public sealed class BoundedCallSpanTests
             return 42;
         }
 
-        public bool Succeeded(int value, out string? error)
+        public IoOutcome Judge(int value, out string? error)
         {
             error = null;
-            return true;
+            return IoOutcome.Ok;
+        }
+
+        public void Pending(Task done)
+        {
         }
 
         public int Keys => -1;

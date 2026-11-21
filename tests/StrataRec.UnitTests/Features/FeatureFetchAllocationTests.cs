@@ -48,6 +48,26 @@ public class FeatureFetchAllocationTests
         Assert.True(more - fewer < 100 * 8, $"100 chunks: {fewer} B, 200 chunks: {more} B");
     }
 
+    /// <summary>
+    /// A chunk whose connector answers later costs its wait and no more: the task of its answer, the lease that holds the
+    /// request memory until the connector has completed, the continuation that releases it, the wait's timer and the
+    /// state machine that awaits it, besides the connector's own async method. Measured over every thread, since the
+    /// continuations run on the pool; the same 2,000 keys in 100 or in 200 chunks, so the difference is 100 chunks' worth.
+    /// About 1.19 KB a chunk on .NET 10, the yielding connector's own included; 1.14 KB before the waits were merged into
+    /// one (IO step 4), 1.31 KB when the merged wait's state machine also kept the result, the memory and the client's
+    /// token across the wait.
+    /// </summary>
+    [Fact]
+    public async Task AnAsynchronouslyAnsweredChunk_CostsItsWaitAlone()
+    {
+        const int Keys = 2_000;
+        var fewer = await MeasureAllThreadsAsync(AsynchronousRig(maxBatch: 20), Keys);
+        var more = await MeasureAllThreadsAsync(AsynchronousRig(maxBatch: 10), Keys);
+
+        var perChunk = (more - fewer) / 100.0;
+        Assert.True(perChunk < 1_350, $"100 chunks: {fewer} B, 200 chunks: {more} B, {perChunk:F0} B a chunk");
+    }
+
     [Fact]
     public void LocalRead_AllocatesNothing_AtAnyKeyCount()
     {
@@ -250,6 +270,44 @@ public class FeatureFetchAllocationTests
         return (rig, new[] { score, clicks });
     }
 
+    private static (FeatureTestRig Rig, int[] Features) AsynchronousRig(int maxBatch)
+    {
+        var rig = new FeatureTestRig().Source("item_store", new YieldingConnector(), maxBatch: maxBatch);
+        var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float32, "item_store", ScalarValue.FromFloat64(0));
+        rig.Build();
+        return (rig, new[] { score, clicks });
+    }
+
+    /// <summary>
+    /// Bytes one request fetching for keys 1..<paramref name="keys"/> allocates on every thread, until the fill has
+    /// completed and the request memory is released: the best of five rounds after a warm-up.
+    /// </summary>
+    private static async Task<long> MeasureAllThreadsAsync((FeatureTestRig Rig, int[] Features) setup, int keys)
+    {
+        var (rig, features) = setup;
+        var candidates = Enumerable.Range(1, keys).Select(i => (long)i).ToArray();
+        var best = long.MaxValue;
+        for (var round = 0; round < 6; round++)
+        {
+            var request = rig.NewRequest(candidates);
+            var before = GC.GetTotalAllocatedBytes(precise: true);
+            var result = await request.Fetcher.EnsureAsync(features, CancellationToken.None);
+            var last = ColumnValues.Get(request.Table.TryGetSlot(rig.SlotOf(features[0]))!, candidates.Length - 1);
+            request.Memory.Release();
+            var allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
+
+            Assert.Equal(FeatureState.Ok, result.State);
+            Assert.Equal(candidates[^1] * 0.5, last.AsFloat64());
+            if (round > 0)
+            {
+                best = Math.Min(best, allocated);
+            }
+        }
+
+        return best;
+    }
+
     private static string Items(int count)
     {
         var json = new StringBuilder("{");
@@ -303,6 +361,23 @@ public class FeatureFetchAllocationTests
         }
 
         return best;
+    }
+
+    /// <summary>Answers as <see cref="SynchronousConnector"/> does, after yielding: every call completes after it returned.</summary>
+    private sealed class YieldingConnector : IFeatureSourceConnector
+    {
+        private readonly SynchronousConnector _answer = new();
+
+        public string ConnectorType => TestConnectorFactory.TypeName;
+
+        public bool Supports(EntityKeyLayout layout) => _answer.Supports(layout);
+
+        public async ValueTask<FetchStatus> FetchAsync(
+            EntityKeyBatch keys, ReadOnlyMemory<CompiledFieldBinding> fields, IFeatureBatchWriter writer, CancellationToken cancellationToken)
+        {
+            await Task.Yield();
+            return await _answer.FetchAsync(keys, fields, writer, cancellationToken);
+        }
     }
 
     /// <summary>Answers every key at once (score = key × 0.5, clicks = key) without allocating.</summary>

@@ -5,6 +5,7 @@ using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Services;
+using StrataRec.Core.Threading;
 using StrataRec.Features.Cache;
 using StrataRec.Features.Local;
 using StrataRec.Pipeline.Replay;
@@ -213,7 +214,7 @@ internal sealed class CachedServiceCall
         var records = new ReadOnlyMemory<byte>[misses];
         var read = await BoundedCall.RunAsync<bool, StoreRead>(
             new StoreRead(tier.Store, _cache.Policy.Keyspace, texts, records), _context.Budget, _memory, _cache.Io,
-            Math.Min(_cache.DistributedTimeoutMs, RemainingMs()), _context.RequestId, _context.Events).ConfigureAwait(false);
+            CallDeadline.After(Math.Min(_cache.DistributedTimeoutMs, RemainingMs()))).ConfigureAwait(false);
         switch (read.End)
         {
             case CallEnd.BudgetRanOut or CallEnd.Cancelled:
@@ -925,10 +926,14 @@ internal sealed class CachedServiceCall
             }
         }
 
-        public bool Succeeded(bool value, out string? error)
+        public IoOutcome Judge(bool value, out string? error)
         {
             error = null;
-            return true;
+            return IoOutcome.Ok;
+        }
+
+        public void Pending(Task done)
+        {
         }
 
         public void Ended(in CallResult<bool> result, TimeSpan duration)

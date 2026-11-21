@@ -130,6 +130,12 @@ public class ObservedCancellationSource : CancellationTokenSource
     /// <summary>Which token this is.</summary>
     public CancellationSite Site => _site;
 
+    /// <summary>Where a failure is summarized; also where the calls a <see cref="CallBound"/> bounds report.</summary>
+    internal RequestEventLog? Events => _events;
+
+    /// <summary>The request a failure is sampled with; also the one the calls a <see cref="CallBound"/> bounds report.</summary>
+    internal string? RequestId => _requestId;
+
     /// <summary>The tag value of <paramref name="site"/>.</summary>
     public static string NameOf(CancellationSite site) => SiteNames[(int)site];
 
