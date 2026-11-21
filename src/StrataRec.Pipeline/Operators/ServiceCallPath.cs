@@ -26,8 +26,8 @@ internal readonly struct ServiceCaller
     /// <summary>The feature source whose features the call is for; null for a node's call.</summary>
     public string? Source { get; }
 
-    /// <summary>One string per caller, which a replay matches a recorded call's on: the node id, or <c>source:&lt;name&gt;</c>
-    /// (node ids are identifiers, so the two never meet).</summary>
+    /// <summary>One string per caller, which a replay matches a recorded call's on, with whether it is a source's (a node
+    /// built without the plan compiler's checks may spell a source's key): the node id, or <c>source:&lt;name&gt;</c>.</summary>
     public string Key { get; }
 
     public static ServiceCaller OfNode(string node) => new(node, null, node);
@@ -58,6 +58,13 @@ internal interface IServiceCallScope
 
     /// <summary>The call was answered with stale values (its cache's), or was when it was recorded.</summary>
     void ReportDegraded(string reason);
+
+    /// <summary>
+    /// An external call of this scope (to the service, or its cache's distributed tier) did not complete synchronously;
+    /// <paramref name="done"/> completes once it really has: a feature fetch tracks it, as its connectors' calls (review of
+    /// IO step 5). The call holds the request memory until then either way.
+    /// </summary>
+    void Pending(Task done);
 }
 
 /// <summary>
@@ -101,7 +108,7 @@ internal static class ServiceCallPath
         var recorder = scope.Recorder;
         var sequence = recorder?.BeginCall(scope.Caller, service.Target, call) ?? 0;
         var result = await BoundedCall.RunAsync<ServiceStatus, ServiceInvocation>(
-            new ServiceInvocation(service.Client, call, response, service.Target, recorder, sequence), scope.Budget, scope.Memory, service.Target,
+            new ServiceInvocation(scope, service.Client, call, response, service.Target, recorder, sequence), scope.Budget, scope.Memory, service.Target,
             CallDeadline.After(service.TimeoutMs)).ConfigureAwait(false);
         // Every end named, no default arm: a new kind of end does not compile until it is decided here (architecture audit).
         return result.End switch
@@ -120,7 +127,7 @@ internal static class ServiceCallPath
     public static ValueTask<CallResult<ServiceStatus>> SendAsync(
         IServiceCallScope scope, BoundService service, ServiceCall call, ServiceResponse response, in CallDeadline deadline) =>
         BoundedCall.RunAsync<ServiceStatus, ServiceInvocation>(
-            new ServiceInvocation(service.Client, call, response, service.Target, null, 0), scope.Budget, scope.Memory, service.Target, deadline);
+            new ServiceInvocation(scope, service.Client, call, response, service.Target, null, 0), scope.Budget, scope.Memory, service.Target, deadline);
 
     /// <summary>Throws <paramref name="exception"/> with the stack it was thrown with.</summary>
     private static ServiceStatus Rethrow(Exception exception)
@@ -137,7 +144,7 @@ internal static class ServiceCallPath
     /// nothing.
     /// </summary>
     private readonly struct ServiceInvocation(
-        IServiceClient client, ServiceCall call, ServiceResponse response, IoTarget target, RunRecorder? recorder, int sequence)
+        IServiceCallScope scope, IServiceClient client, ServiceCall call, ServiceResponse response, IoTarget target, RunRecorder? recorder, int sequence)
         : IBoundedCall<ServiceStatus>
     {
         public ValueTask<ServiceStatus> Send(CancellationToken token) => client.CallAsync(call, response, token);
@@ -150,9 +157,7 @@ internal static class ServiceCallPath
             return value.Succeeded ? IoOutcome.Ok : IoOutcome.Error;
         }
 
-        public void Pending(Task done)
-        {
-        }
+        public void Pending(Task done) => scope.Pending(done);
 
         public void Ended(in CallResult<ServiceStatus> result, TimeSpan duration)
         {

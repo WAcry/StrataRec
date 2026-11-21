@@ -363,7 +363,23 @@ public sealed class OperatorContext : IServiceCallScope
     /// where the recorded call was cut off by the budget or the caller. A client exception is a failed status, not a throw,
     /// so a replay never has to recreate an exception type the recording saw.</para>
     /// </remarks>
-    public async Task<ServiceStatus> CallAsync(BoundService service, ServiceCall call, ServiceResponse response)
+    public Task<ServiceStatus> CallAsync(BoundService service, ServiceCall call, ServiceResponse response)
+    {
+        // Not an async method: the shared path's task is the call's (review of IO step 5: awaiting it here cost a second
+        // task per call). A wrong call is still a faulted task, as an async method's would be.
+        try
+        {
+            Check(service, call, response);
+        }
+        catch (Exception ex)
+        {
+            return Task.FromException<ServiceStatus>(ex);
+        }
+
+        return ServiceCallPath.CallAsync(this, service, call, response);
+    }
+
+    private void Check(BoundService service, ServiceCall call, ServiceResponse response)
     {
         ArgumentNullException.ThrowIfNull(service);
         ArgumentNullException.ThrowIfNull(call);
@@ -383,8 +399,6 @@ public sealed class OperatorContext : IServiceCallScope
         {
             CheckItems(call);
         }
-
-        return await ServiceCallPath.CallAsync(this, service, call, response).ConfigureAwait(false);
     }
 
     /// <summary>Each output is named once: the recording, the replay's choice of a recording and the cache count outputs by name.</summary>
@@ -464,6 +478,11 @@ public sealed class OperatorContext : IServiceCallScope
     RunReplay? IServiceCallScope.Replay => _state.Replay;
 
     RunRecorder? IServiceCallScope.Recorder => _state.Recorder;
+
+    /// <summary>A node's pending call holds the request memory until it completes; nothing else waits for it.</summary>
+    void IServiceCallScope.Pending(Task done)
+    {
+    }
 
     /// <summary>Marks the result as Degraded (completed with partial or stale inputs, design 5.6).</summary>
     public void ReportDegraded(string reason) => DegradedReason ??= reason;

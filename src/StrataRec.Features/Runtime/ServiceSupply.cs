@@ -56,4 +56,19 @@ internal sealed class ServiceSupplyCall
 
     /// <summary>The request's recorder or replay, when it records or replays.</summary>
     public IFeatureCallHook? Hook { get; init; }
+
+    /// <summary>The request's id and seed, which a service call carries as a node's does (review of IO step 5).</summary>
+    public string? RequestId { get; init; }
+
+    /// <inheritdoc cref="RequestId"/>
+    public long? Seed { get; init; }
+
+    /// <summary>The fetch, which tracks the call's external operations still running (<see cref="FeatureFetcher.WhenIoCompleteAsync"/>).</summary>
+    public IIoTracker? Io { get; init; }
+}
+
+/// <summary>Tracks an external operation that did not complete synchronously, until it really has.</summary>
+internal interface IIoTracker
+{
+    void Track(Task done);
 }

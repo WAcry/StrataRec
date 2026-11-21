@@ -123,9 +123,29 @@ public static class ArtifactSchemas
             "experiment" => Experiment(Sorted(operators)),
             "bindings" => Bindings(bindings ?? Array.Empty<BindingSchemaSource>()),
             "replay_bundle" => ReplayBundleSchema(Export(type, Describe, inline: editable)),
+            "catalog" => CatalogSchema(Export(type, Describe, inline: editable)),
             _ => Export(type, Describe, inline: editable),
         };
         return Document(schema, type.Name, editable ? kind : null);
+    }
+
+    /// <summary>
+    /// An entity declares exactly one of <c>key</c> and <c>args</c>, and args has at least one argument, as the catalog
+    /// checks (IO step 5): both members are optional in the type, so an editor accepted an entity the engine refuses
+    /// (review of IO step 5; a key alone was required before).
+    /// </summary>
+    private static JsonObject CatalogSchema(JsonObject schema)
+    {
+        if (schema["properties"] is JsonObject properties && properties["entities"]?["additionalProperties"] is JsonObject entity
+            && entity["properties"]?["args"] is JsonObject args)
+        {
+            args["minProperties"] = 1;
+            entity["oneOf"] = new JsonArray(
+                new JsonObject { ["required"] = new JsonArray("key") },
+                new JsonObject { ["required"] = new JsonArray("args") });
+        }
+
+        return schema;
     }
 
     /// <summary>

@@ -473,9 +473,11 @@ public sealed partial class FeatureFetcher
             }
         }
 
+        // A failed call's staging is not read: an abandoned connector may still be writing it (review of IO step 5).
+        var staging = status.Outcome != FetchOutcome.Failed ? fetch.Staging : null;
         for (var i = 0; i < fetch.Features.Length; i++)
         {
-            StoreContextMember(fetch.Features[i], status, fetch.Staging is null ? ScalarValue.Missing : fetch.Staging.Get(i, 0));
+            StoreContextMember(fetch.Features[i], status, staging is null ? ScalarValue.Missing : staging.Get(i, 0));
         }
     }
 
@@ -517,6 +519,7 @@ public sealed partial class FeatureFetcher
         var call = new ServiceSupplyCall
         {
             Group = group, Args = args, Fields = fields, Values = new ScalarValue[fields.Length], Memory = _memory, Bound = bound, Hook = _hook,
+            RequestId = _requestId, Seed = _seed, Io = this,
         };
         ValueTask<FetchStatus> served;
         try

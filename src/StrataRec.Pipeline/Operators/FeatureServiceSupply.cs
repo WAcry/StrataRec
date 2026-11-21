@@ -1,3 +1,4 @@
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Services;
 using StrataRec.Core.Threading;
@@ -21,6 +22,9 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
 {
     private readonly ServiceCaller _caller = ServiceCaller.OfSource(source);
 
+    /// <summary>The outputs of the last fields asked for: a group asks for the same fields every request.</summary>
+    private OutputNames? _outputs;
+
     public string ServiceName => service.Name;
 
     public async ValueTask<FetchStatus> FetchAsync(ServiceSupplyCall call)
@@ -32,25 +36,25 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
             inputs[a] = ServiceInputs.Create(arg.Name, arg.Type, arg.Value, call.Memory);
         }
 
-        var outputs = new string[call.Fields.Length];
-        for (var i = 0; i < outputs.Length; i++)
-        {
-            outputs[i] = call.Fields[i].Field;
-        }
-
         var scope = new Scope(_caller, call);
         var response = new ServiceResponse(call.Memory);
+        var serviceCall = new ServiceCall
+        {
+            Service = service.Name, Inputs = inputs, Outputs = Outputs(call.Fields), RequestId = call.RequestId ?? string.Empty,
+            Options = new ServiceCallOptions(Seed: call.Seed),
+        };
         ServiceStatus status;
         try
         {
-            status = await ServiceCallPath.CallAsync(scope, service, new ServiceCall { Service = service.Name, Inputs = inputs, Outputs = outputs }, response)
-                .ConfigureAwait(false);
+            status = await ServiceCallPath.CallAsync(scope, service, serviceCall, response).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException ex)
         {
-            // The fetch's bound ran out (live, or where the recorded call was), or the caller cancelled: the features fail,
+            // The fetch's bound ran out, or the caller cancelled, live or where the recorded call was (review of IO step 5:
+            // a recorded cancellation replayed as a timeout, the replay's caller not having cancelled): the features fail,
             // as a connector's cut off at its bound do; the caller's cancellation is the request's to throw.
-            return FetchStatus.Failed(call.Bound.Caller.IsCancellationRequested ? $"source '{source}' was cancelled" : $"source '{source}' timed out");
+            var cancelled = ex is ReplayedCutOff replayed ? replayed.Outcome == IoOutcome.Cancelled : call.Bound.Caller.IsCancellationRequested;
+            return FetchStatus.Failed(cancelled ? $"source '{source}' was cancelled" : $"source '{source}' timed out");
         }
 
         if (!status.Succeeded)
@@ -123,7 +127,19 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
                 value = ScalarValue.FromFloat64List(Float64s(values));
                 return true;
             case StorageKind.String when values.ElementType == TensorElementType.String:
-                value = ScalarValue.FromStringList(values.String.ToArray());
+                // An element the service left unwritten is null, which no list of strings holds (review of IO step 5: one
+                // reached a later call's digest as an argument, and failed the recording).
+                var strings = values.String.Span;
+                for (var i = 0; i < strings.Length; i++)
+                {
+                    if (strings[i] is null)
+                    {
+                        error = $"output '{field.Field}' with element {i} of {strings.Length} unwritten";
+                        return false;
+                    }
+                }
+
+                value = ScalarValue.FromStringList(strings.ToArray());
                 return true;
             default:
                 error = $"output '{field.Field}' of {values.ElementType} values, which a {type} feature cannot take";
@@ -191,6 +207,34 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
         return list;
     }
 
+    /// <summary>
+    /// The outputs the call reads: each field's name once, though two features may read one field (review of IO step 5: a
+    /// service was asked for an output twice); each feature still takes the output as its own type does. Kept for the
+    /// fields' array, which a group's request passes every time.
+    /// </summary>
+    private string[] Outputs(CompiledFieldBinding[] fields)
+    {
+        if (Volatile.Read(ref _outputs) is { } cached && ReferenceEquals(cached.Fields, fields))
+        {
+            return cached.Names;
+        }
+
+        var names = new List<string>(fields.Length);
+        foreach (var field in fields)
+        {
+            if (!names.Contains(field.Field))
+            {
+                names.Add(field.Field);
+            }
+        }
+
+        var outputs = new OutputNames(fields, [.. names]);
+        Volatile.Write(ref _outputs, outputs);
+        return outputs.Names;
+    }
+
+    private sealed record OutputNames(CompiledFieldBinding[] Fields, string[] Names);
+
     /// <summary>One request's call: the fetch's bound and memory, the request's recorder or replay, and whether a stale answer degraded it.</summary>
     private sealed class Scope(ServiceCaller caller, ServiceSupplyCall call) : IServiceCallScope
     {
@@ -207,5 +251,7 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
         public string? Degraded { get; private set; }
 
         public void ReportDegraded(string reason) => Degraded ??= reason;
+
+        public void Pending(Task done) => call.Io?.Track(done);
     }
 }

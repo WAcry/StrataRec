@@ -194,6 +194,7 @@ internal sealed class RunReplay : IFeatureCallHook
     internal ServiceStatus Call(in ServiceCaller caller, IoTarget target, ServiceCall call, ServiceResponse response, out string? degraded)
     {
         var node = caller.Key;
+        var fromSource = caller.Source is not null; // with the key, which a node's id might spell too (review of IO step 5)
         degraded = null;
         lock (_gate)
         {
@@ -204,7 +205,7 @@ internal sealed class RunReplay : IFeatureCallHook
             if (items.IsEmpty)
             {
                 var digest = ReplayJson.Hex(ServiceInputDigest.Call(call, order));
-                var own = TakeOwn(calls, entry => entry.Keys is null && entry.Node == node && entry.Digests[0] == digest, call);
+                var own = TakeOwn(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest, call);
                 if (own is not null && (own.Outcome != IoOutcome.Ok || Answers(own, call)))
                 {
                     return Unanswered(call, response, Answer(own, call, response, kind, node, out degraded), kind, node, null, own);
@@ -215,11 +216,11 @@ internal sealed class RunReplay : IFeatureCallHook
                 {
                     // Inputs changed when the node has the service's call only with other inputs; its calls with these
                     // inputs used up (a recorded failure replayed already) is not a change.
-                    var changed = Find(calls, entry => entry.Keys is null && entry.Node == node && entry.Digests[0] != digest) is not null
-                        && Find(calls, entry => entry.Keys is null && entry.Node == node && entry.Digests[0] == digest) is null;
+                    var changed = Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] != digest) is not null
+                        && Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest) is null;
                     var otherLimit = !changed
-                        && Find(calls, entry => entry.Keys is null && entry.Node == node && entry.Digests[0] == digest && entry.Limit == call.Limit) is null
-                        && Find(calls, entry => entry.Keys is null && entry.Node == node && entry.Digests[0] == digest) is not null;
+                        && Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest && entry.Limit == call.Limit) is null
+                        && Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest) is not null;
                     AddGap(kind, call.Service, null, changed ? "inputs_changed" : otherLimit ? "limit_changed" : "not_recorded", 1, node);
                     return ServiceStatus.Failed($"{kind} '{call.Service}': this call is not in the replay bundle");
                 }
@@ -235,7 +236,7 @@ internal sealed class RunReplay : IFeatureCallHook
             }
 
             bool Same(ServiceEntry entry) => entry.Keys is not null && entry.Keys.AsSpan().SequenceEqual(keys) && entry.Digests.AsSpan().SequenceEqual(digests);
-            var ownCall = TakeOwn(calls, entry => entry.Node == node && Same(entry), call);
+            var ownCall = TakeOwn(calls, entry => entry.Is(node, fromSource) && Same(entry), call);
             if (ownCall is not null && (ownCall.Outcome != IoOutcome.Ok || Answers(ownCall, call)))
             {
                 return Unanswered(call, response, Answer(ownCall, call, response, kind, node, out degraded), kind, node, keys, ownCall);
@@ -246,7 +247,7 @@ internal sealed class RunReplay : IFeatureCallHook
             var same = Best(calls, entry => entry.Outcome == IoOutcome.Ok && Same(entry), call);
             return same is not null
                 ? Unanswered(call, response, Answer(same, call, response, kind, node, out degraded), kind, node, keys, same)
-                : Synthesize(call, calls, response, keys, digests, node, kind);
+                : Synthesize(call, calls, response, keys, digests, node, fromSource, kind);
         }
     }
 
@@ -476,7 +477,7 @@ internal sealed class RunReplay : IFeatureCallHook
         {
             if (entry.Threw)
             {
-                throw new OperationCanceledException(entry.Error ?? $"{kind} '{entry.Service}' was cut off in the recording");
+                throw new ReplayedCutOff(entry.Error ?? $"{kind} '{entry.Service}' was cut off in the recording", entry.Outcome);
             }
 
             return ServiceStatus.Failed(entry.Error ?? $"{kind} '{entry.Service}' failed in the recording") with
@@ -562,7 +563,7 @@ internal sealed class RunReplay : IFeatureCallHook
     /// replayed only with a recorded call of the same items (<see cref="Call"/>), and is a gap of that output here.
     /// </remarks>
     private ServiceStatus Synthesize(
-        ServiceCall call, List<ServiceEntry>? calls, ServiceResponse outputs, EntityKey[] keys, string[] digests, string node, string kind)
+        ServiceCall call, List<ServiceEntry>? calls, ServiceResponse outputs, EntityKey[] keys, string[] digests, string node, bool fromSource, string kind)
     {
         // The rows by (entity, input digest), from the successful keyed calls of the same model and version. An entity can
         // be scored several times with different inputs.
@@ -615,7 +616,7 @@ internal sealed class RunReplay : IFeatureCallHook
         {
             foreach (var entry in calls)
             {
-                if (entry.Outcome == IoOutcome.Ok && entry.Keys is not null && (pass == 1 || string.Equals(entry.Node, node, StringComparison.Ordinal))
+                if (entry.Outcome == IoOutcome.Ok && entry.Keys is not null && (pass == 1 || entry.Is(node, fromSource))
                     && seen.Add(entry))
                 {
                     AddLayout(layout, entry, call.Outputs.Span);
@@ -1176,7 +1177,7 @@ internal sealed class RunReplay : IFeatureCallHook
                     "a node's call names its node, a feature source's its source");
             }
 
-            var entry = new ServiceEntry(call.Seq, ServiceCaller.KeyOf(call.Node, call.Source), call.Service, call.BatchSize, call.Limit, outcome, call.Error, call.Threw, keys,
+            var entry = new ServiceEntry(call.Seq, ServiceCaller.KeyOf(call.Node, call.Source), call.Source is not null, call.Service, call.BatchSize, call.Limit, outcome, call.Error, call.Threw, keys,
                 call.InputDigests.ToArray(), outputs, new Dictionary<string, string>(call.Texts, StringComparer.Ordinal), ids, call.Scores.ToArray(),
                 call.OutputTokens, call.Truncated == true, call.Degraded, call.Dropped ?? 0);
             if (!_serviceCalls.TryGetValue((call.Service, call.Version), out var list))
@@ -1252,13 +1253,19 @@ internal sealed class RunReplay : IFeatureCallHook
     }
 
     private sealed class ServiceEntry(
-        int seq, string? node, string service, int batchSize, int limit, IoOutcome outcome, string? error, bool threw, EntityKey[]? keys, string[] digests,
+        int seq, string? node, bool fromSource, string service, int batchSize, int limit, IoOutcome outcome, string? error, bool threw, EntityKey[]? keys, string[] digests,
         Dictionary<string, ReplayTensor> outputs, Dictionary<string, string> texts, EntityKey[] ids, double[] scores, int? outputTokens, bool truncated,
         string? degraded, int dropped)
     {
         public int Seq { get; } = seq;
 
+        /// <summary>The caller's key (<see cref="ServiceCaller.Key"/>); with <see cref="FromSource"/>, which caller it is.</summary>
         public string? Node { get; } = node;
+
+        public bool FromSource { get; } = fromSource;
+
+        /// <summary>Whether the call was made by the caller of <paramref name="key"/>, a source's or a node's.</summary>
+        public bool Is(string key, bool source) => FromSource == source && string.Equals(Node, key, StringComparison.Ordinal);
 
         public string Service { get; } = service;
 

@@ -1,9 +1,12 @@
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
+using StrataRec.Core.Memory;
+using StrataRec.Core.Tables;
 using StrataRec.Core.Services;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
+using StrataRec.Features.Runtime;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Replay;
 using StrataRec.Hosting.Workspace;
@@ -274,6 +277,160 @@ public sealed class ComputedEntityEndToEndTests
         Assert.Contains(diagnostics, d => d.Code == "ENTITY_KEY_CYCLE" && d.Message.Contains("leads to a key cycle", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// An element of a list of strings the service left unwritten fails the feature, and an argument reading it sends no
+    /// call (review of IO step 5: the null element reached the later call's digest and failed the recording).
+    /// </summary>
+    [Fact]
+    public async Task AStringListWithAnUnwrittenElement_FailsTheFeature_AndAnArgumentReadingItSendsNoCall()
+    {
+        var service = new IntentService { Topics = "strings, one unwritten" };
+        var root = Workspace(
+            extraEntities: """, "later": { "args": { "topics": "ctx.intent.topics" } }""",
+            extraFeatures: """, "later.score": { "type": "float32", "source": "later", "field": "score" }""",
+            extraSources: """, "later": { "mode": "service", "service": "intent_model", "timeout_ms": 5000 }""",
+            extraOutput: """, "late": "ctx.later.score" """);
+        Replace(root, "catalog/c.jsonc", "list<int64>", "list<string>");
+        var plan = Compile(root, service);
+
+        var result = await Execute(plan, Inputs(user: 7, query: "shoes", recent: null), record: true);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("answered output 'topics' with element 1 of 2 unwritten", result.Error);
+        Assert.Single(service.Calls); // intent's; later's argument failed
+    }
+
+    /// <summary>
+    /// A source in mode service computes one entity: its call is recorded as the source's, so two entities of one source
+    /// took each other's recorded failures (review of IO step 5).
+    /// </summary>
+    [Fact]
+    public void TwoEntitiesOfOneServiceSource_AreAnError()
+    {
+        var diagnostics = Diagnostics(Workspace(
+            extraEntities: """, "other": { "args": { "q": "ctx.request.query" } }""",
+            extraFeatures: """, "other.score": { "type": "float32", "source": "intent", "field": "score" }""",
+            extraOutput: """, "other": "ctx.other.score" """));
+
+        var error = Assert.Single(diagnostics, d => d.Code == "SOURCE_SERVICE_ENTITY");
+        Assert.Equal("/sources/intent", error.Pointer);
+        Assert.Contains("computes entity 'intent' already, and entity 'other' reads it too", error.Message);
+    }
+
+    /// <summary>Two features of one field ask the service for it once, and both take its answer (review of IO step 5).</summary>
+    [Fact]
+    public async Task TwoFeaturesOfOneField_AskForItOnce()
+    {
+        var service = new IntentService();
+        var plan = Compile(Workspace(
+            extraFeatures: """, "intent.alias": { "type": "float64", "source": "intent", "field": "score" }""",
+            extraOutput: """, "alias": "ctx.intent.alias" """), service);
+
+        var result = await Execute(plan, Inputs(user: 7, query: "shoes", recent: null));
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(["label", "score", "topics"], Assert.Single(service.Calls).Outputs.Order(StringComparer.Ordinal));
+        Assert.All(result.Items, item => Assert.Equal((0.75, 0.75), (item.Columns["score"].AsFloat64(), item.Columns["alias"].AsFloat64())));
+    }
+
+    /// <summary>
+    /// An argument may read a derived feature of its own entity: what it reads is in its expression, not in the entity
+    /// (review of IO step 5: the catalog reported a key cycle).
+    /// </summary>
+    [Fact]
+    public async Task AnArgumentReadingADerivedFeatureOfItsOwnEntity_IsNoCycle()
+    {
+        var service = new IntentService();
+        var plan = Compile(Workspace(
+            intent: """{ "args": { "query": "ctx.intent.prep" } }""",
+            derived: """ "intent.prep": { "type": "string", "expr": "ctx.request.query ?? 'none'" } """), service);
+
+        var result = await Execute(plan, Inputs(user: 7, query: null, recent: null));
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(["query:String[]=none"], Assert.Single(service.Calls).Inputs);
+    }
+
+    /// <summary>The call carries the request's id and seed, as a node's does (review of IO step 5).</summary>
+    [Fact]
+    public async Task TheCall_CarriesTheRequestsIdAndSeed()
+    {
+        var service = new IntentService();
+        var plan = Compile(Workspace(), service);
+
+        await Execute(plan, Inputs(user: 7, query: "shoes", recent: null));
+
+        var call = Assert.Single(service.Calls);
+        Assert.Equal(("r", (long?)PipelineRequest.DefaultSeed("r")), (call.RequestId, call.Seed));
+    }
+
+    /// <summary>
+    /// A source's call that the caller cancelled in the recording is cancelled in the replay too, whose own caller did not
+    /// cancel (review of IO step 5: it replayed as a timeout).
+    /// </summary>
+    [Fact]
+    public async Task ARecordedCancellation_ReplaysAsACancellation()
+    {
+        var service = new IntentService();
+        var plan = Compile(Workspace(readInOutput: false), service);
+        var inputs = Inputs(user: 7, query: "shoes", recent: null);
+        var run = (await Execute(plan, inputs, record: true)).Recording!;
+        var at = run.ServiceCalls.FindIndex(c => c.Service == "intent_model");
+        var recorded = run.ServiceCalls[at];
+        run.ServiceCalls[at] = new ReplayServiceCall
+        {
+            Seq = recorded.Seq, Source = recorded.Source, Service = recorded.Service, Role = recorded.Role, Status = "cancelled", Threw = true,
+            InputDigests = recorded.InputDigests,
+        };
+
+        var replayed = await Execute(plan, inputs, replay: RunReplay.Create(run, "/runs/0"));
+
+        var boost = Assert.Single(replayed.Outcomes, o => o.NodeId == "boost");
+        Assert.Equal(NodeOutcomeKind.Failed, boost.Kind);
+        Assert.Contains("source 'intent' was cancelled", boost.Detail);
+    }
+
+    /// <summary>
+    /// The fetch's drain waits for a source's call it abandoned at the source's timeout, as for a connector's (review of
+    /// IO step 5); the call holds the request memory until then either way.
+    /// </summary>
+    [Fact]
+    public async Task TheFetchsDrain_WaitsForASourcesCallItAbandoned()
+    {
+        var service = new IntentService { Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) };
+        var plan = Compile(Workspace(intent: """{ "args": { "q": "ctx.request.query" } }""", intentTimeoutMs: 100), service);
+        var feature = plan.Features.Features.Single(f => f.Definition.Name == "intent.score");
+        var memory = new RequestMemory();
+        var fetcher = new FeatureFetcher(
+            plan.Features, new CandidateTable(plan.TableSchema, 1, memory), new ScalarValue[plan.Schema.ContextFields.Count],
+            new OutputBindings(plan.Schema.Columns.Count, memory), [], memory, long.MaxValue);
+        try
+        {
+            fetcher.StartContextFetch([feature.Index], TestContext.Current.CancellationToken);
+            await fetcher.ContextStoredTask(feature.Index);
+            Assert.Equal(FeatureState.Failed, fetcher.ContextStoredState(feature.Index).State); // timed out
+
+            var drained = fetcher.WhenIoCompleteAsync();
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+            Assert.False(drained.IsCompleted, "the drain ended while the abandoned call was still running");
+            service.Gate.SetResult();
+            await drained.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            service.Gate.TrySetResult();
+            memory.Release();
+        }
+    }
+
+    private static void Replace(string root, string path, string find, string replace)
+    {
+        var file = Path.Combine(root, path);
+        var text = File.ReadAllText(file);
+        Assert.Contains(find, text);
+        File.WriteAllText(file, text.Replace(find, replace, StringComparison.Ordinal));
+    }
+
     private static RequestInputs Inputs(long user, string? query, long[]? recent)
     {
         var inputs = new RequestInputs().Set("user_id", user);
@@ -337,7 +494,10 @@ public sealed class ComputedEntityEndToEndTests
         bool readInOutput = true,
         int? intentTimeoutMs = null,
         string extraEntities = "",
-        string extraFeatures = "")
+        string extraFeatures = "",
+        string extraSources = "",
+        string extraOutput = "",
+        string derived = "")
     {
         if (intentTimeoutMs is { } timeout)
         {
@@ -359,18 +519,19 @@ public sealed class ComputedEntityEndToEndTests
                 "intent.score":  { "type": "float32", "source": "intent", "field": "score", "default": 0.5 },
                 "intent.label":  { "type": "string", "source": "intent", "field": "label" },
                 "intent.topics": { "type": "list<int64>", "source": "intent", "field": "topics" }{{extraFeatures}}
-              } }
+              },
+              "derived_features": { {{derived}} } }
             """);
         File.WriteAllText(Path.Combine(root, "bindings", "local.jsonc"), $$"""
             { "environment": "local",
-              "sources": { "users": {{users}}, "intent": {{intentSource}} },
+              "sources": { "users": {{users}}, "intent": {{intentSource}}{{extraSources}} },
               "services": {
                 "pool": { "client": "memory_list@1", "items": [1, 2] },
                 "intent_model": { "client": "{{IntentService.TypeName}}"{{serviceCache}} } } }
             """);
         var output = readInOutput
-            ? """{ "s": "col.out.s", "score": "ctx.intent.score", "label": "ctx.intent.label", "topics": "ctx.intent.topics" }"""
-            : """{ "s": "col.out.s" }""";
+            ? $$"""{ "s": "col.out.s", "score": "ctx.intent.score", "label": "ctx.intent.label", "topics": "ctx.intent.topics"{{extraOutput}} }"""
+            : $$"""{ "s": "col.out.s"{{extraOutput}} }""";
         File.WriteAllText(Path.Combine(root, "pipelines", "p.jsonc"), $$"""
             { "pipeline_id": "p",
               "request_schema": { "user_id": { "type": "int64?" }, "query": { "type": "string?" }, "recent": { "type": "list<int64>?" } },
@@ -394,7 +555,7 @@ public sealed class ComputedEntityEndToEndTests
     {
         public const string TypeName = "intent_test@1";
 
-        private readonly List<(int BatchSize, int Limit, string[] Outputs, string[] Inputs)> _calls = [];
+        private readonly List<Received> _calls = [];
 
         public string Type => TypeName;
 
@@ -407,7 +568,13 @@ public sealed class ComputedEntityEndToEndTests
         /// <summary><c>number</c>, <c>string</c> (a string tensor) or <c>two</c> (two numbers).</summary>
         public string Score { get; init; } = "number";
 
-        public List<(int BatchSize, int Limit, string[] Outputs, string[] Inputs)> Calls
+        /// <summary><c>int32</c>, or two strings of which the second is left unwritten.</summary>
+        public string Topics { get; init; } = "int32";
+
+        /// <summary>Answers only once this completes, whatever its token.</summary>
+        public TaskCompletionSource? Gate { get; init; }
+
+        public List<Received> Calls
         {
             get
             {
@@ -439,12 +606,17 @@ public sealed class ComputedEntityEndToEndTests
 
             lock (_calls)
             {
-                _calls.Add((call.BatchSize, call.Limit, call.Outputs.ToArray(), [.. inputs]));
+                _calls.Add(new Received(call.BatchSize, call.Limit, call.Outputs.ToArray(), [.. inputs], call.RequestId, call.Options.Seed));
             }
 
             if (DelayMs > 0)
             {
                 await Task.Delay(DelayMs, cancellationToken);
+            }
+
+            if (Gate is { } gate)
+            {
+                await gate.Task.ConfigureAwait(false); // ignores the token
             }
 
             if (Fail)
@@ -466,9 +638,17 @@ public sealed class ComputedEntityEndToEndTests
             }
 
             response.SetText("label", "sporty");
-            var topics = response.GetValues<int>("topics", 2).Span;
-            topics[0] = 3;
-            topics[1] = 4;
+            if (Topics == "int32")
+            {
+                var topics = response.GetValues<int>("topics", 2).Span;
+                topics[0] = 3;
+                topics[1] = 4;
+            }
+            else
+            {
+                response.GetValues<string>("topics", 2).Span[0] = "shoe"; // the second left unwritten
+            }
+
             return ServiceStatus.Ok;
         }
 
@@ -495,6 +675,8 @@ public sealed class ComputedEntityEndToEndTests
     }
 
     private sealed class NoSettings;
+
+    private sealed record Received(int BatchSize, int Limit, string[] Outputs, string[] Inputs, string RequestId, long? Seed);
 
     private sealed class MovableClock : TimeProvider
     {

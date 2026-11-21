@@ -56,7 +56,7 @@ public readonly record struct FeatureFillResult(FeatureState State, string? Erro
 /// fetch's <see cref="StagingArea"/> seen through a reused view, its cancellation is the fetch's, and its status comes
 /// back in a <see cref="ValueTask{TResult}"/>. Only a call that really goes asynchronous allocates what waiting needs.</para>
 /// </remarks>
-public sealed partial class FeatureFetcher
+public sealed partial class FeatureFetcher : IIoTracker
 {
     private static readonly FetchStatus NoTimeLeft = FetchStatus.Failed("no time left before the request deadline");
 
@@ -68,6 +68,7 @@ public sealed partial class FeatureFetcher
     private readonly RequestMemory _memory;
     private readonly long _deadlineTimestamp;
     private readonly string? _requestId;
+    private readonly long? _seed;
     private readonly RequestEventLog? _events;
     private readonly FeatureState[] _state;
     private readonly string?[] _errors;
@@ -82,6 +83,7 @@ public sealed partial class FeatureFetcher
     /// <param name="requestId">Sample request id for failure summaries (design 13.2).</param>
     /// <param name="events">Source health and failure summaries; null when the engine has no logger.</param>
     /// <param name="hook">Records every connector call, or answers them from a recording (design 13.4); null for ordinary requests.</param>
+    /// <param name="seed">The request's seed, which a source in mode service sends with its call, as a node does.</param>
     public FeatureFetcher(
         FeaturePlan plan,
         CandidateTable table,
@@ -93,7 +95,8 @@ public sealed partial class FeatureFetcher
         ExpressionCounters? counters = null,
         string? requestId = null,
         RequestEventLog? events = null,
-        IFeatureCallHook? hook = null)
+        IFeatureCallHook? hook = null,
+        long? seed = null)
     {
         _plan = plan;
         _table = table;
@@ -104,6 +107,7 @@ public sealed partial class FeatureFetcher
         _deadlineTimestamp = deadlineTimestamp;
         _counters = counters ?? new ExpressionCounters();
         _requestId = requestId;
+        _seed = seed;
         _events = events;
         _hook = hook;
         _state = new FeatureState[plan.Features.Count];
@@ -835,6 +839,9 @@ public sealed partial class FeatureFetcher
             _io.Add(task);
         }
     }
+
+    /// <summary>A source in mode service's call, or its cache's read, still running (IO step 5).</summary>
+    void IIoTracker.Track(Task done) => TrackIo(done);
 
     private async ValueTask CompleteAsync(PendingFetch pending)
     {

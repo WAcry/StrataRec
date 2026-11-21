@@ -34,7 +34,8 @@
             ],
             "additionalProperties": {
               "type": "string"
-            }
+            },
+            "minProperties": 1
           },
           "description": {
             "type": [
@@ -43,7 +44,19 @@
             ]
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "key"
+            ]
+          },
+          {
+            "required": [
+              "args"
+            ]
+          }
+        ]
       }
     },
     "features": {

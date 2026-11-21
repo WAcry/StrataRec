@@ -794,7 +794,9 @@ public sealed class FeatureCatalog
     /// kind of edge reached it: without it, eight parts reading eight features of the same parent walk the parent's chain
     /// eight times each, and a valid chain of ten such entities took 6 s (review 76). A cycle that also passes through a
     /// derived feature is found where the plan compiles the derived feature (the catalog does not compile expressions), and
-    /// reported there with the same code at a key part on the cycle.
+    /// reported there with the same code at a key part on the cycle: a derived feature is no edge here, since what it reads
+    /// is in its expression, not in its entity's key (review of IO step 5: an entity's argument reading a derived feature
+    /// of its own entity, computed from a request input, was a cycle).
     /// </summary>
     private static void ValidateKeyCycles(
         Dictionary<string, EntityDefinition> entities, Dictionary<string, FeatureDefinition> features, DiagnosticBag diagnostics, string artifactName)
@@ -846,7 +848,7 @@ public sealed class FeatureCatalog
         }
 
         static EntityDefinition? KeyEntity(EntityFeatureRead read, Dictionary<string, FeatureDefinition> features) =>
-            features.TryGetValue(read.Feature, out var feature) ? feature.Entity : null;
+            features.TryGetValue(read.Feature, out var feature) && !feature.IsDerived ? feature.Entity : null;
     }
 
     /// <summary>The pointer of key part <paramref name="part"/>: <c>/key</c> for a one-part key written as one reference.</summary>

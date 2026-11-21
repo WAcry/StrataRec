@@ -392,7 +392,7 @@ internal sealed class PipelineExecutor
             // One set of counters per request: operator expressions and derived features count into the same totals.
             var counters = new ExpressionCounters();
             fetcher = new FeatureFetcher(plan.Features, table, context, bindings, parameters, memory, deadline, counters, request.RequestId, events,
-                (IFeatureCallHook?)replay ?? recorder);
+                (IFeatureCallHook?)replay ?? recorder, context[PlanSchema.RequestSeedContext].AsInt64());
             state = new RequestState
             {
                 Plan = plan,

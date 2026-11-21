@@ -12,6 +12,47 @@ public sealed class FeatureFetchBoundReviewTests
     /// own chunk: the wait ended at once, but the connector may still write through it. The fetch pointed the view at the
     /// next chunk (one key here), which it did not even send.
     /// </summary>
+    /// <summary>
+    /// A context feature whose connector call was abandoned fails without its staging being read: the connector may
+    /// still be writing there (review of IO step 5: the value was read, and its list copied, before the failure was seen).
+    /// </summary>
+    [Fact]
+    public async Task AnAbandonedContextConnector_FailsItsFeatures_WithoutItsStagingBeingRead()
+    {
+        using var caller = new CancellationTokenSource();
+        var late = new TaskCompletionSource<FetchStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var payload = new double[64 * 1024];
+        long afterWriting = -1;
+        var connector = new ScriptedConnector((_, _, writer, _) =>
+        {
+            writer.SetFloat64List(0, 0, payload);
+            caller.Cancel();
+            afterWriting = GC.GetAllocatedBytesForCurrentThread();
+            return new ValueTask<FetchStatus>(late.Task);
+        });
+        var rig = new FeatureTestRig().Source("test", connector);
+        var f = rig.Physical("user.vec", FeatureTestRig.User, ColumnType.List(StorageKind.Float64), "test");
+        rig.Build();
+        var request = rig.NewRequest([], userId: 1);
+
+        try
+        {
+            request.Fetcher.StartContextFetch([f], caller.Token);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - afterWriting;
+            await request.Fetcher.ContextStoredTask(f);
+
+            Assert.False(late.Task.IsCompleted);
+            Assert.Equal(FeatureState.Failed, request.Fetcher.ContextStoredState(f).State);
+            Assert.True(afterWriting >= 0 && allocated < 64 * 1024, $"{allocated} B allocated after the abandoned connector wrote a list of 512 KiB");
+        }
+        finally
+        {
+            late.TrySetResult(FetchStatus.Ok);
+            await request.Fetcher.WhenIoCompleteAsync();
+            request.Memory.Release();
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

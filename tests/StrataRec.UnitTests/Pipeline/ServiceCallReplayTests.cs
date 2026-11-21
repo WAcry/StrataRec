@@ -423,6 +423,30 @@ public sealed class ServiceCallReplayTests
         Assert.Single(replay.Gaps); // the source's, as recorded
     }
 
+    /// <summary>
+    /// A node whose id spells a source's key (a plan built without the plan compiler's id checks) is still another caller
+    /// than the source (review of IO step 5: the source took the node's recorded failure).
+    /// </summary>
+    [Fact]
+    public void ANodeWhoseIdSpellsASourcesKey_IsNotTheSource()
+    {
+        var run = RunReplayTests.Run();
+        var failed = Recorded("source:x", Query(1, limit: 0), "error");
+        var answered = Recorded("x", Query(1, limit: 0), "ok");
+        run.ServiceCalls.Add(failed);
+        run.ServiceCalls.Add(new ReplayServiceCall
+        {
+            Source = "x", Service = answered.Service, Role = IoRoles.Fetch, Limit = 0, Status = "ok", InputDigests = answered.InputDigests,
+            Ids = answered.Ids, Scores = answered.Scores,
+        });
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var status = replay.Call(ServiceCaller.OfSource("x"), new IoTarget(IoRoles.Fetch, "s"), Query(1, limit: 0), new ServiceResponse(Memory, 0), out _);
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Empty(replay.Gaps);
+    }
+
     [Fact]
     public void ACallOfBothANodeAndASource_IsRejectedAtItsSource()
     {
