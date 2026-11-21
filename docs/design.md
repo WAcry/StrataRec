@@ -237,6 +237,7 @@ public sealed class RecResult
     public string? Error { get; init; }            // 给人看的原因
     public string? ErrorPointer { get; init; }     // InvalidRequest 时出错输入的 JSON 指针，例如 /inputs/user_id
     public required IReadOnlyList<RankedItem> Items { get; init; }   // entity_id、名次和 output 声明的列
+    public required ResultColumns Columns { get; init; }             // 同样的内容按列：每列的名字、声明的类型和值
     public required ExperimentRecord Experiments { get; init; }      // 分配、触发和被忽略的桶
     public required string ManifestId { get; init; }
     public required string ServedBy { get; init; } // 请求的流水线，或者它的 fallback_pipeline
@@ -311,6 +312,8 @@ public readonly struct ColumnKey<T>
 | `float32`、`float64` | `float64` | 读取时提升为 `float64` 计算；写入 `float32` 列时收窄 |
 | `string` | `string` | 任意长度的字符串：类目、标题、ID、URL、提示词、模型生成的推荐理由。每行一个字符串引用，不做字典编码；重复的值由产生它的一方共享同一个实例（本地表的字典、连接器写入器的 `Intern`、缓存读取的去重），所以按行复制和比较都不新建字符串 |
 | `list<E>`、`list<E,N>`，`E` 是 `bool`、`int32`、`int64`、`float32`、`float64` 或 `string`，`N ≥ 1` | `list<E 的表达式类型>`（定长时带长度） | 变长或定长列表，每行的元素连续存放；也用于请求输入中的行为序列。向量（embedding）就是定长浮点列表，例如 `list<float32,64>`。元素的提升与标量相同：`list<int32>` 读作 `list<int64>`，`list<float32>` 读作 `list<float64>`，读取时不复制，写入时逐元素收窄。标签、主题、token ID 用 `list<int32>`，权重、价格序列用 `list<float32>`，都比宽类型省一半内存 |
+
+提升只发生在表达式内部。值离开引擎的地方（连接器和本地表写入的存储、模型输入、日志、宿主拿到的结果），交付的都是声明的类型和宽度：int32 的特征送给模型和写进日志都是 int32，float32 是 float32，bool 是 bool，不在边界上做任何转换。提升是精确的，收窄回声明的类型得到原值；给出的值（请求输入、默认值、参数）转换到 float32 时取最近的 float，和写进 float32 列一样，所以一个 float32 字段在表达式里和在边界上是同一个数。有运算的表达式没有声明的类型，交出去的是它提升后的结果类型；要以窄类型交出，声明一个那种类型的衍生特征（`development.md` 第 6 节）。
 
 列表是类型构造器，不是每种元素各一个类型：元素能是什么，就是标量能是什么，每一层（存储、表达式、连接器、本地表、日志、结果）对列表只处理一次。三个限制：
 
@@ -1408,7 +1411,7 @@ flowchart LR
 ```
 
 1. 每个探针变体在加载期编译为一个提取内核：选行逻辑、列表达式（复用 `ColumnExpr`）和输出布局都已经确定。
-2. 请求线程只做选行和数组复制。例如 200 行 × 10 个数值列约 16 KB，复制成本在微秒量级。探针批次持有自己的缓冲区，所以请求结束时候选表可以照常归还。
+2. 请求线程只做选行和数组复制：引用一列的日志列不求值，直接从列的存储复制，宽度不变。例如 200 行 × 10 个数值列约 16 KB，复制成本在微秒量级。探针批次持有自己的缓冲区，所以请求结束时候选表可以照常归还。
 3. 请求结束后，批次进入对应等级的有界队列；后台线程负责编码、压缩、发送和归还缓冲区。
 4. `durable` 批次入队时获得进程内连续的序号 `seq`，发送失败时重试直到 sink 确认。重试间隔从 10 ms（`MaxRetryDelay` 更短时从它）起倍增，上限 `MaxRetryDelay`（至少 1 ms：计时器按整毫秒等待，更短等于不等）；排空时限 `DrainTimeout` 至多 `MaxDrainTimeout`，即计时器上限减去关闭的 500 ms 宽限。宿主停止接收新请求后，引擎在限定时间内排空 `durable` 队列。开启本地磁盘缓冲时，sink 不可用或内存队列超限的批次落盘，进程重启后按原序号补发；没有磁盘缓冲时，进程崩溃会丢失内存中的批次，下游从序号缺口看到丢了多少。
 5. `best_effort` 队列满时丢弃批次并计数（第 8.4 节）。两个队列都按批次占用的内存设上限（`BestEffortMaxBytes` 默认 64 MiB，`DurableMaxBytes` 默认 256 MiB），而不是按批次数：一个请求级探针一行，一个候选探针可能几千行列表，批次数限制不了内存。日志量不做静态估算：探针的行数取决于请求的候选数，字符串和列表的宽度只能猜；按字节的上限和逐探针的批次指标是实际的保护和观测（见 `decisions.md`）。
@@ -1447,7 +1450,7 @@ flowchart LR
 1. **生产者与序号。** `producer.id` 由进程名和启动时间组成，`seq` 只出现在 `durable` 批次中。下游用 `(producer.id, seq)` 去重，并按序号发现缺口。
 2. **实际产出者。** `column_producers` 记录每个日志列实际由哪个节点产出。上例中主模型超时，`p_click` 来自后备模型 `ctr_backup`；训练任务可以据此过滤或单独处理这些样本。
 3. **列定义血缘。** `schema_sha256` 指向这个探针变体的 schema 记录，其中写明每一列和上下文字段的名字、类型和表达式原文，id 就是这条记录内容的哈希；批次直接带着这条记录（所有请求共用一个对象），日志接收端按 id 每条只写一次（JSON Lines 接收端在第一个用到它的批次之前写一行 `{"log_schema": ...}`）。哪些实验桶生效看批次的 `assigned_arms`。同名列 `p_click` 在不同计划版本中可能来自不同模型，分析时可以准确知道它的含义。
-4. **编码。** 流式传输推荐 Arrow IPC，落地文件推荐 Parquet，调试使用 JSON。批次中每个日志列保留表达式结果的原生类型，包括 `list`（float32 的列和列表与表达式结果一样记成 float64，embedding 记成 `list<float64,N>`）；上面的 JSON 只是调试编码。
+4. **编码。** 流式传输推荐 Arrow IPC，落地文件推荐 Parquet，调试使用 JSON。批次中每个日志列和上下文字段按声明的类型保存：引用列、特征或上下文值的，是它声明的类型和宽度（int32 是 int32，float32 是 float32，embedding 是 `list<float32,N>`），使用者自己的日志系统拿到的就是它声明的类型；有运算的表达式没有声明，是它提升后的结果类型（int64、float64），要以窄类型记录一个计算出的值，声明一个那种类型的衍生特征再记录它（`development.md` 第 6 节）。上面的 JSON 只是调试编码，float32 写成 float 的最短文本。
 5. **下游表结构固定。** 原始批次表的结构不随探针变化；标准 ETL 再把标量列展开成按行的视图 `funnel_rows(request_id, tap_id, rank, entity_id, row_prob, req_prob, float_values map<string,double>, int_values map<string,bigint>, string_values map<string,string>)`，`list` 列（包括 embedding）留在批次表中按需展开。实验新增日志列不需要修改下游表结构。
 6. **缺失。** `missing` 按列记录缺失行的下标位图，缺失值不会被写成 0 或哨兵值。
 

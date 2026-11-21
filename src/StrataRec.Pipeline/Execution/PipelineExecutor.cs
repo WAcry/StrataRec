@@ -254,6 +254,17 @@ internal sealed class RequestState
     public EvalContext Eval => new(Table, Bindings, Context, Params, Counters);
 
     /// <summary>
+    /// The buffer a column reads in this request, as an expression reads it: its fixed slot (a feature, an <c>@node</c>
+    /// version, <c>col.entity_id</c>) when it has one, otherwise the committed version through the bindings; null when no
+    /// node has produced it.
+    /// </summary>
+    public ColumnBuffer? ReadColumn(int fixedSlot, int logicalId)
+    {
+        var slot = fixedSlot >= 0 ? fixedSlot : Bindings.Resolve(logicalId);
+        return slot < 0 ? null : Table.TryGetSlot(slot);
+    }
+
+    /// <summary>
     /// The slot a node writes an output into now (design 4.6): its own, except that a row source writes the rows it
     /// appends into the column's current version once a node has committed one. Its rows then join the values readers
     /// already see, and nothing is committed for the column: a row source after a scorer can give the rows it injects a
@@ -1181,19 +1192,22 @@ internal sealed class PipelineExecutor
         // The result column by column (ResultColumns): each output column evaluated over the rows into one array; the
         // rows' dictionaries are made only for a caller that reads Items.
         var names = new string[output.Columns.Length];
+        var types = new ColumnType[output.Columns.Length];
         var values = new ScalarValue[output.Columns.Length][];
         var producers = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var c = 0; c < output.Columns.Length; c++)
         {
             var (name, expression) = output.Columns[c];
             names[c] = name;
+            types[c] = plan.Schema.DeclaredType(expression);
             values[c] = count == 0 ? [] : new ScalarValue[count];
             if (count == 0)
             {
                 continue;
             }
 
-            var buffer = ColumnBuffer.Create(OutputPlan.ValueType(expression), Math.Max(1, state.Table.StorageCapacity), state.Memory);
+            // Evaluated into storage of the declared type, so a float32 column's values print as the floats they are.
+            var buffer = ColumnBuffer.Create(types[c], Math.Max(1, state.Table.StorageCapacity), state.Memory);
             expression.Evaluate(state.Eval, rows, buffer);
             for (var i = 0; i < count; i++)
             {
@@ -1224,7 +1238,7 @@ internal sealed class PipelineExecutor
         return new PipelineResult
         {
             Succeeded = true,
-            Columns = new ResultColumns(ids, names, values),
+            Columns = new ResultColumns(ids, names, types, values),
             Outcomes = state.Outcomes,
             AssignedArms = plan.ArmIds(state.Arms),
             TriggeredExperiments = TriggeredIds(plan, state.Triggered),

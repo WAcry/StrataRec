@@ -1,5 +1,6 @@
 using System.Text.Json;
 using StrataRec.Core.Keys;
+using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Pipeline.Execution;
 
@@ -7,13 +8,16 @@ namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary>
 /// A result column by column, and its items as rows: the same ids, ranks and values; the rows made once, whoever reads
-/// them first; a result made by hand from rows has the same columns.
+/// them first; each column's declared type; a result made by hand from rows has the same columns.
 /// </summary>
 public sealed class ResultColumnsTests
 {
+    private static readonly (string, ColumnType)[] SampleColumns = [("score", ColumnType.Parse("float64?")), ("category", ColumnType.String)];
+
     private static ResultColumns Sample() => new(
         [EntityKey.FromInt64(7), EntityKey.FromInt64(3)],
         ["score", "category"],
+        [ColumnType.Parse("float64?"), ColumnType.String],
         [[ScalarValue.FromFloat64(0.9), ScalarValue.Missing], [ScalarValue.FromString("food"), ScalarValue.FromString("tech")]]);
 
     [Fact]
@@ -39,7 +43,18 @@ public sealed class ResultColumnsTests
         var columns = Sample();
 
         Assert.False(columns.TryGetColumn("Score", out _)); // names are ordinal
+        Assert.Equal(-1, columns.IndexOf("Score"));
         Assert.Throws<KeyNotFoundException>(() => columns["missing"].Length);
+    }
+
+    [Fact]
+    public void EachColumn_HasItsDeclaredType()
+    {
+        var columns = Sample();
+
+        Assert.Equal(["float64?", "string"], columns.Types.Select(t => t.ToString()));
+        Assert.Equal(ColumnType.String, columns.Types[columns.IndexOf("category")]);
+        Assert.Throws<ArgumentException>(() => new ResultColumns([], ["a"], [], [[]])); // a type per name
     }
 
     [Fact]
@@ -47,18 +62,48 @@ public sealed class ResultColumnsTests
     {
         var columns = Sample();
 
-        var copy = ResultColumns.FromItems(columns.Rows);
+        var copy = ResultColumns.FromItems(SampleColumns, columns.Rows);
 
         Assert.Equal(columns.Names, copy.Names);
+        Assert.Equal(columns.Types, copy.Types);
         Assert.Equal(columns.Ids.ToArray(), copy.Ids.ToArray());
         Assert.Equal(columns.Column(1).ToArray(), copy.Column(1).ToArray());
-        Assert.Same(ResultColumns.Empty, ResultColumns.FromItems([]));
+        Assert.Same(ResultColumns.Empty, ResultColumns.FromItems([], []));
+        Assert.Equal(["score", "category"], ResultColumns.FromItems(SampleColumns, []).Names); // no items, still the output's columns
         var mismatched = new[]
         {
             new RankedItem(EntityKey.FromInt64(1), 1, new Dictionary<string, ScalarValue> { ["a"] = ScalarValue.FromInt64(1) }),
             new RankedItem(EntityKey.FromInt64(2), 2, new Dictionary<string, ScalarValue> { ["b"] = ScalarValue.FromInt64(1) }),
         };
-        Assert.Contains("no column 'a'", Assert.Throws<ArgumentException>(() => ResultColumns.FromItems(mismatched)).Message);
+        Assert.Contains("no column 'a'", Assert.Throws<ArgumentException>(() => ResultColumns.FromItems([("a", ColumnType.Int64)], mismatched)).Message);
+    }
+
+    [Theory]
+    [InlineData("int32", 4294967296L)] // outside the int32 range
+    [InlineData("float64", 1L)] // an int64, not a float64
+    [InlineData("int64", null)] // missing in a non-nullable column
+    public void FromItems_RejectsAValueThatIsNotOneOfItsColumnsType(string type, long? value)
+    {
+        var item = new RankedItem(EntityKey.FromInt64(1), 1, new Dictionary<string, ScalarValue>
+        {
+            ["x"] = value is { } v ? ScalarValue.FromInt64(v) : ScalarValue.Missing,
+        });
+
+        Assert.Contains("not a value of", Assert.Throws<ArgumentException>(() => ResultColumns.FromItems([("x", ColumnType.Parse(type))], [item])).Message);
+    }
+
+    [Fact]
+    public void AHostWithNarrowTypes_ReadsAColumnAtItsDeclaredWidth()
+    {
+        var item = new RankedItem(EntityKey.FromInt64(1), 1, new Dictionary<string, ScalarValue>
+        {
+            ["clicks"] = ScalarValue.FromInt64(int.MinValue),
+            ["ctr"] = ScalarValue.FromFloat32(0.1f),
+        });
+        var columns = ResultColumns.FromItems([("clicks", ColumnType.Int32), ("ctr", ColumnType.Float32)], [item]);
+
+        Assert.Equal(int.MinValue, columns["clicks"][0].AsInt32());
+        Assert.Equal(0.1f, columns["ctr"][0].AsFloat32());
     }
 
     [Fact]

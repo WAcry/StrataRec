@@ -104,11 +104,7 @@ public sealed class OperatorContext
     internal string? DegradedReason { get; private set; }
 
     /// <summary>The committed version of a column (or its fixed slot); null when not produced in this request.</summary>
-    public ColumnBuffer? Read(in ColumnRef column)
-    {
-        var slot = column.FixedSlot >= 0 ? column.FixedSlot : _state.Bindings.Resolve(column.LogicalId);
-        return slot < 0 ? null : _state.Table.TryGetSlot(slot);
-    }
+    public ColumnBuffer? Read(in ColumnRef column) => _state.ReadColumn(column.FixedSlot, column.LogicalId);
 
     /// <summary>
     /// This node's buffer for an output column. Written values become visible only if the node succeeds. A row source

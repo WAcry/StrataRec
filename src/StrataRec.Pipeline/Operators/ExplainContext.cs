@@ -69,11 +69,7 @@ public sealed class ExplainContext
     public int Rank(int target) => _explainer.PendingRank(target);
 
     /// <summary>The committed version of a column (or its fixed slot), as the operator read it; null when not produced.</summary>
-    public ColumnBuffer? Read(in ColumnRef column)
-    {
-        var slot = column.FixedSlot >= 0 ? column.FixedSlot : _state.Bindings.Resolve(column.LogicalId);
-        return slot < 0 ? null : _state.Table.TryGetSlot(slot);
-    }
+    public ColumnBuffer? Read(in ColumnRef column) => _state.ReadColumn(column.FixedSlot, column.LogicalId);
 
     /// <summary>A column's value for a target; missing when the target has no row or the column no value.</summary>
     public ScalarValue Value(in ColumnRef column, int target)

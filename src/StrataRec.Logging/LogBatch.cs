@@ -60,9 +60,13 @@ public sealed class LogBatch
     /// </summary>
     public required double RowProbability { get; init; }
 
+    /// <summary>The logged columns, in the order of <see cref="LogSchema.Columns"/>.</summary>
     public required LogColumn[] Columns { get; init; }
 
-    /// <summary>Per-request context fields (<c>context</c> of the tap).</summary>
+    /// <summary>
+    /// Per-request context fields (<c>context</c> of the tap), in the order of <see cref="LogSchema.Context"/>: field i's
+    /// type is <c>Schema.Context[i].Type</c>, by which a sink narrows the value (held promoted, as every value is).
+    /// </summary>
     public required (string Name, ScalarValue Value)[] Context { get; init; }
 
     public int RowCount => Ranks.Length;
@@ -149,8 +153,8 @@ public sealed class LogBatch
                     case bool[] flags:
                         bytes += flags.LongLength;
                         break;
-                    case float[] floats:
-                        bytes += floats.LongLength * 4;
+                    case float[] or int[]:
+                        bytes += column.Values.LongLength * 4;
                         break;
                     default:
                         bytes += column.Values.LongLength * 8; // long[] or double[]

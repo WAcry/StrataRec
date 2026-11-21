@@ -114,6 +114,27 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
         _ => throw WrongKind(StorageKind.Float64),
     };
 
+    /// <summary>
+    /// The value of an <c>int32</c> field as the int32 it is, for a reader that knows the declared type (a result column, a
+    /// log context field): values are held promoted, and a value of an int32 type always fits.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The value is not an int64 in the int32 range: it is not a value of an
+    /// int32 type, and narrowing it would wrap.</exception>
+    public int AsInt32() => Kind == StorageKind.Int64 && Int32Range.Fits(_bits)
+        ? (int)_bits
+        : throw new InvalidOperationException(Kind == StorageKind.Int64
+            ? $"{_bits} is outside the int32 range: it is not a value of an int32 type."
+            : $"Value of kind {Describe()} cannot be read as Int32.");
+
+    /// <summary>
+    /// The value of a <c>float32</c> field as a float, for a reader that knows the declared type: the float nearest the
+    /// double (an int64 value is converted, as <see cref="AsFloat64"/> converts it). Exact for every value of a float32
+    /// field: one read from float32 storage holds a widened float, and one converted to a float32 type (a request input,
+    /// a default, a parameter) was rounded to the nearest float (<see cref="TryConvert"/>). Any other double is rounded as
+    /// storing it in a float32 column would round it.
+    /// </summary>
+    public float AsFloat32() => (float)AsFloat64();
+
     public string AsString() => Kind == StorageKind.String ? (string)_ref! : throw WrongKind(StorageKind.String);
 
     /// <summary>The list's elements, read-only (see <see cref="FromBoolList"/>).</summary>
@@ -137,6 +158,10 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
     /// float beyond the float32 range for <c>float32</c> and <c>list&lt;float32&gt;</c> ones (<see cref="Float32Range"/>), and
     /// a list of another length than a <c>list&lt;E,N&gt;</c> target's. A list converts element by element, as a scalar of
     /// its element type would.</summary>
+    /// <remarks>A number converted to <c>float32</c> (or to <c>list&lt;float32&gt;</c> elements) is rounded to the nearest
+    /// float, as storing it in a float32 column rounds it: a value of a float32 field is a float32 value wherever it is
+    /// read, so an expression computes with the same number a model input, a log or a result of that field gets
+    /// (<c>0.1</c> given for a float32 request input is <c>0.1f</c> everywhere).</remarks>
     public bool TryConvert(ColumnType target, out ScalarValue converted)
     {
         converted = this;
@@ -159,18 +184,27 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
                 converted = FromFloat64(AsFloat64()); // a float64 value prints as the double it is
             }
 
-            return target.Kind switch
+            switch (target.Kind)
             {
-                StorageKind.Int32 => Int32Range.Fits(_bits),
-                StorageKind.Float32 => Float32Range.Fits(AsFloat64()),
-                _ => true,
-            };
+                case StorageKind.Int32:
+                    return Int32Range.Fits(_bits);
+                case StorageKind.Float32:
+                    if (!Float32Range.Fits(AsFloat64()))
+                    {
+                        return false;
+                    }
+
+                    converted = IsFloat32 ? this : FromFloat32((float)AsFloat64());
+                    return true;
+                default:
+                    return true;
+            }
         }
 
         switch (kind)
         {
             case StorageKind.Float64 when Kind == StorageKind.Int64:
-                converted = FromFloat64(_bits);
+                converted = target.Kind == StorageKind.Float32 ? FromFloat32(_bits) : FromFloat64(_bits);
                 return true;
             case StorageKind.Int64 when Kind == StorageKind.Float64:
                 if (TryInteger(AsFloat64(), target.Kind == StorageKind.Int32, out var integer))
@@ -197,12 +231,32 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
                 converted = FromFloat64List((double[])_ref!); // a float64 list prints as the doubles it holds
             }
 
-            return target.Element switch
+            switch (target.Element)
             {
-                StorageKind.Int32 => Int32Range.AllFit(AsInt64List()),
-                StorageKind.Float32 => Float32Range.AllFit(AsFloat64List()),
-                _ => true,
-            };
+                case StorageKind.Int32:
+                    return Int32Range.AllFit(AsInt64List());
+                case StorageKind.Float32:
+                    if (!Float32Range.AllFit(AsFloat64List()))
+                    {
+                        return false;
+                    }
+
+                    if (!IsFloat32List)
+                    {
+                        var elements = AsFloat64List();
+                        var rounded = new double[elements.Length];
+                        for (var i = 0; i < elements.Length; i++)
+                        {
+                            rounded[i] = (float)elements[i];
+                        }
+
+                        converted = new(StorageKind.List, (long)StorageKind.Float64 | SinglePrecisionList, rounded);
+                    }
+
+                    return true;
+                default:
+                    return true;
+            }
         }
 
         switch (element)
@@ -210,12 +264,13 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
             case StorageKind.Float64 when ListElement == StorageKind.Int64:
                 var longs = AsInt64List();
                 var doubles = new double[longs.Length];
+                var single = target.Element == StorageKind.Float32;
                 for (var i = 0; i < longs.Length; i++)
                 {
-                    doubles[i] = longs[i];
+                    doubles[i] = single ? (float)longs[i] : longs[i];
                 }
 
-                converted = FromFloat64List(doubles);
+                converted = single ? new(StorageKind.List, (long)StorageKind.Float64 | SinglePrecisionList, doubles) : FromFloat64List(doubles);
                 return true;
             case StorageKind.Int64 when ListElement == StorageKind.Float64:
                 var source = AsFloat64List();

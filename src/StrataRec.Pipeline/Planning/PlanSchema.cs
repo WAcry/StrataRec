@@ -67,11 +67,12 @@ public sealed class ContextField
     public required ColumnType Type { get; init; }
 
     /// <summary>
-    /// The type as declared: in <c>request_schema</c> for a request input, in the catalog for a context feature.
-    /// <see cref="Type"/> is its promoted form, which expressions see. Incoming values are validated against the declared
-    /// type, so an <c>int32</c> or <c>list&lt;int32&gt;</c> input outside the int32 range is rejected rather than passed
-    /// through; and whatever hands the value on beyond the engine (a model input, a log tap, a prompt) gives it at this
-    /// type, as the user declared it.
+    /// The type as declared: in <c>request_schema</c> for a request input, in the catalog for a context feature, the
+    /// built-in's own for a built-in. <see cref="Type"/> is its promoted form, which expressions see. Incoming values are
+    /// validated against the declared type, so an <c>int32</c> or <c>list&lt;int32&gt;</c> input outside the int32 range
+    /// is rejected rather than passed through; and whatever hands the value on beyond the engine (a model input, a log
+    /// context field, a result column that is nothing but this value, a prompt) gives it at this type, as the user
+    /// declared it.
     /// </summary>
     public ColumnType DeclaredType
     {
@@ -246,6 +247,27 @@ public sealed class PlanSchema
     public int SlotCount => _slotTypes.Count;
 
     public TableSchema CreateTableSchema() => new(KeyType, _slotTypes);
+
+    /// <summary>
+    /// The type an expression's values have where they leave the engine: log columns and context fields, result columns,
+    /// a replay bundle's output types. For an expression that is nothing but a reference
+    /// (<see cref="CompiledExpression.Reference"/>), the type the name is declared with: a column's or feature's
+    /// (<c>int32</c>, <c>float32?</c>, <c>list&lt;float32,64&gt;</c>), a context field's <see cref="ContextField.DeclaredType"/>,
+    /// a parameter's; a host or log sink whose own types are narrow reads it at that width. For a computed expression,
+    /// which declares nothing, its promoted <see cref="CompiledExpression.ResultType"/>: inside the engine every expression
+    /// computes on promoted types, and a user who wants a computed value at a narrow type declares a derived feature of
+    /// that type and reads it.
+    /// </summary>
+    public ColumnType DeclaredType(CompiledExpression expression)
+    {
+        ArgumentNullException.ThrowIfNull(expression);
+        return expression.Reference switch
+        {
+            { Kind: SymbolKind.Context } context => _contextList[context.Id].DeclaredType, // the symbol's type is promoted
+            { } symbol => symbol.Type, // a column's is its declared type; a parameter's is only ever promoted
+            null => expression.ResultType,
+        };
+    }
 
     /// <summary>The column named <paramref name="name"/> (without <c>col.</c>). While the plan compiles, looking up a
     /// catalog feature registers it.</summary>

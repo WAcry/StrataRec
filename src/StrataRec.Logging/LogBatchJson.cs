@@ -10,6 +10,10 @@ namespace StrataRec.Logging;
 /// The JSON debug encoding of a batch (design 8.7): envelope, then columns grouped by kind with a per-column list of
 /// missing row indices. Production sinks should prefer Arrow IPC or Parquet; the envelope fields are the same.
 /// </summary>
+/// <remarks>Numbers are written as the field's type (<see cref="LogField.Type"/>) holds them: an <c>int32</c> as the
+/// integer, a <c>float32</c> value or <c>list&lt;float32&gt;</c> element as the shortest text that reads back as the
+/// same float (<c>0.1</c>, not the double <c>0.10000000149011612</c> it widens to), a <c>float64</c> one as the shortest
+/// text of the double.</remarks>
 public static class LogBatchJson
 {
     public static string Encode(LogBatch batch, bool indented = true)
@@ -69,10 +73,22 @@ public static class LogBatchJson
 
         json.WriteNumber("row_prob", batch.RowProbability);
         json.WriteStartObject("context");
-        foreach (var (name, value) in batch.Context)
+        var fields = batch.Schema.Context;
+        if (fields.Length != batch.Context.Length)
         {
+            throw new ArgumentException($"The batch of tap '{batch.TapId}' has {batch.Context.Length} context fields, its schema {fields.Length}.", nameof(batch));
+        }
+
+        for (var i = 0; i < fields.Length; i++)
+        {
+            var (name, value) = batch.Context[i];
+            if (!string.Equals(name, fields[i].Name, StringComparison.Ordinal))
+            {
+                throw new ArgumentException($"Context field {i} of tap '{batch.TapId}' is '{name}', its schema's '{fields[i].Name}'.", nameof(batch));
+            }
+
             json.WritePropertyName(name);
-            WriteValue(json, value);
+            WriteField(json, value, fields[i].Type);
         }
 
         json.WriteEndObject();
@@ -104,7 +120,55 @@ public static class LogBatchJson
         json.WriteEndObject();
     }
 
-    /// <summary>Writes a value; missing becomes null (and is listed under <c>missing</c>).</summary>
+    /// <summary>
+    /// A context field's value as its declared <paramref name="type"/> writes it: a <c>float32</c> field's value and a
+    /// <c>list&lt;float32&gt;</c> field's elements as floats, by the type rather than by the value's flag (a value made by
+    /// hand may lack it); every other value as <see cref="WriteValue"/> writes it, a float64 field's as the double.
+    /// </summary>
+    private static void WriteField(Utf8JsonWriter json, in ScalarValue value, ColumnType type)
+    {
+        if (type.ValueKind != StorageKind.Float32 || value.IsMissing)
+        {
+            WriteValue(json, value);
+            return;
+        }
+
+        if (value.Kind != StorageKind.List)
+        {
+            var single = value.AsFloat32();
+            if (float.IsFinite(single))
+            {
+                json.WriteNumberValue(single);
+            }
+            else
+            {
+                json.WriteNullValue();
+            }
+
+            return;
+        }
+
+        var elements = value.AsFloat64List();
+        for (var i = 0; i < elements.Length; i++)
+        {
+            if (!float.IsFinite((float)elements[i]))
+            {
+                json.WriteNullValue(); // a list with a non-finite element is missing in logs, as a column's is
+                return;
+            }
+        }
+
+        json.WriteStartArray();
+        foreach (var element in elements)
+        {
+            json.WriteNumberValue((float)element);
+        }
+
+        json.WriteEndArray();
+    }
+
+    /// <summary>Writes a value; missing becomes null (and is listed under <c>missing</c>). A float is written as the double
+    /// it is held as, exact in both encodings; a batch writes its float32 fields as floats (<see cref="Write"/>).</summary>
     /// <param name="nonFiniteAsStrings">
     /// False for logs: a NaN or ±∞ float, and a float list with such an element, is written as null like a missing value
     /// (design 8.7). True for replay bundles, which must keep what the request observed: such values are written as the
@@ -204,16 +268,19 @@ public static class LogBatchJson
     }
 
     /// <summary>
-    /// Reads a value written by <see cref="WriteValue"/> back as <paramref name="type"/> (promoted storage, like
-    /// <see cref="ScalarValue"/>): null is missing, a bool is 0 or 1 (<c>true</c>/<c>false</c> are accepted too), an
-    /// <c>int32</c> value or <c>list&lt;int32&gt;</c> element must fit int32. The encoding carries no type, so the reader
-    /// supplies it, as a log consumer does from the batch's schema.
+    /// Reads a value written by <see cref="WriteValue"/> or a batch (<see cref="Write"/>) back as <paramref name="type"/>
+    /// (promoted storage, like <see cref="ScalarValue"/>): null is missing, a bool is 0 or 1 (<c>true</c>/<c>false</c> are
+    /// accepted too), an <c>int32</c> value or <c>list&lt;int32&gt;</c> element must fit int32. The encoding carries no
+    /// type, so the reader supplies it, as a log consumer does from the batch's schema.
     /// </summary>
     /// <remarks>Non-finite floats were written as null, so they read back as missing (design 8.7); a number outside the
     /// type's range is not a value of it.</remarks>
     /// <param name="nonFiniteAsStrings">
-    /// Accept the strings <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c> as float values and float list elements, as
-    /// <see cref="WriteValue"/> writes them for replay bundles.
+    /// The replay-bundle encoding rather than the log's. A bundle accepts the strings <c>"NaN"</c>, <c>"Infinity"</c> and
+    /// <c>"-Infinity"</c> as float values and float list elements, as <see cref="WriteValue"/> writes them for bundles, and
+    /// reads a float32 value as the double written: a bundle keeps what the request saw, its inputs as the host gave them
+    /// (a float32 input's double, which the replay converts to the float again). A log holds float32 values as floats, so
+    /// there a float32 value reads as the float the text names (the shortest text of the float, or its exact double).
     /// </param>
     public static bool TryReadValue(JsonElement json, ColumnType type, out ScalarValue value, out string? error, bool nonFiniteAsStrings = false)
     {
@@ -257,7 +324,10 @@ public static class LogBatchJson
                     return false;
                 }
 
-                value = Float(type, number);
+                // Parsed as a float, not narrowed from the double: rounding twice could pick the other neighbour.
+                value = type.Kind == StorageKind.Float32 && !nonFiniteAsStrings && json.TryGetSingle(out var single)
+                    ? ScalarValue.FromFloat32(single)
+                    : Float(type, number);
                 return true;
             case StorageKind.Float32 or StorageKind.Float64 when nonFiniteAsStrings && TryNonFinite(json, out var named):
                 value = Float(type, named);
@@ -422,8 +492,14 @@ public static class LogBatchJson
                 case bool[] b:
                     json.WriteNumberValue(b[i] ? 1 : 0); // as every other bool of a log: 0/1 in int_cols (decisions)
                     break;
+                case int[] n:
+                    json.WriteNumberValue(n[i]);
+                    break;
                 case long[] l:
                     json.WriteNumberValue(l[i]);
+                    break;
+                case float[] f:
+                    json.WriteNumberValue(f[i]); // the shortest text of the float
                     break;
                 case double[] d:
                     json.WriteNumberValue(d[i]);

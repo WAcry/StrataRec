@@ -11,9 +11,10 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.Pipeline.Execution;
 
 /// <summary>
-/// Hot-path capture of log taps (design 8.6): pick the rows (scope, filter, coordinated sampling), evaluate the tap's
-/// columns for those rows only and copy them into a batch the request no longer owns. Everything here runs only for
-/// requests whose funnel group sampled them.
+/// Hot-path capture of log taps (design 8.6): pick the rows (scope, filter, coordinated sampling), copy the tap's columns
+/// for those rows only into a batch the request no longer owns: a column logged as a reference to a candidate column
+/// straight from that column's storage, at its declared width; any other expression evaluated for those rows. Everything
+/// here runs only for requests whose funnel group sampled them.
 /// </summary>
 internal static class TapCapture
 {
@@ -245,15 +246,25 @@ internal static class TapCapture
         for (var c = 0; c < tap.Columns.Length; c++)
         {
             var (name, expression) = tap.Columns[c];
+            var type = tap.Schema.Columns[c].Type; // the declared type for a reference, else the promoted result type
             if (count == 0 || ReadsFailedFeature(state, expression))
             {
-                columns[c] = LogColumn.AllMissing(name, expression.ResultType, count);
+                columns[c] = LogColumn.AllMissing(name, type, count);
+            }
+            else if (expression.ColumnReference is { } column)
+            {
+                // A column is copied from its own storage, at its declared width: nothing to evaluate, nothing widened (a
+                // float32 embedding stays float32). A column no node produced in this request has no value to log.
+                columns[c] = state.ReadColumn(column.FixedSlot, column.Id) is { } storage
+                    ? LogColumn.Capture(name, type, storage, selectedRows)
+                    : LogColumn.AllMissing(name, type, count);
             }
             else
             {
-                var buffer = ColumnBuffer.Create(expression.ResultType, capacity, memory);
+                // A request-level reference broadcast to the rows is narrowed to its declared type, which holds it.
+                var buffer = ColumnBuffer.Create(type, capacity, memory);
                 expression.Evaluate(eval, selectedRows, buffer);
-                columns[c] = LogColumn.Capture(name, buffer, selectedRows); // non-finite values are missing in logs
+                columns[c] = LogColumn.Capture(name, type, buffer, selectedRows); // non-finite values are missing in logs
             }
 
             if (tap.PinnedProducers[c] is { } pinned)

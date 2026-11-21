@@ -41,16 +41,42 @@ public sealed class LogValueReadTests
     }
 
     [Theory]
-    [InlineData("float32", "0.10000000149011612", true, "0.1")] // the exact double of float32 0.1, as logs write it
-    [InlineData("float32", "0.1", false, "0.1")] // not a float32: kept as the double, printed as one
-    [InlineData("float64", "0.10000000149011612", false, "0.10000000149011612")]
-    public void AFloat32ColumnsValue_ReadsBackAsTheSameDouble_PrintedAsTheFloat(string type, string json, bool float32, string text)
+    [InlineData("0.10000000149011612", false)] // the exact double of float32 0.1, as WriteValue writes it
+    [InlineData("0.1", false)] // the shortest text of float32 0.1, as a batch writes a float32 field
+    [InlineData("0.10000000149011612", true)] // in a bundle too
+    public void AFloat32Value_ReadsBackAsTheFloat_PrintedAsTheFloat(string json, bool bundle)
     {
-        using var document = JsonDocument.Parse(json);
+        var value = Read(json, ColumnType.Float32, nonFiniteAsStrings: bundle);
 
-        Assert.True(LogBatchJson.TryReadValue(document.RootElement, ColumnType.Parse(type), out var value, out _));
-        Assert.Equal(double.Parse(json, System.Globalization.CultureInfo.InvariantCulture), value.AsFloat64()); // the value is not narrowed
-        Assert.Equal((float32, text), (value.IsFloat32, value.ToString()));
+        Assert.Equal((double)0.1f, value.AsFloat64());
+        Assert.Equal((true, "0.1"), (value.IsFloat32, value.ToString()));
+    }
+
+    [Theory]
+    [InlineData("float32", "0.1", true)] // a bundle keeps what the request saw: a float32 request input is the double it was given
+    [InlineData("float64", "0.10000000149011612", true)]
+    [InlineData("float64", "0.10000000149011612", false)]
+    public void ADoublesText_ReadsBackAsThatDouble_WhereTheEncodingHoldsDoubles(string type, string json, bool bundle)
+    {
+        var value = Read(json, ColumnType.Parse(type), nonFiniteAsStrings: bundle);
+
+        Assert.Equal(double.Parse(json, System.Globalization.CultureInfo.InvariantCulture), value.AsFloat64()); // not narrowed
+        Assert.Equal((false, json), (value.IsFloat32, value.ToString()));
+    }
+
+    [Theory]
+    [InlineData(16777217.0)] // halfway between two floats: the text rounds to even
+    [InlineData(1.00000005960464477539)] // 1 + 2^-24, halfway too
+    [InlineData(3.4028234663852886E+38)] // float.MaxValue
+    [InlineData(1.401298464324817E-45)] // float.Epsilon, the smallest subnormal
+    public void ALogsFloat32Text_ReadsAsTheFloatItNames(double number)
+    {
+        var text = number.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+
+        var value = Read(text, ColumnType.Float32, nonFiniteAsStrings: false);
+
+        Assert.Equal(float.Parse(text, System.Globalization.CultureInfo.InvariantCulture), value.AsFloat32());
+        Assert.True(value.IsFloat32);
     }
 
     [Fact]
@@ -62,7 +88,8 @@ public sealed class LogValueReadTests
         var read = Read("[0.10000000149011612, 2]", ColumnType.Parse("list<float32>"), nonFiniteAsStrings: false);
         Assert.True(read.IsFloat32List); // printed as the floats it holds
         Assert.Equal("[0.1, 2]", read.ToString());
-        Assert.False(Read("[0.1]", ColumnType.Parse("list<float32>"), nonFiniteAsStrings: false).IsFloat32List); // not a float32
+        Assert.True(Read("[0.1]", ColumnType.Parse("list<float32>"), nonFiniteAsStrings: false).IsFloat32List); // a log's floats
+        Assert.False(Read("[0.1]", ColumnType.Parse("list<float32>"), nonFiniteAsStrings: true).IsFloat32List); // a bundle's double
     }
 
     [Fact]
