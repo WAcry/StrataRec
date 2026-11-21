@@ -404,6 +404,7 @@ public sealed class OperatorContext : IServiceCallScope
         }
 
         CheckOutputs(call);
+        CheckInputs(call);
         if (!call.Items.IsEmpty)
         {
             CheckItems(call);
@@ -421,6 +422,51 @@ public sealed class OperatorContext : IServiceCallScope
                 if (string.Equals(outputs[i], outputs[j], StringComparison.Ordinal))
                 {
                     throw new ArgumentException($"The call names output '{outputs[i]}' twice: name each output it reads once.", nameof(call));
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Each input is named once: a service reads an input by its name (<see cref="ServiceCall.TryGetInput"/> finds the
+    /// first), and a replay's digests and a cache's keys take every input in name order, so a second of a name is one the
+    /// service never reads that the key does, and two orders of the two were one key (review of 3a0d9e8). Hashes first, so
+    /// a call of many inputs compares few names, and nothing is allocated for up to 256.
+    /// </summary>
+    private static void CheckInputs(ServiceCall call)
+    {
+        var inputs = call.Inputs.Span;
+        if (inputs.Length < 2)
+        {
+            return;
+        }
+
+        Span<int> hashes = inputs.Length <= 256 ? stackalloc int[inputs.Length] : new int[inputs.Length];
+        for (var i = 0; i < inputs.Length; i++)
+        {
+            hashes[i] = string.GetHashCode(inputs[i].Name, StringComparison.Ordinal);
+        }
+
+        hashes.Sort();
+        for (var i = 1; i < hashes.Length; i++)
+        {
+            if (hashes[i] == hashes[i - 1])
+            {
+                ThrowIfNamedTwice(inputs);
+                return; // a hash collision of two names
+            }
+        }
+
+        static void ThrowIfNamedTwice(ReadOnlySpan<NamedInput> inputs)
+        {
+            for (var i = 1; i < inputs.Length; i++)
+            {
+                for (var j = 0; j < i; j++)
+                {
+                    if (string.Equals(inputs[i].Name, inputs[j].Name, StringComparison.Ordinal))
+                    {
+                        throw new ArgumentException($"The call names input '{inputs[i].Name}' twice: name each input once, as the service reads it by its name.", "call");
+                    }
                 }
             }
         }

@@ -32,6 +32,16 @@ public sealed class ServiceCallTests
         var twice = new ServiceCall { Service = "s", Outputs = new[] { "a", "b", "a" } };
         var duplicated = await Assert.ThrowsAsync<ArgumentException>(() => context.CallAsync(service, twice, new ServiceResponse(memory)));
         Assert.StartsWith("The call names output 'a' twice", duplicated.Message, StringComparison.Ordinal);
+
+        // An input named twice: the service read the first, and a cache's key took both in an order the call did not give
+        // (review of 3a0d9e8: two calls whose first 'x' differed had one key). Of many inputs too, which are compared by hash.
+        foreach (var count in new[] { 2, 300 })
+        {
+            var inputs = Enumerable.Range(0, count).Select(i => NamedInput.FromFloat32(i == count - 1 ? "f0" : "f" + i, [], new[] { (float)i })).ToArray();
+            var named = new ServiceCall { Service = "s", Inputs = inputs };
+            var again = await Assert.ThrowsAsync<ArgumentException>(() => context.CallAsync(service, named, new ServiceResponse(memory)));
+            Assert.StartsWith("The call names input 'f0' twice", again.Message, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

@@ -338,6 +338,7 @@ public sealed class ServiceCall
     /// <summary>The version the call asks for; null for the service's default.</summary>
     public string? Version { get; init; }
 
+    /// <summary>The inputs, each named once (an operator's call naming one twice is rejected): the service reads each by its name (<see cref="TryGetInput"/>).</summary>
     public ReadOnlyMemory<NamedInput> Inputs { get; init; }
 
     /// <summary>Number of rows in this batch (the leading dimension of row-wise tensors); 0 for a call about no rows.</summary>

@@ -671,22 +671,25 @@ public sealed class RunReplayTests
     }
 
     /// <summary>
-    /// The digests of a call's items read a shared input once for the call, not once an item (review of 43bdf97: a
-    /// recording of 2,048 items hashed a shared vector 2,048 times, and so did the replay): an item's view of more than a
-    /// few values enters its digest as a digest of its own, the same for every item. An item's digest is still its own.
+    /// The digests of a call's items read each shared input once for the call, not once an item, whatever its size: what
+    /// every item sees alike is encoded once (reviews of 43bdf97 and 3a0d9e8: a recording of 2,048 items hashed a shared
+    /// vector 2,048 times, and one item's long string, counted as one value, was encoded again for every item). An item's
+    /// digest is still its own.
     /// </summary>
     [Fact]
-    public void ACallsItemDigests_ReadASharedInputOnce()
+    public void ACallsItemDigests_ReadEachSharedInputOnce()
     {
         const int count = 64;
-        var shared = new ReadCountingMemory<float>(Enumerable.Range(0, 64).Select(i => (float)i).ToArray());
+        var wide = new ReadCountingMemory<float>(Enumerable.Range(0, 64).Select(i => (float)i).ToArray());
+        var small = new ReadCountingMemory<float>([8, 9]);
+        var text = new ReadCountingMemory<string>([new string('p', 4096)]);
         var call = Call(
             count, NamedInput.FromFloat32("x", [count], Enumerable.Range(0, count).Select(i => (float)i).ToArray()),
-            NamedInput.FromFloat32("u", [1, 64], shared.Memory));
+            NamedInput.FromFloat32("u", [1, 64], wide.Memory), NamedInput.FromFloat32("s", [1, 2], small.Memory), NamedInput.FromString("p", [1], text.Memory));
 
         var digests = RowDigests(call);
 
-        Assert.InRange(shared.Reads, 1, 4); // a few (its length is read too), not one an item
+        Assert.All(new[] { wide.Reads, small.Reads, text.Reads }, reads => Assert.InRange(reads, 1, 4)); // a few (its length is read too), not one an item
         Assert.Equal(count, digests.Distinct().Count());
     }
 

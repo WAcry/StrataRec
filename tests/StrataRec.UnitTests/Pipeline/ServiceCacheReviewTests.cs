@@ -150,6 +150,7 @@ public sealed class ServiceCacheReviewTests
     /// item (review of 43bdf97: a full hit of 2,048 items hashed a vector of 4,096 values 2,048 times, which used up its
     /// node's budget). The per-item input is still read per item, and every item still hits.
     /// </summary>
+    /// <remarks>A shared string is one value, of any size (review of 3a0d9e8: one was encoded again for every item); a few shared values are encoded once too.</remarks>
     [Fact]
     public async Task ASharedInput_IsHashedOnceForTheItemsKeys_NotOnceAnItem()
     {
@@ -157,25 +158,31 @@ public sealed class ServiceCacheReviewTests
         var rig = new ServiceCacheRig();
         var ids = Enumerable.Range(1, count).Select(i => (long)i).ToArray();
         var x = ids.Select(i => (float)i).ToArray();
-        var shared = new ReadCountingMemory<float>(Enumerable.Range(0, 64).Select(i => (float)i).ToArray()); // more than a key holds inline
+        var wide = new ReadCountingMemory<float>(Enumerable.Range(0, 64).Select(i => (float)i).ToArray());
+        var small = new ReadCountingMemory<float>([8, 9]);
+        var text = new ReadCountingMemory<string>([new string('p', 4096)]);
         ServiceCall WithShared() => new()
         {
             Service = "m",
             BatchSize = count,
             Items = ids.Select(EntityKey.FromInt64).ToArray(),
-            Inputs = new[] { NamedInput.FromFloat32("x", new[] { count }, x), NamedInput.FromFloat32("u", new[] { 1, 64 }, shared.Memory) },
+            Inputs = new[]
+            {
+                NamedInput.FromFloat32("x", new[] { count }, x), NamedInput.FromFloat32("u", new[] { 1, 64 }, wide.Memory),
+                NamedInput.FromFloat32("s", new[] { 1, 2 }, small.Memory), NamedInput.FromString("p", new[] { 1 }, text.Memory),
+            },
             Outputs = new[] { "p" },
         };
 
         await rig.CallAsync(WithShared());
         rig.Apply();
-        var before = shared.Reads;
+        var before = (wide.Reads, small.Reads, text.Reads);
         var (status, response) = await rig.CallAsync(WithShared());
 
         Assert.True(status.Succeeded, status.Error);
         Assert.Equal(x.Select(v => v * 10), Floats(response, "p")); // as the service answered them
         Assert.Single(rig.Service.Calls); // the second call is a full hit
-        Assert.InRange(shared.Reads - before, 1, 4); // a few (its length is read too), not one an item
+        Assert.All(new[] { wide.Reads - before.Item1, small.Reads - before.Item2, text.Reads - before.Item3 }, reads => Assert.InRange(reads, 1, 4)); // a few, not one an item
     }
 
     /// <summary>

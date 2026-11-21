@@ -158,6 +158,12 @@ public static class StableHash
         /// <summary>Clears the accumulated bytes, keeping the buffer for reuse.</summary>
         public void Reset() => _length = 0;
 
+        /// <summary>The bytes added so far, valid until the next addition: a part encoded once, to repeat with <see cref="AddEncoded"/>.</summary>
+        public readonly ReadOnlySpan<byte> Encoded => _buffer is null ? ReadOnlySpan<byte>.Empty : _buffer.AsSpan(0, _length);
+
+        /// <summary>Adds bytes this encoding produced already (<see cref="Encoded"/>), as if their values were added again.</summary>
+        public void AddEncoded(scoped ReadOnlySpan<byte> encoded) => encoded.CopyTo(Reserve(encoded.Length));
+
         public void Dispose()
         {
             if (_buffer is not null)
