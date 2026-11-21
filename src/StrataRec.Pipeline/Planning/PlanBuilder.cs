@@ -523,7 +523,7 @@ public sealed class PlanBuilder
                 if (e is not null)
                 {
                     context.Add((name, e));
-                    contextFields.Add(new Logging.LogField(name, e.ResultType, spec.Context[name]));
+                    contextFields.Add(new Logging.LogField(name, Schema.DeclaredType(e), spec.Context[name]));
                 }
             }
         }
@@ -597,7 +597,7 @@ public sealed class PlanBuilder
             }
 
             columns.Add((name, e));
-            columnFields.Add(new Logging.LogField(name, e.ResultType, source));
+            columnFields.Add(new Logging.LogField(name, Schema.DeclaredType(e), source)); // a reference logs at its declared width
             var direct = -1;
             string? pin = null;
             for (var i = before; i < reads.Count; i++)

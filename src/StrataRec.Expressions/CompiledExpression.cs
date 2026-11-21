@@ -30,11 +30,16 @@ public abstract class CompiledExpression
     public virtual IReadOnlyList<Symbol> Names => Reads;
 
     /// <summary>
-    /// The candidate column the expression is, when it is nothing but a reference to one (<c>col.score.final</c>); null
-    /// otherwise. <see cref="ResultType"/> is the expression type system's (every float is float64); a reader that wants
-    /// the column's own storage type, such as an output whose float32 values should print as floats, takes it from here.
+    /// The symbol the expression is, when it is nothing but a reference to one (<c>col.score.final</c>,
+    /// <c>col.score.final@fusion</c>, a feature, <c>ctx.user.age</c>, <c>param.k</c>), after optimization; null otherwise.
+    /// What leaves the engine as such a reference has the type the referenced name is declared with, not
+    /// <see cref="ResultType"/>.
     /// </summary>
-    public virtual Symbol? ColumnReference => null;
+    public virtual Symbol? Reference => null;
+
+    /// <summary>The candidate column the expression is (<see cref="Reference"/> of a <c>col.*</c> symbol): a reader can
+    /// take its values from the column's storage instead of evaluating the expression.</summary>
+    public Symbol? ColumnReference => Reference is { Kind: SymbolKind.Column } column ? column : null;
 
     /// <summary>Normalized, optimized form of the expression for explain-plan output.</summary>
     public abstract string Describe();

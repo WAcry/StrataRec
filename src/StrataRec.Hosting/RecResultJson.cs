@@ -232,7 +232,8 @@ public static class RecResultJson
     /// A result's items as a JSON array, each <c>{ "rank", "id", "columns": { … } }</c>, written from the columns (no row
     /// dictionaries are made). The output columns are a member of their own, so a column named <c>id</c> or <c>rank</c>
     /// cannot collide with the item's (<c>stratarec replay</c> writes its items with this too: it flattened the columns
-    /// into the item and wrote duplicate members, architecture audit).
+    /// into the item and wrote duplicate members, architecture audit). A column's declared type decides how its floats
+    /// print (<see cref="ResultColumns.Types"/>): a <c>float32</c> or <c>list&lt;float32&gt;</c> column's as floats.
     /// </summary>
     public static void WriteItems(Utf8JsonWriter json, ResultColumns items)
     {
@@ -249,7 +250,7 @@ public static class RecResultJson
             for (var c = 0; c < items.Names.Count; c++)
             {
                 json.WritePropertyName(items.Names[c]);
-                WriteValue(json, items.Column(c)[i]);
+                WriteValue(json, items.Column(c)[i], float32: items.Types[c].ValueKind == StorageKind.Float32);
             }
 
             json.WriteEndObject();
@@ -275,7 +276,7 @@ public static class RecResultJson
     /// A list as a JSON array of its elements, each written as a scalar of its element type is (a float32 list's
     /// elements as the floats they are, a non-finite element as null, as a non-finite float is).
     /// </summary>
-    private static void WriteList(Utf8JsonWriter json, in ScalarValue value)
+    private static void WriteList(Utf8JsonWriter json, in ScalarValue value, bool float32)
     {
         json.WriteStartArray();
         switch (value.ListElement)
@@ -295,14 +296,13 @@ public static class RecResultJson
 
                 break;
             case StorageKind.Float64:
-                var single = value.IsFloat32List;
                 foreach (var number in value.AsFloat64List())
                 {
                     if (!double.IsFinite(number))
                     {
                         json.WriteNullValue();
                     }
-                    else if (single)
+                    else if (float32)
                     {
                         json.WriteNumberValue((float)number);
                     }
@@ -329,8 +329,14 @@ public static class RecResultJson
     /// A value as JSON: missing is <c>null</c>, and so is a non-finite float (or float list element), which JSON cannot
     /// represent; integers exact, floats in their shortest round-trip form, a float32 value (a float32 column's, a
     /// <c>list&lt;float32&gt;</c> element) as the float: <c>0.1</c>, not the double <c>0.10000000149011612</c> it widens to.
+    /// Without a declared type, a value read from float32 storage is a float32 one (<see cref="ScalarValue.IsFloat32"/>).
     /// </summary>
-    public static void WriteValue(Utf8JsonWriter json, in ScalarValue value)
+    public static void WriteValue(Utf8JsonWriter json, in ScalarValue value) =>
+        WriteValue(json, value, float32: value.IsFloat32 || value.IsFloat32List);
+
+    /// <summary><see cref="WriteValue(Utf8JsonWriter, in ScalarValue)"/>, a float written as a float when
+    /// <paramref name="float32"/>: the declared type's decision, not the value's origin.</summary>
+    private static void WriteValue(Utf8JsonWriter json, in ScalarValue value, bool float32)
     {
         switch (value.Kind)
         {
@@ -340,8 +346,8 @@ public static class RecResultJson
             case StorageKind.Int64: // also int32 values: ScalarValue holds them promoted
                 json.WriteNumberValue(value.AsInt64());
                 break;
-            case StorageKind.Float64 when value.IsFloat32 && double.IsFinite(value.AsFloat64()):
-                json.WriteNumberValue((float)value.AsFloat64());
+            case StorageKind.Float64 when float32 && double.IsFinite(value.AsFloat64()):
+                json.WriteNumberValue(value.AsFloat32());
                 break;
             case StorageKind.Float64 when double.IsFinite(value.AsFloat64()):
                 json.WriteNumberValue(value.AsFloat64());
@@ -350,7 +356,7 @@ public static class RecResultJson
                 json.WriteStringValue(value.AsString());
                 break;
             case StorageKind.List:
-                WriteList(json, value);
+                WriteList(json, value, float32);
                 break;
             default: // missing, or a non-finite float
                 json.WriteNullValue();

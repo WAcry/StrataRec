@@ -363,7 +363,7 @@ internal sealed class RunRecorder : IFeatureCallHook
         var types = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (name, expression) in plan.Output.Columns)
         {
-            types[name] = OutputPlan.ValueType(expression).ToString();
+            types[name] = plan.Schema.DeclaredType(expression).ToString();
         }
 
         var items = new List<ReplayItem>(result.Items.Count);

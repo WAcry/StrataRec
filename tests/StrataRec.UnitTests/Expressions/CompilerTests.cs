@@ -65,6 +65,19 @@ public class CompilerTests
         }
     }
 
+    [Theory]
+    [InlineData("col.item.age_hours", "col.item.age_hours")]
+    [InlineData("ctx.user.tenure_days", "ctx.user.tenure_days")] // a request-level value is a reference too
+    [InlineData("(param.w_click)", "param.w_click")]
+    [InlineData("param.w_click * 2.0", null)]
+    [InlineData("ctx.user.tenure_days > 30.0", null)]
+    public void AnExpressionThatIsAName_IsAReferenceToIt(string source, string? name)
+    {
+        var compiled = HomeFeed().Compile(source);
+
+        Assert.Equal(name, compiled.Reference?.Name);
+    }
+
     internal const string FusionFormula = """
         let utility    = param.w_click * col.score.p_click + param.w_like * col.score.p_like;
         let age_hours  = col.item.age_hours ?? 720.0;

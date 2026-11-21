@@ -12,10 +12,13 @@ namespace StrataRec.Logging;
 /// request's candidate table can go back to the pool while the batch waits in a queue.
 /// </summary>
 /// <remarks>
-/// Columns used to be one <see cref="ScalarValue"/> per row (24 bytes) and a copied array per list row: a candidate tap
-/// of 1,000 rows and 10 numeric columns held 240 KB of values; typed it holds 80 KB in 10 arrays, and a list column is one
-/// array of elements instead of one per row. A sink reads the arrays directly; <see cref="Get"/> gives a row as a value,
-/// for cold readers.
+/// <para>Columns used to be one <see cref="ScalarValue"/> per row (24 bytes) and a copied array per list row: a candidate tap
+/// of 1,000 rows and 10 numeric columns held 240 KB of values; typed it holds 80 KB in 10 arrays (40 KB when they are
+/// float32 or int32), and a list column is one array of elements instead of one per row. A sink reads the arrays
+/// directly; <see cref="Get"/> gives a row as a value, for cold readers.</para>
+/// <para>The arrays have the column's <see cref="Type"/>, so a sink whose own types are narrow (an int32 feature log, a
+/// float32 training table) writes them as they are: an <c>int32</c> column is an <c>int[]</c>, a
+/// <c>list&lt;float32,64&gt;</c> embedding a <c>float[]</c> of 64 elements per row.</para>
 /// </remarks>
 public sealed class LogColumn
 {
@@ -31,18 +34,20 @@ public sealed class LogColumn
 
     public string Name { get; }
 
-    /// <summary>The column expression's type: <c>bool</c>, <c>int64</c>, <c>float64</c>, <c>string</c>, or
-    /// <c>list&lt;E&gt;</c> or <c>list&lt;E,N&gt;</c> of those scalars (a float32 embedding logs as <c>list&lt;float64,N&gt;</c>,
-    /// as a float32 column logs as float64: a log column holds an expression's result, whose types are promoted).</summary>
+    /// <summary>The field's type (<see cref="LogField.Type"/>): for a column logged as a plain reference to a column,
+    /// feature or context value, the type that is declared with (<c>int32</c>, <c>float32?</c>,
+    /// <c>list&lt;float32,64&gt;</c>); for a computed expression its promoted result type (<c>bool</c>, <c>int64</c>,
+    /// <c>float64</c>, <c>string</c>, or lists of those).</summary>
     public ColumnType Type { get; }
 
     public int RowCount { get; }
 
     /// <summary>
-    /// The values: for a scalar one per row, a <c>bool[]</c>, <c>long[]</c>, <c>double[]</c> or <c>string?[]</c>; for a
-    /// list the elements of every row in row order (<c>bool[]</c>, <c>long[]</c>, <c>double[]</c> or <c>string[]</c>),
-    /// which <see cref="Offsets"/> delimits, a fixed-length list included. A missing row holds zeros (null for a string)
-    /// and a missing list row no elements.
+    /// The values, in the storage of <see cref="Type"/>: for a scalar one per row, a <c>bool[]</c>, <c>int[]</c>
+    /// (<c>int32</c>), <c>long[]</c>, <c>float[]</c> (<c>float32</c>), <c>double[]</c> or <c>string?[]</c>; for a list the
+    /// elements of every row in row order (<c>bool[]</c>, <c>int[]</c>, <c>long[]</c>, <c>float[]</c>, <c>double[]</c> or
+    /// <c>string[]</c>), which <see cref="Offsets"/> delimits, a fixed-length list included. A missing row holds zeros
+    /// (null for a string) and a missing list row no elements. Every float is finite: a non-finite one is missing.
     /// </summary>
     public Array Values { get; }
 
@@ -55,7 +60,8 @@ public sealed class LogColumn
 
     public bool IsMissing(int row) => Validity is { } validity && !Bits.Get(validity, row);
 
-    /// <summary>Row <paramref name="row"/> as a value; a list row is copied. For tests and the JSON encoding.</summary>
+    /// <summary>Row <paramref name="row"/> as a value (promoted, as every value is); a list row is copied. For tests and
+    /// cold readers.</summary>
     public ScalarValue Get(int row)
     {
         if (IsMissing(row))
@@ -68,10 +74,12 @@ public sealed class LogColumn
             var (start, length) = (offsets[row], offsets[row + 1] - offsets[row]);
             return Values switch
             {
-                bool[] b => ScalarValue.FromBoolList(b.AsSpan(start, length).ToArray()),
-                long[] l => ScalarValue.FromInt64List(l.AsSpan(start, length).ToArray()),
-                double[] d => ScalarValue.FromFloat64List(d.AsSpan(start, length).ToArray()),
-                string[] s => ScalarValue.FromStringList(s.AsSpan(start, length).ToArray()),
+                bool[] b => ColumnValues.ListValue<bool>(b.AsSpan(start, length)),
+                int[] i => ColumnValues.ListValue<int>(i.AsSpan(start, length)),
+                long[] l => ColumnValues.ListValue<long>(l.AsSpan(start, length)),
+                float[] f => ColumnValues.ListValue<float>(f.AsSpan(start, length)),
+                double[] d => ColumnValues.ListValue<double>(d.AsSpan(start, length)),
+                string[] s => ColumnValues.ListValue<string>(s.AsSpan(start, length)),
                 _ => throw new InvalidOperationException($"Unexpected list values {Values.GetType().Name}."),
             };
         }
@@ -79,7 +87,9 @@ public sealed class LogColumn
         return Values switch
         {
             bool[] b => ScalarValue.FromBool(b[row]),
+            int[] i => ScalarValue.FromInt64(i[row]),
             long[] l => ScalarValue.FromInt64(l[row]),
+            float[] f => ScalarValue.FromFloat32(f[row]),
             double[] d => ScalarValue.FromFloat64(d[row]),
             string?[] s => ScalarValue.FromString(s[row]),
             _ => throw new InvalidOperationException($"Unexpected values {Values.GetType().Name}."),
@@ -87,7 +97,7 @@ public sealed class LogColumn
     }
 
     /// <summary>A column of <paramref name="rowCount"/> missing rows: what a tap logs for a column that reads a feature
-    /// whose fetch failed.</summary>
+    /// whose fetch failed, or a column no node produced in the request.</summary>
     public static LogColumn AllMissing(string name, ColumnType type, int rowCount)
     {
         var values = type.IsList ? ElementArray(type.Element, 0) : ElementArray(type.Kind, rowCount);
@@ -95,39 +105,55 @@ public sealed class LogColumn
     }
 
     /// <summary>
-    /// The <paramref name="rows"/> of <paramref name="buffer"/> (an expression's result, so its numbers are promoted:
-    /// int64, float64), in that order. A NaN or ±∞ number and a list with such an element are missing: logs carry no
-    /// non-finite values (design 8.7).
+    /// The <paramref name="rows"/> of <paramref name="buffer"/> as a column of <paramref name="type"/>, in that order, copied
+    /// in the buffer's storage without widening: a candidate column's own storage for a column logged as a reference to
+    /// it, an expression's result otherwise. A NaN or ±∞ number and a list with such an element are missing: logs carry
+    /// no non-finite values (design 8.7).
     /// </summary>
-    public static LogColumn Capture(string name, ColumnBuffer buffer, ReadOnlySpan<int> rows)
+    /// <remarks>A row is missing when the buffer's validity says so, whatever the type's nullability: a table slot is
+    /// missing until something writes it, and a log records what is there rather than whatever an unwritten row
+    /// holds.</remarks>
+    /// <exception cref="ArgumentException">The buffer does not store <paramref name="type"/> (another kind, or another
+    /// element kind).</exception>
+    public static LogColumn Capture(string name, ColumnType type, ColumnBuffer buffer, ReadOnlySpan<int> rows)
     {
         ArgumentNullException.ThrowIfNull(buffer);
+        if (buffer.Type.Kind != type.Kind || buffer.Type.Element != type.Element)
+        {
+            throw new ArgumentException($"Column '{name}' is logged as {type}, but its buffer stores {buffer.Type}.", nameof(buffer));
+        }
+
         ulong[]? validity = null;
         int[]? offsets = null;
         Array values = buffer switch
         {
             ScalarColumn<bool> b => Scalars(b, rows, ref validity),
+            ScalarColumn<int> i => Scalars(i, rows, ref validity),
             ScalarColumn<long> l => Scalars(l, rows, ref validity),
+            ScalarColumn<float> f => Scalars(f, rows, ref validity),
             ScalarColumn<double> d => Scalars(d, rows, ref validity),
             StringColumn s => Strings(s, rows, ref validity),
             ListColumn<bool> b => Elements(b, rows, offsets = new int[rows.Length + 1], ref validity),
+            ListColumn<int> i => Elements(i, rows, offsets = new int[rows.Length + 1], ref validity),
             ListColumn<long> l => Elements(l, rows, offsets = new int[rows.Length + 1], ref validity),
+            ListColumn<float> f => Elements(f, rows, offsets = new int[rows.Length + 1], ref validity),
             ListColumn<double> d => Elements(d, rows, offsets = new int[rows.Length + 1], ref validity),
             ListColumn<string> s => Elements(s, rows, offsets = new int[rows.Length + 1], ref validity),
-            _ => throw new NotSupportedException($"A log column holds an expression's result (promoted types), not a {buffer.GetType().Name}."),
+            _ => throw new NotSupportedException($"Unsupported column {buffer.GetType().Name}."),
         };
-        return new LogColumn(name, buffer.Type, rows.Length, values, offsets, validity);
+        return new LogColumn(name, type, rows.Length, values, offsets, validity);
     }
 
-    /// <summary>A column from one value per row, for cold paths and tests: each value missing or of <paramref name="type"/>
-    /// as <see cref="ColumnValues.Get"/> reads it (promoted numbers). Non-finite values are missing, as in
-    /// <see cref="Capture"/>.</summary>
+    /// <summary>A column from one value per row, for cold paths and tests: each value missing or a value of
+    /// <paramref name="type"/> held promoted, as <see cref="ColumnValues.Get"/> reads one, and narrowed here to the type's
+    /// storage. Non-finite values are missing, as in <see cref="Capture"/>.</summary>
+    /// <exception cref="InvalidOperationException">A value is not one of <paramref name="type"/> (another kind, or an
+    /// integer outside an <c>int32</c> type's range).</exception>
     public static LogColumn FromValues(string name, ColumnType type, ReadOnlySpan<ScalarValue> values)
     {
         var count = values.Length;
         ulong[]? validity = null;
         int[]? offsets = type.IsList ? new int[count + 1] : null;
-        var elements = new List<ScalarValue>();
         var result = type.IsList ? ElementArray(type.Element, 0) : ElementArray(type.Kind, count);
         var at = 0;
         for (var i = 0; i < count; i++)
@@ -147,7 +173,17 @@ public sealed class LogColumn
             switch (result)
             {
                 case bool[] b when offsets is null: b[i] = value.AsBool(); break;
+                case int[] n when offsets is null: n[i] = value.AsInt32(); break;
                 case long[] l when offsets is null: l[i] = value.AsInt64(); break;
+                case float[] f when offsets is null:
+                    f[i] = value.AsFloat32();
+                    if (!float.IsFinite(f[i]))
+                    {
+                        f[i] = 0; // beyond the float32 range: an infinity in float32 storage, so missing
+                        MarkMissing(ref validity, count, i);
+                    }
+
+                    break;
                 case double[] d when offsets is null: d[i] = value.AsFloat64(); break;
                 case string?[] s when offsets is null: s[i] = value.AsString(); break;
                 default:
@@ -155,39 +191,86 @@ public sealed class LogColumn
                     result = type.Element switch
                     {
                         StorageKind.Bool => Append((bool[])result, at, value.AsBoolList()),
-                        StorageKind.Int32 or StorageKind.Int64 => Append((long[])result, at, value.AsInt64List()),
-                        StorageKind.Float32 or StorageKind.Float64 => Append((double[])result, at, value.AsFloat64List()),
+                        StorageKind.Int32 => AppendInt32((int[])result, at, value.AsInt64List()),
+                        StorageKind.Int64 => Append((long[])result, at, value.AsInt64List()),
+                        StorageKind.Float32 => AppendFloat32((float[])result, at, value.AsFloat64List()),
+                        StorageKind.Float64 => Append((double[])result, at, value.AsFloat64List()),
                         _ => Append((string[])result, at, value.AsStringList()),
                     };
+                    if (result is float[] floats && !ColumnValues.AllFinite(floats.AsSpan(at, list)))
+                    {
+                        MarkMissing(ref validity, count, i); // its elements are overwritten by the next row's
+                        break;
+                    }
+
                     at += list;
                     break;
             }
         }
 
-        if (offsets is not null)
+        if (offsets is null)
         {
-            offsets[count] = at;
+            return new LogColumn(name, type, count, result, null, validity);
         }
 
-        return new LogColumn(name, type, count, result, offsets, validity);
+        offsets[count] = at;
+        return new LogColumn(name, type, count, Trim(result, at), offsets, validity);
     }
 
     private static T[] Append<T>(T[] array, int at, ReadOnlySpan<T> values)
     {
-        if (array.Length < at + values.Length)
-        {
-            Array.Resize(ref array, Math.Max(at + values.Length, array.Length * 2));
-        }
-
+        array = Grow(array, at + values.Length);
         values.CopyTo(array.AsSpan(at));
         return array;
     }
 
+    private static int[] AppendInt32(int[] array, int at, ReadOnlySpan<long> values)
+    {
+        if (!Int32Range.AllFit(values))
+        {
+            throw new InvalidOperationException("A list<int32> value has an element outside the int32 range.");
+        }
+
+        array = Grow(array, at + values.Length);
+        Int32Range.Narrow(values, array.AsSpan(at));
+        return array;
+    }
+
+    private static float[] AppendFloat32(float[] array, int at, ReadOnlySpan<double> values)
+    {
+        array = Grow(array, at + values.Length);
+        ColumnValues.NarrowFloats(values, array.AsSpan(at));
+        return array;
+    }
+
+    private static T[] Grow<T>(T[] array, int length)
+    {
+        if (array.Length < length)
+        {
+            Array.Resize(ref array, Math.Max(length, array.Length * 2));
+        }
+
+        return array;
+    }
+
+    /// <summary>The first <paramref name="length"/> elements, so <see cref="Values"/> holds no spare capacity.</summary>
+    private static Array Trim(Array elements, int length) => elements.Length == length ? elements : elements switch
+    {
+        bool[] b => b[..length],
+        int[] i => i[..length],
+        long[] l => l[..length],
+        float[] f => f[..length],
+        double[] d => d[..length],
+        _ => ((string[])elements)[..length],
+    };
+
     private static Array ElementArray(StorageKind kind, int length) => kind switch
     {
         StorageKind.Bool => new bool[length],
-        StorageKind.Int32 or StorageKind.Int64 => new long[length],
-        StorageKind.Float32 or StorageKind.Float64 => new double[length],
+        StorageKind.Int32 => new int[length],
+        StorageKind.Int64 => new long[length],
+        StorageKind.Float32 => new float[length],
+        StorageKind.Float64 => new double[length],
         StorageKind.String => new string?[length],
         _ => throw new NotSupportedException($"Unsupported log column kind {kind}."),
     };
@@ -212,7 +295,9 @@ public sealed class LogColumn
             var row = rows[i];
             var value = column[row];
             // typeof(T) tests are constants once the method is compiled for T.
-            if (!column.IsValid(row) || (typeof(T) == typeof(double) && !double.IsFinite(Unsafe.As<T, double>(ref value))))
+            if (!column.IsValid(row)
+                || (typeof(T) == typeof(double) && !double.IsFinite(Unsafe.As<T, double>(ref value)))
+                || (typeof(T) == typeof(float) && !float.IsFinite(Unsafe.As<T, float>(ref value))))
             {
                 MarkMissing(ref validity, rows.Length, i);
                 continue;
@@ -252,13 +337,17 @@ public sealed class LogColumn
             total += list.IsValid(rows[i]) ? list.LengthOf(rows[i]) : 0;
         }
 
+        var doubles = list as ListColumn<double>;
+        var floats = list as ListColumn<float>;
         var elements = new T[total];
         var at = 0;
         for (var i = 0; i < rows.Length; i++)
         {
             offsets[i] = at;
             var row = rows[i];
-            if (!list.IsValid(row) || (list is ListColumn<double> doubles && !ColumnValues.AllFinite(doubles.Get(row))))
+            if (!list.IsValid(row)
+                || (doubles is not null && !ColumnValues.AllFinite(doubles.Get(row)))
+                || (floats is not null && !ColumnValues.AllFinite(floats.Get(row))))
             {
                 MarkMissing(ref validity, rows.Length, i);
                 continue;
@@ -305,4 +394,14 @@ public sealed record LogSchema(string Id, string TapId, ImmutableArray<LogField>
 }
 
 /// <summary>A logged column or context field: its name, type and the expression it is logged from.</summary>
+/// <param name="Type">
+/// The type a sink writes the field as. A field whose expression is a plain reference (<c>col.item.clicks</c>, a feature,
+/// <c>col.score.final@fusion</c>, <c>ctx.request.age</c>, <c>param.k</c>) has the type the name is declared with, nullability
+/// included: an <c>int32</c> feature logs as <c>int32</c>, a <c>list&lt;float32,64&gt;</c> embedding as itself. A computed
+/// expression declares nothing and has its promoted result type (<c>int64</c>, <c>float64</c>, lists of those); to log a
+/// computed value at a narrow type, declare a derived feature of that type and log the feature. A column's values are
+/// stored in this type (<see cref="LogColumn.Values"/>); a context field's value is a <see cref="ScalarValue"/>, held
+/// promoted like every value, which a sink narrows by this type (<see cref="ScalarValue.AsInt32"/>,
+/// <see cref="ScalarValue.AsFloat32"/>).
+/// </param>
 public sealed record LogField(string Name, ColumnType Type, string Expression);

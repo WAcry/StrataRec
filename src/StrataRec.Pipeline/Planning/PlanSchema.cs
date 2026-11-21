@@ -67,17 +67,19 @@ public sealed class ContextField
     public required ColumnType Type { get; init; }
 
     /// <summary>
-    /// For request inputs, the type as declared in <c>request_schema</c>. <see cref="Type"/> is its promoted form, which
-    /// expressions see; incoming values are validated against the declared type, so an <c>int32</c> or
-    /// <c>list&lt;int32&gt;</c> input outside the int32 range is rejected rather than passed through.
+    /// The type as declared: in <c>request_schema</c> for a request input, in the catalog for a context feature, the
+    /// built-in's own for a built-in. <see cref="Type"/> is its promoted form, which expressions see; incoming values are
+    /// validated against the declared type, so an <c>int32</c> or <c>list&lt;int32&gt;</c> input outside the int32 range
+    /// is rejected rather than passed through, and what leaves the engine (a log context field, a result column that
+    /// is nothing but this value) has this type.
     /// </summary>
-    public ColumnType InputType
+    public ColumnType DeclaredType
     {
-        get => _inputType ?? Type;
-        init => _inputType = value;
+        get => _declaredType ?? Type;
+        init => _declaredType = value;
     }
 
-    private readonly ColumnType? _inputType;
+    private readonly ColumnType? _declaredType;
 
     public required ContextFieldKind Kind { get; init; }
 
@@ -245,6 +247,27 @@ public sealed class PlanSchema
 
     public TableSchema CreateTableSchema() => new(KeyType, _slotTypes);
 
+    /// <summary>
+    /// The type an expression's values have where they leave the engine: log columns and context fields, result columns,
+    /// a replay bundle's output types. For an expression that is nothing but a reference
+    /// (<see cref="CompiledExpression.Reference"/>), the type the name is declared with: a column's or feature's
+    /// (<c>int32</c>, <c>float32?</c>, <c>list&lt;float32,64&gt;</c>), a context field's <see cref="ContextField.DeclaredType"/>,
+    /// a parameter's; a host or log sink whose own types are narrow reads it at that width. For a computed expression,
+    /// which declares nothing, its promoted <see cref="CompiledExpression.ResultType"/>: inside the engine every expression
+    /// computes on promoted types, and a user who wants a computed value at a narrow type declares a derived feature of
+    /// that type and reads it.
+    /// </summary>
+    public ColumnType DeclaredType(CompiledExpression expression)
+    {
+        ArgumentNullException.ThrowIfNull(expression);
+        return expression.Reference switch
+        {
+            { Kind: SymbolKind.Context } context => _contextList[context.Id].DeclaredType, // the symbol's type is promoted
+            { } symbol => symbol.Type, // a column's is its declared type; a parameter's is only ever promoted
+            null => expression.ResultType,
+        };
+    }
+
     /// <summary>The column named <paramref name="name"/> (without <c>col.</c>). While the plan compiles, looking up a
     /// catalog feature registers it.</summary>
     public bool TryGetColumn(string name, [NotNullWhen(true)] out LogicalColumn? column)
@@ -353,7 +376,7 @@ public sealed class PlanSchema
         {
             if (field.Kind == ContextFieldKind.RequestInput)
             {
-                copy.AddRequestInput(field.Name["request.".Length..], field.InputType);
+                copy.AddRequestInput(field.Name["request.".Length..], field.DeclaredType);
             }
         }
 
@@ -379,8 +402,8 @@ public sealed class PlanSchema
     internal ContextField AddRequestInput(string name, ColumnType declared) =>
         AddContext("request." + name, declared.Promoted(), ContextFieldKind.RequestInput, inputType: declared);
 
-    internal ContextField AddContextFeature(string featureName, ColumnType type, int featureIndex) =>
-        AddContext(featureName, type, ContextFieldKind.Feature, featureIndex);
+    internal ContextField AddContextFeature(string featureName, ColumnType type, int featureIndex, ColumnType? inputType = null) =>
+        AddContext(featureName, type, ContextFieldKind.Feature, featureIndex, inputType);
 
     internal LogicalColumn AddFeatureColumn(string featureName, ColumnType type, int featureIndex, string pointer)
     {
@@ -479,7 +502,7 @@ public sealed class PlanSchema
     {
         var field = new ContextField
         {
-            Id = _contextList.Count, Name = name, Type = type, InputType = inputType ?? type, Kind = kind, FeatureIndex = featureIndex,
+            Id = _contextList.Count, Name = name, Type = type, DeclaredType = inputType ?? type, Kind = kind, FeatureIndex = featureIndex,
         };
         _context.Add(name, field);
         _contextList.Add(field);

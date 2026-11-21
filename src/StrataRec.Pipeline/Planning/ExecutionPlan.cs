@@ -143,16 +143,11 @@ public sealed class OutputPlan
 {
     public required ParamRef Limit { get; init; }
 
+    /// <summary>The output columns in order. A column's type in results (<c>ResultColumns.Types</c>) and replay bundles is
+    /// its expression's <see cref="PlanSchema.DeclaredType"/>: an output that is nothing but a reference keeps the
+    /// declared type (an int32 column is int32, a float32 one prints as the floats it holds: <c>0.08</c>, not the double
+    /// <c>0.07999999821186066</c>); a computed one has its promoted result type.</summary>
     public required ImmutableArray<(string Name, CompiledExpression Expression)> Columns { get; init; }
-
-    /// <summary>
-    /// The type of an output column's values: its expression's result type, except that an output that is nothing but a
-    /// float32 or <c>list&lt;float32&gt;</c> column (<c>col.score.final</c>) stays float32, so its values print as the floats
-    /// they are (<c>0.08</c>, not the double <c>0.07999999821186066</c>) in results and replay bundles. The values
-    /// themselves are the same.
-    /// </summary>
-    public static ColumnType ValueType(CompiledExpression expression) =>
-        expression.ColumnReference is { Type.ValueKind: StorageKind.Float32 } column ? column.Type : expression.ResultType;
 
     /// <summary>The pinned versions the output's columns read (<c>col.x@node</c>), with the column that reads each.</summary>
     public ImmutableArray<(string Column, VersionRead Read)> VersionReads { get; init; } = [];

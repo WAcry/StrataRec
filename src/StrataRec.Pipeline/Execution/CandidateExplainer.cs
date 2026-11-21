@@ -369,9 +369,6 @@ internal sealed class CandidateExplainer
         return values.ToArray();
     }
 
-    private static ScalarValue ValueOf(RequestState state, LogicalColumn column, int row)
-    {
-        var slot = column.FixedSlot >= 0 ? column.FixedSlot : state.Bindings.Resolve(column.Id);
-        return slot >= 0 && state.Table.TryGetSlot(slot) is { } buffer && row < buffer.Capacity ? ColumnValues.Get(buffer, row) : ScalarValue.Missing;
-    }
+    private static ScalarValue ValueOf(RequestState state, LogicalColumn column, int row) =>
+        state.ReadColumn(column.FixedSlot, column.Id) is { } buffer && row < buffer.Capacity ? ColumnValues.Get(buffer, row) : ScalarValue.Missing;
 }

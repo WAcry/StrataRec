@@ -82,7 +82,9 @@ public sealed class CoordinatedSamplingTests
 
 public sealed class LogPipelineTests
 {
-    internal static readonly LogSchema TestSchema = new("sha256:schema", "test", [], []);
+    internal static readonly LogSchema TestSchema = new("sha256:schema", "test", [], [new LogField("user_id", ColumnType.Int64.AsNullable(), "ctx.request.user_id")]);
+
+    private static readonly LogSchema NoContext = new("sha256:schema", "test", [], []);
 
     internal static LogBatch Batch(string tap, LogDelivery delivery, int rows = 2) => new()
     {
@@ -306,7 +308,7 @@ public sealed class LogPipelineTests
 
     private static LogBatch Titled(int rows, Func<int, string> title) => new()
     {
-        TapId = "titles", RequestId = "req-1", PipelineId = "feed", ManifestId = "sha256:test", Schema = TestSchema,
+        TapId = "titles", RequestId = "req-1", PipelineId = "feed", ManifestId = "sha256:test", Schema = NoContext,
         TimeMs = 1_767_225_600_000, Delivery = LogDelivery.Durable, RequestProbability = 1.0,
         Int64EntityIds = Enumerable.Range(1, rows).Select(i => (long)i).ToArray(), Ranks = Enumerable.Range(1, rows).ToArray(),
         RowProbability = 1.0,
@@ -318,7 +320,7 @@ public sealed class LogPipelineTests
 
     private static LogBatch WideBatch(string[] strings, LogDelivery delivery) => new()
     {
-        TapId = "wide", RequestId = "req-1", PipelineId = "feed", ManifestId = "sha256:test", Schema = TestSchema,
+        TapId = "wide", RequestId = "req-1", PipelineId = "feed", ManifestId = "sha256:test", Schema = NoContext,
         TimeMs = 1_767_225_600_000, Delivery = delivery, RequestProbability = 1.0,
         Int64EntityIds = new long[] { 1 }, Ranks = new[] { 1 }, RowProbability = 1.0,
         Columns = new[] { LogColumn.FromValues("titles", ColumnType.List(StorageKind.String), new[] { ScalarValue.FromStringList(strings) }) },
@@ -376,10 +378,11 @@ public sealed class LogPipelineTests
             RowProbability = batch.RowProbability, Context = batch.Context,
             Columns = new[]
             {
-                // Values are held promoted (int64 lists), like any int32 value; the column keeps its storage type.
+                // Values are held promoted (int64 lists), like any int32 value; the column stores its declared type.
                 LogColumn.FromValues("tags", ColumnType.List(StorageKind.Int32).AsNullable(), new[] { ScalarValue.FromInt64List(new long[] { 1, int.MinValue, int.MaxValue }), ScalarValue.Missing }),
             },
         };
+        Assert.Equal([1, int.MinValue, int.MaxValue], Assert.IsType<int[]>(batch.Columns[0].Values));
 
         using var document = JsonDocument.Parse(LogBatchJson.Encode(batch));
         var root = document.RootElement;
@@ -400,7 +403,8 @@ public sealed class LogPipelineTests
         var batch = Batch("served", LogDelivery.Durable);
         batch = new LogBatch
         {
-            TapId = batch.TapId, RequestId = batch.RequestId, PipelineId = batch.PipelineId, ManifestId = batch.ManifestId, Schema = batch.Schema,
+            TapId = batch.TapId, RequestId = batch.RequestId, PipelineId = batch.PipelineId, ManifestId = batch.ManifestId,
+            Schema = new LogSchema("sha256:schema", "test", [], [new LogField("fresh", ColumnType.Bool, "ctx.request.fresh")]),
             TimeMs = batch.TimeMs, Delivery = batch.Delivery, RequestProbability = 1, Int64EntityIds = batch.Int64EntityIds, Ranks = batch.Ranks,
             RowProbability = batch.RowProbability, Context = [("fresh", ScalarValue.FromBool(true))],
             Columns =
@@ -461,7 +465,7 @@ public sealed class LogPipelineTests
         using var sink = new JsonLinesLogSink(writer);
         var schema = new LogSchema("sha256:served", "served",
             [new LogField("final", ColumnType.Float64.AsNullable(), "col.score.final"), new LogField("tags", ColumnType.List(StorageKind.Int64), "col.item.tags")],
-            [new LogField("surface", ColumnType.String, "ctx.request.surface")]);
+            [new LogField("user_id", ColumnType.Int64.AsNullable(), "ctx.request.user_id")]);
         LogBatch Of(LogBatch b) => new()
         {
             TapId = b.TapId, RequestId = b.RequestId, PipelineId = b.PipelineId, ManifestId = b.ManifestId, Schema = schema, TimeMs = b.TimeMs,
@@ -479,7 +483,7 @@ public sealed class LogPipelineTests
         Assert.Equal("sha256:served", body.GetProperty("id").GetString());
         Assert.Equal(["final:float64?:col.score.final", "tags:list<int64>:col.item.tags"],
             body.GetProperty("columns").EnumerateArray().Select(c => $"{c.GetProperty("name")}:{c.GetProperty("type")}:{c.GetProperty("expr")}"));
-        Assert.Equal("ctx.request.surface", body.GetProperty("context")[0].GetProperty("expr").GetString());
+        Assert.Equal("ctx.request.user_id", body.GetProperty("context")[0].GetProperty("expr").GetString());
         Assert.All(lines[1..], line => Assert.Contains("\"schema\":\"sha256:served\"", line, StringComparison.Ordinal));
     }
 

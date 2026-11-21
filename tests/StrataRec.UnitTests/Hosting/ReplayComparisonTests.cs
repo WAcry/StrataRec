@@ -90,7 +90,7 @@ public sealed class ReplayComparisonTests
             Succeeded = succeeded,
             ErrorKind = succeeded ? RecErrorKind.None : RecErrorKind.Failed,
             Error = succeeded ? null : "node failed",
-            Columns = ResultColumns.FromItems(items),
+            Columns = ResultColumns.FromItems([("score", StrataRec.Core.Types.ColumnType.Float64)], items),
             Experiments = new ExperimentRecord(Array.Empty<string>(), Array.Empty<string>(), Array.Empty<IgnoredArm>()),
             ManifestId = "m",
             ServedBy = "p",

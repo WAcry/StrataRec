@@ -114,6 +114,27 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
         _ => throw WrongKind(StorageKind.Float64),
     };
 
+    /// <summary>
+    /// The value of an <c>int32</c> field as the int32 it is, for a reader that knows the declared type (a result column, a
+    /// log context field): values are held promoted, and a value of an int32 type always fits.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The value is not an int64 in the int32 range: it is not a value of an
+    /// int32 type, and narrowing it would wrap.</exception>
+    public int AsInt32() => Kind == StorageKind.Int64 && Int32Range.Fits(_bits)
+        ? (int)_bits
+        : throw new InvalidOperationException(Kind == StorageKind.Int64
+            ? $"{_bits} is outside the int32 range: it is not a value of an int32 type."
+            : $"Value of kind {Describe()} cannot be read as Int32.");
+
+    /// <summary>
+    /// The value of a <c>float32</c> field as a float, for a reader that knows the declared type: the float nearest the
+    /// double (an int64 value is converted, as <see cref="AsFloat64"/> converts it). Exact for a value read from float32
+    /// storage (a float32 column, feature or list element), whose double is a widened float; a float32 request input or
+    /// parameter holds the double it was given (<see cref="TryConvert"/> checks the range, not the precision), which this
+    /// rounds as storing it in a float32 column would.
+    /// </summary>
+    public float AsFloat32() => (float)AsFloat64();
+
     public string AsString() => Kind == StorageKind.String ? (string)_ref! : throw WrongKind(StorageKind.String);
 
     /// <summary>The list's elements, read-only (see <see cref="FromBoolList"/>).</summary>
