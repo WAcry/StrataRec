@@ -28,6 +28,12 @@ public enum SupplyMode : byte
     /// misses are written back to, then optionally a distributed cache shared by the instances; I/O only on a miss.
     /// </summary>
     Cache,
+
+    /// <summary>
+    /// Asked of a service, once per request, for the features of an entity with args (IO step 5): the arguments are the
+    /// call's inputs, the fields its outputs, and the service's own timeout and cache apply.
+    /// </summary>
+    Service,
 }
 
 /// <summary>
@@ -38,10 +44,12 @@ public enum SupplyMode : byte
 /// </summary>
 public sealed class GroupSupply
 {
-    private GroupSupply(SupplyMode mode, IFeatureSourceConnector? connector, LocalGroupTable? table, CacheSupply? cache, int timeoutMs, int maxBatch)
+    private GroupSupply(
+        SupplyMode mode, IFeatureSourceConnector? connector, LocalGroupTable? table, CacheSupply? cache, int timeoutMs, int maxBatch, IServiceSupply? service = null)
     {
         Mode = mode;
         Connector = connector;
+        Service = service;
         Table = table;
         Cache = cache;
         TimeoutMs = timeoutMs;
@@ -59,6 +67,9 @@ public sealed class GroupSupply
 
     /// <summary>The rest of a <see cref="SupplyMode.Cache"/> group's supply; null for the other modes.</summary>
     public CacheSupply? Cache { get; }
+
+    /// <summary>The service a <see cref="SupplyMode.Service"/> group asks; null for the other modes.</summary>
+    internal IServiceSupply? Service { get; }
 
     /// <summary>
     /// Time limit of one call through the fetch path; for a cache group, of the whole read of its misses (the distributed
@@ -81,6 +92,9 @@ public sealed class GroupSupply
 
     internal static GroupSupply ForCache(IFeatureSourceConnector connector, int timeoutMs, LocalGroupTable table, CacheSupply cache) =>
         new(SupplyMode.Cache, connector, table, cache, timeoutMs, FeatureSourceResolver.LocalMaxBatch);
+
+    /// <summary>A service group: its fetch is bounded by the source's <c>timeout_ms</c>, as a connector's is; the service's own applies within it.</summary>
+    internal static GroupSupply ForService(IServiceSupply service, int timeoutMs) => new(SupplyMode.Service, null, null, null, timeoutMs, 1, service);
 }
 
 /// <summary>
@@ -158,11 +172,12 @@ internal sealed class FeatureSourceResolver
     internal static readonly (string Name, SupplyMode[] Modes, Func<FeatureSourceBinding, bool> IsSet)[] ModeSettings =
     {
         ("connector", [SupplyMode.Fetch, SupplyMode.Cache], static b => b.Connector is not null),
-        ("timeout_ms", [SupplyMode.Fetch, SupplyMode.Cache], static b => b.TimeoutMs is not null),
+        ("timeout_ms", [SupplyMode.Fetch, SupplyMode.Cache, SupplyMode.Service], static b => b.TimeoutMs is not null),
         ("max_batch", [SupplyMode.Fetch, SupplyMode.Cache], static b => b.MaxBatch is not null),
         ("max_bytes", [SupplyMode.Local, SupplyMode.Cache], static b => b.MaxBytes is not null),
         ("bootstrap", [SupplyMode.Local], static b => b.Bootstrap is not null),
         ("cache", [SupplyMode.Cache], static b => b.Cache is not null),
+        ("service", [SupplyMode.Service], static b => b.Service is not null),
     };
 
     internal const int DefaultTimeoutMs = 50;
@@ -181,19 +196,23 @@ internal sealed class FeatureSourceResolver
     private readonly string _catalogArtifact;
     private readonly FeatureCatalog? _catalog;
     private readonly Dictionary<string, SourceSupply?> _resolved = new(StringComparer.Ordinal);
+    private readonly ServiceSupplyResolver? _services;
 
     /// <param name="resolver">Creates connectors, update sources and distributed cache stores, and reports their bindings' errors.</param>
     /// <param name="clock">The clock of the cache tables the plan creates (write times and expiry).</param>
     /// <param name="catalog">The catalog a local table's layout comes from (<see cref="TableFeatures"/>); null lays it
     /// out from the group's members.</param>
+    /// <param name="services">The plan's services, for a source in mode <c>service</c>; null leaves the mode unavailable.</param>
     public FeatureSourceResolver(
         SourceBindingArtifact bindings,
         BindingResolver resolver,
         ILocalTableProvider localTables,
         TimeProvider clock,
         string catalogArtifact = "catalog",
-        FeatureCatalog? catalog = null)
+        FeatureCatalog? catalog = null,
+        ServiceSupplyResolver? services = null)
     {
+        _services = services;
         _bindings = bindings;
         _catalogArtifact = catalogArtifact;
         _catalog = catalog;
@@ -223,12 +242,36 @@ internal sealed class FeatureSourceResolver
     /// cannot be supplied that way: a connector that does not support the entity's key layout, fields a table cannot hold.
     /// A table holds any key layout (design 6.6): <c>max_bytes</c> bounds its memory, and a cache's TTL and eviction its churn.
     /// </summary>
-    public GroupSupply? Group(SourceSupply supply, EntityDefinition entity, FeatureRuntimeInfo[] members) => supply.Mode switch
+    public GroupSupply? Group(SourceSupply supply, EntityDefinition entity, FeatureRuntimeInfo[] members) => !Pairs(supply, entity) ? null : supply.Mode switch
     {
         SupplyMode.Fetch => SupportsKey(supply, entity) ? GroupSupply.Fetch(supply.Connector!, supply.TimeoutMs, supply.MaxBatch) : null,
         SupplyMode.Local => LocalTable(supply, entity, members) is { } table ? GroupSupply.Local(table) : null,
         SupplyMode.Cache => CacheGroup(supply, entity, members),
+        SupplyMode.Service => GroupSupply.ForService(supply.Service!, supply.TimeoutMs),
     };
+
+    /// <summary>
+    /// A service computes the features of an entity with args, and only those: a stored entity's are looked up by its key
+    /// (a connector, a table), and an entity with args has no key to look up (IO step 5). A pair that does not match is a
+    /// <c>SOURCE_SERVICE_ENTITY</c> at the binding.
+    /// </summary>
+    private bool Pairs(SourceSupply supply, EntityDefinition entity)
+    {
+        var service = supply.Mode == SupplyMode.Service;
+        if (service == entity.HasArgs)
+        {
+            return true;
+        }
+
+        _diagnostics.Error("SOURCE_SERVICE_ENTITY", _artifact, supply.Pointer + (service ? "/service" : string.Empty),
+            service
+                ? $"Source '{supply.Name}' is bound to service '{supply.Binding.Service}', which computes the features of an entity with args; entity '{entity.Name}' has a key."
+                : $"Entity '{entity.Name}' has args: a service computes its features, but source '{supply.Name}' is bound with mode '{ModeName(supply.Mode)}'.",
+            service
+                ? $"bind the source to a connector or a local table, or give '{entity.Name}' args instead of a key"
+                : "bind the source with \"mode\": \"service\" and the \"service\" that computes them");
+        return false;
+    }
 
     /// <summary>
     /// Whether the connector supports the entity's key layout (asked once, here): a connector that does not is a
@@ -280,7 +323,7 @@ internal sealed class FeatureSourceResolver
         {
             SupplyMode.Local => LocalTableMode.Local,
             SupplyMode.Cache => LocalTableMode.Cache,
-            SupplyMode.Fetch => throw new InvalidOperationException("A fetched source has no table."),
+            SupplyMode.Fetch or SupplyMode.Service => throw new InvalidOperationException("A fetched or served source has no table."),
         };
         var definitions = TableFeatures(supply, entity, members);
         if (!LocalTableSchema.TryFromFeatures(supply.Name, entity, tableMode, definitions, out var schema, out var conflict))
@@ -351,6 +394,7 @@ internal sealed class FeatureSourceResolver
             SupplyMode.Fetch => ResolveFetch(sourceName, binding, pointer),
             SupplyMode.Local => ResolveLocal(sourceName, binding, pointer),
             SupplyMode.Cache => ResolveCache(sourceName, binding, pointer),
+            SupplyMode.Service => ResolveService(sourceName, binding, pointer),
         };
         return settingsOk ? supply : null;
     }
@@ -391,7 +435,7 @@ internal sealed class FeatureSourceResolver
     private static bool TakesConnectorSettings(SupplyMode mode) => mode switch
     {
         SupplyMode.Fetch or SupplyMode.Cache => true,
-        SupplyMode.Local => false,
+        SupplyMode.Local or SupplyMode.Service => false,
     };
 
     /// <summary>Reports every setting of a mode the binding is not in; true when there is none.</summary>
@@ -424,11 +468,34 @@ internal sealed class FeatureSourceResolver
                 ok = false;
                 _diagnostics.Error("SOURCE_SETTING_WRONG_MODE", _artifact, pointer + "/" + JsonPointer.Escape(name),
                     $"'{name}' is not a setting of mode '{ModeName(mode)}' (connector settings belong to modes 'fetch' and 'cache'); source '{sourceName}' is bound with mode '{ModeName(mode)}'.",
-                    $"a {ModeName(mode)} binding takes {SettingsOf(mode)}; settings of the update source go inside 'bootstrap'");
+                    $"a {ModeName(mode)} binding takes {SettingsOf(mode)}; "
+                    + (mode == SupplyMode.Local ? "settings of the update source go inside 'bootstrap'" : "the service's settings go under 'services'"));
             }
         }
 
         return ok;
+    }
+
+    /// <summary>A service binding (IO step 5): the service it names, as the plan resolves it; null (diagnosed) without one.</summary>
+    private SourceSupply? ResolveService(string sourceName, FeatureSourceBinding binding, string pointer)
+    {
+        if (binding.Service is not { } service)
+        {
+            _diagnostics.Error("SOURCE_SERVICE_MISSING", _artifact, pointer, $"Source '{sourceName}' is bound with mode 'service' but names no 'service'.",
+                "name the service that computes its features, e.g. \"service\": \"intent_model\"");
+            return null;
+        }
+
+        if (_services is null)
+        {
+            _diagnostics.Error("SOURCE_MODE_UNSUPPORTED", _artifact, pointer + "/mode", $"Supply mode 'service' of source '{sourceName}' needs the plan's services.",
+                "compile the plan with its services");
+            return null;
+        }
+
+        return _services(sourceName, service, pointer + "/service") is { } supply
+            ? new SourceSupply(sourceName, pointer, binding, SupplyMode.Service) { Service = supply, TimeoutMs = binding.TimeoutMs ?? DefaultTimeoutMs }
+            : null;
     }
 
     private SourceSupply? ResolveFetch(string sourceName, FeatureSourceBinding binding, string pointer) =>
@@ -557,7 +624,7 @@ internal sealed class FeatureSourceResolver
         {
             SupplyMode.Local => true,
             SupplyMode.Cache => false,
-            SupplyMode.Fetch => throw new InvalidOperationException("A fetched source has no table."),
+            SupplyMode.Fetch or SupplyMode.Service => throw new InvalidOperationException("A fetched or served source has no table."),
         };
         if (fromCatalog)
         {
@@ -611,6 +678,7 @@ internal sealed class FeatureSourceResolver
         SupplyMode.Fetch => "fetch",
         SupplyMode.Local => "local",
         SupplyMode.Cache => "cache",
+        SupplyMode.Service => "service",
     };
 
     /// <summary>The declared settings of <paramref name="mode"/>, quoted, from <see cref="ModeSettings"/>.</summary>
@@ -659,4 +727,7 @@ internal sealed class SourceSupply(string name, string pointer, FeatureSourceBin
 
     /// <summary>Mode cache: <c>cache.distributed.timeout_ms</c>.</summary>
     public int? DistributedTimeoutMs { get; init; }
+
+    /// <summary>Mode service: the service.</summary>
+    public IServiceSupply? Service { get; init; }
 }

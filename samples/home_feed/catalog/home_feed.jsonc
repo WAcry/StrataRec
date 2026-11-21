@@ -13,7 +13,10 @@
     // weights are kept per region. The region is fetched once the country's record is stored, concurrently with recall;
     // without a country, or for a country without a region, there is no region key and the weight is the default.
     "country": { "key": "ctx.request.country" },
-    "region":  { "key": "ctx.country.region" }
+    "region":  { "key": "ctx.country.region" },
+    // Computed, not looked up: a service answers its features from these arguments, once per request (users with the
+    // same values share its cached answer). The user's features are fetched first.
+    "engagement": { "args": { "ctr": "ctx.user.ctr_30d" } }
   },
   "features": {
     "user.ctr_30d":        { "type": "float32", "source": "user_store", "field": "u_ctr_30d", "default": 0.02 },
@@ -32,7 +35,8 @@
     "author.followers":    { "type": "float32", "source": "author_store", "field": "a_followers", "default": 0.0 },
     "item_country.boost":  { "type": "float32", "source": "item_country_store", "field": "boost", "default": 1.0 },
     "country.region":      { "type": "string",  "source": "geo_store",    "field": "region" },
-    "region.boost":        { "type": "float32", "source": "region_store", "field": "boost", "default": 1.0 }
+    "region.boost":        { "type": "float32", "source": "region_store", "field": "boost", "default": 1.0 },
+    "engagement.propensity": { "type": "float32", "source": "engagement_model", "field": "propensity", "default": 0.5 }
   },
   "derived_features": {
     "item.smoothed_ctr":    { "type": "float32", "expr": "(col.item.clicks_7d + 10.0) / (col.item.impressions_7d + 100.0)" },

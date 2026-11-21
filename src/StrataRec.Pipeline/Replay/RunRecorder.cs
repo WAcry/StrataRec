@@ -118,7 +118,7 @@ internal sealed class RunRecorder : IFeatureCallHook
     /// Registers a service call about to be sent, with its input digests (taken now, before the client sees the inputs):
     /// one per item for a call about items, one of the whole call otherwise. Returns its sequence for <see cref="EndCall"/>.
     /// </summary>
-    public int BeginCall(string node, IoTarget target, ServiceCall call)
+    public int BeginCall(in ServiceCaller caller, IoTarget target, ServiceCall call)
     {
         var sequence = NextSequence();
         var order = ServiceInputDigest.NameOrder(call);
@@ -139,7 +139,8 @@ internal sealed class RunRecorder : IFeatureCallHook
         var begun = new ReplayServiceCall
         {
             Seq = sequence,
-            Node = node,
+            Node = caller.Node,
+            Source = caller.Source,
             Service = target.Name,
             Role = target.Role,
             Version = call.Version,
@@ -218,6 +219,7 @@ internal sealed class RunRecorder : IFeatureCallHook
         {
             Seq = begun.Seq,
             Node = begun.Node,
+            Source = begun.Source,
             Service = begun.Service,
             Role = begun.Role,
             Version = begun.Version,

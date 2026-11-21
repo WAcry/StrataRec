@@ -305,7 +305,7 @@ public sealed class BoundedWaitTests
         }
     }
 
-    /// <summary>linear@1 models that answer only once the gate opens, writing their outputs then.</summary>
+    /// <summary>The CTR model (linear@1) answering only once the gate opens, writing its outputs then.</summary>
     private sealed class GatedModels : Gated, IBindingFactory<IServiceClient>
     {
         private readonly LinearModelClientFactory _inner = new();
@@ -314,7 +314,7 @@ public sealed class BoundedWaitTests
 
         public Type SettingsType => _inner.SettingsType;
 
-        public IServiceClient Create(BindingContext context) => new Client(_inner.Create(context), this);
+        public IServiceClient Create(BindingContext context) => context.Name == "ctr_model" ? new Client(_inner.Create(context), this) : _inner.Create(context);
 
         private sealed class Client(IServiceClient inner, GatedModels owner) : IServiceClient
         {
@@ -354,7 +354,7 @@ public sealed class BoundedWaitTests
         }
     }
 
-    /// <summary>linear@1 models that answer synchronously, but only once their token has been cancelled.</summary>
+    /// <summary>The CTR model (linear@1) answering synchronously, but only once its token has been cancelled.</summary>
     private sealed class LateModels : IBindingFactory<IServiceClient>
     {
         private readonly LinearModelClientFactory _inner = new();
@@ -363,7 +363,7 @@ public sealed class BoundedWaitTests
 
         public Type SettingsType => _inner.SettingsType;
 
-        public IServiceClient Create(BindingContext context) => new Client(_inner.Create(context));
+        public IServiceClient Create(BindingContext context) => context.Name == "ctr_model" ? new Client(_inner.Create(context)) : _inner.Create(context);
 
         private sealed class Client(IServiceClient inner) : IServiceClient
         {

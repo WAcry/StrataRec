@@ -16,9 +16,9 @@ public sealed class PlanFeatureClosureTests
 {
     private static readonly string[] SampleFeatures =
     [
-        "author.followers", "author.log_followers", "country.region", "item.age_hours", "item.author_id", "item.category", "item.clicks_7d",
-        "item.embedding", "item.impressions_7d", "item.is_policy_safe", "item.report_rate", "item.smoothed_ctr", "item_country.boost", "region.boost",
-        "user.embedding",
+        "author.followers", "author.log_followers", "country.region", "engagement.propensity", "item.age_hours", "item.author_id", "item.category",
+        "item.clicks_7d", "item.embedding", "item.impressions_7d", "item.is_policy_safe", "item.report_rate", "item.smoothed_ctr", "item_country.boost",
+        "region.boost", "user.ctr_30d", "user.embedding",
     ];
 
     [Fact]
@@ -28,12 +28,13 @@ public sealed class PlanFeatureClosureTests
 
         Assert.Equal(SampleFeatures, Names(plan));
         Assert.Equal(
-            ["author_store", "geo_store", "item_country_store", "item_store", "region_store", "user_store"],
+            ["author_store", "engagement_model", "geo_store", "item_country_store", "item_store", "region_store", "user_store"],
             plan.Features.Groups.Select(g => g.SourceName).Order(StringComparer.Ordinal));
-        // The context features are the fusion's regional weight, the region it is keyed by and the embedding the two-tower
-        // recall's query reads; none of the user's other features.
+        // The context features are the fusion's regional weight, the region it is keyed by, the embedding the two-tower
+        // recall's query reads, and the engagement boost with the user's CTR it is computed from; none of the user's other
+        // features.
         Assert.Equal(
-            ["country.region", "region.boost", "user.embedding"],
+            ["country.region", "engagement.propensity", "region.boost", "user.ctr_30d", "user.embedding"],
             plan.Schema.ContextFields.Where(f => f.Kind == ContextFieldKind.Feature).Select(f => f.Name).Order(StringComparer.Ordinal));
 
         // Features are registered in the order the compile first reads them: the same for the same configuration.
@@ -50,7 +51,7 @@ public sealed class PlanFeatureClosureTests
 
         Assert.Equal([.. SampleFeatures, "user.tenure_days"], Names(plan));
         // Prefetched with the request, beside the sample's region chain.
-        Assert.Equal(["country.region", "region.boost", "user.embedding", "user.tenure_days"], plan.ContextFeatures.Select(f => plan.Features.Features[f].Definition.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(["country.region", "engagement.propensity", "region.boost", "user.ctr_30d", "user.embedding", "user.tenure_days"], plan.ContextFeatures.Select(f => plan.Features.Features[f].Definition.Name).Order(StringComparer.Ordinal));
 
         // users.json: 1001 has 420 days, 1002 has 12.
         var veteran = await Run(plan, HomeFeedTestHost.NewRequest(userId: 1001));

@@ -14,8 +14,10 @@ namespace StrataRec.Models;
 /// <para>Intended for local development, tests, replay fixtures and as a cheap fallback model. Its signature declares every
 /// input and output float32 <c>[-1]</c>, one value per row: <c>ModelScorer@1</c> sends every column as its declared type,
 /// so it feeds float32 columns and writes float32 ones, and reports a column of another type mapped to it at load time
-/// (a float64, bool or int one weighs in through a float32 derived feature, e.g. <c>is_new ? 1.0 : 0.0</c>). A call with
-/// another tensor fails. Settings:</para>
+/// (a float64, bool or int one weighs in through a float32 derived feature, e.g. <c>is_new ? 1.0 : 0.0</c>). A call of no
+/// batch (<see cref="ServiceCall.BatchSize"/> 0) whose inputs are float32 scalars (shape <c>[]</c>) is computed once, one
+/// value per output: what a feature source in mode <c>service</c> sends for the features of an entity with args (IO step
+/// 5). A call with another tensor fails. Settings:</para>
 /// <code>
 /// { "client": "linear@1",
 ///   "outputs": { "p_click": { "bias": -2.0, "weights": { "smoothed_ctr": 8.0 }, "activation": "sigmoid" } },
@@ -110,6 +112,13 @@ public sealed class LinearModelClient : IServiceClient
             return ServiceStatus.Failed($"The call's batch size is {batch}; it must not be negative.");
         }
 
+        // A call of no batch is one row of scalars: one value per output.
+        var scalars = batch == 0;
+        if (scalars)
+        {
+            batch = 1;
+        }
+
         var inputs = call.Inputs.Span;
         foreach (var output in _outputs)
         {
@@ -128,10 +137,14 @@ public sealed class LinearModelClient : IServiceClient
                     return ServiceStatus.Failed($"Input '{name}' is missing; linear@1 needs a value per row.");
                 }
 
-                // [batch] exactly: its data may be a longer buffer, but its shape says how many rows it holds.
-                if (input.Value.ElementType != TensorElementType.Float32 || input.Value.Shape is not [var rows] || rows != batch || input.Value.Float32.Length < batch)
+                // [batch] exactly (or [] for a call of no batch): its data may be a longer buffer, but its shape says how
+                // many rows it holds.
+                var shaped = scalars ? input.Value.Shape.IsEmpty : input.Value.Shape is [var rows] && rows == batch;
+                if (input.Value.ElementType != TensorElementType.Float32 || !shaped || input.Value.Float32.Length < batch)
                 {
-                    return ServiceStatus.Failed($"Input '{name}' must be float32 with one value per row ({batch}).");
+                    return ServiceStatus.Failed(scalars
+                        ? $"Input '{name}' must be a float32 scalar in a call of no batch."
+                        : $"Input '{name}' must be float32 with one value per row ({batch}).");
                 }
 
                 var data = input.Value.Float32.Span;

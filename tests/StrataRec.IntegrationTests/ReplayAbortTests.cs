@@ -354,7 +354,7 @@ public sealed class ReplayAbortTests
 
         public Type SettingsType => _inner.SettingsType;
 
-        public IServiceClient Create(BindingContext context) => new Client(_inner.Create(context), this);
+        public IServiceClient Create(BindingContext context) => context.Name == "ctr_model" ? new Client(_inner.Create(context), this) : _inner.Create(context);
 
         private sealed class Client(IServiceClient inner, BlockingModels owner) : IServiceClient
         {

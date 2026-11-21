@@ -85,9 +85,10 @@ public sealed class LocalBindingCliTests
         var schema = JsonNode.Parse(output.ToString())!;
         var binding = FindObjectWithProperty(schema, "max_bytes")!;
         var properties = binding["properties"]!;
-        Assert.Equal("""["fetch","local","cache",null]""", properties["mode"]!["enum"]!.ToJsonString());
+        Assert.Equal("""["fetch","local","cache","service",null]""", properties["mode"]!["enum"]!.ToJsonString());
         Assert.Equal("^[0-9]+(B|KiB|MiB|GiB|TiB)$", properties["max_bytes"]!["pattern"]!.GetValue<string>());
         Assert.Contains("Mode local", properties["bootstrap"]!["description"]!.GetValue<string>());
+        Assert.Contains("Mode service", properties["service"]!["description"]!.GetValue<string>());
         Assert.Null(binding["additionalProperties"]); // connector settings
         Assert.Null(properties["bootstrap"]!["additionalProperties"]); // the update source's own settings
         var cache = FindObjectWithProperty(properties["cache"], "ttl_ms")!;

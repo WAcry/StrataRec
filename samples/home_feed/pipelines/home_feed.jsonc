@@ -72,6 +72,12 @@
         }
       }
     },
+    // A boost from an entity computed per request: the engagement service answers from the user's features. A request
+    // whose engagement cannot be computed is ranked without it.
+    "engagement_boost": {
+      "order": 460, "op": "ExpressionScorer@1", "on_failure": "skip",
+      "config": { "output_col": "score.final", "expr": "col.score.final * (0.8 + 0.4 * ctx.engagement.propensity)" }
+    },
     "rank_sort": {
       "order": 500, "op": "TopK@1",
       "config": { "score_col": "score.final", "k": 1000 }

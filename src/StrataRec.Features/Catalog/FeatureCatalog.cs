@@ -79,7 +79,55 @@ public sealed class EntityKeyPartDefinition
     public override string ToString() => Reference;
 }
 
-/// <summary>A compiled entity declaration: its name and its key, an ordered tuple of 1 to 8 parts (design 6.2).</summary>
+/// <summary>
+/// One argument of an entity a service computes (IO step 5): the name the service gets it under, the request input or
+/// context feature it takes, and that value's type.
+/// </summary>
+public sealed class EntityArgDefinition
+{
+    internal EntityArgDefinition(string name, EntityKeyPartKind kind, string target, ColumnType? type, string pointer)
+    {
+        Name = name;
+        Kind = kind;
+        Target = target;
+        Type = type;
+        Pointer = pointer;
+    }
+
+    /// <summary>The service's input.</summary>
+    public string Name { get; }
+
+    /// <summary><see cref="EntityKeyPartKind.RequestInput"/> or <see cref="EntityKeyPartKind.ContextFeature"/>.</summary>
+    public EntityKeyPartKind Kind { get; }
+
+    /// <summary>The request input's name, or the context feature's catalog name (<c>user.embedding</c>).</summary>
+    public string Target { get; }
+
+    /// <summary>The argument as the catalog writes it: <c>ctx.request.&lt;input&gt;</c> or <c>ctx.&lt;entity&gt;.&lt;feature&gt;</c>.</summary>
+    public string Reference => Kind == EntityKeyPartKind.RequestInput ? "ctx.request." + Target : "ctx." + Target;
+
+    public bool IsFeature => Kind == EntityKeyPartKind.ContextFeature;
+
+    /// <summary>The value's declared type: the request input's, or the context feature's (set when the catalog builds the features).</summary>
+    public ColumnType? Type { get; internal set; }
+
+    /// <summary>Where the catalog declares it: <c>/entities/&lt;entity&gt;/args/&lt;name&gt;</c>.</summary>
+    public string Pointer { get; }
+
+    public override string ToString() => Name + " = " + Reference;
+}
+
+/// <summary>A feature an entity's key or arguments read: fetched (or computed) before the entity's features.</summary>
+/// <param name="Feature">The feature's catalog name.</param>
+/// <param name="Context">Whether it is a context feature (<c>ctx.</c>), as the reference says.</param>
+/// <param name="Reference">The key part or argument as the catalog writes it.</param>
+/// <param name="Pointer">Where the catalog declares the part or argument.</param>
+public readonly record struct EntityFeatureRead(string Feature, bool Context, string Reference, string Pointer);
+
+/// <summary>
+/// A compiled entity declaration: its name and its key, an ordered tuple of 1 to 8 parts (design 6.2); or, for an entity
+/// a service computes, its arguments and no key (IO step 5).
+/// </summary>
 /// <remarks>
 /// The key decides the rest. The entity is context-scoped (one key per request, <c>ctx.&lt;entity&gt;.*</c>) when every part
 /// is a context part (a request input or a context feature), candidate-scoped (one key per row, <c>col.&lt;entity&gt;.*</c>)
@@ -92,31 +140,33 @@ public sealed class EntityDefinition
 
     public required string Name { get; init; }
 
-    /// <summary>The key's parts, in declared order: the order of the tuple.</summary>
+    /// <summary>The key's parts, in declared order: the order of the tuple. Empty for an entity with <see cref="Args"/>.</summary>
     public required IReadOnlyList<EntityKeyPartDefinition> Key { get; init; }
+
+    /// <summary>
+    /// What a service computes the entity's features from, in declared order (IO step 5); empty for a keyed entity. An
+    /// entity with arguments is per request, and its features come from a source bound to a service.
+    /// </summary>
+    public IReadOnlyList<EntityArgDefinition> Args { get; init; } = [];
+
+    public bool HasArgs => Args.Count > 0;
+
+    /// <summary>
+    /// The features the key's parts and the arguments read, in declared order: they are fetched before the entity's
+    /// features, whose state they decide (design 6.7), and an entity reached again through them is a cycle.
+    /// </summary>
+    public IReadOnlyList<EntityFeatureRead> FeatureReads => _reads ??= BuildReads();
+
+    private EntityFeatureRead[]? _reads;
 
     /// <summary>Whether the catalog wrote the key as a list (a part's pointer is then <c>/key/&lt;i&gt;</c>, even for one part).</summary>
     internal bool KeyIsList { get; init; }
 
-    /// <summary>Whether a part reads a feature: the entity's features are then fetched after it, as a foreign key's are.</summary>
-    public bool HasFeatureParts
-    {
-        get
-        {
-            foreach (var part in Key)
-            {
-                if (part.IsFeature)
-                {
-                    return true;
-                }
-            }
+    /// <summary>Whether a part or an argument reads a feature: the entity's features are then fetched after it, as a foreign key's are.</summary>
+    public bool HasFeatureParts => FeatureReads.Count > 0;
 
-            return false;
-        }
-    }
-
-    /// <summary>Every part is a context part (a request input or a context feature): one key per request (asked per feature
-    /// by every read, so worked out once).</summary>
+    /// <summary>Every part is a context part (a request input or a context feature), or the entity has arguments: one key
+    /// (or call) per request (asked per feature by every read, so worked out once).</summary>
     public bool IsContextScoped
     {
         get
@@ -154,24 +204,50 @@ public sealed class EntityDefinition
         "/entities/" + FeatureCatalog.EscapePointer(Name) + "/key"
         + (Key.Count == 1 && !KeyIsList ? string.Empty : "/" + part.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
-    /// <summary>The position of the key part that reads feature <paramref name="feature"/>, or -1.</summary>
-    public int KeyPartReading(FeatureDefinition feature)
+    /// <summary>The key part or argument that reads feature <paramref name="feature"/>; null when none does.</summary>
+    public EntityFeatureRead? ReadOf(FeatureDefinition feature)
     {
-        for (var p = 0; p < Key.Count; p++)
+        foreach (var read in FeatureReads)
         {
-            var part = Key[p];
-            if (part.IsFeature && (part.Kind == EntityKeyPartKind.ContextFeature) == feature.IsContext
-                && string.Equals(part.Name, feature.Name, StringComparison.Ordinal))
+            if (read.Context == feature.IsContext && string.Equals(read.Feature, feature.Name, StringComparison.Ordinal))
             {
-                return p;
+                return read;
             }
         }
 
-        return -1;
+        return null;
+    }
+
+    private EntityFeatureRead[] BuildReads()
+    {
+        var reads = new List<EntityFeatureRead>();
+        for (var p = 0; p < Key.Count; p++)
+        {
+            var part = Key[p];
+            if (part.IsFeature)
+            {
+                reads.Add(new EntityFeatureRead(part.Name, part.Kind == EntityKeyPartKind.ContextFeature, part.Reference, KeyPointer(p)));
+            }
+        }
+
+        foreach (var arg in Args)
+        {
+            if (arg.IsFeature)
+            {
+                reads.Add(new EntityFeatureRead(arg.Target, true, arg.Reference, arg.Pointer));
+            }
+        }
+
+        return reads.ToArray();
     }
 
     private EntityKeyLayout BuildLayout()
     {
+        if (HasArgs)
+        {
+            throw new InvalidOperationException($"Entity '{Name}' is computed from its arguments: it has no key.");
+        }
+
         var parts = new EntityKeyPart[Key.Count];
         for (var p = 0; p < parts.Length; p++)
         {
@@ -409,7 +485,21 @@ public sealed class FeatureCatalog
         string name, EntitySpec spec, IReadOnlyDictionary<string, ColumnType> requestSchema, EntityKeyType entityKeyType,
         IReadOnlySet<string>? unusableInputs, DiagnosticBag diagnostics, string artifactName)
     {
-        var pointer = "/entities/" + EscapePointer(name) + "/key";
+        var entityPointer = "/entities/" + EscapePointer(name);
+        if ((spec.Key is null) == (spec.Args is null))
+        {
+            diagnostics.Error(spec.Key is null ? "ENTITY_BAD_KEY" : "ENTITY_BAD_ARGS", artifactName, entityPointer,
+                spec.Key is null ? $"Entity '{name}' declares neither a key nor args." : $"Entity '{name}' declares both a key and args.",
+                "a stored entity has a \"key\" (looked up by a source); one a service computes has \"args\" (the service's inputs)");
+            return null;
+        }
+
+        if (spec.Args is { } args)
+        {
+            return BuildComputedEntity(name, args, entityPointer + "/args", requestSchema, unusableInputs, diagnostics, artifactName);
+        }
+
+        var pointer = entityPointer + "/key";
         var list = spec.Key as System.Text.Json.Nodes.JsonArray;
         var count = list?.Count ?? 1;
         if (count is < 1 or > EntityKeyLayout.MaxParts)
@@ -450,6 +540,68 @@ public sealed class FeatureCatalog
         }
 
         return new EntityDefinition { Name = name, Key = parts, KeyIsList = list is not null };
+    }
+
+    /// <summary>
+    /// An entity a service computes (IO step 5): its arguments, each a request input or a context feature of any type, in
+    /// declared order. Every problem is an <c>ENTITY_BAD_ARGS</c> at the argument with a hint; a context feature is typed
+    /// (and checked) when the features are built.
+    /// </summary>
+    private static EntityDefinition? BuildComputedEntity(
+        string name, Dictionary<string, string> args, string pointer, IReadOnlyDictionary<string, ColumnType> requestSchema,
+        IReadOnlySet<string>? unusableInputs, DiagnosticBag diagnostics, string artifactName)
+    {
+        const string Hint = "an argument is a request input (\"ctx.request.query\") or a context feature (\"ctx.user.embedding\")";
+        if (args.Count == 0)
+        {
+            diagnostics.Error("ENTITY_BAD_ARGS", artifactName, pointer, $"Entity '{name}' has no args.",
+                "list what its service computes its features from, e.g. { \"query\": \"ctx.request.query\" }, or key the entity");
+            return null;
+        }
+
+        var parsed = new List<EntityArgDefinition>(args.Count);
+        foreach (var (arg, reference) in args)
+        {
+            var at = pointer + "/" + EscapePointer(arg);
+            if (arg.Length == 0)
+            {
+                diagnostics.Error("ENTITY_BAD_ARGS", artifactName, at, $"An argument of '{name}' has no name.", "name each argument as the service's input");
+                return null;
+            }
+
+            if (reference.StartsWith("ctx.request.", StringComparison.Ordinal))
+            {
+                var input = reference["ctx.request.".Length..];
+                if (!requestSchema.TryGetValue(input, out var inputType))
+                {
+                    if (unusableInputs is null || !unusableInputs.Contains(input))
+                    {
+                        diagnostics.Error("ENTITY_BAD_ARGS", artifactName, at, $"Request input '{input}' is not declared in the pipeline's request_schema.",
+                            NameSuggestions.DidYouMean(input, requestSchema.Keys) ?? "declare the input in the pipeline's request_schema");
+                    }
+
+                    return null; // an input declared with an error is reported there; the entity fails with it
+                }
+
+                parsed.Add(new EntityArgDefinition(arg, EntityKeyPartKind.RequestInput, input, inputType, at));
+                continue;
+            }
+
+            if (reference.StartsWith("ctx.", StringComparison.Ordinal) && reference.Length > "ctx.".Length)
+            {
+                parsed.Add(new EntityArgDefinition(arg, EntityKeyPartKind.ContextFeature, reference["ctx.".Length..], null, at)); // typed with the features
+                continue;
+            }
+
+            diagnostics.Error("ENTITY_BAD_ARGS", artifactName, at,
+                reference.StartsWith("col.", StringComparison.Ordinal)
+                    ? $"Argument '{arg}' of '{name}' reads '{reference}', a candidate value; an entity with args is computed once per request."
+                    : $"Argument '{arg}' of '{name}' is '{reference}', not a value it can take.",
+                Hint);
+            return null;
+        }
+
+        return new EntityDefinition { Name = name, Key = [], Args = parsed };
     }
 
     /// <summary>
@@ -555,10 +707,39 @@ public sealed class FeatureCatalog
         }
     }
 
-    /// <summary>Types the entity's feature parts; false (reported, or silent for a feature declared with an error) when one cannot key it.</summary>
+    /// <summary>Types the entity's feature parts and arguments; false (reported, or silent for a feature declared with an error) when one cannot key it.</summary>
     private static bool ResolveParts(
         EntityDefinition entity, Dictionary<string, FeatureDefinition> features, SortedSet<string> unusable, DiagnosticBag diagnostics, string artifactName)
     {
+        foreach (var arg in entity.Args)
+        {
+            if (!arg.IsFeature || arg.Type is not null)
+            {
+                continue;
+            }
+
+            if (!features.TryGetValue(arg.Target, out var argFeature))
+            {
+                if (!unusable.Contains(arg.Target))
+                {
+                    diagnostics.Error("ENTITY_BAD_ARGS", artifactName, arg.Pointer, $"Argument '{arg.Name}' reads '{arg.Reference}', which is not a declared feature.",
+                        NameSuggestions.DidYouMean(arg.Target, features.Keys) ?? "read a declared context feature, or declare it");
+                }
+
+                return false;
+            }
+
+            if (!argFeature.IsContext)
+            {
+                diagnostics.Error("ENTITY_BAD_ARGS", artifactName, arg.Pointer,
+                    $"Argument '{arg.Name}' reads '{argFeature.Name}', a candidate feature; an entity with args is computed once per request.",
+                    "read a request input or a context feature");
+                return false;
+            }
+
+            arg.Type = argFeature.Type;
+        }
+
         for (var i = 0; i < entity.Key.Count; i++)
         {
             var part = entity.Key[i];
@@ -625,13 +806,13 @@ public sealed class FeatureCatalog
         {
             var entity = entities[name];
             var path = new HashSet<string>(StringComparer.Ordinal) { entity.Name };
-            for (var i = 0; i < entity.Key.Count; i++)
+            foreach (var read in entity.FeatureReads)
             {
-                if (KeyEntity(entity.Key[i], features) is { } next && CycleFrom(next, path, acyclic, features) is { } through)
+                if (KeyEntity(read, features) is { } next && CycleFrom(next, path, acyclic, features) is { } through)
                 {
-                    diagnostics.Error("ENTITY_KEY_CYCLE", artifactName, KeyPointer(entity, i),
-                        $"Key part '{entity.Key[i].Reference}' of '{entity.Name}' leads to a key cycle through entity '{through}'.",
-                        "key one of the entities on the cycle by something that does not depend on it");
+                    diagnostics.Error("ENTITY_KEY_CYCLE", artifactName, read.Pointer,
+                        $"{(read.Pointer.Contains("/args/", StringComparison.Ordinal) ? "Argument" : "Key part")} '{read.Reference}' of '{entity.Name}' leads to a key cycle through entity '{through}'.",
+                        "key (or compute) one of the entities on the cycle from something that does not depend on it");
                     break;
                 }
             }
@@ -651,9 +832,9 @@ public sealed class FeatureCatalog
                 return entity.Name;
             }
 
-            foreach (var part in entity.Key)
+            foreach (var read in entity.FeatureReads)
             {
-                if (KeyEntity(part, features) is { } next && CycleFrom(next, path, acyclic, features) is { } through)
+                if (KeyEntity(read, features) is { } next && CycleFrom(next, path, acyclic, features) is { } through)
                 {
                     return through;
                 }
@@ -664,8 +845,8 @@ public sealed class FeatureCatalog
             return null;
         }
 
-        static EntityDefinition? KeyEntity(EntityKeyPartDefinition part, Dictionary<string, FeatureDefinition> features) =>
-            part.IsFeature && features.TryGetValue(part.Name, out var feature) ? feature.Entity : null;
+        static EntityDefinition? KeyEntity(EntityFeatureRead read, Dictionary<string, FeatureDefinition> features) =>
+            features.TryGetValue(read.Feature, out var feature) ? feature.Entity : null;
     }
 
     /// <summary>The pointer of key part <paramref name="part"/>: <c>/key</c> for a one-part key written as one reference.</summary>

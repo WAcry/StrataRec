@@ -36,7 +36,7 @@ namespace StrataRec.Pipeline.Operators;
 /// rolled back and reused by the fallback (<see cref="CandidateTable.Rollback"/>), so a late write would land on the
 /// fallback's rows. Clients called through this context write into rented buffers, never into the table.</para>
 /// </remarks>
-public sealed class OperatorContext
+public sealed class OperatorContext : IServiceCallScope
 {
     private readonly RequestState _state;
     private readonly Effects _effects;
@@ -384,41 +384,7 @@ public sealed class OperatorContext
             CheckItems(call);
         }
 
-        if (_state.Replay is { } replay)
-        {
-            try
-            {
-                var status = replay.Call(NodeId, service.Target, call, response, out var degraded);
-                if (degraded is not null)
-                {
-                    ReportDegraded(degraded); // the node was Degraded by this call when it was recorded
-                }
-
-                return status;
-            }
-            finally
-            {
-                response.Close();
-            }
-        }
-
-        if (service.Cache is { } cache)
-        {
-            return await CachedServiceCall.RunAsync(this, service, cache, call, response).ConfigureAwait(false);
-        }
-
-        var recorder = _state.Recorder;
-        var sequence = recorder?.BeginCall(NodeId, service.Target, call) ?? 0;
-        var result = await BoundedCall.RunAsync<ServiceStatus, ServiceInvocation>(
-            new ServiceInvocation(service.Client, call, response, service.Target, recorder, sequence), Budget, _state.Memory, service.Target,
-            CallDeadline.After(service.TimeoutMs)).ConfigureAwait(false);
-        // Every end named, no default arm: a new kind of end does not compile until it is decided here (architecture audit).
-        return result.End switch
-        {
-            CallEnd.Answered => result.Value,
-            CallEnd.TimedOut or CallEnd.Threw => ServiceStatus.Failed(result.Error ?? "failed"),
-            CallEnd.BudgetRanOut or CallEnd.Cancelled => Rethrow(result.Exception!), // the budget's or the caller's
-        };
+        return await ServiceCallPath.CallAsync(this, service, call, response).ConfigureAwait(false);
     }
 
     /// <summary>Each output is named once: the recording, the replay's choice of a recording and the cache count outputs by name.</summary>
@@ -491,21 +457,13 @@ public sealed class OperatorContext
     /// <summary>The request's recorder, when it records.</summary>
     internal RunRecorder? Recorder => _state.Recorder;
 
-    /// <summary>
-    /// Sends a call to the service's client, bounded and measured like every call, without recording it: the call of the
-    /// items a service's cache missed (<see cref="CachedServiceCall"/>), whose caller records the whole call. The deadline
-    /// is what is left of the service's <c>timeout_ms</c>; a call whose deadline has passed is not sent.
-    /// </summary>
-    internal ValueTask<CallResult<ServiceStatus>> SendAsync(BoundService service, ServiceCall call, ServiceResponse response, in CallDeadline deadline) =>
-        BoundedCall.RunAsync<ServiceStatus, ServiceInvocation>(
-            new ServiceInvocation(service.Client, call, response, service.Target, null, 0), Budget, _state.Memory, service.Target, deadline);
+    ServiceCaller IServiceCallScope.Caller => ServiceCaller.OfNode(NodeId);
 
-    /// <summary>Throws <paramref name="exception"/> with the stack it was thrown with.</summary>
-    private static ServiceStatus Rethrow(Exception exception)
-    {
-        ExceptionDispatchInfo.Throw(exception);
-        return default;
-    }
+    CallBound IServiceCallScope.Budget => Budget;
+
+    RunReplay? IServiceCallScope.Replay => _state.Replay;
+
+    RunRecorder? IServiceCallScope.Recorder => _state.Recorder;
 
     /// <summary>Marks the result as Degraded (completed with partial or stale inputs, design 5.6).</summary>
     public void ReportDegraded(string reason) => DegradedReason ??= reason;
@@ -519,85 +477,6 @@ public sealed class OperatorContext
         {
             throw new InvalidOperationException(
                 $"Node '{NodeId}' called {operation}, which needs the {effect} effect, but its operator does not declare it.");
-        }
-    }
-
-    /// <summary>
-    /// A service call: closes or abandons the response when the call ends; counts what a generative client reported
-    /// (<see cref="StrataRecMetrics.IoOutputTokens"/>, <see cref="StrataRecMetrics.IoTruncated"/>) for every call that
-    /// answered, in this one place for every operator; and records what the request saw, with the outputs only of a call
-    /// that answered. A replay never gets here: it is answered from the recording before the call is sent, so it counts
-    /// nothing.
-    /// </summary>
-    private readonly struct ServiceInvocation(
-        IServiceClient client, ServiceCall call, ServiceResponse response, IoTarget target, RunRecorder? recorder, int sequence)
-        : IBoundedCall<ServiceStatus>
-    {
-        public ValueTask<ServiceStatus> Send(CancellationToken token) => client.CallAsync(call, response, token);
-
-        public int Keys => call.Items.IsEmpty ? -1 : call.Items.Length;
-
-        public IoOutcome Judge(ServiceStatus value, out string? error)
-        {
-            error = value.Error;
-            return value.Succeeded ? IoOutcome.Ok : IoOutcome.Error;
-        }
-
-        public void Pending(Task done)
-        {
-        }
-
-        public void Ended(in CallResult<ServiceStatus> result, TimeSpan duration)
-        {
-            // Closed before the memory is released: a client writing after it completed cannot write into returned buffers.
-            // One still running may be in the middle of a write: the response reads as empty from now on.
-            if (result.Abandoned)
-            {
-                response.Abandon();
-            }
-            else
-            {
-                response.Close();
-            }
-
-            // Whether the operator is thrown cancellation, so a replay throws it too (a failure is a status, not a throw).
-            var cutOff = result.End is CallEnd.BudgetRanOut or CallEnd.Cancelled;
-            var answered = result.End == CallEnd.Answered;
-            if (answered)
-            {
-                CountGenerated(result.Value, target);
-            }
-
-            recorder?.EndCall(sequence, result.Outcome, result.Error, cutOff, duration, response, answered ? result.Value : default);
-        }
-
-        // Each instrument has its own boundary, as the call's other metrics (IoCall.Complete): what a host's listener throws
-        // loses that one measurement, and never the call's record or its answer.
-        private static void CountGenerated(in ServiceStatus status, IoTarget target)
-        {
-            if (status.OutputTokens is { } tokens && StrataRecMetrics.IoOutputTokens.Enabled)
-            {
-                try
-                {
-                    StrataRecMetrics.IoOutputTokens.Add(tokens, target.Tags);
-                }
-                catch (Exception)
-                {
-                    // A metric listener threw: see above.
-                }
-            }
-
-            if (status.Truncated && StrataRecMetrics.IoTruncated.Enabled)
-            {
-                try
-                {
-                    StrataRecMetrics.IoTruncated.Add(1, target.Tags);
-                }
-                catch (Exception)
-                {
-                    // As above.
-                }
-            }
         }
     }
 }

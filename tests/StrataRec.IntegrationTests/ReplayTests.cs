@@ -251,7 +251,7 @@ public sealed class ReplayTests
         {
             Edit(root, "bindings/local.jsonc", "\"data_file\": \"fixtures/recall_popular.json\"",
                 "\"data_file\": \"fixtures/recall_popular.json\", \"latency_ms\": 60000, \"timeout_ms\": 20");
-            Edit(root, "bindings/local.jsonc", "\"client\": \"linear@1\",", "\"client\": \"linear@1\", \"latency_ms\": 60000,");
+            Edit(root, "bindings/local.jsonc", MetricsTests.CtrModelClient, MetricsTests.CtrModelClient + " \"latency_ms\": 60000,");
             Edit(root, "pipelines/home_feed.jsonc", "\"order\": 520,", "\"order\": 520, \"min_remaining_ms\": 10000,");
         }, SampleTiming.AsWritten);
         var (engine, _) = MetricsTests.LoadEngine(host);

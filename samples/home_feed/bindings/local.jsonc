@@ -22,7 +22,9 @@
       "mode": "local",
       "max_bytes": "4MiB",
       "bootstrap": { "source": "snapshot_files@1", "uri": "fixtures/item_country_snapshot" }
-    }
+    },
+    // The features of the engagement entity, which has args: the service below computes them.
+    "engagement_model": { "mode": "service", "service": "engagement_model", "timeout_ms": 1000 }
   },
   "services": {
     "ctr_model": {
@@ -32,6 +34,12 @@
     // The two-tower service's stand-in: an in-memory index scored by the dot product with the query's user_embedding
     // (the recall node's queries). Items below min_score are not returned.
     "two_tower": { "client": "memory_vectors@1", "data_file": "fixtures/recall_vectors.json", "query": "user_embedding", "min_score": 0.01 },
-    "popular":   { "client": "memory_list@1", "data_file": "fixtures/recall_popular.json" }
+    "popular":   { "client": "memory_list@1", "data_file": "fixtures/recall_popular.json" },
+    // A user's propensity to engage, from the arguments of the engagement entity. A "cache" here would share its answers
+    // between requests with the same arguments.
+    "engagement_model": {
+      "client": "linear@1",
+      "outputs": { "propensity": { "bias": -1.0, "weights": { "ctr": 20.0 }, "activation": "sigmoid" } }
+    }
   }
 }

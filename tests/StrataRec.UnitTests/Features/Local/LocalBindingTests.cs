@@ -22,6 +22,7 @@ public class LocalBindingTests
         ["max_bytes"] = "\"1MiB\"",
         ["bootstrap"] = """{ "source": "snapshot_files@1", "uri": "x" }""",
         ["cache"] = """{ "ttl_ms": 1000 }""",
+        ["service"] = "\"intent_model\"",
     };
 
     [Fact]

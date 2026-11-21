@@ -18,7 +18,7 @@
         "type": "object",
         "properties": {
           "mode": {
-            "description": "Supply mode (design 6.6): 'fetch' (default) fetches from the connector on every request; 'local' serves the features from an in-process table that 'bootstrap' loads in the background, with no I/O on the request path; 'cache' keeps what the connector returned in an in-process table (and optionally a distributed cache) for 'cache.ttl_ms'. Settings of another mode are errors.",
+            "description": "Supply mode (design 6.6): 'fetch' (default) fetches from the connector on every request; 'local' serves the features from an in-process table that 'bootstrap' loads in the background, with no I/O on the request path; 'cache' keeps what the connector returned in an in-process table (and optionally a distributed cache) for 'cache.ttl_ms'; 'service' asks the service named by 'service' once per request, for the features of an entity with args. Settings of another mode are errors.",
             "type": [
               "string",
               "null"
@@ -27,7 +27,15 @@
               "fetch",
               "local",
               "cache",
+              "service",
               null
+            ]
+          },
+          "service": {
+            "description": "Mode service, required: the service, under 'services', that computes the features of an entity with args: called once per request with the arguments as its inputs, each feature's 'field' the output it reads. Its timeout_ms and cache are the service's.",
+            "type": [
+              "string",
+              "null"
             ]
           },
           "connector": {
@@ -42,7 +50,7 @@
             ]
           },
           "timeout_ms": {
-            "description": "Modes fetch and cache: time limit of one connector call, in milliseconds (default 50). For cache, the whole read of the keys a request misses (the distributed cache, then the connector) stays within it.",
+            "description": "Modes fetch, cache and service: time limit of one connector call, in milliseconds (default 50). For cache, the whole read of the keys a request misses (the distributed cache, then the connector) stays within it; for service, the whole call of the service (its cache, then its client), whose own timeout_ms applies within it.",
             "type": [
               "integer",
               "null"
@@ -180,6 +188,7 @@
             "then": {
               "properties": {
                 "mode": {},
+                "service": {},
                 "connector": {},
                 "timeout_ms": {},
                 "max_batch": {},
@@ -220,6 +229,7 @@
             "then": {
               "properties": {
                 "mode": {},
+                "service": {},
                 "connector": {},
                 "timeout_ms": {},
                 "max_batch": {},

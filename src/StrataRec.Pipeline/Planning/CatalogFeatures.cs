@@ -165,9 +165,9 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
                 _deprecatedReads.Add(feature.Name);
             }
 
-            foreach (var part in feature.Entity.Key)
+            foreach (var read in feature.Entity.FeatureReads)
             {
-                if (part.IsFeature && _catalog.TryGet(part.Name, out var key) && key.IsContext == (part.Kind == EntityKeyPartKind.ContextFeature))
+                if (_catalog.TryGet(read.Feature, out var key) && key.IsContext == read.Context)
                 {
                     pending.Push(key);
                 }
@@ -244,9 +244,9 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
     /// features fail with the key's error.</summary>
     private bool RegisterPhysical(FeatureDefinition feature)
     {
-        foreach (var part in feature.Entity.Key)
+        foreach (var read in feature.Entity.FeatureReads)
         {
-            if (part.IsFeature && !TryRegister(part.Reference))
+            if (!TryRegister(read.Reference))
             {
                 return false;
             }
@@ -312,8 +312,8 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
         var start = _registering.IndexOf(feature);
         var path = new List<string>(_registering.Count - start + 1);
         FeatureDefinition? derived = null;
-        FeatureDefinition? keyed = null; // the first physical feature on the cycle: its entity's key reads the next one
-        var keyPart = -1;
+        FeatureDefinition? keyed = null; // the first physical feature on the cycle: its entity's key (or args) reads the next one
+        EntityFeatureRead keyRead = default;
         for (var i = start; i < _registering.Count; i++)
         {
             var on = _registering[i];
@@ -322,16 +322,17 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
             if (keyed is null && !on.IsDerived)
             {
                 // A physical feature registers its key's features and nothing else, so the next on the path is one of them.
-                keyPart = on.Entity.KeyPartReading(i + 1 < _registering.Count ? _registering[i + 1] : feature);
-                keyed = keyPart >= 0 ? on : null;
+                var read = on.Entity.ReadOf(i + 1 < _registering.Count ? _registering[i + 1] : feature);
+                keyRead = read ?? default;
+                keyed = read is not null ? on : null;
             }
         }
 
         path.Add(feature.Name);
         if (derived is not null && keyed is not null)
         {
-            _diagnostics.Error("ENTITY_KEY_CYCLE", _artifact, keyed.Entity.KeyPointer(keyPart),
-                $"Key part '{keyed.Entity.Key[keyPart].Reference}' of '{keyed.Entity.Name}' leads to a key cycle through derived feature '{derived.Name}': {string.Join(" → ", path)}.",
+            _diagnostics.Error("ENTITY_KEY_CYCLE", _artifact, keyRead.Pointer,
+                $"{(keyed.Entity.HasArgs ? "Argument" : "Key part")} '{keyRead.Reference}' of '{keyed.Entity.Name}' leads to a key cycle through derived feature '{derived.Name}': {string.Join(" → ", path)}.",
                 $"key one of the entities on the cycle by something that does not depend on it, or compute '{derived.Name}' without it");
         }
         else if (derived is not null)

@@ -50,7 +50,7 @@ public sealed partial class FeatureFetcher
     /// </summary>
     private bool ReadsLocally(FetchGroup group) => group.Supply.Mode switch
     {
-        SupplyMode.Fetch => false,
+        SupplyMode.Fetch or SupplyMode.Service => false,
         SupplyMode.Local or SupplyMode.Cache => _hook is not { Replays: true },
     };
 
@@ -62,7 +62,7 @@ public sealed partial class FeatureFetcher
     /// holds for it: never prefetched. Its misses therefore wait for the node that needs them; see design 6.6.</remarks>
     private static bool Prefetches(FetchGroup group) => group.Supply.Mode switch
     {
-        SupplyMode.Fetch => true,
+        SupplyMode.Fetch or SupplyMode.Service => true,
         SupplyMode.Local or SupplyMode.Cache => false,
     };
 

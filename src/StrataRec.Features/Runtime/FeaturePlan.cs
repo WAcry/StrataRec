@@ -117,6 +117,11 @@ internal sealed class SourceValueTags(string source, string feature)
     ];
 }
 
+/// <summary>One argument of a service group (<see cref="FetchGroup.Args"/>): the service's input, its type and where the request holds its value.</summary>
+/// <param name="ContextId">The request's context value: a request input's, or a context feature's.</param>
+/// <param name="Feature">The context feature read, or -1 for a request input.</param>
+internal readonly record struct ServiceArgSource(string Name, ColumnType Type, int ContextId, int Feature);
+
 /// <summary>
 /// Features that are supplied together: one source × one entity (design 6.8: same source within a wave is merged).
 /// How is the group's <see cref="Supply"/>: a fetched group calls its connector, a local group reads its table (design 6.6).
@@ -136,8 +141,15 @@ public sealed class FetchGroup
     /// <summary>The mode and what it holds (a connector, a table), as the bindings resolved it.</summary>
     public required GroupSupply Supply { get; init; }
 
-    /// <summary>The entity's key layout: what a fetch's keys are, and what the connector was checked to support.</summary>
+    /// <summary>The entity's key layout: what a fetch's keys are, and what the connector was checked to support. An entity
+    /// with args has none (it is not looked up): only keyed groups read it.</summary>
     public EntityKeyLayout KeyLayout => Entity.KeyLayout;
+
+    /// <summary>
+    /// Where a request reads each argument of an entity with args, in declared order (IO step 5): the service call's inputs.
+    /// Empty for a keyed entity.
+    /// </summary>
+    internal ServiceArgSource[] Args { get; init; } = [];
 
     /// <summary>Where a request reads each key part, in part order (<see cref="KeyPartSource"/>).</summary>
     internal KeyPartSource[] KeyParts { get; init; } = [];
@@ -146,7 +158,7 @@ public sealed class FetchGroup
     /// the request's.</summary>
     internal int[] VaryingParts { get; init; } = [];
 
-    /// <summary>The features the key reads (its feature parts, each once): fetched before the group, and the group fails
+    /// <summary>The features the key (or the arguments) read, each once: fetched before the group, and the group fails
     /// with any of them (design 6.7).</summary>
     public required ImmutableArray<int> KeyFeatures { get; init; }
 
@@ -252,6 +264,7 @@ public sealed class FeaturePlan
     /// <param name="catalog">The catalog the features come from: a <c>local</c> table holds every physical feature it
     /// binds to the table's source and entity, not only those of <paramref name="features"/> (see
     /// <see cref="NeedsWholeTable"/>); null holds the plan's features alone.</param>
+    /// <param name="services">The plan's services, for sources in mode <c>service</c> (<see cref="FeatureSourceResolver"/>).</param>
     /// <param name="awaited">The context features operators await while they run rather than before they start (a recall
     /// source's query, design 5.4), by index in <paramref name="features"/>: a derived one is computed as soon as its inputs
     /// are stored (<see cref="FeatureRuntimeInfo.ComputedEarly"/>), so such an operator does not wait for the whole
@@ -260,7 +273,7 @@ public sealed class FeaturePlan
     /// <remarks>The plan takes <paramref name="features"/> as they are and fills in their groups, fields, key dependencies
     /// and waves. So an info belongs to one plan: one that a plan has taken (another plan's <see cref="Features"/>, which
     /// requests are using) is refused before anything changes (review 56).</remarks>
-    public static FeaturePlan Create(
+    internal static FeaturePlan Create(
         IReadOnlyList<FeatureRuntimeInfo> features,
         SourceBindingArtifact bindings,
         BindingResolver resolver,
@@ -269,7 +282,8 @@ public sealed class FeaturePlan
         TimeProvider? clock = null,
         string catalogArtifact = "catalog",
         FeatureCatalog? catalog = null,
-        IReadOnlyCollection<int>? awaited = null)
+        IReadOnlyCollection<int>? awaited = null,
+        ServiceSupplyResolver? services = null)
     {
         var diagnostics = resolver.Diagnostics;
         foreach (var f in features)
@@ -309,7 +323,7 @@ public sealed class FeaturePlan
 
         var groups = new List<FetchGroup>();
         var sources = new FeatureSourceResolver(
-            bindings, resolver, localTables ?? UnloadedLocalTables.Instance, clock ?? TimeProvider.System, catalogArtifact, catalog);
+            bindings, resolver, localTables ?? UnloadedLocalTables.Instance, clock ?? TimeProvider.System, catalogArtifact, catalog, services);
 
         foreach (var (groupKey, memberList) in grouped)
         {
@@ -323,7 +337,7 @@ public sealed class FeaturePlan
             }
 
             if (sources.Group(supply, entity, members) is not { } groupSupply
-                || !TryKeyParts(entity, byName, contextIdOfRequestInput, diagnostics, catalogArtifact, out var keyParts, out var varying, out var keyFeatures, out var contextKeys))
+                || !TryKeyParts(entity, byName, contextIdOfRequestInput, diagnostics, catalogArtifact, out var keyParts, out var varying, out var keyFeatures, out var contextKeys, out var args))
             {
                 continue;
             }
@@ -346,6 +360,7 @@ public sealed class FeaturePlan
                 VaryingParts = varying,
                 KeyFeatures = keyFeatures,
                 ContextKeyFeatures = contextKeys,
+                Args = args,
                 FeatureIndices = ImmutableCollectionsMarshal.AsImmutableArray(featureIndices),
                 Fields = ImmutableCollectionsMarshal.AsImmutableArray(fields),
             };
@@ -378,13 +393,16 @@ public sealed class FeaturePlan
     /// <summary>
     /// Where a request reads each part of <paramref name="entity"/>'s key (design 6.8): a request input from the request's
     /// context values, <c>col.entity_id</c>, a candidate key feature's column, or a context key feature's context value; the
-    /// group's members then depend on the key features. False (diagnosed) when a key feature is not in the plan.
+    /// group's members then depend on the key features. An entity with args reads each argument as a shared part: a
+    /// request input, or a context feature stored first. False (diagnosed) when a key feature is not in the plan.
     /// </summary>
-    /// <remarks>The one place a part's kind becomes a source.</remarks>
+    /// <remarks>The one place a part's (or an argument's) kind becomes a source.</remarks>
     private static bool TryKeyParts(
         EntityDefinition entity, Dictionary<string, FeatureRuntimeInfo> byName, Func<string, int> contextIdOfRequestInput, DiagnosticBag diagnostics,
-        string catalogArtifact, out KeyPartSource[] parts, out int[] varying, out ImmutableArray<int> keyFeatures, out int[] contextKeys)
+        string catalogArtifact, out KeyPartSource[] parts, out int[] varying, out ImmutableArray<int> keyFeatures, out int[] contextKeys,
+        out ServiceArgSource[] args)
     {
+        args = entity.HasArgs ? new ServiceArgSource[entity.Args.Count] : [];
         parts = new KeyPartSource[entity.Key.Count];
         var varyingList = new List<int>(parts.Length);
         var features = new List<int>();
@@ -430,6 +448,34 @@ public sealed class FeaturePlan
 
             parts[p] = new KeyPartSource(-1, keyFeature.Index);
             varyingList.Add(p);
+        }
+
+        for (var a = 0; a < args.Length; a++)
+        {
+            var arg = entity.Args[a];
+            if (arg.Kind == EntityKeyPartKind.RequestInput)
+            {
+                args[a] = new ServiceArgSource(arg.Name, arg.Type!.Value, contextIdOfRequestInput(arg.Target), -1);
+                continue;
+            }
+
+            if (!byName.TryGetValue(arg.Target, out var argFeature))
+            {
+                diagnostics.Error("ENTITY_BAD_ARGS", catalogArtifact, arg.Pointer,
+                    $"Argument feature '{arg.Target}' is not available.", "an argument's feature is compiled with the features computed from it; check its declaration");
+                varying = Array.Empty<int>();
+                keyFeatures = [];
+                contextKeys = Array.Empty<int>();
+                return false;
+            }
+
+            if (!features.Contains(argFeature.Index))
+            {
+                features.Add(argFeature.Index);
+                context.Add(argFeature.Index);
+            }
+
+            args[a] = new ServiceArgSource(arg.Name, argFeature.Type, argFeature.ContextId, argFeature.Index);
         }
 
         varying = varyingList.ToArray();
@@ -495,8 +541,7 @@ public sealed class FeaturePlan
 
         return mode switch
         {
-            SupplyMode.Fetch => false,
-            SupplyMode.Local => false,
+            SupplyMode.Fetch or SupplyMode.Local or SupplyMode.Service => false,
             SupplyMode.Cache => true,
         };
     }

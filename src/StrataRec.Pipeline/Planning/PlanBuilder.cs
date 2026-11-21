@@ -2174,9 +2174,9 @@ public sealed class PlanBuilder
             return;
         }
 
-        foreach (var part in info.Definition.Entity.Key)
+        foreach (var read in info.Definition.Entity.FeatureReads)
         {
-            if (part.IsFeature && Schema.RegisteredFeature(part.Name, part.Kind == EntityKeyPartKind.ContextFeature) is >= 0 and var key)
+            if (Schema.RegisteredFeature(read.Feature, read.Context) is >= 0 and var key)
             {
                 MarkFetched(fetched, key);
             }
@@ -2201,7 +2201,28 @@ public sealed class PlanBuilder
             _environment.Clock,
             CatalogLabel,
             _catalog,
-            _awaitedFeatures);
+            _awaitedFeatures,
+            FeatureService);
+    }
+
+    /// <summary>
+    /// The supply of a feature source in mode <c>service</c> (IO step 5): the service its binding names, called in role
+    /// <c>fetch</c>; null when the service has no binding (a <c>SERVICE_UNBOUND</c> at the source's <c>service</c>) or a
+    /// wrong one (reported at the binding).
+    /// </summary>
+    private FeatureServiceSupply? FeatureService(string source, string service, string pointer)
+    {
+        if (_clients!.TryGetService(service, out var client, out var timeoutMs, out var cache, out var error, out var hint))
+        {
+            return new FeatureServiceSupply(new BoundService(service, client, Core.Diagnostics.IoRoles.Fetch, timeoutMs, cache), source);
+        }
+
+        if (error is not null)
+        {
+            _diagnostics.Error("SERVICE_UNBOUND", "bindings:" + _sources!.Bindings.Environment, pointer, error, hint);
+        }
+
+        return null;
     }
 
     /// <summary>Assembles the final plan. Call after every node, the output and the feature plan are compiled.</summary>

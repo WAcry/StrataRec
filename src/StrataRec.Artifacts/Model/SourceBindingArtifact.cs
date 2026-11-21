@@ -79,21 +79,29 @@ public sealed class SourceBindingArtifact
 /// </remarks>
 public sealed class FeatureSourceBinding
 {
-    /// <summary><c>fetch</c> (default), <c>local</c> or <c>cache</c>.</summary>
+    /// <summary><c>fetch</c> (default), <c>local</c>, <c>cache</c> or <c>service</c>.</summary>
     [Description("Supply mode (design 6.6): 'fetch' (default) fetches from the connector on every request; 'local' serves the " +
         "features from an in-process table that 'bootstrap' loads in the background, with no I/O on the request path; 'cache' " +
-        "keeps what the connector returned in an in-process table (and optionally a distributed cache) for 'cache.ttl_ms'. " +
+        "keeps what the connector returned in an in-process table (and optionally a distributed cache) for 'cache.ttl_ms'; " +
+        "'service' asks the service named by 'service' once per request, for the features of an entity with args. " +
         "Settings of another mode are errors.")]
-    [AllowedValues("fetch", "local", "cache")]
+    [AllowedValues("fetch", "local", "cache", "service")]
     public string? Mode { get; init; }
+
+    /// <summary>Mode <c>service</c>: the service (under <c>services</c>) that computes the features of an entity with args.</summary>
+    [Description("Mode service, required: the service, under 'services', that computes the features of an entity with args: " +
+        "called once per request with the arguments as its inputs, each feature's 'field' the output it reads. Its timeout_ms " +
+        "and cache are the service's.")]
+    public string? Service { get; init; }
 
     /// <summary>Connector type and version, e.g. <c>redis_hash@1</c> or <c>memory@1</c>.</summary>
     [Description("Modes fetch and cache, required: connector type and version, e.g. 'memory@1' (for cache, the origin the cache " +
         "is in front of). Other members of the binding not listed here are the connector's own settings (e.g. 'data_file').")]
     public string? Connector { get; init; }
 
-    [Description("Modes fetch and cache: time limit of one connector call, in milliseconds (default 50). For cache, the whole " +
-        "read of the keys a request misses (the distributed cache, then the connector) stays within it.")]
+    [Description("Modes fetch, cache and service: time limit of one connector call, in milliseconds (default 50). For cache, the " +
+        "whole read of the keys a request misses (the distributed cache, then the connector) stays within it; for service, the " +
+        "whole call of the service (its cache, then its client), whose own timeout_ms applies within it.")]
     public int? TimeoutMs { get; init; }
 
     /// <summary>Maximum keys per connector call; larger batches are split into the fewest calls, of even size, sent concurrently.</summary>

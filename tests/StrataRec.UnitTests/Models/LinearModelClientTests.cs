@@ -34,6 +34,25 @@ public sealed class LinearModelClientTests
         Assert.Equal(new[] { 2f, -1f }, outputs.Values["p"]);
     }
 
+    /// <summary>
+    /// A call of no batch is one row of float32 scalars (shape <c>[]</c>), one value per output: what a feature source in
+    /// mode <c>service</c> sends for an entity with args (IO step 5). A list in such a call fails.
+    /// </summary>
+    [Fact]
+    public async Task ACallOfNoBatch_OfScalars_IsComputedOnce()
+    {
+        var client = Create();
+        var outputs = new Outputs();
+
+        var status = await client.CallAsync(Call(0, NamedInput.FromFloat32("x", [], new[] { 0.5f })), outputs, CancellationToken.None);
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Equal(new[] { 2f }, outputs.Values["p"]);
+        Assert.Equal(
+            ServiceStatus.Failed("Input 'x' must be a float32 scalar in a call of no batch."),
+            await client.CallAsync(Call(0, NamedInput.FromFloat32("x", new[] { 1 }, new[] { 0.5f })), new Outputs(), CancellationToken.None));
+    }
+
     [Fact]
     public async Task AnotherTensor_FailsTheCall()
     {

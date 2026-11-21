@@ -38,7 +38,7 @@ public sealed class HomeFeedEndToEndTests
         Assert.Equal(new[]
         {
             (100, "recall"), (200, "safety_filter"), (300, "coarse_score"), (350, "coarse_top_k"), (400, "ctr_ranker"),
-            (450, "fusion"), (470, "freshness_calibration"), (500, "rank_sort"), (512, "author_rank"), (515, "author_cap"), (520, "diversity_cap"), (550, "mmr_diversifier"),
+            (450, "fusion"), (460, "engagement_boost"), (470, "freshness_calibration"), (500, "rank_sort"), (512, "author_rank"), (515, "author_cap"), (520, "diversity_cap"), (550, "mmr_diversifier"),
         }, orders);
 
         var mmr = plan.ArmsFromIds(new[] { "exp_mmr_diversity/mmr" });
@@ -66,7 +66,7 @@ public sealed class HomeFeedEndToEndTests
         LiveRunAssert.SameNodeOutcomes(first, second);
         Assert.Equal(Describe(first), Describe(second));
         Assert.All(first.Items, item => Assert.False(item.Columns["score"].IsMissing));
-        Assert.Equal("fusion", first.ColumnProducers["score"]);
+        Assert.Equal("engagement_boost", first.ColumnProducers["score"]);
         Assert.All(first.Outcomes, o => Assert.True(o.Kind == NodeOutcomeKind.Succeeded || NodeOutcomeNames.IsSkipped(o.Kind), $"{o.NodeId}: {o.Kind}"));
     }
 
@@ -149,11 +149,7 @@ public sealed class HomeFeedEndToEndTests
     [Fact]
     public async Task FailingModelIsServedByItsFallback()
     {
-        var host = HomeFeedTestHost.LoadModified(root =>
-        {
-            var path = Path.Combine(root, "bindings", "local.jsonc");
-            File.WriteAllText(path, File.ReadAllText(path).Replace("\"client\": \"linear@1\",", "\"client\": \"linear@1\", \"fail\": true,", StringComparison.Ordinal));
-        });
+        var host = HomeFeedTestHost.LoadModified(MetricsTests.FailModel);
         var plan = host.Plan();
 
         var result = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(captureLogs: true), TestContext.Current.CancellationToken);

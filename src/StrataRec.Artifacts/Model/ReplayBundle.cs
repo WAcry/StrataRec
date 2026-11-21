@@ -47,11 +47,12 @@ public sealed class ReplayBundle
     /// and records why a call left its node Degraded; a recall query of a negative zero or of a declared float32 is sent
     /// as served since: a bundle before could replay identical to a run whose answers changed. 2026-11-21.7 digests every
     /// call about no items without its limit again (a recorded call answers the named outputs a call reads only at the
-    /// call's limit), and records the items a service added past a call's limit.
+    /// call's limit), and records the items a service added past a call's limit. 2026-11-21.8 records the service call of
+    /// a feature source in mode <c>service</c> (IO step 5) with its source and no node.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.7";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.8";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.7\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.8\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -258,12 +259,16 @@ public sealed class ReplayServiceCall
     [Description("Start order of the call within its run, across all calls.")]
     public int Seq { get; init; }
 
+    [Description("The node that made the call; absent for a feature source's call (source).")]
     public string? Node { get; init; }
+
+    [Description("The feature source in mode 'service' whose features the call asked for (the request's prefetch made it); absent for a node's call.")]
+    public string? Source { get; init; }
 
     [Description("The service's logical name, as the bindings name it.")]
     public required string Service { get; init; }
 
-    [Description("The role the node called it in: model, recall, or an operator's own.")]
+    [Description("The role it was called in: model, recall, an operator's own, or fetch for a feature source's call.")]
     public required string Role { get; init; }
 
     public string? Version { get; init; }

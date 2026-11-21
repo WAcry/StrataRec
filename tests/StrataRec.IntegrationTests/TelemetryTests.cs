@@ -310,7 +310,7 @@ public sealed class MetricsTests
 
         public Type SettingsType => inner.SettingsType;
 
-        public IServiceClient Create(BindingContext context) => new Client(inner.Create(context));
+        public IServiceClient Create(BindingContext context) => context.Name == "ctr_model" ? new Client(inner.Create(context)) : inner.Create(context);
 
         private sealed class Client(IServiceClient inner) : IServiceClient
         {
@@ -349,8 +349,8 @@ public sealed class MetricsTests
     {
         var bindings = Path.Combine(root, "bindings", "local.jsonc");
         var text = File.ReadAllText(bindings);
-        // The model, or every recall source: the lists and the vector index.
-        string[] clients = what == "model" ? ["\"client\": \"linear@1\","] : ["\"client\": \"memory_list@1\",", "\"client\": \"memory_vectors@1\","];
+        // The CTR model, or every recall source: the lists and the vector index.
+        string[] clients = what == "model" ? [CtrModelClient] : ["\"client\": \"memory_list@1\",", "\"client\": \"memory_vectors@1\","];
         var edited = text;
         foreach (var client in clients)
         {
@@ -420,11 +420,15 @@ public sealed class MetricsTests
         Debug = new DebugOptions { Trace = true },
     };
 
+    /// <summary>The CTR model's client in the sample bindings, which an edit of it replaces.</summary>
+    internal const string CtrModelClient = "\"ctr_model\": {\n      \"client\": \"linear@1\",";
+
     internal static void FailModel(string root)
     {
         var bindings = Path.Combine(root, "bindings", "local.jsonc");
         var text = File.ReadAllText(bindings);
-        var edited = text.Replace("\"client\": \"linear@1\",", "\"client\": \"linear@1\", \"fail\": true,", StringComparison.Ordinal);
+        // The CTR model only: the sample's other linear@1 service (engagement_model) is not what these tests are about.
+        var edited = text.Replace(CtrModelClient, CtrModelClient + " \"fail\": true,", StringComparison.Ordinal);
         Assert.NotEqual(text, edited);
         File.WriteAllText(bindings, edited);
     }

@@ -162,7 +162,7 @@ public sealed class ServiceCallReplayTests
         var replay = RunReplay.Create(run, "/runs/0");
         var asked = Reading(Query(1, limit: 3), "a", "b");
 
-        var status = replay.Call("added", new IoTarget(IoRoles.Recall, "s"), asked, new ServiceResponse(Memory, asked.Limit), out _);
+        var status = replay.Call(ServiceCaller.OfNode("added"), new IoTarget(IoRoles.Recall, "s"), asked, new ServiceResponse(Memory, asked.Limit), out _);
 
         Assert.True(status.Succeeded);
         var gap = Assert.Single(replay.Gaps);
@@ -180,7 +180,7 @@ public sealed class ServiceCallReplayTests
         var replay = RunReplay.Create(run, "/runs/0");
         var response = new ServiceResponse(Memory, asked.Limit);
 
-        var status = replay.Call("added", new IoTarget(IoRoles.Recall, "s"), Reading(asked, "b"), response, out _);
+        var status = replay.Call(ServiceCaller.OfNode("added"), new IoTarget(IoRoles.Recall, "s"), Reading(asked, "b"), response, out _);
 
         Assert.True(status.Succeeded);
         Assert.True(response.TryGetText("b", out var text));
@@ -205,7 +205,7 @@ public sealed class ServiceCallReplayTests
         var replay = RunReplay.Create(run, "/runs/0");
         var response = new ServiceResponse(Memory, 2);
 
-        var status = replay.Call("n", new IoTarget(IoRoles.Recall, "s"), replayed, response, out _);
+        var status = replay.Call(ServiceCaller.OfNode("n"), new IoTarget(IoRoles.Recall, "s"), replayed, response, out _);
 
         Assert.True(status.Succeeded, status.Error);
         Assert.Equal([7L, 8L], response.Keys.ToArray().Select(k => k.Int64Value));
@@ -233,7 +233,7 @@ public sealed class ServiceCallReplayTests
         var asked = Reading(Query(1, limit: 1), "summary");
         var response = new ServiceResponse(Memory, asked.Limit);
 
-        var status = replay.Call("n", new IoTarget(IoRoles.Recall, "s"), asked, response, out _);
+        var status = replay.Call(ServiceCaller.OfNode("n"), new IoTarget(IoRoles.Recall, "s"), asked, response, out _);
 
         Assert.True(status.Succeeded, status.Error);
         Assert.Equal([7L], response.Keys.ToArray().Select(k => k.Int64Value));
@@ -268,7 +268,7 @@ public sealed class ServiceCallReplayTests
         var replay = RunReplay.Create(run, "/runs/0");
         var response = new ServiceResponse(Memory, limit);
 
-        Assert.True(replay.Call("n", new IoTarget(IoRoles.Recall, "s"), Query(1, limit), response, out _).Succeeded);
+        Assert.True(replay.Call(ServiceCaller.OfNode("n"), new IoTarget(IoRoles.Recall, "s"), Query(1, limit), response, out _).Succeeded);
 
         Assert.Equal(dropped, response.Dropped);
     }
@@ -289,7 +289,7 @@ public sealed class ServiceCallReplayTests
         var asked = Reading(Query(1, limit: 3), "summary");
         var response = new ServiceResponse(Memory, asked.Limit);
 
-        var answered = replay.Call("n", new IoTarget(IoRoles.Recall, "s"), asked, response, out _);
+        var answered = replay.Call(ServiceCaller.OfNode("n"), new IoTarget(IoRoles.Recall, "s"), asked, response, out _);
 
         Assert.True(answered.Succeeded, answered.Error);
         Assert.Equal([7L, 8L, 9L], response.Keys.ToArray().Select(k => k.Int64Value));
@@ -337,7 +337,7 @@ public sealed class ServiceCallReplayTests
         var replay = RunReplay.Create(run, "/runs/0");
         var response = new ServiceResponse(Memory, limit);
 
-        var status = replay.Call("n", new IoTarget(IoRoles.Recall, "s"), Query(1, limit), response, out _);
+        var status = replay.Call(ServiceCaller.OfNode("n"), new IoTarget(IoRoles.Recall, "s"), Query(1, limit), response, out _);
 
         Assert.True(status.Succeeded, status.Error);
         Assert.Equal((tokens, truncated), (status.OutputTokens, status.Truncated));
@@ -359,6 +359,44 @@ public sealed class ServiceCallReplayTests
         var error = Assert.Throws<ReplayBundleException>(() => RunReplay.Create(run, "/runs/0"));
 
         Assert.Equal("/runs/0/service_calls/0/dropped", error.Pointer);
+    }
+
+    /// <summary>
+    /// A feature source's call (IO step 5) is recorded with its source and no node: its failure answers the source, not a
+    /// node whose id is the source's name.
+    /// </summary>
+    [Fact]
+    public void ASourcesRecordedFailure_AnswersTheSource_NotANodeOfTheSameName()
+    {
+        var run = RunReplayTests.Run();
+        var failed = Recorded("x", Query(1), "error");
+        run.ServiceCalls.Add(new ReplayServiceCall
+        {
+            Source = "x", Service = failed.Service, Role = IoRoles.Fetch, Limit = failed.Limit, Status = failed.Status, InputDigests = failed.InputDigests,
+        });
+        var replay = RunReplay.Create(run, "/runs/0");
+        var response = new ServiceResponse(Memory, 0);
+
+        Assert.False(replay.Call(ServiceCaller.OfNode("x"), new IoTarget(IoRoles.Recall, "s"), Query(1, limit: 0), response, out _).Succeeded);
+        Assert.Equal("not_recorded", Assert.Single(replay.Gaps).Reason); // the node has no call of its own
+        Assert.False(replay.Call(ServiceCaller.OfSource("x"), new IoTarget(IoRoles.Fetch, "s"), Query(1, limit: 0), new ServiceResponse(Memory, 0), out _).Succeeded);
+        Assert.Single(replay.Gaps); // the source's, as recorded
+    }
+
+    [Fact]
+    public void ACallOfBothANodeAndASource_IsRejectedAtItsSource()
+    {
+        var run = RunReplayTests.Run();
+        var call = Recorded("n", Query(1), "ok", 1);
+        run.ServiceCalls.Add(new ReplayServiceCall
+        {
+            Node = "n", Source = "n", Service = call.Service, Role = call.Role, Limit = call.Limit, Status = call.Status, InputDigests = call.InputDigests,
+            Ids = call.Ids, Scores = call.Scores,
+        });
+
+        var error = Assert.Throws<ReplayBundleException>(() => RunReplay.Create(run, "/runs/0"));
+
+        Assert.Equal("/runs/0/service_calls/0/source", error.Pointer);
     }
 
     /// <summary>A node's recorded failure, replayed once, leaves its next call of the same inputs unrecorded: not "inputs changed".</summary>
@@ -430,7 +468,7 @@ public sealed class ServiceCallReplayTests
     private static (string Ids, bool Succeeded) Retrieve(RunReplay replay, string node, ServiceCall call)
     {
         var response = new ServiceResponse(Memory, call.Limit);
-        var status = replay.Call(node, new IoTarget(IoRoles.Recall, "s"), call, response, out _);
+        var status = replay.Call(ServiceCaller.OfNode(node), new IoTarget(IoRoles.Recall, "s"), call, response, out _);
         return (string.Join(",", response.Keys.ToArray().Select(k => k.Int64Value)), status.Succeeded);
     }
 }

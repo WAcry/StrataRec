@@ -43,7 +43,7 @@ public sealed class RunTextTests
         Assert.Contains(lines, l => l.StartsWith("  trace     recall: succeeded, ", StringComparison.Ordinal));
         Assert.Contains(lines, l => l.StartsWith("  columns   ", StringComparison.Ordinal) && l.Contains("score <- ", StringComparison.Ordinal));
         Assert.Contains("  explain   17: dropped by safety_filter", lines);
-        Assert.Contains("              not live in 9 other nodes", lines); // the nodes after the filter, in one line
+        Assert.Contains("              not live in 10 other nodes", lines); // the nodes after the filter, in one line
     }
 
     [Fact]

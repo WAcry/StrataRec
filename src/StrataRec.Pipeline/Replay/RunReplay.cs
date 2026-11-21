@@ -183,14 +183,15 @@ internal sealed class RunReplay : IFeatureCallHook
     /// success the recording has for its own inputs (review 30). A node's own answer is consumed even when another answers
     /// the call better, so its later calls still meet their own recorded calls in order.
     /// </remarks>
-    /// <param name="node">The calling node: its own recorded calls answer it first, and a synthesized call whose items all
-    /// changed takes its outputs' widths from them before another node's.</param>
+    /// <param name="caller">The calling node, or the feature source (IO step 5): its own recorded calls answer it first,
+    /// and a synthesized call whose items all changed takes its outputs' widths from them before another caller's.</param>
     /// <param name="degraded">
     /// Why the recorded call that answers left its node Degraded (its cache answered with stale values), which the node
     /// reports again; null for a synthesized call, whose values come from many calls.
     /// </param>
-    internal ServiceStatus Call(string node, IoTarget target, ServiceCall call, ServiceResponse response, out string? degraded)
+    internal ServiceStatus Call(in ServiceCaller caller, IoTarget target, ServiceCall call, ServiceResponse response, out string? degraded)
     {
+        var node = caller.Key;
         degraded = null;
         lock (_gate)
         {
@@ -1165,7 +1166,13 @@ internal sealed class RunReplay : IFeatureCallHook
                 outputs[name] = ReplayJson.Tensor(values, $"{at}/outputs/{JsonPointer.Escape(name)}");
             }
 
-            var entry = new ServiceEntry(call.Seq, call.Node, call.Service, call.BatchSize, call.Limit, outcome, call.Error, call.Threw, keys,
+            if (call.Node is not null && call.Source is not null)
+            {
+                throw new ReplayBundleException(at + "/source", "a call made by both a node and a feature source",
+                    "a node's call names its node, a feature source's its source");
+            }
+
+            var entry = new ServiceEntry(call.Seq, ServiceCaller.KeyOf(call.Node, call.Source), call.Service, call.BatchSize, call.Limit, outcome, call.Error, call.Threw, keys,
                 call.InputDigests.ToArray(), outputs, new Dictionary<string, string>(call.Texts, StringComparer.Ordinal), ids, call.Scores.ToArray(),
                 call.OutputTokens, call.Truncated == true, call.Degraded, call.Dropped ?? 0);
             if (!_serviceCalls.TryGetValue((call.Service, call.Version), out var list))

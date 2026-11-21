@@ -275,7 +275,9 @@ public sealed partial class FeatureFetcher
             return Task.CompletedTask;
         }
 
-        var stored = ReadsLocally(group) ? ReadContextGroup(group, features, cancellationToken) : FetchContextGroup(group, features, cancellationToken);
+        var stored = group.Supply.Mode == SupplyMode.Service ? ServeContextGroup(group, features, cancellationToken)
+            : ReadsLocally(group) ? ReadContextGroup(group, features, cancellationToken)
+            : FetchContextGroup(group, features, cancellationToken);
         return keyState == FeatureState.Degraded ? DegradeWhenStoredAsync(stored, features, keyError) : stored;
     }
 
@@ -473,19 +475,87 @@ public sealed partial class FeatureFetcher
 
         for (var i = 0; i < fetch.Features.Length; i++)
         {
-            var f = fetch.Features[i];
-            if (status.Outcome == FetchOutcome.Failed)
-            {
-                _state[f] = FeatureState.Failed;
-                _errors[f] = status.Error;
-                continue;
-            }
+            StoreContextMember(fetch.Features[i], status, fetch.Staging is null ? ScalarValue.Missing : fetch.Staging.Get(i, 0));
+        }
+    }
 
-            var value = fetch.Staging is null ? ScalarValue.Missing : fetch.Staging.Get(i, 0);
-            var partial = status.Outcome == FetchOutcome.Partial;
-            _state[f] = partial ? FeatureState.Degraded : FeatureState.Ok;
-            _errors[f] = partial ? status.Error : null;
-            StoreContext(_plan.Features[f], value);
+    /// <summary>One member of a context group as its source answered: failed with the call, degraded with a partial answer, else its value.</summary>
+    private void StoreContextMember(int f, in FetchStatus status, ScalarValue value)
+    {
+        if (status.Outcome == FetchOutcome.Failed)
+        {
+            _state[f] = FeatureState.Failed;
+            _errors[f] = status.Error;
+            return;
+        }
+
+        var partial = status.Outcome == FetchOutcome.Partial;
+        _state[f] = partial ? FeatureState.Degraded : FeatureState.Ok;
+        _errors[f] = partial ? status.Error : null;
+        StoreContext(_plan.Features[f], value);
+    }
+
+    /// <summary>
+    /// Asks the service of a service group (IO step 5) for <paramref name="features"/>, once, with the entity's arguments
+    /// read from the request's context values (a missing one is sent as missing), and returns the task that stores its
+    /// answer. The call goes through the service's own path (its cache, its <c>timeout_ms</c>, the recording and the
+    /// replay), within this fetch's bound: the request's deadline, and the caller's token.
+    /// </summary>
+    private Task ServeContextGroup(FetchGroup group, int[] features, CancellationToken cancellationToken)
+    {
+        var args = new ServiceArg[group.Args.Length];
+        for (var a = 0; a < args.Length; a++)
+        {
+            var arg = group.Args[a];
+            args[a] = new ServiceArg(arg.Name, arg.Type, _context[arg.ContextId]);
+        }
+
+        var fields = FieldBindings(group, features);
+        var bound = _hook is { Replays: true }
+            ? new CallBound(CancellationSite.Fetch, cancellationToken, long.MaxValue, _events, _requestId) // a replay is untimed
+            : CallBound.After(CancellationSite.Fetch, cancellationToken, BudgetMs(group), _events, _requestId);
+        var call = new ServiceSupplyCall
+        {
+            Group = group, Args = args, Fields = fields, Values = new ScalarValue[fields.Length], Memory = _memory, Bound = bound, Hook = _hook,
+        };
+        ValueTask<FetchStatus> served;
+        try
+        {
+            served = group.Supply.Service!.FetchAsync(call);
+        }
+        catch (Exception ex)
+        {
+            served = ValueTask.FromException<FetchStatus>(ex);
+        }
+
+        return StoreServedAsync(call, features, served);
+    }
+
+    /// <summary>Stores a service group's answer when it comes, then lets go of the call's bound.</summary>
+    private async Task StoreServedAsync(ServiceSupplyCall call, int[] features, ValueTask<FetchStatus> served)
+    {
+        FetchStatus status;
+        try
+        {
+            status = await served.ConfigureAwait(false);
+        }
+        finally
+        {
+            call.Bound.Release();
+        }
+
+        if (CountsValues && status.Outcome != FetchOutcome.Failed)
+        {
+            for (var i = 0; i < features.Length; i++)
+            {
+                var present = call.Values[i].IsMissing ? 0 : 1;
+                CountValues(_plan.Features[features[i]], present, 1 - present);
+            }
+        }
+
+        for (var i = 0; i < features.Length; i++)
+        {
+            StoreContextMember(features[i], status, call.Values[i]);
         }
     }
 

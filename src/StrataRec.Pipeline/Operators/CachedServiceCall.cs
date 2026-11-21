@@ -53,7 +53,7 @@ internal sealed class CachedServiceCall
     private const int StringType = 6;
     private const int TextType = 7;
 
-    private readonly OperatorContext _context;
+    private readonly IServiceCallScope _scope;
     private readonly BoundService _service;
     private readonly ServiceCache _cache;
     private readonly ServiceCall _call;
@@ -69,14 +69,14 @@ internal sealed class CachedServiceCall
     private bool _timeUsed; // the distributed tier's read was cut off at the service's own deadline
     private int[]? _layout; // a call about items: the layout every record it uses has
 
-    private CachedServiceCall(OperatorContext context, BoundService service, ServiceCache cache, ServiceCall call, ServiceResponse response)
+    private CachedServiceCall(IServiceCallScope scope, BoundService service, ServiceCache cache, ServiceCall call, ServiceResponse response)
     {
-        _context = context;
+        _scope = scope;
         _service = service;
         _cache = cache;
         _call = call;
         _response = response;
-        _memory = context.Memory;
+        _memory = scope.Memory;
         _keyed = !call.Items.IsEmpty;
         _count = _keyed ? call.BatchSize : 1;
         _keys = _memory.Rent<UInt128>(_count);
@@ -105,18 +105,18 @@ internal sealed class CachedServiceCall
     }
 
     /// <summary>
-    /// Runs the call and records it as the node got it; throws <see cref="OperationCanceledException"/> as
-    /// <see cref="OperatorContext.CallAsync"/> does, when the node's budget ran out or the caller cancelled.
+    /// Runs the call and records it as its caller got it; throws <see cref="OperationCanceledException"/> as
+    /// <see cref="ServiceCallPath.CallAsync"/> does, when the scope's bound ran out or the caller cancelled.
     /// </summary>
-    public static async Task<ServiceStatus> RunAsync(OperatorContext context, BoundService service, ServiceCache cache, ServiceCall call, ServiceResponse response)
+    public static async Task<ServiceStatus> RunAsync(IServiceCallScope scope, BoundService service, ServiceCache cache, ServiceCall call, ServiceResponse response)
     {
-        var recorder = context.Recorder;
-        var sequence = recorder?.BeginCall(context.NodeId, service.Target, call) ?? 0;
+        var recorder = scope.Recorder;
+        var sequence = recorder?.BeginCall(scope.Caller, service.Target, call) ?? 0;
         var started = Stopwatch.GetTimestamp();
         var result = new Result(ServiceStatus.Failed("the call did not complete"), IoOutcome.Error, null, false);
         try
         {
-            result = await new CachedServiceCall(context, service, cache, call, response).ReadAsync().ConfigureAwait(false);
+            result = await new CachedServiceCall(scope, service, cache, call, response).ReadAsync().ConfigureAwait(false);
         }
         finally
         {
@@ -138,7 +138,7 @@ internal sealed class CachedServiceCall
     {
         // A call the node could no longer send (its budget ran out, the caller cancelled) is not answered from the cache
         // either: it ends as the call it stands for would (BoundedCall, rule 8), whatever the tiers hold.
-        if (BoundedCall.CutOff(_context.Budget) is { } before)
+        if (BoundedCall.CutOff(_scope.Budget) is { } before)
         {
             return new Result(default, before.Outcome, before.Exception, false);
         }
@@ -158,7 +158,7 @@ internal sealed class CachedServiceCall
         {
             // Answered by the tiers alone, and taken only if the node could still send the call now, as a service's
             // answer is heard only if the call's bound has not passed when it is observed (BoundedCall, rule 1).
-            if (BoundedCall.CutOff(_context.Budget) is { } late)
+            if (BoundedCall.CutOff(_scope.Budget) is { } late)
             {
                 return new Result(default, late.Outcome, late.Exception, false);
             }
@@ -239,7 +239,7 @@ internal sealed class CachedServiceCall
         var tierDeadline = CallDeadline.After(_cache.DistributedTimeoutMs);
         var serviceFirst = _deadline.IsSet && _deadline.Remaining <= tierDeadline.Remaining; // the read within the service's time
         var read = await BoundedCall.RunAsync<bool, StoreRead>(
-            new StoreRead(tier.Store, _cache.Policy, texts, records, answeredAt), _context.Budget, _memory, _cache.Io,
+            new StoreRead(tier.Store, _cache.Policy, texts, records, answeredAt), _scope.Budget, _memory, _cache.Io,
             serviceFirst ? _deadline : tierDeadline).ConfigureAwait(false);
         switch (read.End)
         {
@@ -357,7 +357,7 @@ internal sealed class CachedServiceCall
         var answer = new ServiceResponse(_memory, call.Limit);
 
         // Within what is left of the service's timeout_ms: not sent at all once the distributed tier took all of it.
-        var sent = await _context.SendAsync(_service, call, answer, _deadline).ConfigureAwait(false);
+        var sent = await ServiceCallPath.SendAsync(_scope, _service, call, answer, _deadline).ConfigureAwait(false);
         if (sent.End is CallEnd.BudgetRanOut or CallEnd.Cancelled)
         {
             return new Result(default, sent.Outcome, sent.Exception, false);
@@ -399,7 +399,7 @@ internal sealed class CachedServiceCall
         {
             // Taken only if the node could still send the call now, as an answer of the tiers alone is (review of IO
             // step 4: a caller that cancelled while the distributed tier used up the service's time got the stale values).
-            if (BoundedCall.CutOff(_context.Budget) is { } late)
+            if (BoundedCall.CutOff(_scope.Budget) is { } late)
             {
                 return new Result(default, late.Outcome, late.Exception, false);
             }
@@ -409,7 +409,7 @@ internal sealed class CachedServiceCall
             _cache.Policy.CountKeys(CacheTier.Local, CacheKeyOutcome.Stale, CountStale(wire: false));
             _cache.Policy.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Stale, CountStale(wire: true));
             var degraded = $"{_service.Target.Role} '{_service.Name}' failed ({failure.Error}); its cache answered with values past their TTL";
-            _context.ReportDegraded(degraded);
+            _scope.ReportDegraded(degraded);
             return new Result(Assemble(null, null), IoOutcome.Ok, null, true, degraded);
         }
 

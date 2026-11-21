@@ -16,14 +16,15 @@ public sealed class FeatureCatalogArtifact
     public Dictionary<string, DerivedFeatureSpec> DerivedFeatures { get; init; } = new();
 }
 
-/// <summary>An entity that features hang off (design 6.2).</summary>
+/// <summary>An entity that features hang off (design 6.2): keyed by <see cref="Key"/>, or computed from <see cref="Args"/>.</summary>
 /// <remarks>
-/// Only the key is declared, an ordered tuple of parts. Whether the entity is per request or per candidate, and each
+/// A keyed entity declares only the key, an ordered tuple of parts. Whether the entity is per request or per candidate, and each
 /// part's type, follow from it: a request input (<c>ctx.request.user_id</c>) has its declared type; <c>col.entity_id</c>
 /// the pipeline's <c>entity_key_type</c>; a candidate feature (<c>col.item.creator_id</c>, a foreign key) that feature's
 /// type. A key of request inputs only keys a context entity; any other a candidate entity. Declaring scope and key type
 /// as well only gave them a way to disagree: a <c>key_type</c> of int64 on <c>col.entity_id</c> in a pipeline of string
-/// ids made every lookup miss without an error.
+/// ids made every lookup miss without an error. An entity with <see cref="Args"/> instead is per request: a service
+/// computes its features from the arguments (IO step 5).
 /// </remarks>
 public sealed class EntitySpec
 {
@@ -32,9 +33,18 @@ public sealed class EntitySpec
     /// request input (<c>ctx.request.user_id</c>), the candidate id (<c>col.entity_id</c>), a candidate feature
     /// (<c>col.item.creator_id</c>) or a context feature (<c>ctx.identity.user_id</c>, fetched first), of type int64 or
     /// string, e.g. <c>["col.entity_id", "ctx.request.country"]</c>. A key of request inputs and context features only is
-    /// one per request; a key with a missing part is not looked up.
+    /// one per request; a key with a missing part is not looked up. An entity declares a key or <see cref="Args"/>.
     /// </summary>
-    public required JsonNode Key { get; init; }
+    public JsonNode? Key { get; init; }
+
+    /// <summary>
+    /// What a service computes the entity's features from, instead of a key: each argument's name, as the service's input,
+    /// and the request input (<c>ctx.request.query</c>) or context feature (<c>ctx.user.embedding</c>, fetched first) it
+    /// takes, of any type (a list, a float, a text). One call per request; a missing value is sent as missing. Its features
+    /// come from a source bound to a service (<c>"mode": "service"</c>), e.g.
+    /// <c>{ "query": "ctx.request.query", "recent": "ctx.request.recent_items" }</c>.
+    /// </summary>
+    public Dictionary<string, string>? Args { get; init; }
 
     public string? Description { get; init; }
 }
