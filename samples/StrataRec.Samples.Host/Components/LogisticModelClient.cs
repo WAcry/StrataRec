@@ -1,3 +1,4 @@
+using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Models;
 
@@ -54,7 +55,7 @@ public sealed class LogisticModelClient : IModelClient
         _signature = new ModelSignature(specs, new[] { new TensorSpec(output, TensorElementType.Float32, batch) });
     }
 
-    public string ClientType => LogisticModelClientFactory.Type;
+    public string ClientType => LogisticModelClientFactory.TypeName;
 
     public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken)
     {
@@ -158,11 +159,11 @@ public sealed class LogisticSettings
 }
 
 /// <summary>Creates <c>logistic@1</c> clients; registered in <see cref="SampleEnvironment"/>.</summary>
-public sealed class LogisticModelClientFactory : ModelClientFactory<LogisticSettings>
+public sealed class LogisticModelClientFactory : BindingFactory<IModelClient, LogisticSettings>
 {
-    public const string Type = "logistic@1";
+    public const string TypeName = "logistic@1";
 
-    public override string ClientType => Type;
+    public override string Type => TypeName;
 
     /// <summary>Checks what the settings type cannot say; a wrong setting is a <see cref="BindingException"/> at its pointer, with a hint.</summary>
     protected override IModelClient Create(LogisticSettings settings, BindingContext context)

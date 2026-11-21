@@ -1,50 +1,35 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
+using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 
 namespace StrataRec.Features.Bindings;
 
-/// <summary>The sections of a bindings artifact whose entries name instances (design 6.4).</summary>
-public enum BindingSection : byte
-{
-    /// <summary><c>models</c>: model clients.</summary>
-    Models = 1,
-
-    /// <summary><c>candidate_sources</c>: candidate sources.</summary>
-    CandidateSources,
-
-    /// <summary><c>sources</c> bound with mode <c>fetch</c> or <c>cache</c>: feature connectors.</summary>
-    Sources,
-
-    /// <summary><c>cache.distributed</c> of <c>sources</c> bound with mode <c>cache</c>: distributed cache stores.</summary>
-    SourceCaches,
-}
-
 /// <summary>
-/// What a plan needs from one binding instance (design 6.4): a model client, a candidate source or a feature connector,
-/// with the <see cref="Identity"/> that decides whether an instance created for an earlier plan can serve this one. The
+/// What a plan needs from one binding instance (design 6.4), of any <see cref="BindingKind"/>, with the
+/// <see cref="Identity"/> that decides whether an instance created for an earlier plan can serve this one. The
 /// counterpart of <see cref="Local.LocalTableSpec"/> for everything a binding names that is not a local table.
 /// </summary>
 public sealed class BindingSpec
 {
     private BindingSpec(
-        BindingSection section, string name, string type, IReadOnlyDictionary<string, JsonElement> settings, string baseDirectory, object factory,
+        BindingKind kind, string name, string type, IReadOnlyDictionary<string, JsonElement> settings, string baseDirectory, object factory,
         string artifact)
     {
-        Section = section;
+        Kind = kind;
         Name = name;
         Type = type;
         Settings = settings;
         BaseDirectory = baseDirectory;
         Factory = factory;
         Artifact = artifact;
-        Pointer = "/" + SectionName(section) + "/" + JsonPointer.Escape(name) + MemberPointer(section);
-        Identity = ComputeIdentity(section, name, type, settings, baseDirectory);
+        Pointer = kind.Pointer(name);
+        Identity = ComputeIdentity(kind, name, type, settings, baseDirectory);
         Key = new BindingKey(factory, Identity);
     }
 
-    /// <param name="section">Where the binding is.</param>
+    /// <param name="kind">What the binding names, and so where it is.</param>
     /// <param name="name">The logical name, e.g. <c>ctr_ranker</c>.</param>
     /// <param name="type">The client or connector type, e.g. <c>linear@1</c>.</param>
     /// <param name="settings">The binding's own settings, passed to the factory.</param>
@@ -54,14 +39,14 @@ public sealed class BindingSpec
     /// created them with the same factory, so two engines with different registries never share one.</param>
     /// <param name="artifact">The bindings artifact, e.g. <c>bindings:local</c>, for errors.</param>
     public static BindingSpec Create(
-        BindingSection section, string name, string type, IReadOnlyDictionary<string, JsonElement> settings, string? baseDirectory, object factory,
+        BindingKind kind, string name, string type, IReadOnlyDictionary<string, JsonElement> settings, string? baseDirectory, object factory,
         string artifact)
     {
         ArgumentNullException.ThrowIfNull(factory);
-        return new BindingSpec(section, name, type, settings, BindingContext.PinBaseDirectory(baseDirectory), factory, artifact);
+        return new BindingSpec(kind, name, type, settings, BindingContext.PinBaseDirectory(baseDirectory), factory, artifact);
     }
 
-    public BindingSection Section { get; }
+    public BindingKind Kind { get; }
 
     public string Name { get; }
 
@@ -81,13 +66,7 @@ public sealed class BindingSpec
     public string Pointer { get; }
 
     /// <summary>How messages name the instance, e.g. <c>model 'ctr_backup' (linear@1)</c>.</summary>
-    public string Label => Section switch
-    {
-        BindingSection.Models => "model",
-        BindingSection.CandidateSources => "candidate source",
-        BindingSection.Sources => "feature source",
-        BindingSection.SourceCaches => "distributed cache of feature source",
-    } + $" '{Name}' ({Type})";
+    public string Label => Kind.Noun() + $" '{Name}' ({Type})";
 
     /// <summary>
     /// The one rule for sharing an instance across plans: two specs with the same identity (and the same
@@ -105,27 +84,12 @@ public sealed class BindingSpec
     /// <summary>What an instance is shared by: <see cref="Identity"/> and the <see cref="Factory"/> object.</summary>
     public BindingKey Key { get; }
 
-    /// <summary>The section's member name in the bindings artifact.</summary>
-    public static string SectionName(BindingSection section) => section switch
-    {
-        BindingSection.Models => "models",
-        BindingSection.CandidateSources => "candidate_sources",
-        BindingSection.Sources or BindingSection.SourceCaches => "sources",
-    };
-
-    /// <summary>Where the instance's settings are within its entry of the section: the entry itself, or a member of it.</summary>
-    public static string MemberPointer(BindingSection section) => section switch
-    {
-        BindingSection.Models or BindingSection.CandidateSources or BindingSection.Sources => string.Empty,
-        BindingSection.SourceCaches => "/cache/distributed",
-    };
-
     /// <summary>The context the factory gets.</summary>
     /// <param name="secrets">The host's secret store; null when it has none (or the plan is never loaded).</param>
     public BindingContext Context(ISecretResolver? secrets) => new(Name, Settings, BaseDirectory, secrets);
 
     private static string ComputeIdentity(
-        BindingSection section, string name, string type, IReadOnlyDictionary<string, JsonElement> settings, string baseDirectory)
+        BindingKind kind, string name, string type, IReadOnlyDictionary<string, JsonElement> settings, string baseDirectory)
     {
         var members = new JsonObject();
         foreach (var (key, value) in settings)
@@ -135,7 +99,7 @@ public sealed class BindingSpec
 
         var identity = new JsonObject
         {
-            ["section"] = SectionName(section) + MemberPointer(section),
+            ["section"] = kind.Section() + kind.Member(),
             ["name"] = name,
             ["type"] = type,
             ["settings"] = members,

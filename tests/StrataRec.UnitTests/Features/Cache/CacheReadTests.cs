@@ -525,7 +525,7 @@ public class CacheReadTests
     /// <summary>A distributed tier with nothing in it, which says what its first write held: record bytes, and the bytes of the arrays under them.</summary>
     private sealed class CapturingStore : IFeatureCacheStore
     {
-        public string StoreType => TestCacheStoreFactory.Type;
+        public string StoreType => TestCacheStoreFactory.TypeName;
 
         public TaskCompletionSource<(long Records, long Held)> Written { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 

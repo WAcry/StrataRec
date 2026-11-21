@@ -31,7 +31,7 @@ public sealed class RequestEventLogTests
     {
         var logger = new ListLogger();
         using var events = new RequestEventLog(logger, autoFlush: false);
-        var source = new IoTarget(IoKind.CandidateSource, "ann");
+        var source = new IoTarget(IoRoles.Recall, "ann");
 
         // A healthy window logs nothing; occasional failures are summarized but do not flip the verdict.
         Calls(events, source, ok: 10, failed: 0);
@@ -48,7 +48,7 @@ public sealed class RequestEventLogTests
         var failing = Assert.Single(logger.Entries, e => e.EventId.Id == 2002);
         Assert.Equal(5L, failing.State["Failures"]);
         Assert.Equal(10L, failing.State["Calls"]);
-        Assert.Equal("ann", Assert.Single(logger.Entries, e => e.EventId.Id == 2001).State["Subject"]); // the timeout summary
+        Assert.Equal("recall ann", Assert.Single(logger.Entries, e => e.EventId.Id == 2001).State["Subject"]); // the timeout summary
 
         logger.Entries.Clear();
         Calls(events, source, ok: 0, failed: 3);
@@ -61,14 +61,35 @@ public sealed class RequestEventLogTests
         events.Flush();
         var recovered = Assert.Single(logger.Entries, e => e.EventId.Id == 2003);
         Assert.Equal(LogLevel.Information, recovered.Level);
-        Assert.Equal(IoKind.CandidateSource, recovered.State["Kind"]);
+        Assert.Equal(("recall", "ann"), (recovered.State["Role"], recovered.State["Name"]));
+    }
+
+    [Fact]
+    public void ARoleOfItsOwn_IsMeasuredAndSummarizedAsTheBuiltInOnes_AndTwoRolesOfOneName_AreTwoDependencies()
+    {
+        var logger = new ListLogger();
+        using var events = new RequestEventLog(logger, autoFlush: false);
+        var lookup = new IoTarget("lookup", "geo");
+        var fetch = new IoTarget(IoRoles.Fetch, "geo");
+        using var errors = new MeasurementHook(StrataRecMetrics.Names.IoErrors, static () => { }, (StrataRecTags.IoRole, "lookup"), (StrataRecTags.IoTarget, "geo"));
+
+        lookup.Start().Complete(IoOutcome.Error, requestId: "req-1", error: "down", events: events);
+        lookup.Start().Complete(IoOutcome.Error, requestId: "req-2", error: "down", events: events);
+        fetch.Start().Complete(IoOutcome.Ok, keys: 3, events: events);
+        fetch.Start().Complete(IoOutcome.Ok, keys: 3, events: events);
+        events.Flush();
+
+        Assert.Equal(2, errors.Calls);
+        Assert.Equal("lookup geo", Assert.Single(logger.Entries, e => e.EventId.Id == 2001).State["Subject"]);
+        var failing = Assert.Single(logger.Entries, e => e.EventId.Id == 2002); // the lookup fails; the fetch of the same name does not
+        Assert.Equal(("lookup", "geo", 2L, 2L), (failing.State["Role"], failing.State["Name"], failing.State["Failures"], failing.State["Calls"]));
     }
 
     [Fact]
     public void ReportingAnExistingPair_AllocatesNothing()
     {
         using var events = new RequestEventLog(new ListLogger(), autoFlush: false);
-        var source = new IoTarget(IoKind.FeatureSource, "items");
+        var source = new IoTarget(IoRoles.Fetch, "items");
         var first = Measure(events, source);
         var second = Measure(events, source);
         var third = Measure(events, source);
@@ -92,8 +113,8 @@ public sealed class RequestEventLogTests
     [Fact]
     public void Instrumentation_WithoutListeners_AllocatesNothing()
     {
-        var source = new IoTarget(IoKind.FeatureSource, "items");
-        var model = new IoTarget(IoKind.Model, "ctr");
+        var source = new IoTarget(IoRoles.Fetch, "items");
+        var model = new IoTarget(IoRoles.Model, "ctr");
         KeyValuePair<string, object?>[] tags = [new(StrataRecTags.Pipeline, "feed"), new(StrataRecTags.Node, "ranker")];
         Exercise(source, model, tags);
 
@@ -125,7 +146,7 @@ public sealed class RequestEventLogTests
         // with a fixed amount of work, so a busy thread pool (CI) cannot leave the windows empty.
         var logger = new ListLogger();
         using var events = new RequestEventLog(logger, autoFlush: false);
-        var target = new IoTarget(IoKind.FeatureSource, "store");
+        var target = new IoTarget(IoRoles.Fetch, "store");
 
         var producers = new Thread[2];
         for (var p = 0; p < producers.Length; p++)

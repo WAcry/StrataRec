@@ -39,43 +39,6 @@ internal static class SchemaFiles
         return operators;
     }
 
-    /// <summary>The model clients, candidate sources, connectors, update sources and cache stores of <paramref name="environment"/>, as the bindings schema describes them.</summary>
-    public static List<BindingSchemaSource> Bindings(PlanEnvironment environment)
-    {
-        var bindings = new List<BindingSchemaSource>();
-        foreach (var type in environment.Models.Types)
-        {
-            _ = environment.Models.TryGet(type, out var factory);
-            bindings.Add(new BindingSchemaSource(BindingKind.Model, type, factory.SettingsType));
-        }
-
-        foreach (var type in environment.CandidateSources.Types)
-        {
-            _ = environment.CandidateSources.TryGet(type, out var factory);
-            bindings.Add(new BindingSchemaSource(BindingKind.CandidateSource, type, factory.SettingsType));
-        }
-
-        foreach (var type in environment.Connectors.Types)
-        {
-            _ = environment.Connectors.TryGet(type, out var factory);
-            bindings.Add(new BindingSchemaSource(BindingKind.Connector, type, factory.SettingsType));
-        }
-
-        foreach (var type in environment.UpdateSources.Types)
-        {
-            _ = environment.UpdateSources.TryGet(type, out var factory);
-            bindings.Add(new BindingSchemaSource(BindingKind.UpdateSource, type, factory.SettingsType));
-        }
-
-        foreach (var type in environment.CacheStores.Types)
-        {
-            _ = environment.CacheStores.TryGet(type, out var factory);
-            bindings.Add(new BindingSchemaSource(BindingKind.CacheStore, type, factory.SettingsType));
-        }
-
-        return bindings;
-    }
-
     /// <summary>The schema of <paramref name="kind"/> (an artifact kind or <see cref="RequestKind"/>), or null for another word.</summary>
     public static JsonObject? Schema(string kind, PlanEnvironment environment)
     {
@@ -88,7 +51,7 @@ internal static class SchemaFiles
         {
             if (name == kind)
             {
-                return ArtifactSchemas.Artifact(kind, Operators(environment), Bindings(environment));
+                return ArtifactSchemas.Artifact(kind, Operators(environment), environment.BindingSchemaSources());
             }
         }
 
@@ -120,7 +83,7 @@ internal static class SchemaFiles
     public static List<SchemaFile> Generate(PlanEnvironment environment)
     {
         var operators = Operators(environment);
-        var bindings = Bindings(environment);
+        var bindings = environment.BindingSchemaSources();
         var files = new List<SchemaFile>();
         foreach (var kind in ArtifactSchemas.WorkspaceKinds)
         {

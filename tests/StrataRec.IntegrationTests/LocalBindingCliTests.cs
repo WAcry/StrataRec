@@ -25,9 +25,9 @@ public sealed class LocalBindingCliTests
         Assert.Equal(
             new[]
             {
+                ("BINDING_SETTINGS", "/sources/author_store/bootstrap/url"),
                 ("LOCAL_MAX_BYTES", "/sources/author_store/max_bytes"),
                 ("SOURCE_SETTING_WRONG_MODE", "/sources/author_store/timeout_ms"),
-                ("UPDATE_SOURCE_CONFIG", "/sources/author_store/bootstrap/url"),
             },
             errors.Select(e => (e.Code!, e.Pointer!)).Order());
         Assert.All(errors, e => Assert.False(string.IsNullOrEmpty(e.Hint)));
@@ -61,7 +61,7 @@ public sealed class LocalBindingCliTests
         Assert.True(process.ExitCode == 1, $"exit {process.ExitCode}; stderr: {await stderr}");
         using var report = JsonDocument.Parse(await stdout);
         var error = Assert.Single(report.RootElement.GetProperty("diagnostics").EnumerateArray(), d => d.GetProperty("severity").GetString() == "error");
-        Assert.Equal("UPDATE_SOURCE_CONFIG", error.GetProperty("code").GetString());
+        Assert.Equal("BINDING_SETTINGS", error.GetProperty("code").GetString());
         Assert.Equal("bindings:local", error.GetProperty("artifact").GetString());
         Assert.Equal("/sources/author_store/bootstrap/uri", error.GetProperty("pointer").GetString());
         Assert.Contains("file://", error.GetProperty("hint").GetString());

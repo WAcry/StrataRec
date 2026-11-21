@@ -470,7 +470,7 @@ public sealed class RecallQueryTests
         await using var engine = new RecEngine(new PlanEnvironment
         {
             BaseDirectory = host.Root,
-            Connectors = FeatureConnectorRegistry.CreateDefault().Add(connectors),
+            Bindings = PlanEnvironment.DefaultBindings().Add(connectors),
             Operators = OperatorRegistry.CreateDefault().Add(probe),
         });
         var load = engine.Load(host.Request);
@@ -541,13 +541,12 @@ public sealed class RecallQueryTests
         Debug = new DebugOptions { Record = true, Trace = true, ForceArms = ReplayTests.ControlArms },
     };
 
-    internal static RecEngine Engine(HomeFeedTestHost host, ProbeSources sources, IFeatureConnectorFactory? connectors = null)
+    internal static RecEngine Engine(HomeFeedTestHost host, ProbeSources sources, IBindingFactory<IFeatureSourceConnector>? connectors = null)
     {
         var engine = new RecEngine(new PlanEnvironment
         {
             BaseDirectory = host.Root,
-            Connectors = connectors is null ? FeatureConnectorRegistry.CreateDefault() : FeatureConnectorRegistry.CreateDefault().Add(connectors),
-            CandidateSources = CandidateSourceRegistry.CreateDefault().Add(sources.Lists).Add(sources.Vectors),
+            Bindings = TestBindings.With(connectors, sources.Lists, sources.Vectors),
         });
         var load = engine.Load(host.Request);
         Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
@@ -557,7 +556,7 @@ public sealed class RecallQueryTests
     private static List<(long, int)> Items(RecResult result) => result.Items.Select(i => (i.Id.Int64Value, i.Rank)).ToList();
 
     /// <summary>memory@1 connectors where geo_store waits for <see cref="OpenGeo"/> and region_store for <see cref="OpenRegion"/>.</summary>
-    internal sealed class TwoGateConnectors : IFeatureConnectorFactory, IDisposable
+    internal sealed class TwoGateConnectors : IBindingFactory<IFeatureSourceConnector>, IDisposable
     {
         private readonly MemoryFeatureConnectorFactory _inner = new();
 
@@ -568,7 +567,7 @@ public sealed class RecallQueryTests
         /// <summary>Completes when region_store is asked: the country's region it is keyed by is stored.</summary>
         public TaskCompletionSource RegionStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public string ConnectorType => _inner.ConnectorType;
+        public string Type => _inner.Type;
 
         public Type SettingsType => _inner.SettingsType;
 
@@ -612,9 +611,9 @@ public sealed class RecallQueryTests
             Vectors = new Factory(new MemoryVectorsCandidateSourceFactory(), this);
         }
 
-        public ICandidateSourceFactory Lists { get; }
+        public IBindingFactory<ICandidateSource> Lists { get; }
 
-        public ICandidateSourceFactory Vectors { get; }
+        public IBindingFactory<ICandidateSource> Vectors { get; }
 
         /// <summary>Runs when a source is sent, before it answers, with the call's token.</summary>
         public Func<CandidateQuery, CancellationToken, ValueTask>? BeforeRetrieve { get; init; }
@@ -634,9 +633,9 @@ public sealed class RecallQueryTests
             entry.Called.TrySetResult();
         }
 
-        private sealed class Factory(ICandidateSourceFactory inner, ProbeSources owner) : ICandidateSourceFactory
+        private sealed class Factory(IBindingFactory<ICandidateSource> inner, ProbeSources owner) : IBindingFactory<ICandidateSource>
         {
-            public string ClientType => inner.ClientType;
+            public string Type => inner.Type;
 
             public Type SettingsType => inner.SettingsType;
 
@@ -664,14 +663,14 @@ public sealed class RecallQueryTests
     /// memory@1 connectors where <paramref name="gated"/>'s fetches wait for the gate (open it before a request that should
     /// not wait), and with <paramref name="partial"/> report a partial answer: its features are degraded.
     /// </summary>
-    internal sealed class GatedConnectors(string gated, bool partial = false) : IFeatureConnectorFactory, IDisposable
+    internal sealed class GatedConnectors(string gated, bool partial = false) : IBindingFactory<IFeatureSourceConnector>, IDisposable
     {
         private readonly MemoryFeatureConnectorFactory _inner = new();
         private readonly ManualResetEventSlim _gate = new();
 
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public string ConnectorType => _inner.ConnectorType;
+        public string Type => _inner.Type;
 
         public Type SettingsType => _inner.SettingsType;
 
@@ -792,7 +791,7 @@ public sealed class RecallQueryListenerTests
         await using var engine = new RecEngine(new PlanEnvironment
         {
             BaseDirectory = host.Root,
-            Connectors = FeatureConnectorRegistry.CreateDefault().Add(connectors),
+            Bindings = PlanEnvironment.DefaultBindings().Add(connectors),
             Operators = OperatorRegistry.CreateDefault().Add(late),
         });
         var load = engine.Load(host.Request);

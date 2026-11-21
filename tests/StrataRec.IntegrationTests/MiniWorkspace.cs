@@ -1,4 +1,5 @@
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Bindings;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting.Workspace;
 using StrataRec.Pipeline.Operators;
@@ -14,17 +15,17 @@ internal static class MiniWorkspace
     /// <param name="files">Other files (e.g. a source's <c>data_file</c>) by path relative to the workspace root.</param>
     /// <param name="operators">The operators available; the standard library by default.</param>
     public static ExecutionPlan Compile(
-        string candidateSources, string pipeline, CandidateSourceRegistry? sources = null, IReadOnlyDictionary<string, string>? files = null,
+        string candidateSources, string pipeline, BindingRegistry? bindings = null, IReadOnlyDictionary<string, string>? files = null,
         OperatorRegistry? operators = null)
     {
-        var compilation = TryCompile(candidateSources, pipeline, sources, files, operators);
+        var compilation = TryCompile(candidateSources, pipeline, bindings, files, operators);
         Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
         return compilation.Plan!;
     }
 
     /// <summary>Like <see cref="Compile"/>, for a pipeline that may fail validation; the workspace itself must load.</summary>
     public static PlanCompilation TryCompile(
-        string candidateSources, string pipeline, CandidateSourceRegistry? sources = null, IReadOnlyDictionary<string, string>? files = null,
+        string candidateSources, string pipeline, BindingRegistry? bindings = null, IReadOnlyDictionary<string, string>? files = null,
         OperatorRegistry? operators = null)
     {
         var root = Directory.CreateTempSubdirectory("stratarec-mini-").FullName;
@@ -50,7 +51,7 @@ internal static class MiniWorkspace
         var environment = new PlanEnvironment
         {
             BaseDirectory = root,
-            CandidateSources = sources ?? CandidateSourceRegistry.CreateDefault(),
+            Bindings = bindings ?? PlanEnvironment.DefaultBindings(),
             Operators = operators ?? OperatorRegistry.CreateDefault(),
         };
         return PlanCompiler.Compile(request!, environment);

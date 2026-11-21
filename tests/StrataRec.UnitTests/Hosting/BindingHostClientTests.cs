@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Features.Bindings;
 using StrataRec.Hosting.Bindings;
@@ -671,7 +672,7 @@ public sealed class BindingHostClientTests
             values[property.Name] = property.Value.Clone();
         }
 
-        return BindingSpec.Create(BindingSection.Models, "ctr_model", "test@1", values, Root, factory, "bindings:test");
+        return BindingSpec.Create(BindingKind.Model, "ctr_model", "test@1", values, Root, factory, "bindings:test");
     }
 
     private sealed class Factory

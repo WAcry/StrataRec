@@ -115,7 +115,7 @@ public sealed class StrataRecStartupTests : IDisposable
         using var host = Build(new CapturedLog(), options =>
         {
             options.ConfigRoot = "config";
-            options.PlanEnvironment = new PlanEnvironment { CandidateSources = CandidateSourceRegistry.CreateDefault().Add(new SlowListFactory()) };
+            options.PlanEnvironment = new PlanEnvironment { Bindings = PlanEnvironment.DefaultBindings().Add(new SlowListFactory()) };
         }, concurrently: true, later);
 
         await host.StartAsync(TestContext.Current.CancellationToken);
@@ -194,9 +194,9 @@ public sealed class StrataRecStartupTests : IDisposable
     }
 
     /// <summary><c>memory_list@1</c> whose load takes 300 ms.</summary>
-    private sealed class SlowListFactory : ICandidateSourceFactory
+    private sealed class SlowListFactory : IBindingFactory<ICandidateSource>
     {
-        public string ClientType => "slow_list@1";
+        public string Type => "slow_list@1";
 
         public Type SettingsType => typeof(MemoryListSettings);
 

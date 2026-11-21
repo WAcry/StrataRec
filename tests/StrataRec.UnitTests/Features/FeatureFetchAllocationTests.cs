@@ -308,7 +308,7 @@ public class FeatureFetchAllocationTests
     /// <summary>Answers every key at once (score = key × 0.5, clicks = key) without allocating.</summary>
     private sealed class SynchronousConnector : IFeatureSourceConnector
     {
-        public string ConnectorType => TestConnectorFactory.Type;
+        public string ConnectorType => TestConnectorFactory.TypeName;
 
         public bool Supports(EntityKeyLayout layout) => !layout[0].IsShared; // keyed by the first part
 

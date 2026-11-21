@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Runtime.InteropServices;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
@@ -111,7 +112,6 @@ internal sealed class SourceValueTags(string source, string feature)
     private static KeyValuePair<string, object?>[] Tags(string source, string feature, string outcome) =>
     [
         new(StrataRecTags.Source, source),
-        new(StrataRecTags.SourceKind, "feature"),
         new(StrataRecTags.Feature, feature),
         new(StrataRecTags.Outcome, outcome),
     ];
@@ -182,7 +182,7 @@ public sealed class FetchGroup
     public int Wave { get; internal set; }
 
     /// <summary>Metric tags and span name of this source (design 13.1), built once per plan on first use.</summary>
-    public IoTarget Io => _io ?? Interlocked.CompareExchange(ref _io, new IoTarget(IoKind.FeatureSource, SourceName), null) ?? _io!;
+    public IoTarget Io => _io ?? Interlocked.CompareExchange(ref _io, new IoTarget(IoRoles.Fetch, SourceName), null) ?? _io!;
 
     private IoTarget? _io;
 }
@@ -245,10 +245,9 @@ public sealed class FeaturePlan
     /// computes fetch waves. Problems (unbound sources, wrong settings, unsupported key layouts) are reported to
     /// <paramref name="diagnostics"/>.
     /// </summary>
-    /// <param name="updateSources">Update-source factories for local bindings; null has the built-in ones.</param>
+    /// <param name="resolver">Creates connectors, update sources and distributed cache stores (sharing them by identity as
+    /// it does) and reports their bindings' errors.</param>
     /// <param name="localTables">Where local tables come from; null gives tables that are never loaded (compiling without serving).</param>
-    /// <param name="instances">Where connectors and distributed cache stores come from; null creates them for this plan alone.</param>
-    /// <param name="cacheStores">Distributed cache store factories for cache bindings; null has none.</param>
     /// <param name="clock">The clock of the cache tables the plan creates; null is the system clock.</param>
     /// <param name="catalog">The catalog the features come from: a <c>local</c> table holds every physical feature it
     /// binds to the table's source and entity, not only those of <paramref name="features"/> (see
@@ -264,14 +263,10 @@ public sealed class FeaturePlan
     public static FeaturePlan Create(
         IReadOnlyList<FeatureRuntimeInfo> features,
         SourceBindingArtifact bindings,
-        FeatureConnectorRegistry connectors,
+        BindingResolver resolver,
         Func<string, int> contextIdOfRequestInput,
         DiagnosticBag diagnostics,
-        string? baseDirectory,
-        FeatureUpdateSourceRegistry? updateSources = null,
         ILocalTableProvider? localTables = null,
-        IBindingInstances? instances = null,
-        FeatureCacheStoreRegistry? cacheStores = null,
         TimeProvider? clock = null,
         string catalogArtifact = "catalog",
         FeatureCatalog? catalog = null,
@@ -313,10 +308,8 @@ public sealed class FeaturePlan
         }
 
         var groups = new List<FetchGroup>();
-        var resolver = new FeatureSourceResolver(
-            bindings, connectors, updateSources ?? FeatureUpdateSourceRegistry.CreateDefault(), cacheStores ?? new FeatureCacheStoreRegistry(),
-            localTables ?? UnloadedLocalTables.Instance, instances ?? UnsharedInstances.Instance, baseDirectory, clock ?? TimeProvider.System, diagnostics,
-            catalogArtifact, catalog);
+        var sources = new FeatureSourceResolver(
+            bindings, resolver, localTables ?? UnloadedLocalTables.Instance, clock ?? TimeProvider.System, diagnostics, catalogArtifact, catalog);
 
         foreach (var (groupKey, memberList) in grouped)
         {
@@ -324,12 +317,12 @@ public sealed class FeaturePlan
             memberList.Sort(static (a, b) => string.CompareOrdinal(a.Definition.Name, b.Definition.Name));
             var members = memberList.ToArray();
             var entity = members[0].Definition.Entity;
-            if (resolver.Source(sourceName, members[0].Definition.Pointer + "/source") is not { } supply)
+            if (sources.Source(sourceName, members[0].Definition.Pointer + "/source") is not { } supply)
             {
                 continue;
             }
 
-            if (resolver.Group(supply, entity, members) is not { } groupSupply
+            if (sources.Group(supply, entity, members) is not { } groupSupply
                 || !TryKeyParts(entity, byName, contextIdOfRequestInput, diagnostics, catalogArtifact, out var keyParts, out var varying, out var keyFeatures, out var contextKeys))
             {
                 continue;
@@ -674,33 +667,6 @@ public sealed class FeaturePlan
             }
         }
     }
-}
-
-/// <summary>Connector factories available in this binary, keyed by connector type (<c>name@version</c>).</summary>
-public sealed class FeatureConnectorRegistry
-{
-    private readonly Dictionary<string, IFeatureConnectorFactory> _factories = new(StringComparer.Ordinal);
-
-    public IEnumerable<string> Types
-    {
-        get
-        {
-            var types = new List<string>(_factories.Keys);
-            types.Sort(StringComparer.Ordinal);
-            return types;
-        }
-    }
-
-    /// <summary>A registry with the built-in connectors (<c>memory@1</c>).</summary>
-    public static FeatureConnectorRegistry CreateDefault() => new FeatureConnectorRegistry().Add(new MemoryFeatureConnectorFactory());
-
-    public FeatureConnectorRegistry Add(IFeatureConnectorFactory factory)
-    {
-        _factories[factory.ConnectorType] = factory;
-        return this;
-    }
-
-    public bool TryGet(string type, out IFeatureConnectorFactory factory) => _factories.TryGetValue(type, out factory!);
 }
 
 internal sealed class GroupKeyComparer : IComparer<(string Source, string Entity)>

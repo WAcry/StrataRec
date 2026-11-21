@@ -161,7 +161,7 @@ public sealed class LlmRerankerEndToEndTests
 
     private static List<(string Outcome, double Count)> AnswerIds(MetricCapture metrics) =>
         metrics.Of(StrataRecMetrics.Names.ModelAnswerIds)
-            .Where(m => Equals(m.Tags[StrataRecTags.Model], "llm_ranker"))
+            .Where(m => Equals(m.Tags[StrataRecTags.IoTarget], "llm_ranker"))
             .GroupBy(m => (string)m.Tags[StrataRecTags.Outcome]!)
             .Select(g => (g.Key, g.Sum(m => m.Value)))
             .OrderBy(p => p.Key, StringComparer.Ordinal)

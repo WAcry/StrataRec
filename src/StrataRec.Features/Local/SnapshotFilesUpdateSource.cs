@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Xml;
 using StrataRec.Artifacts.Json;
+using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Keys;
@@ -160,11 +161,11 @@ public sealed class SnapshotFilesSettings
 }
 
 /// <summary>Factory for <c>snapshot_files@1</c>.</summary>
-public sealed class SnapshotFilesUpdateSourceFactory : FeatureUpdateSourceFactory<SnapshotFilesSettings>
+public sealed class SnapshotFilesUpdateSourceFactory : BindingFactory<IFeatureUpdateSource, SnapshotFilesSettings>
 {
     private static readonly TimeSpan MaxReload = TimeSpan.FromDays(49);
 
-    public override string SourceType => SnapshotFilesUpdateSource.Type;
+    public override string Type => SnapshotFilesUpdateSource.Type;
 
     /// <summary>
     /// The manifest's path is fixed now, absolute (the <c>uri</c> is resolved against the pinned base directory when the

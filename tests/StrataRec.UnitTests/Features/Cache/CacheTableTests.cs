@@ -396,7 +396,7 @@ public class CacheTableTests
 
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public string StoreType => TestCacheStoreFactory.Type;
+        public string StoreType => TestCacheStoreFactory.TypeName;
 
         public void Release() => _release.TrySetResult();
 

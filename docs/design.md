@@ -785,7 +785,7 @@ internal sealed class RequestMemory
 
 模型客户端、召回源和连接器（内置的或使用方写的）是绑定的实例，与本地特征表一样按身份（类型、设置、基准目录）在计划之间共享：在计划开始服务之前加载，在没有服务中的计划使用、也没有请求还能调用它们时释放（取舍见 `decisions.md`“绑定的实例”）。凭据只写成 `secret://<名字>` 的引用，实例加载时由宿主注册的 `ISecretResolver` 解析，值不出现在诊断、日志和回放包里。
 
-每种绑定类型的工厂声明自己设置的 C# 类型（`SettingsType`；内置基类 `ModelClientFactory<T>`、`CandidateSourceFactory<T>`、`FeatureConnectorFactory<T>`、`FeatureCacheStoreFactory<T>`、`FeatureUpdateSourceFactory<T>` 以类型参数声明）。调用工厂之前，引擎用和算子配置相同的严格规则把绑定自己的设置绑定到这个类型：未知或拼错的键（附相近的名字）、类型不符、缺少必填成员，都报在设置的 JSON 指针处并给出提示；工厂只检查类型表达不了的约束（取值范围、两者择一）。本地文件和密钥引用是设置类型里的 `LocalFile`、`SecretReference` 成员：相对路径按配置根目录解析，`file://` URI 和绝对路径等价，非本地 URI 是配置错误；密钥只以 `secret://名字` 引用，报错不回显它的值。更新来源的工厂同样接收 `BindingContext`，设置错误报在 `bootstrap` 内。上例的 `grpc_tensor@1`、`redis_hash@1`、`kafka@1` 等是宿主注册的类型；内置的模型客户端只有 `linear@1`、`random@1`、`fixed_text@1`。
+每种绑定类型的工厂（各种绑定同一个接口 `IBindingFactory<TInstance>`）声明自己设置的 C# 类型（`SettingsType`；基类 `BindingFactory<TInstance, TSettings>` 以类型参数声明），全部注册在 `PlanEnvironment.Bindings` 一个注册表里。调用工厂之前，引擎用和算子配置相同的严格规则把绑定自己的设置绑定到这个类型：未知或拼错的键（附相近的名字）、类型不符、缺少必填成员，都报在设置的 JSON 指针处并给出提示；工厂只检查类型表达不了的约束（取值范围、两者择一）。本地文件和密钥引用是设置类型里的 `LocalFile`、`SecretReference` 成员：相对路径按配置根目录解析，`file://` URI 和绝对路径等价，非本地 URI 是配置错误；密钥只以 `secret://名字` 引用，报错不回显它的值。更新来源的工厂同样接收 `BindingContext`，设置错误报在 `bootstrap` 内。上例的 `grpc_tensor@1`、`redis_hash@1`、`kafka@1` 等是宿主注册的类型；内置的模型客户端只有 `linear@1`、`random@1`、`fixed_text@1`。
 
 ### 6.5 实体键与批量
 
@@ -2201,7 +2201,7 @@ MMR 实验的 `mmr` 桶删除 `diversity_cap`、在第 550 位新增 `mmr_divers
 | 日志 | 队列深度、每个探针的字节数、按（探针，时间窗口）统计的丢弃数、持久批次的序号 |
 | 内存 | 池中保留的字节数、每请求租借的字节数、取消后仍未结束的外部 I/O（`abandoned_io_total`） |
 
-**指标接口。** 引擎只用 .NET 标准的 `System.Diagnostics.Metrics` 记录指标（`Meter` 名为 `StrataRec`），不引用任何导出库。指标名称是稳定的公开接口，例如 `stratarec.request.duration`、`stratarec.source.duration`、`stratarec.model.duration` 和 `stratarec.node.duration`，耗时以秒为单位。耗时、行数、字节数等分布都记为 `Histogram<T>`。怎样导出、每个分布以什么形式存储、在哪些实例上输出，都由宿主按指标名称配置，引擎的代码和记录方式不随之改变。
+**指标接口。** 引擎只用 .NET 标准的 `System.Diagnostics.Metrics` 记录指标（`Meter` 名为 `StrataRec`），不引用任何导出库。指标名称是稳定的公开接口，例如 `stratarec.request.duration`、`stratarec.io.duration` 和 `stratarec.node.duration`，耗时以秒为单位。耗时、行数、字节数等分布都记为 `Histogram<T>`。怎样导出、每个分布以什么形式存储、在哪些实例上输出，都由宿主按指标名称配置，引擎的代码和记录方式不随之改变。
 
 **导出方式。** 宿主从下面三种方式中选择：
 

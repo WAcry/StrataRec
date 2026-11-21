@@ -447,7 +447,7 @@ public class BindingHostTableTests
 
     /// <summary>The spec of a local table loaded by a source of <paramref name="factory"/>; a <see cref="ScriptedSource"/>
     /// is its own factory, so the specs of one source share a table.</summary>
-    private static LocalTableSpec Spec(IFeatureUpdateSourceFactory factory, string maxBytes = "1MiB")
+    private static LocalTableSpec Spec(IBindingFactory<IFeatureUpdateSource> factory, string maxBytes = "1MiB")
     {
         var entity = StrataRec.Features.Catalog.EntityDefinition.Of(
             "item", StrataRec.Features.Catalog.EntityKeyPartDefinition.EntityId(EntityKeyType.Int64));
@@ -517,11 +517,11 @@ public class BindingHostTableTests
     }
 
     /// <summary>A factory that hands out the given sources in order, one per spec (the last one again if asked for more).</summary>
-    private sealed class Sources(params IFeatureUpdateSource[] sources) : IFeatureUpdateSourceFactory
+    private sealed class Sources(params IFeatureUpdateSource[] sources) : IBindingFactory<IFeatureUpdateSource>
     {
         private int _created;
 
-        public string SourceType => "scripted@1";
+        public string Type => "scripted@1";
 
         public Type SettingsType => typeof(NoSettings);
 
@@ -533,11 +533,13 @@ public class BindingHostTableTests
     /// every spec of one source has one owner, and shares the table, as the specs of one engine's plans do.
     /// </summary>
     private sealed class ScriptedSource(params Func<UpdatePosition, IFeatureTableWriter, CancellationToken, Task>[] runs)
-        : IFeatureUpdateSource, IFeatureUpdateSourceFactory
+        : IFeatureUpdateSource, IBindingFactory<IFeatureUpdateSource>
     {
         private int _runs;
 
-        public string SourceType => "scripted@1";
+        public string Type => "scripted@1";
+
+        public string SourceType => Type;
 
         public Type SettingsType => typeof(NoSettings);
 

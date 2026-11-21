@@ -30,7 +30,7 @@ public sealed class ReplayAbortTests
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
             "\"on_failure\": \"fallback\", \"fallback\": \"ctr_backup\"", "\"on_failure\": \"fail_request\""));
         var models = new BlockingModels();
-        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Models = new ModelClientRegistry().Add(models) });
+        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Bindings = PlanEnvironment.DefaultBindings().Add(models) });
         Assert.True(engine.Load(host.Request).Applied);
         ReplayBundle? delivered = null;
         using var cancel = new CancellationTokenSource();
@@ -115,7 +115,7 @@ public sealed class ReplayAbortTests
             }
         });
         var models = new BlockingModels();
-        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Models = new ModelClientRegistry().Add(models) });
+        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Bindings = PlanEnvironment.DefaultBindings().Add(models) });
         var load = engine.Load(host.Request);
         Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
         ReplayBundle? delivered = null;
@@ -287,7 +287,7 @@ public sealed class ReplayAbortTests
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
             "\"on_failure\": \"fallback\", \"fallback\": \"ctr_backup\"", "\"on_failure\": \"fail_request\""));
         var models = new BlockingModels();
-        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Models = new ModelClientRegistry().Add(models) });
+        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Bindings = PlanEnvironment.DefaultBindings().Add(models) });
         Assert.True(engine.Load(host.Request).Applied);
         ReplayBundle? delivered = null;
         using var cancel = new CancellationTokenSource();
@@ -340,7 +340,7 @@ public sealed class ReplayAbortTests
     }
 
     /// <summary>Linear model clients that block until cancelled, honouring the cancellation.</summary>
-    private sealed class BlockingModels : IModelClientFactory
+    private sealed class BlockingModels : IBindingFactory<IModelClient>
     {
         private readonly LinearModelClientFactory _inner = new();
         private int _calls;
@@ -349,7 +349,7 @@ public sealed class ReplayAbortTests
 
         public int Calls => Volatile.Read(ref _calls);
 
-        public string ClientType => _inner.ClientType;
+        public string Type => _inner.Type;
 
         public Type SettingsType => _inner.SettingsType;
 
@@ -416,7 +416,7 @@ public sealed class ReplayAbortTests
             {
                 var rows = context.LiveRows.ToArray();
                 var call = new ModelCall { Model = "stuck", Inputs = Array.Empty<NamedInput>(), BatchSize = rows.Length };
-                client.Invocation = context.InvokeModelAsync(client, new IoTarget(IoKind.Model, "stuck"), call, new ArrayWriter(), rows, timeoutMs: null);
+                client.Invocation = context.InvokeModelAsync(client, new IoTarget(IoRoles.Model, "stuck"), call, new ArrayWriter(), rows, timeoutMs: null);
                 if (awaitCall)
                 {
                     await client.Invocation;

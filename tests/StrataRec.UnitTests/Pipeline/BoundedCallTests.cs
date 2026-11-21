@@ -24,7 +24,7 @@ public sealed class BoundedCallTests
 {
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(20);
 
-    private static readonly IoTarget Target = new(IoKind.Model, "m");
+    private static readonly IoTarget Target = new(IoRoles.Model, "m");
 
     [Fact]
     public async Task AClientIgnoringItsToken_IsCutOffAtTheNodeDeadline_AndHoldsTheMemoryAndItsTokenUntilItCompletes()
@@ -635,8 +635,8 @@ public sealed class BoundedCallListenerTests
     [InlineData(false)]
     public async Task AListenerThatThrowsWhenACallCompletes_LosesItsMeasurement_AndTheCallIsStillRecorded(bool synchronously)
     {
-        var target = new IoTarget(IoKind.CandidateSource, "review80_listener");
-        using var listener = MeasurementHook.Throwing(StrataRecMetrics.Names.SourceDuration, (StrataRecTags.Source, target.Name));
+        var target = new IoTarget(IoRoles.Recall, "review80_listener");
+        using var listener = MeasurementHook.Throwing(StrataRecMetrics.Names.IoDuration, (StrataRecTags.IoTarget, target.Name));
         var memory = new RequestMemory();
         var budget = new AttemptBudget(CancellationToken.None, Stopwatch.GetTimestamp() + (600L * Stopwatch.Frequency));
         var answer = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -681,7 +681,7 @@ public sealed class BoundedCallListenerTests
         ActivitySource.AddActivityListener(listener);
         using var request = StrataRecTelemetry.ActivitySource.StartActivity(root);
         trace = request!.TraceId;
-        var target = new IoTarget(IoKind.CandidateSource, "start_listener");
+        var target = new IoTarget(IoRoles.Recall, "start_listener");
         var memory = new RequestMemory();
         var budget = new AttemptBudget(CancellationToken.None, Stopwatch.GetTimestamp() + (600L * Stopwatch.Frequency));
         var call = new Recording(new ValueTask<int>(5));
@@ -748,7 +748,7 @@ public sealed class BoundedCallAllocationTests
     {
         var memory = new RequestMemory();
         var budget = new AttemptBudget(CancellationToken.None, Stopwatch.GetTimestamp() + (600L * Stopwatch.Frequency));
-        var target = new IoTarget(IoKind.CandidateSource, "s");
+        var target = new IoTarget(IoRoles.Recall, "s");
         for (var i = 0; i < 100; i++)
         {
             Consume(BoundedCall.RunAsync<int, Answering>(default, budget, memory, target, timeoutMs, "req", null));

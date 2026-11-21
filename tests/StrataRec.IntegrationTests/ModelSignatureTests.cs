@@ -88,7 +88,7 @@ public sealed class ModelSignatureTests
     private static bool IsModelError(ConfigDiagnostic d) => d.IsError && d.Code.StartsWith("MODEL_", StringComparison.Ordinal);
 
     private static PlanCompilation Compile(HomeFeedTestHost host, Func<string?, ModelSignature> signature) =>
-        PlanCompiler.Compile(host.Request, new PlanEnvironment { BaseDirectory = host.Root, Models = new ModelClientRegistry().Add(new SignatureModels(signature)) });
+        PlanCompiler.Compile(host.Request, new PlanEnvironment { BaseDirectory = host.Root, Bindings = PlanEnvironment.DefaultBindings().Add(new SignatureModels(signature)) });
 
     /// <summary>The sample model's signature (what <c>linear@1</c> declares for it), with one tensor replaced or added.</summary>
     private static ModelSignature Linear(TensorSpec? smoothedCtr = null, TensorSpec? logFollowers = null, TensorSpec? extra = null, TensorSpec? pClick = null)
@@ -107,9 +107,9 @@ public sealed class ModelSignatureTests
     }
 
     /// <summary>Stands in for <c>linear@1</c> with a signature per version; never called.</summary>
-    private sealed class SignatureModels(Func<string?, ModelSignature> signature) : IModelClientFactory
+    private sealed class SignatureModels(Func<string?, ModelSignature> signature) : IBindingFactory<IModelClient>
     {
-        public string ClientType => LinearModelClientFactory.Type;
+        public string Type => LinearModelClientFactory.TypeName;
 
         public Type SettingsType => typeof(LinearSettings);
 
@@ -117,7 +117,7 @@ public sealed class ModelSignatureTests
 
         private sealed class Client(Func<string?, ModelSignature> signature) : IModelClient
         {
-            public string ClientType => LinearModelClientFactory.Type;
+            public string ClientType => LinearModelClientFactory.TypeName;
 
             public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
                 ValueTask.FromResult(signature(version));

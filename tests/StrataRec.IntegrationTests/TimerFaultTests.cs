@@ -14,8 +14,8 @@ using StrataRec.Logging;
 using StrataRec.Models;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
-using StrataRec.Testing;
 using StrataRec.Pipeline.Sources;
+using StrataRec.Testing;
 
 namespace StrataRec.IntegrationTests;
 
@@ -379,7 +379,7 @@ internal static class TimerFaultChild
     {
         var timeout = popularTimeoutMs is { } ms ? $", \"timeout_ms\": {ms}" : string.Empty;
         var host = HomeFeedTestHost.LoadModified(root => SampleBindings.RebindCandidateSource(root, "popular",
-            $$"""{ "client": "{{HangingSources.Type}}", "data_file": "fixtures/recall_popular.json"{{timeout}} }"""));
+            $$"""{ "client": "{{HangingSources.TypeName}}", "data_file": "fixtures/recall_popular.json"{{timeout}} }"""));
         var events = new RequestEventLog(loggers.CreateLogger("events"), autoFlush: false);
         var (result, elapsed) = Execute(host, events, deadlineMs, sources: new HangingSources(), callerTimeoutMs: callerTimeoutMs);
         if (result is null)
@@ -395,7 +395,7 @@ internal static class TimerFaultChild
     private static (string Ended, int BudgetMs, long ElapsedMs, RequestEventLog? Events) Fetch(ListLoggerFactory loggers, int timeoutMs, int deadlineMs)
     {
         var host = HomeFeedTestHost.LoadModified(root => SampleBindings.Rebind(root, "item_store",
-            $$"""{ "connector": "{{HangingConnectors.Type}}", "data_file": "fixtures/items.json", "timeout_ms": {{timeoutMs}}, "max_batch": 25 }"""));
+            $$"""{ "connector": "{{HangingConnectors.TypeName}}", "data_file": "fixtures/items.json", "timeout_ms": {{timeoutMs}}, "max_batch": 25 }"""));
         var events = new RequestEventLog(loggers.CreateLogger("events"), autoFlush: false);
         var (result, elapsed) = Execute(host, events, deadlineMs, connectors: new HangingConnectors());
         var details = string.Join(" | ", (result!.Trace ?? Array.Empty<NodeOutcome>()).Select(n => n.Detail).Where(d => d is not null));
@@ -404,14 +404,12 @@ internal static class TimerFaultChild
 
     /// <returns>The result, or null when the caller's token (cancelled after <paramref name="callerTimeoutMs"/>) ended the request.</returns>
     private static (RecResult? Result, long ElapsedMs) Execute(HomeFeedTestHost host, RequestEventLog events, int deadlineMs,
-        ICandidateSourceFactory? sources = null, IFeatureConnectorFactory? connectors = null, int? callerTimeoutMs = null)
+        IBindingFactory<ICandidateSource>? sources = null, IBindingFactory<IFeatureSourceConnector>? connectors = null, int? callerTimeoutMs = null)
     {
         var environment = new PlanEnvironment
         {
             BaseDirectory = host.Root,
-            Models = ModelClientRegistry.CreateDefault(),
-            Connectors = connectors is null ? FeatureConnectorRegistry.CreateDefault() : FeatureConnectorRegistry.CreateDefault().Add(connectors),
-            CandidateSources = sources is null ? CandidateSourceRegistry.CreateDefault() : CandidateSourceRegistry.CreateDefault().Add(sources),
+            Bindings = TestBindings.With(connectors, sources),
         };
         var engine = new RecEngine(environment, executor: new PipelineExecutor(null, null, events));
         var load = engine.Load(host.Request);
@@ -495,13 +493,13 @@ internal static class TimerFaultChild
         return ended.Task;
     }
 
-    private sealed class HangingSources : ICandidateSourceFactory
+    private sealed class HangingSources : IBindingFactory<ICandidateSource>
     {
-        public const string Type = "hanging_list@1";
+        public const string TypeName = "hanging_list@1";
 
         private readonly MemoryListCandidateSourceFactory _inner = new();
 
-        public string ClientType => Type;
+        public string Type => TypeName;
 
         public Type SettingsType => _inner.SettingsType;
 
@@ -516,13 +514,13 @@ internal static class TimerFaultChild
         }
     }
 
-    private sealed class HangingConnectors : IFeatureConnectorFactory
+    private sealed class HangingConnectors : IBindingFactory<IFeatureSourceConnector>
     {
-        public const string Type = "hanging_memory@1";
+        public const string TypeName = "hanging_memory@1";
 
         private readonly MemoryFeatureConnectorFactory _inner = new();
 
-        public string ConnectorType => Type;
+        public string Type => TypeName;
 
         public Type SettingsType => _inner.SettingsType;
 
@@ -530,7 +528,7 @@ internal static class TimerFaultChild
 
         private sealed class Connector(IFeatureSourceConnector inner) : IFeatureSourceConnector
         {
-            public string ConnectorType => Type;
+            public string ConnectorType => TypeName;
 
             public bool Supports(EntityKeyLayout layout) => inner.Supports(layout);
 

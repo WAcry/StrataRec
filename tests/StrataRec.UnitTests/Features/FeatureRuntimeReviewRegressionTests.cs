@@ -1,11 +1,13 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
+using StrataRec.Features.Bindings;
 using StrataRec.Features.Connectors;
 using StrataRec.Features.Runtime;
 
@@ -29,7 +31,8 @@ public class FeatureRuntimeReviewRegressionTests
         var before = Layout();
 
         var thrown = Assert.Throws<ArgumentException>(() => FeaturePlan.Create(
-            plan.Features, new SourceBindingArtifact { Environment = "test" }, FeatureConnectorRegistry.CreateDefault(), _ => -1, new DiagnosticBag(), null));
+            plan.Features, new SourceBindingArtifact { Environment = "test" },
+            new BindingResolver(new BindingRegistry(), UnsharedInstances.Instance, null, "bindings:test", new DiagnosticBag()), _ => -1, new DiagnosticBag()));
 
         Assert.Contains("'item.score' belongs to a feature plan already", thrown.Message);
         Assert.Equal(before, Layout());

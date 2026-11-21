@@ -38,12 +38,17 @@ public static class StrataRecTags
 
     public const string Node = "stratarec.node";
 
-    /// <summary>Feature source or candidate source name from the bindings.</summary>
+    /// <summary>Feature source name from the bindings, on what the feature runtime measures of a source (values, tables, caches).</summary>
     public const string Source = "stratarec.source";
 
-    /// <summary><c>feature</c> or <c>candidate</c>: the two source namespaces of the bindings; <c>feature_cache</c> for the
-    /// distributed cache of a feature source bound with mode <c>cache</c>.</summary>
-    public const string SourceKind = "stratarec.source.kind";
+    /// <summary>
+    /// What a call of an external dependency is for (<see cref="IoRoles"/>): <c>fetch</c>, <c>cache</c>, <c>recall</c>,
+    /// <c>model</c>, or an extension's own; with <see cref="IoTarget"/> on every <c>stratarec.io.*</c> metric.
+    /// </summary>
+    public const string IoRole = "stratarec.io.role";
+
+    /// <summary>The binding name of the dependency a call went to, e.g. <c>item_store</c> or <c>ctr_model</c>.</summary>
+    public const string IoTarget = "stratarec.io.target";
 
     /// <summary>
     /// Catalog name of a feature (with <see cref="Source"/>: what a source supplies, field by field). Bounded by the
@@ -56,8 +61,6 @@ public static class StrataRecTags
 
     /// <summary>Tier of a <c>cache</c> source (design 6.6): <c>local</c> (the in-process table) or <c>distributed</c>.</summary>
     public const string CacheTier = "stratarec.cache.tier";
-
-    public const string Model = "stratarec.model";
 
     /// <summary>Outcome category; only on counters, never on durations (design 13.1 rule 2).</summary>
     public const string Outcome = "stratarec.outcome";

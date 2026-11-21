@@ -49,7 +49,7 @@ public sealed class LocalTableSpec
         LocalTableSchema schema,
         LocalFeatureTableOptions options,
         FeatureSourceBinding binding,
-        IFeatureUpdateSourceFactory bootstrapFactory,
+        IBindingFactory<IFeatureUpdateSource> bootstrapFactory,
         string sourceName,
         string artifact,
         string pointer,
@@ -226,35 +226,6 @@ public sealed class UnloadedLocalTables : ILocalTableProvider
         ArgumentNullException.ThrowIfNull(spec);
         return new LocalFeatureTable(spec.Schema, spec.Options);
     }
-}
-
-/// <summary>Update-source factories available in this binary, keyed by type (<c>name@version</c>); the
-/// counterpart of <see cref="Runtime.FeatureConnectorRegistry"/>.</summary>
-public sealed class FeatureUpdateSourceRegistry
-{
-    private readonly Dictionary<string, IFeatureUpdateSourceFactory> _factories = new(StringComparer.Ordinal);
-
-    public IEnumerable<string> Types
-    {
-        get
-        {
-            var types = new List<string>(_factories.Keys);
-            types.Sort(StringComparer.Ordinal);
-            return types;
-        }
-    }
-
-    /// <summary>A registry with the built-in sources (<c>snapshot_files@1</c>).</summary>
-    public static FeatureUpdateSourceRegistry CreateDefault() => new FeatureUpdateSourceRegistry().Add(new SnapshotFilesUpdateSourceFactory());
-
-    public FeatureUpdateSourceRegistry Add(IFeatureUpdateSourceFactory factory)
-    {
-        ArgumentNullException.ThrowIfNull(factory);
-        _factories[factory.SourceType] = factory;
-        return this;
-    }
-
-    public bool TryGet(string type, out IFeatureUpdateSourceFactory factory) => _factories.TryGetValue(type, out factory!);
 }
 
 /// <summary>

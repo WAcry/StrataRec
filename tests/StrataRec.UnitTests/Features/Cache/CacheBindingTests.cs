@@ -33,7 +33,7 @@ public class CacheBindingTests
         var items = Errors(Build("""{ "mode": "cache" }"""));
 
         Assert.Equal(
-            new[] { ("CONNECTOR_UNKNOWN", "/sources/item_store"), ("LOCAL_MAX_BYTES", "/sources/item_store"), ("CACHE_SETTINGS_MISSING", "/sources/item_store") },
+            new[] { ("BINDING_TYPE_UNKNOWN", "/sources/item_store"), ("LOCAL_MAX_BYTES", "/sources/item_store"), ("CACHE_SETTINGS_MISSING", "/sources/item_store") },
             items.Select(d => (d.Code, d.Pointer)));
         Assert.Contains("mode 'cache'", items[1].Message);
         Assert.Contains("\"ttl_ms\": 60000", items[2].Hint);
@@ -43,15 +43,15 @@ public class CacheBindingTests
     [InlineData("""{ }""", "/sources/item_store/cache", "CACHE_TTL")]
     [InlineData("""{ "ttl_ms": 0 }""", "/sources/item_store/cache/ttl_ms", "CACHE_TTL")]
     [InlineData("""{ "ttl_ms": 1000, "stale_if_error_ms": -1 }""", "/sources/item_store/cache/stale_if_error_ms", "CACHE_STALE_IF_ERROR")]
-    [InlineData("""{ "ttl_ms": 1000, "distributed": { } }""", "/sources/item_store/cache/distributed", "DISTRIBUTED_CACHE_UNKNOWN")]
-    [InlineData("""{ "ttl_ms": 1000, "distributed": { "store": "redis@2" } }""", "/sources/item_store/cache/distributed/store", "DISTRIBUTED_CACHE_UNKNOWN")]
+    [InlineData("""{ "ttl_ms": 1000, "distributed": { } }""", "/sources/item_store/cache/distributed", "BINDING_TYPE_UNKNOWN")]
+    [InlineData("""{ "ttl_ms": 1000, "distributed": { "store": "redis@2" } }""", "/sources/item_store/cache/distributed/store", "BINDING_TYPE_UNKNOWN")]
     [InlineData("""{ "ttl_ms": 1000, "distributed": { "store": "redis@1", "endpoint": "r:6379", "timeout_ms": 0 } }""", "/sources/item_store/cache/distributed/timeout_ms", "DISTRIBUTED_CACHE_CONFIG")]
-    [InlineData("""{ "ttl_ms": 1000, "distributed": { "store": "redis@1" } }""", "/sources/item_store/cache/distributed", "DISTRIBUTED_CACHE_CONFIG")]
-    [InlineData("""{ "ttl_ms": 1000, "distributed": { "store": "redis@1", "endpoint": "r:6379", "pasword": "x" } }""", "/sources/item_store/cache/distributed/pasword", "DISTRIBUTED_CACHE_CONFIG")]
-    [InlineData("""{ "ttl_ms": 1000, "distributed": { "store": "redis@1", "endpoint": "r:6379", "password": "hunter2" } }""", "/sources/item_store/cache/distributed/password", "DISTRIBUTED_CACHE_CONFIG")]
-    [InlineData("""{ "ttl_ms": 1000, "distributed": { "store": "redis@1", "endpoint": "redis.internal" } }""", "/sources/item_store/cache/distributed/endpoint", "DISTRIBUTED_CACHE_CONFIG")]
-    [InlineData("""{ "ttl_ms": 1000, "distributed": { "store": "redis@1", "endpoint": "r:6379", "database": -1 } }""", "/sources/item_store/cache/distributed/database", "DISTRIBUTED_CACHE_CONFIG")]
-    [InlineData("""{ "ttl_ms": 1000, "distributed": { "store": "redis@1", "endpoint": "r:6379", "tls": "yes" } }""", "/sources/item_store/cache/distributed/tls", "DISTRIBUTED_CACHE_CONFIG")]
+    [InlineData("""{ "ttl_ms": 1000, "distributed": { "store": "redis@1" } }""", "/sources/item_store/cache/distributed", "BINDING_SETTINGS")]
+    [InlineData("""{ "ttl_ms": 1000, "distributed": { "store": "redis@1", "endpoint": "r:6379", "pasword": "x" } }""", "/sources/item_store/cache/distributed/pasword", "BINDING_SETTINGS")]
+    [InlineData("""{ "ttl_ms": 1000, "distributed": { "store": "redis@1", "endpoint": "r:6379", "password": "hunter2" } }""", "/sources/item_store/cache/distributed/password", "BINDING_SETTINGS")]
+    [InlineData("""{ "ttl_ms": 1000, "distributed": { "store": "redis@1", "endpoint": "redis.internal" } }""", "/sources/item_store/cache/distributed/endpoint", "BINDING_SETTINGS")]
+    [InlineData("""{ "ttl_ms": 1000, "distributed": { "store": "redis@1", "endpoint": "r:6379", "database": -1 } }""", "/sources/item_store/cache/distributed/database", "BINDING_SETTINGS")]
+    [InlineData("""{ "ttl_ms": 1000, "distributed": { "store": "redis@1", "endpoint": "r:6379", "tls": "yes" } }""", "/sources/item_store/cache/distributed/tls", "BINDING_SETTINGS")]
     public void AWrongCacheSetting_IsAnErrorAtTheSetting_WithAHint(string cache, string pointer, string code)
     {
         var error = Assert.Single(Errors(Build($$"""{ "mode": "cache", "connector": "memory@1", "max_bytes": "1MiB", "cache": {{cache}} }""")));
@@ -146,7 +146,7 @@ public class CacheBindingTests
     {
         var error = Assert.Single(Errors(Build("""{ "mode": "cache", "connector": "memory@1", "max_bytes": "1MiB", "cache": { "ttl_ms": 1, "distributed": { "store": "redis@1" } } }""", redis: false)));
 
-        Assert.Equal(("DISTRIBUTED_CACHE_UNKNOWN", "/sources/item_store/cache/distributed/store"), (error.Code, error.Pointer));
+        Assert.Equal(("BINDING_TYPE_UNKNOWN", "/sources/item_store/cache/distributed/store"), (error.Code, error.Pointer));
         Assert.Contains("StrataRec.Redis", error.Hint);
     }
 
@@ -190,7 +190,7 @@ public class CacheBindingTests
         rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
         if (redis)
         {
-            rig.CacheStores.AddRedis();
+            rig.Bindings.AddRedis();
         }
 
         return rig.TryBuild();

@@ -168,7 +168,7 @@ public class DistributedCacheTierTests
         private int _running;
         private int _disposals;
 
-        public string StoreType => TestCacheStoreFactory.Type;
+        public string StoreType => TestCacheStoreFactory.TypeName;
 
         /// <summary>Runs on the token of each write (to register a callback).</summary>
         public Action<CancellationToken>? OnToken { get; init; }

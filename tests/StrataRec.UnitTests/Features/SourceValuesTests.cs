@@ -46,11 +46,7 @@ public class SourceValuesTests
         Assert.Equal((3, 2), values.Of("item.clicks"));
         Assert.Equal((1, 4), values.Of("item.age"));
         Assert.Equal(4, values.Adds); // one add per feature and outcome for the fetch, not one per chunk
-        Assert.All(values.TagSets, tags =>
-        {
-            Assert.Equal("feature", tags[StrataRecTags.SourceKind]);
-            Assert.Equal(4, tags.Count);
-        });
+        Assert.All(values.TagSets, tags => Assert.Equal(3, tags.Count)); // source, feature, outcome
     }
 
     [Fact]
@@ -303,7 +299,7 @@ public class SourceValuesTests
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
-            if (instrument.Meter.Name == StrataRecTelemetry.Name && instrument.Name is StrataRecMetrics.Names.SourceKeys or StrataRecMetrics.Names.LocalKeys)
+            if (instrument.Meter.Name == StrataRecTelemetry.Name && instrument.Name is StrataRecMetrics.Names.IoKeys or StrataRecMetrics.Names.LocalKeys)
             {
                 l.EnableMeasurementEvents(instrument);
             }

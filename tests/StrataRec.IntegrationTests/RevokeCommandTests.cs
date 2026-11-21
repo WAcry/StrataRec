@@ -4,11 +4,15 @@ using StrataRec.Artifacts.Model;
 using StrataRec.Artifacts.Storage;
 using StrataRec.CommandLine;
 using StrataRec.CommandLine.Commands;
+using StrataRec.Core.Bindings;
+using StrataRec.Features.Cache;
+using StrataRec.Features.Connectors;
+using StrataRec.Features.Local;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Manifests;
-using StrataRec.Features.Cache;
 using StrataRec.Models;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Pipeline.Sources;
 
 namespace StrataRec.IntegrationTests;
 
@@ -381,7 +385,15 @@ public sealed class RevokeCommandTests
         Assert.DoesNotContain("redis@1", first.Requires);
 
         // A binary without those types refuses the release, and serves it without the experiment.
-        var older = Tool.Environment with { Models = new ModelClientRegistry().Add(new LinearModelClientFactory()), CacheStores = new FeatureCacheStoreRegistry() };
+        var older = Tool.Environment with
+        {
+            Bindings = new BindingRegistry()
+                .Add(new LinearModelClientFactory())
+                .Add(new MemoryListCandidateSourceFactory())
+                .Add(new MemoryVectorsCandidateSourceFactory())
+                .Add(new MemoryFeatureConnectorFactory())
+                .Add(new SnapshotFilesUpdateSourceFactory()),
+        };
         await using var engine = new RecEngine(CommonOptions.ForRoot(older, root));
         var refused = await engine.LoadManifestAsync(first, firstId, blobs, TestContext.Current.CancellationToken);
         Assert.Equal(ManifestLoadStatus.Incompatible, refused.Status);

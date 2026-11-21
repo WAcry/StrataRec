@@ -279,3 +279,32 @@ public static class BindingSettings
         public override void Write(Utf8JsonWriter writer, SecretReference value, JsonSerializerOptions options) => writer.WriteStringValue(value.ToString());
     }
 }
+
+/// <summary>
+/// The base of a binding factory: it declares the type of its settings once, as its type argument, and gets them bound to
+/// it (<see cref="BindingSettings"/>), so the type the schema describes is the type that binds, and the factory
+/// parses no JSON.
+/// </summary>
+/// <typeparam name="TInstance">The contract the factory's instances serve, e.g. a model client.</typeparam>
+/// <typeparam name="TSettings">The settings type: snake_case members, documented for the schema, required ones
+/// <c>required</c>; <see cref="LocalFile"/> and <see cref="SecretReference"/> for files and credentials.</typeparam>
+public abstract class BindingFactory<TInstance, TSettings> : IBindingFactory<TInstance>
+    where TInstance : class
+    where TSettings : class
+{
+    public abstract string Type { get; }
+
+    public Type SettingsType => typeof(TSettings);
+
+    /// <summary>Binds the settings strictly and creates the instance from them.</summary>
+    /// <exception cref="BindingException">The settings are wrong: at the setting's pointer, with a hint.</exception>
+    public TInstance Create(BindingContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return Create(BindingSettings.Bind<TSettings>(context, Type), context);
+    }
+
+    /// <summary>Creates the instance: checks what the settings type cannot say, and reads nothing else (see <see cref="BindingContext"/>).</summary>
+    /// <exception cref="BindingException">A setting is wrong: at its pointer, with a hint.</exception>
+    protected abstract TInstance Create(TSettings settings, BindingContext context);
+}

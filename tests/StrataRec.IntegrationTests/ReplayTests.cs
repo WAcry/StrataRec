@@ -500,7 +500,7 @@ public sealed class ReplayTelemetryTests
         {
             var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-telemetry", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
             bundle = recorded.Recording!;
-            Assert.NotEmpty(recording.Of(StrataRecMetrics.Names.SourceErrors)); // recording a request does not hide it
+            Assert.NotEmpty(recording.Of(StrataRecMetrics.Names.IoErrors)); // recording a request does not hide it
         }
 
         events.Flush();

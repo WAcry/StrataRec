@@ -161,7 +161,7 @@ public sealed class RandomModelClient : IModelClient
         _signature = new ModelSignature((TensorSpec[])_inputs.Clone(), (TensorSpec[])_outputs.Clone());
     }
 
-    public string ClientType => RandomModelClientFactory.Type;
+    public string ClientType => RandomModelClientFactory.TypeName;
 
     /// <summary>
     /// True when an input of shape <paramref name="input"/> is scored per element of an output of shape
@@ -198,7 +198,7 @@ public sealed class RandomModelClient : IModelClient
     {
         if ((_seed ?? call.Options.Seed) is not { } seed)
         {
-            return ModelStatus.Failed($"Model '{_modelName}' ({RandomModelClientFactory.Type}) got a call without a seed and its binding fixes none; " +
+            return ModelStatus.Failed($"Model '{_modelName}' ({RandomModelClientFactory.TypeName}) got a call without a seed and its binding fixes none; " +
                 "pass ModelCallOptions.Seed (the model operators pass ctx.request.seed), or set \"seed\" in the binding.");
         }
 
@@ -528,14 +528,14 @@ public sealed class RandomTensorSettings
 }
 
 /// <summary>Factory for <c>random@1</c>. <see cref="Create"/> only reads and checks the settings.</summary>
-public sealed class RandomModelClientFactory : ModelClientFactory<RandomSettings>
+public sealed class RandomModelClientFactory : BindingFactory<IModelClient, RandomSettings>
 {
-    public const string Type = "random@1";
+    public const string TypeName = "random@1";
 
     private const string InputExample = "smoothed_ctr\", \"log_followers";
     private const string OutputExample = "p_click";
 
-    public override string ClientType => Type;
+    public override string Type => TypeName;
 
     protected override IModelClient Create(RandomSettings settings, BindingContext context)
     {
@@ -579,7 +579,7 @@ public sealed class RandomModelClientFactory : ModelClientFactory<RandomSettings
         switch (value.ValueKind)
         {
             case JsonValueKind.Array:
-                var names = BindingSettings.Bind<List<string>>(context, value, pointer, $"'{setting}' of {Type}");
+                var names = BindingSettings.Bind<List<string>>(context, value, pointer, $"'{setting}' of {TypeName}");
                 SettingChecks.Names(names, setting, Hint(setting));
                 foreach (var name in names)
                 {
@@ -589,7 +589,7 @@ public sealed class RandomModelClientFactory : ModelClientFactory<RandomSettings
 
                 break;
             case JsonValueKind.Object:
-                foreach (var (name, spec) in BindingSettings.Bind<Dictionary<string, RandomTensorSettings>>(context, value, pointer, $"'{setting}' of {Type}"))
+                foreach (var (name, spec) in BindingSettings.Bind<Dictionary<string, RandomTensorSettings>>(context, value, pointer, $"'{setting}' of {TypeName}"))
                 {
                     var specPointer = pointer + "/" + BindingContext.EscapePointerToken(name);
                     if (name.Length == 0)
@@ -635,7 +635,7 @@ public sealed class RandomModelClientFactory : ModelClientFactory<RandomSettings
         {
             throw new BindingException(pointer + "/type", input
                 ? $"{title} has type \"{spec.Type}\": an input is bool, int32, int64, float32, float64 or string."
-                : $"{title} has type \"{spec.Type}\": {Type} produces scores, so an output is float32 or float64.", hint);
+                : $"{title} has type \"{spec.Type}\": {TypeName} produces scores, so an output is float32 or float64.", hint);
         }
 
         if (spec.Shape.Count == 0)

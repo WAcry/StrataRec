@@ -878,7 +878,7 @@ public sealed partial class FeatureFetcher
     /// Counts what the source had of the values a read with misses asked for (<see cref="StrataRecMetrics.SourceValues"/>),
     /// once it has resolved: each key the read resolved, once per read feature — fresh in the table, or answered by the
     /// distributed tier or the connector — present where its record has the field. A key served stale, or not at all,
-    /// was not resolved: the connector failed for it, which <see cref="StrataRecMetrics.SourceErrors"/> counts.
+    /// was not resolved: the connector failed for it, which <see cref="StrataRecMetrics.IoErrors"/> counts.
     /// </summary>
     private void CountResolvedValues(CacheRead read)
     {

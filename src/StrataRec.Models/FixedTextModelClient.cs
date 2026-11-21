@@ -1,3 +1,4 @@
+using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 
 namespace StrataRec.Models;
@@ -51,7 +52,7 @@ public sealed class FixedTextModelClient : IModelClient
         _signature = new ModelSignature(inputSpecs, outputSpecs);
     }
 
-    public string ClientType => FixedTextModelClientFactory.Type;
+    public string ClientType => FixedTextModelClientFactory.TypeName;
 
     /// <summary>Answers at once with the signature the settings declare, for any version.</summary>
     public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
@@ -110,11 +111,11 @@ public sealed class FixedTextSettings
 }
 
 /// <summary>Creates <see cref="FixedTextModelClient"/>s from binding settings.</summary>
-public sealed class FixedTextModelClientFactory : ModelClientFactory<FixedTextSettings>
+public sealed class FixedTextModelClientFactory : BindingFactory<IModelClient, FixedTextSettings>
 {
-    public const string Type = "fixed_text@1";
+    public const string TypeName = "fixed_text@1";
 
-    public override string ClientType => Type;
+    public override string Type => TypeName;
 
     protected override IModelClient Create(FixedTextSettings settings, BindingContext context)
     {

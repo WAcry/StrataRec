@@ -18,25 +18,6 @@ namespace StrataRec.Artifacts.Model;
 /// <param name="ConfigType">The C# type the operator binds its <c>config</c> to: the single source of the config's schema (design 9.1).</param>
 public sealed record OperatorSchemaSource(string Id, string Description, Type ConfigType);
 
-/// <summary>What a binding's type is selected by, and where its settings are, in the bindings artifact (design 6.4).</summary>
-public enum BindingKind : byte
-{
-    /// <summary><c>models.*.client</c>: a model client; the settings are the entry's other members.</summary>
-    Model = 1,
-
-    /// <summary><c>candidate_sources.*.client</c>: a candidate source.</summary>
-    CandidateSource,
-
-    /// <summary><c>sources.*.connector</c>: a feature connector.</summary>
-    Connector,
-
-    /// <summary><c>sources.*.bootstrap.source</c>: the update source of a <c>local</c> source.</summary>
-    UpdateSource,
-
-    /// <summary><c>sources.*.cache.distributed.store</c>: the distributed cache store of a <c>cache</c> source.</summary>
-    CacheStore,
-}
-
 /// <summary>A binding type as the bindings schema describes it: where it is named, its id, and the type of its settings.</summary>
 /// <param name="Type">The type and version, e.g. <c>linear@1</c>.</param>
 /// <param name="SettingsType">The C# type its factory binds the binding's own settings to (<see cref="BindingSettings"/>):
@@ -410,25 +391,26 @@ public static class ArtifactSchemas
     {
         var schema = Export(typeof(SourceBindingArtifact), Describe, inline: true);
         var sections = Member(schema, "properties");
-        AddBindingTypes(Member(Member(sections, "models"), "additionalProperties"), "client", bindings, BindingKind.Model);
-        AddBindingTypes(Member(Member(sections, "candidate_sources"), "additionalProperties"), "client", bindings, BindingKind.CandidateSource);
+        AddBindingTypes(Member(Member(sections, "models"), "additionalProperties"), bindings, BindingKind.Model);
+        AddBindingTypes(Member(Member(sections, "candidate_sources"), "additionalProperties"), bindings, BindingKind.CandidateSource);
         var source = Member(Member(sections, "sources"), "additionalProperties");
         var members = Member(source, "properties");
-        AddBindingTypes(source, "connector", bindings, BindingKind.Connector);
-        AddBindingTypes(Member(members, "bootstrap"), "source", bindings, BindingKind.UpdateSource);
-        AddBindingTypes(Member(Member(Member(members, "cache"), "properties"), "distributed"), "store", bindings, BindingKind.CacheStore);
+        AddBindingTypes(source, bindings, BindingKind.Connector);
+        AddBindingTypes(Member(members, "bootstrap"), bindings, BindingKind.UpdateSource);
+        AddBindingTypes(Member(Member(Member(members, "cache"), "properties"), "distributed"), bindings, BindingKind.CacheStore);
         return schema;
     }
 
     /// <summary>
-    /// The settings of each type of <paramref name="kind"/>, in the entry that names one with <paramref name="selector"/>:
+    /// The settings of each type of <paramref name="kind"/>, in the entry that names one with the kind's selector:
     /// when it names the type, the entry takes the framework's members (described where the entry declares them) and the
     /// type's settings, and nothing else. The selector lists the types as <c>examples</c>, which editors complete, not as
     /// an <c>enum</c>: a binding of a type this binary lacks is valid while nothing uses it
     /// (only what a plan binds is required, <see cref="SourceBindingArtifact.AddTypes"/>), so such an entry stays open.
     /// </summary>
-    private static void AddBindingTypes(JsonObject entry, string selector, IReadOnlyList<BindingSchemaSource> bindings, BindingKind kind)
+    private static void AddBindingTypes(JsonObject entry, IReadOnlyList<BindingSchemaSource> bindings, BindingKind kind)
     {
+        var selector = kind.Selector();
         var types = new List<BindingSchemaSource>();
         foreach (var binding in bindings)
         {

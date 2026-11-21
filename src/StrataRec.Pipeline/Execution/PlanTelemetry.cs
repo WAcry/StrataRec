@@ -65,7 +65,7 @@ internal sealed class PlanTelemetry
         /// <summary>Per entry of <see cref="CompiledNode.Outputs"/>: the node tags plus <c>stratarec.column</c>.</summary>
         public KeyValuePair<string, object?>[][] Outputs { get; }
 
-        /// <summary><c>stratarec.model</c> for model-calling nodes, whose fallbacks are also counted per model.</summary>
+        /// <summary>The model call tags (<c>stratarec.io.role</c> = <c>model</c>, <c>stratarec.io.target</c>) of model-calling nodes, whose fallbacks are also counted per model.</summary>
         public KeyValuePair<string, object?>[]? Model { get; }
 
         public static NodeTelemetry Create(string pipeline, CompiledNode node)

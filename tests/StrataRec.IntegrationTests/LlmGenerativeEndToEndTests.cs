@@ -221,7 +221,7 @@ public sealed class LlmGenerativeEndToEndTests
 
     private static List<(string Outcome, double Count)> Counts(MetricCapture metrics, string instrument, string model) =>
         metrics.Of(instrument)
-            .Where(m => Equals(m.Tags[StrataRecTags.Model], model))
+            .Where(m => Equals(m.Tags[StrataRecTags.IoTarget], model))
             .GroupBy(m => (string)m.Tags[StrataRecTags.Outcome]!)
             .Select(g => (g.Key, g.Sum(m => m.Value)))
             .OrderBy(p => p.Key, StringComparer.Ordinal)

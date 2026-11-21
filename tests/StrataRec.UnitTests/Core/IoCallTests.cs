@@ -21,11 +21,11 @@ public sealed class IoCallSpanTests
     {
         using var flow = new TracedFlow(stage, "recall first");
 
-        var first = new IoTarget(IoKind.CandidateSource, "first").Start();
+        var first = new IoTarget(IoRoles.Recall, "first").Start();
         var during = Activity.Current;
         first.Complete(IoOutcome.Ok);
         var after = Activity.Current;
-        var next = new IoTarget(IoKind.CandidateSource, "next").Start();
+        var next = new IoTarget(IoRoles.Recall, "next").Start();
         next.Complete(IoOutcome.Ok);
 
         Assert.Equal(1, flow.Thrown);
@@ -60,7 +60,7 @@ public sealed class IoCallSpanTests
     public async Task ACallCompletedOnAFlowWithAnotherActivity_LeavesThatActivityCurrent(ListenerStage stage)
     {
         using var flow = new TracedFlow(stage, "fetch detached");
-        var call = new IoTarget(IoKind.FeatureSource, "detached").Start();
+        var call = new IoTarget(IoRoles.Fetch, "detached").Start();
         call.Sent();
         Assert.Same(flow.Request, Activity.Current);
 
@@ -87,7 +87,7 @@ public sealed class IoCallSpanTests
     public async Task ACallCompletedOnAFlowWhoseActivityStopped_LeavesIt_AndTheFlowIsNeverMovedToTheRequest()
     {
         using var flow = new TracedFlow();
-        var call = new IoTarget(IoKind.CandidateSource, "late").Start();
+        var call = new IoTarget(IoRoles.Recall, "late").Start();
         call.Sent();
         var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Activity foreign;
@@ -141,7 +141,7 @@ public sealed class IoCallSpanTests
         IoCall call;
         using (ExecutionContext.SuppressFlow())
         {
-            call = new IoTarget(IoKind.CandidateSource, "unflowed").Start();
+            call = new IoTarget(IoRoles.Recall, "unflowed").Start();
             call.Sent();
         }
 
@@ -174,13 +174,13 @@ public sealed class IoCallMetricTests
     public void AListenerThatThrowsOnTheDuration_LosesOnlyThatMeasurement()
     {
         const string source = "review83_metric_boundaries";
-        using var keys = new MeasurementHook(StrataRecMetrics.Names.SourceKeys, static () => { }, (StrataRecTags.Source, source));
-        using var errors = new MeasurementHook(StrataRecMetrics.Names.SourceErrors, static () => { }, (StrataRecTags.Source, source));
-        using var duration = MeasurementHook.Throwing(StrataRecMetrics.Names.SourceDuration, (StrataRecTags.Source, source));
+        using var keys = new MeasurementHook(StrataRecMetrics.Names.IoKeys, static () => { }, (StrataRecTags.IoTarget, source));
+        using var errors = new MeasurementHook(StrataRecMetrics.Names.IoErrors, static () => { }, (StrataRecTags.IoTarget, source));
+        using var duration = MeasurementHook.Throwing(StrataRecMetrics.Names.IoDuration, (StrataRecTags.IoTarget, source));
         var logger = new EventIds();
         using var events = new RequestEventLog(logger, autoFlush: false);
 
-        new IoTarget(IoKind.FeatureSource, source).Start().Complete(IoOutcome.Error, 3, "req", "origin failed", events);
+        new IoTarget(IoRoles.Fetch, source).Start().Complete(IoOutcome.Error, 3, "req", "origin failed", events);
         events.Flush();
 
         Assert.Equal((1, 1, 1), (duration.Calls, keys.Calls, errors.Calls));

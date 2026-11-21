@@ -38,7 +38,7 @@ public sealed class BoundedCallCurrentChangedTests
         CallResult<int> result;
         try
         {
-            var running = BoundedCall.RunAsync<int, Client>(client, budget, memory, new IoTarget(IoKind.CandidateSource, target), null, "req", null);
+            var running = BoundedCall.RunAsync<int, Client>(client, budget, memory, new IoTarget(IoRoles.Recall, target), null, "req", null);
             Assert.Same(flow.Request, Activity.Current);
             answer.TrySetResult(42);
             result = await running;

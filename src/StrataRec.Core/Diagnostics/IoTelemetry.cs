@@ -1,17 +1,26 @@
 using System.Diagnostics;
-using System.Diagnostics.Metrics;
 
 namespace StrataRec.Core.Diagnostics;
 
-/// <summary>The kinds of external dependency the engine calls.</summary>
-public enum IoKind : byte
+/// <summary>
+/// The roles of the external calls the framework makes: what a call is for, which metrics, spans, summaries and health
+/// name together with the binding name of the dependency called (<c>fetch item_store</c>). A role is a short bounded
+/// label, never configuration; an extension that calls a dependency of its own through the framework's call path gives
+/// it a role of its own.
+/// </summary>
+public static class IoRoles
 {
-    FeatureSource = 1,
-    CandidateSource,
-    Model,
+    /// <summary>Features from a feature source's connector (design 6.5), per <c>max_batch</c> chunk.</summary>
+    public const string Fetch = "fetch";
 
-    /// <summary>The distributed cache of a feature source bound with mode <c>cache</c> (design 6.6), read before its connector.</summary>
-    FeatureCache,
+    /// <summary>A read of the distributed cache of a feature source bound with mode <c>cache</c> (design 6.6), before its connector.</summary>
+    public const string Cache = "cache";
+
+    /// <summary>Candidates from a candidate source, per recall call.</summary>
+    public const string Recall = "recall";
+
+    /// <summary>A model client's answer, per batch.</summary>
+    public const string Model = "model";
 }
 
 /// <summary>How one external call ended, as seen by the request.</summary>
@@ -32,61 +41,39 @@ public enum IoOutcome : byte
 }
 
 /// <summary>
-/// One external dependency (a feature source, candidate source, model or a feature source's distributed cache) with its
-/// metric tags and span name built once, when the plan or operator is compiled, so recording a call allocates nothing
-/// (design 13.1 rule 5).
+/// One external dependency, by role (<see cref="IoRoles"/>) and binding name, with its metric tags and span name built
+/// once, when the plan or operator is compiled, so recording a call allocates nothing (design 13.1 rule 5). Every role is
+/// measured by the same instruments (<c>stratarec.io.*</c>), told apart by <see cref="StrataRecTags.IoRole"/>.
 /// </summary>
 public sealed class IoTarget
 {
-    public IoTarget(IoKind kind, string name)
+    /// <param name="role">What the call is for: one of <see cref="IoRoles"/>, or an extension's own bounded label.</param>
+    /// <param name="name">The dependency's binding name, e.g. <c>item_store</c>.</param>
+    public IoTarget(string role, string name)
     {
-        Kind = kind;
+        ArgumentException.ThrowIfNullOrEmpty(role);
+        ArgumentNullException.ThrowIfNull(name);
+        Role = role;
         Name = name;
-        Tags = kind switch
-        {
-            IoKind.Model => [new(StrataRecTags.Model, name)],
-            IoKind.FeatureSource => [new(StrataRecTags.Source, name), new(StrataRecTags.SourceKind, "feature")],
-            IoKind.CandidateSource => [new(StrataRecTags.Source, name), new(StrataRecTags.SourceKind, "candidate")],
-            IoKind.FeatureCache => [new(StrataRecTags.Source, name), new(StrataRecTags.SourceKind, "feature_cache")],
-        };
+        Tags = [new(StrataRecTags.IoRole, role), new(StrataRecTags.IoTarget, name)];
         TimeoutTags = WithOutcome(Tags, "timeout");
         ErrorTags = WithOutcome(Tags, "error");
-        SpanName = kind switch
-        {
-            IoKind.FeatureSource => "fetch ",
-            IoKind.CandidateSource => "recall ",
-            IoKind.Model => "model ",
-            IoKind.FeatureCache => "cache ",
-        } + name;
-        (TimeoutEvent, FailedEvent) = kind switch
-        {
-            IoKind.FeatureSource => (RequestEvent.FeatureSourceTimeout, RequestEvent.FeatureSourceFailed),
-            IoKind.CandidateSource => (RequestEvent.CandidateSourceTimeout, RequestEvent.CandidateSourceFailed),
-            IoKind.Model => (RequestEvent.ModelTimeout, RequestEvent.ModelFailed),
-            IoKind.FeatureCache => (RequestEvent.FeatureCacheTimeout, RequestEvent.FeatureCacheFailed),
-        };
+        SpanName = role + " " + name;
     }
 
-    public IoKind Kind { get; }
+    public string Role { get; }
 
     public string Name { get; }
 
-    /// <summary><c>stratarec.model</c>, or <c>stratarec.source</c> and <c>stratarec.source.kind</c>.</summary>
+    /// <summary><c>stratarec.io.role</c> and <c>stratarec.io.target</c>.</summary>
     public KeyValuePair<string, object?>[] Tags { get; }
 
     internal KeyValuePair<string, object?>[] TimeoutTags { get; }
 
     internal KeyValuePair<string, object?>[] ErrorTags { get; }
 
+    /// <summary>The role and the name, e.g. <c>model ctr_model</c>: the call's span, and the subject of its failure summaries.</summary>
     internal string SpanName { get; }
-
-    internal RequestEvent TimeoutEvent { get; }
-
-    internal RequestEvent FailedEvent { get; }
-
-    private Histogram<double> Duration => Kind == IoKind.Model ? StrataRecMetrics.ModelDuration : StrataRecMetrics.SourceDuration;
-
-    private Counter<long> Errors => Kind == IoKind.Model ? StrataRecMetrics.ModelErrors : StrataRecMetrics.SourceErrors;
 
     /// <summary>
     /// Starts timing one call, and a child span when the request is traced (<see cref="StrataRecTracing.IsRecording"/>).
@@ -151,18 +138,18 @@ public sealed class IoTarget
     {
         try
         {
-            Duration.Record(seconds, Tags);
+            StrataRecMetrics.IoDuration.Record(seconds, Tags);
         }
         catch (Exception)
         {
             // A metric listener threw: see IoCall.Complete.
         }
 
-        if (keys >= 0 && Kind is IoKind.FeatureSource or IoKind.FeatureCache)
+        if (keys >= 0)
         {
             try
             {
-                StrataRecMetrics.SourceKeys.Record(keys, Tags);
+                StrataRecMetrics.IoKeys.Record(keys, Tags);
             }
             catch (Exception)
             {
@@ -174,7 +161,7 @@ public sealed class IoTarget
         {
             try
             {
-                Errors.Add(1, outcome == IoOutcome.Timeout ? TimeoutTags : ErrorTags);
+                StrataRecMetrics.IoErrors.Add(1, outcome == IoOutcome.Timeout ? TimeoutTags : ErrorTags);
             }
             catch (Exception)
             {
@@ -291,7 +278,7 @@ public readonly struct IoCall
     /// activity has stopped: the setter refuses it, and the flow stays where the stop left it (under this call's request,
     /// or still on that activity when a stop listener threw before the stop moved it).</para>
     /// </remarks>
-    /// <param name="keys">Keys sent (feature sources), or -1.</param>
+    /// <param name="keys">Keys the call sent (a keyed call: a feature source's), or -1.</param>
     /// <param name="requestId">Sample request id for failure summaries.</param>
     /// <param name="error">Error text of a failed call.</param>
     /// <param name="events">The engine's event log; null when it has no logger.</param>

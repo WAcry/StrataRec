@@ -885,7 +885,7 @@ public class LocalFeatureTableTests
     /// <summary>Writes the values of <c>data(key)</c> for every key and requested field (absent = not written).</summary>
     private sealed class ValueConnector(Func<long, Dictionary<string, ScalarValue>?> data) : StrataRec.Features.Connectors.IFeatureSourceConnector
     {
-        public string ConnectorType => TestConnectorFactory.Type;
+        public string ConnectorType => TestConnectorFactory.TypeName;
 
         public bool Supports(EntityKeyLayout layout) => layout.PartCount == 1 && !layout[0].IsShared;
 

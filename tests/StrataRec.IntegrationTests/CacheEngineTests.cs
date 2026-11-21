@@ -76,7 +76,7 @@ public sealed class CacheEngineTests
 
         // Neither tier nor the connector: a replay reads no table and writes nothing back.
         Assert.DoesNotContain(metrics.Measurements.Skip(before), m => m.Instrument.StartsWith("stratarec.cache.", StringComparison.Ordinal)
-            || (m.Instrument == StrataRecMetrics.Names.SourceKeys && Equals(m.Tags[StrataRecTags.Source], Source)));
+            || (m.Instrument == StrataRecMetrics.Names.IoKeys && Equals(m.Tags[StrataRecTags.IoTarget], Source)));
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public sealed class CacheEngineTests
     public async Task TwoEnginesSharingADistributedTier_TheSecondServesTheFirstsWriteBack_WithoutTheConnector()
     {
         var shared = new SharedStores();
-        var root = HomeFeedTestHost.LoadModified(r => CacheItems(r, $$"""{ "store": "{{SharedStores.Type}}", "generation": 1 }""")).Root;
+        var root = HomeFeedTestHost.LoadModified(r => CacheItems(r, $$"""{ "store": "{{SharedStores.TypeName}}", "generation": 1 }""")).Root;
         await using var first = await Load(root, shared);
         await using var second = await Load(root, shared);
         using var metrics = new MetricCapture();
@@ -155,7 +155,7 @@ public sealed class CacheEngineTests
     public async Task TheDistributedTier_IsABindingInstance_SharedWhileUnchanged_ReplacedWhenChanged_DisposedWithTheEngine()
     {
         var shared = new SharedStores();
-        var root = HomeFeedTestHost.LoadModified(r => CacheItems(r, $$"""{ "store": "{{SharedStores.Type}}", "generation": 1 }""")).Root;
+        var root = HomeFeedTestHost.LoadModified(r => CacheItems(r, $$"""{ "store": "{{SharedStores.TypeName}}", "generation": 1 }""")).Root;
         var engine = await Load(root, shared);
         var store = Assert.Single(shared.Created);
         Assert.Equal(1, store.Loads);
@@ -163,12 +163,12 @@ public sealed class CacheEngineTests
         Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied); // the same binding: the same store
         Assert.Single(shared.Created);
 
-        CacheItems(root, $$"""{ "store": "{{SharedStores.Type}}", "generation": 1, "timeout_ms": 20 }""");
+        CacheItems(root, $$"""{ "store": "{{SharedStores.TypeName}}", "generation": 1, "timeout_ms": 20 }""");
         Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied); // how long the engine waits is not the store's identity
         Assert.Single(shared.Created);
         Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-unchanged"), TestContext.Current.CancellationToken)).Succeeded);
 
-        CacheItems(root, $$"""{ "store": "{{SharedStores.Type}}", "generation": 2 }""");
+        CacheItems(root, $$"""{ "store": "{{SharedStores.TypeName}}", "generation": 2 }""");
         Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         var replacement = Assert.Single(shared.Created, s => s != store);
         await store.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken); // no served plan uses it any more
@@ -192,9 +192,9 @@ public sealed class CacheEngineTests
         }
         """);
 
-    internal static async Task<RecEngine> Load(string root, IFeatureCacheStoreFactory stores)
+    internal static async Task<RecEngine> Load(string root, IBindingFactory<IFeatureCacheStore> stores)
     {
-        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = root, CacheStores = new FeatureCacheStoreRegistry().Add(stores) });
+        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = root, Bindings = PlanEnvironment.DefaultBindings().Add(stores) });
         var load = await engine.LoadAsync(Compile(root));
         Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
         return engine;
@@ -275,7 +275,8 @@ public sealed class CacheEngineTests
                 }
             }
 
-            var connector = metrics.Of(StrataRecMetrics.Names.SourceKeys).Where(m => Equals(m.Tags[StrataRecTags.Source], Source) && Equals(m.Tags[StrataRecTags.SourceKind], "feature")).Sum(m => (long)m.Value);
+            var connector = metrics.Of(StrataRecMetrics.Names.IoKeys)
+                .Where(m => Equals(m.Tags[StrataRecTags.IoTarget], Source) && Equals(m.Tags[StrataRecTags.IoRole], IoRoles.Fetch)).Sum(m => (long)m.Value);
             return new Snapshot(counts, connector);
         }
 
@@ -294,14 +295,14 @@ public sealed class CacheEngineTests
 /// hosts share records as instances share a Redis. Accepts any settings (a test changes one to change the identity) and
 /// counts each store's loads and disposals.
 /// </summary>
-internal sealed class SharedStores : IFeatureCacheStoreFactory
+internal sealed class SharedStores : IBindingFactory<IFeatureCacheStore>
 {
-    public const string Type = "shared_memory@1";
+    public const string TypeName = "shared_memory@1";
 
     private readonly ConcurrentDictionary<string, byte[]> _records = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, bool> _read = new(StringComparer.Ordinal);
 
-    public string StoreType => Type;
+    public string Type => TypeName;
 
     public Type SettingsType => typeof(Core.Bindings.NoSettings);
 
@@ -322,7 +323,7 @@ internal sealed class SharedStores : IFeatureCacheStoreFactory
         private int _loads;
         private int _disposals;
 
-        public string StoreType => Type;
+        public string StoreType => TypeName;
 
         public int Loads => Volatile.Read(ref _loads);
 

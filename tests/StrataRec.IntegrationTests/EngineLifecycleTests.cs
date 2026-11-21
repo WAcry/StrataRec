@@ -1,4 +1,5 @@
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
@@ -215,7 +216,7 @@ public sealed class EngineLifecycleTests
     /// item_country_store, fetched instead (from no records): these tests are about one table's lifecycle.</summary>
     private static string Workspace() => HomeFeedTestHost.LoadModified(root =>
     {
-        SampleBindings.Rebind(root, "author_store", $$"""{ "mode": "local", "max_bytes": "16MiB", "bootstrap": { "source": "{{GatedSources.Type}}" } }""");
+        SampleBindings.Rebind(root, "author_store", $$"""{ "mode": "local", "max_bytes": "16MiB", "bootstrap": { "source": "{{GatedSources.TypeName}}" } }""");
         SampleBindings.Rebind(root, "item_country_store", $$"""{ "connector": "memory@1", "timeout_ms": {{HomeFeedTestHost.UntimedMs}} }""");
     }).Root;
 
@@ -231,7 +232,7 @@ public sealed class EngineLifecycleTests
     private static PlanEnvironment Environment(string root, GatedSources sources) => new()
     {
         BaseDirectory = root,
-        UpdateSources = FeatureUpdateSourceRegistry.CreateDefault().Add(sources),
+        Bindings = PlanEnvironment.DefaultBindings().Add(sources),
     };
 
     private static PlanCompileRequest Compile(string root)
@@ -246,9 +247,9 @@ public sealed class EngineLifecycleTests
     /// Update sources the test drives: each run is announced (<see cref="Next"/>), loads author 100 (with
     /// <paramref name="followers"/>) once the gate is open, calls <see cref="Loaded"/>, and then runs until it is cancelled.
     /// </summary>
-    private sealed class GatedSources(double followers = 5) : IFeatureUpdateSourceFactory
+    private sealed class GatedSources(double followers = 5) : IBindingFactory<IFeatureUpdateSource>
     {
-        public const string Type = "gated@1";
+        public const string TypeName = "gated@1";
 
         private readonly double _followers = followers;
         private readonly TaskCompletionSource _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -256,7 +257,7 @@ public sealed class EngineLifecycleTests
         private int _runCount;
         private int _taken;
 
-        public string SourceType => Type;
+        public string Type => TypeName;
 
         public int Runs => Volatile.Read(ref _runCount);
 
@@ -293,7 +294,7 @@ public sealed class EngineLifecycleTests
 
         private sealed class Source(GatedSources owner) : IFeatureUpdateSource
         {
-            public string SourceType => Type;
+            public string SourceType => TypeName;
 
             public async Task RunAsync(UpdatePosition from, IFeatureTableWriter writer, CancellationToken cancellationToken)
             {

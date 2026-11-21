@@ -536,7 +536,7 @@ public sealed class RandomModelClientTests
     [Fact]
     public void TheDefaultRegistry_HasIt()
     {
-        Assert.True(StrataRec.Pipeline.Planning.ModelClientRegistry.CreateDefault().TryGet("random@1", out var factory));
+        Assert.True(StrataRec.Pipeline.Planning.PlanEnvironment.DefaultBindings().TryGet<IModelClient>("random@1", out var factory));
         Assert.Equal("random@1", factory.Create(Context(SampleSettings, "ctr_model")).ClientType);
     }
 

@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Globalization;
 using System.Text.Json;
+using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
@@ -42,7 +43,7 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
         _fail = fail;
     }
 
-    public string ConnectorType => MemoryFeatureConnectorFactory.Type;
+    public string ConnectorType => MemoryFeatureConnectorFactory.TypeName;
 
     /// <summary>Every layout: the data nests one level per part.</summary>
     public bool Supports(EntityKeyLayout layout) => true;
@@ -310,11 +311,11 @@ public sealed class MemoryConnectorSettings
 }
 
 /// <summary>Factory for <c>memory@1</c>.</summary>
-public sealed class MemoryFeatureConnectorFactory : FeatureConnectorFactory<MemoryConnectorSettings>
+public sealed class MemoryFeatureConnectorFactory : BindingFactory<IFeatureSourceConnector, MemoryConnectorSettings>
 {
-    public const string Type = "memory@1";
+    public const string TypeName = "memory@1";
 
-    public override string ConnectorType => Type;
+    public override string Type => TypeName;
 
     /// <remarks>A test fixture: it reads its data file here, at create time, so it needs no load.</remarks>
     /// <exception cref="BindingException">A setting is invalid, or the data file cannot be read: at the setting, with a hint.</exception>

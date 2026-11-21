@@ -137,7 +137,7 @@ public class CacheAllocationTests(ITestOutputHelper output)
     /// <summary>Answers every key at once (score = key × 0.5, clicks = key) without allocating.</summary>
     private sealed class SynchronousConnector : IFeatureSourceConnector
     {
-        public string ConnectorType => TestConnectorFactory.Type;
+        public string ConnectorType => TestConnectorFactory.TypeName;
 
         public bool Supports(EntityKeyLayout layout) => layout.PartCount == 1 && !layout[0].IsShared;
 
@@ -171,7 +171,7 @@ public class CacheAllocationTests(ITestOutputHelper output)
     {
         private ReadOnlyMemory<byte>[] _records = [];
 
-        public string StoreType => TestCacheStoreFactory.Type;
+        public string StoreType => TestCacheStoreFactory.TypeName;
 
         public void Prepare(LocalTableCache cache, int keys, long writtenMs)
         {

@@ -23,7 +23,7 @@ public sealed class MetricsTests
     /// <summary>Every tag key a metric may carry (design 13.1 rule 1); ids are never among them.</summary>
     private static readonly HashSet<string> BoundedTagKeys = new(StringComparer.Ordinal)
     {
-        StrataRecTags.Pipeline, StrataRecTags.Node, StrataRecTags.Source, StrataRecTags.SourceKind, StrataRecTags.Model,
+        StrataRecTags.Pipeline, StrataRecTags.Node, StrataRecTags.Source, StrataRecTags.IoRole, StrataRecTags.IoTarget,
         StrataRecTags.Outcome, StrataRecTags.Arm, StrataRecTags.Column, StrataRecTags.Tap, StrataRecTags.LogDelivery, StrataRecTags.Entity,
         StrataRecTags.CacheTier, StrataRecTags.Token, StrataRecTags.Feature,
     };
@@ -76,21 +76,21 @@ public sealed class MetricsTests
 
         // Data sources: both candidate sources and the fetched feature sources the request reads; key counts respect
         // max_batch. The local author_store makes no source calls.
-        var sources = capture.Of(StrataRecMetrics.Names.SourceDuration)
-            .Select(m => (Tag(m, StrataRecTags.SourceKind), Tag(m, StrataRecTags.Source))).ToHashSet();
-        Assert.Superset(new HashSet<(string?, string?)> { ("candidate", "two_tower"), ("candidate", "popular"), ("feature", "item_store") }, sources);
-        Assert.DoesNotContain(("feature", "author_store"), sources);
-        var itemKeys = capture.Of(StrataRecMetrics.Names.SourceKeys).Where(m => Tag(m, StrataRecTags.Source) == "item_store").ToList();
+        var sources = capture.Of(StrataRecMetrics.Names.IoDuration)
+            .Select(m => (Tag(m, StrataRecTags.IoRole), Tag(m, StrataRecTags.IoTarget))).ToHashSet();
+        Assert.Superset(new HashSet<(string?, string?)> { ("recall", "two_tower"), ("recall", "popular"), ("fetch", "item_store") }, sources);
+        Assert.DoesNotContain(("fetch", "author_store"), sources);
+        var itemKeys = capture.Of(StrataRecMetrics.Names.IoKeys).Where(m => Tag(m, StrataRecTags.IoTarget) == "item_store").ToList();
         Assert.NotEmpty(itemKeys);
         Assert.All(itemKeys, m => Assert.InRange(m.Value, 1, 25));
-        Assert.Empty(capture.Of(StrataRecMetrics.Names.SourceErrors));
+        Assert.All(capture.Of(StrataRecMetrics.Names.IoKeys), m => Assert.Equal("fetch", Tag(m, StrataRecTags.IoRole))); // keyed calls only
+        Assert.Empty(capture.Of(StrataRecMetrics.Names.IoErrors));
 
         // Missing ratio: what each feature source had of the values the request asked for, per feature. Some recalled items
         // have no i_safe in the fixture, and one recalled item's author (105) has no record in the author snapshot.
         var values = capture.Of(StrataRecMetrics.Names.SourceValues);
         Assert.All(values, m =>
         {
-            Assert.Equal("feature", Tag(m, StrataRecTags.SourceKind));
             Assert.Contains(Tag(m, StrataRecTags.Outcome), new[] { "present", "missing" });
             Assert.True(m.Value > 0);
         });
@@ -115,7 +115,7 @@ public sealed class MetricsTests
         Assert.All(authorKeys, m => Assert.Contains(Tag(m, StrataRecTags.Outcome), new[] { "hit", "miss" }));
 
         // Model calls: the 30 coarse survivors fit one batch.
-        Assert.Single(capture.Of(StrataRecMetrics.Names.ModelDuration), m => Tag(m, StrataRecTags.Model) == "ctr_model");
+        Assert.Single(capture.Of(StrataRecMetrics.Names.IoDuration), m => Tag(m, StrataRecTags.IoRole) == "model" && Tag(m, StrataRecTags.IoTarget) == "ctr_model");
 
         // Memory.
         Assert.True(Assert.Single(capture.Of(StrataRecMetrics.Names.RequestMemoryRented)).Value > 0);
@@ -218,12 +218,12 @@ public sealed class MetricsTests
 
         Assert.True(result.Succeeded, result.Error);
         AssertTagRules(capture.Measurements);
-        Assert.Contains(capture.Of(StrataRecMetrics.Names.SourceErrors),
-            m => Tag(m, StrataRecTags.Source) == "author_store" && Tag(m, StrataRecTags.Outcome) == "error");
+        Assert.Contains(capture.Of(StrataRecMetrics.Names.IoErrors),
+            m => Tag(m, StrataRecTags.IoRole) == "fetch" && Tag(m, StrataRecTags.IoTarget) == "author_store" && Tag(m, StrataRecTags.Outcome) == "error");
         Assert.Single(capture.Of(StrataRecMetrics.Names.NodeOutcomes),
             m => Tag(m, StrataRecTags.Node) == "ctr_ranker" && Tag(m, StrataRecTags.Outcome) == "fallback");
-        Assert.Single(capture.Of(StrataRecMetrics.Names.ModelFallbacks), m => Tag(m, StrataRecTags.Model) == "ctr_model");
-        Assert.Empty(capture.Of(StrataRecMetrics.Names.ModelDuration)); // the model was never called
+        Assert.Single(capture.Of(StrataRecMetrics.Names.ModelFallbacks), m => Tag(m, StrataRecTags.IoTarget) == "ctr_model");
+        Assert.DoesNotContain(capture.Of(StrataRecMetrics.Names.IoDuration), m => Tag(m, StrataRecTags.IoRole) == "model"); // the model was never called
         Assert.Single(capture.Of(StrataRecMetrics.Names.RequestDegraded));
         Assert.Equal(Arms.Order(), capture.Of(StrataRecMetrics.Names.ArmRequestDegraded).Select(m => Tag(m, StrataRecTags.Arm)).Order());
         Assert.Empty(capture.Of(StrataRecMetrics.Names.RequestErrors));
@@ -243,12 +243,11 @@ public sealed class MetricsTests
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await engine.ExecuteAsync(Request("req-cancelled"), cancel.Token));
 
-            Assert.Empty(capture.Of(StrataRecMetrics.Names.ModelErrors));
-            Assert.Empty(capture.Of(StrataRecMetrics.Names.ModelDuration));
-            Assert.Empty(capture.Of(StrataRecMetrics.Names.SourceErrors));
+            Assert.Empty(capture.Of(StrataRecMetrics.Names.IoErrors));
+            Assert.DoesNotContain(capture.Of(StrataRecMetrics.Names.IoDuration), m => Tag(m, StrataRecTags.IoRole) == "model");
             if (slow == "recall")
             {
-                Assert.DoesNotContain(capture.Of(StrataRecMetrics.Names.SourceDuration), m => Tag(m, StrataRecTags.SourceKind) == "candidate");
+                Assert.DoesNotContain(capture.Of(StrataRecMetrics.Names.IoDuration), m => Tag(m, StrataRecTags.IoRole) == "recall");
             }
 
             Assert.Single(capture.Of(StrataRecMetrics.Names.RequestErrors)); // the request itself failed
@@ -267,9 +266,7 @@ public sealed class MetricsTests
 
             await engine.ExecuteAsync(Request("req-timeout"), TestContext.Current.CancellationToken);
 
-            var errors = slow == "model"
-                ? capture.Of(StrataRecMetrics.Names.ModelErrors)
-                : capture.Of(StrataRecMetrics.Names.SourceErrors).Where(m => Tag(m, StrataRecTags.SourceKind) == "candidate").ToList();
+            var errors = capture.Of(StrataRecMetrics.Names.IoErrors).Where(m => Tag(m, StrataRecTags.IoRole) == (slow == "model" ? "model" : "recall")).ToList();
             Assert.NotEmpty(errors);
             Assert.All(errors, m => Assert.Equal("timeout", Tag(m, StrataRecTags.Outcome)));
         }
@@ -286,26 +283,27 @@ public sealed class MetricsTests
         var environment = new PlanEnvironment
         {
             BaseDirectory = host.Environment.BaseDirectory,
-            Models = client == "model" ? new ModelClientRegistry().Add(new TimingOutModels(new LinearModelClientFactory())) : ModelClientRegistry.CreateDefault(),
-            CandidateSources = client == "recall"
-                ? new CandidateSourceRegistry().Add(new TimingOutSources(new MemoryListCandidateSourceFactory())).Add(new TimingOutSources(new MemoryVectorsCandidateSourceFactory()))
-                : CandidateSourceRegistry.CreateDefault(),
+            Bindings = client switch
+            {
+                "model" => TestBindings.With(new TimingOutModels(new LinearModelClientFactory())),
+                "recall" => TestBindings.With(
+                    new TimingOutSources(new MemoryListCandidateSourceFactory()), new TimingOutSources(new MemoryVectorsCandidateSourceFactory())),
+                _ => PlanEnvironment.DefaultBindings(),
+            },
         };
         var engine = new RecEngine(environment);
         Assert.True(engine.Load(host.Request).Applied);
 
         await engine.ExecuteAsync(Request("req-client-timeout"), TestContext.Current.CancellationToken);
 
-        var errors = client == "model"
-            ? capture.Of(StrataRecMetrics.Names.ModelErrors)
-            : capture.Of(StrataRecMetrics.Names.SourceErrors).Where(m => Tag(m, StrataRecTags.SourceKind) == "candidate").ToList();
+        var errors = capture.Of(StrataRecMetrics.Names.IoErrors).Where(m => Tag(m, StrataRecTags.IoRole) == (client == "model" ? "model" : "recall")).ToList();
         Assert.Equal(client == "model" ? 1 : 2, errors.Count);
         Assert.All(errors, m => Assert.Equal("timeout", Tag(m, StrataRecTags.Outcome)));
     }
 
-    private sealed class TimingOutModels(IModelClientFactory inner) : IModelClientFactory
+    private sealed class TimingOutModels(IBindingFactory<IModelClient> inner) : IBindingFactory<IModelClient>
     {
-        public string ClientType => inner.ClientType;
+        public string Type => inner.Type;
 
         public Type SettingsType => inner.SettingsType;
 
@@ -323,9 +321,9 @@ public sealed class MetricsTests
         }
     }
 
-    private sealed class TimingOutSources(ICandidateSourceFactory inner) : ICandidateSourceFactory
+    private sealed class TimingOutSources(IBindingFactory<ICandidateSource> inner) : IBindingFactory<ICandidateSource>
     {
-        public string ClientType => inner.ClientType;
+        public string Type => inner.Type;
 
         public Type SettingsType => inner.SettingsType;
 
@@ -624,8 +622,8 @@ public sealed class EventLogTests
         events.Flush();
         var first = logging.Entries.ToList();
 
-        var fetch = Assert.Single(first, e => Event(e) == nameof(RequestEvent.FeatureSourceFailed));
-        Assert.Equal("author_store", fetch.State["Subject"]);
+        var fetch = Assert.Single(first, e => Event(e) == nameof(RequestEvent.IoFailed));
+        Assert.Equal("fetch author_store", fetch.State["Subject"]);
         Assert.Equal(50L, fetch.State["Count"]);
         Assert.StartsWith("req-", (string)fetch.State["SampleRequestId"]!);
         Assert.Contains("configured to fail", (string)fetch.State["SampleError"]!);
@@ -634,7 +632,7 @@ public sealed class EventLogTests
         Assert.Equal(50L, fallback.State["Count"]);
         var failing = Assert.Single(first, e => e.EventId.Id == 2002);
         Assert.Equal(LogLevel.Error, failing.Level);
-        Assert.Equal("author_store", failing.State["Name"]);
+        Assert.Equal(("fetch", "author_store"), (failing.State["Role"], failing.State["Name"]));
         Assert.Equal(3, first.Count);
 
         // The next window: one more summary per pair, and no new health line while the source keeps failing.

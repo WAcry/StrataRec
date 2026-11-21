@@ -67,7 +67,7 @@ public sealed class ReplayClientFailureTests
         var engine = new RecEngine(new PlanEnvironment
         {
             BaseDirectory = host.Root,
-            Models = new ModelClientRegistry().Add(new ThrowingModels(mode == "timeout"
+            Bindings = PlanEnvironment.DefaultBindings().Add(new ThrowingModels(mode == "timeout"
                 ? () => new TimeoutException("backend timed out")
                 : () => new InvalidOperationException("backend refused"))),
         });
@@ -101,7 +101,7 @@ public sealed class ReplayClientFailureTests
             {
                 var rows = context.LiveRows.ToArray();
                 var call = new ModelCall { Model = "flaky", Inputs = Array.Empty<NamedInput>(), BatchSize = rows.Length };
-                var status = await context.InvokeModelAsync(new FlakyClient(), new IoTarget(IoKind.Model, "flaky"), call, new DiscardingWriter(), rows,
+                var status = await context.InvokeModelAsync(new FlakyClient(), new IoTarget(IoRoles.Model, "flaky"), call, new DiscardingWriter(), rows,
                     timeoutMs: null);
                 lock (errors)
                 {
@@ -136,11 +136,11 @@ public sealed class ReplayClientFailureTests
         }
     }
 
-    private sealed class ThrowingModels(Func<Exception> exception) : IModelClientFactory
+    private sealed class ThrowingModels(Func<Exception> exception) : IBindingFactory<IModelClient>
     {
         private readonly LinearModelClientFactory _inner = new();
 
-        public string ClientType => _inner.ClientType;
+        public string Type => _inner.Type;
 
         public Type SettingsType => _inner.SettingsType;
 

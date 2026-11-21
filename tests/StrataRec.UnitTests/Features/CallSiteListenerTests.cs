@@ -36,7 +36,7 @@ public sealed class CallSiteListenerTests
         var rig = new FeatureTestRig().Source("review80_store", connector);
         var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "review80_store");
         rig.Build();
-        using var listener = MeasurementHook.Throwing(StrataRecMetrics.Names.SourceDuration, (StrataRecTags.Source, "review80_store"));
+        using var listener = MeasurementHook.Throwing(StrataRecMetrics.Names.IoDuration, (StrataRecTags.IoTarget, "review80_store"));
         var hook = new FeatureCallHookTests.ListHook();
         var request = rig.NewRequest([1, 2], hook: hook);
 

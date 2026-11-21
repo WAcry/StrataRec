@@ -41,7 +41,7 @@ public sealed class MemoryVectorsCandidateSource : ICandidateSource
         (_query, _minScore, _latencyMs, _fail) = (query, minScore, latencyMs, fail);
     }
 
-    public string ClientType => MemoryVectorsCandidateSourceFactory.Type;
+    public string ClientType => MemoryVectorsCandidateSourceFactory.TypeName;
 
     public async ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken)
     {
@@ -52,13 +52,13 @@ public sealed class MemoryVectorsCandidateSource : ICandidateSource
 
         if (_fail)
         {
-            return CandidateSourceStatus.Failed(MemoryVectorsCandidateSourceFactory.Type + " source is configured to fail.");
+            return CandidateSourceStatus.Failed(MemoryVectorsCandidateSourceFactory.TypeName + " source is configured to fail.");
         }
 
         if (!query.Values.TryGet(_query, out var type, out var value))
         {
             return CandidateSourceStatus.Failed(
-                $"{MemoryVectorsCandidateSourceFactory.Type} reads the query vector '{_query}', and the query of '{query.SourceName}' has no such value; " +
+                $"{MemoryVectorsCandidateSourceFactory.TypeName} reads the query vector '{_query}', and the query of '{query.SourceName}' has no such value; " +
                 $"give it one in the recall node's queries, e.g. \"queries\": {{ \"{query.SourceName}\": {{ \"{_query}\": \"ctx.user.embedding\" }} }}.");
         }
 
@@ -215,11 +215,11 @@ public sealed class MemoryVectorsItem
 }
 
 /// <summary>Factory for <c>memory_vectors@1</c>.</summary>
-public sealed class MemoryVectorsCandidateSourceFactory : CandidateSourceFactory<MemoryVectorsSettings>
+public sealed class MemoryVectorsCandidateSourceFactory : BindingFactory<ICandidateSource, MemoryVectorsSettings>
 {
-    public const string Type = "memory_vectors@1";
+    public const string TypeName = "memory_vectors@1";
 
-    public override string ClientType => Type;
+    public override string Type => TypeName;
 
     /// <remarks>A test fixture: it reads its data file here, at create time, so it needs no load.</remarks>
     /// <exception cref="BindingException">A setting or an item is invalid: at the setting, or at <c>/data_file</c> naming

@@ -117,17 +117,17 @@ public sealed class ModelRankerReplayTests
         ReplayTests.Edit(root, "bindings/local.jsonc", "\"models\": {",
             $$"""
             "models": {
-                "pair_model": { "client": "{{PairModels.Type}}" },
-                "list_model": { "client": "{{ListModels.Type}}" },
+                "pair_model": { "client": "{{PairModels.TypeName}}" },
+                "list_model": { "client": "{{ListModels.TypeName}}" },
             """);
     }
 
     private static double PairsCounted(MetricCapture metrics) =>
-        metrics.Of(StrataRecMetrics.Names.ModelPairs).Where(m => Equals(m.Tags[StrataRecTags.Model], "pair_model")).Sum(m => m.Value);
+        metrics.Of(StrataRecMetrics.Names.ModelPairs).Where(m => Equals(m.Tags[StrataRecTags.IoTarget], "pair_model")).Sum(m => m.Value);
 
     private static RecEngine Load(HomeFeedTestHost host, PairModels pairs, ListModels lists)
     {
-        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Models = ModelClientRegistry.CreateDefault().Add(pairs).Add(lists) });
+        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Bindings = PlanEnvironment.DefaultBindings().Add(pairs).Add(lists) });
         var load = engine.Load(host.Request);
         Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
         return engine;
@@ -152,13 +152,15 @@ public sealed class ModelRankerReplayTests
     /// A pairwise model over the final score, the ids and the quality weight: the first row is preferred by the logistic
     /// of their difference (so a replay that served another pair's answer would differ); <c>bias</c> shifts every answer.
     /// </summary>
-    private sealed class PairModels(float bias = 0f) : IModelClientFactory, IModelClient
+    private sealed class PairModels(float bias = 0f) : IBindingFactory<IModelClient>, IModelClient
     {
-        public const string Type = "pair_test@1";
+        public const string TypeName = "pair_test@1";
 
         private readonly List<string> _seen = new();
 
-        public string ClientType => Type;
+        public string Type => TypeName;
+
+        public string ClientType => TypeName;
 
         public Type SettingsType => typeof(NoSettings);
 
@@ -210,13 +212,15 @@ public sealed class ModelRankerReplayTests
     }
 
     /// <summary>A listwise model: each row's final score relative to the list's mean, plus a little of its CTR and the seed.</summary>
-    private sealed class ListModels(float bias = 0f) : IModelClientFactory, IModelClient
+    private sealed class ListModels(float bias = 0f) : IBindingFactory<IModelClient>, IModelClient
     {
-        public const string Type = "list_test@1";
+        public const string TypeName = "list_test@1";
 
         private readonly List<string> _seen = new();
 
-        public string ClientType => Type;
+        public string Type => TypeName;
+
+        public string ClientType => TypeName;
 
         public Type SettingsType => typeof(NoSettings);
 

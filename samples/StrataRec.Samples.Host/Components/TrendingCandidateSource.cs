@@ -1,3 +1,4 @@
+using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Types;
 using StrataRec.Pipeline.Sources;
@@ -37,7 +38,7 @@ public sealed class TrendingCandidateSource : ICandidateSource
         _regionInput = regionInput;
     }
 
-    public string ClientType => TrendingCandidateSourceFactory.Type;
+    public string ClientType => TrendingCandidateSourceFactory.TypeName;
 
     public ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken)
     {
@@ -127,11 +128,11 @@ public sealed class TrendingItem
 }
 
 /// <summary>Creates <c>trending@1</c> sources; registered in <see cref="SampleEnvironment"/>.</summary>
-public sealed class TrendingCandidateSourceFactory : CandidateSourceFactory<TrendingSettings>
+public sealed class TrendingCandidateSourceFactory : BindingFactory<ICandidateSource, TrendingSettings>
 {
-    public const string Type = "trending@1";
+    public const string TypeName = "trending@1";
 
-    public override string ClientType => Type;
+    public override string Type => TypeName;
 
     /// <summary>Checks what the settings type cannot say; a wrong setting is a <see cref="BindingException"/> at its pointer, with a hint.</summary>
     protected override ICandidateSource Create(TrendingSettings settings, BindingContext context)

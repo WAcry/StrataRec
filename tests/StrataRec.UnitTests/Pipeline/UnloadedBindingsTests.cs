@@ -1,4 +1,5 @@
 using System.Text.Json;
+using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Features.Bindings;
 using StrataRec.Pipeline.Planning;
@@ -45,7 +46,7 @@ public sealed class UnloadedBindingsTests
             values[property.Name] = property.Value.Clone();
         }
 
-        return BindingSpec.Create(BindingSection.Models, "ctr_model", "test@1", values, Root, factory, "bindings:test");
+        return BindingSpec.Create(BindingKind.Model, "ctr_model", "test@1", values, Root, factory, "bindings:test");
     }
 
     private sealed record ValueFactory(string Kind)

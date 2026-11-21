@@ -9,18 +9,14 @@ namespace StrataRec.Core.Diagnostics;
 /// <summary>Request-level failures that are summarized per time window instead of logged one by one (design 13.2).</summary>
 public enum RequestEvent : byte
 {
-    FeatureSourceTimeout = 1,
-    FeatureSourceFailed,
-    CandidateSourceTimeout,
-    CandidateSourceFailed,
-    ModelTimeout,
-    ModelFailed,
+    /// <summary>
+    /// The request stopped waiting for a call of an external dependency; subject: its role and name
+    /// (<see cref="IoTarget"/>), e.g. <c>model ctr_model</c>. A distributed cache's keys went to the connector.
+    /// </summary>
+    IoTimeout = 1,
 
-    /// <summary>A read of a cache source's distributed cache timed out; its keys went to the connector.</summary>
-    FeatureCacheTimeout,
-
-    /// <summary>A read of a cache source's distributed cache failed; its keys went to the connector.</summary>
-    FeatureCacheFailed,
+    /// <summary>A call of an external dependency failed; subject as for <see cref="IoTimeout"/>.</summary>
+    IoFailed,
 
     /// <summary>A node failed and its fallback node served.</summary>
     NodeFallback,
@@ -91,7 +87,7 @@ public sealed partial class RequestEventLog : IDisposable
 
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<(RequestEvent Event, string Subject), EventWindow> _events = new();
-    private readonly ConcurrentDictionary<(IoKind Kind, string Name), HealthWindow> _health = new();
+    private readonly ConcurrentDictionary<(string Role, string Name), HealthWindow> _health = new();
     private readonly object _flushGate = new();
     private readonly List<HeldMemory> _held = new(); // guarded by itself
     private readonly Timer? _timer;
@@ -144,10 +140,10 @@ public sealed partial class RequestEventLog : IDisposable
     public void RecordIo(IoTarget target, IoOutcome outcome, string? requestId, string? error)
     {
         var failed = outcome is IoOutcome.Timeout or IoOutcome.Error;
-        _health.GetOrAdd((target.Kind, target.Name), static _ => new HealthWindow()).Add(failed, error);
+        _health.GetOrAdd((target.Role, target.Name), static _ => new HealthWindow()).Add(failed, error);
         if (failed)
         {
-            Report(outcome == IoOutcome.Timeout ? target.TimeoutEvent : target.FailedEvent, target.Name, requestId, error);
+            Report(outcome == IoOutcome.Timeout ? RequestEvent.IoTimeout : RequestEvent.IoFailed, target.SpanName, requestId, error);
         }
     }
 
@@ -200,11 +196,11 @@ public sealed partial class RequestEventLog : IDisposable
                 health.Failing = failing;
                 if (failing)
                 {
-                    LogDependencyFailing(_logger, key.Kind, key.Name, failures, calls, seconds, error);
+                    LogDependencyFailing(_logger, key.Role, key.Name, failures, calls, seconds, error);
                 }
                 else
                 {
-                    LogDependencyRecovered(_logger, key.Kind, key.Name, failures, calls, seconds);
+                    LogDependencyRecovered(_logger, key.Role, key.Name, failures, calls, seconds);
                 }
             }
         }
@@ -265,12 +261,12 @@ public sealed partial class RequestEventLog : IDisposable
     private static partial void LogSummary(ILogger logger, RequestEvent @event, string subject, long count, double windowSeconds, string? sampleRequestId, string? sampleError);
 
     [LoggerMessage(EventId = 2002, Level = LogLevel.Error,
-        Message = "{Kind} '{Name}' is failing: {Failures} of {Calls} call(s) failed in the last {WindowSeconds} s; sample error: {SampleError}")]
-    private static partial void LogDependencyFailing(ILogger logger, IoKind kind, string name, long failures, long calls, double windowSeconds, string? sampleError);
+        Message = "{Role} '{Name}' is failing: {Failures} of {Calls} call(s) failed in the last {WindowSeconds} s; sample error: {SampleError}")]
+    private static partial void LogDependencyFailing(ILogger logger, string role, string name, long failures, long calls, double windowSeconds, string? sampleError);
 
     [LoggerMessage(EventId = 2003, Level = LogLevel.Information,
-        Message = "{Kind} '{Name}' recovered: {Failures} of {Calls} call(s) failed in the last {WindowSeconds} s")]
-    private static partial void LogDependencyRecovered(ILogger logger, IoKind kind, string name, long failures, long calls, double windowSeconds);
+        Message = "{Role} '{Name}' recovered: {Failures} of {Calls} call(s) failed in the last {WindowSeconds} s")]
+    private static partial void LogDependencyRecovered(ILogger logger, string role, string name, long failures, long calls, double windowSeconds);
 
     private readonly record struct HeldMemory(RequestMemory Memory, string Subject, string? RequestId, long Since);
 

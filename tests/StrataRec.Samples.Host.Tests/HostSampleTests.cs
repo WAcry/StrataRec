@@ -74,7 +74,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
             .Select(d => (d!["code"]!.GetValue<string>(), d["artifact"]!.GetValue<string>() + d["pointer"]!.GetValue<string>()))
             .ToList();
         Assert.Contains(("BOOST_INVALID", "pipeline:trending_feed/nodes/editorial_boost/config/boosts/local_news"), errors);
-        Assert.Contains(("CONNECTOR_CONFIG", "bindings:local/sources/user_store/data_fle"), errors);
+        Assert.Contains(("BINDING_SETTINGS", "bindings:local/sources/user_store/data_fle"), errors);
         Assert.Contains(("MODEL_SIGNATURE", "pipeline:trending_feed/nodes/engagement/config/model"), errors); // the node calls v3; the binding serves v4
         Assert.Equal(3, errors.Count);
     }

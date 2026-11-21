@@ -69,7 +69,7 @@ public sealed class FixedTextModelClientTests
     [Fact]
     public void ItIsInTheDefaultRegistry()
     {
-        Assert.True(StrataRec.Pipeline.Planning.ModelClientRegistry.CreateDefault().TryGet("fixed_text@1", out var factory));
+        Assert.True(StrataRec.Pipeline.Planning.PlanEnvironment.DefaultBindings().TryGet<IModelClient>("fixed_text@1", out var factory));
         Assert.IsType<FixedTextModelClient>(factory.Create(Context(Settings)));
     }
 

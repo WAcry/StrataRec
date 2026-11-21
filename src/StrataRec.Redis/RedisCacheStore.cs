@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using StackExchange.Redis;
+using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Features.Cache;
@@ -373,9 +374,9 @@ public sealed class RedisSettings
 }
 
 /// <summary>Creates <see cref="RedisCacheStore"/>s; register it with <see cref="RedisRegistration.AddRedis"/>.</summary>
-public sealed class RedisCacheStoreFactory : FeatureCacheStoreFactory<RedisSettings>
+public sealed class RedisCacheStoreFactory : BindingFactory<IFeatureCacheStore, RedisSettings>
 {
-    public override string StoreType => RedisCacheStore.Type;
+    public override string Type => RedisCacheStore.Type;
 
     protected override IFeatureCacheStore Create(RedisSettings settings, BindingContext context)
     {
@@ -418,8 +419,8 @@ public sealed class RedisCacheStoreFactory : FeatureCacheStoreFactory<RedisSetti
 /// <summary>Registers <c>redis@1</c>.</summary>
 public static class RedisRegistration
 {
-    /// <summary>Adds <c>redis@1</c> to the distributed cache stores a host's plans may use.</summary>
-    public static FeatureCacheStoreRegistry AddRedis(this FeatureCacheStoreRegistry registry)
+    /// <summary>Adds <c>redis@1</c> to the binding types a host's plans may use, for distributed caches.</summary>
+    public static BindingRegistry AddRedis(this BindingRegistry registry)
     {
         ArgumentNullException.ThrowIfNull(registry);
         return registry.Add(new RedisCacheStoreFactory());

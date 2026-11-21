@@ -298,8 +298,8 @@ public class CacheStoreCallTests
         answers.Prepare(rig.Tables["review80_cache"].Cache!, rig.Clock.NowMs, 111.0);
         waits.Prepare(rig.Tables["review80_cache"].Cache!, rig.Clock.NowMs, 111.0);
         rig.Clock.HoldTimestamps(); // the tier's time never runs out
-        using var listener = new MeasurementHook(StrataRecMetrics.Names.SourceDuration, () => rig.Clock.AdvanceMs(50),
-            (StrataRecTags.Source, "review80_cache"), (StrataRecTags.SourceKind, "feature_cache"));
+        using var listener = new MeasurementHook(StrataRecMetrics.Names.IoDuration, () => rig.Clock.AdvanceMs(50),
+            (StrataRecTags.IoTarget, "review80_cache"), (StrataRecTags.IoRole, IoRoles.Cache));
 
         var request = rig.NewRequest([1]);
         var fill = request.EnsureAsync(clicks).AsTask();
@@ -321,7 +321,7 @@ public class CacheStoreCallTests
     /// its fill threw the listener's exception.
     /// </summary>
     [Theory]
-    [InlineData(StrataRecMetrics.Names.SourceDuration)]
+    [InlineData(StrataRecMetrics.Names.IoDuration)]
     [InlineData(StrataRecMetrics.Names.CacheKeys)]
     public async Task AListenerThatThrowsWhileACacheReadResolves_LosesItsMeasurement_AndTheReadIsRecorded(string instrument)
     {
@@ -331,8 +331,9 @@ public class CacheStoreCallTests
         var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "review80_cache");
         rig.Build();
         store.Prepare(rig.Tables["review80_cache"].Cache!, rig.Clock.NowMs, 111.0);
-        using var listener = MeasurementHook.Throwing(instrument, (StrataRecTags.Source, "review80_cache"),
-            instrument == StrataRecMetrics.Names.CacheKeys ? (StrataRecTags.CacheTier, "distributed") : (StrataRecTags.SourceKind, "feature_cache"));
+        using var listener = instrument == StrataRecMetrics.Names.CacheKeys
+            ? MeasurementHook.Throwing(instrument, (StrataRecTags.Source, "review80_cache"), (StrataRecTags.CacheTier, "distributed"))
+            : MeasurementHook.Throwing(instrument, (StrataRecTags.IoTarget, "review80_cache"), (StrataRecTags.IoRole, IoRoles.Cache));
         var hook = new FeatureCallHookTests.ListHook();
         var request = rig.NewRequest([1], hook: hook);
 
@@ -359,7 +360,7 @@ public class CacheStoreCallTests
         private ReadOnlyMemory<byte> _record;
         private int _calls;
 
-        public string StoreType => TestCacheStoreFactory.Type;
+        public string StoreType => TestCacheStoreFactory.TypeName;
 
         public int Calls => Volatile.Read(ref _calls);
 
@@ -406,7 +407,7 @@ public class CacheStoreCallTests
         private ReadOnlyMemory<byte> _record;
         private int _calls;
 
-        public string StoreType => TestCacheStoreFactory.Type;
+        public string StoreType => TestCacheStoreFactory.TypeName;
 
         public Task SecondSent => _sent.Task;
 
@@ -452,7 +453,7 @@ public class CacheStoreCallTests
         private ReadOnlyMemory<byte> _record;
         private int _calls;
 
-        public string StoreType => TestCacheStoreFactory.Type;
+        public string StoreType => TestCacheStoreFactory.TypeName;
 
         public int Calls => Volatile.Read(ref _calls);
 
@@ -486,7 +487,7 @@ public class CacheStoreCallTests
         private ReadOnlyMemory<byte> _record;
         private int _calls;
 
-        public string StoreType => TestCacheStoreFactory.Type;
+        public string StoreType => TestCacheStoreFactory.TypeName;
 
         public int Calls => Volatile.Read(ref _calls);
 
@@ -525,7 +526,7 @@ public class CacheStoreCallTests
     /// <summary>A store whose every read is <paramref name="get"/>.</summary>
     private sealed class ScriptedStore(Func<ValueTask> get) : IFeatureCacheStore
     {
-        public string StoreType => TestCacheStoreFactory.Type;
+        public string StoreType => TestCacheStoreFactory.TypeName;
 
         public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken) =>
             get();
@@ -560,7 +561,7 @@ public class CacheStoreCallTests
             _listener.InstrumentPublished = (instrument, listener) =>
             {
                 if (instrument.Meter.Name == StrataRecTelemetry.Name
-                    && instrument.Name is StrataRecMetrics.Names.SourceDuration or StrataRecMetrics.Names.SourceErrors)
+                    && instrument.Name is StrataRecMetrics.Names.IoDuration or StrataRecMetrics.Names.IoErrors)
                 {
                     listener.EnableMeasurementEvents(instrument);
                 }
@@ -580,9 +581,9 @@ public class CacheStoreCallTests
         {
             foreach (var tag in tags)
             {
-                if (tag.Key == StrataRecTags.SourceKind && Equals(tag.Value, "feature_cache"))
+                if (tag.Key == StrataRecTags.IoRole && Equals(tag.Value, IoRoles.Cache))
                 {
-                    Interlocked.Increment(ref instrument.Name == StrataRecMetrics.Names.SourceDuration ? ref _completed : ref _errors);
+                    Interlocked.Increment(ref instrument.Name == StrataRecMetrics.Names.IoDuration ? ref _completed : ref _errors);
                 }
             }
         }

@@ -210,7 +210,7 @@ public class OutputFeatureRowsTests
         File.WriteAllText(Path.Combine(root, "bindings", "local.jsonc"), $$"""
             { "environment": "local",
               "sources": {
-                "item_store": { "connector": "{{CountingConnectors.Type}}", "data": { "1": { "base": {{baseOf1}} }, "2": { "base": {{baseOf2}} } }, "timeout_ms": 60000 } },
+                "item_store": { "connector": "{{CountingConnectors.TypeName}}", "data": { "1": { "base": {{baseOf1}} }, "2": { "base": {{baseOf2}} } }, "timeout_ms": 60000 } },
               "candidate_sources": {{candidateSources}} }
             """);
         File.WriteAllText(Path.Combine(root, "pipelines", "p.jsonc"), pipeline);
@@ -222,7 +222,7 @@ public class OutputFeatureRowsTests
         var compilation = PlanCompiler.Compile(request!, new PlanEnvironment
         {
             BaseDirectory = root,
-            Connectors = FeatureConnectorRegistry.CreateDefault().Add(connectors),
+            Bindings = PlanEnvironment.DefaultBindings().Add(connectors),
         });
         Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
         return (compilation.Plan!, connectors.Calls);
@@ -232,15 +232,15 @@ public class OutputFeatureRowsTests
     /// <c>counting_memory@1</c>: <c>memory@1</c>, recording the keys of every call, and failing a call that asks for
     /// <paramref name="failing"/>.
     /// </summary>
-    private sealed class CountingConnectors(long? failing = null) : IFeatureConnectorFactory
+    private sealed class CountingConnectors(long? failing = null) : IBindingFactory<IFeatureSourceConnector>
     {
-        public const string Type = "counting_memory@1";
+        public const string TypeName = "counting_memory@1";
 
         private readonly MemoryFeatureConnectorFactory _memory = new();
 
         public ConcurrentQueue<long[]> Calls { get; } = new();
 
-        public string ConnectorType => Type;
+        public string Type => TypeName;
 
         public Type SettingsType => _memory.SettingsType;
 
@@ -248,7 +248,7 @@ public class OutputFeatureRowsTests
 
         private sealed class Connector(IFeatureSourceConnector inner, ConcurrentQueue<long[]> calls, long? failing) : IFeatureSourceConnector
         {
-            public string ConnectorType => Type;
+            public string ConnectorType => TypeName;
 
             public bool Supports(EntityKeyLayout layout) => inner.Supports(layout);
 

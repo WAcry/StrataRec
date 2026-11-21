@@ -1,4 +1,3 @@
-using StrataRec.Features.Runtime;
 using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Samples.Host.Components;
@@ -6,7 +5,7 @@ using StrataRec.Samples.Host.Components;
 namespace StrataRec.Samples.Host;
 
 /// <summary>
-/// What this binary provides to plans: the built-in operators, connectors and clients, plus the sample's own. A workspace
+/// What this binary provides to plans: the built-in operators and binding types, plus the sample's own. A workspace
 /// names each by its type (<c>"op": "CategoryBoost@1"</c>, <c>"connector": "kv_store@1"</c>, <c>"client": "logistic@1"</c>,
 /// <c>"client": "trending@1"</c>), so a binary without them rejects the workspace at load.
 /// </summary>
@@ -20,8 +19,9 @@ public static class SampleEnvironment
     public static PlanEnvironment Create() => new()
     {
         Operators = OperatorRegistry.CreateDefault().Add(new CategoryBoostFactory()),
-        Connectors = FeatureConnectorRegistry.CreateDefault().Add(new KeyValueFeatureConnectorFactory()),
-        Models = ModelClientRegistry.CreateDefault().Add(new LogisticModelClientFactory()),
-        CandidateSources = CandidateSourceRegistry.CreateDefault().Add(new TrendingCandidateSourceFactory()),
+        Bindings = PlanEnvironment.DefaultBindings()
+            .Add(new KeyValueFeatureConnectorFactory())
+            .Add(new LogisticModelClientFactory())
+            .Add(new TrendingCandidateSourceFactory()),
     };
 }

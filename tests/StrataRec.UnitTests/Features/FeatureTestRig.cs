@@ -12,6 +12,7 @@ using StrataRec.Core.Tables;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
+using StrataRec.Features.Bindings;
 using StrataRec.Features.Cache;
 using StrataRec.Features.Catalog;
 using StrataRec.Features.Connectors;
@@ -48,11 +49,19 @@ internal sealed class FeatureTestRig
 
     public FeatureTestRig()
     {
-        CacheStores = new FeatureCacheStoreRegistry().Add(new TestCacheStoreFactory(_cacheStores));
+        Bindings = new BindingRegistry()
+            .Add(new MemoryFeatureConnectorFactory())
+            .Add(new SnapshotFilesUpdateSourceFactory())
+            .Add(new TestConnectorFactory(_connectors))
+            .Add(new TestUpdateSourceFactory())
+            .Add(new TestCacheStoreFactory(_cacheStores));
     }
 
-    /// <summary>The distributed cache stores the plan's cache bindings may name: <c>test_cache@1</c>, and what a test adds.</summary>
-    public FeatureCacheStoreRegistry CacheStores { get; }
+    /// <summary>
+    /// The binding types the plan's sources may name: the built-in connector and update source, <c>test@1</c>,
+    /// <c>test_updates@1</c>, the distributed cache store <c>test_cache@1</c>, and what a test adds.
+    /// </summary>
+    public BindingRegistry Bindings { get; }
     private int _contextCount = 1; // context id 0 is the request input user_id
     private readonly Dictionary<string, int> _inputs = new(StringComparer.Ordinal) { ["user_id"] = UserIdContext };
 
@@ -71,7 +80,7 @@ internal sealed class FeatureTestRig
     public FeatureTestRig Source(string name, IFeatureSourceConnector connector, int timeoutMs = UntimedMs, int? maxBatch = null)
     {
         _connectors[name] = connector;
-        _sources[name] = new FeatureSourceBinding { Connector = TestConnectorFactory.Type, TimeoutMs = timeoutMs, MaxBatch = maxBatch };
+        _sources[name] = new FeatureSourceBinding { Connector = TestConnectorFactory.TypeName, TimeoutMs = timeoutMs, MaxBatch = maxBatch };
         return this;
     }
 
@@ -81,7 +90,7 @@ internal sealed class FeatureTestRig
         using var document = JsonDocument.Parse(json);
         _sources[name] = new FeatureSourceBinding
         {
-            Connector = MemoryFeatureConnectorFactory.Type,
+            Connector = MemoryFeatureConnectorFactory.TypeName,
             TimeoutMs = timeoutMs,
             MaxBatch = maxBatch,
             Settings = new Dictionary<string, JsonElement> { ["data"] = document.RootElement.Clone() },
@@ -97,7 +106,7 @@ internal sealed class FeatureTestRig
     {
         _sources[name] = new FeatureSourceBinding
         {
-            Mode = "local", MaxBytes = maxBytes, Bootstrap = new UpdateSourceBinding { Source = TestUpdateSourceFactory.Type },
+            Mode = "local", MaxBytes = maxBytes, Bootstrap = new UpdateSourceBinding { Source = TestUpdateSourceFactory.TypeName },
         };
         _localTables.Loads[name] = load;
         return this;
@@ -120,7 +129,7 @@ internal sealed class FeatureTestRig
         _sources[name] = new FeatureSourceBinding
         {
             Mode = "cache",
-            Connector = TestConnectorFactory.Type,
+            Connector = TestConnectorFactory.TypeName,
             TimeoutMs = timeoutMs,
             MaxBatch = maxBatch,
             MaxBytes = maxBytes,
@@ -128,7 +137,7 @@ internal sealed class FeatureTestRig
             {
                 TtlMs = ttlMs,
                 StaleIfErrorMs = staleIfErrorMs,
-                Distributed = distributed is null ? null : new DistributedCacheBinding { Store = TestCacheStoreFactory.Type, TimeoutMs = distributedTimeoutMs },
+                Distributed = distributed is null ? null : new DistributedCacheBinding { Store = TestCacheStoreFactory.TypeName, TimeoutMs = distributedTimeoutMs },
             },
         };
         return this;
@@ -154,7 +163,7 @@ internal sealed class FeatureTestRig
             Cache = new CacheBinding
             {
                 TtlMs = ttlMs,
-                Distributed = distributed is null ? null : new DistributedCacheBinding { Store = TestCacheStoreFactory.Type },
+                Distributed = distributed is null ? null : new DistributedCacheBinding { Store = TestCacheStoreFactory.TypeName },
             },
         };
         return this;
@@ -233,19 +242,14 @@ internal sealed class FeatureTestRig
     /// <summary>Builds the plan and returns the diagnostics instead of asserting there are none.</summary>
     public DiagnosticBag TryBuild(string? baseDirectory = null)
     {
-        var registry = FeatureConnectorRegistry.CreateDefault().Add(new TestConnectorFactory(_connectors));
-        var updateSources = FeatureUpdateSourceRegistry.CreateDefault().Add(new TestUpdateSourceFactory());
         var diagnostics = new DiagnosticBag();
         Plan = FeaturePlan.Create(
             _features,
             new SourceBindingArtifact { Environment = "test", Sources = _sources },
-            registry,
+            new BindingResolver(Bindings, UnsharedInstances.Instance, baseDirectory, "bindings:test", diagnostics),
             input => _inputs.TryGetValue(input, out var id) ? id : -1,
             diagnostics,
-            baseDirectory,
-            updateSources,
             _localTables,
-            cacheStores: CacheStores,
             clock: Clock);
         return diagnostics;
     }
@@ -375,11 +379,11 @@ internal sealed class ManualClock : TimeProvider
 }
 
 /// <summary><c>test_cache@1</c>: serves distributed cache stores registered by source name.</summary>
-internal sealed class TestCacheStoreFactory(IReadOnlyDictionary<string, IFeatureCacheStore> stores) : IFeatureCacheStoreFactory
+internal sealed class TestCacheStoreFactory(IReadOnlyDictionary<string, IFeatureCacheStore> stores) : IBindingFactory<IFeatureCacheStore>
 {
-    public const string Type = "test_cache@1";
+    public const string TypeName = "test_cache@1";
 
-    public string StoreType => Type;
+    public string Type => TypeName;
 
     public Type SettingsType => typeof(NoSettings);
 
@@ -397,7 +401,7 @@ internal sealed class FakeCacheStore : IFeatureCacheStore
     private readonly List<(int Records, TaskCompletionSource Done)> _waiters = new();
     private int _written;
 
-    public string StoreType => TestCacheStoreFactory.Type;
+    public string StoreType => TestCacheStoreFactory.TypeName;
 
     /// <summary>Runs before a read answers: throw to fail it, or wait to hold it.</summary>
     public Func<CancellationToken, ValueTask>? BeforeGet { get; set; }
@@ -488,11 +492,11 @@ internal sealed class FakeCacheStore : IFeatureCacheStore
 }
 
 /// <summary><c>test_updates@1</c>: an update source with nothing to load (the rig loads its tables directly).</summary>
-internal sealed class TestUpdateSourceFactory : IFeatureUpdateSourceFactory
+internal sealed class TestUpdateSourceFactory : IBindingFactory<IFeatureUpdateSource>
 {
-    public const string Type = "test_updates@1";
+    public const string TypeName = "test_updates@1";
 
-    public string SourceType => Type;
+    public string Type => TypeName;
 
     public Type SettingsType => typeof(NoSettings);
 
@@ -500,11 +504,11 @@ internal sealed class TestUpdateSourceFactory : IFeatureUpdateSourceFactory
 }
 
 /// <summary>Serves connectors registered by source name under the connector type <c>test@1</c>.</summary>
-internal sealed class TestConnectorFactory(IReadOnlyDictionary<string, IFeatureSourceConnector> connectors) : IFeatureConnectorFactory
+internal sealed class TestConnectorFactory(IReadOnlyDictionary<string, IFeatureSourceConnector> connectors) : IBindingFactory<IFeatureSourceConnector>
 {
-    public const string Type = "test@1";
+    public const string TypeName = "test@1";
 
-    public string ConnectorType => Type;
+    public string Type => TypeName;
 
     public Type SettingsType => typeof(NoSettings);
 
@@ -519,7 +523,7 @@ internal sealed class ScriptedConnector(ScriptedConnector.Handler handler) : IFe
 
     public ConcurrentQueue<RecordedCall> Calls { get; } = new();
 
-    public string ConnectorType => TestConnectorFactory.Type;
+    public string ConnectorType => TestConnectorFactory.TypeName;
 
     /// <summary>The layouts the plan asked about, in order.</summary>
     public ConcurrentQueue<EntityKeyLayout> Layouts { get; } = new();

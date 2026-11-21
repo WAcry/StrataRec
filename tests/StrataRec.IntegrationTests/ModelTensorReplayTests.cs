@@ -26,7 +26,7 @@ public sealed class ModelTensorReplayTests
                 + "\n    \"item.emb_or_zero\": { \"type\": \"list<float32,4>\", \"source\": \"item_store\", \"field\": \"i_emb\", \"default\": [0, 0, 0, 0] },");
             ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"log_followers\": \"col.author.log_followers\" }",
                 "\"log_followers\": \"col.author.log_followers\", \"item_id\": \"col.entity_id\", \"item_emb\": \"col.item.emb_or_zero\" }");
-            SampleBindings.RebindModel(root, "ctr_model", $$"""{ "client": "{{TensorModels.Type}}" }""");
+            SampleBindings.RebindModel(root, "ctr_model", $$"""{ "client": "{{TensorModels.TypeName}}" }""");
         });
         var recording = new TensorModels();
         var engine = Load(host, recording);
@@ -55,7 +55,7 @@ public sealed class ModelTensorReplayTests
 
     private static RecEngine Load(HomeFeedTestHost host, TensorModels models)
     {
-        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Models = ModelClientRegistry.CreateDefault().Add(models) });
+        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Bindings = PlanEnvironment.DefaultBindings().Add(models) });
         var load = engine.Load(host.Request);
         Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
         return engine;
@@ -65,15 +65,17 @@ public sealed class ModelTensorReplayTests
     /// A model taking the sample's two float32 inputs, an int64 id and a 4-vector, scoring each row from all four (so a
     /// replay that served another row's output would differ), and noting the tensors it was sent.
     /// </summary>
-    private sealed class TensorModels(float bias = 0f) : IModelClientFactory, IModelClient
+    private sealed class TensorModels(float bias = 0f) : IBindingFactory<IModelClient>, IModelClient
     {
-        public const string Type = "tensor_test@1";
+        public const string TypeName = "tensor_test@1";
 
         private static readonly int[] Rows = { -1 };
 
         private readonly List<string> _seen = new();
 
-        public string ClientType => Type;
+        public string Type => TypeName;
+
+        public string ClientType => TypeName;
 
         public Type SettingsType => typeof(NoSettings);
 

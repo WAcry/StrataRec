@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Text.Json;
+using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
@@ -45,7 +46,7 @@ public sealed class KeyValueFeatureConnector : IFeatureSourceConnector, ILoadabl
         _latencyMs = latencyMs;
     }
 
-    public string ConnectorType => KeyValueFeatureConnectorFactory.Type;
+    public string ConnectorType => KeyValueFeatureConnectorFactory.TypeName;
 
     /// <summary>
     /// Entities keyed by one int64: a context entity (a user, one key per call) or a candidate entity (an item, many). Asked
@@ -320,11 +321,11 @@ public sealed class KeyValueSettings
 }
 
 /// <summary>Creates <c>kv_store@1</c> connectors; registered in <see cref="SampleEnvironment"/>.</summary>
-public sealed class KeyValueFeatureConnectorFactory : FeatureConnectorFactory<KeyValueSettings>
+public sealed class KeyValueFeatureConnectorFactory : BindingFactory<IFeatureSourceConnector, KeyValueSettings>
 {
-    public const string Type = "kv_store@1";
+    public const string TypeName = "kv_store@1";
 
-    public override string ConnectorType => Type;
+    public override string Type => TypeName;
 
     /// <summary>
     /// Checks the settings only: <c>Create</c> runs for every compile, including <c>validate</c>, and may run on several

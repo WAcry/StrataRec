@@ -1,4 +1,5 @@
 using System.Text.Json;
+using StrataRec.Artifacts.Model;
 using StrataRec.Features.Bindings;
 
 namespace StrataRec.UnitTests.Features;
@@ -31,7 +32,7 @@ public sealed class BindingSpecTests
     {
         var spec = Spec("""{ "uri": "m.bin" }""");
 
-        Assert.NotEqual(spec.Identity, Spec("""{ "uri": "m.bin" }""", section: BindingSection.CandidateSources).Identity);
+        Assert.NotEqual(spec.Identity, Spec("""{ "uri": "m.bin" }""", kind: BindingKind.CandidateSource).Identity);
         Assert.NotEqual(spec.Identity, Spec("""{ "uri": "m.bin" }""", name: "ctr_other").Identity);
         Assert.NotEqual(spec.Identity, Spec("""{ "uri": "m.bin" }""", type: "my_ranker@2").Identity);
         Assert.NotEqual(spec.Identity, Spec("""{ "uri": "m.bin" }""", baseDirectory: Path.Combine(Root, "other")).Identity);
@@ -47,12 +48,14 @@ public sealed class BindingSpecTests
     }
 
     [Theory]
-    [InlineData(BindingSection.Models, "/models/ctr~1model", "model 'ctr/model' (my_ranker@1)")]
-    [InlineData(BindingSection.CandidateSources, "/candidate_sources/ctr~1model", "candidate source 'ctr/model' (my_ranker@1)")]
-    [InlineData(BindingSection.Sources, "/sources/ctr~1model", "feature source 'ctr/model' (my_ranker@1)")]
-    public void ThePointerAndLabelNameTheBinding(BindingSection section, string pointer, string label)
+    [InlineData(BindingKind.Model, "/models/ctr~1model", "model 'ctr/model' (my_ranker@1)")]
+    [InlineData(BindingKind.CandidateSource, "/candidate_sources/ctr~1model", "candidate source 'ctr/model' (my_ranker@1)")]
+    [InlineData(BindingKind.Connector, "/sources/ctr~1model", "feature source 'ctr/model' (my_ranker@1)")]
+    [InlineData(BindingKind.UpdateSource, "/sources/ctr~1model/bootstrap", "update source of feature source 'ctr/model' (my_ranker@1)")]
+    [InlineData(BindingKind.CacheStore, "/sources/ctr~1model/cache/distributed", "distributed cache of feature source 'ctr/model' (my_ranker@1)")]
+    public void ThePointerAndLabelNameTheBinding(BindingKind kind, string pointer, string label)
     {
-        var spec = Spec("{}", section: section, name: "ctr/model");
+        var spec = Spec("{}", kind: kind, name: "ctr/model");
 
         Assert.Equal((pointer, label), (spec.Pointer, spec.Label));
     }
@@ -74,7 +77,7 @@ public sealed class BindingSpecTests
     }
 
     private static BindingSpec Spec(
-        string settings, BindingSection section = BindingSection.Models, string name = "ctr_model", string type = "my_ranker@1", string? baseDirectory = null,
+        string settings, BindingKind kind = BindingKind.Model, string name = "ctr_model", string type = "my_ranker@1", string? baseDirectory = null,
         object? factory = null)
     {
         var values = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
@@ -83,7 +86,7 @@ public sealed class BindingSpecTests
             values[property.Name] = property.Value.Clone();
         }
 
-        return BindingSpec.Create(section, name, type, values, baseDirectory ?? Root, factory ?? Factory, "bindings:test");
+        return BindingSpec.Create(kind, name, type, values, baseDirectory ?? Root, factory ?? Factory, "bindings:test");
     }
 
     private sealed record MutableRecord

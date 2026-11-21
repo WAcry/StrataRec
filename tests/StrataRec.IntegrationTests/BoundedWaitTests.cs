@@ -52,7 +52,7 @@ public sealed class BoundedWaitTests
         Assert.Equal(("ctr_backup", "timed out after 50 ms; served by fallback 'ctr_backup'"), (ranker.ProducedBy, ranker.Detail));
         Assert.True(pool.Outstanding > 0); // the abandoned call still holds the request memory...
         Assert.Equal(1, Assert.Single(capture.Of(StrataRecMetrics.Names.AbandonedIo)).Value); // ...and is counted once
-        Assert.Equal("timeout", Tag(Assert.Single(capture.Of(StrataRecMetrics.Names.ModelErrors)), StrataRecTags.Outcome));
+        Assert.Equal("timeout", Tag(Assert.Single(capture.Of(StrataRecMetrics.Names.IoErrors), m => Tag(m, StrataRecTags.IoRole) == "model"), StrataRecTags.Outcome));
         var run = result.Recording!.Runs[0];
         var call = Assert.Single(run.ModelCalls);
         Assert.Equal(("timeout", true), (call.Status, call.Threw)); // as the request saw it
@@ -116,8 +116,8 @@ public sealed class BoundedWaitTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(Patience, TestContext.Current.CancellationToken));
         Assert.False(models.Answered.Task.IsCompleted);
         Assert.Equal("cancelled", Assert.Single(delivered!.Runs[0].ModelCalls).Status);
-        Assert.Empty(capture.Of(StrataRecMetrics.Names.ModelErrors)); // the caller giving up is not the model's fault
-        Assert.Empty(capture.Of(StrataRecMetrics.Names.ModelDuration));
+        Assert.DoesNotContain(capture.Of(StrataRecMetrics.Names.IoErrors), m => Tag(m, StrataRecTags.IoRole) == "model"); // the caller giving up is not the model's fault
+        Assert.DoesNotContain(capture.Of(StrataRecMetrics.Names.IoDuration), m => Tag(m, StrataRecTags.IoRole) == "model");
         Assert.Equal(1, Assert.Single(capture.Of(StrataRecMetrics.Names.AbandonedIo)).Value);
         Assert.True(pool.Outstanding > 0);
 
@@ -157,8 +157,8 @@ public sealed class BoundedWaitTests
         Assert.Equal(("timeout", null), (popular.Status, popular.Ids));
         Assert.True(pool.Outstanding > 0);
         Assert.Equal(1, Assert.Single(capture.Of(StrataRecMetrics.Names.AbandonedIo)).Value);
-        var error = Assert.Single(capture.Of(StrataRecMetrics.Names.SourceErrors));
-        Assert.Equal(("popular", "timeout"), (Tag(error, StrataRecTags.Source), Tag(error, StrataRecTags.Outcome)));
+        var error = Assert.Single(capture.Of(StrataRecMetrics.Names.IoErrors));
+        Assert.Equal(("recall", "popular", "timeout"), (Tag(error, StrataRecTags.IoRole), Tag(error, StrataRecTags.IoTarget), Tag(error, StrataRecTags.Outcome)));
 
         // It answers late, adding its candidates again into the closed buffer, and then lets go of the memory.
         sources.Open();
@@ -218,14 +218,13 @@ public sealed class BoundedWaitTests
     };
 
     private static RecEngine Engine(
-        HomeFeedTestHost host, IBufferPool pool, IModelClientFactory? models = null, ICandidateSourceFactory? sources = null, RequestEventLog? events = null)
+        HomeFeedTestHost host, IBufferPool pool, IBindingFactory<IModelClient>? models = null, IBindingFactory<ICandidateSource>? sources = null, RequestEventLog? events = null)
     {
         var engine = new RecEngine(
             new PlanEnvironment
             {
                 BaseDirectory = host.Root,
-                Models = models is null ? ModelClientRegistry.CreateDefault() : new ModelClientRegistry().Add(models),
-                CandidateSources = sources is null ? CandidateSourceRegistry.CreateDefault() : CandidateSourceRegistry.CreateDefault().Add(sources),
+                Bindings = TestBindings.With(models, sources),
             },
             executor: new PipelineExecutor(pool, null, events));
         var load = engine.Load(host.Request);
@@ -306,11 +305,11 @@ public sealed class BoundedWaitTests
     }
 
     /// <summary>linear@1 models that answer only once the gate opens, writing their outputs then.</summary>
-    private sealed class GatedModels : Gated, IModelClientFactory
+    private sealed class GatedModels : Gated, IBindingFactory<IModelClient>
     {
         private readonly LinearModelClientFactory _inner = new();
 
-        public string ClientType => _inner.ClientType;
+        public string Type => _inner.Type;
 
         public Type SettingsType => _inner.SettingsType;
 
@@ -332,11 +331,11 @@ public sealed class BoundedWaitTests
     /// memory_list@1 sources where <paramref name="gated"/> adds all its candidates at once and then answers only once the
     /// gate opens, adding them again then.
     /// </summary>
-    private sealed class GatedSources(string gated) : Gated, ICandidateSourceFactory
+    private sealed class GatedSources(string gated) : Gated, IBindingFactory<ICandidateSource>
     {
         private readonly MemoryListCandidateSourceFactory _inner = new();
 
-        public string ClientType => _inner.ClientType;
+        public string Type => _inner.Type;
 
         public Type SettingsType => _inner.SettingsType;
 
@@ -359,11 +358,11 @@ public sealed class BoundedWaitTests
     }
 
     /// <summary>linear@1 models that answer synchronously, but only once their token has been cancelled.</summary>
-    private sealed class LateModels : IModelClientFactory
+    private sealed class LateModels : IBindingFactory<IModelClient>
     {
         private readonly LinearModelClientFactory _inner = new();
 
-        public string ClientType => _inner.ClientType;
+        public string Type => _inner.Type;
 
         public Type SettingsType => _inner.SettingsType;
 

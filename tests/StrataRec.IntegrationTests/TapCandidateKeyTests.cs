@@ -2,8 +2,8 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Model;
-using StrataRec.Core.Memory;
 using StrataRec.Core.Columns;
+using StrataRec.Core.Memory;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Features.Runtime;
@@ -807,7 +807,7 @@ public sealed class TapCandidateKeyTests
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
         return (request!, new PlanEnvironment
         {
-            BaseDirectory = root, Connectors = FeatureConnectorRegistry.CreateDefault(), Operators = operators ?? OperatorRegistry.CreateDefault(),
+            BaseDirectory = root, Operators = operators ?? OperatorRegistry.CreateDefault(),
         });
     }
 }

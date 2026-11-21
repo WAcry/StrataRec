@@ -118,7 +118,7 @@ public class IoDrainTests
         private readonly TaskCompletionSource _answer = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _calls;
 
-        public string StoreType => TestCacheStoreFactory.Type;
+        public string StoreType => TestCacheStoreFactory.TypeName;
 
         public int Calls => Volatile.Read(ref _calls);
 

@@ -5,16 +5,20 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
+using StrataRec.Features.Bindings;
 using StrataRec.Features.Cache;
 using StrataRec.Features.Catalog;
 using StrataRec.Features.Connectors;
 using StrataRec.Features.Local;
 using StrataRec.Features.Runtime;
+using StrataRec.Models;
 using StrataRec.Pipeline.Operators;
+using StrataRec.Pipeline.Sources;
 
 namespace StrataRec.Pipeline.Planning;
 
@@ -28,23 +32,15 @@ public sealed record PlanEnvironment
 {
     public OperatorRegistry Operators { get; init; } = OperatorRegistry.CreateDefault();
 
-    public FeatureConnectorRegistry Connectors { get; init; } = FeatureConnectorRegistry.CreateDefault();
-
-    /// <summary>Update sources that load <c>local</c> feature tables (design 6.6), keyed by type like <see cref="Connectors"/>.</summary>
-    public FeatureUpdateSourceRegistry UpdateSources { get; init; } = FeatureUpdateSourceRegistry.CreateDefault();
-
     /// <summary>
-    /// Distributed cache stores of <c>cache</c> bindings (<c>cache.distributed.store</c>, design 6.6), keyed by type.
-    /// Empty by default: StrataRec.Redis adds <c>redis@1</c>.
+    /// The binding factories of this binary, of every kind (design 6.4): model clients, candidate sources, feature
+    /// connectors, update sources and distributed cache stores, by the type a binding names. <see cref="DefaultBindings"/>
+    /// by default; StrataRec.Redis adds <c>redis@1</c>.
     /// </summary>
-    public FeatureCacheStoreRegistry CacheStores { get; init; } = new();
+    public BindingRegistry Bindings { get; init; } = DefaultBindings();
 
     /// <summary>The clock of <c>cache</c> tables (write times and expiry); tests pass one they move by hand.</summary>
     public TimeProvider Clock { get; init; } = TimeProvider.System;
-
-    public ModelClientRegistry Models { get; init; } = ModelClientRegistry.CreateDefault();
-
-    public CandidateSourceRegistry CandidateSources { get; init; } = CandidateSourceRegistry.CreateDefault();
 
     /// <summary>Directory that relative fixture paths in bindings resolve against (the config root); null resolves them
     /// against the current directory.</summary>
@@ -54,14 +50,60 @@ public sealed record PlanEnvironment
     public List<string> Capabilities()
     {
         var caps = new List<string>(Operators.Ids);
-        caps.AddRange(Connectors.Types);
-        caps.AddRange(UpdateSources.Types);
-        caps.AddRange(CacheStores.Types);
-        caps.AddRange(Models.Types);
-        caps.AddRange(CandidateSources.Types);
+        foreach (var factory in Bindings.Factories())
+        {
+            caps.Add(factory.Type);
+        }
+
         caps.Sort(StringComparer.Ordinal);
         return caps;
     }
+
+    /// <summary>
+    /// The built-in binding types: <c>linear@1</c>, <c>random@1</c> and <c>fixed_text@1</c> models,
+    /// <c>memory_list@1</c> and <c>memory_vectors@1</c> candidate sources, the <c>memory@1</c> connector and the
+    /// <c>snapshot_files@1</c> update source. A new registry each call, for a host to add its own to.
+    /// </summary>
+    public static BindingRegistry DefaultBindings() => new BindingRegistry()
+        .Add(new LinearModelClientFactory())
+        .Add(new RandomModelClientFactory())
+        .Add(new FixedTextModelClientFactory())
+        .Add(new MemoryListCandidateSourceFactory())
+        .Add(new MemoryVectorsCandidateSourceFactory())
+        .Add(new MemoryFeatureConnectorFactory())
+        .Add(new SnapshotFilesUpdateSourceFactory());
+
+    /// <summary>
+    /// The registered binding types as the bindings schema describes them: each with the kinds of binding that can name
+    /// it, by the contract its factory creates (<see cref="BindingKinds"/>). A factory of no such contract is named by no
+    /// binding and not described.
+    /// </summary>
+    public List<BindingSchemaSource> BindingSchemaSources()
+    {
+        var sources = new List<BindingSchemaSource>();
+        foreach (var factory in Bindings.Factories())
+        {
+            foreach (var (kind, contract) in KindContracts)
+            {
+                if (contract.IsInstanceOfType(factory))
+                {
+                    sources.Add(new BindingSchemaSource(kind, factory.Type, factory.SettingsType));
+                }
+            }
+        }
+
+        return sources;
+    }
+
+    /// <summary>The factory contract of each <see cref="BindingKind"/>: what a binding of the kind gets from <see cref="Bindings"/>.</summary>
+    private static readonly (BindingKind Kind, Type Factory)[] KindContracts =
+    [
+        (BindingKind.Model, typeof(IBindingFactory<IModelClient>)),
+        (BindingKind.CandidateSource, typeof(IBindingFactory<ICandidateSource>)),
+        (BindingKind.Connector, typeof(IBindingFactory<IFeatureSourceConnector>)),
+        (BindingKind.UpdateSource, typeof(IBindingFactory<IFeatureUpdateSource>)),
+        (BindingKind.CacheStore, typeof(IBindingFactory<IFeatureCacheStore>)),
+    ];
 }
 
 /// <summary>
@@ -116,6 +158,7 @@ public sealed class PlanBuilder
     private readonly HashSet<string> _failedGroups = new(StringComparer.Ordinal);
     private IExpressionScope? _scope;
     private ClientResolver? _clients;
+    private BindingResolver? _resolver;
 
     /// <summary>The operators of every node compiled, fallbacks and every arm's variants included.</summary>
     private readonly SortedSet<string> _operators = new(StringComparer.Ordinal);
@@ -171,7 +214,8 @@ public sealed class PlanBuilder
         var schema = new PlanSchema(keyType);
         _schema = schema;
         _scope = schema.CreateScope();
-        _clients = new ClientResolver(sources.Bindings, _environment.Models, _environment.CandidateSources, _environment.BaseDirectory, _bindings, _diagnostics);
+        _resolver = new BindingResolver(_environment.Bindings, _bindings, _environment.BaseDirectory, "bindings:" + sources.Bindings.Environment, _diagnostics);
+        _clients = new ClientResolver(sources.Bindings, _resolver, _bindings);
 
         // Request inputs.
         _requestInputs = new Dictionary<string, ContextField>(StringComparer.Ordinal);
@@ -2132,14 +2176,10 @@ public sealed class PlanBuilder
         return FeaturePlan.Create(
             _features,
             _sources!.Bindings,
-            _environment.Connectors,
+            _resolver!,
             name => inputs.TryGetValue(name, out var f) ? f.Id : -1,
             _diagnostics,
-            _environment.BaseDirectory,
-            _environment.UpdateSources,
             _bindings,
-            _bindings,
-            _environment.CacheStores,
             _environment.Clock,
             CatalogLabel,
             _catalog,

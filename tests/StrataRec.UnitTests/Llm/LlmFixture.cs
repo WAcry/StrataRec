@@ -106,7 +106,7 @@ internal static class LlmFixture
               "sources": {
                 "items": { "connector": "memory@1", "data_file": "fixtures/items.json", "timeout_ms": 30000 },
                 "users": { "connector": "memory@1", "data_file": "fixtures/users.json", "timeout_ms": 30000 } },
-              "models": { "llm": { "client": "{{TextModels.Type}}" } },
+              "models": { "llm": { "client": "{{TextModels.TypeName}}" } },
               "candidate_sources": { "s": { "client": "memory_list@1", "items": [{{(stringKeys ? string.Join(", ", StringKeys.Select(k => $"\"{k}\"")) : string.Join(", ", recall ?? Incoming))}}] } } }
             """);
         Write(root, "pipelines/p.jsonc", $$"""
@@ -137,7 +137,7 @@ internal static class LlmFixture
         return PlanCompiler.Compile(request!, new PlanEnvironment
         {
             BaseDirectory = root,
-            Models = new ModelClientRegistry().Add(models),
+            Bindings = PlanEnvironment.DefaultBindings().Add(models),
             Operators = operators ?? OperatorRegistry.CreateDefault().AddLlm(),
         });
     }
@@ -229,9 +229,9 @@ internal sealed record TextCall(string? Version, int BatchSize, long? Seed, int?
 /// answers with what <c>answer</c> returns: the text of output <c>answer</c> (none when null) and the status.
 /// </summary>
 internal sealed class TextModels(Func<TextCall, (string? Text, ModelStatus Status)> answer, Func<string?, ModelSignature>? signature = null)
-    : IModelClientFactory, IModelClient
+    : IBindingFactory<IModelClient>, IModelClient
 {
-    public const string Type = "text_test@1";
+    public const string TypeName = "text_test@1";
 
     private readonly List<TextCall> _calls = new();
 
@@ -240,7 +240,9 @@ internal sealed class TextModels(Func<TextCall, (string? Text, ModelStatus Statu
     {
     }
 
-    public string ClientType => Type;
+    public string Type => TypeName;
+
+    public string ClientType => TypeName;
 
     public Type SettingsType => typeof(NoSettings);
 

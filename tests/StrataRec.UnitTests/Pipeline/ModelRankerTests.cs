@@ -580,7 +580,7 @@ public sealed class ModelRankerTests
         Write(root, "bindings/local.jsonc", $$"""
             { "environment": "local",
               "sources": { "items": { "connector": "memory@1", "data_file": "fixtures/items.json", "timeout_ms": 30000 } },
-              "models": { "m": { "client": "{{TestModels.Type}}" } },
+              "models": { "m": { "client": "{{TestModels.TypeName}}" } },
               "candidate_sources": { "s": { "client": "memory_list@1", "items": [{{string.Join(", ", recall ?? Incoming)}}] } } }
             """);
         Write(root, "pipelines/p.jsonc", $$"""
@@ -604,7 +604,7 @@ public sealed class ModelRankerTests
         var workspace = ConfigWorkspace.Load(root, diagnostics);
         var request = workspace.CreateCompileRequest("p", "local", diagnostics);
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
-        return PlanCompiler.Compile(request!, new PlanEnvironment { BaseDirectory = root, Models = new ModelClientRegistry().Add(models) });
+        return PlanCompiler.Compile(request!, new PlanEnvironment { BaseDirectory = root, Bindings = PlanEnvironment.DefaultBindings().Add(models) });
     }
 
     private static void Write(string root, string path, string content)
@@ -632,13 +632,15 @@ public sealed class ModelRankerTests
     /// <param name="extra">Elements written beyond the answer: a client that writes more than the output's shape holds.</param>
     internal sealed class TestModels(
         Func<string?, ModelSignature> signature, Func<CapturedCall, float[]?> answer, TensorElementType answerType = TensorElementType.Float32,
-        Func<CapturedCall, double[]>? exact = null, int extra = 0) : IModelClientFactory, IModelClient
+        Func<CapturedCall, double[]>? exact = null, int extra = 0) : IBindingFactory<IModelClient>, IModelClient
     {
-        public const string Type = "ranker_test@1";
+        public const string TypeName = "ranker_test@1";
 
         private readonly List<CapturedCall> _calls = new();
 
-        public string ClientType => Type;
+        public string Type => TypeName;
+
+        public string ClientType => TypeName;
 
         public Type SettingsType => typeof(NoSettings);
 
@@ -729,7 +731,7 @@ public sealed class ModelPairsMetricTests
             string? model = null;
             foreach (var tag in tags)
             {
-                if (tag.Key == StrataRecTags.Model)
+                if (tag.Key == StrataRecTags.IoTarget)
                 {
                     model = (string?)tag.Value;
                 }

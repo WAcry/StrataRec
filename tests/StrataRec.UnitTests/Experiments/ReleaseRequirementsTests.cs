@@ -41,7 +41,7 @@ public sealed class ReleaseRequirementsTests
         var environment = new PlanEnvironment
         {
             BaseDirectory = root,
-            CandidateSources = CandidateSourceRegistry.CreateDefault().Add(new AliasFactory()),
+            Bindings = PlanEnvironment.DefaultBindings().Add(new AliasFactory()),
         };
         var diagnostics = new DiagnosticBag();
         var request = ConfigWorkspace.Load(root, diagnostics).CreateCompileRequest("p", "local", diagnostics)!;
@@ -172,7 +172,7 @@ public sealed class ReleaseRequirementsTests
         var environment = new PlanEnvironment
         {
             BaseDirectory = root,
-            CandidateSources = CandidateSourceRegistry.CreateDefault().Add(new AliasFactory()),
+            Bindings = PlanEnvironment.DefaultBindings().Add(new AliasFactory()),
         };
         var diagnostics = new DiagnosticBag();
         var request = ConfigWorkspace.Load(root, diagnostics).CreateCompileRequest("p", "local", diagnostics)!;
@@ -193,9 +193,9 @@ public sealed class ReleaseRequirementsTests
     }
 
     /// <summary>A client type this binary would not have: the memory list under another name.</summary>
-    private sealed class AliasFactory : ICandidateSourceFactory
+    private sealed class AliasFactory : IBindingFactory<ICandidateSource>
     {
-        public string ClientType => "future@1";
+        public string Type => "future@1";
 
         public Type SettingsType => typeof(MemoryListSettings);
 

@@ -23,8 +23,8 @@ public sealed class BoundedCallSpanTests
         var first = new Traced(new List<Activity?>());
         var second = new Traced(new List<Activity?>());
 
-        var firstResult = await BoundedCall.RunAsync<int, Traced>(first, budget, memory, new IoTarget(IoKind.CandidateSource, "first"), null, "req", null);
-        var secondResult = await BoundedCall.RunAsync<int, Traced>(second, budget, memory, new IoTarget(IoKind.CandidateSource, "second"), null, "req", null);
+        var firstResult = await BoundedCall.RunAsync<int, Traced>(first, budget, memory, new IoTarget(IoRoles.Recall, "first"), null, "req", null);
+        var secondResult = await BoundedCall.RunAsync<int, Traced>(second, budget, memory, new IoTarget(IoRoles.Recall, "second"), null, "req", null);
 
         Assert.Equal((IoOutcome.Ok, IoOutcome.Ok), (firstResult.Outcome, secondResult.Outcome));
         Assert.Equal(1, flow.Thrown);
@@ -50,8 +50,8 @@ public sealed class BoundedCallSpanTests
         var first = new Traced(new List<Activity?>(), later: true);
         var second = new Traced(new List<Activity?>(), later: true);
 
-        var firstResult = await BoundedCall.RunAsync<int, Traced>(first, budget, memory, new IoTarget(IoKind.CandidateSource, "first"), null, "req", null);
-        var secondResult = await BoundedCall.RunAsync<int, Traced>(second, budget, memory, new IoTarget(IoKind.CandidateSource, "second"), null, "req", null);
+        var firstResult = await BoundedCall.RunAsync<int, Traced>(first, budget, memory, new IoTarget(IoRoles.Recall, "first"), null, "req", null);
+        var secondResult = await BoundedCall.RunAsync<int, Traced>(second, budget, memory, new IoTarget(IoRoles.Recall, "second"), null, "req", null);
 
         Assert.Equal((42, 42), (firstResult.Value, secondResult.Value));
         var firstSpan = Assert.Single(flow.Named("recall first"));

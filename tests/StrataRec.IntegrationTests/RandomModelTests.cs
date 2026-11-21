@@ -55,7 +55,7 @@ public sealed class RandomModelTests
     [InlineData("""{ "client": "random@1", "inputs": ["smoothed_ctr", "log_followers"], "outputs": ["p_like"] }""",
         "MODEL_SIGNATURE", "pipeline:home_feed", "/nodes/ctr_ranker/config/outputs/p_click")]
     [InlineData("""{ "client": "random@1", "inputs": ["smoothed_ctr", "log_followers"], "outputs": ["p_click"], "seed": "42" }""",
-        "MODEL_CONFIG", "bindings:local", "/models/ctr_model/seed")]
+        "BINDING_SETTINGS", "bindings:local", "/models/ctr_model/seed")]
     public void ABindingThatDoesNotFit_IsAnError_AtTheNodeOrTheSetting(string binding, string code, string artifact, string pointer)
     {
         var host = Host(binding);

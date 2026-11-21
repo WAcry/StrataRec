@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
@@ -114,7 +115,7 @@ public sealed class CustomPlacementTests
               "nodes": { {{nodes}} },
               "output": { "limit_param": "k", "columns": { {{output}} } } }
             """,
-            sources: CandidateSourceRegistry.CreateDefault().Add(new FailingSourceFactory()),
+            bindings: PlanEnvironment.DefaultBindings().Add(new FailingSourceFactory()),
             operators: OperatorRegistry.CreateDefault().Add(new SlotInjectorFactory()).Add(new InterleaveFactory()));
         Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
         return compilation.Plan!;
@@ -182,7 +183,7 @@ public sealed class CustomPlacementTests
 
         private sealed class SlotInjector(string name, ICandidateSource source, int? timeoutMs, int[] slots, OutputColumn score) : Operator
         {
-            private readonly IoTarget _target = new(IoKind.CandidateSource, name);
+            private readonly IoTarget _target = new(IoRoles.Recall, name);
 
             public override int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => slots.Length;
 
@@ -316,9 +317,9 @@ public sealed class CustomPlacementTests
     }
 
     /// <summary><c>failing@1</c>: a candidate source that always fails.</summary>
-    private sealed class FailingSourceFactory : ICandidateSourceFactory
+    private sealed class FailingSourceFactory : IBindingFactory<ICandidateSource>
     {
-        public string ClientType => "failing@1";
+        public string Type => "failing@1";
 
         public Type SettingsType => typeof(Core.Bindings.NoSettings);
 

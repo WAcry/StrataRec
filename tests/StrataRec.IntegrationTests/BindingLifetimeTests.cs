@@ -255,8 +255,8 @@ public sealed class BindingLifetimeTests
         var load = await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(load.Applied);
-        var error = Assert.Single(load.Diagnostics, d => d.Code == "MODEL_CONFIG"); // and the tap that reads the node's inputs
-        Assert.Equal(("MODEL_CONFIG", "bindings:local", "/models/ctr_model/credentials"), (error.Code, error.Artifact, error.Pointer));
+        var error = Assert.Single(load.Diagnostics, d => d.Code == "BINDING_SETTINGS"); // and the tap that reads the node's inputs
+        Assert.Equal(("BINDING_SETTINGS", "bindings:local", "/models/ctr_model/credentials"), (error.Code, error.Artifact, error.Pointer));
         Assert.DoesNotContain(Pasted, string.Join("\n", load.Diagnostics) + string.Join("\n", logs.Entries.Select(e => e.Message)), StringComparison.Ordinal);
     }
 
@@ -370,7 +370,7 @@ public sealed class BindingLifetimeTests
         var root = Workspace(generation: 1);
         SampleBindings.RebindModel(root, "ctr_model", $$"""
             {
-              "client": "{{RemoteSignatureModels.Type}}",
+              "client": "{{RemoteSignatureModels.TypeName}}",
               "outputs": { "p_click": { "bias": -1.5, "weights": { "smoothed_ctr": 12.0, "log_followers": 0.05 }, "activation": "sigmoid" } }
             }
             """);
@@ -430,7 +430,7 @@ public sealed class BindingLifetimeTests
         var root = Workspace(generation: 1);
         SampleBindings.RebindModel(root, "ctr_model", $$"""
             {
-              "client": "{{RemoteSignatureModels.Type}}",
+              "client": "{{RemoteSignatureModels.TypeName}}",
               "outputs": { "p_click": { "bias": -1.5, "weights": { "smoothed_ctr": 12.0, "log_followers": 0.05 }, "activation": "sigmoid" } }
             }
             """);
@@ -481,7 +481,7 @@ public sealed class BindingLifetimeTests
     private static void Rebind(string root, int generation, string? credentials = null) =>
         SampleBindings.RebindModel(root, "ctr_model", $$"""
             {
-              "client": "{{ScriptedModels.Type}}", "generation": {{generation}},
+              "client": "{{ScriptedModels.TypeName}}", "generation": {{generation}},
               {{(credentials is null ? string.Empty : $"\"credentials\": \"{credentials}\",")}}
               "outputs": { "p_click": { "bias": -1.5, "weights": { "smoothed_ctr": 12.0, "log_followers": 0.05 }, "activation": "sigmoid" } }
             }
@@ -495,20 +495,18 @@ public sealed class BindingLifetimeTests
     {
         var latency = latencyMs is { } ms ? $", \"latency_ms\": {ms}" : string.Empty;
         SampleBindings.Rebind(root, "user_store",
-            $$"""{ "connector": "{{CountingConnectors.Type}}", "data_file": "fixtures/users.json", "timeout_ms": {{HomeFeedTestHost.UntimedMs}} }""");
+            $$"""{ "connector": "{{CountingConnectors.TypeName}}", "data_file": "fixtures/users.json", "timeout_ms": {{HomeFeedTestHost.UntimedMs}} }""");
         SampleBindings.Rebind(root, "item_store",
-            $$"""{ "connector": "{{CountingConnectors.Type}}", "data_file": "fixtures/items.json", "timeout_ms": {{HomeFeedTestHost.UntimedMs}}, "max_batch": 25{{latency}} }""");
+            $$"""{ "connector": "{{CountingConnectors.TypeName}}", "data_file": "fixtures/items.json", "timeout_ms": {{HomeFeedTestHost.UntimedMs}}, "max_batch": 25{{latency}} }""");
         // A list in place of the sample's vector index: the lifetimes, not the candidates, are tested.
-        SampleBindings.RebindCandidateSource(root, "two_tower", $$"""{ "client": "{{CountingSources.Type}}", "data_file": "fixtures/recall_popular.json" }""");
-        SampleBindings.RebindCandidateSource(root, "popular", $$"""{ "client": "{{CountingSources.Type}}", "data_file": "fixtures/recall_popular.json"{{latency}} }""");
+        SampleBindings.RebindCandidateSource(root, "two_tower", $$"""{ "client": "{{CountingSources.TypeName}}", "data_file": "fixtures/recall_popular.json" }""");
+        SampleBindings.RebindCandidateSource(root, "popular", $$"""{ "client": "{{CountingSources.TypeName}}", "data_file": "fixtures/recall_popular.json"{{latency}} }""");
     }
 
-    private static PlanEnvironment Environment(string root, IModelClientFactory models, IFeatureConnectorFactory? connectors = null, ICandidateSourceFactory? sources = null) => new()
+    private static PlanEnvironment Environment(string root, IBindingFactory<IModelClient> models, IBindingFactory<IFeatureSourceConnector>? connectors = null, IBindingFactory<ICandidateSource>? sources = null) => new()
     {
         BaseDirectory = root,
-        Models = ModelClientRegistry.CreateDefault().Add(models),
-        Connectors = connectors is null ? FeatureConnectorRegistry.CreateDefault() : FeatureConnectorRegistry.CreateDefault().Add(connectors),
-        CandidateSources = sources is null ? CandidateSourceRegistry.CreateDefault() : CandidateSourceRegistry.CreateDefault().Add(sources),
+        Bindings = TestBindings.With(models, connectors, sources),
     };
 
     private static PlanCompileRequest Compile(string root)
@@ -555,15 +553,15 @@ public sealed class BindingLifetimeTests
     /// <c>credentials</c> reference), answers <see cref="Signature"/> when set, and holds its calls while
     /// <see cref="HoldCalls"/> is in effect, ignoring their cancellation like a client stuck in I/O.
     /// </summary>
-    private sealed class ScriptedModels : IModelClientFactory
+    private sealed class ScriptedModels : IBindingFactory<IModelClient>
     {
-        public const string Type = "scripted@1";
+        public const string TypeName = "scripted@1";
 
         private readonly LinearModelClientFactory _linear = new();
         private readonly ConcurrentQueue<Client> _created = new();
         private TaskCompletionSource? _gate;
 
-        public string ClientType => Type;
+        public string Type => TypeName;
 
         public Type SettingsType => _linear.SettingsType;
 
@@ -591,7 +589,7 @@ public sealed class BindingLifetimeTests
         {
             private int _loads;
 
-            public string ClientType => Type;
+            public string ClientType => TypeName;
 
             public int Loads => Volatile.Read(ref _loads);
 
@@ -686,14 +684,14 @@ public sealed class BindingLifetimeTests
     }
 
     /// <summary><c>counting_memory@1</c>: <c>memory@1</c> connectors that count what the engine does with them.</summary>
-    private sealed class CountingConnectors : IFeatureConnectorFactory
+    private sealed class CountingConnectors : IBindingFactory<IFeatureSourceConnector>
     {
-        public const string Type = "counting_memory@1";
+        public const string TypeName = "counting_memory@1";
 
         private readonly MemoryFeatureConnectorFactory _memory = new();
         private readonly ConcurrentQueue<Connector> _created = new();
 
-        public string ConnectorType => Type;
+        public string Type => TypeName;
 
         public Type SettingsType => _memory.SettingsType;
 
@@ -712,7 +710,7 @@ public sealed class BindingLifetimeTests
         {
             public string Name { get; } = name;
 
-            public string ConnectorType => Type;
+            public string ConnectorType => TypeName;
 
             public bool Supports(EntityKeyLayout layout) => inner.Supports(layout);
 
@@ -733,14 +731,14 @@ public sealed class BindingLifetimeTests
     }
 
     /// <summary><c>counting_list@1</c>: <c>memory_list@1</c> candidate sources that count what the engine does with them.</summary>
-    private sealed class CountingSources : ICandidateSourceFactory
+    private sealed class CountingSources : IBindingFactory<ICandidateSource>
     {
-        public const string Type = "counting_list@1";
+        public const string TypeName = "counting_list@1";
 
         private readonly MemoryListCandidateSourceFactory _list = new();
         private readonly ConcurrentQueue<Source> _created = new();
 
-        public string ClientType => Type;
+        public string Type => TypeName;
 
         public Type SettingsType => _list.SettingsType;
 
@@ -759,7 +757,7 @@ public sealed class BindingLifetimeTests
         {
             public string Name { get; } = name;
 
-            public string ClientType => Type;
+            public string ClientType => TypeName;
 
             public async ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken)
             {
@@ -780,14 +778,14 @@ public sealed class BindingLifetimeTests
     /// <c>remote_signature@1</c>: linear@1 models whose signature only a model server knows. The client needs no load, and
     /// every answer takes a round trip; <see cref="Answer"/> stands in for a server whose model differs from the binding.
     /// </summary>
-    private sealed class RemoteSignatureModels : IModelClientFactory
+    private sealed class RemoteSignatureModels : IBindingFactory<IModelClient>
     {
-        public const string Type = "remote_signature@1";
+        public const string TypeName = "remote_signature@1";
 
         private readonly LinearModelClientFactory _linear = new();
         private int _lookups;
 
-        public string ClientType => Type;
+        public string Type => TypeName;
 
         public Type SettingsType => _linear.SettingsType;
 
@@ -802,7 +800,7 @@ public sealed class BindingLifetimeTests
 
         private sealed class Client(RemoteSignatureModels owner, IModelClient inner) : IModelClient
         {
-            public string ClientType => Type;
+            public string ClientType => TypeName;
 
             public async ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken)
             {

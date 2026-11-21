@@ -1,4 +1,5 @@
 using System.Numerics;
+using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
@@ -368,56 +369,4 @@ public interface IFeatureSourceConnector
         ReadOnlyMemory<CompiledFieldBinding> fields,
         IFeatureBatchWriter writer,
         CancellationToken cancellationToken);
-}
-
-/// <summary>Creates connectors for bindings of one connector type.</summary>
-/// <remarks>
-/// The engine creates one connector per binding identity and shares it across plans and their concurrent requests (see
-/// <see cref="Bindings.BindingSpec.Identity"/>), so a connector lives as long as some plan uses it, not one plan.
-/// <see cref="Create"/> only reads the settings; a connector that must connect or resolve credentials first implements
-/// <see cref="ILoadable"/>, and one holding resources implements <see cref="IAsyncDisposable"/> or <see cref="IDisposable"/>:
-/// the engine disposes it once nothing can call it any more. The whole lifetime contract is on
-/// <see cref="BindingContext"/>.
-/// </remarks>
-public interface IFeatureConnectorFactory
-{
-    string ConnectorType { get; }
-
-    /// <summary>
-    /// The C# type the connector settings bind to (<see cref="Artifacts.Model.BindingSettings"/>): the single source of
-    /// their JSON Schema (design 9.1). <see cref="FeatureConnectorFactory{TSettings}"/> binds them to it before its
-    /// <c>Create</c> sees them; <see cref="NoSettings"/> for a connector that takes none.
-    /// </summary>
-    Type SettingsType { get; }
-
-    /// <param name="context">The source's logical name (e.g. <c>item_store</c>), its connector settings, the base directory
-    /// relative files resolve against and the host's secret store.</param>
-    /// <exception cref="BindingException">The settings are wrong: at the setting's pointer, with a hint.</exception>
-    IFeatureSourceConnector Create(BindingContext context);
-}
-
-/// <summary>
-/// The base of a connector factory: it declares the type of its settings once, as its type argument, and gets them bound
-/// to it, so the type the schema describes is the type that binds, and the factory parses no JSON.
-/// </summary>
-/// <typeparam name="TSettings">The settings type: snake_case members, documented for the schema, required ones
-/// <c>required</c>; <see cref="LocalFile"/> and <see cref="SecretReference"/> for files and credentials.</typeparam>
-public abstract class FeatureConnectorFactory<TSettings> : IFeatureConnectorFactory
-    where TSettings : class
-{
-    public abstract string ConnectorType { get; }
-
-    public Type SettingsType => typeof(TSettings);
-
-    /// <summary>Binds the settings strictly (<see cref="Artifacts.Model.BindingSettings"/>) and creates the connector from them.</summary>
-    /// <exception cref="BindingException">The settings are wrong: at the setting's pointer, with a hint.</exception>
-    public IFeatureSourceConnector Create(BindingContext context)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-        return Create(Artifacts.Model.BindingSettings.Bind<TSettings>(context, ConnectorType), context);
-    }
-
-    /// <summary>Creates the connector: checks what the settings type cannot say, and reads nothing else (see <see cref="BindingContext"/>).</summary>
-    /// <exception cref="BindingException">A setting is wrong: at its pointer, with a hint.</exception>
-    protected abstract IFeatureSourceConnector Create(TSettings settings, BindingContext context);
 }

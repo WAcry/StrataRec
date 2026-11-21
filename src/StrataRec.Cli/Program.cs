@@ -17,12 +17,12 @@ public static class Program
     public static Task<int> Main(string[] args) => StrataRecCommandLine.InvokeAsync(args, CreateEnvironment());
 
     /// <summary>
-    /// What the tool provides to plans: the built-in registries, <c>redis@1</c> for distributed caches and the
+    /// What the tool provides to plans: the built-in operators and binding types, <c>redis@1</c> for distributed caches and the
     /// generative operators of StrataRec.Llm. <c>operators</c> and <c>schema</c> list exactly these.
     /// </summary>
     public static PlanEnvironment CreateEnvironment() => new()
     {
         Operators = OperatorRegistry.CreateDefault().AddLlm(),
-        CacheStores = new FeatureCacheStoreRegistry().AddRedis(),
+        Bindings = PlanEnvironment.DefaultBindings().AddRedis(),
     };
 }

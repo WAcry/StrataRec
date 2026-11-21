@@ -148,7 +148,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 continue;
             }
 
-            sources[i] = new SourceEntry(names[i], bound.Value.Source, bound.Value.TimeoutMs, byName[names[i]], new IoTarget(IoKind.CandidateSource, names[i]));
+            sources[i] = new SourceEntry(names[i], bound.Value.Source, bound.Value.TimeoutMs, byName[names[i]], new IoTarget(IoRoles.Recall, names[i]));
         }
 
         if (!CompileQueries(context, config, byName, sources) || !declared || unbound)

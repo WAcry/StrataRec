@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Globalization;
+using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 
 namespace StrataRec.Models;
@@ -50,7 +51,7 @@ public sealed class LinearModelClient : IModelClient
         _fail = fail;
     }
 
-    public string ClientType => LinearModelClientFactory.Type;
+    public string ClientType => LinearModelClientFactory.TypeName;
 
     /// <summary>Answers at once: the signature follows from the settings.</summary>
     public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken)
@@ -199,11 +200,11 @@ public sealed class LinearOutputSettings
 }
 
 /// <summary>Factory for <c>linear@1</c>.</summary>
-public sealed class LinearModelClientFactory : ModelClientFactory<LinearSettings>
+public sealed class LinearModelClientFactory : BindingFactory<IModelClient, LinearSettings>
 {
-    public const string Type = "linear@1";
+    public const string TypeName = "linear@1";
 
-    public override string ClientType => Type;
+    public override string Type => TypeName;
 
     protected override IModelClient Create(LinearSettings settings, BindingContext context)
     {

@@ -56,12 +56,12 @@ public sealed class FallbackCaptureTests
     [Fact]
     public async Task ACapturingRequestCancelledInItsFallback_RecordsThatItsBatchesWentNowhere()
     {
-        var root = Workspace(backupSource: BlockingSources.Type);
+        var root = Workspace(backupSource: BlockingSources.TypeName);
         var sources = new BlockingSources();
         await using var engine = new RecEngine(new PlanEnvironment
         {
             BaseDirectory = root,
-            CandidateSources = CandidateSourceRegistry.CreateDefault().Add(sources),
+            Bindings = PlanEnvironment.DefaultBindings().Add(sources),
         });
         ServiceCollectionExtensions.LoadWorkspace(engine, root, "local", ["primary"]).ThrowIfErrors("load");
         ReplayBundle? delivered = null;
@@ -129,15 +129,15 @@ public sealed class FallbackCaptureTests
     }
 
     /// <summary>A list source that says it started and then waits until its call is cancelled.</summary>
-    private sealed class BlockingSources : ICandidateSourceFactory
+    private sealed class BlockingSources : IBindingFactory<ICandidateSource>
     {
-        public const string Type = "blocking_list@1";
+        public const string TypeName = "blocking_list@1";
 
         private readonly MemoryListCandidateSourceFactory _inner = new();
 
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public string ClientType => Type;
+        public string Type => TypeName;
 
         public Type SettingsType => _inner.SettingsType;
 
@@ -145,7 +145,7 @@ public sealed class FallbackCaptureTests
 
         private sealed class Source(BlockingSources owner) : ICandidateSource
         {
-            public string ClientType => Type;
+            public string ClientType => TypeName;
 
             public async ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken)
             {

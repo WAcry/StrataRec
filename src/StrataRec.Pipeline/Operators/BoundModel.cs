@@ -37,7 +37,7 @@ public sealed class BoundModel
         _client = client;
         _timeoutMs = timeoutMs;
         _versions = versions;
-        Target = new IoTarget(IoKind.Model, model);
+        Target = new IoTarget(IoRoles.Model, model);
     }
 
     /// <summary>The logical model name.</summary>

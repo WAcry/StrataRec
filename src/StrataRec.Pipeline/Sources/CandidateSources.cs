@@ -208,57 +208,6 @@ public interface ICandidateSource
     ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken);
 }
 
-/// <summary>Creates candidate sources for bindings of one client type.</summary>
-/// <remarks>
-/// The engine creates one source per binding identity and shares it across plans and their concurrent requests, so a
-/// source lives as long as some plan uses it. <see cref="Create"/> only reads the settings; a source that must connect
-/// first implements <see cref="ILoadable"/>, and one holding resources implements <see cref="IAsyncDisposable"/> or
-/// <see cref="IDisposable"/>: the engine disposes it once nothing can call it any more. The whole lifetime contract is on
-/// <see cref="BindingContext"/>.
-/// </remarks>
-public interface ICandidateSourceFactory
-{
-    string ClientType { get; }
-
-    /// <summary>
-    /// The C# type the binding's own settings bind to (<see cref="BindingSettings"/>): the single source of their JSON
-    /// Schema (design 9.1). <see cref="CandidateSourceFactory{TSettings}"/> binds them to it before its <c>Create</c> sees
-    /// them; <see cref="NoSettings"/> for a source that takes none.
-    /// </summary>
-    Type SettingsType { get; }
-
-    /// <param name="context">The source's logical name, the binding's own settings, the base directory relative files
-    /// resolve against and the host's secret store.</param>
-    /// <exception cref="BindingException">The settings are wrong: at the setting's pointer, with a hint.</exception>
-    ICandidateSource Create(BindingContext context);
-}
-
-/// <summary>
-/// The base of a candidate source factory: it declares the type of its settings once, as its type argument, and gets
-/// them bound to it, so the type the schema describes is the type that binds, and the factory parses no JSON.
-/// </summary>
-/// <typeparam name="TSettings">The settings type: snake_case members, documented for the schema, required ones
-/// <c>required</c>; <see cref="LocalFile"/> and <see cref="SecretReference"/> for files and credentials.</typeparam>
-public abstract class CandidateSourceFactory<TSettings> : ICandidateSourceFactory
-    where TSettings : class
-{
-    public abstract string ClientType { get; }
-
-    public Type SettingsType => typeof(TSettings);
-
-    /// <summary>Binds the settings strictly (<see cref="BindingSettings"/>) and creates the source from them.</summary>
-    /// <exception cref="BindingException">The settings are wrong: at the setting's pointer, with a hint.</exception>
-    public ICandidateSource Create(BindingContext context)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-        return Create(BindingSettings.Bind<TSettings>(context, ClientType), context);
-    }
-
-    /// <summary>Creates the source: checks what the settings type cannot say, and reads nothing else (see <see cref="BindingContext"/>).</summary>
-    /// <exception cref="BindingException">A setting is wrong: at its pointer, with a hint.</exception>
-    protected abstract ICandidateSource Create(TSettings settings, BindingContext context);
-}
-
 /// <summary>
 /// <c>memory_list@1</c>: a fixed candidate list, optionally per value of a request input. For local runs and tests.
 /// </summary>
@@ -285,7 +234,7 @@ public sealed class MemoryListCandidateSource : ICandidateSource
         _fail = fail;
     }
 
-    public string ClientType => MemoryListCandidateSourceFactory.Type;
+    public string ClientType => MemoryListCandidateSourceFactory.TypeName;
 
     public async ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken)
     {
@@ -375,11 +324,11 @@ public sealed class MemoryListItem
 }
 
 /// <summary>Factory for <c>memory_list@1</c>.</summary>
-public sealed class MemoryListCandidateSourceFactory : CandidateSourceFactory<MemoryListSettings>
+public sealed class MemoryListCandidateSourceFactory : BindingFactory<ICandidateSource, MemoryListSettings>
 {
-    public const string Type = "memory_list@1";
+    public const string TypeName = "memory_list@1";
 
-    public override string ClientType => Type;
+    public override string Type => TypeName;
 
     /// <remarks>A test fixture: it reads its data file here, at create time, so it needs no load.</remarks>
     /// <exception cref="BindingException">A setting or a member of the data file is invalid: at the setting, or at
@@ -428,7 +377,7 @@ public sealed class MemoryListCandidateSourceFactory : CandidateSourceFactory<Me
             var id = list[i];
             if (id.ValueKind == JsonValueKind.Object)
             {
-                var item = BindingSettings.Bind<MemoryListItem>(context, id, at, "an item of " + Type);
+                var item = BindingSettings.Bind<MemoryListItem>(context, id, at, "an item of " + TypeName);
                 (id, score) = (item.Id, item.Score ?? score);
             }
 

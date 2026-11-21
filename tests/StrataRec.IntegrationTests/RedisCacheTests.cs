@@ -308,7 +308,7 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         {
             var root = HomeFeedTestHost.LoadModified(r => CacheEngineTests.CacheItems(r,
                 $$"""{ "store": "redis@1", "endpoint": "{{server.Endpoint}}", "user": "{{user}}", "password": "secret://redis-password" }""")).Root;
-            var environment = new PlanEnvironment { BaseDirectory = root, CacheStores = new FeatureCacheStoreRegistry().AddRedis() };
+            var environment = new PlanEnvironment { BaseDirectory = root, Bindings = PlanEnvironment.DefaultBindings().AddRedis() };
             await using var engine = new RecEngine(environment, bindingOptions: new BindingHostOptions { Secrets = new Secrets { ["redis-password"] = "wrong-secret" } });
 
             var load = await engine.LoadAsync(CacheEngineTests.Compile(root));
@@ -677,13 +677,13 @@ public sealed class RedisServer : IAsyncLifetime
 /// Wraps a store factory so that a test knows when the stores hold every key they were asked for: what the first engine
 /// missed has been written back. Keys are recorded as written once the inner store's write completed.
 /// </summary>
-internal sealed class RecordedStores(IFeatureCacheStoreFactory inner) : IFeatureCacheStoreFactory
+internal sealed class RecordedStores(IBindingFactory<IFeatureCacheStore> inner) : IBindingFactory<IFeatureCacheStore>
 {
     private readonly ConcurrentDictionary<string, bool> _read = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, bool> _written = new(StringComparer.Ordinal);
     private string _prefix = string.Empty;
 
-    public string StoreType => inner.StoreType;
+    public string Type => inner.Type;
 
     public Type SettingsType => inner.SettingsType;
 

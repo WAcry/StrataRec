@@ -419,7 +419,7 @@ public sealed class LlmMetricsTests
                 string? model = null, outcome = null;
                 foreach (var tag in tags)
                 {
-                    model = tag.Key == StrataRecTags.Model ? (string?)tag.Value : model;
+                    model = tag.Key == StrataRecTags.IoTarget ? (string?)tag.Value : model;
                     outcome = tag.Key == StrataRecTags.Outcome ? (string?)tag.Value : outcome;
                 }
 

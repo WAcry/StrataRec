@@ -375,7 +375,7 @@ public sealed class ModelScorerTests
             { "environment": "local",
               "sources": { "items": { "connector": "memory@1", "data_file": "fixtures/items.json", "timeout_ms": 30000 },
                            "users": { "connector": "memory@1", "data_file": "fixtures/users.json", "timeout_ms": 30000 } },
-              "models": { "m": { "client": "{{CapturingModels.Type}}" } },
+              "models": { "m": { "client": "{{CapturingModels.TypeName}}" } },
               "candidate_sources": { "s": { "client": "memory_list@1", "data_file": "fixtures/ids.json" } } }
             """);
         Write(root, "pipelines/p.jsonc", $$"""
@@ -409,7 +409,7 @@ public sealed class ModelScorerTests
         var workspace = ConfigWorkspace.Load(root, diagnostics);
         var request = workspace.CreateCompileRequest("p", "local", diagnostics);
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
-        return PlanCompiler.Compile(request!, new PlanEnvironment { BaseDirectory = root, Models = new ModelClientRegistry().Add(models) });
+        return PlanCompiler.Compile(request!, new PlanEnvironment { BaseDirectory = root, Bindings = PlanEnvironment.DefaultBindings().Add(models) });
     }
 
     private static void Write(string root, string path, string content)
@@ -434,13 +434,15 @@ public sealed class ModelScorerTests
     /// <c>capture@1</c>: declares a fixed signature, keeps a copy of every call, and scores every row 0.5 (or writes what
     /// <paramref name="write"/> writes).
     /// </summary>
-    private sealed class CapturingModels(ModelSignature signature, Action<ModelCall, IModelOutputWriter>? write = null) : IModelClientFactory, IModelClient
+    private sealed class CapturingModels(ModelSignature signature, Action<ModelCall, IModelOutputWriter>? write = null) : IBindingFactory<IModelClient>, IModelClient
     {
-        public const string Type = "capture@1";
+        public const string TypeName = "capture@1";
 
         private readonly List<CapturedCall> _calls = new();
 
-        public string ClientType => Type;
+        public string Type => TypeName;
+
+        public string ClientType => TypeName;
 
         public Type SettingsType => typeof(NoSettings);
 

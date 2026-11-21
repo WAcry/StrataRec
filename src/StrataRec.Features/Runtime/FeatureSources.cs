@@ -95,7 +95,7 @@ public sealed class CacheSupply
         Distributed = distributed;
         DistributedTimeoutMs = distributedTimeoutMs;
         MemberOfTableField = memberOfTableField;
-        Io = new IoTarget(IoKind.FeatureCache, sourceName);
+        Io = new IoTarget(IoRoles.Cache, sourceName);
     }
 
     /// <summary>Keys per connector call, and per read of the distributed tier (the binding's <c>max_batch</c>).</summary>
@@ -175,11 +175,8 @@ internal sealed class FeatureSourceResolver
     private const long MaxCacheMs = 1L << 61;
 
     private readonly SourceBindingArtifact _bindings;
-    private readonly FeatureConnectorRegistry _connectors;
-    private readonly FeatureUpdateSourceRegistry _updateSources;
-    private readonly FeatureCacheStoreRegistry _cacheStores;
+    private readonly BindingResolver _resolver;
     private readonly ILocalTableProvider _localTables;
-    private readonly IBindingInstances _instances;
     private readonly string? _baseDirectory;
     private readonly TimeProvider _clock;
     private readonly DiagnosticBag _diagnostics;
@@ -188,19 +185,14 @@ internal sealed class FeatureSourceResolver
     private readonly FeatureCatalog? _catalog;
     private readonly Dictionary<string, SourceSupply?> _resolved = new(StringComparer.Ordinal);
 
-    /// <param name="instances">Where connectors and distributed cache stores come from: the engine shares them across plans by
-    /// binding identity.</param>
+    /// <param name="resolver">Creates connectors, update sources and distributed cache stores, and reports their bindings' errors.</param>
     /// <param name="clock">The clock of the cache tables the plan creates (write times and expiry).</param>
     /// <param name="catalog">The catalog a local table's layout comes from (<see cref="TableFeatures"/>); null lays it
     /// out from the group's members.</param>
     public FeatureSourceResolver(
         SourceBindingArtifact bindings,
-        FeatureConnectorRegistry connectors,
-        FeatureUpdateSourceRegistry updateSources,
-        FeatureCacheStoreRegistry cacheStores,
+        BindingResolver resolver,
         ILocalTableProvider localTables,
-        IBindingInstances instances,
-        string? baseDirectory,
         TimeProvider clock,
         DiagnosticBag diagnostics,
         string catalogArtifact = "catalog",
@@ -209,12 +201,9 @@ internal sealed class FeatureSourceResolver
         _bindings = bindings;
         _catalogArtifact = catalogArtifact;
         _catalog = catalog;
-        _connectors = connectors;
-        _updateSources = updateSources;
-        _cacheStores = cacheStores;
+        _resolver = resolver;
         _localTables = localTables;
-        _instances = instances;
-        _baseDirectory = baseDirectory;
+        _baseDirectory = resolver.BaseDirectory;
         _clock = clock;
         _diagnostics = diagnostics;
         _artifact = "bindings:" + bindings.Environment;
@@ -316,7 +305,7 @@ internal sealed class FeatureSourceResolver
         }
         catch (BindingException ex)
         {
-            ReportSourceSettings(supply.Pointer, ex);
+            _resolver.Report(BindingKind.UpdateSource, supply.Name, ex);
             return null;
         }
 
@@ -447,7 +436,7 @@ internal sealed class FeatureSourceResolver
     }
 
     private SourceSupply? ResolveFetch(string sourceName, FeatureSourceBinding binding, string pointer) =>
-        ResolveConnector(sourceName, binding, pointer) is { } connector
+        ResolveConnector(sourceName, binding) is { } connector
             ? new SourceSupply(sourceName, pointer, binding, SupplyMode.Fetch)
             {
                 Connector = connector,
@@ -457,33 +446,8 @@ internal sealed class FeatureSourceResolver
             : null;
 
     /// <summary>The binding's connector, shared by identity; null (diagnosed) when its type is unknown or its settings are wrong.</summary>
-    private IFeatureSourceConnector? ResolveConnector(string sourceName, FeatureSourceBinding binding, string pointer)
-    {
-        var type = binding.Connector ?? string.Empty;
-        if (!_connectors.TryGet(type, out var factory))
-        {
-            _diagnostics.Error("CONNECTOR_UNKNOWN", _artifact, pointer + (binding.Connector is null ? string.Empty : "/connector"),
-                binding.Connector is null ? $"Source '{sourceName}' names no 'connector'." : $"Connector type '{type}' is not registered in this binary.",
-                NameSuggestions.DidYouMean(type, _connectors.Types) ?? $"registered: {string.Join(", ", _connectors.Types)}");
-            return null;
-        }
-
-        try
-        {
-            var spec = BindingSpec.Create(BindingSection.Sources, sourceName, type, binding.Settings, _baseDirectory, factory, _artifact);
-            return _instances.Acquire(spec, factory.Create);
-        }
-        catch (BindingException ex)
-        {
-            _diagnostics.Error("CONNECTOR_CONFIG", _artifact, pointer + ex.Pointer, ex.Reason, ex.Hint);
-            return null;
-        }
-        catch (Exception ex) when (ex is FormatException or IOException or JsonException or InvalidOperationException)
-        {
-            _diagnostics.Error("CONNECTOR_CONFIG", _artifact, pointer, ex.Message);
-            return null;
-        }
-    }
+    private IFeatureSourceConnector? ResolveConnector(string sourceName, FeatureSourceBinding binding) =>
+        _resolver.Acquire<IFeatureSourceConnector>(BindingKind.Connector, sourceName, binding.Connector, binding.Settings);
 
     /// <summary>
     /// A cache binding (design 6.6 <c>cache</c>): the connector it is in front of, <c>max_bytes</c> of its tables, and its
@@ -491,7 +455,7 @@ internal sealed class FeatureSourceResolver
     /// </summary>
     private SourceSupply? ResolveCache(string sourceName, FeatureSourceBinding binding, string pointer)
     {
-        var connector = ResolveConnector(sourceName, binding, pointer);
+        var connector = ResolveConnector(sourceName, binding);
         var ok = connector is not null;
         ok &= TryMaxBytes(sourceName, binding, pointer, SupplyMode.Cache, out var maxBytes);
         long ttlMs = 0, staleMs = 0;
@@ -594,38 +558,16 @@ internal sealed class FeatureSourceResolver
                 "give the longest a request waits for the distributed cache, in milliseconds, or leave it out (half the source's timeout_ms)");
         }
 
-        var type = shared.Store ?? string.Empty;
-        if (!_cacheStores.TryGet(type, out var factory))
-        {
-            _diagnostics.Error("DISTRIBUTED_CACHE_UNKNOWN", _artifact, pointer + (shared.Store is null ? string.Empty : "/store"),
-                shared.Store is null ? "The distributed cache names no 'store'." : $"Distributed cache store type '{type}' is not registered in this binary.",
-                NameSuggestions.DidYouMean(type, _cacheStores.Types) ?? StoreHint(type));
-            return false;
-        }
-
-        try
-        {
-            var spec = BindingSpec.Create(BindingSection.SourceCaches, sourceName, type, shared.Settings, _baseDirectory, factory, _artifact);
-            tier = _instances.Acquire(spec, context => new DistributedCacheTier(factory.Create(context)));
-        }
-        catch (BindingException ex)
-        {
-            _diagnostics.Error("DISTRIBUTED_CACHE_CONFIG", _artifact, pointer + ex.Pointer, ex.Reason, ex.Hint);
-            return false;
-        }
-
-        return ok;
+        tier = _resolver.Acquire<IFeatureCacheStore, DistributedCacheTier>(
+            BindingKind.CacheStore, sourceName, shared.Store, shared.Settings, static store => new DistributedCacheTier(store), StoreHint(shared.Store));
+        return ok && tier is not null;
     }
 
-    /// <summary>What to do about a store type the binary does not have: what it has, and where <c>redis@1</c> comes from.</summary>
-    private string StoreHint(string type)
-    {
-        var registered = string.Join(", ", _cacheStores.Types);
-        return (registered.Length == 0 ? "this binary registers no distributed cache store" : "registered: " + registered)
-            + (type.StartsWith("redis@", StringComparison.Ordinal)
-                ? "; redis@1 is in the package StrataRec.Redis: the host adds it with PlanEnvironment.CacheStores.AddRedis()"
-                : "; or remove 'distributed' to cache in process only");
-    }
+    /// <summary>What to do about a store type the binary does not have, besides the types it has: where <c>redis@1</c> comes from.</summary>
+    private static string StoreHint(string? type) =>
+        type is not null && type.StartsWith("redis@", StringComparison.Ordinal)
+            ? "redis@1 is in the package StrataRec.Redis: the host adds it with PlanEnvironment.Bindings.AddRedis()"
+            : "or remove 'distributed' to cache in process only";
 
     /// <summary>The binding's <c>max_bytes</c> (required in modes local and cache); false (diagnosed) when missing or not a positive size.</summary>
     private bool TryMaxBytes(string sourceName, FeatureSourceBinding binding, string pointer, SupplyMode mode, out long maxBytes)
@@ -651,35 +593,19 @@ internal sealed class FeatureSourceResolver
     private SourceSupply? ResolveLocal(string sourceName, FeatureSourceBinding binding, string pointer)
     {
         var ok = TryMaxBytes(sourceName, binding, pointer, SupplyMode.Local, out var maxBytes);
-        IFeatureUpdateSourceFactory? factory = null;
+        IBindingFactory<IFeatureUpdateSource>? factory = null;
         if (binding.Bootstrap is not { } bootstrap)
         {
             ok = false;
             _diagnostics.Error("LOCAL_BOOTSTRAP_MISSING", _artifact, pointer, $"Source '{sourceName}' is bound with mode 'local' but has no 'bootstrap'.",
                 $"add the update source that loads it, e.g. \"bootstrap\": {{ \"source\": \"{SnapshotFilesUpdateSource.Type}\", \"uri\": \"<snapshot directory>\" }}");
         }
-        else if (!_updateSources.TryGet(bootstrap.Source ?? string.Empty, out factory))
+        else
         {
-            ok = false;
-            var type = bootstrap.Source ?? string.Empty;
-            _diagnostics.Error("UPDATE_SOURCE_UNKNOWN", _artifact, pointer + "/bootstrap" + (bootstrap.Source is null ? string.Empty : "/source"),
-                bootstrap.Source is null ? "The bootstrap names no 'source'." : $"Update source type '{type}' is not registered in this binary.",
-                NameSuggestions.DidYouMean(type, _updateSources.Types) ?? $"registered: {string.Join(", ", _updateSources.Types)}");
-        }
-
-        // The bootstrap settings are checked once for the source (not per entity), and even when the rest is wrong, so
-        // every problem of the binding is reported at once.
-        if (factory is not null)
-        {
-            try
-            {
-                _ = factory.Create(new BindingContext(sourceName, binding.Bootstrap!.Settings, BindingContext.PinBaseDirectory(_baseDirectory), secrets: null));
-            }
-            catch (BindingException ex)
-            {
-                ok = false;
-                ReportSourceSettings(pointer, ex);
-            }
+            // The bootstrap settings are checked once for the source (not per entity), and even when the rest is wrong, so
+            // every problem of the binding is reported at once.
+            factory = _resolver.Factory<IFeatureUpdateSource>(BindingKind.UpdateSource, sourceName, bootstrap.Source);
+            ok &= factory is not null && _resolver.Check(factory, BindingKind.UpdateSource, sourceName, bootstrap.Settings);
         }
 
         if (!ok)
@@ -695,9 +621,6 @@ internal sealed class FeatureSourceResolver
             MaxBatch = LocalMaxBatch,
         };
     }
-
-    private void ReportSourceSettings(string pointer, BindingException ex) =>
-        _diagnostics.Error("UPDATE_SOURCE_CONFIG", _artifact, pointer + "/bootstrap" + ex.Pointer, ex.Reason, ex.Hint);
 
     /// <summary>
     /// The features a table of <paramref name="supply"/>'s source and <paramref name="entity"/> holds, in name order. A
@@ -805,7 +728,7 @@ internal sealed class SourceSupply(string name, string pointer, FeatureSourceBin
     public int MaxBatch { get; init; }
 
     /// <summary>Mode local: the factory of the bootstrap source.</summary>
-    public IFeatureUpdateSourceFactory? BootstrapFactory { get; init; }
+    public IBindingFactory<IFeatureUpdateSource>? BootstrapFactory { get; init; }
 
     /// <summary>Modes local and cache: the options of every table of the source.</summary>
     public LocalFeatureTableOptions? Options { get; init; }
