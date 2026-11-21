@@ -1,4 +1,5 @@
 using StrataRec.Core.Keys;
+using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Hosting.Replay;
 
@@ -77,6 +78,29 @@ public sealed class ResultComparisonTests
 
         Assert.True(ResultComparison.Diff(recorded, replayed).Identical);
         Assert.False(ResultComparison.Diff(recorded, Result(true, (1, 0.5, "a"))).Identical);
+    }
+
+    /// <summary>
+    /// Equal values in a column of another declared type are not an identical result: a host reads the column, and a
+    /// result prints it, otherwise (a float32 0.1 is <c>0.1</c>, the float64 of the same double <c>0.10000000149011612</c>).
+    /// </summary>
+    [Fact]
+    public void Diff_ReportsAColumnOfAnotherDeclaredType_AsNotIdentical()
+    {
+        var recorded = Result(true, (1, 0.5, "a"));
+        var replayed = Result(true, (1, 0.5, "a"));
+        var float32 = new Dictionary<string, ColumnType> { ["score"] = ColumnType.Float32, ["category"] = ColumnType.String };
+        var float64 = new Dictionary<string, ColumnType> { ["score"] = ColumnType.Float64, ["category"] = ColumnType.String };
+
+        var same = ResultComparison.Diff(new ComparableResult { Succeeded = true, Ids = recorded.Ids, Columns = recorded.Columns, Types = float32 },
+            new ComparableResult { Succeeded = true, Ids = replayed.Ids, Columns = replayed.Columns, Types = float32 });
+        var retyped = ResultComparison.Diff(new ComparableResult { Succeeded = true, Ids = recorded.Ids, Columns = recorded.Columns, Types = float32 },
+            new ComparableResult { Succeeded = true, Ids = replayed.Ids, Columns = replayed.Columns, Types = float64 });
+
+        Assert.True(same.Identical);
+        Assert.False(retyped.Identical);
+        Assert.Empty(retyped.Changes);
+        Assert.Equal(new RetypedColumn("score", ColumnType.Float32, ColumnType.Float64), Assert.Single(retyped.RetypedColumns));
     }
 
     [Fact]

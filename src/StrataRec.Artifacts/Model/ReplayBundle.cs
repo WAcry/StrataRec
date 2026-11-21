@@ -33,11 +33,13 @@ public sealed class ReplayBundle
     /// reason <c>yielded</c> (design 11.1): a build before cannot read it, and refuses such a bundle at its format, with
     /// a hint to record again, instead of at a reason it does not know (review 96). 2026-11-21.1 records each model output
     /// with its element type, and model inputs of every declared type (their digests include it): tensors follow the
-    /// declared column types (design 6.9).
+    /// declared column types (design 6.9). 2026-11-21.2 records the result's columns at their declared types, and a
+    /// float32 request input recorded as the host gave it now replays as the nearest float, as it is served: the same
+    /// bundle would replay to other values in a build before.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.1";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.2";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.1\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.2\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }

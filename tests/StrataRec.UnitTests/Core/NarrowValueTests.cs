@@ -98,4 +98,46 @@ public sealed class NarrowValueTests
         Assert.Equal((0.1, false), (wide.AsFloat64(), wide.IsFloat32));
         Assert.False(ScalarValue.FromFloat64(1e39).TryConvert(ColumnType.Float32, out _)); // beyond the float32 range
     }
+
+    /// <summary>An integer list converted to list&lt;float64&gt; keeps every integer a double holds: not rounded through float.</summary>
+    [Fact]
+    public void AnIntegerListConvertedToFloat64_KeepsItsDoubles()
+    {
+        Assert.True(ScalarValue.FromInt64List([16_777_217, -16_777_217]).TryConvert(ColumnType.List(StorageKind.Float64), out var list));
+
+        Assert.Equal([16_777_217.0, -16_777_217.0], list.AsFloat64List().ToArray());
+        Assert.False(list.IsFloat32List);
+    }
+
+    /// <summary>
+    /// An integer converted to float32 goes through its double, as one written to a float32 column does and as a replay
+    /// reads the recorded integer back: a direct conversion can round to the other float.
+    /// </summary>
+    [Fact]
+    public void AnIntegerConvertedToFloat32_RoundsThroughItsDouble()
+    {
+        const long Value = 9_007_199_791_611_905; // the direct conversion and the one through the double differ
+        Assert.NotEqual((float)Value, (float)(double)Value);
+
+        Assert.True(ScalarValue.FromInt64(Value).TryConvert(ColumnType.Float32, out var scalar));
+        Assert.True(ScalarValue.FromInt64List([Value]).TryConvert(ColumnType.List(StorageKind.Float32), out var list));
+
+        Assert.Equal((double)(float)(double)Value, scalar.AsFloat64());
+        Assert.Equal([(double)(float)(double)Value], list.AsFloat64List().ToArray());
+        Assert.True(ScalarValue.FromFloat64((double)Value).TryConvert(ColumnType.Float32, out var replayed)); // the recorded integer, read as a double
+        Assert.Equal(scalar, replayed);
+    }
+
+    /// <summary>A list whose elements are floats already converts to list&lt;float32&gt; without copying them.</summary>
+    [Fact]
+    public void AListOfFloatsAlready_ConvertsToFloat32_WithoutACopy()
+    {
+        var doubles = new[] { 0.5, (double)0.1f };
+
+        Assert.True(ScalarValue.FromFloat64List(doubles).TryConvert(ColumnType.List(StorageKind.Float32), out var list));
+
+        Assert.True(list.IsFloat32List);
+        Assert.True(System.Runtime.CompilerServices.Unsafe.AreSame(
+            ref System.Runtime.InteropServices.MemoryMarshal.GetReference(list.AsFloat64List()), ref doubles[0]));
+    }
 }

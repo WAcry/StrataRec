@@ -30,8 +30,10 @@ public abstract class CompiledExpression
     public virtual IReadOnlyList<Symbol> Names => Reads;
 
     /// <summary>
-    /// The symbol the expression is, when it is nothing but a reference to one (<c>col.score.final</c>,
-    /// <c>col.score.final@fusion</c>, a feature, <c>ctx.user.age</c>, <c>param.k</c>), after optimization; null otherwise.
+    /// The symbol the expression is, when it is written as nothing but a reference to one (<c>col.score.final</c>,
+    /// <c>col.score.final@fusion</c>, a feature, <c>ctx.user.age</c>, <c>param.k</c>); null otherwise, also for an
+    /// expression the optimizer reduces to a reference (<c>col.x * 1</c>), whose type at the boundary must not depend on
+    /// the optimizer's rules.
     /// What leaves the engine as such a reference has the type the referenced name is declared with, not
     /// <see cref="ResultType"/>.
     /// </summary>

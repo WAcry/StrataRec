@@ -273,8 +273,9 @@ public sealed class RequestSchema
 
     /// <summary>
     /// Checks typed inputs a host built itself: the first problem, or null when the request may run. The engine calls it
-    /// before anything else (no assignment, no fallback pipeline for a request the caller got wrong); it allocates nothing
-    /// when the inputs are valid.
+    /// before anything else (no assignment, no fallback pipeline for a request the caller got wrong). Valid inputs
+    /// allocate nothing, except a list converted to <c>list&lt;float32&gt;</c> whose elements are not floats already:
+    /// checking converts it, as binding does (<see cref="ScalarValue.TryConvert"/>).
     /// </summary>
     public JsonBindingError? Check(RequestInputs inputs) => Validate(inputs, null);
 

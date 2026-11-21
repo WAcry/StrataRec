@@ -75,8 +75,9 @@ public sealed class ResultColumns
     /// </summary>
     /// <remarks>The types are given rather than guessed from the values: a column whose values are all missing has no
     /// type to guess, and a guess would make an int32 column int64.</remarks>
-    /// <exception cref="ArgumentException">An item lacks a column or has another one, or a value is not one of its
-    /// column's type (missing in a non-nullable column, an int64 in a float64 one, an int32 out of range).</exception>
+    /// <exception cref="ArgumentException">A column is defined twice, an item lacks a column or has another one, or a value
+    /// is not one of its column's type (missing in a non-nullable column, an int64 in a float64 one, an int32 out of
+    /// range).</exception>
     public static ResultColumns FromItems(IReadOnlyList<(string Name, ColumnType Type)> columns, IReadOnlyList<RankedItem> items)
     {
         ArgumentNullException.ThrowIfNull(columns);
@@ -89,9 +90,15 @@ public sealed class ResultColumns
         var names = new string[columns.Count];
         var types = new ColumnType[columns.Count];
         var values = new ScalarValue[columns.Count][];
+        var distinct = new HashSet<string>(StringComparer.Ordinal);
         for (var c = 0; c < names.Length; c++)
         {
             (names[c], types[c]) = columns[c];
+            if (!distinct.Add(names[c]))
+            {
+                throw new ArgumentException($"Column '{names[c]}' is defined twice.", nameof(columns));
+            }
+
             values[c] = new ScalarValue[items.Count];
         }
 

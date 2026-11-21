@@ -10,7 +10,7 @@ public sealed class ReplayBundleFileTests
 {
     private const string Minimal = """
         {
-          "format": "stratarec.replay_bundle/2026-11-21.1",
+          "format": "stratarec.replay_bundle/2026-11-21.2",
           "request": { "pipeline_id": "p", "request_id": "r", "seed": 1, "time_ms": 0, "deadline_ms": 100, "assignment": { "source": "none" } },
           "manifest": { "id": "m" },
           "runs": [
@@ -31,12 +31,16 @@ public sealed class ReplayBundleFileTests
     [Fact]
     public void ABundleOfThePreviousFormat_IsRejectedAtTheFormat()
     {
-        // 2026-11-21.1 records a model output with its element type, and inputs of every declared type: a bundle of
-        // 2026-11-20.3 has float32 outputs only, as bare arrays. There are no old readers.
-        var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(Minimal.Replace("2026-11-21.1", "2026-11-20.3", StringComparison.Ordinal)));
+        // 2026-11-21.2 replays a float32 request input as the nearest float, which 2026-11-21.1 (laid out alike) replayed
+        // as the double given; 2026-11-20.3 has float32 model outputs only, as bare arrays. There are no old readers.
+        foreach (var previous in new[] { "2026-11-21.1", "2026-11-20.3" })
+        {
+            var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(Minimal.Replace("2026-11-21.2", previous, StringComparison.Ordinal)));
 
-        Assert.Equal("/format", error.Pointer);
-        Assert.Equal("stratarec.replay_bundle/2026-11-21.1", ReplayBundle.CurrentFormat);
+            Assert.Equal("/format", error.Pointer);
+        }
+
+        Assert.Equal("stratarec.replay_bundle/2026-11-21.2", ReplayBundle.CurrentFormat);
     }
 
     [Fact]
@@ -171,7 +175,7 @@ public sealed class ReplayBundleFileTests
         // Review 32 #4: "\uD800" (an unpaired surrogate escape) escaped as InvalidOperationException.
         var unpaired = "\"" + (char)92 + "uD800\"";
         var json = member == "seed"
-            ? """{"format":"stratarec.replay_bundle/2026-11-21.1","request":{"seed":""" + unpaired + "}}"
+            ? """{"format":"stratarec.replay_bundle/2026-11-21.2","request":{"seed":""" + unpaired + "}}"
             : """{"format":""" + unpaired + ""","request":{}}""";
 
         var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(json));

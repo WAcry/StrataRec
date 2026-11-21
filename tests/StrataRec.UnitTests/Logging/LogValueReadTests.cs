@@ -64,6 +64,18 @@ public sealed class LogValueReadTests
         Assert.Equal((false, json), (value.IsFloat32, value.ToString()));
     }
 
+    /// <summary>
+    /// A decimal just below the midpoint above float.MaxValue names float.MaxValue; through the double it rounds to the
+    /// midpoint, which as a float is +∞: a log's float32 is judged on the float it reads as.
+    /// </summary>
+    [Fact]
+    public void ALogsFloat32Text_JustBelowTheOverflowMidpoint_IsFloatMaxValue()
+    {
+        var value = Read("340282356779733661637539395458142568447", ColumnType.Float32, nonFiniteAsStrings: false);
+
+        Assert.Equal(float.MaxValue, value.AsFloat32());
+    }
+
     [Theory]
     [InlineData(16777217.0)] // halfway between two floats: the text rounds to even
     [InlineData(1.00000005960464477539)] // 1 + 2^-24, halfway too

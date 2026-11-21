@@ -76,6 +76,9 @@ public sealed class ResultColumnsTests
             new RankedItem(EntityKey.FromInt64(2), 2, new Dictionary<string, ScalarValue> { ["b"] = ScalarValue.FromInt64(1) }),
         };
         Assert.Contains("no column 'a'", Assert.Throws<ArgumentException>(() => ResultColumns.FromItems([("a", ColumnType.Int64)], mismatched)).Message);
+        var two = new RankedItem(EntityKey.FromInt64(1), 1, new Dictionary<string, ScalarValue> { ["x"] = ScalarValue.FromInt64(1), ["y"] = ScalarValue.FromInt64(7) });
+        Assert.Contains("Column 'x' is defined twice", Assert.Throws<ArgumentException>(
+            () => ResultColumns.FromItems([("x", ColumnType.Int64), ("x", ColumnType.Float64)], [two])).Message); // its two keys would be written
     }
 
     [Theory]

@@ -102,9 +102,9 @@ internal sealed class ModelCallCompiler
                 continue;
             }
 
-            // The type the user declared decides the tensor: a context value's symbol has its promoted form, which expressions see.
+            // The type the user declared decides the tensor, as it decides every boundary's type (PlanSchema.DeclaredType).
             var symbol = expr.Reads[0];
-            var declared = symbol.Kind == SymbolKind.Context ? _context.Schema.ContextFields[symbol.Id].DeclaredType : symbol.Type;
+            var declared = _context.Schema.DeclaredType(expr);
             if (!ModelTensorRule.TryGetInputTensor(declared, out var tensor))
             {
                 var problem = ModelTensorRule.UnsendableInput(name, symbol.Name, declared);

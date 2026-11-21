@@ -331,10 +331,13 @@ public sealed class LogColumn
     /// element is missing and adds none.</summary>
     private static T[] Elements<T>(ListColumn<T> list, ReadOnlySpan<int> rows, int[] offsets, ref ulong[]? validity)
     {
+        // A row of a list<E,N> column with another length is missing, as an expression reading it finds it: a custom
+        // operator can write any length into the column's storage.
+        var width = list.Type.FixedLength;
         var total = 0;
         for (var i = 0; i < rows.Length; i++)
         {
-            total += list.IsValid(rows[i]) ? list.LengthOf(rows[i]) : 0;
+            total += Present(list, rows[i], width) ? list.LengthOf(rows[i]) : 0;
         }
 
         var doubles = list as ListColumn<double>;
@@ -345,7 +348,7 @@ public sealed class LogColumn
         {
             offsets[i] = at;
             var row = rows[i];
-            if (!list.IsValid(row)
+            if (!Present(list, row, width)
                 || (doubles is not null && !ColumnValues.AllFinite(doubles.Get(row)))
                 || (floats is not null && !ColumnValues.AllFinite(floats.Get(row))))
             {
@@ -359,6 +362,8 @@ public sealed class LogColumn
 
         offsets[rows.Length] = at;
         return at == total ? elements : elements[..at];
+
+        static bool Present(ListColumn<T> list, int row, int width) => list.IsValid(row) && (width == 0 || list.LengthOf(row) == width);
     }
 }
 

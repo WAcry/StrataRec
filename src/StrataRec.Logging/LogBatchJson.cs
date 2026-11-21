@@ -317,6 +317,20 @@ public static class LogBatchJson
                 // A JSON number is finite: one beyond the float64 range reads as an infinity, which a writer would have
                 // spelled "Infinity". Read as one, it compared equal to a real infinity (review 84). A float32 value beyond
                 // the float32 range is not one either: stored, it would be an infinity.
+                if (type.Kind == StorageKind.Float32 && !nonFiniteAsStrings)
+                {
+                    // A log's float32 is parsed as a float, and its range judged on that float: through the double, it
+                    // could round twice, to the other neighbour or past float.MaxValue.
+                    if (!json.TryGetSingle(out var single) || !float.IsFinite(single))
+                    {
+                        error = $"{json.GetRawText()} is beyond the float32 range";
+                        return false;
+                    }
+
+                    value = ScalarValue.FromFloat32(single);
+                    return true;
+                }
+
                 var number = json.GetDouble();
                 if (!double.IsFinite(number) || (type.Kind == StorageKind.Float32 && !float.IsFinite((float)number)))
                 {
@@ -324,10 +338,7 @@ public static class LogBatchJson
                     return false;
                 }
 
-                // Parsed as a float, not narrowed from the double: rounding twice could pick the other neighbour.
-                value = type.Kind == StorageKind.Float32 && !nonFiniteAsStrings && json.TryGetSingle(out var single)
-                    ? ScalarValue.FromFloat32(single)
-                    : Float(type, number);
+                value = Float(type, number);
                 return true;
             case StorageKind.Float32 or StorageKind.Float64 when nonFiniteAsStrings && TryNonFinite(json, out var named):
                 value = Float(type, named);
@@ -400,7 +411,9 @@ public static class LogBatchJson
                 }
 
                 // As for a scalar: a list<float32> value whose elements are all floats prints as the floats they are.
-                value = single ? ScalarValue.FromFloat32List(Narrow(doubles)) : ScalarValue.FromFloat64List(doubles);
+                // Converting keeps the array: its elements are floats already.
+                var read = ScalarValue.FromFloat64List(doubles);
+                value = single && read.TryConvert(ColumnType.List(StorageKind.Float32), out var floats) ? floats : read;
                 return true;
             default:
                 var strings = new string[count];
@@ -417,17 +430,6 @@ public static class LogBatchJson
 
                 value = ScalarValue.FromStringList(strings);
                 return true;
-        }
-
-        static float[] Narrow(double[] doubles)
-        {
-            var floats = new float[doubles.Length];
-            for (var i = 0; i < doubles.Length; i++)
-            {
-                floats[i] = (float)doubles[i];
-            }
-
-            return floats;
         }
     }
 

@@ -204,7 +204,9 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
         switch (kind)
         {
             case StorageKind.Float64 when Kind == StorageKind.Int64:
-                converted = target.Kind == StorageKind.Float32 ? FromFloat32(_bits) : FromFloat64(_bits);
+                // Through the double, as an integer reaches a float32 column (promoted, then narrowed), and as a replay
+                // reads the recorded integer back: a direct long-to-float conversion can round to the other float.
+                converted = target.Kind == StorageKind.Float32 ? FromFloat32((float)(double)_bits) : FromFloat64(_bits);
                 return true;
             case StorageKind.Int64 when Kind == StorageKind.Float64:
                 if (TryInteger(AsFloat64(), target.Kind == StorageKind.Int32, out var integer))
@@ -254,9 +256,16 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
 
                     if (!IsFloat32List)
                     {
+                        // Elements that are floats already are kept, not copied (a request checks its inputs, then binds them).
                         var elements = AsFloat64List();
-                        var rounded = new double[elements.Length];
-                        for (var i = 0; i < elements.Length; i++)
+                        var exact = true;
+                        foreach (var e in elements)
+                        {
+                            exact &= ((double)(float)e).Equals(e);
+                        }
+
+                        var rounded = exact ? (double[])_ref! : new double[elements.Length];
+                        for (var i = 0; !exact && i < elements.Length; i++)
                         {
                             rounded[i] = (float)elements[i];
                         }
@@ -278,7 +287,9 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
                 var single = target.Element == StorageKind.Float32;
                 for (var i = 0; i < longs.Length; i++)
                 {
-                    doubles[i] = single ? (float)longs[i] : longs[i];
+                    // Through the double, as a scalar converts; for list<float64> the double itself.
+                    double d = longs[i];
+                    doubles[i] = single ? (double)(float)d : d;
                 }
 
                 converted = single ? new(StorageKind.List, (long)StorageKind.Float64 | SinglePrecisionList, doubles) : FromFloat64List(doubles);

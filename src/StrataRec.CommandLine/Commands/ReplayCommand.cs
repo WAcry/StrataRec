@@ -384,6 +384,17 @@ internal static class ReplayCommand
 
         WriteStrings(json, "added_columns", diff.AddedColumns);
         WriteStrings(json, "removed_columns", diff.RemovedColumns);
+        json.WriteStartArray("retyped_columns");
+        foreach (var retyped in diff.RetypedColumns)
+        {
+            json.WriteStartObject();
+            json.WriteString("column", retyped.Column);
+            json.WriteString("recorded", retyped.Recorded.ToString());
+            json.WriteString("replayed", retyped.Replayed.ToString());
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
         json.WriteStartArray("changes");
         foreach (var change in diff.Changes)
         {
@@ -500,6 +511,11 @@ internal static class ReplayCommand
         if (diff.AddedColumns.Count > 0 || diff.RemovedColumns.Count > 0)
         {
             output.WriteLine($"    columns added: {Join(diff.AddedColumns)}; removed: {Join(diff.RemovedColumns)}");
+        }
+
+        foreach (var retyped in diff.RetypedColumns)
+        {
+            output.WriteLine($"    column {retyped.Column}: recorded as {retyped.Recorded}, replayed as {retyped.Replayed}");
         }
 
         foreach (var change in diff.Changes)

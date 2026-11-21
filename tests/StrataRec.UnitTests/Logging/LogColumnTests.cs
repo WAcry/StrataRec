@@ -65,6 +65,27 @@ public sealed class LogColumnTests
         Assert.Equal(ScalarValue.FromInt64List([int.MinValue, 7]), tagColumn.Get(0));
     }
 
+    /// <summary>
+    /// A row of a list&lt;E,N&gt; column with another length (a custom operator can write one) is missing in the log, as
+    /// an expression reading it finds it: logged, it would contradict the declared width.
+    /// </summary>
+    [Fact]
+    public void Capture_LogsAFixedLengthListsRowOfAnotherLength_AsMissing()
+    {
+        var memory = new RequestMemory();
+        var type = ColumnType.Parse("list<float32,2>?");
+        var embedding = (ListColumn<float>)ColumnBuffer.Create(type, 3, memory);
+        embedding.Set(0, [0.5f]);
+        embedding.Set(1, [1f, 2f]);
+        embedding.Set(2, [1f, 2f, 3f]);
+
+        var column = LogColumn.Capture("emb", type, embedding, [0, 1, 2]);
+
+        Assert.Equal((true, false, true), (column.IsMissing(0), column.IsMissing(1), column.IsMissing(2)));
+        Assert.Equal([1f, 2f], Assert.IsType<float[]>(column.Values));
+        Assert.Equal([0, 0, 2, 2], column.Offsets!);
+    }
+
     [Fact]
     public void Capture_RejectsABufferThatDoesNotStoreTheType()
     {

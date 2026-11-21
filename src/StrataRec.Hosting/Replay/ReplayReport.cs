@@ -101,6 +101,12 @@ public sealed record NodeComparison(string Node, string? Recorded, string? Repla
 public sealed record ColumnChange(string Column, ScalarValue Recorded, ScalarValue Replayed);
 
 /// <summary>
+/// An output column both results have, declared as another type in one (<c>float32</c> and <c>float64</c>, <c>int32</c>
+/// and <c>int32?</c>): equal values, but a host reads, and a JSON result prints, the column otherwise.
+/// </summary>
+public sealed record RetypedColumn(string Column, ColumnType Recorded, ColumnType Replayed);
+
+/// <summary>
 /// An item whose rank or values differ: its rank in each result (null in the one that does not have it), and the values of
 /// its own columns that differ, compared when both results have the item.
 /// </summary>
@@ -114,8 +120,8 @@ public sealed record ItemChange(EntityKey Id, int? RecordedRank, int? ReplayedRa
 public sealed class ResultDiff
 {
     /// <summary>
-    /// The same success, the same items in the same order and every column value equal. False when nothing was replayed
-    /// (<see cref="ReplayOutcome.NotReplayed"/>).
+    /// The same success, the same items in the same order, the same output columns of the same types, and every column
+    /// value equal. False when nothing was replayed (<see cref="ReplayOutcome.NotReplayed"/>).
     /// </summary>
     public required bool Identical { get; init; }
 
@@ -139,6 +145,9 @@ public sealed class ResultDiff
     /// <summary>Output columns only the left (recorded) result has.</summary>
     public required IReadOnlyList<string> RemovedColumns { get; init; }
 
+    /// <summary>Output columns both results have, of another declared type in each.</summary>
+    public IReadOnlyList<RetypedColumn> RetypedColumns { get; init; } = [];
+
     /// <summary>Items both results have, whatever their ranks.</summary>
     public int InBoth { get; init; }
 
@@ -158,6 +167,9 @@ public sealed class ComparableResult
 
     public required IReadOnlyList<IReadOnlyDictionary<string, ScalarValue>> Columns { get; init; }
 
+    /// <summary>The output columns' declared types (<c>ResultColumns.Types</c>, a bundle's <c>column_types</c>).</summary>
+    public IReadOnlyDictionary<string, ColumnType> Types { get; init; } = new Dictionary<string, ColumnType>();
+
     public static ComparableResult From(RecResult result)
     {
         var ids = new List<EntityKey>(result.Items.Count);
@@ -168,7 +180,13 @@ public sealed class ComparableResult
             columns.Add(item.Columns);
         }
 
-        return new ComparableResult { Succeeded = result.Succeeded, Ids = ids, Columns = columns };
+        var types = new Dictionary<string, ColumnType>(StringComparer.Ordinal);
+        for (var c = 0; c < result.Columns.Names.Count; c++)
+        {
+            types[result.Columns.Names[c]] = result.Columns.Types[c];
+        }
+
+        return new ComparableResult { Succeeded = result.Succeeded, Ids = ids, Columns = columns, Types = types };
     }
 
     /// <summary>Decodes a recorded result with its recorded column types.</summary>
@@ -203,7 +221,7 @@ public sealed class ComparableResult
             columns.Add(values);
         }
 
-        return new ComparableResult { Succeeded = result.Succeeded, Ids = ids, Columns = columns };
+        return new ComparableResult { Succeeded = result.Succeeded, Ids = ids, Columns = columns, Types = types };
     }
 }
 
@@ -271,9 +289,22 @@ public static class ResultComparison
 
         var count = Math.Max(left.Ids.Count, right.Ids.Count);
 
+        // A column both declare, as another type: its values may compare equal (0.1f widened is the double compared) while
+        // a host reads it, and a result prints it, otherwise.
+        var retyped = new List<RetypedColumn>();
+        foreach (var (name, type) in left.Types)
+        {
+            if (right.Types.TryGetValue(name, out var other) && !type.Equals(other))
+            {
+                retyped.Add(new RetypedColumn(name, type, other));
+            }
+        }
+
+        retyped.Sort((a, b) => string.CompareOrdinal(a.Column, b.Column));
+
         return new ResultDiff
         {
-            Identical = left.Succeeded == right.Succeeded && changes.Count == 0 && added.Count == 0 && removed.Count == 0,
+            Identical = left.Succeeded == right.Succeeded && changes.Count == 0 && added.Count == 0 && removed.Count == 0 && retyped.Count == 0,
             LeftSucceeded = left.Succeeded,
             RightSucceeded = right.Succeeded,
             LeftCount = left.Ids.Count,
@@ -283,6 +314,7 @@ public static class ResultComparison
             KendallTau = KendallTau(left.Ids, right.Ids),
             AddedColumns = added,
             RemovedColumns = removed,
+            RetypedColumns = retyped,
             Changes = changes,
         };
     }

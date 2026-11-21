@@ -81,11 +81,17 @@ public class TapCaptureBenchmarks
         HomeFeedBenchWorkspace.Delete(_root);
     }
 
+    // Both read the same of the result (its columns, not Items, which would build every row's dictionary in one only):
+    // the difference is the capture.
     [Benchmark(Baseline = true)]
-    public int WithoutLogs() => Run(captureLogs: false).Items.Count;
+    public int WithoutLogs() => Run(captureLogs: false).Columns.Count;
 
     [Benchmark]
-    public int WithLogs() => Run(captureLogs: true).LogBatches.Count;
+    public int WithLogs()
+    {
+        var result = Run(captureLogs: true);
+        return result.Columns.Count + result.LogBatches.Count;
+    }
 
     private static void Rewrite(string path, string from, string to)
     {

@@ -25,7 +25,7 @@ public class DeclaredWidthEndToEndTests
 
         var batch = Assert.Single(result.LogBatches, b => b.TapId == "t");
         Assert.Equal(
-            ["clicks:int32", "computed:float64?", "ctr:float32?", "ctr2:float32", "emb:list<float32,2>?", "id:int64", "n32:int32", "w:float32?"],
+            ["clicks:int32", "clicks1:int64", "computed:float64?", "ctr:float32?", "ctr2:float32", "emb:list<float32,2>?", "id:int64", "n32:int32", "w:float32?"],
             batch.Schema.Columns.Select(f => $"{f.Name}:{f.Type}"));
         Assert.Equal(["age:int32?", "sum:float64", "uctr:float32", "w:float32?"], batch.Schema.Context.Select(f => $"{f.Name}:{f.Type}"));
         Assert.All(batch.Columns, c => Assert.Equal(batch.Schema.Columns.Single(f => f.Name == c.Name).Type, c.Type));
@@ -40,6 +40,7 @@ public class DeclaredWidthEndToEndTests
         Assert.Equal(0.6f, Assert.IsType<float[]>(Column(batch, "ctr2").Values)[second]); // a derived float32 feature
         Assert.IsType<double[]>(Column(batch, "computed").Values); // computed: promoted
         Assert.IsType<long[]>(Column(batch, "id").Values);
+        Assert.IsType<long[]>(Column(batch, "clicks1").Values); // computed as written, though the optimizer reduces it to the column
         Assert.Equal([0.25f, 0.25f], Assert.IsType<float[]>(Column(batch, "w").Values)); // a request input broadcast, narrowed
         var emb = Column(batch, "emb");
         Assert.Equal(4, Assert.IsType<float[]>(emb.Values).Length); // a float32 embedding: 4 bytes an element
@@ -83,7 +84,7 @@ public class DeclaredWidthEndToEndTests
         var pipeline = Path.Combine(root, "pipelines", "p.jsonc");
         File.WriteAllText(pipeline, File.ReadAllText(pipeline)
             .Replace("\"order\": 210, \"op\": \"ExpressionScorer@1\",", "\"order\": 210, \"op\": \"ExpressionScorer@1\", \"when\": \"(ctx.request.age ?? 0) == 1\",", StringComparison.Ordinal)
-            .Replace("\"n32\": \"col.out.n32\" } } },", "\"n32\": \"col.out.n32\" } },\n\"nullable\": { \"group\": \"all\", \"attach\": { \"output\": true }, \"columns\": { \"n\": \"col.out.n32n\" } } },", StringComparison.Ordinal));
+            .Replace("\"clicks1\": \"col.item.clicks * 1\" } } },", "\"clicks1\": \"col.item.clicks * 1\" } },\n\"nullable\": { \"group\": \"all\", \"attach\": { \"output\": true }, \"columns\": { \"n\": \"col.out.n32n\" } } },", StringComparison.Ordinal));
 
         var result = await Run(Compile(root));
 
@@ -215,7 +216,8 @@ public class DeclaredWidthEndToEndTests
                 "t": { "group": "all", "attach": { "output": true },
                        "context": { "age": "ctx.request.age", "w": "ctx.request.w", "uctr": "ctx.user.ctr", "sum": "ctx.user.ctr + 1.0" },
                        "columns": { "clicks": "col.item.clicks", "ctr": "col.item.ctr", "ctr2": "col.item.ctr2", "emb": "col.item.emb",
-                                    "computed": "col.item.ctr * 2.0", "id": "col.entity_id", "w": "ctx.request.w", "n32": "col.out.n32" } } },
+                                    "computed": "col.item.ctr * 2.0", "id": "col.entity_id", "w": "ctx.request.w", "n32": "col.out.n32",
+                                    "clicks1": "col.item.clicks * 1" } } },
               "output": { "limit_param": "k",
                           "columns": { "clicks": "col.item.clicks", "ctr": "col.item.ctr", "emb": "col.item.emb", "w": "ctx.request.w",
                                        "uctr": "ctx.user.ctr", "double": "col.item.ctr * 2.0", "ctr2": "col.item.ctr2", "w2": "(ctx.request.w ?? 0.0) + 0.0" } } }

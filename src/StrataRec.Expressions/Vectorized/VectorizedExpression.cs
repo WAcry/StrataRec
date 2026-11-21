@@ -50,7 +50,9 @@ internal sealed class VectorizedExpression : CompiledExpression
 
     public override IReadOnlyList<Symbol> Names => _names;
 
-    public override Symbol? Reference => Optimized.Op is IrOp.Column or IrOp.Context or IrOp.Param ? Optimized.Symbol : null;
+    // As written (the bound IR), not as optimized: `col.x * 1` computes, so it leaves the engine at its promoted type, and
+    // an optimizer rule that removes the multiplication must not change a log's or a result's types.
+    public override Symbol? Reference => Bound.Op is IrOp.Column or IrOp.Context or IrOp.Param ? Bound.Symbol : null;
 
     /// <summary>The type-checked IR before optimization (input of the reference interpreter).</summary>
     internal IrNode Bound { get; }
