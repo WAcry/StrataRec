@@ -17,6 +17,7 @@
          hosts and operators reach it only through OperatorContext.CallAsync. -->
     <InternalsVisibleTo Include="StrataRec.Features" />
     <InternalsVisibleTo Include="StrataRec.Pipeline" />
+    <InternalsVisibleTo Include="StrataRec.Hosting" />
     <InternalsVisibleTo Include="StrataRec.UnitTests" />
     <InternalsVisibleTo Include="StrataRec.IntegrationTests" />
     <InternalsVisibleTo Include="StrataRec.Benchmarks" />

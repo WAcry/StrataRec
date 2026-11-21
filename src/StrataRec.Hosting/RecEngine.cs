@@ -2,6 +2,7 @@ using System.Collections.Frozen;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.ExceptionServices;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -884,23 +885,17 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             return (RequestArms.None, Array.Empty<IgnoredArm>(), null, RecErrorKind.None);
         }
 
-        // The provider shares the end-to-end deadline. It is called inline on the request's thread, as connectors and
-        // models are (BoundedCall): what it does before it returns is not bounded. Its asynchronous part is: its token is
-        // cancelled at the deadline, and the wait ends there even if it ignores the token (review 18 #2). The deadline
-        // cancels it through ObservedCancellationSource, so the provider's callbacks never run on the timer's thread, where
-        // one that throws would end the process (review 20 #1).
-        var budget = request.Deadline - Stopwatch.GetElapsedTime(started);
-        if (budget <= TimeSpan.Zero)
-        {
-            return (RequestArms.None, Array.Empty<IgnoredArm>(), "deadline exceeded before assignment", RecErrorKind.DeadlineExceeded);
-        }
-
-        const string Late = "deadline exceeded during assignment";
-        var deadline = new ProviderDeadline(_logger, cancellationToken, request.PipelineId, request.RequestId);
-        Task<IReadOnlyList<string>>? pending = null; // the provider, once it did not answer synchronously
+        // The provider shares the end-to-end deadline, through the framework's one bounded wait (BoundedCall), as connectors
+        // and models do: it is called inline on the request's thread, and what it does before it returns is not bounded;
+        // its asynchronous part is (its token is cancelled at the deadline, and the wait ends there even if it ignores the
+        // token, review 18 #2), its callbacks run on the pool and what they throw is counted and summarized (review 20 #1),
+        // an answer that came after the wait timed out is not taken (review 20 #2), and its token lives until it ends
+        // (review 20 #3). It writes into nothing of the request, which has no memory yet.
+        var bound = new CallBound(CancellationSite.Assignment, cancellationToken, CallBound.DeadlineAfter(started, request.Deadline), _executor.Events,
+            request.RequestId);
+        CallResult<IReadOnlyList<string>> asked;
         try
         {
-            deadline.CancelAfterObserved(budget);
             var context = new AssignmentContext
             {
                 PipelineId = request.PipelineId,
@@ -910,135 +905,62 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                 Experiments = pipeline.Layout.Experiments,
                 Arms = pipeline.Layout.Arms,
             };
-            ValueTask<IReadOnlyList<string>> answer;
-            try
-            {
-                answer = _assignmentProvider.AssignAsync(context, deadline.Token);
-            }
-            catch (Exception ex)
-            {
-                answer = ValueTask.FromException<IReadOnlyList<string>>(ex);
-            }
-
-            IReadOnlyList<string> ids;
-            try
-            {
-                if (!answer.IsCompleted)
-                {
-                    pending = answer.AsTask();
-                    var left = request.Deadline - Stopwatch.GetElapsedTime(started);
-                    var wait = pending.WaitAsync(left <= TimeSpan.Zero ? TimeSpan.Zero : left, AssignmentWaitTimers, cancellationToken);
-                    if (!ReferenceEquals(wait, pending))
-                    {
-                        // A wait that was set up ends with whoever came first: the provider, the deadline or the caller.
-                        // Its outcome decides, even when the provider has completed by now too: a wait that timed out an
-                        // instant before the provider answered has lost the answer (review 20 #2).
-                        ids = await wait.ConfigureAwait(false);
-                        return Resolve(pipeline.Plan, ids);
-                    }
-
-                    // WaitAsync handed back the provider itself: it had completed before a wait could be set up (while its
-                    // ValueTask became a task, say), whatever the time or the caller, so no wait decided. Judged below.
-                    answer = new ValueTask<IReadOnlyList<string>>(pending);
-                }
-
-                // An answer the engine observes complete, with no wait to say who came first (a synchronous return, or one
-                // before the wait was set up), is judged now, as BoundedCall judges a client: the caller's cancellation
-                // first, then the deadline (passed by the clock, or by the timer that cancels the provider's token).
-                if (cancellationToken.IsCancellationRequested || deadline.IsCancellationRequested || Stopwatch.GetElapsedTime(started) >= request.Deadline)
-                {
-                    Discard(answer);
-                    cancellationToken.ThrowIfCancellationRequested();
-                    return (RequestArms.None, Array.Empty<IgnoredArm>(), Late, RecErrorKind.DeadlineExceeded);
-                }
-
-                ids = answer.GetAwaiter().GetResult();
-            }
-            catch (Exception ex) when (ex is TimeoutException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
-            {
-                return (RequestArms.None, Array.Empty<IgnoredArm>(), Late, RecErrorKind.DeadlineExceeded);
-            }
-
-            return Resolve(pipeline.Plan, ids);
+            asked = await BoundedCall.RunAsync<IReadOnlyList<string>, ProviderCall>(
+                new ProviderCall(_assignmentProvider, context), bound, memory: null, AssignmentTarget, CallDeadline.None).ConfigureAwait(false);
         }
         finally
         {
-            // A provider that has ended no longer needs its token; one still running keeps it until it ends.
-            if (pending is { IsCompleted: false })
-            {
-                _ = AbandonProviderAsync(deadline, pending);
-            }
-            else
-            {
-                deadline.Dispose();
-            }
+            bound.Release();
         }
 
-        static (RequestArms, IgnoredArm[], string?, RecErrorKind) Resolve(ExecutionPlan plan, IReadOnlyList<string> answered)
+        switch (asked.End)
+        {
+            case CallEnd.Answered:
+                return Resolve(pipeline.Plan, asked.Value);
+            case CallEnd.Cancelled:
+            case CallEnd.Threw when asked.Outcome != IoOutcome.Timeout:
+                ExceptionDispatchInfo.Throw(asked.Exception!); // the caller's cancellation, or what the provider threw
+                break;
+        }
+
+        // The deadline, the provider's own timeout or a cancellation of its own: rejected, and nothing it said is used.
+        return (RequestArms.None, Array.Empty<IgnoredArm>(),
+            asked.Sent ? "deadline exceeded during assignment" : "deadline exceeded before assignment", RecErrorKind.DeadlineExceeded);
+
+        static (RequestArms, IgnoredArm[], string?, RecErrorKind) Resolve(ExecutionPlan plan, IReadOnlyList<string>? answered)
         {
             var assigned = ExternalArms.Resolve(plan.Layers.AsSpan(), plan.Arms.AsSpan(), answered, out var ignoredIds);
             return (assigned, ignoredIds, null, RecErrorKind.None);
         }
-
-        // Consumes, once (as a source-backed ValueTask requires), an answer that came too late; what it holds is dropped.
-        static void Discard(ValueTask<IReadOnlyList<string>> late)
-        {
-            try
-            {
-                _ = late.GetAwaiter().GetResult();
-            }
-            catch (Exception)
-            {
-                // Dropped with the answer: the request ended before it was observed.
-            }
-        }
     }
 
-    /// <summary>
-    /// The timers of the wait for a pending assignment provider; the system's. A test ends that wait before the timer that
-    /// cancels the provider's token, as the wait can in production: both aim at the deadline, each rounded to whole
-    /// milliseconds and started at a different moment.
-    /// </summary>
-    internal TimeProvider AssignmentWaitTimers { get; init; } = TimeProvider.System;
+    private static readonly IoTarget AssignmentTarget = new(IoRoles.Assignment, "provider");
 
     /// <summary>
-    /// The engine stopped waiting for a provider that is still running (the deadline, or the caller): its token is
-    /// cancelled now and stays valid until the provider ends, as a client's token does in the shared waits (decisions,
-    /// invariant 3). Disposing the source at once could leave the token never cancelled: the wait may end before the
-    /// source's timer fires, and a caller's cancellation may end the request, inline in Cancel, before the registration
-    /// that cancels the linked token has run, and disposing removes it. The callbacks run on the pool, so one that blocks
-    /// does not hold the request; one that throws is counted and logged by the source (<see cref="ProviderDeadline"/>),
-    /// which no logger can make throw. A provider that never ends keeps its source. Whatever the cancellation does, the
-    /// source is disposed once the provider has ended, and not before (review 20 #3).
+    /// The assignment provider as a bounded call. Every answer is one: what the request cannot run with is ignored and
+    /// reported, never an error (<see cref="ExternalArms"/>), and null is no arms.
     /// </summary>
-    private static async Task AbandonProviderAsync(ProviderDeadline deadline, Task provider)
+    private readonly struct ProviderCall(IAssignmentProvider provider, AssignmentContext context) : IBoundedCall<IReadOnlyList<string>>
     {
-        try
+        public int Keys => -1;
+
+        public ValueTask<IReadOnlyList<string>> Send(CancellationToken token) => provider.AssignAsync(context, token);
+
+        public IoOutcome Judge(IReadOnlyList<string> value, out string? error)
         {
-            await deadline.CancelObservedAsync().ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            error = null;
+            return IoOutcome.Ok;
         }
-        finally
+
+        /// <summary>Nothing waits for an abandoned provider: it holds nothing of the request, and its token lives until it ends.</summary>
+        public void Pending(Task done)
         {
-            await provider.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-            _ = provider.Exception; // a late failure nobody awaits any more
-            deadline.Dispose();
+        }
+
+        public void Ended(in CallResult<IReadOnlyList<string>> result, TimeSpan duration)
+        {
         }
     }
-
-    /// <summary>
-    /// The assignment provider's token: cancelled at the request's deadline, with the caller's token, or when the engine
-    /// stops waiting. In every case the provider's callbacks run on the pool, and what they throw is logged (1102).
-    /// </summary>
-    private sealed class ProviderDeadline(ILogger logger, CancellationToken caller, string pipelineId, string requestId)
-        : ObservedCancellationSource(CancellationSite.Assignment, caller)
-    {
-        protected override void CallbacksFailed(AggregateException errors) =>
-            LogProviderCancellationCallbacksFailed(logger, errors, pipelineId, requestId);
-    }
-
-    [LoggerMessage(EventId = 1102, Level = LogLevel.Warning,
-        Message = "A cancellation callback of the assignment provider's token threw (pipeline '{PipelineId}', request '{RequestId}'); the request is not affected")]
-    private static partial void LogProviderCancellationCallbacksFailed(ILogger logger, Exception exception, string pipelineId, string requestId);
 
     /// <summary>
     /// The plan a pipeline serves, its binding lease entered (see the lifecycle remarks): the caller ends the entry

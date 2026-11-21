@@ -8,6 +8,7 @@ using StrataRec.Core.Hashing;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Tables;
+using StrataRec.Core.Threading;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
@@ -306,6 +307,9 @@ internal sealed class PipelineExecutor
     {
     }
 
+    /// <summary>Where request-level failures are summarized; the engine's assignment provider reports there too.</summary>
+    internal RequestEventLog? Events => _events;
+
     /// <summary>With a caller-owned event log, e.g. one a test flushes by hand.</summary>
     internal PipelineExecutor(IBufferPool? pool, Logging.LogPipeline? logs, RequestEventLog? events)
     {
@@ -384,7 +388,7 @@ internal sealed class PipelineExecutor
 
             var table = new CandidateTable(plan.TableSchema, (int)Math.Min(capacity, int.MaxValue), memory);
             var bindings = new OutputBindings(plan.Schema.Columns.Count, memory);
-            var deadline = start + (long)(request.Deadline.TotalSeconds * Stopwatch.Frequency);
+            var deadline = CallBound.DeadlineAfter(start, request.Deadline);
             // One set of counters per request: operator expressions and derived features count into the same totals.
             var counters = new ExpressionCounters();
             fetcher = new FeatureFetcher(plan.Features, table, context, bindings, parameters, memory, deadline, counters, request.RequestId, events,

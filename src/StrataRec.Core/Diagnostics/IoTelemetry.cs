@@ -21,6 +21,12 @@ public static class IoRoles
 
     /// <summary>A model's answer, per batch.</summary>
     public const string Model = "model";
+
+    /// <summary>
+    /// The experiment assignment provider's answer (design 11.1), per request the caller passed no arms for; its target
+    /// is <c>provider</c>, the engine's one.
+    /// </summary>
+    public const string Assignment = "assignment";
 }
 
 /// <summary>How one external call ended, as seen by the request.</summary>

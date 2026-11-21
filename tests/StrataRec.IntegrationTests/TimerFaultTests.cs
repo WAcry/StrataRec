@@ -349,11 +349,11 @@ internal static class TimerFaultChild
         GC.Collect();
 
         // The request event log's summary (2001) names the event and the site and samples the callback's message; the
-        // engine's (1102) and the log pipeline's (3005) own events carry the exception.
+        // log pipeline's own event (3005) carries the exception.
         var logged = loggers.Entries.Any(e => e.EventId.Id == 2001
                 && e.Message.Contains($"CancellationCallbacksFailed for '{token}'", StringComparison.Ordinal)
                 && e.Message.Contains(CleanupFailed, StringComparison.Ordinal)
-            || e.EventId.Id is 1102 or 3005 && e.Exception?.ToString().Contains(CleanupFailed, StringComparison.Ordinal) == true);
+            || e.EventId.Id == 3005 && e.Exception?.ToString().Contains(CleanupFailed, StringComparison.Ordinal) == true);
         Console.WriteLine($"ended={ended}");
         Console.WriteLine($"elapsed_ms={elapsed}");
         Console.WriteLine($"budget_ms={budgetMs}");
@@ -435,7 +435,8 @@ internal static class TimerFaultChild
     private static (string Ended, int BudgetMs, long ElapsedMs, RequestEventLog? Events) Assignment(ListLoggerFactory loggers, int deadlineMs)
     {
         var host = HomeFeedTestHost.Load();
-        var engine = new RecEngine(host.Environment, new HangingProvider(), loggerFactory: loggers);
+        var events = new RequestEventLog(loggers.CreateLogger("events"), autoFlush: false);
+        var engine = new RecEngine(host.Environment, new PipelineExecutor(null, null, events), new HangingProvider(), loggers);
         if (!engine.Load(host.Request).Applied)
         {
             throw new InvalidOperationException("the sample did not load");
@@ -443,7 +444,7 @@ internal static class TimerFaultChild
 
         var watch = Stopwatch.StartNew();
         var result = engine.ExecuteAsync(Request("req-timer-fault", deadlineMs, force: false)).AsTask().WaitAsync(Patience).GetAwaiter().GetResult();
-        return (result.Error ?? "succeeded", deadlineMs, watch.ElapsedMilliseconds, null);
+        return (result.Error ?? "succeeded", deadlineMs, watch.ElapsedMilliseconds, events);
     }
 
     /// <summary>A log sink whose write never ends on its own: the drain timeout cancels its token when the pipeline is disposed.</summary>

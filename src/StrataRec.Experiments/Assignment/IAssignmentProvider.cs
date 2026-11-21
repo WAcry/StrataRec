@@ -21,6 +21,8 @@ namespace StrataRec.Experiments.Assignment;
 /// <para>An answer is used only if the engine observes it before the deadline and before the caller cancels. One it sees
 /// only later, such as a synchronous answer after blocking past the deadline, is dropped: the request fails as past its
 /// deadline, or is cancelled.</para>
+/// <para>The call is an external call like a connector's or a model's: measured as <c>assignment provider</c>
+/// (<c>stratarec.io.*</c>, a span, health), and what its token's callbacks throw is counted and summarized.</para>
 /// </remarks>
 public interface IAssignmentProvider
 {

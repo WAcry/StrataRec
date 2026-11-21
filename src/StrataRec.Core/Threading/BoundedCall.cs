@@ -70,6 +70,14 @@ internal class CallBound : ObservedCancellationSource
     /// <summary>The deadline has passed, by the clock or by the timer that enforces it (or the caller has cancelled the token).</summary>
     internal bool Passed => Token.IsCancellationRequested || Stopwatch.GetTimestamp() >= Deadline;
 
+    /// <summary>
+    /// The deadline <paramref name="budget"/> after <paramref name="start"/> (a <see cref="Stopwatch"/> timestamp); a
+    /// budget longer than any timer accepts is none (<see cref="long.MaxValue"/>), so the sum cannot overflow into the
+    /// past.
+    /// </summary>
+    public static long DeadlineAfter(long start, TimeSpan budget) =>
+        budget >= MaxWait ? long.MaxValue : start + (long)(budget.TotalSeconds * Stopwatch.Frequency);
+
     /// <summary>A bound <paramref name="budgetMs"/> from now.</summary>
     public static CallBound After(CancellationSite site, CancellationToken caller, int budgetMs, RequestEventLog? events = null, string? requestId = null) =>
         new(site, caller, Stopwatch.GetTimestamp() + ((long)Math.Max(0, budgetMs) * Stopwatch.Frequency / 1000), events, requestId);
@@ -258,10 +266,13 @@ internal static class BoundedCall
     /// </summary>
     /// <param name="call">The call site: sends the call, judges an answer, records the end.</param>
     /// <param name="bound">The scope's bound: its token and deadline, and the caller's token.</param>
-    /// <param name="memory">The request memory, held for the call (rule 2).</param>
+    /// <param name="memory">
+    /// The request memory, held for the call (rule 2); null for a call made before the request has any (the assignment
+    /// provider's), which writes into nothing of the request.
+    /// </param>
     /// <param name="deadline">The call's own deadline (a binding's <c>timeout_ms</c>, a tier's time); none for the bound's alone.</param>
     /// <remarks>The call reports to the bound's request (<see cref="ObservedCancellationSource.RequestId"/>, its events).</remarks>
-    public static ValueTask<CallResult<T>> RunAsync<T, TCall>(TCall call, CallBound bound, RequestMemory memory, IoTarget target, in CallDeadline deadline)
+    public static ValueTask<CallResult<T>> RunAsync<T, TCall>(TCall call, CallBound bound, RequestMemory? memory, IoTarget target, in CallDeadline deadline)
         where TCall : struct, IBoundedCall<T>
     {
         // Rule 8: a call whose bound has passed before it is sent (the caller cancelled, as an earlier call may have done,
@@ -274,7 +285,7 @@ internal static class BoundedCall
             return new ValueTask<CallResult<T>>(cut);
         }
 
-        memory.Hold();
+        memory?.Hold();
         bound.AddReference();
         var (own, token) = Own(bound, deadline);
         var io = target.Start();
@@ -311,7 +322,7 @@ internal static class BoundedCall
             {
                 own?.Dispose();
                 bound.Release();
-                memory.Release();
+                memory?.Release();
             }
         }
 
@@ -637,11 +648,11 @@ internal static class BoundedCall
     /// completed (rule 3). Its task completes just after the memory is released and never faults; continuations run
     /// asynchronously (only a request's I/O drain awaits it, and none runs on a client's or a call site's thread).
     /// </summary>
-    private sealed class Lease(RequestMemory memory, CallBound bound, CancellationTokenSource? own) : TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+    private sealed class Lease(RequestMemory? memory, CallBound bound, CancellationTokenSource? own) : TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
     {
         private int _parts = 2;
 
-        public static Lease Until(Task client, RequestMemory memory, CallBound bound, CancellationTokenSource? own)
+        public static Lease Until(Task client, RequestMemory? memory, CallBound bound, CancellationTokenSource? own)
         {
             var lease = new Lease(memory, bound, own);
             _ = client.ContinueWith(
@@ -674,7 +685,7 @@ internal static class BoundedCall
             {
                 try
                 {
-                    memory.Release();
+                    memory?.Release();
                 }
                 finally
                 {
