@@ -72,17 +72,28 @@ public sealed class RequestEventLogTests
         var lookup = new IoTarget("lookup", "geo");
         var fetch = new IoTarget(IoRoles.Fetch, "geo");
         using var errors = new MeasurementHook(StrataRecMetrics.Names.IoErrors, static () => { }, (StrataRecTags.IoRole, "lookup"), (StrataRecTags.IoTarget, "geo"));
+        using var keys = new MeasurementHook(StrataRecMetrics.Names.IoKeys, static () => { }, (StrataRecTags.IoRole, "lookup"), (StrataRecTags.IoTarget, "geo"));
 
-        lookup.Start().Complete(IoOutcome.Error, requestId: "req-1", error: "down", events: events);
+        lookup.Start().Complete(IoOutcome.Error, keys: 2, requestId: "req-1", error: "down", events: events); // a keyed call, whatever its role
         lookup.Start().Complete(IoOutcome.Error, requestId: "req-2", error: "down", events: events);
         fetch.Start().Complete(IoOutcome.Ok, keys: 3, events: events);
         fetch.Start().Complete(IoOutcome.Ok, keys: 3, events: events);
         events.Flush();
 
-        Assert.Equal(2, errors.Calls);
+        Assert.Equal((2, 1), (errors.Calls, keys.Calls));
         Assert.Equal("lookup geo", Assert.Single(logger.Entries, e => e.EventId.Id == 2001).State["Subject"]);
         var failing = Assert.Single(logger.Entries, e => e.EventId.Id == 2002); // the lookup fails; the fetch of the same name does not
         Assert.Equal(("lookup", "geo", 2L, 2L), (failing.State["Role"], failing.State["Name"], failing.State["Failures"], failing.State["Calls"]));
+    }
+
+    [Theory]
+    [InlineData("fetch geo")] // would be one subject with ("fetch", "geo shard")
+    [InlineData("Fetch")]
+    [InlineData("1fetch")]
+    [InlineData("fetch-geo")]
+    public void ARoleIsALabel(string role)
+    {
+        Assert.Throws<ArgumentException>(() => new IoTarget(role, "shard"));
     }
 
     [Fact]

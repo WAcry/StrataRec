@@ -248,7 +248,6 @@ internal sealed class FeatureTestRig
             new SourceBindingArtifact { Environment = "test", Sources = _sources },
             new BindingResolver(Bindings, UnsharedInstances.Instance, baseDirectory, "bindings:test", diagnostics),
             input => _inputs.TryGetValue(input, out var id) ? id : -1,
-            diagnostics,
             _localTables,
             clock: Clock);
         return diagnostics;

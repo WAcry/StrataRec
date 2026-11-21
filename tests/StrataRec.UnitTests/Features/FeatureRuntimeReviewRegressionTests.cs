@@ -32,7 +32,7 @@ public class FeatureRuntimeReviewRegressionTests
 
         var thrown = Assert.Throws<ArgumentException>(() => FeaturePlan.Create(
             plan.Features, new SourceBindingArtifact { Environment = "test" },
-            new BindingResolver(new BindingRegistry(), UnsharedInstances.Instance, null, "bindings:test", new DiagnosticBag()), _ => -1, new DiagnosticBag()));
+            new BindingResolver(new BindingRegistry(), UnsharedInstances.Instance, null, "bindings:test", new DiagnosticBag()), _ => -1));
 
         Assert.Contains("'item.score' belongs to a feature plan already", thrown.Message);
         Assert.Equal(before, Layout());

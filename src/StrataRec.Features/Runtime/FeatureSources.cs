@@ -194,7 +194,6 @@ internal sealed class FeatureSourceResolver
         BindingResolver resolver,
         ILocalTableProvider localTables,
         TimeProvider clock,
-        DiagnosticBag diagnostics,
         string catalogArtifact = "catalog",
         FeatureCatalog? catalog = null)
     {
@@ -205,7 +204,7 @@ internal sealed class FeatureSourceResolver
         _localTables = localTables;
         _baseDirectory = resolver.BaseDirectory;
         _clock = clock;
-        _diagnostics = diagnostics;
+        _diagnostics = resolver.Diagnostics;
         _artifact = "bindings:" + bindings.Environment;
     }
 

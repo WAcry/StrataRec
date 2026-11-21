@@ -43,7 +43,8 @@ public static class StrataRecTags
 
     /// <summary>
     /// What a call of an external dependency is for (<see cref="IoRoles"/>): <c>fetch</c>, <c>cache</c>, <c>recall</c>,
-    /// <c>model</c>, or an extension's own; with <see cref="IoTarget"/> on every <c>stratarec.io.*</c> metric.
+    /// <c>model</c>, or an extension's own; with <see cref="IoTarget"/> on <c>stratarec.io.duration</c>, <c>errors</c> and
+    /// <c>keys</c>, and on the metrics of what a model call reported (<c>stratarec.model.*</c>).
     /// </summary>
     public const string IoRole = "stratarec.io.role";
 

@@ -391,13 +391,18 @@ public static class ArtifactSchemas
     {
         var schema = Export(typeof(SourceBindingArtifact), Describe, inline: true);
         var sections = Member(schema, "properties");
-        AddBindingTypes(Member(Member(sections, "models"), "additionalProperties"), bindings, BindingKind.Model);
-        AddBindingTypes(Member(Member(sections, "candidate_sources"), "additionalProperties"), bindings, BindingKind.CandidateSource);
-        var source = Member(Member(sections, "sources"), "additionalProperties");
-        var members = Member(source, "properties");
-        AddBindingTypes(source, bindings, BindingKind.Connector);
-        AddBindingTypes(Member(members, "bootstrap"), bindings, BindingKind.UpdateSource);
-        AddBindingTypes(Member(Member(Member(members, "cache"), "properties"), "distributed"), bindings, BindingKind.CacheStore);
+        foreach (var kind in BindingKinds.All)
+        {
+            // Where the kind's settings are (BindingKinds): an entry of its section, or a member of the entry.
+            var entry = Member(Member(sections, kind.Section()), "additionalProperties");
+            foreach (var member in kind.Member().Split('/', StringSplitOptions.RemoveEmptyEntries))
+            {
+                entry = Member(Member(entry, "properties"), member);
+            }
+
+            AddBindingTypes(entry, bindings, kind);
+        }
+
         return schema;
     }
 

@@ -112,7 +112,21 @@ public sealed class DiagnosticBag
         return taken;
     }
 
-    public void AddRange(IEnumerable<ConfigDiagnostic> diagnostics) => _items.AddRange(diagnostics);
+    /// <summary>
+    /// Adds another compilation's diagnostics, except those this bag holds already: a binding that several pipelines (or
+    /// a pipeline and its fallback) read is one error at the binding, however many compilations reported it.
+    /// </summary>
+    public void AddRange(IEnumerable<ConfigDiagnostic> diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        foreach (var diagnostic in diagnostics)
+        {
+            if (!_items.Contains(diagnostic))
+            {
+                _items.Add(diagnostic);
+            }
+        }
+    }
 
     public void Error(string code, string artifact, string pointer, string message, string? hint = null) =>
         _items.Add(new ConfigDiagnostic(DiagnosticSeverity.Error, code, artifact, pointer, message, hint));

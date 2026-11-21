@@ -47,12 +47,20 @@ public enum IoOutcome : byte
 /// </summary>
 public sealed class IoTarget
 {
-    /// <param name="role">What the call is for: one of <see cref="IoRoles"/>, or an extension's own bounded label.</param>
+    /// <param name="role">What the call is for: one of <see cref="IoRoles"/>, or an extension's own bounded label of lowercase
+    /// letters, digits and <c>_</c>, starting with a letter.</param>
     /// <param name="name">The dependency's binding name, e.g. <c>item_store</c>.</param>
+    /// <exception cref="ArgumentException"><paramref name="role"/> is not such a label: a space in it would make two
+    /// targets one subject (<c>fetch geo</c> + <c>shard</c> and <c>fetch</c> + <c>geo shard</c>).</exception>
     public IoTarget(string role, string name)
     {
         ArgumentException.ThrowIfNullOrEmpty(role);
         ArgumentNullException.ThrowIfNull(name);
+        if (!IsLabel(role))
+        {
+            throw new ArgumentException($"Role '{role}' is not a label of lowercase letters, digits and '_' starting with a letter.", nameof(role));
+        }
+
         Role = role;
         Name = name;
         Tags = [new(StrataRecTags.IoRole, role), new(StrataRecTags.IoTarget, name)];
@@ -168,6 +176,24 @@ public sealed class IoTarget
                 // As above.
             }
         }
+    }
+
+    private static bool IsLabel(string role)
+    {
+        if (role[0] is < 'a' or > 'z')
+        {
+            return false;
+        }
+
+        foreach (var c in role)
+        {
+            if (c is not ((>= 'a' and <= 'z') or (>= '0' and <= '9') or '_'))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static KeyValuePair<string, object?>[] WithOutcome(KeyValuePair<string, object?>[] tags, string outcome)

@@ -50,9 +50,12 @@ public sealed record PlanEnvironment
     public List<string> Capabilities()
     {
         var caps = new List<string>(Operators.Ids);
-        foreach (var factory in Bindings.Factories())
+        foreach (var source in BindingSchemaSources())
         {
-            caps.Add(factory.Type);
+            if (!caps.Contains(source.Type))
+            {
+                caps.Add(source.Type); // a factory of two kinds is one capability
+            }
         }
 
         caps.Sort(StringComparer.Ordinal);
@@ -75,19 +78,20 @@ public sealed record PlanEnvironment
 
     /// <summary>
     /// The registered binding types as the bindings schema describes them: each with the kinds of binding that can name
-    /// it, by the contract its factory creates (<see cref="BindingKinds"/>). A factory of no such contract is named by no
-    /// binding and not described.
+    /// it, by the contract its factory creates, and the settings type it binds for that contract, read as a binding of the
+    /// kind reads it (a factory of two contracts may bind different settings for each). A factory of no such contract is
+    /// named by no binding: neither described nor a capability.
     /// </summary>
     public List<BindingSchemaSource> BindingSchemaSources()
     {
         var sources = new List<BindingSchemaSource>();
         foreach (var factory in Bindings.Factories())
         {
-            foreach (var (kind, contract) in KindContracts)
+            foreach (var (kind, settingsOf) in KindContracts)
             {
-                if (contract.IsInstanceOfType(factory))
+                if (settingsOf(factory) is { } settings)
                 {
-                    sources.Add(new BindingSchemaSource(kind, factory.Type, factory.SettingsType));
+                    sources.Add(new BindingSchemaSource(kind, factory.Type, settings));
                 }
             }
         }
@@ -95,14 +99,17 @@ public sealed record PlanEnvironment
         return sources;
     }
 
-    /// <summary>The factory contract of each <see cref="BindingKind"/>: what a binding of the kind gets from <see cref="Bindings"/>.</summary>
-    private static readonly (BindingKind Kind, Type Factory)[] KindContracts =
+    /// <summary>
+    /// The factory contract of each <see cref="BindingKind"/>: what a binding of the kind gets from <see cref="Bindings"/>,
+    /// and the settings type it then binds, through the same interface (null when the factory has no such contract).
+    /// </summary>
+    private static readonly (BindingKind Kind, Func<object, Type?> SettingsOf)[] KindContracts =
     [
-        (BindingKind.Model, typeof(IBindingFactory<IModelClient>)),
-        (BindingKind.CandidateSource, typeof(IBindingFactory<ICandidateSource>)),
-        (BindingKind.Connector, typeof(IBindingFactory<IFeatureSourceConnector>)),
-        (BindingKind.UpdateSource, typeof(IBindingFactory<IFeatureUpdateSource>)),
-        (BindingKind.CacheStore, typeof(IBindingFactory<IFeatureCacheStore>)),
+        (BindingKind.Model, static f => (f as IBindingFactory<IModelClient>)?.SettingsType),
+        (BindingKind.CandidateSource, static f => (f as IBindingFactory<ICandidateSource>)?.SettingsType),
+        (BindingKind.Connector, static f => (f as IBindingFactory<IFeatureSourceConnector>)?.SettingsType),
+        (BindingKind.UpdateSource, static f => (f as IBindingFactory<IFeatureUpdateSource>)?.SettingsType),
+        (BindingKind.CacheStore, static f => (f as IBindingFactory<IFeatureCacheStore>)?.SettingsType),
     ];
 }
 
@@ -2178,7 +2185,6 @@ public sealed class PlanBuilder
             _sources!.Bindings,
             _resolver!,
             name => inputs.TryGetValue(name, out var f) ? f.Id : -1,
-            _diagnostics,
             _bindings,
             _environment.Clock,
             CatalogLabel,

@@ -25,7 +25,6 @@ public sealed class BindingResolver
 
     private readonly BindingRegistry _registry;
     private readonly IBindingInstances _instances;
-    private readonly DiagnosticBag _diagnostics;
 
     /// <param name="registry">The factories of this binary.</param>
     /// <param name="instances">Where instances come from: the engine shares them across plans by binding identity.</param>
@@ -37,8 +36,12 @@ public sealed class BindingResolver
         _instances = instances;
         BaseDirectory = baseDirectory;
         Artifact = artifact;
-        _diagnostics = diagnostics;
+        Diagnostics = diagnostics;
     }
+
+    /// <summary>Where binding errors go: also where whoever resolves through this resolver reports the rest of its errors,
+    /// so one compile has one list.</summary>
+    public DiagnosticBag Diagnostics { get; }
 
     /// <summary>The bindings artifact, e.g. <c>bindings:local</c>.</summary>
     public string Artifact { get; }
@@ -61,11 +64,11 @@ public sealed class BindingResolver
             + (hint is null ? string.Empty : "; " + hint);
         if (type is null)
         {
-            _diagnostics.Error(TypeUnknownCode, Artifact, kind.Pointer(name), $"{kind.Label(name)} names no '{kind.Selector()}'.", list);
+            Diagnostics.Error(TypeUnknownCode, Artifact, kind.Pointer(name), $"{kind.Label(name)} names no '{kind.Selector()}'.", list);
         }
         else
         {
-            _diagnostics.Error(TypeUnknownCode, Artifact, kind.Pointer(name) + "/" + kind.Selector(),
+            Diagnostics.Error(TypeUnknownCode, Artifact, kind.Pointer(name) + "/" + kind.Selector(),
                 _registry.Contains(type)
                     ? $"{kind.Label(name)} names type '{type}', which is not a {kind.TypeNoun()}."
                     : $"{kind.Label(name)} names type '{type}', which this binary does not register.",
@@ -132,11 +135,11 @@ public sealed class BindingResolver
     {
         if (ex is BindingException binding)
         {
-            _diagnostics.Error(SettingsCode, Artifact, kind.Pointer(name) + binding.Pointer, binding.Reason, binding.Hint);
+            Diagnostics.Error(SettingsCode, Artifact, kind.Pointer(name) + binding.Pointer, binding.Reason, binding.Hint);
         }
         else
         {
-            _diagnostics.Error(SettingsCode, Artifact, kind.Pointer(name), $"{kind.Label(name)}: {ExceptionText.Of(ex)}");
+            Diagnostics.Error(SettingsCode, Artifact, kind.Pointer(name), $"{kind.Label(name)}: {ExceptionText.Of(ex)}");
         }
     }
 }

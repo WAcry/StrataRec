@@ -242,8 +242,8 @@ public sealed class FeaturePlan
     /// <summary>
     /// Builds the plan: groups physical features by (source, entity), resolves each group's supply from the bindings
     /// (<see cref="FeatureSourceResolver"/>: a connector, or a local table from <paramref name="localTables"/>) and
-    /// computes fetch waves. Problems (unbound sources, wrong settings, unsupported key layouts) are reported to
-    /// <paramref name="diagnostics"/>.
+    /// computes fetch waves. Problems (unbound sources, wrong settings, unsupported key layouts) are reported to the
+    /// resolver's <see cref="BindingResolver.Diagnostics"/>, with its binding errors: one list.
     /// </summary>
     /// <param name="resolver">Creates connectors, update sources and distributed cache stores (sharing them by identity as
     /// it does) and reports their bindings' errors.</param>
@@ -265,13 +265,13 @@ public sealed class FeaturePlan
         SourceBindingArtifact bindings,
         BindingResolver resolver,
         Func<string, int> contextIdOfRequestInput,
-        DiagnosticBag diagnostics,
         ILocalTableProvider? localTables = null,
         TimeProvider? clock = null,
         string catalogArtifact = "catalog",
         FeatureCatalog? catalog = null,
         IReadOnlyCollection<int>? awaited = null)
     {
+        var diagnostics = resolver.Diagnostics;
         foreach (var f in features)
         {
             if (f.Planned)
@@ -309,7 +309,7 @@ public sealed class FeaturePlan
 
         var groups = new List<FetchGroup>();
         var sources = new FeatureSourceResolver(
-            bindings, resolver, localTables ?? UnloadedLocalTables.Instance, clock ?? TimeProvider.System, diagnostics, catalogArtifact, catalog);
+            bindings, resolver, localTables ?? UnloadedLocalTables.Instance, clock ?? TimeProvider.System, catalogArtifact, catalog);
 
         foreach (var (groupKey, memberList) in grouped)
         {
