@@ -397,6 +397,13 @@ internal sealed class CachedServiceCall
     {
         if (Count(RowState.Fresh, negate: true) == Count(RowState.Stale, negate: false) && StaleAnswer(_cache.Policy.NowMs()))
         {
+            // Taken only if the node could still send the call now, as an answer of the tiers alone is (review of IO
+            // step 4: a caller that cancelled while the distributed tier used up the service's time got the stale values).
+            if (BoundedCall.CutOff(_context.Budget) is { } late)
+            {
+                return new Result(default, late.Outcome, late.Exception, false);
+            }
+
             // Every row without a fresh record has a stale one still within stale_if_error_ms now: they answer, and the
             // node is Degraded, in a replay too (the reason is recorded with the call).
             _cache.Policy.CountKeys(CacheTier.Local, CacheKeyOutcome.Stale, CountStale(wire: false));

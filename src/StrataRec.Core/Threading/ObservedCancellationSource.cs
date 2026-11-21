@@ -150,7 +150,11 @@ public class ObservedCancellationSource : CancellationTokenSource
     /// async-locals, as a traced request does): the cancellation, and its log, belong to the request's trace. The
     /// context is let go with the source.
     /// </remarks>
-    /// <param name="delay">At most <see cref="uint.MaxValue"/> − 1 ms, as for <c>CancelAfter</c>.</param>
+    /// <param name="delay">
+    /// Capped to what a timer accepts (<see cref="CallBound.MaxWait"/>, just under 49.7 days), so a budget of any length
+    /// is one (a request's <see cref="TimeSpan.MaxValue"/> deadline threw out of the timer: review of IO step 4); a
+    /// negative one cancels at once.
+    /// </param>
     public void CancelAfterObserved(TimeSpan delay)
     {
         if (_timer is not null)
@@ -158,6 +162,7 @@ public class ObservedCancellationSource : CancellationTokenSource
             throw new InvalidOperationException("The cancellation's timer is set already.");
         }
 
+        delay = delay <= TimeSpan.Zero ? TimeSpan.Zero : delay < CallBound.MaxWait ? delay : CallBound.MaxWait;
         _timer = TimeProvider.System.CreateTimer(Expire, this, delay, Timeout.InfiniteTimeSpan);
     }
 

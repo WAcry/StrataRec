@@ -47,7 +47,7 @@ internal static class ServiceInputDigest
         }
     }
 
-    /// <summary>Digest of the whole call, for calls about no items: the batch size, the limit when it reads outputs, every input whole.</summary>
+    /// <summary>Digest of the whole call, for calls about no items: the batch size and every input whole (not the limit: a recorded call answers named outputs only for its own limit, <see cref="RunReplay"/>).</summary>
     public static ulong Call(ServiceCall call, int[] order)
     {
         var builder = default(StableHash.Builder);

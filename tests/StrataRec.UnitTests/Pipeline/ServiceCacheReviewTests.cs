@@ -485,6 +485,64 @@ public sealed class ServiceCacheReviewTests
         memory.Release();
     }
 
+    /// <summary>
+    /// Stale values answer a call only if the node could still send it then, as an answer of the tiers alone is: a caller
+    /// that cancelled while the distributed tier used up the service's time got them, and the node succeeded Degraded
+    /// (review of IO step 4).
+    /// </summary>
+    [Fact]
+    public async Task ACallCancelledWhileTheDistributedTierUsesUpTheServicesTime_IsNotAnsweredWithStaleValues()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var store = new FakeCacheStore();
+        var rig = new ServiceCacheRig(ttlMs: 1000, staleIfErrorMs: 5000, store: store, timeoutMs: 100, distributedTimeoutMs: 10000);
+        var call = Query(1, limit: 1);
+        Assert.True((await rig.CallAsync(call)).Status.Succeeded);
+        Assert.Equal(1, rig.Apply());
+        await store.WhenWrittenAsync(1).WaitAsync(Patience, token);
+        rig.Clock.AdvanceMs(2000); // stale locally, within stale_if_error_ms
+        store.BeforeGet = async _ => await Task.Delay(500, token); // past the service's 100 ms
+
+        using var cancellation = new CancellationTokenSource();
+        var armed = 0;
+        using var listener = new MeterListener
+        {
+            InstrumentPublished = static (instrument, meterListener) =>
+            {
+                if (instrument.Name == StrataRecMetrics.Names.IoErrors)
+                {
+                    meterListener.EnableMeasurementEvents(instrument);
+                }
+            },
+        };
+        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        {
+            var cache = false;
+            foreach (var tag in tags)
+            {
+                cache |= tag.Key == StrataRecTags.IoRole && Equals(tag.Value, IoRoles.Cache);
+            }
+
+            if (cache && Volatile.Read(ref armed) == 1)
+            {
+                cancellation.Cancel(); // as the distributed read times out
+            }
+        });
+        listener.Start();
+        var memory = new RequestMemory();
+        var context = Context(memory, cancellation.Token, long.MaxValue);
+
+        Volatile.Write(ref armed, 1);
+        var response = new ServiceResponse(memory, call.Limit);
+        var thrown = await Record.ExceptionAsync(() => context.CallAsync(rig.Bound, call, response));
+
+        Assert.True(cancellation.IsCancellationRequested);
+        Assert.IsAssignableFrom<OperationCanceledException>(thrown);
+        Assert.Null(context.DegradedReason);
+        Assert.Single(rig.Service.Calls); // the first call's
+        memory.Release();
+    }
+
     private static OperatorContext Context(RequestMemory memory, CancellationToken token, long deadline) => new(new RequestState
     {
         Plan = null!,

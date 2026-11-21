@@ -24,12 +24,13 @@ public sealed partial class RecEngine
     {
         var lease = Bindings.OpenLease();
         var handedOut = false;
-        using var deadline = new ObservedCancellationSource(CancellationSite.PlanLoad, cancellationToken);
-        deadline.CancelAfterObserved(budget);
-        var environment = Environment;
-        var source = served.Source.Read(); // the configuration as it was loaded, whatever the host did with its objects since
         try
         {
+            using var deadline = new ObservedCancellationSource(CancellationSite.PlanLoad, cancellationToken);
+            deadline.CancelAfterObserved(budget);
+            var environment = Environment;
+            var source = served.Source.Read(); // the configuration as it was loaded, whatever the host did with its objects since
+
             // A compile that waited for model signatures runs again (BindingLease.CompileAsync): that one reads the
             // override as the first one checked it, not the host's tree, which writes its CLR values again and may have
             // changed since (review 85).

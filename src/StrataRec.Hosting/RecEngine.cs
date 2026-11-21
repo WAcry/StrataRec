@@ -28,7 +28,8 @@ public interface IRecEngine
 {
     /// <summary>
     /// Runs a request on the plan its pipeline serves now. Failures are results, not exceptions:
-    /// <see cref="RecResult.ErrorKind"/> says whose they are. Throws only when the caller cancels, when the engine is
+    /// <see cref="RecResult.ErrorKind"/> says whose they are. Throws only when the caller cancels (an
+    /// <see cref="OperationCanceledException"/> carrying <paramref name="cancellationToken"/>), when the engine is
     /// disposed, or on a defect.
     /// </summary>
     ValueTask<RecResult> ExecuteAsync(RecRequest request, CancellationToken cancellationToken = default);
@@ -829,11 +830,22 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             result = Combine(request, executed, converted, served, ignored, fallbackId, merged);
             return result = record ? Recorded(request, pipeline, seed!.Value, timeMs!.Value, result, executed, served, overridden?.ConfigOverride) : result;
         }
-        catch (Exception) when (runs is { Runs.Count: > 0 } && pipeline is not null)
+        catch (Exception ex)
         {
             // Aborted while (or after) a pipeline ran: the caller gets the exception, the recording callback the bundle of
             // what ran up to the abort. Nothing here waits for calls still in flight.
-            Deliver(request, AbortedBundle(request, pipeline, seed!.Value, timeMs!.Value, runs.Runs, ignored, merged, overridden?.ConfigOverride));
+            if (runs is { Runs.Count: > 0 } && pipeline is not null)
+            {
+                Deliver(request, AbortedBundle(request, pipeline, seed!.Value, timeMs!.Value, runs.Runs, ignored, merged, overridden?.ConfigOverride));
+            }
+
+            // The caller's cancellation is thrown as the caller's: a client or a provider that honoured the token the engine
+            // gave it (linked to the caller's) threw that one, which a host matching its own token missed (review of IO step 4).
+            if (ex is OperationCanceledException cancelled && cancellationToken.IsCancellationRequested && cancelled.CancellationToken != cancellationToken)
+            {
+                throw new OperationCanceledException(cancelled.Message, cancelled, cancellationToken);
+            }
+
             throw;
         }
         finally

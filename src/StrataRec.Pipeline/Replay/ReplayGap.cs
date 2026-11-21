@@ -10,7 +10,8 @@ namespace StrataRec.Pipeline.Replay;
 /// <param name="Reason">
 /// <c>not_recorded</c> (never fetched or called, or only by a call that failed), <c>type_changed</c> (the field's type
 /// changed incompatibly), <c>limit_exceeds_recording</c> (asked for more items than the recording could answer),
-/// <c>limit_changed</c> (a service's output recorded for another limit, which it may depend on) or
+/// <c>limit_changed</c> (a service's output, or a call reading outputs, recorded only for another limit, which they may
+/// depend on) or
 /// <c>inputs_changed</c> (a service's inputs differ from the recorded ones, so the recorded answer does not apply: the item
 /// or the call is not answered).
 /// </param>
@@ -24,6 +25,7 @@ public sealed record ReplayGap(string Kind, string Source, string? Field, string
         ("feature", _) => $"feature field {Source}/{Field}: {Count} key(s) have no recorded value; treated as missing",
         (_, "limit_exceeds_recording") => $"{Kind} {Source}: asked for {Count} more item(s) than the recording holds",
         (_, "inputs_changed") => $"{Kind} {Source}: {Count} item(s) or call(s) have other inputs than recorded; not answered",
+        (_, "limit_changed") when Field is null => $"{Kind} {Source}: {Count} call(s) were recorded only for another limit; not answered",
         (_, "limit_changed") => $"{Kind} {Source}: output '{Field}' was recorded for another limit in {Count} call(s); not answered",
         (_, "not_recorded") when Field is not null => $"{Kind} {Source}: output '{Field}' is not in the recording for {Count} item(s) or call(s)",
         (_, "not_recorded") => $"{Kind} {Source}: {Count} item(s) or call(s) have no recorded answer; not answered",

@@ -273,6 +273,94 @@ public sealed class ServiceCallReplayTests
         Assert.Equal(dropped, response.Dropped);
     }
 
+    /// <summary>
+    /// A failure or a cut-off recorded at another limit does not end a call reading outputs that has an answer of its own
+    /// limit (review of IO step 4: the first call of the same inputs was taken, whatever its limit).
+    /// </summary>
+    [Theory]
+    [InlineData("error", false)]
+    [InlineData("cancelled", true)]
+    public void AFailureRecordedAtAnotherLimit_DoesNotEndACallReadingOutputs_ThatHasItsOwnAnswer(string status, bool cutOff)
+    {
+        var run = RunReplayTests.Run();
+        run.ServiceCalls.Add(With(Recorded("n", Reading(Query(1, limit: 1), "summary"), status), threw: cutOff));
+        run.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 3), "summary"), "ok", texts: new() { ["summary"] = "three" }, 7, 8, 9));
+        var replay = RunReplay.Create(run, "/runs/0");
+        var asked = Reading(Query(1, limit: 3), "summary");
+        var response = new ServiceResponse(Memory, asked.Limit);
+
+        var answered = replay.Call("n", new IoTarget(IoRoles.Recall, "s"), asked, response, out _);
+
+        Assert.True(answered.Succeeded, answered.Error);
+        Assert.Equal([7L, 8L, 9L], response.Keys.ToArray().Select(k => k.Int64Value));
+        Assert.True(response.TryGetText("summary", out var text));
+        Assert.Equal("three", text);
+        Assert.Empty(replay.Gaps);
+    }
+
+    /// <summary>
+    /// A call of the list takes the node's recording of its own limit first, then one of another limit, a failure
+    /// included: the limit only bounds the list. One reading outputs is another call at another limit: a failure recorded
+    /// only there leaves it unanswered, a <c>limit_changed</c> gap.
+    /// </summary>
+    [Fact]
+    public void AFailureRecordedAtAnotherLimit_EndsOnlyACallOfTheList()
+    {
+        var run = RunReplayTests.Run();
+        run.ServiceCalls.Add(Recorded("n", Query(1, limit: 1), "error"));
+        run.ServiceCalls.Add(Recorded("n", Query(1, limit: 3), "ok", 7, 8, 9));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        Assert.Equal(("7,8,9", true), Retrieve(replay, "n", Query(1, limit: 3))); // its own limit's, though recorded second
+        Assert.Equal(("", false), Retrieve(replay, "n", Query(1, limit: 3))); // then the failure, as recorded
+        Assert.Empty(replay.Gaps);
+
+        var reading = RunReplayTests.Run();
+        reading.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 1), "summary"), "error"));
+        var other = RunReplay.Create(reading, "/runs/0");
+        Assert.Equal(("", false), Retrieve(other, "n", Reading(Query(1, limit: 3), "summary")));
+        var gap = Assert.Single(other.Gaps);
+        Assert.Equal((null, "limit_changed"), (gap.Field, gap.Reason));
+    }
+
+    /// <summary>
+    /// The generation details of a recorded call (tokens, truncation) describe what it generated for its limit: a call of
+    /// another limit answered from the start of its list does not get them (review of IO step 4).
+    /// </summary>
+    [Theory]
+    [InlineData(3, 20, true)]
+    [InlineData(1, null, false)]
+    public void TheGenerationDetails_AreReplayedOnlyForTheRecordedLimit(int limit, int? tokens, bool truncated)
+    {
+        var run = RunReplayTests.Run();
+        run.ServiceCalls.Add(With(Recorded("n", Query(1, limit: 3), "ok", 7, 8, 9), outputTokens: 20, truncated: true));
+        var replay = RunReplay.Create(run, "/runs/0");
+        var response = new ServiceResponse(Memory, limit);
+
+        var status = replay.Call("n", new IoTarget(IoRoles.Recall, "s"), Query(1, limit), response, out _);
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Equal((tokens, truncated), (status.OutputTokens, status.Truncated));
+    }
+
+    /// <summary>
+    /// A service drops items only past a full list, and a recording holds the count only when there were some: any other
+    /// count is no answer a service gave, rejected at its pointer (review of IO step 4).
+    /// </summary>
+    [Theory]
+    [InlineData(-1, 2)]
+    [InlineData(0, 2)]
+    [InlineData(3, 1)]
+    public void ADroppedCountNoServiceCouldGive_IsRejectedAtItsPointer(int dropped, int ids)
+    {
+        var run = RunReplayTests.Run();
+        run.ServiceCalls.Add(With(Recorded("n", Query(1, limit: 2), "ok", ids == 2 ? [7, 8] : [7]), dropped: dropped));
+
+        var error = Assert.Throws<ReplayBundleException>(() => RunReplay.Create(run, "/runs/0"));
+
+        Assert.Equal("/runs/0/service_calls/0/dropped", error.Pointer);
+    }
+
     /// <summary>A node's recorded failure, replayed once, leaves its next call of the same inputs unrecorded: not "inputs changed".</summary>
     [Fact]
     public void ANodesCallsOfTheSameInputsUsedUp_AreNotRecorded_NotChanged()
@@ -324,6 +412,13 @@ public sealed class ServiceCallReplayTests
         InputDigests = [ReplayJson.Hex(ServiceInputDigest.Call(call, ServiceInputDigest.NameOrder(call)))],
         Ids = status == "ok" ? RunReplayTests.Json(JsonSerializer.Serialize(ids)) : null,
         Scores = status == "ok" ? [.. ids.Select(_ => 1.0)] : [],
+    };
+
+    /// <summary>A recorded call with what <see cref="Recorded(string, ServiceCall, string, long[])"/> leaves out.</summary>
+    private static ReplayServiceCall With(ReplayServiceCall c, bool threw = false, int? outputTokens = null, bool? truncated = null, int? dropped = null) => new()
+    {
+        Node = c.Node, Service = c.Service, Role = c.Role, Limit = c.Limit, Status = c.Status, InputDigests = c.InputDigests, Ids = c.Ids,
+        Scores = c.Scores, Texts = c.Texts, Threw = threw, OutputTokens = outputTokens, Truncated = truncated, Dropped = dropped,
     };
 
     private static ServiceCall Reading(ServiceCall call, params string[] outputs) => new()

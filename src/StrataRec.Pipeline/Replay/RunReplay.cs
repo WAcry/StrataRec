@@ -201,7 +201,7 @@ internal sealed class RunReplay : IFeatureCallHook
             if (items.IsEmpty)
             {
                 var digest = ReplayJson.Hex(ServiceInputDigest.Call(call, order));
-                var own = Take(calls, entry => entry.Keys is null && entry.Node == node && entry.Digests[0] == digest);
+                var own = TakeOwn(calls, entry => entry.Keys is null && entry.Node == node && entry.Digests[0] == digest, call);
                 if (own is not null && (own.Outcome != IoOutcome.Ok || Answers(own, call)))
                 {
                     return Unanswered(call, response, Answer(own, call, response, kind, node, out degraded), kind, node, null, own);
@@ -214,7 +214,10 @@ internal sealed class RunReplay : IFeatureCallHook
                     // inputs used up (a recorded failure replayed already) is not a change.
                     var changed = Find(calls, entry => entry.Keys is null && entry.Node == node && entry.Digests[0] != digest) is not null
                         && Find(calls, entry => entry.Keys is null && entry.Node == node && entry.Digests[0] == digest) is null;
-                    AddGap(kind, call.Service, null, changed ? "inputs_changed" : "not_recorded", 1, node);
+                    var otherLimit = !changed
+                        && Find(calls, entry => entry.Keys is null && entry.Node == node && entry.Digests[0] == digest && entry.Limit == call.Limit) is null
+                        && Find(calls, entry => entry.Keys is null && entry.Node == node && entry.Digests[0] == digest) is not null;
+                    AddGap(kind, call.Service, null, changed ? "inputs_changed" : otherLimit ? "limit_changed" : "not_recorded", 1, node);
                     return ServiceStatus.Failed($"{kind} '{call.Service}': this call is not in the replay bundle");
                 }
 
@@ -229,7 +232,7 @@ internal sealed class RunReplay : IFeatureCallHook
             }
 
             bool Same(ServiceEntry entry) => entry.Keys is not null && entry.Keys.AsSpan().SequenceEqual(keys) && entry.Digests.AsSpan().SequenceEqual(digests);
-            var ownCall = Take(calls, entry => entry.Node == node && Same(entry));
+            var ownCall = TakeOwn(calls, entry => entry.Node == node && Same(entry), call);
             if (ownCall is not null && (ownCall.Outcome != IoOutcome.Ok || Answers(ownCall, call)))
             {
                 return Unanswered(call, response, Answer(ownCall, call, response, kind, node, out degraded), kind, node, keys, ownCall);
@@ -460,7 +463,7 @@ internal sealed class RunReplay : IFeatureCallHook
     /// <summary>
     /// Replays a recorded call as it was: its failure, or every output, text and item it returned (items up to the call's
     /// limit), with the generation details its status had (tokens, truncation), so the operator decides and reports as the
-    /// request did. Asking for more items than the recording holds is a shortfall only when the recorded call stopped at
+    /// request did; a recording of another limit, only the start of its list. Asking for more items than the recording holds is a shortfall only when the recorded call stopped at
     /// its own limit (the service might have had more); one that returned fewer had none.
     /// </summary>
     private ServiceStatus Answer(ServiceEntry entry, ServiceCall call, ServiceResponse response, string kind, string node, out string? degraded)
@@ -512,7 +515,8 @@ internal sealed class RunReplay : IFeatureCallHook
             AddGap(kind, entry.Service, null, "limit_exceeds_recording", shortfall, node);
         }
 
-        return ServiceStatus.Ok with { OutputTokens = entry.OutputTokens, Truncated = entry.Truncated };
+        // The generation details describe what the recorded call generated for its own limit (review of IO step 4).
+        return sameLimit ? ServiceStatus.Ok with { OutputTokens = entry.OutputTokens, Truncated = entry.Truncated } : ServiceStatus.Ok;
     }
 
     /// <summary>Writes a recorded tensor output into the operator's writer, as the client wrote it.</summary>
@@ -818,6 +822,17 @@ internal sealed class RunReplay : IFeatureCallHook
 
         return null;
     }
+
+    /// <summary>
+    /// The node's next recorded call that matches, for <paramref name="call"/>: one of the call's limit first, so a recording
+    /// of another limit taken first does not stand in for the call's own (review of IO step 4: a failure recorded at
+    /// another limit ended the call that had a full answer). A failure or a cut-off recorded at another limit ends only a
+    /// call that reads no outputs (the limit only bounds its list); one that reads outputs at another limit is another
+    /// call, and the failure says nothing of it. Consumed.
+    /// </summary>
+    private static ServiceEntry? TakeOwn(List<ServiceEntry>? calls, Predicate<ServiceEntry> match, ServiceCall call) =>
+        Take(calls, entry => entry.Limit == call.Limit && match(entry))
+        ?? Take(calls, entry => (entry.Outcome == IoOutcome.Ok || call.Outputs.IsEmpty) && match(entry));
 
     private static ServiceEntry? Take(List<ServiceEntry>? calls, Predicate<ServiceEntry> match)
     {
@@ -1134,6 +1149,14 @@ internal sealed class RunReplay : IFeatureCallHook
             if (ids.Length != call.Scores.Count)
             {
                 throw new ReplayBundleException(at + "/scores", $"{call.Scores.Count} score(s) for {ids.Length} id(s)", "record one score per id");
+            }
+
+            // A service drops items only past a full list (ServiceResponse.Dropped), and a recording has the count only when
+            // it is positive: any other count is no answer a service gave (review of IO step 4).
+            if (call.Dropped is { } dropped && (dropped <= 0 || ids.Length != call.Limit))
+            {
+                throw new ReplayBundleException(at + "/dropped", $"{dropped} item(s) dropped by a call that returned {ids.Length} of its limit of {call.Limit}",
+                    "a call records the items its service added past its limit only when it returned a full list, and only when there were some");
             }
 
             var outputs = new Dictionary<string, ReplayTensor>(StringComparer.Ordinal);

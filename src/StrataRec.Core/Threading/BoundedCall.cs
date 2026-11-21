@@ -254,7 +254,9 @@ internal interface IBoundedCall<T>
 /// <see cref="ObservedCancellationSource"/>: the client's callbacks run on the pool, and what they throw is counted and
 /// reported, never thrown on the timer's thread; (8) a call whose bound has passed before it is sent is not sent (an
 /// earlier call that cancelled the request, a chunk sent after the fetch's time ran out): it ends cancelled or timed out,
-/// is recorded as not sent, and is no I/O: no metric, health or span counts it, since the dependency never saw it.</para>
+/// is recorded as not sent, and is no I/O: no metric, health or span counts it, since the dependency never saw it. The
+/// bound is looked at before the call starts and again after (the host's tracing runs as it starts); a call the host's
+/// tracing cut off has a span, which ends cancelled.</para>
 /// </remarks>
 internal static class BoundedCall
 {
@@ -277,7 +279,7 @@ internal static class BoundedCall
     {
         // Rule 8: a call whose bound has passed before it is sent (the caller cancelled, as an earlier call may have done,
         // or the time is up) is not sent: it ends as a call the bound or the caller won at once would, and is recorded.
-        var unsent = bound.Caller.IsCancellationRequested ? Winner.Caller : bound.Passed || deadline.HasPassed ? Winner.Bound : Winner.Client;
+        var unsent = Unsent(bound, deadline);
         if (unsent != Winner.Client)
         {
             var cut = CutOff<T>(unsent, null, ownSet: false, bound, deadline, abandoned: false) with { Sent = false };
@@ -285,10 +287,30 @@ internal static class BoundedCall
             return new ValueTask<CallResult<T>>(cut);
         }
 
+        // Starting the call runs the host's code (an ActivityListener's sampler and start callback), which may cancel the
+        // request or take the time that was left: the bound is looked at again after it (review of IO step 4: a sampler
+        // that cancelled the request still had the provider called). The span the host saw start ends cancelled, which
+        // no metric or health counts.
+        var io = target.Start();
+        unsent = Unsent(bound, deadline);
+        if (unsent != Winner.Client)
+        {
+            var cut = CutOff<T>(unsent, null, ownSet: false, bound, deadline, abandoned: false) with { Sent = false };
+            try
+            {
+                call.Ended(cut, TimeSpan.Zero);
+            }
+            finally
+            {
+                io.Complete(IoOutcome.Cancelled);
+            }
+
+            return new ValueTask<CallResult<T>>(cut);
+        }
+
         memory?.Hold();
         bound.AddReference();
         var (own, token) = Own(bound, deadline);
-        var io = target.Start();
         ValueTask<T> pending;
         try
         {
@@ -328,6 +350,10 @@ internal static class BoundedCall
 
         return new ValueTask<CallResult<T>>(result);
     }
+
+    /// <summary>Who has won before the call is sent (rule 8): the caller, the bound or the call's own deadline; <see cref="Winner.Client"/> while none has.</summary>
+    private static Winner Unsent(CallBound bound, in CallDeadline deadline) =>
+        bound.Caller.IsCancellationRequested ? Winner.Caller : bound.Passed || deadline.HasPassed ? Winner.Bound : Winner.Client;
 
     /// <summary>
     /// The end of a call whose bound has passed before it starts (rule 8), or null while it has not: for a call site that
@@ -372,12 +398,13 @@ internal static class BoundedCall
             throw;
         }
 
-        if (wait.IsCompleted && client.IsCompleted)
+        if (ReferenceEquals(wait, client) && client.IsCompleted)
         {
-            // No wait was set up: WaitAsync returns a completed client as it is, whatever the time left or the caller, so
+            // No wait was set up: WaitAsync returns a completed client itself, whatever the time left or the caller, so
             // its outcome says nothing about who came first. The client completed after Send returned pending and before
             // the wait (while its ValueTask became a task, say): the framework observes it now, as an answer that came
-            // before Send returned.
+            // before Send returned. A wait that was set up and has ended already (with the client just after it) is
+            // another task, whose outcome says who won (review of IO step 4: both being complete did not tell them apart).
             return EndObserved(call, client, io, bound, lease, own, token, deadline);
         }
 
