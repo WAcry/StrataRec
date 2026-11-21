@@ -378,6 +378,9 @@ public sealed record PlanLoadResult(
 /// </remarks>
 public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposable
 {
+    /// <summary>The message of the cancellation <see cref="ExecuteAsync"/> throws as the caller's; what was thrown is its inner exception.</summary>
+    private const string CallerCancelled = "The request was cancelled by its caller.";
+
     private readonly ConcurrentDictionary<string, LoadedPipeline> _pipelines = new(StringComparer.Ordinal);
     private readonly object _publishGate = new(); // the lifecycle lock: _loads, _disposed and every change of _pipelines
     private readonly HashSet<PendingLoad> _loads = new();
@@ -841,9 +844,10 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
 
             // The caller's cancellation is thrown as the caller's: a client or a provider that honoured the token the engine
             // gave it (linked to the caller's) threw that one, which a host matching its own token missed (review of IO step 4).
+            // Its message is not read: an extension's exception may throw from it (review of IO step 4b).
             if (ex is OperationCanceledException cancelled && cancellationToken.IsCancellationRequested && cancelled.CancellationToken != cancellationToken)
             {
-                throw new OperationCanceledException(cancelled.Message, cancelled, cancellationToken);
+                throw new OperationCanceledException(CallerCancelled, cancelled, cancellationToken);
             }
 
             throw;

@@ -728,12 +728,61 @@ public sealed class BoundedCallListenerTests
         Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
     }
 
+    /// <summary>
+    /// A host's sampler that takes the time of both deadlines as the call starts leaves it not sent, cut off at the one
+    /// that came first, the call's own: as a sent call would have been (review of IO step 4b: it was put down to the
+    /// scope's bound, which the operator sees as its budget running out rather than the service timing out).
+    /// </summary>
+    [Fact]
+    public async Task ACallWhoseTwoDeadlinesPassInTheHostsSampler_IsCutOffAtTheEarlier_AndNotSent()
+    {
+        var root = "bounded-call-two-deadlines-" + Guid.NewGuid().ToString("N");
+        ActivityTraceId trace = default;
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == StrataRecTelemetry.Name,
+            Sample = (ref ActivityCreationOptions<ActivityContext> options) =>
+            {
+                if (options.Name == root)
+                {
+                    return ActivitySamplingResult.AllDataAndRecorded;
+                }
+
+                if (trace != default && options.Parent.TraceId == trace)
+                {
+                    Thread.Sleep(400); // past both deadlines
+                    return ActivitySamplingResult.AllDataAndRecorded;
+                }
+
+                return ActivitySamplingResult.None;
+            },
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var request = StrataRecTelemetry.ActivitySource.StartActivity(root);
+        trace = request!.TraceId;
+        var started = Stopwatch.GetTimestamp();
+        var budget = new AttemptBudget(CancellationToken.None, started + (Stopwatch.Frequency / 5)); // 200 ms
+        var sent = 0;
+        var call = new Recording(new ValueTask<int>(5), () => sent++);
+
+        var result = await BoundedCall.RunAsync<int, Recording>(call, budget, null, new IoTarget(IoRoles.Model, "two_deadlines"), CallDeadline.After(100))
+            .AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((CallEnd.TimedOut, IoOutcome.Timeout, false, 0), (result.End, result.Outcome, result.Sent, sent));
+        Assert.Equal(CallEnd.TimedOut, Assert.Single(call.Results).End);
+        budget.Release();
+    }
+
     /// <summary>Answers with <paramref name="answer"/> and keeps what each end recorded.</summary>
-    private readonly struct Recording(ValueTask<int> answer) : IBoundedCall<int>
+    private readonly struct Recording(ValueTask<int> answer, Action? onSend = null) : IBoundedCall<int>
     {
         public List<CallResult<int>> Results { get; } = new();
 
-        public ValueTask<int> Send(CancellationToken token) => answer;
+        public ValueTask<int> Send(CancellationToken token)
+        {
+            onSend?.Invoke();
+            return answer;
+        }
 
         public IoOutcome Judge(int value, out string? error)
         {

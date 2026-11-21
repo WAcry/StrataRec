@@ -299,28 +299,65 @@ public sealed class ServiceCallReplayTests
     }
 
     /// <summary>
-    /// A call of the list takes the node's recording of its own limit first, then one of another limit, a failure
-    /// included: the limit only bounds the list. One reading outputs is another call at another limit: a failure recorded
-    /// only there leaves it unanswered, a <c>limit_changed</c> gap.
+    /// A call takes the node's recording of its own limit first, though recorded later. A failure answers only a call of
+    /// its limit: of another, the service may have failed only past some limit (review of IO step 4b), so a success that
+    /// another node recorded at the call's limit answers it, and with none the call is a <c>limit_changed</c> gap, each time.
     /// </summary>
     [Fact]
-    public void AFailureRecordedAtAnotherLimit_EndsOnlyACallOfTheList()
+    public void AFailure_AnswersOnlyACallOfItsLimit()
     {
         var run = RunReplayTests.Run();
         run.ServiceCalls.Add(Recorded("n", Query(1, limit: 1), "error"));
         run.ServiceCalls.Add(Recorded("n", Query(1, limit: 3), "ok", 7, 8, 9));
         var replay = RunReplay.Create(run, "/runs/0");
-
         Assert.Equal(("7,8,9", true), Retrieve(replay, "n", Query(1, limit: 3))); // its own limit's, though recorded second
-        Assert.Equal(("", false), Retrieve(replay, "n", Query(1, limit: 3))); // then the failure, as recorded
+        Assert.Equal(("", false), Retrieve(replay, "n", Query(1, limit: 1))); // the failure, as recorded
         Assert.Empty(replay.Gaps);
 
-        var reading = RunReplayTests.Run();
-        reading.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 1), "summary"), "error"));
-        var other = RunReplay.Create(reading, "/runs/0");
-        Assert.Equal(("", false), Retrieve(other, "n", Reading(Query(1, limit: 3), "summary")));
-        var gap = Assert.Single(other.Gaps);
-        Assert.Equal((null, "limit_changed"), (gap.Field, gap.Reason));
+        var larger = RunReplayTests.Run();
+        larger.ServiceCalls.Add(Recorded("n", Query(1, limit: 11), "error"));
+        larger.ServiceCalls.Add(Recorded("m", Query(1, limit: 2), "ok", 7, 8));
+        var smaller = RunReplay.Create(larger, "/runs/0");
+        Assert.Equal(("7,8", true), Retrieve(smaller, "n", Query(1, limit: 2))); // m's, not n's failure at 11
+        Assert.Empty(smaller.Gaps);
+
+        foreach (var asked in new[] { Query(1, limit: 3), Reading(Query(1, limit: 3), "summary") })
+        {
+            var failed = RunReplayTests.Run();
+            failed.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 1), "summary"), "error"));
+            failed.ServiceCalls.Add(Recorded("n", Query(1, limit: 1), "error"));
+            var other = RunReplay.Create(failed, "/runs/0");
+            Assert.Equal(("", false), Retrieve(other, "n", asked));
+            Assert.Equal(("", false), Retrieve(other, "n", asked));
+            Assert.All(other.Gaps, gap => Assert.Equal((null, "limit_changed"), (gap.Field, gap.Reason)));
+            Assert.Equal(2, other.Gaps.Sum(g => g.Count));
+        }
+    }
+
+    /// <summary>
+    /// A recording of another limit that cannot answer the call is not used up by it: a later call of its limit still gets
+    /// it (review of IO step 4b: it was consumed, and that call got the failure recorded after it).
+    /// </summary>
+    [Fact]
+    public void ARecordingThatCannotAnswerTheCall_IsLeftForACallOfItsLimit()
+    {
+        var run = RunReplayTests.Run();
+        run.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 1), "summary"), "ok", texts: new() { ["summary"] = "one" }, 7));
+        run.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 1), "summary"), "error"));
+        run.ServiceCalls.Add(Recorded("m", Reading(Query(1, limit: 2), "summary"), "ok", texts: new() { ["summary"] = "two" }, 7, 8));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        Assert.Equal(("7,8", "two"), Summary(replay, Reading(Query(1, limit: 2), "summary"))); // m's: n's of limit 1 cannot answer
+        Assert.Equal(("7", "one"), Summary(replay, Reading(Query(1, limit: 1), "summary"))); // n's first, still there
+        Assert.Empty(replay.Gaps);
+
+        static (string Ids, string? Text) Summary(RunReplay replay, ServiceCall call)
+        {
+            var response = new ServiceResponse(Memory, call.Limit);
+            var status = replay.Call(ServiceCaller.OfNode("n"), new IoTarget(IoRoles.Recall, "s"), call, response, out _);
+            Assert.True(status.Succeeded, status.Error);
+            return (string.Join(",", response.Keys.ToArray().Select(k => k.Int64Value)), response.TryGetText("summary", out var text) ? text : null);
+        }
     }
 
     /// <summary>
@@ -345,16 +382,19 @@ public sealed class ServiceCallReplayTests
 
     /// <summary>
     /// A service drops items only past a full list, and a recording holds the count only when there were some: any other
-    /// count is no answer a service gave, rejected at its pointer (review of IO step 4).
+    /// count is no answer a service gave, rejected at its pointer (review of IO step 4); nor is one of a failure, even of
+    /// a call that asked for no items (review of IO step 4b).
     /// </summary>
     [Theory]
-    [InlineData(-1, 2)]
-    [InlineData(0, 2)]
-    [InlineData(3, 1)]
-    public void ADroppedCountNoServiceCouldGive_IsRejectedAtItsPointer(int dropped, int ids)
+    [InlineData(-1, 2, 2, "ok")]
+    [InlineData(0, 2, 2, "ok")]
+    [InlineData(3, 1, 2, "ok")]
+    [InlineData(1, 0, 0, "error")]
+    public void ADroppedCountNoServiceCouldGive_IsRejectedAtItsPointer(int dropped, int ids, int limit, string status)
     {
         var run = RunReplayTests.Run();
-        run.ServiceCalls.Add(With(Recorded("n", Query(1, limit: 2), "ok", ids == 2 ? [7, 8] : [7]), dropped: dropped));
+        long[] answered = ids switch { 2 => [7, 8], 1 => [7], _ => [] };
+        run.ServiceCalls.Add(With(Recorded("n", Query(1, limit: limit), status, answered), dropped: dropped));
 
         var error = Assert.Throws<ReplayBundleException>(() => RunReplay.Create(run, "/runs/0"));
 
@@ -369,7 +409,7 @@ public sealed class ServiceCallReplayTests
     public void ASourcesRecordedFailure_AnswersTheSource_NotANodeOfTheSameName()
     {
         var run = RunReplayTests.Run();
-        var failed = Recorded("x", Query(1), "error");
+        var failed = Recorded("x", Query(1, limit: 0), "error");
         run.ServiceCalls.Add(new ReplayServiceCall
         {
             Source = "x", Service = failed.Service, Role = IoRoles.Fetch, Limit = failed.Limit, Status = failed.Status, InputDigests = failed.InputDigests,

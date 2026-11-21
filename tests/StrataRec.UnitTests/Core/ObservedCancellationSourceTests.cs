@@ -44,6 +44,27 @@ public sealed class ObservedCancellationSourceTests
         Assert.Equal(("fetch", "req-1", "cleanup failed"), ((string)summary.State["Subject"]!, (string?)summary.State["SampleRequestId"], (string?)summary.State["SampleError"]));
     }
 
+    /// <summary>
+    /// A delay past what timers accept is capped, a negative one cancels at once, and <see cref="Timeout.InfiniteTimeSpan"/>
+    /// sets no time, as for <c>CancelAfter</c> (review of IO step 4b: the cap made it cancel at once).
+    /// </summary>
+    [Fact]
+    public async Task AnInfiniteDelay_SetsNoTime_ANegativeOneCancelsAtOnce()
+    {
+        using var infinite = new ObservedCancellationSource(CancellationSite.Assignment);
+        using var negative = new ObservedCancellationSource(CancellationSite.Assignment);
+        using var longest = new ObservedCancellationSource(CancellationSite.Assignment);
+
+        infinite.CancelAfterObserved(Timeout.InfiniteTimeSpan);
+        negative.CancelAfterObserved(TimeSpan.FromMilliseconds(-5));
+        longest.CancelAfterObserved(TimeSpan.MaxValue);
+
+        Assert.True(SpinWait.SpinUntil(() => negative.IsCancellationRequested, Patience));
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+        Assert.False(infinite.IsCancellationRequested);
+        Assert.False(longest.IsCancellationRequested);
+    }
+
     [Fact]
     public void ACallersCancellation_ReachesTheToken_AtOnce_ButItsCallbacksRunOnThePool_AndNothingIsThrownIntoTheCaller()
     {

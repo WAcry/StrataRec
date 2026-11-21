@@ -60,14 +60,17 @@ public sealed class EngineBoundaryReviewTests
 
     /// <summary>
     /// A provider that honours the token the engine gave it after the caller cancelled throws that token: the engine
-    /// throws the caller's, as a host matching its own token expects (it threw the provider's).
+    /// throws the caller's, as a host matching its own token expects (it threw the provider's). The message of what the
+    /// provider threw is not read, so one whose message throws is still a cancellation (review of IO step 4b).
     /// </summary>
-    [Fact]
-    public async Task TheCallersCancellation_IsThrownWithTheCallersToken_WhateverTokenTheProviderThrew()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TheCallersCancellation_IsThrownWithTheCallersToken_WhateverTokenTheProviderThrew(bool unreadableMessage)
     {
         using var caller = new CancellationTokenSource();
         var host = HomeFeedTestHost.Load();
-        await using var engine = new RecEngine(host.Environment, new CancelsTheCaller(caller));
+        await using var engine = new RecEngine(host.Environment, new CancelsTheCaller(caller, unreadableMessage));
         Assert.True(engine.Load(host.Request).Applied);
 
         var cancelled = await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await engine.ExecuteAsync(Request(HomeFeedTestHost.Deadline), caller.Token));
@@ -115,13 +118,23 @@ public sealed class EngineBoundaryReviewTests
         }
     }
 
-    private sealed class CancelsTheCaller(CancellationTokenSource caller) : IAssignmentProvider
+    private sealed class CancelsTheCaller(CancellationTokenSource caller, bool unreadableMessage) : IAssignmentProvider
     {
         public ValueTask<IReadOnlyList<string>> AssignAsync(AssignmentContext context, CancellationToken cancellationToken)
         {
             caller.Cancel();
+            if (unreadableMessage && cancellationToken.IsCancellationRequested)
+            {
+                throw new UnreadableCancellation(cancellationToken);
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
             throw new InvalidOperationException("The token the provider got was not cancelled with the caller's.");
         }
+    }
+
+    private sealed class UnreadableCancellation(CancellationToken token) : OperationCanceledException(token)
+    {
+        public override string Message => throw new InvalidOperationException("The cancellation's message cannot be read.");
     }
 }

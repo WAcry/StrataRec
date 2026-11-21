@@ -167,21 +167,23 @@ internal sealed class RunReplay : IFeatureCallHook
     /// <summary>
     /// Answers a service call from the recording, by the digest of its inputs: a call about no items by that of its whole
     /// input, a call about items by each item's. The node's own next recorded call with the same inputs (and the same items)
-    /// is consumed, and replayed as recorded when it failed or answers the call: it has every output the call reads and,
-    /// unless the service had no more, as many items as it asks for. Otherwise the successful recorded call with the same
+    /// is consumed, of the call's limit, or of another that answers it (<see cref="TakeOwn"/>), and replayed as recorded
+    /// when it failed or answers the call: it has every output the call reads and, unless the service had no more, as many
+    /// items as it asks for. Otherwise the successful recorded call with the same
     /// inputs that answers it best does, whichever node made it, and nothing is consumed (a node the configuration added
     /// asks what another node asked; the order nodes ask in changes nothing). A call about items the recording has in no
     /// such call is synthesized item by item (<see cref="Synthesize"/>). What the recording cannot answer is a gap:
-    /// <c>inputs_changed</c> when it has the node's call of the service only with other inputs, else <c>not_recorded</c>;
+    /// <c>inputs_changed</c> when it has the node's call of the service only with other inputs, <c>limit_changed</c> when
+    /// only at other limits (failures: a success there answers the list), else <c>not_recorded</c>;
     /// an output the call reads and the answer lacks is a <c>not_recorded</c> gap of that output (only the outputs a call
     /// asked for are recorded, so a configuration that reads another one finds none). A recorded call the budget or the
     /// caller cut off throws <see cref="OperationCanceledException"/> again, as the operator saw it.
     /// </summary>
     /// <remarks>
-    /// A recorded failure answers only the call it was: the same node, entities and inputs. Taken by entities alone, the
+    /// A recorded failure answers only the call it was: the same node, entities, inputs and limit. Taken by entities alone, the
     /// failure of another call of the same model and entity (another node, another prompt) answered this one, and hid the
-    /// success the recording has for its own inputs (review 30). A node's own answer is consumed even when another answers
-    /// the call better, so its later calls still meet their own recorded calls in order.
+    /// success the recording has for its own inputs (review 30). A node's own answer of the call's limit is consumed even
+    /// when another answers the call better, so its later calls still meet their own recorded calls in order.
     /// </remarks>
     /// <param name="caller">The calling node, or the feature source (IO step 5): its own recorded calls answer it first,
     /// and a synthesized call whose items all changed takes its outputs' widths from them before another caller's.</param>
@@ -827,13 +829,15 @@ internal sealed class RunReplay : IFeatureCallHook
     /// <summary>
     /// The node's next recorded call that matches, for <paramref name="call"/>: one of the call's limit first, so a recording
     /// of another limit taken first does not stand in for the call's own (review of IO step 4: a failure recorded at
-    /// another limit ended the call that had a full answer). A failure or a cut-off recorded at another limit ends only a
-    /// call that reads no outputs (the limit only bounds its list); one that reads outputs at another limit is another
-    /// call, and the failure says nothing of it. Consumed.
+    /// another limit ended the call that had a full answer); else a success of another limit that answers it (a list long
+    /// enough, or all the service had). Consumed. A failure or a cut-off recorded at another limit answers nothing: a
+    /// service may fail only past some limit, so it says nothing of this one, and a success another node recorded at this
+    /// limit answers instead (review of IO step 4b); nor is a recording consumed that does not answer, which a later call of
+    /// its limit would then miss.
     /// </summary>
     private static ServiceEntry? TakeOwn(List<ServiceEntry>? calls, Predicate<ServiceEntry> match, ServiceCall call) =>
         Take(calls, entry => entry.Limit == call.Limit && match(entry))
-        ?? Take(calls, entry => (entry.Outcome == IoOutcome.Ok || call.Outputs.IsEmpty) && match(entry));
+        ?? Take(calls, entry => entry.Outcome == IoOutcome.Ok && match(entry) && Answers(entry, call));
 
     private static ServiceEntry? Take(List<ServiceEntry>? calls, Predicate<ServiceEntry> match)
     {
@@ -1152,12 +1156,12 @@ internal sealed class RunReplay : IFeatureCallHook
                 throw new ReplayBundleException(at + "/scores", $"{call.Scores.Count} score(s) for {ids.Length} id(s)", "record one score per id");
             }
 
-            // A service drops items only past a full list (ServiceResponse.Dropped), and a recording has the count only when
-            // it is positive: any other count is no answer a service gave (review of IO step 4).
-            if (call.Dropped is { } dropped && (dropped <= 0 || ids.Length != call.Limit))
+            // A service drops items only past a full list it answered with (ServiceResponse.Dropped), and a recording has the
+            // count only when it is positive: any other count is no answer a service gave (reviews of IO steps 4 and 4b).
+            if (call.Dropped is { } dropped && (dropped <= 0 || outcome != IoOutcome.Ok || ids.Length != call.Limit))
             {
-                throw new ReplayBundleException(at + "/dropped", $"{dropped} item(s) dropped by a call that returned {ids.Length} of its limit of {call.Limit}",
-                    "a call records the items its service added past its limit only when it returned a full list, and only when there were some");
+                throw new ReplayBundleException(at + "/dropped", $"{dropped} item(s) dropped by a call ({call.Status}) that returned {ids.Length} of its limit of {call.Limit}",
+                    "a call records the items its service added past its limit only when it answered with a full list, and only when there were some");
             }
 
             var outputs = new Dictionary<string, ReplayTensor>(StringComparer.Ordinal);
