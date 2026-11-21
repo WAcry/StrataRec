@@ -473,7 +473,7 @@ public sealed class ModelScorerTests
                     TensorElementType.Float64 => values.Float64.ToArray(),
                     _ => values.String.ToArray(),
                 };
-                inputs.Add(new CapturedInput(input.Name, input.ElementType, (int[])input.Shape.Clone(), copy));
+                inputs.Add(new CapturedInput(input.Name, input.ElementType, input.Shape.ToArray(), copy));
             }
 
             lock (_calls)

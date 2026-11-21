@@ -266,7 +266,8 @@ internal sealed class RunReplay : IFeatureCallHook
 
     /// <summary>
     /// The matching recorded call that answers <paramref name="call"/> (<see cref="Answers"/>), else the one with the most
-    /// of what it reads (outputs, then items); null when none matches. Nothing is consumed.
+    /// of what it reads (outputs, then items, then the fewest items it cannot tell: <see cref="Shortfall"/>); null when none
+    /// matches. Nothing is consumed.
     /// </summary>
     private static ServiceEntry? Best(List<ServiceEntry>? calls, Predicate<ServiceEntry> match, ServiceCall call)
     {
@@ -276,7 +277,7 @@ internal sealed class RunReplay : IFeatureCallHook
         }
 
         ServiceEntry? best = null;
-        (int Outputs, int Items) bestHas = (-1, -1);
+        (int Outputs, int Items, int Shortfall) bestHas = (-1, -1, int.MinValue);
         foreach (var entry in calls)
         {
             if (!match(entry))
@@ -295,7 +296,7 @@ internal sealed class RunReplay : IFeatureCallHook
                 outputs += entry.Outputs.ContainsKey(name) || entry.Texts.ContainsKey(name) ? 1 : 0;
             }
 
-            (int Outputs, int Items) has = (outputs, Math.Min(entry.Ids.Length, call.Limit));
+            (int Outputs, int Items, int Shortfall) has = (outputs, Math.Min(entry.Ids.Length, call.Limit), -Shortfall(entry, call));
             if (has.CompareTo(bestHas) > 0)
             {
                 (best, bestHas) = (entry, has);

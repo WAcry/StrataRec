@@ -178,11 +178,12 @@ public readonly struct NamedInput
 {
     private readonly string? _text;
     private readonly TensorElementType _missing;
+    private readonly int[] _shape;
 
     private NamedInput(string name, int[] shape, TensorValues values, string? text, TensorElementType missing = 0)
     {
         Name = name;
-        Shape = shape;
+        _shape = shape;
         Values = values;
         _text = text;
         _missing = missing;
@@ -200,8 +201,14 @@ public readonly struct NamedInput
     /// </summary>
     public bool IsMissing => _missing != 0;
 
-    /// <summary>The tensor's shape; empty for text. A missing value's is the declared one: <c>[]</c> for a scalar, <c>[N]</c> for a <c>list&lt;E,N&gt;</c>, <c>[-1]</c> for a list of any length.</summary>
-    public int[] Shape { get; }
+    /// <summary>
+    /// The tensor's shape; empty for text. A missing value's is the declared one: <c>[]</c> for a scalar, <c>[N]</c> for a
+    /// <c>list&lt;E,N&gt;</c>, <c>[-1]</c> for a list of any length. Read-only to the service: the input is the caller's,
+    /// as its <see cref="Values"/> are, and other calls may share it.
+    /// </summary>
+    /// <remarks>Neither the shape array nor the data a factory is given is copied: the caller does not change them while a
+    /// call of the input is under way (the factory's checks hold for what it was given).</remarks>
+    public ReadOnlySpan<int> Shape => _shape;
 
     /// <summary>
     /// The tensor's elements, exactly the product of the <see cref="Shape"/>'s dimensions; default (none) for text and for a
@@ -336,6 +343,12 @@ public sealed class ServiceCall
     /// The entity of each row of the batch, in the order of the rows of row-wise tensors, for a call about rows (a model
     /// scoring them, a service filtering them); empty for a call about no rows.
     /// </summary>
+    /// <remarks>
+    /// One per row (<see cref="BatchSize"/> of them). In such a call an input whose leading dimension is the batch size is
+    /// per item, row <c>i</c> its slice <c>i</c>; every other input is shared by the items, and its leading dimension is 1
+    /// (<c>[1, d]</c>, as the model operators send a broadcast value), or it is a scalar or a text. The engine splits
+    /// inputs by row on this rule: a replay's digest of each item, a cache's call of the items it misses.
+    /// </remarks>
     public ReadOnlyMemory<Keys.EntityKey> Items { get; init; }
 
     /// <summary>

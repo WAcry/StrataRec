@@ -146,6 +146,28 @@ public sealed class ServiceCallReplayTests
         Assert.Equal(("limit_exceeds_recording", 3), (gap.Reason, gap.Count));
     }
 
+    /// <summary>
+    /// Of two partial answers with as much of what a call reads, the one that can tell its items is borrowed: both answered
+    /// text <c>a</c> and no items, the second asked for 3 (the service had none), the first for 0 (it says nothing). The
+    /// first was borrowed and the replay reported 3 items it could not tell besides the missing <c>b</c> (verification 2 of
+    /// IO step 2).
+    /// </summary>
+    [Fact]
+    public void OfPartialAnswersAsGood_TheOneThatCanTellItsItems_IsBorrowed()
+    {
+        var run = RunReplayTests.Run();
+        run.ServiceCalls.Add(Recorded("none", Query(1, limit: 0), "ok", texts: new() { ["a"] = "A" }));
+        run.ServiceCalls.Add(Recorded("three", Query(1, limit: 3), "ok", texts: new() { ["a"] = "A" }));
+        var replay = RunReplay.Create(run, "/runs/0");
+        var asked = Reading(Query(1, limit: 3), "a", "b");
+
+        var status = replay.Call("added", new IoTarget(IoRoles.Recall, "s"), asked, new ServiceResponse(Memory, asked.Limit));
+
+        Assert.True(status.Succeeded);
+        var gap = Assert.Single(replay.Gaps);
+        Assert.Equal(("not_recorded", "b"), (gap.Reason, gap.Field));
+    }
+
     /// <summary>The same for outputs: a node reading <c>b</c> borrows the call with the same inputs that has it.</summary>
     [Fact]
     public void ANodeWithoutACall_BorrowsTheSameInputsAnswerWithTheOutputItReads()

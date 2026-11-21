@@ -51,8 +51,9 @@ public sealed class RecallQueryTests
 
         Assert.True(result.Succeeded, result.Error);
         var embedding = Assert.Single(sources.Query("two_tower"));
-        Assert.Equal(("user_embedding", TensorElementType.Float64, "3"), (embedding.Name, embedding.Type, string.Join(",", embedding.Shape)));
-        Assert.Equal([1.0, 0.0, 0.0], embedding.Float64); // users.json: 1001
+        // A reference is sent at its declared type: the catalog's list<float32,3>.
+        Assert.Equal(("user_embedding", TensorElementType.Float32, "3"), (embedding.Name, embedding.Type, string.Join(",", embedding.Shape)));
+        Assert.Equal([1.0, 0.0, 0.0], embedding.Floats); // users.json: 1001
         Assert.Empty(sources.Query("popular"));
         Assert.Equal(Items(baseline), Items(result));
     }
@@ -87,7 +88,7 @@ public sealed class RecallQueryTests
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal(NodeOutcomeKind.Succeeded, result.Trace!.Single(n => n.NodeId == "recall").Kind);
-        Assert.Equal([1.0, 0.0, 0.0], sources.Query("two_tower")["user_embedding"].Float64);
+        Assert.Equal([1.0, 0.0, 0.0], sources.Query("two_tower")["user_embedding"].Floats);
     }
 
     [Fact]
@@ -130,7 +131,7 @@ public sealed class RecallQueryTests
         var result = await Engine(HomeFeedTestHost.Load(), sources, users).ExecuteAsync(Request("req-users-partial"), TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
-        Assert.Equal([1.0, 0.0, 0.0], sources.Query("two_tower")["user_embedding"].Float64);
+        Assert.Equal([1.0, 0.0, 0.0], sources.Query("two_tower")["user_embedding"].Floats);
         var recall = result.Trace!.Single(n => n.NodeId == "recall");
         Assert.Equal(NodeOutcomeKind.Degraded, recall.Kind);
         Assert.StartsWith("the query of recall source 'two_tower' reads a degraded context feature", recall.Detail, StringComparison.Ordinal);
@@ -184,7 +185,7 @@ public sealed class RecallQueryTests
         Assert.True(result.Succeeded, result.Error);
         var query = sources.Query("two_tower");
         Assert.True(query.TryGet("user_embedding", out var sent)); // sent as missing, with its declared element type and length
-        Assert.Equal((TensorElementType.Float64, "3", true), (sent.Type, string.Join(",", sent.Shape), sent.IsMissing));
+        Assert.Equal((TensorElementType.Float32, "3", true), (sent.Type, string.Join(",", sent.Shape), sent.IsMissing));
         Assert.False(query.TryGet("no_such_value", out _));
         Assert.Equal(NodeOutcomeKind.Succeeded, result.Trace!.Single(n => n.NodeId == "recall").Kind);
         Assert.All(result.Items, item => Assert.Equal("popular", item.Columns["primary_source"].AsString()));
@@ -241,7 +242,7 @@ public sealed class RecallQueryTests
             await geo.Started.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
             await sources.Called("two_tower").WaitAsync(Patience, TestContext.Current.CancellationToken);
 
-            Assert.Equal([1.0, 0.0, 0.0], sources.Query("two_tower")["user_embedding"].Float64);
+            Assert.Equal([1.0, 0.0, 0.0], sources.Query("two_tower")["user_embedding"].Floats);
         }
         finally
         {
@@ -523,6 +524,39 @@ public sealed class RecallQueryTests
         }
     }
 
+    /// <summary>
+    /// A float32 request field in a query is sent as float32, its declared type: <c>memory_list@1</c> picks the list of
+    /// "0.1", as it did reading the request field before queries. The query was sent at the expression's promoted type,
+    /// float64, the value printed as 0.10000000149011612 and picked another list (verification 2 of IO step 2).
+    /// </summary>
+    [Fact]
+    public async Task AFloat32RequestFieldInAQuery_IsSentAsFloat32_AndPicksTheListOfItsValue()
+    {
+        var host = HomeFeedTestHost.LoadModified(root =>
+        {
+            ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"country\":    { \"type\": \"string?\" }",
+                "\"country\":    { \"type\": \"string?\" }, \"affinity\": { \"type\": \"float32?\" }");
+            ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"two_tower\": 40, \"popular\": 20", "\"two_tower\": 40, \"popular\": 20, \"regional\": 5");
+            ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"source_order\": [\"two_tower\", \"popular\"]", "\"source_order\": [\"two_tower\", \"popular\", \"regional\"]");
+            ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"queries\": { \"two_tower\": { \"user_embedding\": \"ctx.user.embedding\" } }",
+                "\"queries\": { \"two_tower\": { \"user_embedding\": \"ctx.user.embedding\" }, \"regional\": { \"affinity\": \"ctx.request.affinity\" } }");
+            ReplayTests.Edit(root, "bindings/local.jsonc", "\"popular\":   { \"client\": \"memory_list@1\", \"data_file\": \"fixtures/recall_popular.json\" }",
+                "\"popular\":   { \"client\": \"memory_list@1\", \"data_file\": \"fixtures/recall_popular.json\" }, " +
+                "\"regional\": { \"client\": \"memory_list@1\", \"by_input\": \"affinity\", \"lists\": { \"0.1\": [7], \"0.10000000149011612\": [9], \"*\": [8] } }");
+        });
+        var sources = new ProbeSources();
+        await using var engine = Engine(host, sources);
+        var request = Request("req-float32-query");
+        request.Inputs.Set("affinity", StrataRec.Core.Values.ScalarValue.FromFloat64(0.1f));
+
+        var result = await engine.ExecuteAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(StrataRec.Core.Services.TensorElementType.Float32, sources.Query("regional")["affinity"].Type);
+        var regional = Assert.Single(result.Recording!.Runs[0].ServiceCalls, c => c.Service == "regional");
+        Assert.Equal("[7]", regional.Ids!.Value.GetRawText().Replace(" ", "", StringComparison.Ordinal));
+    }
+
     internal static RecRequest WithCountry(string requestId)
     {
         var request = Request(requestId);
@@ -687,7 +721,8 @@ public sealed class RecallQueryTests
     }
 
     /// <summary>One input a source was sent, copied.</summary>
-    internal sealed record SentValue(string Name, TensorElementType Type, int[] Shape, bool IsMissing, double[] Float64, string[] Strings)
+    /// <summary>A value as sent; <see cref="Floats"/> holds a float32 or float64 tensor's elements, widened.</summary>
+    internal sealed record SentValue(string Name, TensorElementType Type, int[] Shape, bool IsMissing, double[] Floats, string[] Strings)
     {
         public string String => Strings[0];
     }
@@ -700,8 +735,9 @@ public sealed class RecallQueryTests
             foreach (var input in inputs)
             {
                 Add(new SentValue(
-                    input.Name, input.ElementType, input.Shape, input.IsMissing,
-                    !input.IsMissing && input.ElementType == TensorElementType.Float64 ? input.Float64.ToArray() : [],
+                    input.Name, input.ElementType, input.Shape.ToArray(), input.IsMissing,
+                    input.IsMissing ? [] : input.ElementType == TensorElementType.Float64 ? input.Float64.ToArray()
+                        : input.ElementType == TensorElementType.Float32 ? [.. input.Float32.ToArray().Select(f => (double)f)] : [],
                     !input.IsMissing && input.ElementType == TensorElementType.String ? input.String.ToArray() : []));
             }
         }

@@ -8,7 +8,7 @@ namespace StrataRec.Features.Cache;
 
 /// <summary>
 /// The distributed tier of a <c>cache</c> source as the engine holds it (design 6.6 <c>cache</c>): the binding's
-/// <see cref="IFeatureCacheStore"/> and the engine's write-back queue in front of it. This, not the store, is the binding
+/// <see cref="ICacheStore"/> and the engine's write-back queue in front of it. This, not the store, is the binding
 /// instance: shared by identity, loaded before a plan serves (the store's own load), disposed once nothing can call it.
 /// </summary>
 /// <remarks>
@@ -42,7 +42,7 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
     private bool _disposed;
     private Exception? _observerFailure;
 
-    public DistributedCacheTier(IFeatureCacheStore store, long queueBytes = DefaultQueueBytes)
+    public DistributedCacheTier(ICacheStore store, long queueBytes = DefaultQueueBytes)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(queueBytes);
@@ -50,7 +50,7 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
         QueueBytes = queueBytes;
     }
 
-    public IFeatureCacheStore Store { get; }
+    public ICacheStore Store { get; }
 
     /// <summary>
     /// The most bytes waiting to be written (records, entries and key texts); a write past it is dropped, but for one

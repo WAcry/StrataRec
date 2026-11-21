@@ -215,7 +215,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 if (context.CompileAwaitedExpression(values[names[v]], at + "/" + JsonPointer.Escape(names[v])) is { } expression)
                 {
                     expressions[v] = expression;
-                    types[v] = expression.ResultType;
+                    types[v] = context.Schema.DeclaredType(expression); // a reference sends its declared type (float32 stays float32)
                 }
                 else
                 {

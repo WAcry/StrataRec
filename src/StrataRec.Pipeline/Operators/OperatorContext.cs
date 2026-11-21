@@ -377,9 +377,10 @@ public sealed class OperatorContext
             throw new ArgumentException($"The call names service '{call.Service}', but it is sent to the binding '{service.Name}': name the binding.", nameof(call));
         }
 
-        if (!call.Items.IsEmpty && call.Limit != 0)
+        CheckOutputs(call);
+        if (!call.Items.IsEmpty)
         {
-            throw new ArgumentException("A call about items adds none: its outputs are per item. Send items or ask for a limit, not both.", nameof(call));
+            CheckItems(call);
         }
 
         if (_state.Replay is { } replay)
@@ -394,6 +395,11 @@ public sealed class OperatorContext
             }
         }
 
+        if (service.Cache is { } cache)
+        {
+            return await CachedServiceCall.RunAsync(this, service, cache, call, response).ConfigureAwait(false);
+        }
+
         var recorder = _state.Recorder;
         var sequence = recorder?.BeginCall(NodeId, service.Target, call) ?? 0;
         var result = await BoundedCall.RunAsync<ServiceStatus, ServiceInvocation>(
@@ -406,6 +412,51 @@ public sealed class OperatorContext
             CallEnd.TimedOut or CallEnd.Threw => ServiceStatus.Failed(result.Error ?? "failed"),
             CallEnd.BudgetRanOut or CallEnd.Cancelled => Rethrow(result.Exception!), // the budget's or the caller's
         };
+    }
+
+    /// <summary>Each output is named once: the recording, the replay's choice of a recording and the cache count outputs by name.</summary>
+    private static void CheckOutputs(ServiceCall call)
+    {
+        var outputs = call.Outputs.Span;
+        for (var i = 1; i < outputs.Length; i++)
+        {
+            for (var j = 0; j < i; j++)
+            {
+                if (string.Equals(outputs[i], outputs[j], StringComparison.Ordinal))
+                {
+                    throw new ArgumentException($"The call names output '{outputs[i]}' twice: name each output it reads once.", nameof(call));
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The shape of a call about items (<see cref="ServiceCall.Items"/>): one item per row, no items added, and each input
+    /// either per item (its leading dimension the batch size) or shared (leading dimension 1, a scalar or a text). A shared
+    /// input of another leading dimension would be split by row where the batch size happened to match it: a replay's
+    /// digests and a cache's call of the items it misses split inputs on this rule.
+    /// </summary>
+    private static void CheckItems(ServiceCall call)
+    {
+        if (call.Limit != 0)
+        {
+            throw new ArgumentException("A call about items adds none: its outputs are per item. Send items or ask for a limit, not both.", nameof(call));
+        }
+
+        if (call.Items.Length != call.BatchSize)
+        {
+            throw new ArgumentException($"A call about items has one per row: {call.Items.Length} item(s) for a batch of {call.BatchSize}.", nameof(call));
+        }
+
+        foreach (var input in call.Inputs.Span)
+        {
+            if (!input.IsMissing && input.Shape is [var leading, ..] && leading != call.BatchSize && leading != 1)
+            {
+                throw new ArgumentException(
+                    $"Input '{input.Name}' has shape [{string.Join(", ", input.Shape.ToArray())}] in a call about {call.BatchSize} item(s): an input is per item "
+                    + "(its leading dimension the batch size) or shared, with leading dimension 1 (send a shared vector as [1, d]).", nameof(call));
+            }
+        }
     }
 
     /// <summary>
@@ -427,6 +478,18 @@ public sealed class OperatorContext
 
         return keys.AsMemory(0, rows.Length);
     }
+
+    /// <summary>The request's recorder, when it records.</summary>
+    internal RunRecorder? Recorder => _state.Recorder;
+
+    /// <summary>
+    /// Sends a call to the service's client, bounded and measured like every call, without recording it: the call of the
+    /// items a service's cache missed (<see cref="CachedServiceCall"/>), whose caller records the whole call.
+    /// </summary>
+    internal ValueTask<CallResult<ServiceStatus>> SendAsync(BoundService service, ServiceCall call, ServiceResponse response, int? timeoutMs) =>
+        BoundedCall.RunAsync<ServiceStatus, ServiceInvocation>(
+            new ServiceInvocation(service.Client, call, response, service.Target, null, 0), Budget, _state.Memory, service.Target, timeoutMs, RequestId,
+            _state.Events);
 
     /// <summary>Throws <paramref name="exception"/> with the stack it was thrown with.</summary>
     private static ServiceStatus Rethrow(Exception exception)

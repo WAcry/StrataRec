@@ -48,7 +48,7 @@ public class CacheAllocationTests(ITestOutputHelper output)
         Assert.True((fromOrigin[1] - fromOrigin[0]) / 900.0 < 96, $"{fromOrigin[0]} B, {fromOrigin[1]} B");
     }
 
-    private static (FeatureTestRig Rig, int[] Features) Rig(IFeatureCacheStore? distributed)
+    private static (FeatureTestRig Rig, int[] Features) Rig(ICacheStore? distributed)
     {
         var rig = new FeatureTestRig().CacheSource("item_store", new SynchronousConnector(), distributed: distributed);
         var features = new[]
@@ -167,7 +167,7 @@ public class CacheAllocationTests(ITestOutputHelper output)
     }
 
     /// <summary>A distributed tier that has a fresh record of keys 1..n, answers at once and allocates nothing.</summary>
-    private sealed class PreparedStore : IFeatureCacheStore
+    private sealed class PreparedStore : ICacheStore
     {
         private ReadOnlyMemory<byte>[] _records = [];
 

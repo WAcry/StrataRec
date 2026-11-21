@@ -16,6 +16,9 @@ public enum BindingKind : byte
 
     /// <summary><c>sources.*.cache.distributed.store</c>: the distributed cache store of a <c>cache</c> source.</summary>
     CacheStore,
+
+    /// <summary><c>services.*.cache.distributed.store</c>: the distributed cache store of a service's cache.</summary>
+    ServiceCacheStore,
 }
 
 /// <summary>
@@ -31,11 +34,12 @@ public static class BindingKinds
         new("sources", string.Empty, "connector", "feature source", "feature connector"),
         new("sources", "/bootstrap", "source", "update source of feature source", "update source"),
         new("sources", "/cache/distributed", "store", "distributed cache of feature source", "distributed cache store"),
+        new("services", "/cache/distributed", "store", "distributed cache of service", "distributed cache store"),
     ];
 
     /// <summary>Every kind, in declaration order.</summary>
     public static IReadOnlyList<BindingKind> All { get; } =
-        [BindingKind.Service, BindingKind.Connector, BindingKind.UpdateSource, BindingKind.CacheStore];
+        [BindingKind.Service, BindingKind.Connector, BindingKind.UpdateSource, BindingKind.CacheStore, BindingKind.ServiceCacheStore];
 
     /// <summary>The artifact's member holding the entries, e.g. <c>services</c>.</summary>
     public static string Section(this BindingKind kind) => Of(kind).Section;

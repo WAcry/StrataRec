@@ -161,7 +161,7 @@ public class DistributedCacheTierTests
     /// A store whose call number <c>holdCall</c> waits for <see cref="Release"/> (other calls return at once), and which
     /// says when its token was cancelled and whether it was disposed only after its writes returned.
     /// </summary>
-    private sealed class GatedStore(int holdCall) : IFeatureCacheStore, IDisposable
+    private sealed class GatedStore(int holdCall) : ICacheStore, IDisposable
     {
         private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _calls;

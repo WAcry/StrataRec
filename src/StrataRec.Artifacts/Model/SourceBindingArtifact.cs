@@ -27,7 +27,7 @@ public sealed class SourceBindingArtifact
     /// type, so a new kind of setting is added here. A name without a binding adds nothing (it is an error where it is used).
     /// </summary>
     /// <param name="featureSources">Feature sources a plan reads: their connector, bootstrap source and distributed store.</param>
-    /// <param name="services">Services a plan binds: their client.</param>
+    /// <param name="services">Services a plan binds: their client and distributed store.</param>
     public void AddTypes(ISet<string> types, IEnumerable<string> featureSources, IEnumerable<string> services)
     {
         ArgumentNullException.ThrowIfNull(types);
@@ -59,6 +59,10 @@ public sealed class SourceBindingArtifact
             if (Services.TryGetValue(name, out var service))
             {
                 types.Add(service.Client);
+                if (service.Cache?.Distributed?.Store is { Length: > 0 } store)
+                {
+                    types.Add(store);
+                }
             }
         }
     }
@@ -139,24 +143,37 @@ public sealed class UpdateSourceBinding
 }
 
 /// <summary>
-/// The cache policy of a source bound with mode <c>cache</c> (design 6.6): the in-process table serves each value for
-/// <see cref="TtlMs"/> (RFC 9111 <c>max-age</c>), may serve it <see cref="StaleIfErrorMs"/> longer when the connector fails
-/// (RFC 5861 <c>stale-if-error</c>), and <see cref="Distributed"/> optionally shares values between the service's instances.
+/// The cache policy of a source bound with mode <c>cache</c> (design 6.6), or of a service (<see cref="ServiceCacheBinding"/>):
+/// the in-process table serves each value for <see cref="TtlMs"/> (RFC 9111 <c>max-age</c>), may serve it
+/// <see cref="StaleIfErrorMs"/> longer when the origin (the connector, the service) fails (RFC 5861 <c>stale-if-error</c>),
+/// and <see cref="Distributed"/> optionally shares values between the deployment's instances.
 /// </summary>
-public sealed class CacheBinding
+public class CacheBinding
 {
-    [Description("Required: how long a value fetched from the connector is served, in milliseconds. Each key's lifetime varies " +
-        "by ±10% with the key's hash, so values written together do not all expire together.")]
+    [Description("Required: how long a value fetched from the origin (the connector, or the service) is served, in milliseconds. " +
+        "Each key's lifetime varies by ±10% with the key's hash, so values written together do not all expire together.")]
     public long? TtlMs { get; init; }
 
-    [Description("How much longer (milliseconds, default 0) an expired value may be served when the connector fails or times " +
+    [Description("How much longer (milliseconds, default 0) an expired value may be served when the origin fails or times " +
         "out; its readers are then Degraded.")]
     public long? StaleIfErrorMs { get; init; }
 
-    [Description("A cache shared by the service's instances, read on an in-process miss before the connector, e.g. " +
+    [Description("A cache shared by the deployment's instances, read on an in-process miss before the origin, e.g. " +
         "{ \"store\": \"redis@1\", \"endpoint\": \"cache.internal:6379\" }. Only an optimisation: when it fails or is slow, " +
-        "the keys go to the connector.")]
+        "the keys go to the origin.")]
     public DistributedCacheBinding? Distributed { get; init; }
+}
+
+/// <summary>
+/// The cache of a service's calls (design 6.9): as a <c>cache</c> source's (<see cref="CacheBinding"/>), and the most memory
+/// its in-process table may take. A call about no items is cached whole, one about items item by item.
+/// </summary>
+public sealed class ServiceCacheBinding : CacheBinding
+{
+    [Description("Required: the most memory the service's in-process cache table may take, as an integer and a unit B, KiB, " +
+        "MiB, GiB or TiB, e.g. \"64MiB\". A cache that reaches it drops its expired records, then its oldest.")]
+    [RegularExpression(FeatureSourceBinding.ByteSizePattern)]
+    public string? MaxBytes { get; init; }
 }
 
 /// <summary>The distributed tier of a <c>cache</c> source: its store type, the framework's bound on its reads, and the store's own settings.</summary>
@@ -167,7 +184,8 @@ public sealed class DistributedCacheBinding
     public string? Store { get; init; }
 
     [Description("The longest a request waits for one read of the distributed cache, in milliseconds (default: half the " +
-        "source's timeout_ms); always within the source's timeout_ms, so the connector keeps the rest of it.")]
+        "source's or the service's timeout_ms; required for a service without one); always within that timeout_ms, so the " +
+        "origin keeps the rest of it.")]
     public int? TimeoutMs { get; init; }
 
     /// <summary>The store's own settings, e.g. <c>endpoint</c> and <c>password</c> for <c>redis@1</c>, bound to the settings type of its factory.</summary>
@@ -184,6 +202,11 @@ public sealed class ClientBinding
 
     [Description("Time limit of one call to the client, in milliseconds. The node's deadline bounds the call too, and alone without it.")]
     public int? TimeoutMs { get; init; }
+
+    [Description("Caches the service's answers, e.g. { \"ttl_ms\": 60000, \"max_bytes\": \"64MiB\" }: a call about no items whole, " +
+        "one about items item by item (the items a call misses go to the service in one call). Keyed by the service version, the " +
+        "outputs read and the inputs, not by the request's seed: a service that samples by the seed reuses one answer for ttl_ms.")]
+    public ServiceCacheBinding? Cache { get; init; }
 
     /// <summary>The client's own settings, bound to the settings type of its factory.</summary>
     [JsonExtensionData]

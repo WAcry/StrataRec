@@ -414,9 +414,9 @@ public sealed class OperatorCompileContext
             return null;
         }
 
-        if (_clients.TryGetService(name, out var client, out var timeout, out var error, out var hint))
+        if (_clients.TryGetService(name, out var client, out var timeout, out var cache, out var error, out var hint))
         {
-            return new BoundService(name, client, role, timeout);
+            return new BoundService(name, client, role, timeout, cache);
         }
 
         if (error is null)

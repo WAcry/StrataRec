@@ -18,9 +18,10 @@ namespace StrataRec.Pipeline.Sources;
 /// </summary>
 /// <remarks>
 /// <para>A request whose query vector is missing (a user without an embedding and no default) gets no candidates: the
-/// node's other sources answer it; so does an index without items. A query without the configured value, a value whose
-/// type is not a list of float64s (the type of a float list in an expression), a vector of another length than the
-/// items', or a score that is not finite (vectors too large for a float64 dot product) is a failed call, naming them.</para>
+/// node's other sources answer it; so does an index without items. A query without the configured value, a value that is
+/// not a list of float32s or float64s (the declared type of the expression it is, e.g. <c>list&lt;float32,64&gt;</c>), a
+/// vector of another length than the items', or a score that is not finite (vectors too large for a float64 dot product)
+/// is a failed call, naming them. A float32 vector is scored in float64, as a float64 one.</para>
 /// <para>An exhaustive scan, for the few thousand items of a fixture: its scratch is rented from the shared pool, so a
 /// request allocates nothing for it.</para>
 /// </remarks>
@@ -62,10 +63,10 @@ public sealed class MemoryVectorsService : IServiceClient
         }
 
         // The query's type first, so a wrong one fails whether or not this request has a value (review 80).
-        if (input.ElementType != TensorElementType.Float64 || input.Shape.Length != 1)
+        if (input.ElementType is not (TensorElementType.Float32 or TensorElementType.Float64) || input.Shape.Length != 1)
         {
             return ServiceStatus.Failed(
-                $"The query vector '{_query}' must be a list of floats; it is {TensorValues.Name(input.ElementType)} of shape [{string.Join(", ", input.Shape)}].");
+                $"The query vector '{_query}' must be a list of floats; it is {TensorValues.Name(input.ElementType)} of shape [{string.Join(", ", input.Shape.ToArray())}].");
         }
 
         if (input.Shape[0] > 0 && _dimensions > 0 && input.Shape[0] != _dimensions)
@@ -84,7 +85,26 @@ public sealed class MemoryVectorsService : IServiceClient
             return ServiceStatus.Failed($"The query vector '{_query}' has {input.Shape[0]} elements; the items' vectors have {_dimensions}.");
         }
 
-        return Search(input.Float64.Span[.._dimensions], call.Limit, response);
+        if (input.ElementType == TensorElementType.Float64)
+        {
+            return Search(input.Float64.Span, call.Limit, response);
+        }
+
+        var widened = ArrayPool<double>.Shared.Rent(_dimensions);
+        try
+        {
+            var vector = input.Float32.Span;
+            for (var d = 0; d < _dimensions; d++)
+            {
+                widened[d] = vector[d];
+            }
+
+            return Search(widened.AsSpan(0, _dimensions), call.Limit, response);
+        }
+        finally
+        {
+            ArrayPool<double>.Shared.Return(widened);
+        }
     }
 
     private ServiceStatus Search(ReadOnlySpan<double> vector, int limit, IServiceResponse sink)

@@ -146,7 +146,7 @@ public sealed class ModelRankerReplayTests
         throw new InvalidOperationException($"no input '{name}'");
     }
 
-    private static string Describe(in NamedInput input) => $"{input.Name} {input.ElementType.ToString().ToLowerInvariant()} [{string.Join(", ", input.Shape)}]";
+    private static string Describe(in NamedInput input) => $"{input.Name} {input.ElementType.ToString().ToLowerInvariant()} [{string.Join(", ", input.Shape.ToArray())}]";
 
     /// <summary>
     /// A pairwise model over the final score, the ids and the quality weight: the first row is preferred by the logistic

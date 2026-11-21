@@ -17,7 +17,7 @@ namespace StrataRec.Features.Local;
 public sealed class LocalTableSpec
 {
     private LocalTableSpec(
-        LocalTableSchema schema, LocalFeatureTableOptions options, FeatureSourceBinding binding, IFeatureUpdateSource bootstrap, object owner,
+        LocalTableSchema schema, LocalFeatureTableOptions options, JsonNode binding, IFeatureUpdateSource bootstrap, object owner,
         string artifact, string pointer, string baseDirectory)
     {
         Schema = schema;
@@ -66,7 +66,7 @@ public sealed class LocalTableSpec
 
         var directory = BindingContext.PinBaseDirectory(baseDirectory);
         var source = bootstrapFactory.Create(new BindingContext(sourceName, bootstrap.Settings, directory, secrets: null));
-        return new LocalTableSpec(schema, options, binding, source, bootstrapFactory, artifact, pointer, directory);
+        return new LocalTableSpec(schema, options, ArtifactSerializer.ToNode(binding), source, bootstrapFactory, artifact, pointer, directory);
     }
 
     /// <summary>
@@ -97,7 +97,38 @@ public sealed class LocalTableSpec
         }
 
         return new LocalTableSpec(
-            schema, options, binding, Cache.CacheWriterSource.Instance, connector, artifact, pointer, BindingContext.PinBaseDirectory(baseDirectory));
+            schema, options, ArtifactSerializer.ToNode(binding), Cache.CacheWriterSource.Instance, connector, artifact, pointer,
+            BindingContext.PinBaseDirectory(baseDirectory));
+    }
+
+    /// <summary>
+    /// The spec of a service's cache table (design 6.9): fed by the calls that miss it, as a source's <c>cache</c> table
+    /// (<see cref="CreateCache"/>), with the identity of the service's binding as written, so a change of the client, its
+    /// settings or the cache settings starts a new, empty table.
+    /// </summary>
+    /// <param name="schema">The service cache's layout (<see cref="Cache.ServiceCache.Schema"/>).</param>
+    /// <param name="client">The client the table caches, as the plan's bindings handed it out: the spec's <see cref="Owner"/>.</param>
+    public static LocalTableSpec CreateServiceCache(
+        LocalTableSchema schema,
+        LocalFeatureTableOptions options,
+        ClientBinding binding,
+        object client,
+        string artifact,
+        string pointer,
+        string? baseDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(schema);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(binding);
+        ArgumentNullException.ThrowIfNull(client);
+        if (schema.Mode != LocalTableMode.Cache || options.Cache is null)
+        {
+            throw new ArgumentException("A cache spec has a cache schema and cache options.", nameof(options));
+        }
+
+        return new LocalTableSpec(
+            schema, options, ArtifactSerializer.ToNode(binding), Cache.CacheWriterSource.Instance, client, artifact, pointer,
+            BindingContext.PinBaseDirectory(baseDirectory));
     }
 
     public LocalTableSchema Schema { get; }
@@ -147,7 +178,7 @@ public sealed class LocalTableSpec
     /// <summary>What a table is shared by: <see cref="Identity"/> and the <see cref="Owner"/> object.</summary>
     public TableKey Key { get; }
 
-    private static string ComputeIdentity(LocalTableSchema schema, FeatureSourceBinding binding, string baseDirectory)
+    private static string ComputeIdentity(LocalTableSchema schema, JsonNode binding, string baseDirectory)
     {
         var fields = new List<LocalTableField>(schema.Fields);
         fields.Sort(static (a, b) => string.CompareOrdinal(a.Name, b.Name));
@@ -164,7 +195,7 @@ public sealed class LocalTableSpec
             ["key_type"] = schema.Key.TypeText, // "int64" or "string" for one part, "(int64,string)" for several
             ["mode"] = schema.Mode.ToString(),
             ["fields"] = fieldArray,
-            ["binding"] = ArtifactSerializer.ToNode(binding),
+            ["binding"] = binding,
             ["base_directory"] = baseDirectory,
         };
         return JsonCanonicalizer.CanonicalizeToString(identity);

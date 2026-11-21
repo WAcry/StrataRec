@@ -67,7 +67,7 @@ public sealed class BindingRegistrationTests
 
         for (var node = 0; node < 3; node++)
         {
-            Assert.False(resolver.TryGetService("ctr_model", out _, out _, out var error, out _));
+            Assert.False(resolver.TryGetService("ctr_model", out _, out _, out _, out var error, out _));
             Assert.Null(error); // reported at the binding, not again at the node
         }
 

@@ -1,5 +1,6 @@
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Services;
+using StrataRec.Features.Cache;
 
 namespace StrataRec.Pipeline.Operators;
 
@@ -10,12 +11,13 @@ namespace StrataRec.Pipeline.Operators;
 /// </summary>
 public sealed class BoundService
 {
-    internal BoundService(string name, IServiceClient client, string role, int? timeoutMs)
+    internal BoundService(string name, IServiceClient client, string role, int? timeoutMs, ServiceCache? cache = null)
     {
         Name = name;
         Client = client;
         TimeoutMs = timeoutMs;
         Target = new IoTarget(role, name);
+        Cache = cache;
     }
 
     /// <summary>The service's logical name, as the bindings name it.</summary>
@@ -28,4 +30,7 @@ public sealed class BoundService
 
     /// <summary>The binding's <c>timeout_ms</c>: the most one call may take, within the node's budget; null for none.</summary>
     public int? TimeoutMs { get; }
+
+    /// <summary>The binding's cache (<c>cache</c>), which every call of the service reads first; null for none.</summary>
+    internal ServiceCache? Cache { get; }
 }

@@ -250,17 +250,17 @@ public sealed class RandomModelClient : IServiceClient
             var sizing = inputs[slots[_sizing[o]]].Shape;
             for (var j = 0; j < n; j++)
             {
-                if (_perElement[(o * n) + j] && !inputs[slots[j]].Shape.AsSpan(0, _outputRanks[o]).SequenceEqual(sizing.AsSpan(0, _outputRanks[o])))
+                if (_perElement[(o * n) + j] && !inputs[slots[j]].Shape[.._outputRanks[o]].SequenceEqual(sizing[.._outputRanks[o]]))
                 {
                     return ServiceStatus.Failed($"Inputs '{_inputs[_sizing[o]].Name}' and '{_inputs[j].Name}' give output '{_outputs[o].Name}' ({Describe(_outputs[o])}) " +
-                        $"different shapes, {Dims(sizing, _outputRanks[o])} and {Dims(inputs[slots[j]].Shape, _outputRanks[o])}: the inputs scored per element of an " +
+                        $"different shapes, {DimsOf(sizing, _outputRanks[o])} and {DimsOf(inputs[slots[j]].Shape, _outputRanks[o])}: the inputs scored per element of an " +
                         "output must agree on its dimensions.");
                 }
             }
 
             if (Elements(sizing, 0, _outputRanks[o]) > int.MaxValue)
             {
-                return ServiceStatus.Failed($"Output '{_outputs[o].Name}' would have {Dims(sizing, _outputRanks[o])} elements, more than an output buffer holds.");
+                return ServiceStatus.Failed($"Output '{_outputs[o].Name}' would have {DimsOf(sizing, _outputRanks[o])} elements, more than an output buffer holds.");
             }
         }
 
@@ -335,7 +335,7 @@ public sealed class RandomModelClient : IServiceClient
     {
         var declared = _inputShapes[j];
         var shape = input.Shape;
-        if (input.ElementType != _inputs[j].ElementType || shape is null || shape.Length != declared.Length)
+        if (input.ElementType != _inputs[j].ElementType || shape.Length != declared.Length)
         {
             return false;
         }
@@ -354,13 +354,15 @@ public sealed class RandomModelClient : IServiceClient
     private string Mismatch(in NamedInput input, int j, int batch)
     {
         var spec = _inputs[j];
-        if (_batched[j] && _inputShapes[j] is [-1])
+        var perRow = _batched[j] && _inputShapes[j] is [-1];
+        if (perRow && !input.IsMissing)
         {
             return $"Input '{spec.Name}' must be {TypeName(spec.ElementType)} with one value per row ({batch}).";
         }
 
-        var expected = _batched[j] ? $"{Describe(spec)} with the call's batch size ({batch}) as its first dimension" : Describe(spec);
-        var sent = input.Shape is { } shape ? Dims(shape, shape.Length) : "[]";
+        var expected = perRow ? $"{TypeName(spec.ElementType)} with one value per row ({batch})"
+            : _batched[j] ? $"{Describe(spec)} with the call's batch size ({batch}) as its first dimension" : Describe(spec);
+        var sent = DimsOf(input.Shape, input.Shape.Length);
         return $"Input '{spec.Name}' must be {expected}; the call sends {(input.IsMissing ? "a missing " : "")}{TypeName(input.ElementType)} {sent}.";
     }
 
@@ -418,7 +420,7 @@ public sealed class RandomModelClient : IServiceClient
     /// The number of elements in dimensions [<paramref name="from"/>, <paramref name="to"/>) of a shape with no negative
     /// dimension: exact up to <see cref="int.MaxValue"/>, and <c>int.MaxValue + 1</c> for any more.
     /// </summary>
-    private static long Elements(int[] shape, int from, int to)
+    private static long Elements(ReadOnlySpan<int> shape, int from, int to)
     {
         for (var d = from; d < to; d++)
         {
@@ -477,6 +479,18 @@ public sealed class RandomModelClient : IServiceClient
 
     /// <summary>The first <paramref name="rank"/> dimensions, as <c>[3, 2]</c>.</summary>
     internal static string Dims(IReadOnlyList<int> shape, int rank)
+    {
+        var text = new StringBuilder("[");
+        for (var d = 0; d < rank; d++)
+        {
+            text.Append(d == 0 ? string.Empty : ", ").Append(shape[d]);
+        }
+
+        return text.Append(']').ToString();
+    }
+
+    /// <summary>The first <paramref name="rank"/> dimensions of a call's input, as <c>[3, 2]</c>.</summary>
+    private static string DimsOf(ReadOnlySpan<int> shape, int rank)
     {
         var text = new StringBuilder("[");
         for (var d = 0; d < rank; d++)

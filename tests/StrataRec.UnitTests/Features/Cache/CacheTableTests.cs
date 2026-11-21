@@ -390,7 +390,7 @@ public class CacheTableTests
     }
 
     /// <summary>A store whose writes wait for <see cref="Release"/>, saying when the first began.</summary>
-    private sealed class HeldStore : IFeatureCacheStore
+    private sealed class HeldStore : ICacheStore
     {
         private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
 

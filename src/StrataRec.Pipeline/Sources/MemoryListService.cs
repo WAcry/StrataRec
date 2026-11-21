@@ -98,7 +98,7 @@ public sealed class MemoryListService : IServiceClient
 
         if (input.Shape.Length != 0)
         {
-            error = $"The input '{input.Name}' must be a single value; it has shape [{string.Join(", ", input.Shape)}].";
+            error = $"The input '{input.Name}' must be a single value; it has shape [{string.Join(", ", input.Shape.ToArray())}].";
             return null;
         }
 
@@ -118,9 +118,10 @@ public sealed class MemoryListService : IServiceClient
             case TensorElementType.Bool:
                 return input.Bool.Span[0] ? "true" : "false";
             case TensorElementType.Float64:
-                return input.Float64.Span[0].ToString("R", CultureInfo.InvariantCulture); // as a value prints: 1.25
+                // As a value prints (1.25); −0 as 0, as a call's digest has it, so a call is answered as its replay is.
+                return (input.Float64.Span[0] + 0.0).ToString("R", CultureInfo.InvariantCulture);
             case TensorElementType.Float32:
-                return input.Float32.Span[0].ToString("R", CultureInfo.InvariantCulture);
+                return (input.Float32.Span[0] + 0f).ToString("R", CultureInfo.InvariantCulture);
             default:
                 error = $"The input '{input.Name}' must be a single value; it is {TensorValues.Name(input.ElementType)}.";
                 return null;

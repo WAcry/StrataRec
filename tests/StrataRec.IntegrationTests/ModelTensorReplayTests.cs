@@ -128,7 +128,7 @@ public sealed class ModelTensorReplayTests
             {
                 foreach (var input in inputs)
                 {
-                    _seen.Add($"{input.Name} {input.ElementType.ToString().ToLowerInvariant()} [{string.Join(", ", input.Shape)}]");
+                    _seen.Add($"{input.Name} {input.ElementType.ToString().ToLowerInvariant()} [{string.Join(", ", input.Shape.ToArray())}]");
                 }
             }
 

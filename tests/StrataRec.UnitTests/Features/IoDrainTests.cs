@@ -113,7 +113,7 @@ public class IoDrainTests
     }
 
     /// <summary>A store whose first read waits for <see cref="Answer"/>, then has nothing; later reads have nothing at once.</summary>
-    private sealed class FirstReadWaits : IFeatureCacheStore
+    private sealed class FirstReadWaits : ICacheStore
     {
         private readonly TaskCompletionSource _answer = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _calls;

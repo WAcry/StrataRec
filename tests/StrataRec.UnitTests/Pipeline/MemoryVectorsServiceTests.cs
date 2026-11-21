@@ -34,6 +34,21 @@ public sealed class MemoryVectorsServiceTests
         Assert.Equal(["1:1", "a:1", "b:1", "3:0.75", "2:0.5"], found);
     }
 
+    /// <summary>
+    /// A float32 embedding (<c>list&lt;float32,2&gt;</c>, as a catalog declares it) is a query vector: a query sends a
+    /// reference at its declared type, and the scan scores it in float64 as it scores a float64 one.
+    /// </summary>
+    [Fact]
+    public async Task AFloat32QueryVector_IsScoredAsAFloat64One()
+    {
+        var source = Create($$"""{ "query": "user_embedding", {{Items}} }""");
+
+        var (status, found) = await RetrieveAsync(source, Values(ScalarValue.FromFloat64List([1.0, 0.5]), ColumnType.List(StorageKind.Float32, fixedLength: 2)), limit: 5);
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Equal(["1:1", "a:1", "b:1", "3:0.75", "2:0.5"], found);
+    }
+
     [Fact]
     public async Task MinScore_LeavesOutTheItemsBelowIt()
     {

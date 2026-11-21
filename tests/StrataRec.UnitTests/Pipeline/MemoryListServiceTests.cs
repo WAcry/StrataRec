@@ -85,4 +85,21 @@ public sealed class MemoryListServiceTests
         var (list, _) = await RetrieveAsync(source, Segment(StrataRec.Core.Types.ColumnType.List(StrataRec.Core.Types.StorageKind.Int64), ScalarValue.FromInt64List([1, 2])));
         Assert.Equal("The input 'segment' must be a single value; it has shape [2].", list.Error);
     }
+
+    /// <summary>
+    /// −0 picks the list of 0, as a call's digest has them equal: it picked the list of "-0", and a replay of a call with
+    /// −0 borrowed the answer to 0 and called it identical (verification 2 of IO step 2).
+    /// </summary>
+    [Fact]
+    public async Task ByInput_NegativeZero_PicksTheListOfZero()
+    {
+        var source = new MemoryListServiceFactory().Create(new BindingContext("s",
+            Settings("""{ "by_input": "segment", "lists": { "0": [7], "-0": [8], "*": [9] } }"""), Path.GetTempPath(), null));
+        var memory = new StrataRec.Core.Memory.RequestMemory();
+        var float64 = StrataRec.Pipeline.Operators.ServiceInputs.Create("segment", StrataRec.Core.Types.ColumnType.Float64, ScalarValue.FromFloat64(-0.0), memory);
+        var float32 = NamedInput.FromFloat32("segment", [], new[] { -0f });
+
+        Assert.Equal([7L], (await RetrieveAsync(source, float64)).Ids);
+        Assert.Equal([7L], (await RetrieveAsync(source, float32)).Ids);
+    }
 }

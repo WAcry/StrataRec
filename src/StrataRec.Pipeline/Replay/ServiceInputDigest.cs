@@ -65,6 +65,114 @@ internal static class ServiceInputDigest
         }
     }
 
+    /// <summary>
+    /// The format of service cache keys (docs/decisions.md, IO step 3). A change of what a record holds or of how a key is
+    /// built changes it: the records another build wrote are then misses, never misread.
+    /// </summary>
+    private const string CacheFormat = "stratarec.service_cache/2026-11-21";
+
+    /// <summary>
+    /// The key of a call about no items in its service's cache: the format, the service version, the outputs the call
+    /// reads in its order, and the call's digest (the batch size, the options that change an answer, every input whole);
+    /// 128 bits, so very many cached answers do not collide. Not the seed, the request id or the limit (see the decisions).
+    /// </summary>
+    public static UInt128 CacheCallKey(ServiceCall call, int[] order)
+    {
+        var builder = default(StableHash.Builder);
+        try
+        {
+            AddCachePrefix(ref builder, call, "call");
+            builder.Add(call.BatchSize);
+            AddOptions(ref builder, call.Options);
+            var inputs = call.Inputs.Span;
+            foreach (var i in order)
+            {
+                AddInput(ref builder, inputs[i], call.BatchSize, -1);
+            }
+
+            return builder.Finish128();
+        }
+        finally
+        {
+            builder.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// The key of each item of a call about items (<see cref="ServiceCall.Items"/>) in its service's cache, into
+    /// <paramref name="keys"/>: what the items share (the format, the version, the outputs read, the options, every shared
+    /// input whole) hashed once, then for each item that, its entity and its slice of every per-item input.
+    /// </summary>
+    public static void CacheItemKeys(ServiceCall call, int[] order, Span<UInt128> keys)
+    {
+        var builder = default(StableHash.Builder);
+        try
+        {
+            AddCachePrefix(ref builder, call, "item");
+            AddOptions(ref builder, call.Options);
+            var inputs = call.Inputs.Span;
+            foreach (var i in order)
+            {
+                if (!Splits(inputs[i], call.BatchSize))
+                {
+                    AddInput(ref builder, inputs[i], call.BatchSize, -1);
+                }
+            }
+
+            var shared = builder.Finish128();
+            var items = call.Items.Span;
+            for (var row = 0; row < keys.Length; row++)
+            {
+                builder.Reset();
+                builder.Add((long)(ulong)(shared >> 64));
+                builder.Add((long)(ulong)shared);
+                if (items[row].StringValue is { } text)
+                {
+                    builder.Add(text);
+                }
+                else
+                {
+                    builder.Add(items[row].Int64Value);
+                }
+
+                foreach (var i in order)
+                {
+                    if (Splits(inputs[i], call.BatchSize))
+                    {
+                        AddInput(ref builder, inputs[i], call.BatchSize, row);
+                    }
+                }
+
+                keys[row] = builder.Finish128();
+            }
+        }
+        finally
+        {
+            builder.Dispose();
+        }
+    }
+
+    /// <summary>The input is split by row in a row's digest and key: row-wise, of whole rows.</summary>
+    public static bool Splits(in NamedInput input, int batch) => IsRowWise(input, batch) && input.Values.Length % batch == 0;
+
+    private static void AddCachePrefix(ref StableHash.Builder builder, ServiceCall call, string unit)
+    {
+        builder.Add(CacheFormat);
+        builder.Add(unit);
+        builder.Add(call.Version is not null);
+        if (call.Version is { } version)
+        {
+            builder.Add(version);
+        }
+
+        var outputs = call.Outputs.Span;
+        builder.AddIndex(outputs.Length);
+        foreach (var output in outputs)
+        {
+            builder.Add(output);
+        }
+    }
+
     /// <summary>Input indices in ordinal name order, so the digest does not depend on the order an operator lists them.</summary>
     public static int[] NameOrder(ServiceCall call)
     {
@@ -104,7 +212,7 @@ internal static class ServiceInputDigest
         var sliced = row >= 0 && IsRowWise(input, batch) && length % batch == 0;
         builder.Add(input.Name);
         builder.AddIndex((int)input.ElementType);
-        var shape = input.Shape ?? Array.Empty<int>();
+        var shape = input.Shape;
         builder.AddIndex(shape.Length);
         for (var d = 0; d < shape.Length; d++)
         {

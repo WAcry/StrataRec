@@ -962,8 +962,44 @@ public sealed class TableVersion
         return page.AsSpan(offset + relative, count * elementSize);
     }
 
+    /// <summary>
+    /// The elements of a list field of fixed-size elements (bool, int32, int64, float32 or float64, as stored), or none when
+    /// the record has no value: the record's own bytes, valid while the version is pinned.
+    /// </summary>
+    internal ReadOnlySpan<T> List<T>(int field, LocalRecordRef record)
+        where T : unmanaged
+    {
+        if (!HasValue(field, record))
+        {
+            return default;
+        }
+
+        if (_layout.Kinds[field] != StorageKind.List || _layout.ElementSizes[field] != Unsafe.SizeOf<T>() || _layout.Elements[field] == StorageKind.String)
+        {
+            throw new ArgumentException($"Field {field} is not a list of {typeof(T).Name}.", nameof(field));
+        }
+
+        return MemoryMarshal.Cast<byte, T>(VarBytes(record.Page!, record.Offset, field, Unsafe.SizeOf<T>()));
+    }
+
+    /// <summary>The string codes of a <c>list&lt;string&gt;</c> field (<see cref="StringOf"/>), or none when the record has no value.</summary>
+    internal ReadOnlySpan<int> StringCodes(int field, LocalRecordRef record)
+    {
+        if (!HasValue(field, record))
+        {
+            return default;
+        }
+
+        if (_layout.Kinds[field] != StorageKind.List || _layout.Elements[field] != StorageKind.String)
+        {
+            throw new ArgumentException($"Field {field} is not a list of strings.", nameof(field));
+        }
+
+        return MemoryMarshal.Cast<byte, int>(VarBytes(record.Page!, record.Offset, field, 4));
+    }
+
     /// <summary>A string by code. Codes in published records are always in the dictionary a later load returns.</summary>
-    private string StringOf(int code)
+    internal string StringOf(int code)
     {
         var strings = Volatile.Read(ref _strings);
         return strings[code];

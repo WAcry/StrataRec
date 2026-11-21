@@ -61,7 +61,7 @@ public sealed class TrendingService : IServiceClient
             if (region.ElementType != TensorElementType.String || region.Shape.Length != 0)
             {
                 return new ValueTask<ServiceStatus>(ServiceStatus.Failed(
-                    $"The input '{_regionInput}' must be a string; it is {TensorValues.Name(region.ElementType)} of shape [{string.Join(", ", region.Shape)}]."));
+                    $"The input '{_regionInput}' must be a string; it is {TensorValues.Name(region.ElementType)} of shape [{string.Join(", ", region.Shape.ToArray())}]."));
             }
 
             if (!region.IsMissing && _byRegion.TryGetValue(region.String.Span[0], out var regional))

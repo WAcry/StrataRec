@@ -677,7 +677,7 @@ public sealed class RedisServer : IAsyncLifetime
 /// Wraps a store factory so that a test knows when the stores hold every key they were asked for: what the first engine
 /// missed has been written back. Keys are recorded as written once the inner store's write completed.
 /// </summary>
-internal sealed class RecordedStores(IBindingFactory<IFeatureCacheStore> inner) : IBindingFactory<IFeatureCacheStore>
+internal sealed class RecordedStores(IBindingFactory<ICacheStore> inner) : IBindingFactory<ICacheStore>
 {
     private readonly ConcurrentDictionary<string, bool> _read = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, bool> _written = new(StringComparer.Ordinal);
@@ -692,7 +692,7 @@ internal sealed class RecordedStores(IBindingFactory<IFeatureCacheStore> inner) 
 
     public bool HoldsEveryKeyRead() => !_read.IsEmpty && _read.Keys.All(_written.ContainsKey);
 
-    public IFeatureCacheStore Create(BindingContext context)
+    public ICacheStore Create(BindingContext context)
     {
         if (context.Settings.TryGetValue("key_prefix", out var prefix))
         {
@@ -704,7 +704,7 @@ internal sealed class RecordedStores(IBindingFactory<IFeatureCacheStore> inner) 
 
     private static string Name(CacheKeyspace keyspace, string key) => keyspace.Prefix + key;
 
-    private sealed class Store(IFeatureCacheStore store, RecordedStores recorded) : IFeatureCacheStore, ILoadable, IAsyncDisposable
+    private sealed class Store(ICacheStore store, RecordedStores recorded) : ICacheStore, ILoadable, IAsyncDisposable
     {
         public string StoreType => store.StoreType;
 

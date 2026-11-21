@@ -147,6 +147,14 @@ public static class StableHash
         public readonly ulong Finish() =>
             XxHash3.HashToUInt64(_buffer is null ? ReadOnlySpan<byte>.Empty : _buffer.AsSpan(0, _length));
 
+        /// <summary>
+        /// The XXH3-128 of the bytes added so far: for keys a collision must not confuse among very many (a cache of a
+        /// hundred million answers has a real chance of two 64-bit keys alike, and the collision serves one's answer to the
+        /// other).
+        /// </summary>
+        public readonly UInt128 Finish128() =>
+            XxHash128.HashToUInt128(_buffer is null ? ReadOnlySpan<byte>.Empty : _buffer.AsSpan(0, _length));
+
         /// <summary>Clears the accumulated bytes, keeping the buffer for reuse.</summary>
         public void Reset() => _length = 0;
 

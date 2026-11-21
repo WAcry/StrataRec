@@ -662,7 +662,7 @@ public sealed class ModelRankerTests
             var inputs = new List<CapturedInput>();
             foreach (var input in call.Inputs.Span)
             {
-                inputs.Add(new CapturedInput(input.Name, input.ElementType, (int[])input.Shape.Clone(),
+                inputs.Add(new CapturedInput(input.Name, input.ElementType, input.Shape.ToArray(),
                     input.ElementType == TensorElementType.Float32 ? input.Float32.ToArray() : [],
                     input.ElementType == TensorElementType.Float64 ? input.Float64.ToArray() : [],
                     input.ElementType == TensorElementType.Int64 ? input.Int64.ToArray() : []));

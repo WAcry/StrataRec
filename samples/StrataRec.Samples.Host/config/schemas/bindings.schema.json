@@ -125,21 +125,21 @@
             ],
             "properties": {
               "ttl_ms": {
-                "description": "Required: how long a value fetched from the connector is served, in milliseconds. Each key's lifetime varies by ±10% with the key's hash, so values written together do not all expire together.",
+                "description": "Required: how long a value fetched from the origin (the connector, or the service) is served, in milliseconds. Each key's lifetime varies by ±10% with the key's hash, so values written together do not all expire together.",
                 "type": [
                   "integer",
                   "null"
                 ]
               },
               "stale_if_error_ms": {
-                "description": "How much longer (milliseconds, default 0) an expired value may be served when the connector fails or times out; its readers are then Degraded.",
+                "description": "How much longer (milliseconds, default 0) an expired value may be served when the origin fails or times out; its readers are then Degraded.",
                 "type": [
                   "integer",
                   "null"
                 ]
               },
               "distributed": {
-                "description": "A cache shared by the service's instances, read on an in-process miss before the connector, e.g. { \"store\": \"redis@1\", \"endpoint\": \"cache.internal:6379\" }. Only an optimisation: when it fails or is slow, the keys go to the connector.",
+                "description": "A cache shared by the deployment's instances, read on an in-process miss before the origin, e.g. { \"store\": \"redis@1\", \"endpoint\": \"cache.internal:6379\" }. Only an optimisation: when it fails or is slow, the keys go to the origin.",
                 "type": [
                   "object",
                   "null"
@@ -153,7 +153,7 @@
                     ]
                   },
                   "timeout_ms": {
-                    "description": "The longest a request waits for one read of the distributed cache, in milliseconds (default: half the source's timeout_ms); always within the source's timeout_ms, so the connector keeps the rest of it.",
+                    "description": "The longest a request waits for one read of the distributed cache, in milliseconds (default: half the source's or the service's timeout_ms; required for a service without one); always within that timeout_ms, so the origin keeps the rest of it.",
                     "type": [
                       "integer",
                       "null"
@@ -277,6 +277,61 @@
               "integer",
               "null"
             ]
+          },
+          "cache": {
+            "description": "Caches the service's answers, e.g. { \"ttl_ms\": 60000, \"max_bytes\": \"64MiB\" }: a call about no items whole, one about items item by item (the items a call misses go to the service in one call). Keyed by the service version, the outputs read and the inputs, not by the request's seed: a service that samples by the seed reuses one answer for ttl_ms.",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "max_bytes": {
+                "description": "Required: the most memory the service's in-process cache table may take, as an integer and a unit B, KiB, MiB, GiB or TiB, e.g. \"64MiB\". A cache that reaches it drops its expired records, then its oldest.",
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[0-9]+(B|KiB|MiB|GiB|TiB)$"
+              },
+              "ttl_ms": {
+                "description": "Required: how long a value fetched from the origin (the connector, or the service) is served, in milliseconds. Each key's lifetime varies by ±10% with the key's hash, so values written together do not all expire together.",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "stale_if_error_ms": {
+                "description": "How much longer (milliseconds, default 0) an expired value may be served when the origin fails or times out; its readers are then Degraded.",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "distributed": {
+                "description": "A cache shared by the deployment's instances, read on an in-process miss before the origin, e.g. { \"store\": \"redis@1\", \"endpoint\": \"cache.internal:6379\" }. Only an optimisation: when it fails or is slow, the keys go to the origin.",
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "store": {
+                    "description": "Required: store type and version, e.g. 'redis@1'. The other members are the store's own settings, which the schema describes for each type of the binary that wrote it.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "timeout_ms": {
+                    "description": "The longest a request waits for one read of the distributed cache, in milliseconds (default: half the source's or the service's timeout_ms; required for a service without one); always within that timeout_ms, so the origin keeps the rest of it.",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            },
+            "additionalProperties": false
           }
         },
         "required": [
@@ -298,6 +353,7 @@
               "properties": {
                 "client": {},
                 "timeout_ms": {},
+                "cache": {},
                 "inputs": {
                   "description": "The model's text input names, as its signature declares them (the prompts the calling operator renders), e.g. [\"system\", \"user\"]: at least one, each once.",
                   "type": "array",
@@ -335,6 +391,7 @@
               "properties": {
                 "client": {},
                 "timeout_ms": {},
+                "cache": {},
                 "outputs": {
                   "description": "The model's outputs by name, each a weighted sum of its inputs, e.g. { \"p_click\": { \"bias\": -2.0, \"weights\": { \"smoothed_ctr\": 8.0 }, \"activation\": \"sigmoid\" } }.",
                   "type": "object",
@@ -404,6 +461,7 @@
               "properties": {
                 "client": {},
                 "timeout_ms": {},
+                "cache": {},
                 "version": {
                   "description": "The one model version this binding serves, e.g. v3.",
                   "type": "string"
@@ -446,6 +504,7 @@
               "properties": {
                 "client": {},
                 "timeout_ms": {},
+                "cache": {},
                 "data_file": {
                   "description": "A JSON file of the other members: a path relative to the configuration directory, an absolute path or a file:// URI. A member the binding has too is the binding's.",
                   "type": [
@@ -511,6 +570,7 @@
               "properties": {
                 "client": {},
                 "timeout_ms": {},
+                "cache": {},
                 "query": {
                   "description": "The query value holding the query vector (MultiSourceRecall@1's queries), such as \"user_embedding\": a list of floats of the items' vectors' length.",
                   "type": "string"
@@ -593,6 +653,7 @@
               "properties": {
                 "client": {},
                 "timeout_ms": {},
+                "cache": {},
                 "inputs": {
                   "description": "The inputs of the model it stands in for, as the model declares them: their names, each a float32 tensor of shape [-1] ([\"smoothed_ctr\", \"log_followers\"]), or each name mapped to its tensor ({ \"item_id\": { \"type\": \"int64\", \"shape\": [-1, 2] } }). At least one, each once."
                 },
@@ -629,6 +690,7 @@
               "properties": {
                 "client": {},
                 "timeout_ms": {},
+                "cache": {},
                 "items": {
                   "description": "The trending items, e.g. [{ \"id\": 7, \"score\": 0.9, \"region\": \"us\" }].",
                   "type": "array",

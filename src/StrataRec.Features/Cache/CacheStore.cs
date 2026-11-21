@@ -135,7 +135,7 @@ public readonly record struct CacheStoreEntry(string Key, ReadOnlyMemory<byte> R
 /// counted and forgotten. So a store needs no retries of its own and should fail fast.</para>
 /// <para>Implementations must be thread-safe: every request of every plan sharing the instance reads it concurrently.</para>
 /// </remarks>
-public interface IFeatureCacheStore
+public interface ICacheStore
 {
     /// <summary>Store type and version, e.g. <c>redis@1</c>.</summary>
     string StoreType { get; }

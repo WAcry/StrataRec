@@ -45,7 +45,7 @@ internal sealed class FeatureTestRig
     private readonly Dictionary<string, FeatureSourceBinding> _sources = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IFeatureSourceConnector> _connectors = new(StringComparer.Ordinal);
     private readonly TestLocalTables _localTables = new();
-    private readonly Dictionary<string, IFeatureCacheStore> _cacheStores = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ICacheStore> _cacheStores = new(StringComparer.Ordinal);
 
     public FeatureTestRig()
     {
@@ -117,7 +117,7 @@ internal sealed class FeatureTestRig
     /// distributed tier when given. Its table's writer does not run: <see cref="WriteBack"/> applies what reads handed it.
     /// </summary>
     public FeatureTestRig CacheSource(
-        string name, IFeatureSourceConnector connector, long ttlMs = 60_000, long staleIfErrorMs = 0, IFeatureCacheStore? distributed = null,
+        string name, IFeatureSourceConnector connector, long ttlMs = 60_000, long staleIfErrorMs = 0, ICacheStore? distributed = null,
         int? distributedTimeoutMs = null, int timeoutMs = UntimedMs, int? maxBatch = null, string maxBytes = "64MiB")
     {
         _connectors[name] = connector;
@@ -144,7 +144,7 @@ internal sealed class FeatureTestRig
     }
 
     /// <summary>Binds a source with mode <c>cache</c> in front of <c>memory@1</c> with inline data.</summary>
-    public FeatureTestRig MemoryCacheSource(string name, string json, long ttlMs = 60_000, IFeatureCacheStore? distributed = null)
+    public FeatureTestRig MemoryCacheSource(string name, string json, long ttlMs = 60_000, ICacheStore? distributed = null)
     {
         MemorySource(name, json);
         var fetched = _sources[name];
@@ -378,7 +378,7 @@ internal sealed class ManualClock : TimeProvider
 }
 
 /// <summary><c>test_cache@1</c>: serves distributed cache stores registered by source name.</summary>
-internal sealed class TestCacheStoreFactory(IReadOnlyDictionary<string, IFeatureCacheStore> stores) : IBindingFactory<IFeatureCacheStore>
+internal sealed class TestCacheStoreFactory(IReadOnlyDictionary<string, ICacheStore> stores) : IBindingFactory<ICacheStore>
 {
     public const string TypeName = "test_cache@1";
 
@@ -386,14 +386,14 @@ internal sealed class TestCacheStoreFactory(IReadOnlyDictionary<string, IFeature
 
     public Type SettingsType => typeof(NoSettings);
 
-    public IFeatureCacheStore Create(BindingContext context) => stores[context.Name];
+    public ICacheStore Create(BindingContext context) => stores[context.Name];
 }
 
 /// <summary>
 /// An in-memory distributed cache store: records by (keyspace, key), what each call asked, and a hook that can fail or
 /// hold a read. Writes can be awaited (<see cref="WhenWrittenAsync"/>), since the tier writes in the background.
 /// </summary>
-internal sealed class FakeCacheStore : IFeatureCacheStore
+internal sealed class FakeCacheStore : ICacheStore
 {
     private readonly ConcurrentDictionary<string, (byte[] Record, TimeSpan TimeToLive)> _records = new(StringComparer.Ordinal);
     private readonly object _gate = new();

@@ -354,7 +354,7 @@ public class CacheStoreCallTests
     /// A store whose first read waits for <see cref="Answer"/> and whose later reads answer at once; each answers a record
     /// written at the time <see cref="Prepare"/> was given.
     /// </summary>
-    private sealed class FirstChunkWaits : IFeatureCacheStore
+    private sealed class FirstChunkWaits : ICacheStore
     {
         private readonly TaskCompletionSource _answer = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private ReadOnlyMemory<byte> _record;
@@ -400,7 +400,7 @@ public class CacheStoreCallTests
     /// A store whose first read answers at once and whose later reads wait for <see cref="Answer"/>; each answers a record
     /// written at the time <see cref="Prepare"/> was given.
     /// </summary>
-    private sealed class SecondChunkWaits : IFeatureCacheStore
+    private sealed class SecondChunkWaits : ICacheStore
     {
         private readonly TaskCompletionSource _sent = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _answer = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -448,7 +448,7 @@ public class CacheStoreCallTests
     /// A store that runs <paramref name="whileSending"/> in its synchronous part (where the test moves the clock), then
     /// answers a fresh record for every key.
     /// </summary>
-    private sealed class ClockedStore(Action whileSending) : IFeatureCacheStore
+    private sealed class ClockedStore(Action whileSending) : ICacheStore
     {
         private ReadOnlyMemory<byte> _record;
         private int _calls;
@@ -482,7 +482,7 @@ public class CacheStoreCallTests
     /// A store that blocks for <c>blockMs</c> before it returns (the synchronous part a store should not have), then answers
     /// a fresh record for every key.
     /// </summary>
-    private sealed class SlowStore(int blockMs) : IFeatureCacheStore
+    private sealed class SlowStore(int blockMs) : ICacheStore
     {
         private ReadOnlyMemory<byte> _record;
         private int _calls;
@@ -524,7 +524,7 @@ public class CacheStoreCallTests
     }
 
     /// <summary>A store whose every read is <paramref name="get"/>.</summary>
-    private sealed class ScriptedStore(Func<ValueTask> get) : IFeatureCacheStore
+    private sealed class ScriptedStore(Func<ValueTask> get) : ICacheStore
     {
         public string StoreType => TestCacheStoreFactory.TypeName;
 

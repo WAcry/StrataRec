@@ -192,7 +192,7 @@ public sealed class CacheEngineTests
         }
         """);
 
-    internal static async Task<RecEngine> Load(string root, IBindingFactory<IFeatureCacheStore> stores)
+    internal static async Task<RecEngine> Load(string root, IBindingFactory<ICacheStore> stores)
     {
         var engine = new RecEngine(new PlanEnvironment { BaseDirectory = root, Bindings = PlanEnvironment.DefaultBindings().Add(stores) });
         var load = await engine.LoadAsync(Compile(root));
@@ -295,7 +295,7 @@ public sealed class CacheEngineTests
 /// hosts share records as instances share a Redis. Accepts any settings (a test changes one to change the identity) and
 /// counts each store's loads and disposals.
 /// </summary>
-internal sealed class SharedStores : IBindingFactory<IFeatureCacheStore>
+internal sealed class SharedStores : IBindingFactory<ICacheStore>
 {
     public const string TypeName = "shared_memory@1";
 
@@ -311,14 +311,14 @@ internal sealed class SharedStores : IBindingFactory<IFeatureCacheStore>
     /// <summary>Whether every key any store was asked for has a record: what was missed has been written back.</summary>
     public bool HoldsEveryKeyRead() => !_read.IsEmpty && _read.Keys.All(_records.ContainsKey);
 
-    public IFeatureCacheStore Create(BindingContext context)
+    public ICacheStore Create(BindingContext context)
     {
         var store = new Store(this);
         Created.Enqueue(store);
         return store;
     }
 
-    internal sealed class Store(SharedStores shared) : IFeatureCacheStore, ILoadable, IAsyncDisposable
+    internal sealed class Store(SharedStores shared) : ICacheStore, ILoadable, IAsyncDisposable
     {
         private int _loads;
         private int _disposals;

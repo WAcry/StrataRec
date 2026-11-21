@@ -29,7 +29,7 @@ namespace StrataRec.Redis;
 /// stops waiting for a read much earlier (the tier's <c>timeout_ms</c>), and a read that throws or is late sends its keys
 /// to the connector.</para>
 /// </remarks>
-public sealed class RedisCacheStore : IFeatureCacheStore, ILoadable, IAsyncDisposable
+public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
 {
     public const string Type = "redis@1";
 
@@ -374,11 +374,11 @@ public sealed class RedisSettings
 }
 
 /// <summary>Creates <see cref="RedisCacheStore"/>s; register it with <see cref="RedisRegistration.AddRedis"/>.</summary>
-public sealed class RedisCacheStoreFactory : BindingFactory<IFeatureCacheStore, RedisSettings>
+public sealed class RedisCacheStoreFactory : BindingFactory<ICacheStore, RedisSettings>
 {
     public override string Type => RedisCacheStore.Type;
 
-    protected override IFeatureCacheStore Create(RedisSettings settings, BindingContext context)
+    protected override ICacheStore Create(RedisSettings settings, BindingContext context)
     {
         if (!IsEndpoint(settings.Endpoint))
         {

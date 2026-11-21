@@ -1,6 +1,8 @@
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Services;
 using StrataRec.Features.Bindings;
+using StrataRec.Features.Cache;
+using StrataRec.Features.Local;
 
 namespace StrataRec.Pipeline.Planning;
 
@@ -15,15 +17,18 @@ public sealed class ClientResolver
     private readonly SourceBindingArtifact _bindings;
     private readonly BindingResolver _resolver;
     private readonly IPlanBindings _instances;
-    private readonly Dictionary<string, (IServiceClient? Client, int? TimeoutMs)> _services = new(StringComparer.Ordinal);
+    private readonly TimeProvider _clock;
+    private readonly Dictionary<string, (IServiceClient? Client, int? TimeoutMs, ServiceCache? Cache)> _services = new(StringComparer.Ordinal);
 
     /// <param name="resolver">Creates the instances, from <paramref name="instances"/>, and reports a binding's errors at the binding.</param>
-    /// <param name="instances">Where service signatures come from.</param>
-    public ClientResolver(SourceBindingArtifact bindings, BindingResolver resolver, IPlanBindings instances)
+    /// <param name="instances">Where service signatures and the tables of services' caches come from.</param>
+    /// <param name="clock">The clock of the services' cache tables (write times and expiry).</param>
+    public ClientResolver(SourceBindingArtifact bindings, BindingResolver resolver, IPlanBindings instances, TimeProvider? clock = null)
     {
         _bindings = bindings;
         _resolver = resolver;
         _instances = instances;
+        _clock = clock ?? TimeProvider.System;
     }
 
     public SourceBindingArtifact Bindings => _bindings;
@@ -46,10 +51,10 @@ public sealed class ClientResolver
         }
     }
 
-    /// <summary>The client bound to service <paramref name="name"/>.</summary>
+    /// <summary>The client bound to service <paramref name="name"/>, and its cache when the binding declares one.</summary>
     /// <returns>False with an error for the caller to report at its own config key (the name has no binding), or with a
-    /// null error when the binding is wrong, which is reported at the binding.</returns>
-    public bool TryGetService(string name, out IServiceClient client, out int? timeoutMs, out string? error, out string? hint)
+    /// null error when the binding is wrong (its cache included), which is reported at the binding.</returns>
+    internal bool TryGetService(string name, out IServiceClient client, out int? timeoutMs, out ServiceCache? cache, out string? error, out string? hint)
     {
         error = null;
         hint = null;
@@ -59,18 +64,83 @@ public sealed class ClientResolver
             {
                 client = null!;
                 timeoutMs = null;
+                cache = null;
                 error = $"{BindingKind.Service.Label(name)} has no binding in environment '{_bindings.Environment}'.";
                 hint = NameSuggestions.DidYouMean(name, _bindings.Services.Keys) ?? $"add it under '{BindingKind.Service.Section()}' in the bindings artifact";
                 return false;
             }
 
-            entry = (_resolver.Acquire<IServiceClient>(BindingKind.Service, name, binding.Client, binding.Settings), binding.TimeoutMs);
+            var bound = _resolver.Acquire<IServiceClient>(BindingKind.Service, name, binding.Client, binding.Settings);
+            ServiceCache? serviceCache = null;
+            if (binding.Cache is { } settings && !TryCache(name, binding, settings, bound, out serviceCache))
+            {
+                bound = null; // a wrong cache is a wrong binding: the service is not served without the cache it declares
+            }
+
+            entry = (bound, binding.TimeoutMs, serviceCache);
             _services[name] = entry;
         }
 
         client = entry.Client!;
         timeoutMs = entry.TimeoutMs;
+        cache = entry.Cache;
         return entry.Client is not null;
+    }
+
+    /// <summary>
+    /// The cache a service's binding declares (design 6.9): its table, shared across plans by the binding's identity and
+    /// the client object, and its distributed tier; every problem reported at its setting. False when any is wrong.
+    /// </summary>
+    private bool TryCache(string name, ClientBinding binding, ServiceCacheBinding settings, IServiceClient? client, out ServiceCache? cache)
+    {
+        cache = null;
+        var entry = BindingKind.Service.Pointer(name);
+        var pointer = entry + "/cache";
+        var diagnostics = _resolver.Diagnostics;
+        var ok = true;
+        long maxBytes = 0;
+        if (settings.MaxBytes is null)
+        {
+            ok = false;
+            diagnostics.Error("CACHE_MAX_BYTES", _resolver.Artifact, pointer, $"The cache of service '{name}' has no 'max_bytes'.",
+                "add the most memory its table may take, e.g. \"max_bytes\": \"64MiB\"");
+        }
+        else if (!ByteSize.TryParse(settings.MaxBytes, out maxBytes) || maxBytes == 0)
+        {
+            ok = false;
+            diagnostics.Error("CACHE_MAX_BYTES", _resolver.Artifact, pointer + "/max_bytes", $"'{settings.MaxBytes}' is not a positive size.",
+                "write an integer and a unit B, KiB, MiB, GiB or TiB, e.g. \"64MiB\"");
+        }
+
+        ok &= CacheSettings.TryRead(
+            settings, new CacheOwner(BindingKind.ServiceCacheStore, name, "service", "service"), _resolver, pointer, binding.TimeoutMs,
+            out var ttlMs, out var staleMs, out var distributed, out var distributedTimeoutMs);
+        if (!ok || client is null)
+        {
+            return false;
+        }
+
+        var options = new LocalFeatureTableOptions
+        {
+            MaxBytes = maxBytes,
+            Cache = new CacheTableOptions { TtlMs = ttlMs, StaleIfErrorMs = staleMs, Clock = _clock },
+        };
+        var spec = LocalTableSpec.CreateServiceCache(ServiceCache.Schema(name), options, binding, client, _resolver.Artifact, entry, _resolver.BaseDirectory);
+        LocalFeatureTable table;
+        try
+        {
+            table = _instances.Acquire(spec);
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            // max_bytes below what an empty table takes.
+            diagnostics.Error("CACHE_MAX_BYTES", _resolver.Artifact, pointer + "/max_bytes", ex.Message.Split('\n')[0], "raise max_bytes");
+            return false;
+        }
+
+        // A distributed tier's timeout defaults to half the service's (which then exists: CacheSettings requires one or the other).
+        cache = new ServiceCache(name, table, distributed, distributedTimeoutMs ?? Math.Max(1, (binding.TimeoutMs ?? 2) / 2));
+        return true;
     }
 
     /// <summary>The signature of a version of a service this resolver handed out (see <see cref="IPlanBindings.Signature"/>).</summary>

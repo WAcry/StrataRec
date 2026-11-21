@@ -523,7 +523,7 @@ public class CacheReadTests
     }
 
     /// <summary>A distributed tier with nothing in it, which says what its first write held: record bytes, and the bytes of the arrays under them.</summary>
-    private sealed class CapturingStore : IFeatureCacheStore
+    private sealed class CapturingStore : ICacheStore
     {
         public string StoreType => TestCacheStoreFactory.TypeName;
 

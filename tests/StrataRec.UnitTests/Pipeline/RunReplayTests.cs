@@ -184,8 +184,8 @@ public sealed class RunReplayTests
 
     /// <summary>
     /// A row's digest covers its own values: built from a longer (pooled) buffer, an input is its shape's elements, so the
-    /// slack does not shift the rows (a buffer of 4 for a shape of [2] made each row two values wide, and row 42's digest
-    /// covered row 41's value, verification of IO step 2).
+    /// slack does not shift the rows (a buffer of 4 for a shape of [2] made each row two values wide: row 41's digest covered
+    /// both rows' values and row 42's the slack, verification of IO step 2).
     /// </summary>
     [Fact]
     public void ARowsDigest_IsOfItsOwnValues_WhateverTheBufferHoldsBeyondTheShape()

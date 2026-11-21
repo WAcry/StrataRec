@@ -171,9 +171,6 @@ internal sealed class FeatureSourceResolver
     /// <summary>A local group's chunk size when a replay answers its reads through the fetch path: one chunk, as recorded.</summary>
     internal const int LocalMaxBatch = 1 << 30;
 
-    /// <summary>The longest <c>cache.ttl_ms</c> and <c>cache.stale_if_error_ms</c>: 2^61 ms, so their sums cannot overflow.</summary>
-    private const long MaxCacheMs = 1L << 61;
-
     private readonly SourceBindingArtifact _bindings;
     private readonly BindingResolver _resolver;
     private readonly ILocalTableProvider _localTables;
@@ -468,41 +465,9 @@ internal sealed class FeatureSourceResolver
         }
         else
         {
-            if (cache.TtlMs is not { } ttl)
-            {
-                ok = false;
-                _diagnostics.Error("CACHE_TTL", _artifact, pointer + "/cache", $"The cache of source '{sourceName}' has no 'ttl_ms'.",
-                    "add how long a fetched value is served, in milliseconds, e.g. \"ttl_ms\": 60000");
-            }
-            else if (ttl is <= 0 or > MaxCacheMs)
-            {
-                ok = false;
-                _diagnostics.Error("CACHE_TTL", _artifact, pointer + "/cache/ttl_ms", $"ttl_ms {ttl} is not between 1 and 2^61 milliseconds.",
-                    "give how long a fetched value is served, e.g. \"ttl_ms\": 60000");
-            }
-            else
-            {
-                ttlMs = ttl;
-            }
-
-            if (cache.StaleIfErrorMs is { } stale && stale is < 0 or > MaxCacheMs)
-            {
-                ok = false;
-                _diagnostics.Error("CACHE_STALE_IF_ERROR", _artifact, pointer + "/cache/stale_if_error_ms",
-                    $"stale_if_error_ms {stale} is not between 0 and 2^61 milliseconds.",
-                    "give how much longer an expired value may serve when the connector fails, e.g. 300000, or 0");
-            }
-            else
-            {
-                staleMs = cache.StaleIfErrorMs ?? 0;
-            }
-
-            if (cache.Distributed is { } shared)
-            {
-                ok &= TryDistributed(sourceName, shared, pointer + "/cache/distributed", out distributed);
-                distributedTimeoutMs = shared.TimeoutMs;
-                ok &= TryRetention(sourceName, ttlMs, staleMs, pointer + "/cache");
-            }
+            ok &= CacheSettings.TryRead(
+                cache, new CacheOwner(BindingKind.CacheStore, sourceName, "source", "connector"), _resolver, pointer + "/cache",
+                binding.TimeoutMs ?? DefaultTimeoutMs, out ttlMs, out staleMs, out distributed, out distributedTimeoutMs);
         }
 
         if (!ok)
@@ -524,49 +489,6 @@ internal sealed class FeatureSourceResolver
             DistributedTimeoutMs = distributedTimeoutMs,
         };
     }
-
-    /// <summary>
-    /// Whether the distributed tier can be given the longest time to live a record of this binding needs (the TTL with all
-    /// its jitter, plus the stale window): a <see cref="TimeSpan"/>. Diagnosed at the setting that takes it past.
-    /// </summary>
-    private bool TryRetention(string sourceName, long ttlMs, long staleMs, string pointer)
-    {
-        if (ttlMs == 0 || LocalTableCache.RetentionMs(ttlMs, staleMs) <= LocalTableCache.MaxRetentionMs)
-        {
-            return true; // a ttl_ms that is missing or wrong is diagnosed already
-        }
-
-        var setting = LocalTableCache.MaxLifetime(ttlMs) > LocalTableCache.MaxRetentionMs ? "ttl_ms" : "stale_if_error_ms";
-        _diagnostics.Error("CACHE_RETENTION", _artifact, pointer + "/" + setting,
-            $"The distributed cache of source '{sourceName}' would keep a record for up to {LocalTableCache.RetentionMs(ttlMs, staleMs)} ms "
-            + $"(ttl_ms with its 10% jitter, plus stale_if_error_ms), more than the {LocalTableCache.MaxRetentionMs} ms a time to live can be.",
-            $"lower ttl_ms or stale_if_error_ms so that ttl_ms × 1.1 + stale_if_error_ms is at most {LocalTableCache.MaxRetentionMs} (about 29,000 years)");
-        return false;
-    }
-
-    /// <summary>The distributed tier of a cache binding: its store, created by its factory and shared by identity like any
-    /// binding instance, and wrapped in the engine's write-back queue.</summary>
-    private bool TryDistributed(string sourceName, DistributedCacheBinding shared, string pointer, out DistributedCacheTier? tier)
-    {
-        tier = null;
-        var ok = true;
-        if (shared.TimeoutMs is <= 0)
-        {
-            ok = false;
-            _diagnostics.Error("DISTRIBUTED_CACHE_CONFIG", _artifact, pointer + "/timeout_ms", $"timeout_ms {shared.TimeoutMs} is not positive.",
-                "give the longest a request waits for the distributed cache, in milliseconds, or leave it out (half the source's timeout_ms)");
-        }
-
-        tier = _resolver.Acquire<IFeatureCacheStore, DistributedCacheTier>(
-            BindingKind.CacheStore, sourceName, shared.Store, shared.Settings, static store => new DistributedCacheTier(store), StoreHint(shared.Store));
-        return ok && tier is not null;
-    }
-
-    /// <summary>What to do about a store type the binary does not have, besides the types it has: where <c>redis@1</c> comes from.</summary>
-    private static string StoreHint(string? type) =>
-        type is not null && type.StartsWith("redis@", StringComparison.Ordinal)
-            ? "redis@1 is in the package StrataRec.Redis: the host adds it with PlanEnvironment.Bindings.AddRedis()"
-            : "or remove 'distributed' to cache in process only";
 
     /// <summary>The binding's <c>max_bytes</c> (required in modes local and cache); false (diagnosed) when missing or not a positive size.</summary>
     private bool TryMaxBytes(string sourceName, FeatureSourceBinding binding, string pointer, SupplyMode mode, out long maxBytes)

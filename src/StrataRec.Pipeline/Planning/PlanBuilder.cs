@@ -120,7 +120,8 @@ public sealed record PlanEnvironment
         (BindingKind.Service, typeof(IBindingFactory<IServiceClient>), static f => ((IBindingFactory<IServiceClient>)f).SettingsType),
         (BindingKind.Connector, typeof(IBindingFactory<IFeatureSourceConnector>), static f => ((IBindingFactory<IFeatureSourceConnector>)f).SettingsType),
         (BindingKind.UpdateSource, typeof(IBindingFactory<IFeatureUpdateSource>), static f => ((IBindingFactory<IFeatureUpdateSource>)f).SettingsType),
-        (BindingKind.CacheStore, typeof(IBindingFactory<IFeatureCacheStore>), static f => ((IBindingFactory<IFeatureCacheStore>)f).SettingsType),
+        (BindingKind.CacheStore, typeof(IBindingFactory<ICacheStore>), static f => ((IBindingFactory<ICacheStore>)f).SettingsType),
+        (BindingKind.ServiceCacheStore, typeof(IBindingFactory<ICacheStore>), static f => ((IBindingFactory<ICacheStore>)f).SettingsType),
     ];
 }
 
@@ -233,7 +234,7 @@ public sealed class PlanBuilder
         _schema = schema;
         _scope = schema.CreateScope();
         _resolver = new BindingResolver(_environment.Bindings, _bindings, _environment.BaseDirectory, "bindings:" + sources.Bindings.Environment, _diagnostics);
-        _clients = new ClientResolver(sources.Bindings, _resolver, _bindings);
+        _clients = new ClientResolver(sources.Bindings, _resolver, _bindings, _environment.Clock);
 
         // Request inputs.
         _requestInputs = new Dictionary<string, ContextField>(StringComparer.Ordinal);

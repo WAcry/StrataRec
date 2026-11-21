@@ -20,9 +20,11 @@
       "output": "p_engage"
     },
     // trending@1 (Components/TrendingService.cs), a recall service: the input "region" the recall node sends picks a
-    // region's list; without a region, the overall list.
+    // region's list; without a region, the overall list. A real trending service is remote and changes slowly, so its
+    // answers are cached (design 6.9): one per region (the inputs are the key) for 30 seconds, in a table of at most 4 MiB.
     "trending": {
       "client": "trending@1",
+      "cache": { "ttl_ms": 30000, "max_bytes": "4MiB" },
       "region_input": "region",
       "items": [
         { "id": 1,  "score": 950, "region": "us" },
