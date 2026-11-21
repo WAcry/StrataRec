@@ -29,7 +29,7 @@ namespace StrataRec.Pipeline.Replay;
 /// </remarks>
 internal sealed class RunReplay : IFeatureCallHook
 {
-    private readonly Lock _gate = new();
+    private readonly object _gate = new();
     private readonly Dictionary<ulong, List<FeatureEntry>> _featureCalls = new();
     private readonly Dictionary<(string Source, string Entity), Dictionary<RowKey, Dictionary<string, ScalarValue>>> _featureValues = new();
     private readonly List<CandidateEntry> _candidateCalls = new();

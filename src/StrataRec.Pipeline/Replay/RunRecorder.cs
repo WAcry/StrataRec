@@ -30,7 +30,7 @@ namespace StrataRec.Pipeline.Replay;
 /// </remarks>
 internal sealed class RunRecorder : IFeatureCallHook
 {
-    private readonly Lock _gate = new();
+    private readonly object _gate = new();
     private readonly List<ReplayCandidateCall> _candidates = new();
     private readonly List<ReplayFeatureCall> _features = new();
     private readonly List<ReplayModelCall> _models = new();

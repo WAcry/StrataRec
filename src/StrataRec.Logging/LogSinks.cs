@@ -16,7 +16,7 @@ public interface ILogSink
 public sealed class InMemoryLogSink : ILogSink
 {
     private readonly List<LogBatch> _batches = new();
-    private readonly Lock _gate = new();
+    private readonly object _gate = new();
 
     public List<LogBatch> Snapshot()
     {

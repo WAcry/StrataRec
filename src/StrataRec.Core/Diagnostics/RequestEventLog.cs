@@ -92,7 +92,7 @@ public sealed partial class RequestEventLog : IDisposable
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<(RequestEvent Event, string Subject), EventWindow> _events = new();
     private readonly ConcurrentDictionary<(IoKind Kind, string Name), HealthWindow> _health = new();
-    private readonly Lock _flushGate = new();
+    private readonly object _flushGate = new();
     private readonly List<HeldMemory> _held = new(); // guarded by itself
     private readonly Timer? _timer;
     private long _windowStart;
@@ -319,9 +319,7 @@ public sealed partial class RequestEventLog : IDisposable
     /// <remarks>
     /// A call and its failure are added and taken under one lock: counted separately, a flush between the two increments
     /// moves the failure into the next window without its call, and the verdicts of both windows go wrong (review 6).
-    /// The lock is per dependency and held for a few instructions, but every call of the dependency takes it, from all
-    /// concurrent requests: it is the window itself (a private type, which no other code can lock), which allocates no
-    /// gate, and the monitor handles contention better than a <see cref="Lock"/> (docs/decisions.md).
+    /// The lock is per dependency and held for a few instructions.
     /// </remarks>
     private sealed class HealthWindow
     {

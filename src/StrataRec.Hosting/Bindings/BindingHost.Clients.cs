@@ -108,7 +108,7 @@ public sealed partial class BindingHost
     {
         private readonly BindingHost _host;
         private readonly ObservedCancellationSource _stop = new(CancellationSite.BindingLoad); // cancels the load; never disposed (see TableEntry)
-        private readonly Lock _gate = new();
+        private readonly object _gate = new();
         private readonly TaskCompletionSource _disposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private Task? _run;
         private Task? _ready;

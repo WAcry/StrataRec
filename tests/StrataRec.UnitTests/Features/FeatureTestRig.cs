@@ -393,7 +393,7 @@ internal sealed class TestCacheStoreFactory(IReadOnlyDictionary<string, IFeature
 internal sealed class FakeCacheStore : IFeatureCacheStore
 {
     private readonly ConcurrentDictionary<string, (byte[] Record, TimeSpan TimeToLive)> _records = new(StringComparer.Ordinal);
-    private readonly Lock _gate = new();
+    private readonly object _gate = new();
     private readonly List<(int Records, TaskCompletionSource Done)> _waiters = new();
     private int _written;
 
@@ -627,7 +627,7 @@ internal sealed record RecordedCall(EntityKey[] Keys, EntityKey ContextKey, stri
 internal sealed class PoisoningPool : IBufferPool
 {
     public const byte Pattern = 0xCD;
-    private readonly Lock _gate = new();
+    private readonly object _gate = new();
 
     /// <summary>
     /// Arrays rented and not yet returned. A request gives its scratch buffers back as it goes

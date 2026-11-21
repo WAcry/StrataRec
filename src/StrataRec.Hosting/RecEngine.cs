@@ -377,7 +377,7 @@ public sealed record PlanLoadResult(
 public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposable
 {
     private readonly ConcurrentDictionary<string, LoadedPipeline> _pipelines = new(StringComparer.Ordinal);
-    private readonly Lock _publishGate = new(); // the lifecycle lock: _loads, _disposed and every change of _pipelines
+    private readonly object _publishGate = new(); // the lifecycle lock: _loads, _disposed and every change of _pipelines
     private readonly HashSet<PendingLoad> _loads = new();
     private long _loadTicket;
     private readonly PipelineExecutor _executor;

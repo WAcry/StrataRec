@@ -36,7 +36,7 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
 
     private readonly Channel<PendingWrite> _queue = Channel.CreateUnbounded<PendingWrite>(new UnboundedChannelOptions { SingleReader = true });
     private readonly ObservedCancellationSource _stopping = new(CancellationSite.CacheWriter);
-    private readonly Lock _gate = new();
+    private readonly object _gate = new();
     private Task? _writer;
     private long _queuedBytes;
     private bool _disposed;

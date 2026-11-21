@@ -153,7 +153,7 @@ public sealed class BoundModel
 public sealed class ModelOutputWriter(RequestMemory memory) : IModelOutputWriter
 {
     private readonly Dictionary<string, Memory<float>> _outputs = new(StringComparer.Ordinal);
-    private readonly Lock _gate = new();
+    private readonly object _gate = new();
     private Dictionary<string, string>? _texts;
 
     public Memory<float> GetFloat32(string name, int elementCount)

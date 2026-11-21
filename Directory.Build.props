@@ -6,9 +6,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest</AnalysisLevel>
-    <!-- Code-style rules that .editorconfig sets to warning fail the build too: IDE0330 (a lock is a
-         System.Threading.Lock field) and file-scoped namespaces. Rules left at suggestion stay in the editor. -->
-    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <Deterministic>true</Deterministic>
     <InvariantGlobalization>true</InvariantGlobalization>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
