@@ -236,6 +236,7 @@ internal sealed class RunRecorder : IFeatureCallHook
             OutputTokens = status.OutputTokens,
             Truncated = status.Truncated ? true : null,
             Degraded = degraded,
+            Dropped = answered && response.Dropped > 0 ? response.Dropped : null,
         };
         lock (_gate)
         {

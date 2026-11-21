@@ -337,6 +337,30 @@ public sealed class BoundedCallTests
         Assert.Equal(0, memory.Release());
     }
 
+    /// <summary>
+    /// A synchronous client that returns only after both the node's budget and its own, later, timeout have passed was cut
+    /// off by the earlier, the budget: the operator gets the budget's cancellation (review of IO step 4). It was classified
+    /// by its own timeout, which was checked first, and the operator got a failed status instead.
+    /// </summary>
+    [Fact]
+    public async Task ASynchronousAnswerAfterBothDeadlines_IsCutOffByTheEarlier()
+    {
+        var memory = new RequestMemory();
+        var budget = new AttemptBudget(CancellationToken.None, Deadline(50));
+        var site = new Site(memory);
+
+        var result = await Run(site.With(_ =>
+        {
+            Thread.Sleep(300);
+            return ValueTask.FromResult(5);
+        }), budget, memory, timeoutMs: 150);
+
+        Assert.Equal((CallEnd.BudgetRanOut, IoOutcome.Timeout, "timed out: the time budget ran out"), (result.End, result.Outcome, result.Error));
+        Assert.IsAssignableFrom<OperationCanceledException>(result.Exception);
+        budget.Release();
+        Assert.Equal(0, memory.Release());
+    }
+
     [Theory]
     [InlineData(7, IoOutcome.Ok, null)]
     [InlineData(-1, IoOutcome.Error, "negative")]
@@ -816,6 +840,21 @@ public sealed class BoundedCallAllocationTests
 /// <summary>A candidate buffer abandoned with its source still running reads as empty and takes no more candidates.</summary>
 public sealed class CandidateBufferTests
 {
+    /// <summary>The items dropped past the limit stay at most int.MaxValue, however a recorded count adds to them (review of IO step 4).</summary>
+    [Fact]
+    public void TheDroppedCount_StaysAtMostIntMaxValue()
+    {
+        var memory = new RequestMemory();
+        var buffer = new ServiceResponse(memory, 1);
+        buffer.AddItem(1, 0.9);
+        buffer.AddDropped(int.MaxValue);
+        buffer.AddItem(2, 0.8); // over the limit
+        buffer.AddDropped(5);
+
+        Assert.Equal(int.MaxValue, buffer.Dropped);
+        memory.Release();
+    }
+
     [Fact]
     public void AnAbandonedBuffer_ReadsAsEmpty_AndIgnoresLateAdds()
     {
@@ -828,7 +867,7 @@ public sealed class CandidateBufferTests
         buffer.Abandon();
         buffer.AddItem(4, 0.6);
 
-        Assert.Equal((0, 0, 0, 0), (buffer.Count, buffer.Keys.Length, buffer.Scores.Length, buffer.Truncated));
+        Assert.Equal((0, 0, 0, 0), (buffer.Count, buffer.Keys.Length, buffer.Scores.Length, buffer.Dropped));
         memory.Release();
     }
 

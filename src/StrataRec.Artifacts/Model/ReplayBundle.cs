@@ -45,11 +45,13 @@ public sealed class ReplayBundle
     /// sends it would still find that answer, and call the run identical. 2026-11-21.6 digests a call about no items that
     /// reads named outputs with its limit, a missing input of a call about items by its rows when its shape is per item,
     /// and records why a call left its node Degraded; a recall query of a negative zero or of a declared float32 is sent
-    /// as served since: a bundle before could replay identical to a run whose answers changed.
+    /// as served since: a bundle before could replay identical to a run whose answers changed. 2026-11-21.7 digests every
+    /// call about no items without its limit again (a recorded call answers the named outputs a call reads only at the
+    /// call's limit), and records the items a service added past a call's limit.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.6";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.7";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.6\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.7\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -310,6 +312,9 @@ public sealed class ReplayServiceCall
 
     [Description("Why the call left its node Degraded (its cache answered with values past their TTL after the service failed); absent otherwise.")]
     public string? Degraded { get; init; }
+
+    [Description("Items the service added past the call's limit, which its response dropped; absent when none.")]
+    public int? Dropped { get; init; }
 }
 
 /// <summary>Effective log sampling of the run (design 8.2, 8.4).</summary>

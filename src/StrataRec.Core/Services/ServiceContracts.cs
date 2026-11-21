@@ -366,7 +366,9 @@ public sealed class ServiceCall
     /// A service's items for a smaller limit are the start of its items for a larger one, as a ranked list's are: a cache
     /// and a replay answer a call that reads no named <see cref="Outputs"/> with the start of a longer list recorded for the
     /// same inputs, or with a list the service could not fill. A call that reads named outputs is answered only by an
-    /// answer to its own limit: an output or a text may say how many items it was asked for.
+    /// answer to its own limit: an output or a text may say how many items it was asked for. The items a service adds past
+    /// a limit (<c>ServiceResponse.Dropped</c>) count only for that limit: a longer list's start answers as a service
+    /// keeping to the smaller limit would, with none dropped.
     /// </remarks>
     public int Limit { get; init; }
 

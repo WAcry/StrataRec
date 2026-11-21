@@ -188,6 +188,91 @@ public sealed class ServiceCallReplayTests
         Assert.Empty(replay.Gaps);
     }
 
+    /// <summary>
+    /// A call that reads a named output more or less than its recording, with the same inputs and limit, still meets its
+    /// recording: its list is answered, and an output the recording lacks is a <c>not_recorded</c> gap. The limit in the
+    /// digest made such a call another call, its inputs reported changed (review of IO step 4).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ACallReadingAnOutputMoreOrLess_MeetsItsRecording(bool recordedReadsOutput)
+    {
+        var original = recordedReadsOutput ? Reading(Query(1, limit: 2), "summary") : Query(1, limit: 2);
+        var replayed = recordedReadsOutput ? Query(1, limit: 2) : Reading(Query(1, limit: 2), "summary");
+        var run = RunReplayTests.Run();
+        run.ServiceCalls.Add(Recorded("n", original, "ok", texts: recordedReadsOutput ? new() { ["summary"] = "A" } : new(), 7, 8));
+        var replay = RunReplay.Create(run, "/runs/0");
+        var response = new ServiceResponse(Memory, 2);
+
+        var status = replay.Call("n", new IoTarget(IoRoles.Recall, "s"), replayed, response, out _);
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Equal([7L, 8L], response.Keys.ToArray().Select(k => k.Int64Value));
+        if (recordedReadsOutput)
+        {
+            Assert.Empty(replay.Gaps);
+        }
+        else
+        {
+            var gap = Assert.Single(replay.Gaps);
+            Assert.Equal(("summary", "not_recorded"), (gap.Field, gap.Reason));
+        }
+    }
+
+    /// <summary>
+    /// A named output recorded for another limit is not replayed (it may say how many items it was asked for): the call
+    /// gets the start of the recorded list, and the output is a <c>limit_changed</c> gap.
+    /// </summary>
+    [Fact]
+    public void AnOutputRecordedForAnotherLimit_IsALimitChangedGap()
+    {
+        var run = RunReplayTests.Run();
+        run.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 3), "summary"), "ok", texts: new() { ["summary"] = "asked 3" }, 7, 8, 9));
+        var replay = RunReplay.Create(run, "/runs/0");
+        var asked = Reading(Query(1, limit: 1), "summary");
+        var response = new ServiceResponse(Memory, asked.Limit);
+
+        var status = replay.Call("n", new IoTarget(IoRoles.Recall, "s"), asked, response, out _);
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Equal([7L], response.Keys.ToArray().Select(k => k.Int64Value));
+        Assert.False(response.TryGetText("summary", out _));
+        var gap = Assert.Single(replay.Gaps);
+        Assert.Equal(("summary", "limit_changed"), (gap.Field, gap.Reason));
+    }
+
+    /// <summary>
+    /// The items a service added past the call's limit are replayed for that limit, as the node saw them; a call of a
+    /// smaller limit answered from the start of the list has none (review of IO step 4: they were not recorded).
+    /// </summary>
+    [Theory]
+    [InlineData(2, 3)]
+    [InlineData(1, 0)]
+    public void TheItemsAServiceDroppedPastTheLimit_AreReplayedForThatLimit(int limit, int dropped)
+    {
+        var recorded = Query(1, limit: 2);
+        var run = RunReplayTests.Run();
+        run.ServiceCalls.Add(new ReplayServiceCall
+        {
+            Node = "n",
+            Service = "s",
+            Role = IoRoles.Recall,
+            Limit = 2,
+            Status = "ok",
+            InputDigests = [ReplayJson.Hex(ServiceInputDigest.Call(recorded, ServiceInputDigest.NameOrder(recorded)))],
+            Ids = RunReplayTests.Json("[7,8]"),
+            Scores = [1.0, 1.0],
+            Dropped = 3,
+        });
+        var replay = RunReplay.Create(run, "/runs/0");
+        var response = new ServiceResponse(Memory, limit);
+
+        Assert.True(replay.Call("n", new IoTarget(IoRoles.Recall, "s"), Query(1, limit), response, out _).Succeeded);
+
+        Assert.Equal(dropped, response.Dropped);
+    }
+
     /// <summary>A node's recorded failure, replayed once, leaves its next call of the same inputs unrecorded: not "inputs changed".</summary>
     [Fact]
     public void ANodesCallsOfTheSameInputsUsedUp_AreNotRecorded_NotChanged()

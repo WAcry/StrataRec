@@ -18,9 +18,11 @@ namespace StrataRec.Pipeline.Replay;
 /// whether it is row-wise, as a present one's does (missing on every row). A call's
 /// <see cref="ServiceCallOptions.MaxOutputTokens"/> is part of every digest when it is set: a generative model answers
 /// differently under another limit, so a recorded answer is not served to a call with another one. The seed is not:
-/// it is the request's, which the bundle replays. The call's <see cref="ServiceCall.Limit"/> is only when the call reads
-/// named outputs: a recorded list answers a call asking for fewer items (a service's shorter list is the start of its
-/// longer one), but an output or a text may say how many it was asked for (review of IO step 3).
+/// it is the request's, which the bundle replays. The call's <see cref="ServiceCall.Limit"/> is not: a recorded list
+/// answers a call asking for fewer items (a service's shorter list is the start of its longer one), and the replay
+/// answers the named outputs a call reads only from a call recorded with its limit (an output or a text may say how many
+/// items it was asked for), so a call reading one output more or less still meets its recording. A cache key has it
+/// when the call reads named outputs: a cache matches by key alone.
 /// </remarks>
 internal static class ServiceInputDigest
 {
@@ -52,7 +54,6 @@ internal static class ServiceInputDigest
         try
         {
             builder.Add(call.BatchSize);
-            AddLimit(ref builder, call);
             AddOptions(ref builder, call.Options);
             var inputs = call.Inputs.Span;
             foreach (var i in order)
@@ -200,7 +201,7 @@ internal static class ServiceInputDigest
     public static bool IsRowWise(in NamedInput input, int batch) =>
         batch > 0 && input.ElementType != TensorElementType.Text && input.Shape is { Length: > 0 } shape && shape[0] == batch;
 
-    /// <summary>The limit of a call that reads named outputs (see the remarks); nothing for one that reads only its items.</summary>
+    /// <summary>The limit of a call that reads named outputs, in a cache key (see the remarks); nothing for one that reads only its items.</summary>
     private static void AddLimit(ref StableHash.Builder builder, ServiceCall call)
     {
         if (!call.Outputs.IsEmpty)

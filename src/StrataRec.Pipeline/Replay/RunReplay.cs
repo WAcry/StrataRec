@@ -204,7 +204,7 @@ internal sealed class RunReplay : IFeatureCallHook
                 var own = Take(calls, entry => entry.Keys is null && entry.Node == node && entry.Digests[0] == digest);
                 if (own is not null && (own.Outcome != IoOutcome.Ok || Answers(own, call)))
                 {
-                    return Unanswered(call, response, Answer(own, call, response, kind, node, out degraded), kind, node, null);
+                    return Unanswered(call, response, Answer(own, call, response, kind, node, out degraded), kind, node, null, own);
                 }
 
                 var answer = Best(calls, entry => entry.Keys is null && entry.Outcome == IoOutcome.Ok && entry.Digests[0] == digest, call);
@@ -218,7 +218,7 @@ internal sealed class RunReplay : IFeatureCallHook
                     return ServiceStatus.Failed($"{kind} '{call.Service}': this call is not in the replay bundle");
                 }
 
-                return Unanswered(call, response, Answer(answer, call, response, kind, node, out degraded), kind, node, null);
+                return Unanswered(call, response, Answer(answer, call, response, kind, node, out degraded), kind, node, null, answer);
             }
 
             var keys = items.ToArray();
@@ -232,14 +232,14 @@ internal sealed class RunReplay : IFeatureCallHook
             var ownCall = Take(calls, entry => entry.Node == node && Same(entry));
             if (ownCall is not null && (ownCall.Outcome != IoOutcome.Ok || Answers(ownCall, call)))
             {
-                return Unanswered(call, response, Answer(ownCall, call, response, kind, node, out degraded), kind, node, keys);
+                return Unanswered(call, response, Answer(ownCall, call, response, kind, node, out degraded), kind, node, keys, ownCall);
             }
 
             // A recorded call of these items and inputs answers as recorded, with gaps for what it lacks: synthesizing it item
             // by item would lose its texts and the order of repeated items.
             var same = Best(calls, entry => entry.Outcome == IoOutcome.Ok && Same(entry), call);
             return same is not null
-                ? Unanswered(call, response, Answer(same, call, response, kind, node, out degraded), kind, node, keys)
+                ? Unanswered(call, response, Answer(same, call, response, kind, node, out degraded), kind, node, keys, same)
                 : Synthesize(call, calls, response, keys, digests, node, kind);
         }
     }
@@ -252,7 +252,7 @@ internal sealed class RunReplay : IFeatureCallHook
     {
         foreach (var name in call.Outputs.Span)
         {
-            if (!entry.Outputs.ContainsKey(name) && !entry.Texts.ContainsKey(name))
+            if (!Has(entry, call, name))
             {
                 return false;
             }
@@ -260,6 +260,13 @@ internal sealed class RunReplay : IFeatureCallHook
 
         return Shortfall(entry, call) == 0;
     }
+
+    /// <summary>
+    /// Whether a recorded call has output <paramref name="name"/> for <paramref name="call"/>: recorded, at the call's limit
+    /// (an output or a text may say how many items it was asked for, review of IO step 3).
+    /// </summary>
+    private static bool Has(ServiceEntry entry, ServiceCall call, string name) =>
+        entry.Limit == call.Limit && (entry.Outputs.ContainsKey(name) || entry.Texts.ContainsKey(name));
 
     /// <summary>
     /// How many more items <paramref name="call"/> asks for than the recorded call can tell: 0 when it has as many, or it
@@ -298,7 +305,7 @@ internal sealed class RunReplay : IFeatureCallHook
             var outputs = 0;
             foreach (var name in call.Outputs.Span)
             {
-                outputs += entry.Outputs.ContainsKey(name) || entry.Texts.ContainsKey(name) ? 1 : 0;
+                outputs += Has(entry, call, name) ? 1 : 0;
             }
 
             (int Outputs, int Items, int Shortfall) has = (outputs, Math.Min(entry.Ids.Length, call.Limit), -Shortfall(entry, call));
@@ -312,10 +319,11 @@ internal sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// Reports each output the call reads that its successful answer lacks, as a <c>not_recorded</c> gap of that output,
-    /// with the node (a call about no items) or the items as examples.
+    /// Reports each output the call reads that its successful answer lacks, as a gap of that output, with the node (a call
+    /// about no items) or the items as examples: <c>limit_changed</c> when <paramref name="from"/> recorded it for another
+    /// limit, <c>not_recorded</c> otherwise.
     /// </summary>
-    private ServiceStatus Unanswered(ServiceCall call, ServiceResponse response, ServiceStatus status, string kind, string node, EntityKey[]? keys)
+    private ServiceStatus Unanswered(ServiceCall call, ServiceResponse response, ServiceStatus status, string kind, string node, EntityKey[]? keys, ServiceEntry from)
     {
         if (status.Succeeded)
         {
@@ -323,7 +331,8 @@ internal sealed class RunReplay : IFeatureCallHook
             {
                 if (!response.TryGetValues(name, out _) && !response.TryGetText(name, out _))
                 {
-                    AddOutputGap(kind, call.Service, name, node, keys, null);
+                    var recorded = from.Outputs.ContainsKey(name) || from.Texts.ContainsKey(name);
+                    AddOutputGap(kind, call.Service, name, node, keys, null, recorded && from.Limit != call.Limit ? "limit_changed" : "not_recorded");
                 }
             }
         }
@@ -331,12 +340,12 @@ internal sealed class RunReplay : IFeatureCallHook
         return status;
     }
 
-    /// <summary>A <c>not_recorded</c> gap of one output: for the node's call, or for <paramref name="keys"/> (those <paramref name="only"/> marks, when given).</summary>
-    private void AddOutputGap(string kind, string service, string output, string node, EntityKey[]? keys, bool[]? only)
+    /// <summary>A gap of one output: for the node's call, or for <paramref name="keys"/> (those <paramref name="only"/> marks, when given).</summary>
+    private void AddOutputGap(string kind, string service, string output, string node, EntityKey[]? keys, bool[]? only, string reason = "not_recorded")
     {
         if (keys is null)
         {
-            AddGap(kind, service, output, "not_recorded", 1, node);
+            AddGap(kind, service, output, reason, 1, node);
             return;
         }
 
@@ -345,7 +354,7 @@ internal sealed class RunReplay : IFeatureCallHook
         {
             if (only is null || only[r])
             {
-                (gap ??= Gap(kind, service, output, "not_recorded")).Add(1, keys[r].ToString());
+                (gap ??= Gap(kind, service, output, reason)).Add(1, keys[r].ToString());
             }
         }
     }
@@ -471,20 +480,31 @@ internal sealed class RunReplay : IFeatureCallHook
             };
         }
 
-        foreach (var (name, tensor) in entry.Outputs)
+        // A recorded call of another limit answers only the start of its list (or a list the service could not fill), as
+        // a service's cache does: its outputs, and the items its service added past its limit, were for its own limit.
+        var sameLimit = entry.Limit == call.Limit;
+        if (sameLimit)
         {
-            Write(response, name, tensor);
-        }
+            foreach (var (name, tensor) in entry.Outputs)
+            {
+                Write(response, name, tensor);
+            }
 
-        foreach (var (name, text) in entry.Texts)
-        {
-            response.SetText(name, text);
+            foreach (var (name, text) in entry.Texts)
+            {
+                response.SetText(name, text);
+            }
         }
 
         var count = Math.Min(entry.Ids.Length, call.Limit);
         for (var i = 0; i < count; i++)
         {
             response.AddItem(entry.Ids[i], entry.Scores[i]);
+        }
+
+        if (sameLimit)
+        {
+            response.AddDropped(entry.Dropped);
         }
 
         if (Shortfall(entry, call) is > 0 and var shortfall)
@@ -1124,7 +1144,7 @@ internal sealed class RunReplay : IFeatureCallHook
 
             var entry = new ServiceEntry(call.Seq, call.Node, call.Service, call.BatchSize, call.Limit, outcome, call.Error, call.Threw, keys,
                 call.InputDigests.ToArray(), outputs, new Dictionary<string, string>(call.Texts, StringComparer.Ordinal), ids, call.Scores.ToArray(),
-                call.OutputTokens, call.Truncated == true, call.Degraded);
+                call.OutputTokens, call.Truncated == true, call.Degraded, call.Dropped ?? 0);
             if (!_serviceCalls.TryGetValue((call.Service, call.Version), out var list))
             {
                 list = new List<ServiceEntry>();
@@ -1200,7 +1220,7 @@ internal sealed class RunReplay : IFeatureCallHook
     private sealed class ServiceEntry(
         int seq, string? node, string service, int batchSize, int limit, IoOutcome outcome, string? error, bool threw, EntityKey[]? keys, string[] digests,
         Dictionary<string, ReplayTensor> outputs, Dictionary<string, string> texts, EntityKey[] ids, double[] scores, int? outputTokens, bool truncated,
-        string? degraded)
+        string? degraded, int dropped)
     {
         public int Seq { get; } = seq;
 
@@ -1238,6 +1258,9 @@ internal sealed class RunReplay : IFeatureCallHook
 
         /// <summary>Why the call left its node Degraded when it was recorded; null when it did not.</summary>
         public string? Degraded { get; } = degraded;
+
+        /// <summary>The items its service added past the call's limit (<see cref="ServiceResponse.Dropped"/>).</summary>
+        public int Dropped { get; } = dropped;
 
         public bool Consumed { get; set; }
     }

@@ -156,6 +156,13 @@ internal sealed class CachedServiceCall
 
         if (misses == 0)
         {
+            // Answered by the tiers alone, and taken only if the node could still send the call now, as a service's
+            // answer is heard only if the call's bound has not passed when it is observed (BoundedCall, rule 1).
+            if (BoundedCall.CutOff(_context.Budget) is { } late)
+            {
+                return new Result(default, late.Outcome, late.Exception, false);
+            }
+
             return new Result(Assemble(null, null), IoOutcome.Ok, null, true);
         }
 
@@ -285,7 +292,9 @@ internal sealed class CachedServiceCall
             }
             else
             {
-                if (_rows[r].State == RowState.Miss)
+                // Kept for a failure of the service: the newer of a stale local record and this one, which stays within
+                // stale_if_error_ms longer (review of IO step 4: a stale local record hid a newer one here).
+                if (_rows[r].State == RowState.Miss || (_rows[r].State == RowState.Stale && decoded.WrittenMs > WrittenMs(r)))
                 {
                     _rows[r] = new Row(RowState.Stale, default, decoded);
                 }
@@ -413,8 +422,7 @@ internal sealed class CachedServiceCall
                 continue;
             }
 
-            var writtenMs = _rows[r].Wire is { } wire ? wire.WrittenMs : new LocalServiceRecord(_version, _rows[r].Local).WrittenMs;
-            if (_cache.Classify(writtenMs, _keys[r], nowMs) == CacheFreshness.Expired)
+            if (_cache.Classify(WrittenMs(r), _keys[r], nowMs) == CacheFreshness.Expired)
             {
                 return false;
             }
@@ -422,6 +430,9 @@ internal sealed class CachedServiceCall
 
         return true;
     }
+
+    /// <summary>When the record row <paramref name="r"/> holds (a stale or fresh one, local or distributed) was written.</summary>
+    private long WrittenMs(int r) => _rows[r].Wire is { } wire ? wire.WrittenMs : new LocalServiceRecord(_version, _rows[r].Local).WrittenMs;
 
     // ------------------------------------------------------------------------------------------------------------------
     // Reading records
@@ -496,8 +507,10 @@ internal sealed class CachedServiceCall
         sizes.Clear();
         if (kind == CallKind)
         {
+            // As a response holds them: no more items than the limit asked, and items dropped only past a full list.
             var (items, ids, asked, flags, dropped) = (layout[2], layout[3], layout[4], layout[5], layout[6]);
-            if (items < 0 || asked < 0 || dropped < 0 || (flags & ~TruncatedFlag) != 0 || ids is < NoIds or > StringIds || (ids == NoIds) != (items == 0))
+            if (items < 0 || asked < 0 || dropped < 0 || items > asked || (dropped > 0 && items != asked) || (flags & ~TruncatedFlag) != 0
+                || ids is < NoIds or > StringIds || (ids == NoIds) != (items == 0))
             {
                 return false;
             }
@@ -678,9 +691,10 @@ internal sealed class CachedServiceCall
     }
 
     /// <summary>
-    /// A call's answer from its record: outputs, texts, items up to the limit, and whether it was cut short. Every recorded
-    /// item is added, so the response counts those past a smaller limit as dropped, as it would the service's own, on top
-    /// of those the service had added past the recorded call's limit.
+    /// A call's answer from its record: outputs, texts, items up to the limit, and whether it was cut short. A record of a
+    /// larger limit answers as a service keeping to the call's limit would (ServiceCall.Limit): the start of its list, no
+    /// item dropped; the items the service added past a limit count only for the limit it was asked (review of IO step 4:
+    /// the recorded items past the smaller limit were counted as dropped).
     /// </summary>
     private ServiceStatus WriteCall<TRecord>(TRecord record)
         where TRecord : IServiceRecord
@@ -728,13 +742,17 @@ internal sealed class CachedServiceCall
         }
 
         var scores = record.Float64s;
-        for (var i = 0; i < items; i++)
+        var answered = Math.Min(items, _call.Limit);
+        for (var i = 0; i < answered; i++)
         {
             var id = layout[3] == StringIds ? EntityKey.FromString(record.String(i)) : EntityKey.FromInt64(record.Int64s[i]);
             _response.AddItem(id, scores[i]);
         }
 
-        _response.AddDropped(layout[6]);
+        if (layout[4] == _call.Limit)
+        {
+            _response.AddDropped(layout[6]);
+        }
         return ServiceStatus.Ok with { Truncated = (layout[5] & TruncatedFlag) != 0 };
     }
 
@@ -792,7 +810,7 @@ internal sealed class CachedServiceCall
             _response.AddItem(keys[i], scores[i]);
         }
 
-        _response.AddDropped(answer.Truncated);
+        _response.AddDropped(answer.Dropped);
     }
 
     // ------------------------------------------------------------------------------------------------------------------
@@ -873,7 +891,7 @@ internal sealed class CachedServiceCall
             }
         }
 
-        builder.Layout.AddRange([CallKind, outputs.Length, keys.Length, idKind, _call.Limit, truncated ? TruncatedFlag : 0, answer.Truncated]);
+        builder.Layout.AddRange([CallKind, outputs.Length, keys.Length, idKind, _call.Limit, truncated ? TruncatedFlag : 0, answer.Dropped]);
         foreach (var key in keys)
         {
             if (idKind == StringIds)

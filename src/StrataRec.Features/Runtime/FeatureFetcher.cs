@@ -778,7 +778,11 @@ public sealed partial class FeatureFetcher
     {
         var call = BoundedCall.RunAsync<FetchStatus, ConnectorCall>(
             new ConnectorCall(this, group, batch, fields, writer, budgetMs, sequence), bound, _memory, group.Io, CallDeadline.None);
-        writerHeld = !call.IsCompleted;
+
+        // A call whose wait ended at once (the caller had cancelled while the connector's task was pending) has abandoned a
+        // connector that may still write through the view: it is not the next chunk's (review of IO step 4). The result is
+        // a plain value or a task, so reading it here does not consume it.
+        writerHeld = !call.IsCompletedSuccessfully || call.Result.Abandoned;
         return call;
     }
 
@@ -814,7 +818,7 @@ public sealed partial class FeatureFetcher
         CallEnd.Cancelled => Cancelled(group),
         CallEnd.TimedOut or CallEnd.BudgetRanOut => TimedOut(group, budgetMs),
         _ when result.Outcome == IoOutcome.Timeout => TimedOut(group, budgetMs),
-        _ => FetchStatus.Failed($"source '{group.SourceName}' failed: {result.Exception?.Message ?? "the call did not complete"}"),
+        _ => FetchStatus.Failed($"source '{group.SourceName}' failed: {result.Error ?? "the call did not complete"}"), // read once (BoundedCall)
     };
 
     /// <summary>Whether a connector call's staging must not be read: it did not answer in time, or answered a failure.</summary>

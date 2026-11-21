@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
@@ -209,7 +210,8 @@ public sealed class ServiceCacheReviewTests
 
     /// <summary>
     /// The items a service added past the limit are counted on a cached call as on the service's own answer, cold and from
-    /// the record, and a record answering a smaller limit counts its items past it too.
+    /// the record. A record answering a smaller limit answers as a service keeping to that limit would: the start of its
+    /// list, none dropped (review of IO step 4: its items past the smaller limit were counted as dropped, 2 here).
     /// </summary>
     [Fact]
     public async Task TheItemsAServiceAddsPastTheLimit_AreCountedOnACachedCall()
@@ -235,7 +237,7 @@ public sealed class ServiceCacheReviewTests
         await context.CallAsync(rig.With(client), Query(2, 2), hit);
         await context.CallAsync(rig.With(client), Query(2, 1), smaller);
 
-        Assert.Equal((1, 1, 1, 2), (plain.Truncated, cold.Truncated, hit.Truncated, smaller.Truncated));
+        Assert.Equal((1, 1, 1, 0), (plain.Dropped, cold.Dropped, hit.Dropped, smaller.Dropped));
         Assert.Equal([1L], Ids(smaller));
         memory.Release();
     }
@@ -363,6 +365,124 @@ public sealed class ServiceCacheReviewTests
         Assert.Equal(("a100", "a0"), (a, b));
         Assert.Single(changed.Service.Calls);
         Assert.Empty(same.Service.Calls);
+    }
+
+    /// <summary>
+    /// A stale distributed record newer than the stale local one is kept for a failure of the service: when the service
+    /// fails after the local record has left <c>stale_if_error_ms</c>, the newer one still answers, as it does for a
+    /// reader with no local record (review of IO step 4). The local record hid it, and the call failed.
+    /// </summary>
+    [Fact]
+    public async Task ANewerDistributedStaleRecord_AnswersWhenTheOlderLocalOneHasExpired()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var store = new FakeCacheStore();
+        var reader = new ServiceCacheRig(ttlMs: 1000, staleIfErrorMs: 5000, store: store);
+        var query = Query(1, limit: 1);
+        reader.Service.Have = [11];
+        var first = await reader.CallAsync(query);
+        Assert.Equal([11L], Ids(first.Response));
+        Assert.Equal(1, reader.Apply());
+        await store.WhenWrittenAsync(1).WaitAsync(Patience, token);
+
+        var other = new ServiceCacheRig(ttlMs: 1000, staleIfErrorMs: 5000, store: store);
+        other.Clock.AdvanceMs(3000);
+        other.Service.Have = [22];
+        var newer = await other.CallAsync(query);
+        Assert.Equal([22L], Ids(newer.Response));
+        await store.WhenWrittenAsync(2).WaitAsync(Patience, token);
+
+        reader.Clock.AdvanceMs(5000); // the local record is stale, still within its window
+        store.BeforeGet = _ =>
+        {
+            reader.Clock.AdvanceMs(2000); // past it by the time the read answers, the newer one is not
+            return ValueTask.CompletedTask;
+        };
+        reader.Service.Fail = true;
+        var (status, response) = await reader.CallAsync(query);
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Equal([22L], Ids(response));
+        Assert.NotNull(reader.Last!.DegradedReason);
+    }
+
+    /// <summary>
+    /// A record whose header says what no response holds (more items than the limit it was asked, items dropped past a
+    /// list that was not full) is never read: the service answers. It was read.
+    /// </summary>
+    [Theory]
+    [InlineData("items past the limit asked", 0, 0)]
+    [InlineData("dropped past a list not full", 3, 1)]
+    public async Task ARecordWithAHeaderNoResponseHolds_IsNeverRead(string what, int limitAsked, int dropped)
+    {
+        _ = what;
+        const int readLimit = 2;
+        var token = TestContext.Current.CancellationToken;
+        var store = new FakeCacheStore();
+        var writer = new ServiceCacheRig(store: store);
+        var written = await writer.CallAsync(Query(1, limit: 2));
+        Assert.Equal([1L, 2L], Ids(written.Response));
+        await store.WhenWrittenAsync(1).WaitAsync(Patience, token);
+        Assert.True(store.Gets.TryDequeue(out var keys));
+        Assert.True(store.TryGet(keys[0], out var record, out _));
+
+        // The layout list after the prefix: its length, then kind, n, items (2 here), id kind, limit asked, flags, dropped.
+        BinaryPrimitives.WriteInt32LittleEndian(record.AsSpan(CacheRecord.PrefixSize(7) + (5 * sizeof(int))), limitAsked);
+        BinaryPrimitives.WriteInt32LittleEndian(record.AsSpan(CacheRecord.PrefixSize(7) + (7 * sizeof(int))), dropped);
+        store.Put(keys[0], record);
+
+        var reader = new ServiceCacheRig(store: store);
+        reader.Service.Have = [81];
+        var (status, response) = await reader.CallAsync(Query(1, limit: readLimit));
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Equal([81L], Ids(response));
+        Assert.Equal(0, response.Dropped);
+        Assert.Single(reader.Service.Calls);
+    }
+
+    /// <summary>
+    /// A call whose caller cancels while the cache reads it (a host's listener on the cache's metrics, here) is not answered
+    /// from the cache: an answer is taken only if the node could still send the call when it is observed, as a service's
+    /// answer is. It was answered.
+    /// </summary>
+    [Fact]
+    public async Task ACallCancelledWhileTheCacheReadsIt_IsNotAnsweredFromIt()
+    {
+        var rig = new ServiceCacheRig();
+        var call = Items([71], [0.1f]);
+        await rig.CallAsync(call);
+        Assert.Equal(1, rig.Apply());
+        using var cancellation = new CancellationTokenSource();
+        var armed = 0;
+        using var listener = new MeterListener
+        {
+            InstrumentPublished = static (instrument, meterListener) =>
+            {
+                if (instrument.Name == StrataRecMetrics.Names.CacheKeys)
+                {
+                    meterListener.EnableMeasurementEvents(instrument);
+                }
+            },
+        };
+        listener.SetMeasurementEventCallback<long>((_, _, _, _) =>
+        {
+            if (Volatile.Read(ref armed) == 1)
+            {
+                cancellation.Cancel();
+            }
+        });
+        listener.Start();
+        var memory = new RequestMemory();
+        var context = Context(memory, cancellation.Token, long.MaxValue);
+
+        Volatile.Write(ref armed, 1);
+        var thrown = await Record.ExceptionAsync(() => context.CallAsync(rig.Bound, call, new ServiceResponse(memory)));
+
+        Assert.True(cancellation.IsCancellationRequested);
+        Assert.IsAssignableFrom<OperationCanceledException>(thrown);
+        Assert.Single(rig.Service.Calls); // the first call's
+        memory.Release();
     }
 
     private static OperatorContext Context(RequestMemory memory, CancellationToken token, long deadline) => new(new RequestState

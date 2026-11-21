@@ -29,7 +29,7 @@ public sealed class ServiceResponse : IServiceResponse
     private List<(string Name, TensorValues Values)>? _tensors;
     private List<(string Name, string Text)>? _texts;
     private int _count;
-    private int _truncated;
+    private int _dropped;
     private bool _closed;
     private bool _abandoned;
 
@@ -54,8 +54,11 @@ public sealed class ServiceResponse : IServiceResponse
     /// <summary>Scores of <see cref="Keys"/>; a non-finite score is stored as 0.</summary>
     public ReadOnlySpan<double> Scores => _scores.AsSpan(0, Count);
 
-    /// <summary>Items dropped because the response was full; 0 once the call was abandoned.</summary>
-    public int Truncated => Volatile.Read(ref _abandoned) ? 0 : _truncated;
+    /// <summary>
+    /// Items the service added past the call's limit, dropped because the response was full; 0 once the call was abandoned.
+    /// Not <see cref="ServiceStatus.Truncated"/>, which says a generation was cut short.
+    /// </summary>
+    public int Dropped => Volatile.Read(ref _abandoned) ? 0 : _dropped;
 
     public Memory<T> GetValues<T>(string name, int elementCount)
     {
@@ -139,12 +142,15 @@ public sealed class ServiceResponse : IServiceResponse
         return false;
     }
 
-    /// <summary>Counts items a service added past the limit, which a cache's answer carries (<see cref="Truncated"/>).</summary>
+    /// <summary>
+    /// Counts items a service added past the limit, which a cache's answer and a recording carry (<see cref="Dropped"/>);
+    /// at most <see cref="int.MaxValue"/>.
+    /// </summary>
     internal void AddDropped(int count)
     {
-        if (!Volatile.Read(ref _closed))
+        if (!Volatile.Read(ref _closed) && count > 0)
         {
-            _truncated += count;
+            _dropped = (int)Math.Min(int.MaxValue, (long)_dropped + count);
         }
     }
 
@@ -157,7 +163,7 @@ public sealed class ServiceResponse : IServiceResponse
 
         if (_count >= Limit)
         {
-            _truncated++;
+            _dropped = _dropped == int.MaxValue ? _dropped : _dropped + 1;
             return;
         }
 

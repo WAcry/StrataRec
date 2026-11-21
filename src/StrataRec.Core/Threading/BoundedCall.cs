@@ -588,9 +588,11 @@ internal static class BoundedCall
     }
 
     /// <summary>
-    /// A call the bound or the caller won (rule 1): nothing the client returned or threw is used. The call's own deadline
-    /// expired when it has passed by its clock, or its timer fired while the scope's bound has not run out; otherwise the
-    /// scope's bound ran out (even if its timer has not fired yet).
+    /// A call the bound or the caller won (rule 1): nothing the client returned or threw is used. The deadline that came
+    /// first ended it: the call's own when it was the earlier when the call was sent (it had a token source of its own),
+    /// or when it has passed by its clock while the scope's bound has not (a cache's clock is not the bound's); otherwise
+    /// the scope's bound ran out (even if its timer has not fired yet). A client that returns only after both have passed
+    /// is cut off by the earlier, not by whichever is checked first (review of IO step 4).
     /// </summary>
     /// <param name="honoured">A cancellation the client threw after it lost, thrown on to the operator as its own.</param>
     /// <param name="ownSet">The call had a token source of its own for its deadline.</param>
@@ -603,7 +605,7 @@ internal static class BoundedCall
             return Cancelled<T>(bound, honoured, abandoned);
         }
 
-        var own = deadline.IsSet && (deadline.HasPassed || (ownSet && !bound.Passed));
+        var own = deadline.IsSet && (ownSet || (deadline.HasPassed && !bound.Passed));
         return own ? TimedOut<T>(deadline, abandoned) : RanOut<T>(bound, honoured, abandoned);
     }
 
