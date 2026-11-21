@@ -409,7 +409,7 @@ public sealed class OperatorContext
     {
         if (_state.Replay is { } replay)
         {
-            return replay.InvokeModel(call, outputs, KeysOf(rows));
+            return replay.InvokeModel(call, outputs, KeysOf(rows), NodeId);
         }
 
         var recorder = _state.Recorder;

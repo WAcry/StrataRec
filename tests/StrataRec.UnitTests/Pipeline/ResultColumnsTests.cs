@@ -75,10 +75,14 @@ public sealed class ResultColumnsTests
             new RankedItem(EntityKey.FromInt64(1), 1, new Dictionary<string, ScalarValue> { ["a"] = ScalarValue.FromInt64(1) }),
             new RankedItem(EntityKey.FromInt64(2), 2, new Dictionary<string, ScalarValue> { ["b"] = ScalarValue.FromInt64(1) }),
         };
-        Assert.Contains("no column 'a'", Assert.Throws<ArgumentException>(() => ResultColumns.FromItems([("a", ColumnType.Int64)], mismatched)).Message);
+        Assert.Contains("Item 1 has a column 'b', which the output does not", Assert.Throws<ArgumentException>(() => ResultColumns.FromItems([("a", ColumnType.Int64)], mismatched)).Message);
         var two = new RankedItem(EntityKey.FromInt64(1), 1, new Dictionary<string, ScalarValue> { ["x"] = ScalarValue.FromInt64(1), ["y"] = ScalarValue.FromInt64(7) });
         Assert.Contains("Column 'x' is defined twice", Assert.Throws<ArgumentException>(
-            () => ResultColumns.FromItems([("x", ColumnType.Int64), ("x", ColumnType.Float64)], [two])).Message); // its two keys would be written
+            () => ResultColumns.FromItems([("x", ColumnType.Int64), ("x", ColumnType.Int64)], [two])).Message); // x twice, y dropped
+        var ignoringCase = new RankedItem(EntityKey.FromInt64(1), 1,
+            new Dictionary<string, ScalarValue>(StringComparer.OrdinalIgnoreCase) { ["x"] = ScalarValue.FromInt64(1), ["y"] = ScalarValue.FromInt64(7) });
+        Assert.Contains("has a column 'y', which the output does not", Assert.Throws<ArgumentException>(
+            () => ResultColumns.FromItems([("x", ColumnType.Int64), ("X", ColumnType.Int64)], [ignoringCase])).Message); // 'X' finds x
     }
 
     [Theory]

@@ -71,6 +71,9 @@ public class CompilerTests
     [InlineData("(param.w_click)", "param.w_click")]
     [InlineData("param.w_click * 2.0", null)]
     [InlineData("ctx.user.tenure_days > 30.0", null)]
+    [InlineData("col.item.report_rate * 1.0", null)] // computations as written, though the optimizer
+    [InlineData("double(col.item.report_rate)", null)] // or the binder reduces them to the name
+    [InlineData("max(param.recall_quotas.cf)", null)]
     public void AnExpressionThatIsAName_IsAReferenceToIt(string source, string? name)
     {
         var compiled = HomeFeed().Compile(source);

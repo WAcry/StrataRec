@@ -319,9 +319,10 @@ public static class ResultComparison
         };
     }
 
+    // The declared columns too: a result of no rows still has its output's columns.
     private static List<string> ColumnNames(ComparableResult result)
     {
-        var names = new SortedSet<string>(StringComparer.Ordinal);
+        var names = new SortedSet<string>(result.Types.Keys, StringComparer.Ordinal);
         foreach (var columns in result.Columns)
         {
             names.UnionWith(columns.Keys);

@@ -643,12 +643,10 @@ public sealed partial class RecEngine
                 continue;
             }
 
-            // The declared type: a request records only once its inputs passed the plan's schema (ExecuteAsync checks them
-            // first). The value's own type remains for a caller of this method that did not check.
-            var type = pipeline.Plan.RequestSchema.TryGetType(name, out var declared) && value.TryConvert(declared, out _)
-                ? declared
-                : ReplayJson.TypeOf(value);
-            inputs[name] = ReplayJson.Typed(type, value);
+            // The value as the host gave it, at its own (promoted) type, not the declared one: decoded, it is that value
+            // again, and each pipeline that binds it converts it as it was served (a fallback pipeline may declare the
+            // input otherwise; an int64 recorded as the primary's float32 lost its digits for an int64 fallback).
+            inputs[name] = ReplayJson.Typed(ReplayJson.TypeOf(value), value);
         }
 
         return new ReplayRequestRecord

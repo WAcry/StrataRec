@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text;
 using StrataRec.Artifacts.Json;
 using StrataRec.Core.Types;
@@ -254,7 +253,7 @@ internal static class ModelTensorRule
                 {
                     problems.Add(new Problem(output.ConfigKey, "MODEL_TENSOR_MISMATCH",
                         $"{label} declares output '{output.Name}' as {Describe(spec)}, but it is written to a {column} column, which {OperatorId(layout)} reads as {Describe(tensor.ElementType, shape)}.",
-                        ColumnTaking(spec) is { } other
+                        ColumnTypeFor(OutputShape(layout, -1), spec) is { } other
                             ? $"declare output '{output.Name}' as {Describe(tensor.ElementType, shape)} in the model's signature, or write it to {Article(other)} {other} column, which takes what the model returns"
                             : $"declare output '{output.Name}' as {Describe(tensor.ElementType, shape)} in the model's signature; no column takes {Describe(spec)}"));
                 }
@@ -266,24 +265,6 @@ internal static class ModelTensorRule
         }
 
         return problems;
-    }
-
-    /// <summary>
-    /// The column type a <c>ModelScorer@1</c> output declared as <paramref name="spec"/> could be written to (<c>int64</c>,
-    /// <c>list&lt;float32,4&gt;</c>, <c>list&lt;float32,N&gt;</c> for a trailing -1); null when no column takes it (text,
-    /// a fixed batch dimension, a rank above 2).
-    /// </summary>
-    private static string? ColumnTaking(TensorSpec spec)
-    {
-        if (spec.ElementType == TensorElementType.Text || spec.Shape is not { Count: 1 or 2 } || spec.Shape[0] != -1)
-        {
-            return null;
-        }
-
-        var element = TensorValues.Name(spec.ElementType);
-        return spec.Shape.Count == 1
-            ? element
-            : $"list<{element},{(spec.Shape[1] == -1 ? "N" : spec.Shape[1].ToString(CultureInfo.InvariantCulture))}>";
     }
 
     /// <summary>A float32 or float64 tensor of the layout's output shape: a score per row, pair or list row, which the operator ranks by.</summary>
@@ -342,10 +323,17 @@ internal static class ModelTensorRule
     /// The type of a column (or, with <paramref name="broadcast"/>, a context value) that <paramref name="layout"/> sends
     /// as <paramref name="spec"/>, or null when none does. A list whose N is declared -1 is any <c>list&lt;E,N&gt;</c>.
     /// </summary>
-    private static string? ReferenceTypeFor(TensorLayout layout, bool broadcast, TensorSpec spec)
+    private static string? ReferenceTypeFor(TensorLayout layout, bool broadcast, TensorSpec spec) =>
+        ColumnTypeFor(InputShape(layout, broadcast, -1, 0), spec);
+
+    /// <summary>
+    /// The column type whose tensor is <paramref name="spec"/> where a scalar column's tensor has the shape
+    /// <paramref name="leading"/> (an input's or an output's): the scalar, or a list along one more dimension; null when
+    /// no column type is (a fixed dimension other than the batch's, a list of no length, a text or unknown element).
+    /// </summary>
+    private static string? ColumnTypeFor(int[] leading, TensorSpec spec)
     {
         var shape = spec.Shape;
-        var leading = InputShape(layout, broadcast, -1, 0);
         if (shape is null || shape.Count < leading.Length || shape.Count > leading.Length + 1)
         {
             return null;

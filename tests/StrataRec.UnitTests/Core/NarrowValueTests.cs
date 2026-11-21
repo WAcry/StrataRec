@@ -128,6 +128,24 @@ public sealed class NarrowValueTests
         Assert.Equal(scalar, replayed);
     }
 
+    /// <summary>
+    /// A context feature's integer stored as float32 goes through its double too, as the same feature's candidate column
+    /// stores it: published once per request, the two must be the same float.
+    /// </summary>
+    [Fact]
+    public void AnIntegerAsStoredFloat32_IsTheFloatACandidateColumnStores()
+    {
+        const long Value = 9_007_199_791_611_905;
+        var column = (ScalarColumn<float>)ColumnBuffer.Create(ColumnType.Float32, 1, new RequestMemory());
+        ColumnValues.Set(column, 0, ScalarValue.FromInt64(Value));
+
+        var scalar = ColumnValues.AsStored(ScalarValue.FromInt64(Value), ColumnType.Float32);
+        var list = ColumnValues.AsStored(ScalarValue.FromInt64List([Value]), ColumnType.List(StorageKind.Float32));
+
+        Assert.Equal((double)column.Values[0], scalar.AsFloat64());
+        Assert.Equal([(double)column.Values[0]], list.AsFloat64List().ToArray());
+    }
+
     /// <summary>A list whose elements are floats already converts to list&lt;float32&gt; without copying them.</summary>
     [Fact]
     public void AListOfFloatsAlready_ConvertsToFloat32_WithoutACopy()

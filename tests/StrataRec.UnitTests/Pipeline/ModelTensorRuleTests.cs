@@ -172,6 +172,8 @@ public sealed class ModelTensorRuleTests
     [InlineData("float32", TensorElementType.Float32, new[] { 256 }, "float32 [256]", "float32 [-1]", "; no column takes float32 [256]")] // a fixed batch
     [InlineData("float32", TensorElementType.Float32, new[] { -1, 2, 3 }, "float32 [-1, 2, 3]", "float32 [-1]", "; no column takes float32 [-1, 2, 3]")]
     [InlineData("float32", TensorElementType.Text, new int[0], "text []", "float32 [-1]", "; no column takes text []")]
+    [InlineData("float32", TensorElementType.Float32, new[] { -1, 0 }, "float32 [-1, 0]", "float32 [-1]", "; no column takes float32 [-1, 0]")] // a list of no length
+    [InlineData("float32", TensorElementType.Float32, new[] { -1, -2 }, "float32 [-1, -2]", "float32 [-1]", "; no column takes float32 [-1, -2]")]
     [InlineData("int64?", TensorElementType.Int32, new[] { -1 }, "int32 [-1]", "int64 [-1]", ", or write it to an int32 column, which takes what the model returns")]
     [InlineData("list<float32,4>", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "float32 [-1, 4]", ", or write it to a float32 column, which takes what the model returns")]
     public void AScorerOutputDeclaredOtherwiseThanItsColumnTakes_IsAMismatch_SayingWhatIsReadAndHowToFixIt(

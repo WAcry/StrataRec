@@ -103,6 +103,20 @@ public sealed class ResultComparisonTests
         Assert.Equal(new RetypedColumn("score", ColumnType.Float32, ColumnType.Float64), Assert.Single(retyped.RetypedColumns));
     }
 
+    /// <summary>A result of no rows still has its output's columns: a column renamed between them is a change.</summary>
+    [Fact]
+    public void Diff_ReportsColumnsAddedAndRemoved_InResultsOfNoRows()
+    {
+        var recorded = new ComparableResult { Succeeded = true, Ids = [], Columns = [], Types = new Dictionary<string, ColumnType> { ["before"] = ColumnType.Int64 } };
+        var replayed = new ComparableResult { Succeeded = true, Ids = [], Columns = [], Types = new Dictionary<string, ColumnType> { ["after"] = ColumnType.Int64 } };
+
+        var diff = ResultComparison.Diff(recorded, replayed);
+
+        Assert.False(diff.Identical);
+        Assert.Equal(["after"], diff.AddedColumns);
+        Assert.Equal(["before"], diff.RemovedColumns);
+    }
+
     [Fact]
     public void Summarize_UsesNearestRankPercentiles()
     {

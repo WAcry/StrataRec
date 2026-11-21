@@ -111,12 +111,19 @@ public sealed class ResultColumns
                 throw new ArgumentException($"Item {i} has {items[i].Columns.Count} columns, the output {names.Length}.", nameof(items));
             }
 
+            // Its keys are the output's names, as the output compares them (a case-insensitive dictionary finds 'x' for 'X'):
+            // as many keys as names, each one of them, so each name is a key.
+            foreach (var (name, _) in items[i].Columns)
+            {
+                if (!distinct.Contains(name))
+                {
+                    throw new ArgumentException($"Item {i} has a column '{name}', which the output does not.", nameof(items));
+                }
+            }
+
             for (var c = 0; c < names.Length; c++)
             {
-                if (!items[i].Columns.TryGetValue(names[c], out var value))
-                {
-                    throw new ArgumentException($"Item {i} has no column '{names[c]}'.", nameof(items));
-                }
+                var value = items[i].Columns[names[c]];
 
                 // A value of the type converts to itself: of the type's promoted kind, in its range, of its length.
                 if (!value.TryConvert(types[c], out var converted) || !converted.Equals(value))

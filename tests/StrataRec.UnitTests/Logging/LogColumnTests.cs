@@ -86,6 +86,30 @@ public sealed class LogColumnTests
         Assert.Equal([0, 0, 2, 2], column.Offsets!);
     }
 
+    /// <summary>
+    /// The width is the logged type's: storage of any length logged as list&lt;E,N&gt; (its element type is the same) and
+    /// values given as they are both log a row of another length missing.
+    /// </summary>
+    [Fact]
+    public void ARowOfAnotherLength_ThanTheLoggedListOfN_IsMissing_FromAnyStorage_AndFromValues()
+    {
+        var memory = new RequestMemory();
+        var logged = ColumnType.Parse("list<float32,2>?");
+        var anyLength = (ListColumn<float>)ColumnBuffer.Create(ColumnType.Parse("list<float32>?"), 2, memory);
+        anyLength.Set(0, [0.5f]);
+        anyLength.Set(1, [1f, 2f]);
+
+        var captured = LogColumn.Capture("emb", logged, anyLength, [0, 1]);
+        var given = LogColumn.FromValues("emb", logged, [ScalarValue.FromFloat32List([0.5f]), ScalarValue.FromFloat32List([1f, 2f])]);
+
+        foreach (var column in new[] { captured, given })
+        {
+            Assert.Equal((true, false), (column.IsMissing(0), column.IsMissing(1)));
+            Assert.Equal([1f, 2f], Assert.IsType<float[]>(column.Values));
+            Assert.Equal([0, 0, 2], column.Offsets!);
+        }
+    }
+
     [Fact]
     public void Capture_RejectsABufferThatDoesNotStoreTheType()
     {

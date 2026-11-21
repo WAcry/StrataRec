@@ -180,7 +180,7 @@ internal static class TapCapture
         if (tap.Filter is { } filter && rows.Length > 0)
         {
             // A filter reading a failed feature is missing for every row, which a filter treats as false.
-            if (!ReadsFailedFeature(state, filter))
+            if (!LacksData(state, filter))
             {
                 var keep = ColumnBuffer.Create(filter.ResultType, capacity, memory);
                 filter.Evaluate(eval, rows, keep);
@@ -247,7 +247,7 @@ internal static class TapCapture
         {
             var (name, expression) = tap.Columns[c];
             var type = tap.Schema.Columns[c].Type; // the declared type for a reference, else the promoted result type
-            if (count == 0 || ReadsFailedFeature(state, expression))
+            if (count == 0 || LacksData(state, expression))
             {
                 columns[c] = LogColumn.AllMissing(name, type, count);
             }
@@ -335,12 +335,19 @@ internal static class TapCapture
     /// are invalid under a non-nullable type, which the expression would read without checking validity (review 6). A
     /// tap never fails the request, so such a column is logged as missing.
     /// </summary>
-    private static bool ReadsFailedFeature(RequestState state, CompiledExpression expression)
+    /// <summary>
+    /// True when the expression reads what this request has no value of: a feature whose fetch failed, or a non-nullable
+    /// column no node produced (evaluated, the read would throw; a nullable one reads as missing, which an expression may
+    /// handle). A tap logs such a column missing; it never fails the request.
+    /// </summary>
+    private static bool LacksData(RequestState state, CompiledExpression expression)
     {
         var reads = expression.Reads;
         for (var i = 0; i < reads.Count; i++)
         {
-            if (PipelineExecutor.FeatureOf(state.Plan, reads[i]) is >= 0 and var f && state.Features.GetState(f) == FeatureState.Failed)
+            var symbol = reads[i];
+            if ((PipelineExecutor.FeatureOf(state.Plan, symbol) is >= 0 and var f && state.Features.GetState(f) == FeatureState.Failed)
+                || (symbol.Kind == SymbolKind.Column && !symbol.Type.Nullable && state.ReadColumn(symbol.FixedSlot, symbol.Id) is null))
             {
                 return true;
             }

@@ -233,8 +233,7 @@ internal static class ReplayJson
             // The element's pointer only for an error: a bundle's outputs hold a value per row.
             if (!LogBatchJson.TryReadValue(item, element, out var value, out var error, nonFiniteAsStrings: true))
             {
-                throw new ReplayBundleException(ElementPointer(pointer, i), error!,
-                    $"values use the log encoding of their recorded type ({output.Type}), with \"NaN\", \"Infinity\" and \"-Infinity\" for non-finite floats");
+                throw Malformed(ElementPointer(pointer, i), error!, output.Type);
             }
 
             if (value.IsMissing && type != TensorElementType.String)
@@ -294,12 +293,15 @@ internal static class ReplayJson
 
         if (!LogBatchJson.TryReadValue(element, type, out var value, out var error, nonFiniteAsStrings: true))
         {
-            throw new ReplayBundleException(pointer, error!,
-                $"values use the log encoding of their recorded type ({type}), with \"NaN\", \"Infinity\" and \"-Infinity\" for non-finite floats");
+            throw Malformed(pointer, error!, type.ToString());
         }
 
         return value;
     }
+
+    /// <summary>A recorded value that does not decode as its recorded type.</summary>
+    private static ReplayBundleException Malformed(string pointer, string error, string type) => new(pointer, error,
+        $"values use the log encoding of their recorded type ({type}), with \"NaN\", \"Infinity\" and \"-Infinity\" for non-finite floats");
 
     /// <summary>A value array aligned with <paramref name="expected"/> rows.</summary>
     public static ScalarValue[] Values(JsonElement json, ColumnType type, int expected, string pointer)

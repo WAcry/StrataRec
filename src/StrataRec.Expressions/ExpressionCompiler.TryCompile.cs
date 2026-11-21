@@ -76,8 +76,17 @@ public static partial class ExpressionCompiler
             return false; // without a diagnostic only for a name declared with an error (IExpressionScope.IsUnusable)
         }
 
+        // A reference as written: a name, in parentheses or not (CompiledExpression.Reference), never what binding or
+        // optimizing reduced to one.
+        var written = ast;
+        while (written is ParenAst paren)
+        {
+            written = paren.Inner;
+        }
+
+        var reference = written is NameAst && bound.Op is IrOp.Column or IrOp.Context or IrOp.Param ? bound.Symbol : (Symbol?)null;
         var optimized = Optimizer.Optimize(bound);
-        expression = new VectorizedExpression(source, bound, optimized, binder.Names.ToArray());
+        expression = new VectorizedExpression(source, bound, optimized, binder.Names.ToArray(), reference);
         return true;
     }
 }

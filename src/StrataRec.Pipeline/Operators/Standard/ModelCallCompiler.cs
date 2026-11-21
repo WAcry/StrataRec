@@ -94,7 +94,7 @@ internal sealed class ModelCallCompiler
                 continue;
             }
 
-            if (expr.Reads.Count != 1 || !string.Equals(expr.Reads[0].Name, source.Trim(), StringComparison.Ordinal))
+            if (expr.Reference is null)
             {
                 _context.Error(pointer, "MODEL_INPUT_NOT_REFERENCE", $"Model input '{name}' must be a plain column or context reference, not an expression.",
                     "define the transformation as a derived feature so training and serving share one definition (design 6.9)");

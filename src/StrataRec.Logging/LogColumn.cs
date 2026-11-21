@@ -133,12 +133,12 @@ public sealed class LogColumn
             ScalarColumn<float> f => Scalars(f, rows, ref validity),
             ScalarColumn<double> d => Scalars(d, rows, ref validity),
             StringColumn s => Strings(s, rows, ref validity),
-            ListColumn<bool> b => Elements(b, rows, offsets = new int[rows.Length + 1], ref validity),
-            ListColumn<int> i => Elements(i, rows, offsets = new int[rows.Length + 1], ref validity),
-            ListColumn<long> l => Elements(l, rows, offsets = new int[rows.Length + 1], ref validity),
-            ListColumn<float> f => Elements(f, rows, offsets = new int[rows.Length + 1], ref validity),
-            ListColumn<double> d => Elements(d, rows, offsets = new int[rows.Length + 1], ref validity),
-            ListColumn<string> s => Elements(s, rows, offsets = new int[rows.Length + 1], ref validity),
+            ListColumn<bool> b => Elements(b, type, rows, offsets = new int[rows.Length + 1], ref validity),
+            ListColumn<int> i => Elements(i, type, rows, offsets = new int[rows.Length + 1], ref validity),
+            ListColumn<long> l => Elements(l, type, rows, offsets = new int[rows.Length + 1], ref validity),
+            ListColumn<float> f => Elements(f, type, rows, offsets = new int[rows.Length + 1], ref validity),
+            ListColumn<double> d => Elements(d, type, rows, offsets = new int[rows.Length + 1], ref validity),
+            ListColumn<string> s => Elements(s, type, rows, offsets = new int[rows.Length + 1], ref validity),
             _ => throw new NotSupportedException($"Unsupported column {buffer.GetType().Name}."),
         };
         return new LogColumn(name, type, rows.Length, values, offsets, validity);
@@ -164,9 +164,9 @@ public sealed class LogColumn
                 offsets[i] = at;
             }
 
-            if (value.IsMissing || ColumnValues.IsNonFinite(value))
+            if (value.IsMissing || ColumnValues.IsNonFinite(value) || (offsets is not null && !ColumnValues.FitsLength(value.ListLength, type)))
             {
-                MarkMissing(ref validity, count, i);
+                MarkMissing(ref validity, count, i); // a list of another length than a list<E,N> is missing, as in Capture
                 continue;
             }
 
@@ -329,15 +329,14 @@ public sealed class LogColumn
 
     /// <summary>The rows' elements in one array, <paramref name="offsets"/> delimiting each row's; a row with a non-finite
     /// element is missing and adds none.</summary>
-    private static T[] Elements<T>(ListColumn<T> list, ReadOnlySpan<int> rows, int[] offsets, ref ulong[]? validity)
+    private static T[] Elements<T>(ListColumn<T> list, ColumnType type, ReadOnlySpan<int> rows, int[] offsets, ref ulong[]? validity)
     {
-        // A row of a list<E,N> column with another length is missing, as an expression reading it finds it: a custom
-        // operator can write any length into the column's storage.
-        var width = list.Type.FixedLength;
+        // A row of another length than the logged list<E,N> is missing, as an expression reading it finds it: a custom
+        // operator can write any length into a column's storage, and the storage may be a list of any length.
         var total = 0;
         for (var i = 0; i < rows.Length; i++)
         {
-            total += Present(list, rows[i], width) ? list.LengthOf(rows[i]) : 0;
+            total += Present(list, rows[i], type) ? list.LengthOf(rows[i]) : 0;
         }
 
         var doubles = list as ListColumn<double>;
@@ -348,7 +347,7 @@ public sealed class LogColumn
         {
             offsets[i] = at;
             var row = rows[i];
-            if (!Present(list, row, width)
+            if (!Present(list, row, type)
                 || (doubles is not null && !ColumnValues.AllFinite(doubles.Get(row)))
                 || (floats is not null && !ColumnValues.AllFinite(floats.Get(row))))
             {
@@ -363,7 +362,7 @@ public sealed class LogColumn
         offsets[rows.Length] = at;
         return at == total ? elements : elements[..at];
 
-        static bool Present(ListColumn<T> list, int row, int width) => list.IsValid(row) && (width == 0 || list.LengthOf(row) == width);
+        static bool Present(ListColumn<T> list, int row, ColumnType type) => list.IsValid(row) && ColumnValues.FitsLength(list.LengthOf(row), type);
     }
 }
 

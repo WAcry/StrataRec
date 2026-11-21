@@ -2,6 +2,8 @@ using System.Text.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
+using StrataRec.Hosting;
+using StrataRec.Hosting.Replay;
 using StrataRec.Hosting.Workspace;
 using StrataRec.Logging;
 using StrataRec.Pipeline.Execution;
@@ -25,7 +27,8 @@ public class DeclaredWidthEndToEndTests
 
         var batch = Assert.Single(result.LogBatches, b => b.TapId == "t");
         Assert.Equal(
-            ["clicks:int32", "clicks1:int64", "computed:float64?", "ctr:float32?", "ctr2:float32", "emb:list<float32,2>?", "id:int64", "n32:int32", "w:float32?"],
+            ["clicks:int32", "clicks1:int64", "computed:float64?", "ctr:float32?", "ctr2:float32", "dctr:float64?", "emb:list<float32,2>?", "id:int64",
+             "maxc:int64", "n32:int32", "w:float32?"],
             batch.Schema.Columns.Select(f => $"{f.Name}:{f.Type}"));
         Assert.Equal(["age:int32?", "sum:float64", "uctr:float32", "w:float32?"], batch.Schema.Context.Select(f => $"{f.Name}:{f.Type}"));
         Assert.All(batch.Columns, c => Assert.Equal(batch.Schema.Columns.Single(f => f.Name == c.Name).Type, c.Type));
@@ -41,6 +44,8 @@ public class DeclaredWidthEndToEndTests
         Assert.IsType<double[]>(Column(batch, "computed").Values); // computed: promoted
         Assert.IsType<long[]>(Column(batch, "id").Values);
         Assert.IsType<long[]>(Column(batch, "clicks1").Values); // computed as written, though the optimizer reduces it to the column
+        Assert.IsType<double[]>(Column(batch, "dctr").Values); // computed as written, though the binder reduces it to the column
+        Assert.IsType<long[]>(Column(batch, "maxc").Values);
         Assert.Equal([0.25f, 0.25f], Assert.IsType<float[]>(Column(batch, "w").Values)); // a request input broadcast, narrowed
         var emb = Column(batch, "emb");
         Assert.Equal(4, Assert.IsType<float[]>(emb.Values).Length); // a float32 embedding: 4 bytes an element
@@ -67,7 +72,7 @@ public class DeclaredWidthEndToEndTests
         Assert.True(result.Succeeded, result.Error);
         var columns = result.Columns;
         Assert.Equal(
-            ["clicks:int32", "ctr2:float32", "ctr:float32?", "double:float64?", "emb:list<float32,2>?", "uctr:float32", "w2:float64", "w:float32?"],
+            ["clicks:int32", "ctr2:float32", "ctr:float32?", "double:float64?", "emb:list<float32,2>?", "maxc:int64", "uctr:float32", "w2:float64", "w:float32?"],
             columns.Names.Select((n, c) => $"{n}:{columns.Types[c]}").Order(StringComparer.Ordinal));
         var row = result.Items.Single(i => i.Id.Int64Value == 1).Columns;
         Assert.Equal(int.MaxValue, row["clicks"].AsInt32());
@@ -93,6 +98,31 @@ public class DeclaredWidthEndToEndTests
         Assert.Equal("int32?", column.Type.ToString());
         Assert.IsType<int[]>(column.Values);
         Assert.All(column.Rows(), v => Assert.True(v.IsMissing));
+    }
+
+    /// <summary>
+    /// A tap expression reading a non-nullable column no node produced logs missing, as a plain reference to the column
+    /// does; it does not fail the request (it threw once such an expression stopped counting as a reference). One reading a
+    /// nullable such column reads it as missing, and keeps what it makes of that.
+    /// </summary>
+    [Fact]
+    public async Task ATapExpression_ReadingAColumnNoNodeProduced_DoesNotFailTheRequest()
+    {
+        var root = Workspace();
+        var pipeline = Path.Combine(root, "pipelines", "p.jsonc");
+        const string Skipped = "\"when\": \"(ctx.request.age ?? 0) == 1\",";
+        File.WriteAllText(pipeline, File.ReadAllText(pipeline)
+            .Replace("\"order\": 200, \"op\": \"ExpressionScorer@1\",", "\"order\": 200, \"op\": \"ExpressionScorer@1\", " + Skipped, StringComparison.Ordinal)
+            .Replace("\"order\": 210, \"op\": \"ExpressionScorer@1\",", "\"order\": 210, \"op\": \"ExpressionScorer@1\", " + Skipped, StringComparison.Ordinal)
+            .Replace("\"clicks1\": \"col.item.clicks * 1\" } } },", "\"clicks1\": \"col.item.clicks * 1\" } },\n\"computed\": { \"group\": \"all\", \"attach\": { \"output\": true }, \"columns\": { \"n\": \"col.out.n32 * 1\", \"nn\": \"col.out.n32n ?? 7\" } } },", StringComparison.Ordinal));
+
+        var result = await Run(Compile(root));
+
+        Assert.True(result.Succeeded, result.Error);
+        var batch = Assert.Single(result.LogBatches, b => b.TapId == "computed");
+        Assert.All(Column(batch, "n").Rows(), v => Assert.True(v.IsMissing));
+        Assert.All(Column(batch, "nn").Rows(), v => Assert.Equal(7, v.AsInt64()));
+        Assert.All(Column(Assert.Single(result.LogBatches, b => b.TapId == "t"), "n32").Rows(), v => Assert.True(v.IsMissing));
     }
 
     /// <summary>
@@ -147,6 +177,39 @@ public class DeclaredWidthEndToEndTests
         Assert.Equal((double)0.1f, row["w2"].AsFloat64()); // computed in float64 from the float: (double)0.1f, not 0.1
         var batch = Assert.Single(result.LogBatches, b => b.TapId == "t");
         Assert.Equal((double)0.1f, batch.Context.Single(c => c.Name == "w").Value.AsFloat64());
+    }
+
+    /// <summary>
+    /// The primary declares input <c>w</c> float32, its fallback int64. A replay gives the fallback the integer the host
+    /// gave, as the request served it: the recording keeps the host's value, not the primary's float32 of it, which lost
+    /// its last digits.
+    /// </summary>
+    [Fact]
+    public async Task AReplayedFallback_BindsTheHostsInput_NotThePrimarysDeclaredTypeOfIt()
+    {
+        const long W = 9_007_199_791_611_905;
+        var root = ReviewRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
+        foreach (var (id, type) in new[] { ("primary", "float32"), ("backup", "int64") })
+        {
+            var file = Path.Combine(root, "pipelines", id + ".jsonc");
+            File.WriteAllText(file, File.ReadAllText(file)
+                .Replace("\"param_schema\":", $"\"request_schema\": {{ \"w\": {{ \"type\": \"{type}\" }} }}, \"param_schema\":", StringComparison.Ordinal)
+                .Replace("\"source\": \"col.recall.primary_source\"", "\"source\": \"col.recall.primary_source\", \"w\": \"ctx.request.w\"", StringComparison.Ordinal));
+        }
+
+        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = root });
+        ServiceCollectionExtensions.LoadWorkspace(engine, root, "local", new[] { "primary" }).ThrowIfErrors("load");
+        var served = await engine.ExecuteAsync(new RecRequest
+        {
+            PipelineId = "primary", RequestId = "r", Inputs = new RequestInputs().Set("w", W), Deadline = TimeSpan.FromSeconds(10),
+            Debug = new DebugOptions { Record = true },
+        }, TestContext.Current.CancellationToken);
+        var replayed = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(served.Recording!)),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(("backup", W), (served.ServedBy, served.Items[0].Columns["w"].AsInt64()));
+        Assert.True(replayed.Result.Succeeded, replayed.Result.Error);
+        Assert.Equal(("backup", W), (replayed.Result.ServedBy, replayed.Result.Items[0].Columns["w"].AsInt64()));
     }
 
     private static LogColumn Column(LogBatch batch, string name) => Assert.Single(batch.Columns, c => c.Name == name);
@@ -216,11 +279,13 @@ public class DeclaredWidthEndToEndTests
                 "t": { "group": "all", "attach": { "output": true },
                        "context": { "age": "ctx.request.age", "w": "ctx.request.w", "uctr": "ctx.user.ctr", "sum": "ctx.user.ctr + 1.0" },
                        "columns": { "clicks": "col.item.clicks", "ctr": "col.item.ctr", "ctr2": "col.item.ctr2", "emb": "col.item.emb",
-                                    "computed": "col.item.ctr * 2.0", "id": "col.entity_id", "w": "ctx.request.w", "n32": "col.out.n32",
+                                    "computed": "col.item.ctr * 2.0", "dctr": "double(col.item.ctr)", "maxc": "max(col.item.clicks)",
+                                    "id": "col.entity_id", "w": "ctx.request.w", "n32": "col.out.n32",
                                     "clicks1": "col.item.clicks * 1" } } },
               "output": { "limit_param": "k",
                           "columns": { "clicks": "col.item.clicks", "ctr": "col.item.ctr", "emb": "col.item.emb", "w": "ctx.request.w",
-                                       "uctr": "ctx.user.ctr", "double": "col.item.ctr * 2.0", "ctr2": "col.item.ctr2", "w2": "(ctx.request.w ?? 0.0) + 0.0" } } }
+                                       "uctr": "ctx.user.ctr", "double": "col.item.ctr * 2.0", "ctr2": "col.item.ctr2", "w2": "(ctx.request.w ?? 0.0) + 0.0",
+                                       "maxc": "max(col.item.clicks)" } } }
             """);
         return root;
     }

@@ -18,9 +18,10 @@ internal sealed class VectorizedExpression : CompiledExpression
     private readonly Symbol[] _reads;
     private readonly Symbol[] _names;
 
-    public VectorizedExpression(string source, IrNode bound, IrNode optimized, Symbol[] names)
+    public VectorizedExpression(string source, IrNode bound, IrNode optimized, Symbol[] names, Symbol? reference)
     {
         Source = source;
+        Reference = reference;
         _names = names;
         Bound = bound;
         Optimized = optimized;
@@ -50,9 +51,7 @@ internal sealed class VectorizedExpression : CompiledExpression
 
     public override IReadOnlyList<Symbol> Names => _names;
 
-    // As written (the bound IR), not as optimized: `col.x * 1` computes, so it leaves the engine at its promoted type, and
-    // an optimizer rule that removes the multiplication must not change a log's or a result's types.
-    public override Symbol? Reference => Bound.Op is IrOp.Column or IrOp.Context or IrOp.Param ? Bound.Symbol : null;
+    public override Symbol? Reference { get; }
 
     /// <summary>The type-checked IR before optimization (input of the reference interpreter).</summary>
     internal IrNode Bound { get; }

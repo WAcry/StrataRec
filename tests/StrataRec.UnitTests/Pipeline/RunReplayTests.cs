@@ -274,6 +274,60 @@ public sealed class RunReplayTests
         Assert.Empty(replay.Gaps);
     }
 
+    /// <summary>
+    /// The same two nodes; the second's rebatched call matches no recorded row (its inputs changed). Its output takes the
+    /// width of that node's recorded calls, not of the first node's, so the row is a gap, not a call of the wrong width.
+    /// </summary>
+    [Fact]
+    public void ARebatchedCall_WhoseRowsAllChanged_TakesItsOutputsWidth_FromItsOwnNodesCalls()
+    {
+        var narrow = Call(2, NamedInput.FromInt32("x", new[] { 2, 2 }, new[] { 1, 2, 3, 4 }));
+        var wide = Call(2, NamedInput.FromInt32("x", new[] { 2, 3 }, new[] { 1, 2, 3, 4, 5, 6 }));
+        var run = Run();
+        run.ModelCalls.Add(new ReplayModelCall
+        {
+            Seq = 0, Node = "a", Model = "m", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(narrow).ToList(),
+            Outputs = new Dictionary<string, ReplayModelOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4 })) },
+        });
+        run.ModelCalls.Add(new ReplayModelCall
+        {
+            Seq = 1, Node = "b", Model = "m", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(wide).ToList(),
+            Outputs = new Dictionary<string, ReplayModelOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4, 5, 6 })) },
+        });
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var writer = new ArrayOutputWriter();
+        var status = replay.InvokeModel(Call(1, NamedInput.FromInt32("x", new[] { 1, 3 }, new[] { 4, 5, 7 })), writer, new[] { EntityKey.FromInt64(2) }, "b");
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Equal(new[] { 0, 0, 0 }, (int[])writer.Arrays["v"]);
+        Assert.Equal(("inputs_changed", "2"), (Assert.Single(replay.Gaps).Reason, Assert.Single(Assert.Single(replay.Gaps).Examples)));
+    }
+
+    /// <summary>
+    /// A call whose client wrote more values of an output than its rows hold succeeded, and its node failed on them. Its
+    /// rows are not split out of that output: a rebatched call that took them would succeed, where the recording failed.
+    /// </summary>
+    [Fact]
+    public void ARebatchedCall_DoesNotSplitRows_OutOfAnOutputLongerThanItsShape()
+    {
+        var recorded = Call(2, NamedInput.FromInt32("x", new[] { 2, 2 }, new[] { 1, 2, 3, 4 }));
+        var run = Run();
+        run.ModelCalls.Add(new ReplayModelCall
+        {
+            Seq = 0, Node = "a", Model = "m", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(recorded).ToList(),
+            Outputs = new Dictionary<string, ReplayModelOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4, 5 })) },
+        });
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var writer = new ArrayOutputWriter();
+        var status = replay.InvokeModel(Call(1, NamedInput.FromInt32("x", new[] { 1, 2 }, new[] { 3, 4 })), writer, new[] { EntityKey.FromInt64(2) }, "a");
+
+        Assert.False(status.Succeeded);
+        Assert.Contains("returned 5 values of output 'v' for the 2 rows of recorded call 0", status.Error);
+        Assert.Empty(replay.Gaps); // answered as recorded: a failure
+    }
+
     /// <summary>A float64 input is in the digest as itself: 0.1 and the float nearest it are other inputs.</summary>
     [Fact]
     public void AFloat64InputThatChangedBeyondFloatPrecision_IsAnInputsChangedGap()

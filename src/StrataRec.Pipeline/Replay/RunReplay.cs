@@ -310,7 +310,9 @@ internal sealed class RunReplay : IFeatureCallHook
     /// recording has for its own inputs (review 30). A call whose inputs changed since a recorded failure is synthesized
     /// like any other, so its rows are reported as gaps rather than failed for a reason that was about other inputs.
     /// </remarks>
-    internal ModelStatus InvokeModel(ModelCall call, IModelOutputWriter outputs, EntityKey[]? keys)
+    /// <param name="node">The calling node: a synthesized call whose rows all changed takes its outputs' widths from this
+    /// node's recorded calls before another node's.</param>
+    internal ModelStatus InvokeModel(ModelCall call, IModelOutputWriter outputs, EntityKey[]? keys, string? node = null)
     {
         lock (_gate)
         {
@@ -341,7 +343,7 @@ internal sealed class RunReplay : IFeatureCallHook
                 return Answer(positional, outputs);
             }
 
-            return Synthesize(call, calls, outputs, keys, digests);
+            return Synthesize(call, calls, outputs, keys, digests, node);
         }
     }
 
@@ -515,7 +517,7 @@ internal sealed class RunReplay : IFeatureCallHook
     /// entity alone with the same inputs, it is answered as that call was, texts and generation details included (a
     /// per-row generative call, such as <c>LlmAnnotator@1</c>'s, whose recorded call another call of the same entity took).
     /// </remarks>
-    private ModelStatus Synthesize(ModelCall call, List<ModelEntry>? calls, IModelOutputWriter outputs, EntityKey[] keys, string[] digests)
+    private ModelStatus Synthesize(ModelCall call, List<ModelEntry>? calls, IModelOutputWriter outputs, EntityKey[] keys, string[] digests, string? node)
     {
         // The rows by (entity, input digest), from the successful keyed calls of the same model and version. An entity can
         // be scored several times with different inputs.
@@ -547,23 +549,42 @@ internal sealed class RunReplay : IFeatureCallHook
 
         // The output layout (each output's type and values per row): as the recorded rows this call matches have it, since
         // another node of the same model may write the same output at another width (a list<int32,2> column and a
-        // list<int32,3> one); an output none of them has, as any call has it.
+        // list<int32,3> one); an output none of them has (every row's inputs changed), as this node's calls have it, then
+        // as any call has it. Each recorded call is looked at once.
+        var seen = new HashSet<ModelEntry>(ReferenceEqualityComparer.Instance);
         for (var r = 0; r < keys.Length; r++)
         {
             if (rows.TryGetValue((keys[r], digests[r]), out var matched))
             {
                 foreach (var (entry, _) in matched)
                 {
+                    if (!seen.Add(entry))
+                    {
+                        continue;
+                    }
+
+                    // Values for no whole number of rows (the client wrote more than the shape holds, and the node failed
+                    // on them, after the call succeeded) have no row of this entity to take: the call fails as its node did.
+                    foreach (var (name, tensor) in entry.Outputs)
+                    {
+                        if (!ByRow(entry, tensor.Values))
+                        {
+                            return ModelStatus.Failed(
+                                $"model '{call.Model}' returned {tensor.Values.Length} values of output '{name}' for the {entry.BatchSize} rows of recorded call {entry.Seq}, not the same number for each row: its rows cannot be replayed in another batch");
+                        }
+                    }
+
                     AddLayout(layout, entry);
                 }
             }
         }
 
-        if (calls is not null)
+        for (var pass = 0; calls is not null && pass < 2; pass++)
         {
             foreach (var entry in calls)
             {
-                if (entry.Outcome == IoOutcome.Ok && entry.Keys is not null)
+                if (entry.Outcome == IoOutcome.Ok && entry.Keys is not null && (pass == 1 || string.Equals(entry.Node, node, StringComparison.Ordinal))
+                    && seen.Add(entry))
                 {
                     AddLayout(layout, entry);
                 }
@@ -631,11 +652,20 @@ internal sealed class RunReplay : IFeatureCallHook
 
         static int PerRow(ModelEntry entry, Array values) => entry.BatchSize > 0 ? values.Length / entry.BatchSize : 1;
 
+        // Only an output of whole rows splits by row (one longer than its shape has no row boundaries to take).
+        static bool ByRow(ModelEntry entry, Array values) => entry.BatchSize > 0 && values.Length % entry.BatchSize == 0;
+
         static void AddLayout(List<(string Name, TensorElementType Type, int PerRow)> layout, ModelEntry entry)
         {
             foreach (var (name, values) in entry.Outputs)
             {
-                if (!layout.Exists(o => o.Name == name))
+                var known = false;
+                foreach (var output in layout)
+                {
+                    known |= output.Name == name;
+                }
+
+                if (!known && ByRow(entry, values.Values))
                 {
                     layout.Add((name, values.Type, PerRow(entry, values.Values)));
                 }
@@ -670,8 +700,7 @@ internal sealed class RunReplay : IFeatureCallHook
 
             foreach (var (entry, row) in list)
             {
-                if (entry.Outputs.TryGetValue(name, out var tensor) && tensor.Type == type && PerRow(entry, tensor.Values) == perRow
-                    && tensor.Values.Length >= (row + 1) * perRow)
+                if (entry.Outputs.TryGetValue(name, out var tensor) && tensor.Type == type && PerRow(entry, tensor.Values) == perRow) // by row: matched
                 {
                     return (tensor.Values, row * perRow);
                 }
@@ -1069,7 +1098,7 @@ internal sealed class RunReplay : IFeatureCallHook
                 outputs[name] = ReplayJson.Tensor(values, $"{at}/outputs/{JsonPointer.Escape(name)}");
             }
 
-            var entry = new ModelEntry(call.Seq, call.Model, call.BatchSize, outcome, call.Error, call.Threw, keys, call.InputDigests.ToArray(), outputs,
+            var entry = new ModelEntry(call.Seq, call.Node, call.Model, call.BatchSize, outcome, call.Error, call.Threw, keys, call.InputDigests.ToArray(), outputs,
                 new Dictionary<string, string>(call.Texts, StringComparer.Ordinal), call.OutputTokens, call.Truncated == true);
             if (!_modelCalls.TryGetValue((call.Model, call.Version), out var list))
             {
@@ -1170,10 +1199,12 @@ internal sealed class RunReplay : IFeatureCallHook
     }
 
     private sealed class ModelEntry(
-        int seq, string model, int batchSize, IoOutcome outcome, string? error, bool threw, EntityKey[]? keys, string[] digests,
+        int seq, string? node, string model, int batchSize, IoOutcome outcome, string? error, bool threw, EntityKey[]? keys, string[] digests,
         Dictionary<string, ReplayTensor> outputs, Dictionary<string, string> texts, int? outputTokens, bool truncated)
     {
         public int Seq { get; } = seq;
+
+        public string? Node { get; } = node;
 
         public string Model { get; } = model;
 

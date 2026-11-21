@@ -215,6 +215,27 @@ public sealed class ModelRankerTests
         Assert.Equal(new long[] { 10, 30, 40, 50, 20, 70, 60 }, IdsOf(result)); // the ties at 1 by entity_id
     }
 
+    /// <summary>
+    /// A float64 preference ranks at its precision: 0.5 + 2^-30 per strength between them puts 30 above 10 above the rest,
+    /// where as floats every preference is 0.5 and the window ties (by entity_id).
+    /// </summary>
+    [Fact]
+    public async Task AFloat64Preference_RanksAtItsOwnPrecision()
+    {
+        var strengths = new Dictionary<long, double> { [30] = 2, [10] = 1, [50] = 0, [20] = 0, [40] = 0 };
+        var widePair = Signature(("id", TensorElementType.Int64, [-1, 2]), ("p", TensorElementType.Float64, [-1]));
+        var models = new TestModels(_ => widePair, call => new float[call.BatchSize], TensorElementType.Float64, exact: call =>
+        {
+            var ids = call["id"].Int64;
+            return Enumerable.Range(0, call.BatchSize).Select(p => 0.5 + (Math.Pow(2, -30) * (strengths[ids[2 * p]] - strengths[ids[(2 * p) + 1]]))).ToArray();
+        });
+
+        var result = await Run(Compile(models, "PairwiseRanker@1", """{ "model": "m", "inputs": { "id": "col.entity_id" }, "output": "p", "window": 5 }"""));
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(new long[] { 30, 10, 20, 40, 50, 70, 60 }, IdsOf(result));
+    }
+
     [Theory]
     [InlineData("ListwiseReranker@1")]
     [InlineData("PairwiseRanker@1")]

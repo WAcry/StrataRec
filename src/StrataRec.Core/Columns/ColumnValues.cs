@@ -265,7 +265,8 @@ public static class ColumnValues
         switch (value.Kind)
         {
             case StorageKind.Int64:
-                return single ? ScalarValue.FromFloat32(value.AsInt64()) : ScalarValue.FromFloat64(value.AsInt64());
+                // Through the double, as a candidate column's write narrows it (an int64 promoted, then rounded).
+                return single ? ScalarValue.FromFloat32((float)(double)value.AsInt64()) : ScalarValue.FromFloat64(value.AsInt64());
             case StorageKind.Float64:
                 return single && !value.IsFloat32 ? ScalarValue.FromFloat32((float)value.AsFloat64()) : value;
             case StorageKind.List when value.ListElement == StorageKind.Int64:
@@ -275,7 +276,7 @@ public static class ColumnValues
                     var narrowed = new float[longs.Length];
                     for (var i = 0; i < longs.Length; i++)
                     {
-                        narrowed[i] = longs[i];
+                        narrowed[i] = (float)(double)longs[i];
                     }
 
                     return ScalarValue.FromFloat32List(narrowed);
