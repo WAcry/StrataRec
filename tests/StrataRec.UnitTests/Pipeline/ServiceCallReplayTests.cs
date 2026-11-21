@@ -512,6 +512,7 @@ public sealed class ServiceCallReplayTests
         Limit = call.Limit,
         Status = status,
         InputDigests = [ReplayJson.Hex(ServiceInputDigest.Call(call, ServiceInputDigest.NameOrder(call)))],
+        Requested = [.. call.Outputs.ToArray()],
         Ids = status == "ok" ? RunReplayTests.Json(JsonSerializer.Serialize(ids)) : null,
         Scores = status == "ok" ? [.. ids.Select(_ => 1.0)] : [],
     };
@@ -519,7 +520,7 @@ public sealed class ServiceCallReplayTests
     /// <summary>A recorded call with what <see cref="Recorded(string, ServiceCall, string, long[])"/> leaves out.</summary>
     private static ReplayServiceCall With(ReplayServiceCall c, bool threw = false, int? outputTokens = null, bool? truncated = null, int? dropped = null) => new()
     {
-        Node = c.Node, Service = c.Service, Role = c.Role, Limit = c.Limit, Status = c.Status, InputDigests = c.InputDigests, Ids = c.Ids,
+        Node = c.Node, Service = c.Service, Role = c.Role, Limit = c.Limit, Status = c.Status, InputDigests = c.InputDigests, Requested = c.Requested, Ids = c.Ids,
         Scores = c.Scores, Texts = c.Texts, Threw = threw, OutputTokens = outputTokens, Truncated = truncated, Dropped = dropped,
     };
 

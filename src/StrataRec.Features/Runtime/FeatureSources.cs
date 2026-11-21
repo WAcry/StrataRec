@@ -252,25 +252,15 @@ internal sealed class FeatureSourceResolver
 
     /// <summary>
     /// A service computes the features of an entity with args, and only those: a stored entity's are looked up by its key
-    /// (a connector, a table), and an entity with args has no key to look up (IO step 5). A source in mode service computes
-    /// one entity: its call is the source's, recorded and replayed by the source's name (review of IO step 5: two
-    /// entities of one source took each other's recorded failures). A pair that does not match is a
+    /// (a connector, a table), and an entity with args has no key to look up (IO step 5). A source may compute several: each
+    /// entity's call is its own, by its arguments and the outputs its features read. A pair that does not match is a
     /// <c>SOURCE_SERVICE_ENTITY</c> at the binding.
     /// </summary>
     private bool Pairs(SourceSupply supply, EntityDefinition entity)
     {
         var service = supply.Mode == SupplyMode.Service;
-        if (service && entity.HasArgs && supply.ServedEntity is { } served && served != entity.Name)
-        {
-            _diagnostics.Error("SOURCE_SERVICE_ENTITY", _artifact, supply.Pointer,
-                $"Source '{supply.Name}' computes entity '{served}' already, and entity '{entity.Name}' reads it too: a source in mode service computes one entity, with one call a request.",
-                $"declare another source bound to the same service, e.g. \"{entity.Name}\": {{ \"mode\": \"service\", \"service\": \"{supply.Binding.Service}\" }}, and name it as the source of '{entity.Name}''s features");
-            return false;
-        }
-
         if (service == entity.HasArgs)
         {
-            supply.ServedEntity ??= service ? entity.Name : null;
             return true;
         }
 
@@ -719,9 +709,6 @@ internal sealed class SourceSupply(string name, string pointer, FeatureSourceBin
     public FeatureSourceBinding Binding { get; } = binding;
 
     public SupplyMode Mode { get; } = mode;
-
-    /// <summary>Mode service: the entity it computes, once a group of it is supplied.</summary>
-    public string? ServedEntity { get; set; }
 
     /// <summary>Modes fetch and cache.</summary>
     public IFeatureSourceConnector? Connector { get; init; }

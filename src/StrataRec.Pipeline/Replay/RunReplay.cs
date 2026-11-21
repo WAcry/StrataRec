@@ -221,7 +221,10 @@ internal sealed class RunReplay : IFeatureCallHook
                     var otherLimit = !changed
                         && Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest && entry.Limit == call.Limit) is null
                         && Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest) is not null;
-                    AddGap(kind, call.Service, null, changed ? "inputs_changed" : otherLimit ? "limit_changed" : "not_recorded", 1, node);
+                    var otherOutputs = !changed && !otherLimit
+                        && Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest && entry.Limit == call.Limit && entry.AskedFor(call)) is null
+                        && Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest && entry.Limit == call.Limit) is not null;
+                    AddGap(kind, call.Service, null, changed ? "inputs_changed" : otherLimit ? "limit_changed" : otherOutputs ? "outputs_changed" : "not_recorded", 1, node);
                     return ServiceStatus.Failed($"{kind} '{call.Service}': this call is not in the replay bundle");
                 }
 
@@ -269,11 +272,13 @@ internal sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// Whether a recorded call has output <paramref name="name"/> for <paramref name="call"/>: recorded, at the call's limit
-    /// (an output or a text may say how many items it was asked for, review of IO step 3).
+    /// Whether a recorded call has output <paramref name="name"/> for <paramref name="call"/>, at the call's limit (an output
+    /// or a text may say how many items it was asked for, review of IO step 3): recorded, or asked for and left unwritten
+    /// by the service, which is its answer too (review of the step 5 fixes: such an output was a gap, or borrowed from
+    /// another call that had it).
     /// </summary>
     private static bool Has(ServiceEntry entry, ServiceCall call, string name) =>
-        entry.Limit == call.Limit && (entry.Outputs.ContainsKey(name) || entry.Texts.ContainsKey(name));
+        entry.Limit == call.Limit && (entry.Outputs.ContainsKey(name) || entry.Texts.ContainsKey(name) || Array.IndexOf(entry.Requested, name) >= 0);
 
     /// <summary>
     /// How many more items <paramref name="call"/> asks for than the recorded call can tell: 0 when it has as many, or it
@@ -336,7 +341,8 @@ internal sealed class RunReplay : IFeatureCallHook
         {
             foreach (var name in call.Outputs.Span)
             {
-                if (!response.TryGetValues(name, out _) && !response.TryGetText(name, out _))
+                if (!response.TryGetValues(name, out _) && !response.TryGetText(name, out _)
+                    && !(from.Limit == call.Limit && Array.IndexOf(from.Requested, name) >= 0)) // left unwritten, as recorded
                 {
                     var recorded = from.Outputs.ContainsKey(name) || from.Texts.ContainsKey(name);
                     AddOutputGap(kind, call.Service, name, node, keys, null, recorded && from.Limit != call.Limit ? "limit_changed" : "not_recorded");
@@ -830,14 +836,15 @@ internal sealed class RunReplay : IFeatureCallHook
     /// <summary>
     /// The node's next recorded call that matches, for <paramref name="call"/>: one of the call's limit first, so a recording
     /// of another limit taken first does not stand in for the call's own (review of IO step 4: a failure recorded at
-    /// another limit ended the call that had a full answer); else a success of another limit that answers it (a list long
-    /// enough, or all the service had). Consumed. A failure or a cut-off recorded at another limit answers nothing: a
-    /// service may fail only past some limit, so it says nothing of this one, and a success another node recorded at this
-    /// limit answers instead (review of IO step 4b); nor is a recording consumed that does not answer, which a later call of
-    /// its limit would then miss.
+    /// another limit ended the call that had a full answer) asking for the same outputs; else a success that answers it (a
+    /// list long enough, or all the service had; the outputs it reads). Consumed. A failure or a cut-off recorded at another
+    /// limit, or asking for other outputs, answers nothing: a service may fail only past some limit, or for some output (one
+    /// it does not know), so it says nothing of this call, and a success another caller recorded answers instead (reviews of
+    /// IO step 4b and of the step 5 fixes); nor is a recording consumed that does not answer, which a later call of its own
+    /// would then miss.
     /// </summary>
     private static ServiceEntry? TakeOwn(List<ServiceEntry>? calls, Predicate<ServiceEntry> match, ServiceCall call) =>
-        Take(calls, entry => entry.Limit == call.Limit && match(entry))
+        Take(calls, entry => entry.Limit == call.Limit && entry.AskedFor(call) && match(entry))
         ?? Take(calls, entry => entry.Outcome == IoOutcome.Ok && match(entry) && Answers(entry, call));
 
     private static ServiceEntry? Take(List<ServiceEntry>? calls, Predicate<ServiceEntry> match)
@@ -1179,7 +1186,7 @@ internal sealed class RunReplay : IFeatureCallHook
 
             var entry = new ServiceEntry(call.Seq, ServiceCaller.KeyOf(call.Node, call.Source), call.Source is not null, call.Service, call.BatchSize, call.Limit, outcome, call.Error, call.Threw, keys,
                 call.InputDigests.ToArray(), outputs, new Dictionary<string, string>(call.Texts, StringComparer.Ordinal), ids, call.Scores.ToArray(),
-                call.OutputTokens, call.Truncated == true, call.Degraded, call.Dropped ?? 0);
+                call.OutputTokens, call.Truncated == true, call.Degraded, call.Dropped ?? 0, [.. call.Requested]);
             if (!_serviceCalls.TryGetValue((call.Service, call.Version), out var list))
             {
                 list = new List<ServiceEntry>();
@@ -1255,9 +1262,32 @@ internal sealed class RunReplay : IFeatureCallHook
     private sealed class ServiceEntry(
         int seq, string? node, bool fromSource, string service, int batchSize, int limit, IoOutcome outcome, string? error, bool threw, EntityKey[]? keys, string[] digests,
         Dictionary<string, ReplayTensor> outputs, Dictionary<string, string> texts, EntityKey[] ids, double[] scores, int? outputTokens, bool truncated,
-        string? degraded, int dropped)
+        string? degraded, int dropped, string[] requested)
     {
         public int Seq { get; } = seq;
+
+        /// <summary>The outputs the call asked for: one not in <see cref="Outputs"/> or <see cref="Texts"/> the service left unwritten.</summary>
+        public string[] Requested { get; } = requested;
+
+        /// <summary>Whether the call asked for the outputs <paramref name="call"/> asks for, no more and no fewer.</summary>
+        public bool AskedFor(ServiceCall call)
+        {
+            var outputs = call.Outputs.Span;
+            if (outputs.Length != Requested.Length)
+            {
+                return false;
+            }
+
+            foreach (var name in outputs)
+            {
+                if (Array.IndexOf(Requested, name) < 0)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
 
         /// <summary>The caller's key (<see cref="ServiceCaller.Key"/>); with <see cref="FromSource"/>, which caller it is.</summary>
         public string? Node { get; } = node;

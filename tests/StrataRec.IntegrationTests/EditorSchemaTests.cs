@@ -231,6 +231,12 @@ public sealed class EditorSchemaTests
     [InlineData("""{}""", false)]
     [InlineData("""{ "key": "ctx.request.user_id", "args": { "q": "ctx.request.query" } }""", false)]
     [InlineData("""{ "args": {} }""", false)]
+    [InlineData("""{ "key": "ctx.request.user_id", "args": null }""", true)] // null is not declared (review of the step 5 fixes)
+    [InlineData("""{ "key": null, "args": { "q": "ctx.request.query" } }""", true)]
+    [InlineData("""{ "args": null }""", false)]
+    [InlineData("""{ "key": null }""", false)]
+    [InlineData("""{ "key": true }""", false)]
+    [InlineData("""{ "key": ["ctx.request.user_id", "col.entity_id"] }""", true)]
     public void TheCatalogSchema_TakesAnEntityWithAKeyOrArgs(string entity, bool valid)
     {
         var schema = SchemaCheck.Load(ArtifactSchemas.Artifact("catalog", []).ToJsonString());

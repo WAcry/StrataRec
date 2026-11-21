@@ -39,7 +39,6 @@ internal sealed class RunRecorder : IFeatureCallHook
     private readonly Dictionary<int, ReplayFeatureCall> _pendingFeatures = new();
 
     // The outputs each service call begun reads (empty: all), which are what its record keeps.
-    private readonly Dictionary<int, string[]> _requested = new();
     private readonly List<ReplayNodeRecord> _nodes = new();
     private List<ReplayAttemptRecord>? _attempts;
     private double? _remainingMs;
@@ -150,13 +149,13 @@ internal sealed class RunRecorder : IFeatureCallHook
             Error = ReplayJson.OutstandingError,
             Keys = items.IsEmpty ? null : ReplayJson.Keys(items),
             InputDigests = digests,
+            Requested = [.. call.Outputs.Span],
         };
         lock (_gate)
         {
             if (!_built)
             {
                 _pendingServices[sequence] = begun;
-                _requested[sequence] = call.Outputs.ToArray();
             }
         }
 
@@ -175,11 +174,9 @@ internal sealed class RunRecorder : IFeatureCallHook
         int sequence, IoOutcome outcome, string? error, bool cutOff, TimeSpan duration, ServiceResponse response, in ServiceStatus status, string? degraded = null)
     {
         ReplayServiceCall? begun;
-        string[]? requested;
         lock (_gate)
         {
             begun = !_built && _pendingServices.TryGetValue(sequence, out var call) ? call : null;
-            requested = begun is not null && _requested.TryGetValue(sequence, out var names) ? names : null;
         }
 
         if (begun is null)
@@ -188,6 +185,7 @@ internal sealed class RunRecorder : IFeatureCallHook
         }
 
         var answered = outcome == IoOutcome.Ok;
+        var requested = begun.Requested;
         var tensors = new Dictionary<string, ReplayOutput>(StringComparer.Ordinal);
         var texts = new Dictionary<string, string>(StringComparer.Ordinal);
         var scores = new List<double>(answered ? response.Count : 0);
@@ -231,6 +229,7 @@ internal sealed class RunRecorder : IFeatureCallHook
             DurationMs = duration.TotalMilliseconds,
             Keys = begun.Keys,
             InputDigests = begun.InputDigests,
+            Requested = begun.Requested,
             Outputs = tensors,
             Texts = texts,
             Ids = answered && begun.Limit > 0 ? ReplayJson.Keys(response.Keys) : null,
@@ -245,13 +244,12 @@ internal sealed class RunRecorder : IFeatureCallHook
             // A call that finishes after the snapshot is left out: the run's record is already out.
             if (!_built && _pendingServices.Remove(sequence))
             {
-                _requested.Remove(sequence);
                 _services.Add(record);
             }
         }
 
         // Only the outputs the call reads: a recall reads none, only the items it adds.
-        static bool Reads(string[]? requested, string name) => requested is not null && Array.IndexOf(requested, name) >= 0;
+        static bool Reads(List<string> requested, string name) => requested.Contains(name);
     }
 
     /// <summary>The time left when the current position passed its <c>when</c>.</summary>

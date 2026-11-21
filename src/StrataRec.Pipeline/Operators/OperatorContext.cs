@@ -366,10 +366,17 @@ public sealed class OperatorContext : IServiceCallScope
     public Task<ServiceStatus> CallAsync(BoundService service, ServiceCall call, ServiceResponse response)
     {
         // Not an async method: the shared path's task is the call's (review of IO step 5: awaiting it here cost a second
-        // task per call). A wrong call is still a faulted task, as an async method's would be.
+        // task per call). A wrong call is still a faulted task, and a cancellation (an operator's output names may be a
+        // memory of its own) a cancelled one, as an async method's would be.
         try
         {
             Check(service, call, response);
+        }
+        catch (OperationCanceledException ex)
+        {
+            var cancelled = new TaskCompletionSource<ServiceStatus>();
+            cancelled.SetCanceled(ex.CancellationToken);
+            return cancelled.Task;
         }
         catch (Exception ex)
         {

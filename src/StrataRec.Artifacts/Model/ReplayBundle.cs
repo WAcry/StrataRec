@@ -48,11 +48,14 @@ public sealed class ReplayBundle
     /// as served since: a bundle before could replay identical to a run whose answers changed. 2026-11-21.7 digests every
     /// call about no items without its limit again (a recorded call answers the named outputs a call reads only at the
     /// call's limit), and records the items a service added past a call's limit. 2026-11-21.8 records the service call of
-    /// a feature source in mode <c>service</c> (IO step 5) with its source and no node.
+    /// a feature source in mode <c>service</c> (IO step 5) with its source and no node. 2026-11-21.9 records the outputs each
+    /// call asked for (an output the service left unwritten is replayed so, and a failure answers only a call asking for the
+    /// same), and a feature source's call carries the request's seed: a bundle before replayed a source's failure for a
+    /// call asking for other outputs, and the answer of a call made without the seed.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.8";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.9";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.8\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.9\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -296,7 +299,11 @@ public sealed class ReplayServiceCall
                  "else one of the whole call; each input with its name, element type and shape, and max_output_tokens when set.")]
     public List<string> InputDigests { get; init; } = new();
 
-    [Description("Output → the tensor the service returned: only the outputs the operator read, or all it returned when the operator named none.")]
+    [Description("The outputs the call asked for (what its operator or feature source reads). One it asked for and the service did not write is in neither " +
+        "outputs nor texts: the service left it unanswered, and a replay of the call leaves it so.")]
+    public List<string> Requested { get; init; } = new();
+
+    [Description("Output → the tensor the service returned, of the outputs the call asked for (requested).")]
     public Dictionary<string, ReplayOutput> Outputs { get; init; } = new();
 
     [Description("Output → text, for services that generate text (a recorded answer is replayed as it was, design 13.4 item 7).")]

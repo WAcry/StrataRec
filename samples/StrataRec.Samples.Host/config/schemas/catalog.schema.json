@@ -24,7 +24,15 @@
         "type": "object",
         "properties": {
           "key": {
-            "description": "What keys the entity: one reference, or a list of 1 to 8 distinct ones in the order of the key's parts. A part is a request input (ctx.request.user_id), the candidate id (col.entity_id), a candidate feature (col.item.creator_id) or a context feature (ctx.identity.user_id, fetched first), of type int64 or string, e.g. [\"col.entity_id\", \"ctx.request.country\"]. A key of request inputs and context features only is one per request; a key with a missing part is not looked up. An entity declares a key or args."
+            "description": "What keys the entity: one reference, or a list of 1 to 8 distinct ones in the order of the key's parts. A part is a request input (ctx.request.user_id), the candidate id (col.entity_id), a candidate feature (col.item.creator_id) or a context feature (ctx.identity.user_id, fetched first), of type int64 or string, e.g. [\"col.entity_id\", \"ctx.request.country\"]. A key of request inputs and context features only is one per request; a key with a missing part is not looked up. An entity declares a key or args.",
+            "type": [
+              "string",
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           },
           "args": {
             "description": "What a service computes the entity's features from, instead of a key: each argument's name, as the service's input, and the request input (ctx.request.query) or context feature (ctx.user.embedding, fetched first) it takes, of any type (a list, a float, a text). One call per request; a missing value is sent as missing. Its features come from a source bound to a service (\"mode\": \"service\"), e.g. { \"query\": \"ctx.request.query\", \"recent\": \"ctx.request.recent_items\" }.",
@@ -49,12 +57,25 @@
           {
             "required": [
               "key"
-            ]
+            ],
+            "properties": {
+              "key": {
+                "type": [
+                  "string",
+                  "array"
+                ]
+              }
+            }
           },
           {
             "required": [
               "args"
-            ]
+            ],
+            "properties": {
+              "args": {
+                "type": "object"
+              }
+            }
           }
         ]
       }

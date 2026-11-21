@@ -301,20 +301,51 @@ public sealed class ComputedEntityEndToEndTests
     }
 
     /// <summary>
-    /// A source in mode service computes one entity: its call is recorded as the source's, so two entities of one source
-    /// took each other's recorded failures (review of IO step 5).
+    /// Two entities of one source are two calls, each answered by its own in a replay: a recorded call keeps the outputs it
+    /// asked for, so the call of the entity that reads other outputs does not take the other's failure (review of IO
+    /// step 5, where they did, and of its fixes, where one source computed one entity, which a reload changed anyway).
     /// </summary>
     [Fact]
-    public void TwoEntitiesOfOneServiceSource_AreAnError()
+    public async Task TwoEntitiesOfOneSource_AreTwoCalls_EachReplayedByItsOwn()
     {
-        var diagnostics = Diagnostics(Workspace(
-            extraEntities: """, "other": { "args": { "q": "ctx.request.query" } }""",
-            extraFeatures: """, "other.score": { "type": "float32", "source": "intent", "field": "score" }""",
-            extraOutput: """, "other": "ctx.other.score" """));
+        var service = new IntentService { FailWhenAsked = "score" };
+        var plan = Compile(Workspace(
+            readInOutput: false,
+            extraEntities: """, "other": { "args": { "query": "ctx.request.query", "ctr": "ctx.user.ctr", "recent": "ctx.request.recent" } }""",
+            extraFeatures: """, "other.label": { "type": "string", "source": "intent", "field": "label" }""",
+            extraOutput: """, "label": "ctx.other.label" """), service);
+        var inputs = Inputs(user: 7, query: "shoes", recent: null);
 
-        var error = Assert.Single(diagnostics, d => d.Code == "SOURCE_SERVICE_ENTITY");
-        Assert.Equal("/sources/intent", error.Pointer);
-        Assert.Contains("computes entity 'intent' already, and entity 'other' reads it too", error.Message);
+        var live = await Execute(plan, inputs, record: true);
+        Assert.True(live.Succeeded, live.Error); // boost skipped: intent's call (score) failed; other's (label) answered
+        Assert.Equal(2, service.Calls.Count);
+        var replay = RunReplay.Create(live.Recording!, "/runs/0");
+        var again = await Execute(plan, inputs, replay: replay);
+
+        Assert.True(again.Succeeded, again.Error);
+        Assert.Empty(replay.Gaps);
+        Assert.All(again.Items, item => Assert.Equal("sporty", item.Columns["label"].AsString()));
+        Assert.Equal(NodeOutcomeKind.Failed, Assert.Single(again.Outcomes, o => o.NodeId == "boost").Kind);
+    }
+
+    /// <summary>
+    /// An output the service left unwritten is missing, live and in a replay of the same configuration, which neither
+    /// reports it as a gap nor takes it from another call that has it (review of the step 5 fixes).
+    /// </summary>
+    [Fact]
+    public async Task AnOutputTheServiceLeftUnwritten_IsMissing_AndReplaysSo()
+    {
+        var service = new IntentService { Omit = "score" };
+        var plan = Compile(Workspace(), service);
+        var inputs = Inputs(user: 7, query: "shoes", recent: null);
+
+        var live = await Execute(plan, inputs, record: true);
+        var replay = RunReplay.Create(live.Recording!, "/runs/0");
+        var again = await Execute(plan, inputs, replay: replay);
+
+        Assert.True(live.Succeeded && again.Succeeded, live.Error ?? again.Error);
+        Assert.All(live.Items.Concat(again.Items), item => Assert.Equal(0.5, item.Columns["score"].AsFloat64(), 6)); // the default
+        Assert.Empty(replay.Gaps);
     }
 
     /// <summary>Two features of one field ask the service for it once, and both take its answer (review of IO step 5).</summary>
@@ -380,7 +411,7 @@ public sealed class ComputedEntityEndToEndTests
         run.ServiceCalls[at] = new ReplayServiceCall
         {
             Seq = recorded.Seq, Source = recorded.Source, Service = recorded.Service, Role = recorded.Role, Status = "cancelled", Threw = true,
-            InputDigests = recorded.InputDigests,
+            InputDigests = recorded.InputDigests, Requested = recorded.Requested,
         };
 
         var replayed = await Execute(plan, inputs, replay: RunReplay.Create(run, "/runs/0"));
@@ -571,6 +602,12 @@ public sealed class ComputedEntityEndToEndTests
         /// <summary><c>int32</c>, or two strings of which the second is left unwritten.</summary>
         public string Topics { get; init; } = "int32";
 
+        /// <summary>Fails a call that asks for this output.</summary>
+        public string? FailWhenAsked { get; init; }
+
+        /// <summary>An output it leaves unwritten (<c>score</c>).</summary>
+        public string? Omit { get; init; }
+
         /// <summary>Answers only once this completes, whatever its token.</summary>
         public TaskCompletionSource? Gate { get; init; }
 
@@ -619,13 +656,15 @@ public sealed class ComputedEntityEndToEndTests
                 await gate.Task.ConfigureAwait(false); // ignores the token
             }
 
-            if (Fail)
+            if (Fail || (FailWhenAsked is { } failing && call.Outputs.Span.Contains(failing)))
             {
                 return ServiceStatus.Failed("the model is down");
             }
 
-            switch (Score)
+            switch (Omit == "score" ? "omitted" : Score)
             {
+                case "omitted":
+                    break;
                 case "string":
                     response.GetValues<string>("score", 1).Span[0] = "high";
                     break;

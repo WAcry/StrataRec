@@ -773,6 +773,58 @@ public sealed class BoundedCallListenerTests
         budget.Release();
     }
 
+    /// <summary>
+    /// A call whose host's sampler takes only the scope's time is the scope's, though its own deadline came first when it
+    /// started: that deadline, on a clock of its own (held still here), has not passed (review of the step 4b fixes: the
+    /// order told before the call started put it down to its own deadline).
+    /// </summary>
+    [Fact]
+    public async Task ACallWhoseSamplerTakesOnlyTheScopesTime_IsTheScopes()
+    {
+        var root = "bounded-call-scope-only-" + Guid.NewGuid().ToString("N");
+        ActivityTraceId trace = default;
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == StrataRecTelemetry.Name,
+            Sample = (ref ActivityCreationOptions<ActivityContext> options) =>
+            {
+                if (options.Name == root)
+                {
+                    return ActivitySamplingResult.AllDataAndRecorded;
+                }
+
+                if (trace != default && options.Parent.TraceId == trace)
+                {
+                    Thread.Sleep(400); // past the scope's deadline
+                    return ActivitySamplingResult.AllDataAndRecorded;
+                }
+
+                return ActivitySamplingResult.None;
+            },
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var request = StrataRecTelemetry.ActivitySource.StartActivity(root);
+        trace = request!.TraceId;
+        var budget = new AttemptBudget(CancellationToken.None, Stopwatch.GetTimestamp() + (Stopwatch.Frequency / 5)); // 200 ms
+        var held = new HeldClock();
+        var own = CallDeadline.At(held, held.GetTimestamp() + (held.TimestampFrequency / 10), 100); // 100 ms, never passing
+        var sent = 0;
+        var call = new Recording(new ValueTask<int>(5), () => sent++);
+
+        var result = await BoundedCall.RunAsync<int, Recording>(call, budget, null, new IoTarget(IoRoles.Model, "scope_only"), own)
+            .AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((CallEnd.BudgetRanOut, IoOutcome.Timeout, false, 0), (result.End, result.Outcome, result.Sent, sent));
+        budget.Release();
+    }
+
+    private sealed class HeldClock : TimeProvider
+    {
+        private readonly long _timestamp = Stopwatch.GetTimestamp();
+
+        public override long GetTimestamp() => _timestamp;
+    }
+
     /// <summary>Answers with <paramref name="answer"/> and keeps what each end recorded.</summary>
     private readonly struct Recording(ValueTask<int> answer, Action? onSend = null) : IBoundedCall<int>
     {

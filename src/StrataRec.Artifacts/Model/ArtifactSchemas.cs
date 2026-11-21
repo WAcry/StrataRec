@@ -132,17 +132,20 @@ public static class ArtifactSchemas
     /// <summary>
     /// An entity declares exactly one of <c>key</c> and <c>args</c>, and args has at least one argument, as the catalog
     /// checks (IO step 5): both members are optional in the type, so an editor accepted an entity the engine refuses
-    /// (review of IO step 5; a key alone was required before).
+    /// (review of IO step 5; a key alone was required before). A member written as null is not declared, as for the
+    /// catalog; a key is a reference or a list of them.
     /// </summary>
     private static JsonObject CatalogSchema(JsonObject schema)
     {
         if (schema["properties"] is JsonObject properties && properties["entities"]?["additionalProperties"] is JsonObject entity
-            && entity["properties"]?["args"] is JsonObject args)
+            && entity["properties"] is JsonObject members && members["args"] is JsonObject args && members["key"] is JsonObject key)
         {
             args["minProperties"] = 1;
+            key["type"] = new JsonArray("string", "array", "null");
+            key["items"] = new JsonObject { ["type"] = "string" };
             entity["oneOf"] = new JsonArray(
-                new JsonObject { ["required"] = new JsonArray("key") },
-                new JsonObject { ["required"] = new JsonArray("args") });
+                new JsonObject { ["required"] = new JsonArray("key"), ["properties"] = new JsonObject { ["key"] = new JsonObject { ["type"] = new JsonArray("string", "array") } } },
+                new JsonObject { ["required"] = new JsonArray("args"), ["properties"] = new JsonObject { ["args"] = new JsonObject { ["type"] = "object" } } });
         }
 
         return schema;

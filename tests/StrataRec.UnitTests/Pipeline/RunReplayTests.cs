@@ -579,7 +579,7 @@ public sealed class RunReplayTests
         run.ServiceCalls.Add(new ReplayServiceCall
         {
             Seq = 0, Node = recorded.Node, Service = "m", Role = "model", BatchSize = 1, Status = status, Error = error ?? "the node's budget ran out", Threw = cutOff,
-            Keys = recorded.Keys, InputDigests = recorded.InputDigests,
+            Keys = recorded.Keys, InputDigests = recorded.InputDigests, Requested = recorded.Requested,
         });
         var replay = RunReplay.Create(run, "/runs/0");
 
@@ -620,6 +620,7 @@ public sealed class RunReplayTests
         Status = "ok",
         Keys = Json("[" + string.Join(",", keys) + "]"),
         InputDigests = RowDigests(call).ToList(),
+        Requested = [.. call.Outputs.ToArray()],
         Outputs = new Dictionary<string, ReplayOutput> { ["score"] = new() { Type = "float32", Values = JsonSerializer.SerializeToElement(scores) } },
     };
 
@@ -641,6 +642,7 @@ public sealed class RunReplayTests
         Status = "ok",
         Keys = Json("[" + string.Join(",", keys) + "]"),
         InputDigests = RowDigests(call).ToList(),
+        Requested = [.. call.Outputs.ToArray()],
         Texts = new Dictionary<string, string> { ["answer"] = text },
         OutputTokens = outputTokens,
         Truncated = truncated,
@@ -658,6 +660,7 @@ public sealed class RunReplayTests
         Error = error,
         Keys = Json("[" + string.Join(",", keys) + "]"),
         InputDigests = RowDigests(call).ToList(),
+        Requested = [.. call.Outputs.ToArray()],
     };
 
     internal static (ServiceStatus Status, float[] Scores) Invoke(RunReplay replay, ServiceCall call, params long[] keys)

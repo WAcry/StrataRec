@@ -70,6 +70,59 @@ public sealed class ServiceCallAllocationTests
         }
     }
 
+    /// <summary>A cancellation while the call is checked is a cancelled task, as an async method's (review of the step 5 fixes).</summary>
+    [Fact]
+    public void ACancellationWhileTheCallIsChecked_IsACancelledTask()
+    {
+        var memory = new RequestMemory();
+        var budget = new AttemptBudget(CancellationToken.None, long.MaxValue);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        try
+        {
+            var context = Context(memory, budget);
+            var bound = new BoundService("x", new Answering(), IoRoles.Model, null);
+            var outputs = new CancellingNames(cancelled.Token);
+
+            var call = context.CallAsync(bound, new ServiceCall { Service = "x", Outputs = outputs.Memory }, new ServiceResponse(memory));
+
+            Assert.True(call.IsCanceled);
+        }
+        finally
+        {
+            budget.Release();
+            memory.Release();
+        }
+    }
+
+    /// <summary>Output names whose memory throws a cancellation when read (after the memory over it is made).</summary>
+    private sealed class CancellingNames(CancellationToken token) : System.Buffers.MemoryManager<string>
+    {
+        private readonly string[] _names = ["p"];
+        private bool _made;
+
+        public override Span<string> GetSpan()
+        {
+            if (!_made)
+            {
+                _made = true; // Memory reads its length
+                return _names;
+            }
+
+            throw new OperationCanceledException(token);
+        }
+
+        public override System.Buffers.MemoryHandle Pin(int elementIndex = 0) => throw new NotSupportedException();
+
+        public override void Unpin()
+        {
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+        }
+    }
+
     private static OperatorContext Context(RequestMemory memory, AttemptBudget budget) => new(new RequestState
     {
         Plan = null!,

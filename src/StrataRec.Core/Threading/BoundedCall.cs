@@ -290,14 +290,15 @@ internal static class BoundedCall
         // Starting the call runs the host's code (an ActivityListener's sampler and start callback), which may cancel the
         // request or take the time that was left: the bound is looked at again after it (review of IO step 4: a sampler
         // that cancelled the request still had the provider called). The span the host saw start ends cancelled, which
-        // no metric or health counts. Which deadline comes first is decided before, while both are ahead: a call whose
-        // two deadlines both passed in the host's code is the earlier one's, as a sent one is (review of IO step 4b).
+        // no metric or health counts. A call cut off there is the deadline's that passed; when both did, the one that came
+        // first, which is told before, while both are ahead (review of IO step 4b). The deadlines may be on other clocks
+        // (a cache's, which the host may move), so which comes first is told again for the client's token.
         var ownFirst = deadline.IsSet && deadline.Remaining < bound.Remaining;
         var io = target.Start();
         unsent = Unsent(bound, deadline);
         if (unsent != Winner.Client)
         {
-            var cut = CutOff<T>(unsent, null, ownFirst, bound, deadline, abandoned: false) with { Sent = false };
+            var cut = CutOff<T>(unsent, null, ownSet: ownFirst && deadline.HasPassed, bound, deadline, abandoned: false) with { Sent = false };
             try
             {
                 call.Ended(cut, TimeSpan.Zero);
@@ -312,7 +313,7 @@ internal static class BoundedCall
 
         memory?.Hold();
         bound.AddReference();
-        var (own, token) = Own(bound, deadline, ownFirst);
+        var (own, token) = Own(bound, deadline);
         ValueTask<T> pending;
         try
         {
@@ -491,16 +492,19 @@ internal static class BoundedCall
 
     /// <summary>
     /// The token the client gets. The call's own deadline gets a token source of its own only when it comes before the
-    /// bound's (<paramref name="ownFirst"/>, decided before the call started); otherwise the bound's token already says
-    /// everything.
+    /// bound's; otherwise the bound's token already says everything.
     /// </summary>
-    private static (CancellationTokenSource? Own, CancellationToken Token) Own(CallBound bound, in CallDeadline deadline, bool ownFirst)
+    private static (CancellationTokenSource? Own, CancellationToken Token) Own(CallBound bound, in CallDeadline deadline)
     {
-        if (ownFirst)
+        if (deadline.IsSet)
         {
-            var own = new ObservedCancellationSource(CancellationSite.Call, bound.Token, bound.Events, bound.RequestId);
-            own.CancelAfterObserved(deadline.Remaining);
-            return (own, own.Token);
+            var remaining = deadline.Remaining;
+            if (remaining < bound.Remaining)
+            {
+                var own = new ObservedCancellationSource(CancellationSite.Call, bound.Token, bound.Events, bound.RequestId);
+                own.CancelAfterObserved(remaining);
+                return (own, own.Token);
+            }
         }
 
         return (null, bound.Token);
