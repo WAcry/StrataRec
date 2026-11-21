@@ -44,6 +44,14 @@ public sealed class BindingRegistrationTests
     }
 
     [Fact]
+    public void ABindingTypeOfAnOperatorsId_IsOneCapability()
+    {
+        var environment = new PlanEnvironment { Bindings = PlanEnvironment.DefaultBindings().Add(new Named("TopK@1")) };
+
+        Assert.Single(environment.Capabilities(), c => c == "TopK@1");
+    }
+
+    [Fact]
     public void ABindingTheFactoryRejects_IsCreatedOnceAndReportedOnce_HoweverManyNodesReadIt()
     {
         var factory = new Rejecting();
@@ -112,6 +120,15 @@ public sealed class BindingRegistrationTests
         public Type SettingsType => typeof(NoSettings);
 
         public object Create(BindingContext context) => new();
+    }
+
+    private sealed class Named(string type) : IBindingFactory<IModelClient>
+    {
+        public string Type => type;
+
+        public Type SettingsType => typeof(NoSettings);
+
+        public IModelClient Create(BindingContext context) => throw new NotSupportedException();
     }
 
     private sealed class LazySettings : IBindingFactory<IModelClient>

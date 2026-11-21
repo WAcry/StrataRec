@@ -119,9 +119,10 @@ public sealed class DiagnosticBag
     public void AddRange(IEnumerable<ConfigDiagnostic> diagnostics)
     {
         ArgumentNullException.ThrowIfNull(diagnostics);
-        var held = new HashSet<ConfigDiagnostic>(_items); // linear in both lists, however many there are
+        HashSet<ConfigDiagnostic>? held = null; // built at the first one: linear in both lists, and nothing for none
         foreach (var diagnostic in diagnostics)
         {
+            held ??= new HashSet<ConfigDiagnostic>(_items);
             if (held.Add(diagnostic))
             {
                 _items.Add(diagnostic);

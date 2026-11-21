@@ -58,7 +58,11 @@ public sealed record PlanEnvironment
             {
                 if (contract.IsInstanceOfType(factory))
                 {
-                    caps.Add(factory.Type); // once, however many kinds it serves
+                    if (!caps.Contains(factory.Type))
+                    {
+                        caps.Add(factory.Type); // once, however many kinds it serves, and once beside an operator of its id
+                    }
+
                     break;
                 }
             }
