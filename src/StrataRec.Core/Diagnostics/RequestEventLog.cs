@@ -93,8 +93,7 @@ public sealed partial class RequestEventLog : IDisposable
     private readonly ConcurrentDictionary<(RequestEvent Event, string Subject), EventWindow> _events = new();
     private readonly ConcurrentDictionary<(IoKind Kind, string Name), HealthWindow> _health = new();
     private readonly Lock _flushGate = new();
-    private readonly Lock _heldGate = new();
-    private readonly List<HeldMemory> _held = new(); // guarded by _heldGate
+    private readonly List<HeldMemory> _held = new(); // guarded by itself
     private readonly Timer? _timer;
     private long _windowStart;
 
@@ -160,7 +159,7 @@ public sealed partial class RequestEventLog : IDisposable
     public void WatchHeld(RequestMemory memory, string subject, string? requestId)
     {
         var since = Stopwatch.GetTimestamp();
-        lock (_heldGate)
+        lock (_held)
         {
             _held.Add(new HeldMemory(memory, subject, requestId, since));
         }
@@ -220,7 +219,7 @@ public sealed partial class RequestEventLog : IDisposable
     /// <summary>Reports the watched requests held for <see cref="HeldAfter"/> or more and stops watching them and the returned ones.</summary>
     private void ReportHeld(long now)
     {
-        lock (_heldGate)
+        lock (_held)
         {
             var kept = 0;
             for (var i = 0; i < _held.Count; i++)
@@ -278,7 +277,6 @@ public sealed partial class RequestEventLog : IDisposable
     /// <summary>Occurrences of one (event, subject) in the current window, plus the window's sample.</summary>
     private sealed class EventWindow
     {
-        private readonly Lock _gate = new();
         private long _count;
         private int _sampled;
         private string? _request;
@@ -292,7 +290,7 @@ public sealed partial class RequestEventLog : IDisposable
                 return;
             }
 
-            lock (_gate)
+            lock (this)
             {
                 if (_sampled == 0)
                 {
@@ -305,7 +303,7 @@ public sealed partial class RequestEventLog : IDisposable
 
         public long Take(out string? request, out string? detail)
         {
-            lock (_gate)
+            lock (this)
             {
                 request = _request;
                 detail = _detail;
@@ -321,11 +319,12 @@ public sealed partial class RequestEventLog : IDisposable
     /// <remarks>
     /// A call and its failure are added and taken under one lock: counted separately, a flush between the two increments
     /// moves the failure into the next window without its call, and the verdicts of both windows go wrong (review 6).
-    /// The lock is per dependency and held for a few instructions.
+    /// The lock is per dependency and held for a few instructions, but every call of the dependency takes it, from all
+    /// concurrent requests: it is the window itself (a private type, which no other code can lock), which allocates no
+    /// gate, and the monitor handles contention better than a <see cref="Lock"/> (docs/decisions.md).
     /// </remarks>
     private sealed class HealthWindow
     {
-        private readonly Lock _gate = new();
         private long _calls;
         private long _failures;
         private string? _error;
@@ -335,7 +334,7 @@ public sealed partial class RequestEventLog : IDisposable
 
         public void Add(bool failed, string? error)
         {
-            lock (_gate)
+            lock (this)
             {
                 _calls++;
                 if (failed)
@@ -348,7 +347,7 @@ public sealed partial class RequestEventLog : IDisposable
 
         public long Take(out long failures, out string? error)
         {
-            lock (_gate)
+            lock (this)
             {
                 var calls = _calls;
                 failures = _failures;

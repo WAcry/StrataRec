@@ -47,11 +47,10 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     private readonly ILogger _logger;
     private readonly ObservedCancellationSource _stopping = new(CancellationSite.Release);
     private readonly Channel<ManifestLoadResult>? _reports; // background outcomes waiting for the reporter
-    private readonly Lock _callsGate = new();
-    private readonly List<ObservedCancellationSource> _calls = new(); // calls in flight, or whose callbacks still run (see BeginCall); under _callsGate
+    private readonly List<ObservedCancellationSource> _calls = new(); // calls in flight, or whose callbacks still run (see BeginCall); its own lock
     private Task? _polling;
     private bool _stopRequested;
-    private bool _cancelled; // under _callsGate: no call starts any more
+    private bool _cancelled; // under _calls: no call starts any more
     private bool _disposed;
 
     public StrataRecReleases(
@@ -256,7 +255,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     private Task CancelAll()
     {
         var callbacks = new List<Task>();
-        lock (_callsGate)
+        lock (_calls)
         {
             _cancelled = true;
             foreach (var call in _calls)
@@ -277,7 +276,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     /// </summary>
     private ObservedCancellationSource? BeginCall(TimeSpan timeout, CancellationToken linkedTo)
     {
-        lock (_callsGate)
+        lock (_calls)
         {
             if (_cancelled)
             {
@@ -315,7 +314,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
 
     private void Forget(ObservedCancellationSource call)
     {
-        lock (_callsGate)
+        lock (_calls)
         {
             _calls.Remove(call);
         }

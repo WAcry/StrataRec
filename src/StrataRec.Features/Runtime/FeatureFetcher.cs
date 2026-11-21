@@ -72,8 +72,7 @@ public sealed partial class FeatureFetcher
     private readonly FeatureState[] _state;
     private readonly string?[] _errors;
     private readonly List<PendingFetch> _pending = new();
-    private readonly Lock _ioGate = new();
-    private readonly List<Task> _io = new(); // guarded by _ioGate: connector calls, cache reads' resolutions, the context fetch
+    private readonly List<Task> _io = new(); // guarded by lock (_io): connector calls, cache reads' resolutions, the context fetch
     private readonly ExpressionCounters _counters;
     private readonly IFeatureCallHook? _hook;
     private int _nonFiniteReplaced;
@@ -151,7 +150,7 @@ public sealed partial class FeatureFetcher
         while (true)
         {
             Task[] round;
-            lock (_ioGate)
+            lock (_io)
             {
                 if (_io.Count == seen)
                 {
@@ -994,7 +993,7 @@ public sealed partial class FeatureFetcher
 
     private void TrackIo(Task task)
     {
-        lock (_ioGate)
+        lock (_io)
         {
             _io.Add(task);
         }
