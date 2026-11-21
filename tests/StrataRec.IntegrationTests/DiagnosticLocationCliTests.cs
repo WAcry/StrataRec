@@ -126,10 +126,10 @@ public sealed class DiagnosticLocationCliTests : IDisposable
     [InlineData("experiments/exp_mmr_diversity.jsonc", "\"diversity_cap\": null,", "\"diversty_cap\": null,",
         "PATCH_DELETE_MISSING", "/arms/mmr/nodes/diversty_cap", "\"diversty_cap\"")] // the arm's parameters are not reported again
     [InlineData("bindings/local.jsonc", "\"fixtures/recall_vectors.json\"", "\"fixtures/no_such_file.json\"",
-        "BINDING_SETTINGS", "/candidate_sources/two_tower/data_file", "\"data_file\": \"fixtures/no_such_file.json\"")] // at the binding, and the
+        "BINDING_SETTINGS", "/services/two_tower/data_file", "\"data_file\": \"fixtures/no_such_file.json\"")] // at the binding, and the
         // recall columns are still declared: the output that reads one is not reported unknown
     [InlineData("bindings/local.jsonc", "\"activation\": \"sigmoid\"", "\"activaton\": \"sigmoid\"",
-        "BINDING_SETTINGS", "/models/ctr_model/outputs/p_click/activaton", "\"activaton\"")] // was ignored: the identity scored
+        "BINDING_SETTINGS", "/services/ctr_model/outputs/p_click/activaton", "\"activaton\"")] // was ignored: the identity scored
     // An operator's error is at the setting to change, with a hint (they were at the config or the other column, without).
     [InlineData(Pipeline, "\"source_order\": [\"two_tower\", \"popular\"]", "\"source_order\": [\"two_tower\", \"populr\"]",
         "RECALL_UNKNOWN_SOURCE", "/nodes/recall/config/source_order/1", "\"populr\"")]

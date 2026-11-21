@@ -6,8 +6,8 @@ using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Llm.Templates;
-using StrataRec.Models;
 using StrataRec.Pipeline.Operators;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Llm;
 
@@ -144,6 +144,8 @@ public sealed class GenerativeRetrieverFactory : IOperatorFactory
         BoundModel model, (string Name, PromptTemplate Template)[] prompts, string output, int maxItems, OutputColumn? rank, int maxOutputTokens)
         : Operator
     {
+        private readonly string[] _read = [output]; // the one output it reads, recorded and replayed
+
         private readonly KeyValuePair<string, object?>[] _used = LlmNode.Tags(model, "used");
         private readonly KeyValuePair<string, object?>[] _unknown = LlmNode.Tags(model, "unknown");
         private readonly KeyValuePair<string, object?>[] _repeated = LlmNode.Tags(model, "repeated");
@@ -162,8 +164,8 @@ public sealed class GenerativeRetrieverFactory : IOperatorFactory
                 inputs[i] = NamedInput.FromText(prompts[i].Name, prompts[i].Template.Render(context));
             }
 
-            var writer = new ModelOutputWriter(context.Memory);
-            var status = await model.InvokeAsync(context, model.Version(context), inputs, 1, writer, ReadOnlyMemory<int>.Empty, maxOutputTokens)
+            var writer = new ServiceResponse(context.Memory);
+            var status = await model.InvokeAsync(context, model.Version(context), inputs, 1, writer, ReadOnlySpan<int>.Empty, _read, maxOutputTokens)
                 .ConfigureAwait(false);
             if (!status.Succeeded)
             {
@@ -181,7 +183,7 @@ public sealed class GenerativeRetrieverFactory : IOperatorFactory
         }
 
         /// <summary>Parses the answer and appends its new ids; fails the node, appending nothing, when it is not a JSON array.</summary>
-        private void Append(OperatorContext context, string text, in ModelStatus status)
+        private void Append(OperatorContext context, string text, in ServiceStatus status)
         {
             var table = context.Table;
             var memory = context.Memory;
@@ -245,6 +247,6 @@ public sealed class GenerativeRetrieverFactory : IOperatorFactory
         }
 
         /// <summary>The hint for an answer the client says it cut at the limit; empty otherwise.</summary>
-        private string Cut(in ModelStatus status) => LlmNode.Cut(status, maxOutputTokens, "ask for fewer ids");
+        private string Cut(in ServiceStatus status) => LlmNode.Cut(status, maxOutputTokens, "ask for fewer ids");
     }
 }

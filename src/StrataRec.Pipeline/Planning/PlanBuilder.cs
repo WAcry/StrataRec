@@ -19,6 +19,7 @@ using StrataRec.Features.Runtime;
 using StrataRec.Models;
 using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Sources;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Pipeline.Planning;
 
@@ -33,8 +34,8 @@ public sealed record PlanEnvironment
     public OperatorRegistry Operators { get; init; } = OperatorRegistry.CreateDefault();
 
     /// <summary>
-    /// The binding factories of this binary, of every kind (design 6.4): model clients, candidate sources, feature
-    /// connectors, update sources and distributed cache stores, by the type a binding names. <see cref="DefaultBindings"/>
+    /// The binding factories of this binary, of every kind (design 6.4): service clients, feature connectors, update
+    /// sources and distributed cache stores, by the type a binding names. <see cref="DefaultBindings"/>
     /// by default; StrataRec.Redis adds <c>redis@1</c>.
     /// </summary>
     public BindingRegistry Bindings { get; init; } = DefaultBindings();
@@ -74,15 +75,15 @@ public sealed record PlanEnvironment
 
     /// <summary>
     /// The built-in binding types: <c>linear@1</c>, <c>random@1</c> and <c>fixed_text@1</c> models,
-    /// <c>memory_list@1</c> and <c>memory_vectors@1</c> candidate sources, the <c>memory@1</c> connector and the
+    /// <c>memory_list@1</c> and <c>memory_vectors@1</c> recall services, the <c>memory@1</c> connector and the
     /// <c>snapshot_files@1</c> update source. A new registry each call, for a host to add its own to.
     /// </summary>
     public static BindingRegistry DefaultBindings() => new BindingRegistry()
         .Add(new LinearModelClientFactory())
         .Add(new RandomModelClientFactory())
         .Add(new FixedTextModelClientFactory())
-        .Add(new MemoryListCandidateSourceFactory())
-        .Add(new MemoryVectorsCandidateSourceFactory())
+        .Add(new MemoryListServiceFactory())
+        .Add(new MemoryVectorsServiceFactory())
         .Add(new MemoryFeatureConnectorFactory())
         .Add(new SnapshotFilesUpdateSourceFactory());
 
@@ -116,8 +117,7 @@ public sealed record PlanEnvironment
     /// </summary>
     private static readonly (BindingKind Kind, Type Contract, Func<object, Type> SettingsOf)[] KindContracts =
     [
-        (BindingKind.Model, typeof(IBindingFactory<IModelClient>), static f => ((IBindingFactory<IModelClient>)f).SettingsType),
-        (BindingKind.CandidateSource, typeof(IBindingFactory<ICandidateSource>), static f => ((IBindingFactory<ICandidateSource>)f).SettingsType),
+        (BindingKind.Service, typeof(IBindingFactory<IServiceClient>), static f => ((IBindingFactory<IServiceClient>)f).SettingsType),
         (BindingKind.Connector, typeof(IBindingFactory<IFeatureSourceConnector>), static f => ((IBindingFactory<IFeatureSourceConnector>)f).SettingsType),
         (BindingKind.UpdateSource, typeof(IBindingFactory<IFeatureUpdateSource>), static f => ((IBindingFactory<IFeatureUpdateSource>)f).SettingsType),
         (BindingKind.CacheStore, typeof(IBindingFactory<IFeatureCacheStore>), static f => ((IBindingFactory<IFeatureCacheStore>)f).SettingsType),
@@ -2326,7 +2326,7 @@ public sealed class PlanBuilder
 
     /// <summary>
     /// What the configuration compiled so far needs of a binary (design 10.4): the operator of every node compiled, and
-    /// the types of the bindings it bound, the models and candidate sources its nodes resolved and the feature sources of
+    /// the types of the bindings it bound, the services its nodes resolved and the feature sources of
     /// the catalog features it registered. Taken from the compile rather than from the names the configuration writes, so
     /// an operator's default (a model its config does not name) counts, and a binding nothing uses does not.
     /// </summary>
@@ -2347,7 +2347,7 @@ public sealed class PlanBuilder
             }
         }
 
-        _clients.Bindings.AddTypes(required, sources, _clients.BoundModels, _clients.BoundCandidateSources);
+        _clients.Bindings.AddTypes(required, sources, _clients.BoundServices);
         return required;
     }
 

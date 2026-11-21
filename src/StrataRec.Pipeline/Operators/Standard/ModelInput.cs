@@ -2,7 +2,7 @@ using StrataRec.Core.Columns;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Types;
 using StrataRec.Expressions;
-using StrataRec.Models;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Pipeline.Operators.Standard;
 

@@ -5,6 +5,7 @@ using System.Text.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Hashing;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Models;
 
@@ -42,12 +43,12 @@ namespace StrataRec.Models;
 /// with the output's declared shape (the same dimensions, -1 matching only -1), and <em>shared</em> otherwise. The value
 /// of output <c>o</c> at an element is the top 24 bits of the <see cref="StableHash"/> of <c>(salt, seed, x_1, …, x_n)</c>
 /// in its canonical encoding, times 2^-24: <c>salt</c> is the hash of the strings <c>(model, o)</c> (the binding's
-/// logical name), <c>seed</c> is the binding's or else the call's <see cref="ModelCallOptions.Seed"/> (the model operators
+/// logical name), <c>seed</c> is the binding's or else the call's <see cref="ServiceCallOptions.Seed"/> (the model operators
 /// pass <c>ctx.request.seed</c>), and <c>x_i</c> is input i in ordinal order of the input names: its sub-tensor at the
 /// element's index if it is per element, else the whole input, row-major: integers (and a bool as 0 or 1) as int64,
 /// floats as float64 (a float32 widened exactly), strings as strings. Names, types and shapes are not hashed, so both
 /// forms give the same scores for the same values, and so does a value sent at another width. An output's shape in a call is the leading dimensions of its per-element inputs (they must agree, and the
-/// first must be the call's <see cref="ModelCall.BatchSize"/>), so every output needs a per-element input: nothing else
+/// first must be the call's <see cref="ServiceCall.BatchSize"/>), so every output needs a per-element input: nothing else
 /// would size it or vary it.</para>
 /// <para>So a score depends only on what the model would see for that element: a row's own values (and the shared
 /// inputs), a pair's two rows in their order, a list row's slice of the list. Reordering and rebatching keep it, a new
@@ -63,7 +64,7 @@ namespace StrataRec.Models;
 /// byte buffer is pooled, and the bookkeeping per input is on the stack, or pooled for a model of more than 32 inputs);
 /// the client is immutable, needs no load and holds nothing to release.</para>
 /// </remarks>
-public sealed class RandomModelClient : IModelClient
+public sealed class RandomModelClient : IServiceClient
 {
     /// <summary>2^-24: the spacing of the 24-bit scores.</summary>
     private const float Unit = 1f / (1 << 24);
@@ -91,7 +92,7 @@ public sealed class RandomModelClient : IModelClient
 
     private readonly long[] _salts;
     private readonly long? _seed;
-    private readonly ModelSignature _signature;
+    private readonly ServiceSignature _signature;
 
     /// <param name="inputs">Distinct, non-empty names, float32 or int64, each dimension -1 or positive; at least one.</param>
     /// <param name="outputs">Distinct, non-empty names, float32, each with an input per element (<see cref="IsPerElement"/>); at least one.</param>
@@ -158,10 +159,8 @@ public sealed class RandomModelClient : IModelClient
             salt.Dispose();
         }
 
-        _signature = new ModelSignature((TensorSpec[])_inputs.Clone(), (TensorSpec[])_outputs.Clone());
+        _signature = new ServiceSignature((TensorSpec[])_inputs.Clone(), (TensorSpec[])_outputs.Clone());
     }
-
-    public string ClientType => RandomModelClientFactory.TypeName;
 
     /// <summary>
     /// True when an input of shape <paramref name="input"/> is scored per element of an output of shape
@@ -186,26 +185,26 @@ public sealed class RandomModelClient : IModelClient
     }
 
     /// <summary>Answers at once with the signature the settings declare, for any version.</summary>
-    public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
+    public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken) =>
         string.Equals(model, _modelName, StringComparison.Ordinal)
-            ? new ValueTask<ModelSignature>(_signature)
-            : ValueTask.FromException<ModelSignature>(new ArgumentException($"This client serves model '{_modelName}', not '{model}'.", nameof(model)));
+            ? new ValueTask<ServiceSignature>(_signature)
+            : ValueTask.FromException<ServiceSignature>(new ArgumentException($"This client serves model '{_modelName}', not '{model}'.", nameof(model)));
 
-    public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
-        new(Score(call, outputs));
+    public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken) =>
+        new(Score(call, response));
 
-    private ModelStatus Score(ModelCall call, IModelOutputWriter writer)
+    private ServiceStatus Score(ServiceCall call, IServiceResponse writer)
     {
         if ((_seed ?? call.Options.Seed) is not { } seed)
         {
-            return ModelStatus.Failed($"Model '{_modelName}' ({RandomModelClientFactory.TypeName}) got a call without a seed and its binding fixes none; " +
-                "pass ModelCallOptions.Seed (the model operators pass ctx.request.seed), or set \"seed\" in the binding.");
+            return ServiceStatus.Failed($"Model '{_modelName}' ({RandomModelClientFactory.TypeName}) got a call without a seed and its binding fixes none; " +
+                "pass ServiceCallOptions.Seed (the model operators pass ctx.request.seed), or set \"seed\" in the binding.");
         }
 
         var batch = call.BatchSize;
         if (batch < 0)
         {
-            return ModelStatus.Failed($"The call's batch size is {batch}; it must not be negative.");
+            return ServiceStatus.Failed($"The call's batch size is {batch}; it must not be negative.");
         }
 
         var n = _inputs.Length;
@@ -226,7 +225,7 @@ public sealed class RandomModelClient : IModelClient
 
     /// <param name="slots">Per input in hash order: its position in the call.</param>
     /// <param name="lengths">Per input in hash order, for the output being written: how many values it adds to an element's hash.</param>
-    private ModelStatus Evaluate(ReadOnlySpan<NamedInput> inputs, int batch, long seed, Span<int> slots, Span<int> lengths, IModelOutputWriter writer)
+    private ServiceStatus Evaluate(ReadOnlySpan<NamedInput> inputs, int batch, long seed, Span<int> slots, Span<int> lengths, IServiceResponse writer)
     {
         var n = _inputs.Length;
         for (var j = 0; j < n; j++)
@@ -234,12 +233,12 @@ public sealed class RandomModelClient : IModelClient
             var slot = Find(inputs, j);
             if (slot < 0)
             {
-                return ModelStatus.Failed($"Missing input '{_inputs[j].Name}'.");
+                return ServiceStatus.Failed($"Missing input '{_inputs[j].Name}'.");
             }
 
             if (!Fits(inputs[slot], j, batch))
             {
-                return ModelStatus.Failed(Mismatch(inputs[slot], j, batch));
+                return ServiceStatus.Failed(Mismatch(inputs[slot], j, batch));
             }
 
             slots[j] = slot;
@@ -253,7 +252,7 @@ public sealed class RandomModelClient : IModelClient
             {
                 if (_perElement[(o * n) + j] && !inputs[slots[j]].Shape.AsSpan(0, _outputRanks[o]).SequenceEqual(sizing.AsSpan(0, _outputRanks[o])))
                 {
-                    return ModelStatus.Failed($"Inputs '{_inputs[_sizing[o]].Name}' and '{_inputs[j].Name}' give output '{_outputs[o].Name}' ({Describe(_outputs[o])}) " +
+                    return ServiceStatus.Failed($"Inputs '{_inputs[_sizing[o]].Name}' and '{_inputs[j].Name}' give output '{_outputs[o].Name}' ({Describe(_outputs[o])}) " +
                         $"different shapes, {Dims(sizing, _outputRanks[o])} and {Dims(inputs[slots[j]].Shape, _outputRanks[o])}: the inputs scored per element of an " +
                         "output must agree on its dimensions.");
                 }
@@ -261,7 +260,7 @@ public sealed class RandomModelClient : IModelClient
 
             if (Elements(sizing, 0, _outputRanks[o]) > int.MaxValue)
             {
-                return ModelStatus.Failed($"Output '{_outputs[o].Name}' would have {Dims(sizing, _outputRanks[o])} elements, more than an output buffer holds.");
+                return ServiceStatus.Failed($"Output '{_outputs[o].Name}' would have {Dims(sizing, _outputRanks[o])} elements, more than an output buffer holds.");
             }
         }
 
@@ -279,7 +278,7 @@ public sealed class RandomModelClient : IModelClient
                 var given = single ? floats.Length : doubles.Length;
                 if (given < count)
                 {
-                    return ModelStatus.Failed($"The output writer gave {given} values for output '{_outputs[o].Name}', which has {count}.");
+                    return ServiceStatus.Failed($"The output writer gave {given} values for output '{_outputs[o].Name}', which has {count}.");
                 }
 
                 if (count == 0)
@@ -324,7 +323,7 @@ public sealed class RandomModelClient : IModelClient
             hash.Dispose();
         }
 
-        return ModelStatus.Ok;
+        return ServiceStatus.Ok;
     }
 
     /// <summary>
@@ -528,7 +527,7 @@ public sealed class RandomTensorSettings
 }
 
 /// <summary>Factory for <c>random@1</c>. <see cref="Create"/> only reads and checks the settings.</summary>
-public sealed class RandomModelClientFactory : BindingFactory<IModelClient, RandomSettings>
+public sealed class RandomModelClientFactory : BindingFactory<IServiceClient, RandomSettings>
 {
     public const string TypeName = "random@1";
 
@@ -537,7 +536,7 @@ public sealed class RandomModelClientFactory : BindingFactory<IModelClient, Rand
 
     public override string Type => TypeName;
 
-    protected override IModelClient Create(RandomSettings settings, BindingContext context)
+    protected override IServiceClient Create(RandomSettings settings, BindingContext context)
     {
         var (inputSpecs, _) = Parse(context, settings.Inputs, "inputs");
         var (outputSpecs, outputPointers) = Parse(context, settings.Outputs, "outputs");

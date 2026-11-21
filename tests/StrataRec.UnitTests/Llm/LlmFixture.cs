@@ -5,11 +5,11 @@ using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting.Workspace;
 using StrataRec.Llm;
-using StrataRec.Models;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Pipeline.Replay;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Llm;
 
@@ -106,8 +106,7 @@ internal static class LlmFixture
               "sources": {
                 "items": { "connector": "memory@1", "data_file": "fixtures/items.json", "timeout_ms": 30000 },
                 "users": { "connector": "memory@1", "data_file": "fixtures/users.json", "timeout_ms": 30000 } },
-              "models": { "llm": { "client": "{{TextModels.TypeName}}" } },
-              "candidate_sources": { "s": { "client": "memory_list@1", "items": [{{(stringKeys ? string.Join(", ", StringKeys.Select(k => $"\"{k}\"")) : string.Join(", ", recall ?? Incoming))}}] } } }
+              "services": { "llm": { "client": "{{TextModels.TypeName}}" }, "s": { "client": "memory_list@1", "items": [{{(stringKeys ? string.Join(", ", StringKeys.Select(k => $"\"{k}\"")) : string.Join(", ", recall ?? Incoming))}}] } } }
             """);
         Write(root, "pipelines/p.jsonc", $$"""
             { "pipeline_id": "p", "entity_key_type": "{{(stringKeys ? "string" : "int64")}}",
@@ -228,21 +227,19 @@ internal sealed record TextCall(string? Version, int BatchSize, long? Seed, int?
 /// <c>text_test@1</c>: declares a signature per version (text inputs and output by default), keeps every call, and
 /// answers with what <c>answer</c> returns: the text of output <c>answer</c> (none when null) and the status.
 /// </summary>
-internal sealed class TextModels(Func<TextCall, (string? Text, ModelStatus Status)> answer, Func<string?, ModelSignature>? signature = null)
-    : IBindingFactory<IModelClient>, IModelClient
+internal sealed class TextModels(Func<TextCall, (string? Text, ServiceStatus Status)> answer, Func<string?, ServiceSignature>? signature = null)
+    : IBindingFactory<IServiceClient>, IServiceClient
 {
     public const string TypeName = "text_test@1";
 
     private readonly List<TextCall> _calls = new();
 
     public TextModels(string text)
-        : this(_ => (text, ModelStatus.Ok))
+        : this(_ => (text, ServiceStatus.Ok))
     {
     }
 
     public string Type => TypeName;
-
-    public string ClientType => TypeName;
 
     public Type SettingsType => typeof(NoSettings);
 
@@ -257,16 +254,16 @@ internal sealed class TextModels(Func<TextCall, (string? Text, ModelStatus Statu
         }
     }
 
-    public static ModelSignature Text(params string[] inputs) => new(
+    public static ServiceSignature Text(params string[] inputs) => new(
         inputs.Select(n => new TensorSpec(n, TensorElementType.Text, Array.Empty<int>())).ToArray(),
         new[] { new TensorSpec("answer", TensorElementType.Text, Array.Empty<int>()) });
 
-    public IModelClient Create(BindingContext context) => this;
+    public IServiceClient Create(BindingContext context) => this;
 
-    public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
+    public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken) =>
         ValueTask.FromResult(signature?.Invoke(version) ?? Text("user"));
 
-    public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
+    public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse outputs, CancellationToken cancellationToken)
     {
         var prompts = new Dictionary<string, string>();
         foreach (var input in call.Inputs.Span)

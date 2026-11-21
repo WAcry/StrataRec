@@ -8,7 +8,7 @@ using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
 using StrataRec.Features.Runtime;
-using StrataRec.Pipeline.Sources;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Pipeline.Operators.Standard;
 
@@ -141,14 +141,14 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         var unbound = false;
         for (var i = 0; i < names.Count; i++)
         {
-            var bound = context.CandidateSource(names[i], "/quotas_param");
+            var bound = context.Service(names[i], "/quotas_param", IoRoles.Recall);
             if (bound is null)
             {
                 unbound = true;
                 continue;
             }
 
-            sources[i] = new SourceEntry(names[i], bound.Value.Source, bound.Value.TimeoutMs, byName[names[i]], new IoTarget(IoRoles.Recall, names[i]));
+            sources[i] = new SourceEntry(names[i], bound, byName[names[i]]);
         }
 
         if (!CompileQueries(context, config, byName, sources) || !declared || unbound)
@@ -253,7 +253,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         return false;
     }
 
-    private sealed record SourceEntry(string Name, ICandidateSource Source, int? TimeoutMs, ParamRef Quota, IoTarget Io)
+    private sealed record SourceEntry(string Name, BoundService Service, ParamRef Quota)
     {
         /// <summary>The source's query, null for a source that gets the request's inputs alone.</summary>
         public SourceQuery? Query { get; init; }
@@ -264,16 +264,19 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
     {
         public AwaitedReads Reads { get; } = reads;
 
-        /// <summary>The values for one call: evaluated once its features are stored, on the operator's flow.</summary>
-        public CandidateQueryValues Evaluate(OperatorContext context)
+        /// <summary>
+        /// The inputs of one call: its values, evaluated once their features are stored, on the operator's flow; a missing
+        /// one is sent as missing (<see cref="ServiceInputs.Create"/>).
+        /// </summary>
+        public NamedInput[] Evaluate(OperatorContext context)
         {
-            var values = new ScalarValue[expressions.Length];
+            var inputs = new NamedInput[expressions.Length];
             for (var i = 0; i < expressions.Length; i++)
             {
-                values[i] = expressions[i].EvaluateScalar(context.EvalContext);
+                inputs[i] = ServiceInputs.Create(names[i], types[i], expressions[i].EvaluateScalar(context.EvalContext), context.Memory);
             }
 
-            return new CandidateQueryValues(names, types, values);
+            return inputs;
         }
     }
 
@@ -293,8 +296,8 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
 
         public override async ValueTask ExecuteAsync(OperatorContext context)
         {
-            var calls = new Task<CandidateSourceStatus>?[sources.Length];
-            var buffers = new CandidateBuffer?[sources.Length];
+            var calls = new Task<ServiceStatus>?[sources.Length];
+            var buffers = new ServiceResponse?[sources.Length];
             var bits = context.Memory.Rent<int>(sources.Length);
             string?[]? refused = null; // per source: why it was not sent (its query read a feature that failed)
             string?[]? degraded = null; // per source: the degraded feature its query read
@@ -313,7 +316,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                         continue;
                     }
 
-                    buffers[i] = new CandidateBuffer(quota, context.Memory);
+                    buffers[i] = new ServiceResponse(context.Memory, quota);
                     if (sources[i].Query is { Reads.IsEmpty: false })
                     {
                         (waiting ??= new List<int>()).Add(i); // sent once the features its query reads are stored
@@ -367,7 +370,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 }
 
                 attempted++;
-                CandidateSourceStatus status;
+                ServiceStatus status;
                 try
                 {
                     status = await calls[i]!.ConfigureAwait(false);
@@ -425,7 +428,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         /// says, or refuses it (<paramref name="refused"/> says why) when one of them failed.
         /// </summary>
         private void SendWith(
-            OperatorContext context, int i, FeatureFillResult fill, Task<CandidateSourceStatus>?[] calls, CandidateBuffer?[] buffers,
+            OperatorContext context, int i, FeatureFillResult fill, Task<ServiceStatus>?[] calls, ServiceResponse?[] buffers,
             string?[] refused, string?[] degraded)
         {
             if (fill.Failed)
@@ -444,18 +447,18 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         }
 
         /// <summary>One source's call: its quota, the request's inputs and, when it has a query, the query's values now.</summary>
-        private static Task<CandidateSourceStatus> Send(OperatorContext context, SourceEntry source, CandidateBuffer buffer)
+        private static Task<ServiceStatus> Send(OperatorContext context, SourceEntry source, ServiceResponse response)
         {
-            var query = new CandidateQuery
+            var call = new ServiceCall
             {
-                SourceName = source.Name,
-                Limit = buffer.Limit,
-                Inputs = context.Inputs,
-                Values = source.Query?.Evaluate(context) ?? CandidateQueryValues.Empty,
+                Service = source.Name,
+                Inputs = source.Query?.Evaluate(context) ?? [],
+                Limit = response.Limit,
+                Request = context.Inputs,
                 RequestId = context.RequestId,
-                Seed = context.Seed,
+                Options = new ServiceCallOptions(Seed: context.Seed),
             };
-            return context.RetrieveAsync(source.Source, source.Io, source.TimeoutMs, query, buffer);
+            return context.CallAsync(source.Service, call, response);
         }
 
         private static string? First(string?[] reasons)
@@ -477,7 +480,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         /// first new key that no longer fits in the table. The index and the merged columns are rented from the request
         /// memory, sized to the most keys that can be added, so nothing here allocates per key.
         /// </summary>
-        private void Merge(OperatorContext context, CandidateBuffer?[] sinks, int[] bits)
+        private void Merge(OperatorContext context, ServiceResponse?[] sinks, int[] bits)
         {
             var table = context.Table;
             var memory = context.Memory;

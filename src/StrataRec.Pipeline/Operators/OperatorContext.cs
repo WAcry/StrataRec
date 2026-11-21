@@ -9,10 +9,10 @@ using StrataRec.Core.Tables;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
 using StrataRec.Features.Runtime;
-using StrataRec.Models;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Replay;
 using StrataRec.Pipeline.Sources;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Pipeline.Operators;
 
@@ -23,11 +23,11 @@ namespace StrataRec.Pipeline.Operators;
 /// <remarks>
 /// <para>The attempt has an absolute deadline, its time budget (design 5.6), and <see cref="CancellationToken"/> is
 /// cancelled at it or with the caller's token. Cancellation is cooperative, so the framework does not rely on it at its
-/// I/O boundary: <see cref="RetrieveAsync"/> and <see cref="InvokeModelAsync"/> wait for a client no longer than the
-/// deadline (or the call's own timeout) and the caller allow, whether or not the client honours its token. A client still
-/// running then is abandoned: it keeps the request memory held until it really completes, and nothing it writes
-/// afterwards is read. An attempt whose operator returns only after the deadline has timed out all the same.</para>
-/// <para>Custom operators doing their own I/O outside these two methods are responsible for bounding it: by
+/// I/O boundary: <see cref="CallAsync"/> waits for a service no longer than the deadline (or the call's own timeout) and
+/// the caller allow, whether or not the client honours its token. A client still running then is abandoned: it keeps the
+/// request memory held until it really completes, and nothing it writes afterwards is read. An attempt whose operator
+/// returns only after the deadline has timed out all the same.</para>
+/// <para>Custom operators doing their own I/O outside <see cref="CallAsync"/> are responsible for bounding it: by
 /// <see cref="CancellationToken"/> when the client honours it, or by waiting no longer than <see cref="BudgetRemaining"/>
 /// and keeping every buffer the client may still write alive (through <see cref="RequestMemory.Hold"/>) until it completes.
 /// Such I/O is also not recorded or replayed (design 13.4).</para>
@@ -136,7 +136,7 @@ public sealed class OperatorContext
     /// and one between the check and the wait was missed until another feature was stored).</para>
     /// <para><paramref name="settled"/> runs on the operator's flow, one call at a time; what it throws ends the wait.</para>
     /// <para>The wait is bounded on its own by the attempt's deadline and the caller, as a call is
-    /// (<see cref="RetrieveAsync"/>), not by <see cref="CancellationToken"/>, which a client's callback could hold up; and a
+    /// (<see cref="CallAsync"/>), not by <see cref="CancellationToken"/>, which a client's callback could hold up; and a
     /// prefetch that faulted is rethrown as it is, not taken for the deadline. The bound is also checked before each round
     /// and before each read is judged (an empty one's callback included), so what is stored after it passed is never
     /// settled, and a fault is not reported for a deadline that came first, however long a callback ran. Each read of
@@ -333,102 +333,93 @@ public sealed class OperatorContext
     }
 
     /// <summary>
-    /// Calls a candidate source for this node the way the framework calls every external dependency (through
-    /// <see cref="BoundedCall"/>): holds the request memory until the source completes (design 4.8), waits for it no
-    /// longer than <paramref name="timeoutMs"/> and the node's budget allow, records duration, errors, health and a span
-    /// through <paramref name="target"/> (design 13.1, 13.2), closes the buffer, and records the call or answers it from a
-    /// recording when the request records or replays (design 13.4). Custom operators that call sources through it are
-    /// bounded, recorded and replayed like the built-in ones.
-    /// </summary>
-    /// <param name="timeoutMs">The source's own timeout (its binding's <c>timeout_ms</c>), within the node's budget; null for none.</param>
-    /// <returns>
-    /// The source's status. A source failure, exception or own timeout becomes a failed status; only the node's budget
-    /// running out or the caller cancelling throws <see cref="OperationCanceledException"/>.
-    /// </returns>
-    /// <remarks>
-    /// The wait ends at the earlier of the source's timeout and the node's deadline, or when the caller cancels, even if the
-    /// source ignores its token. A source still running then is abandoned: it keeps the request memory held until it
-    /// completes, and <paramref name="buffer"/> reads as empty from then on, so neither the operator nor the recording reads
-    /// a buffer the source may still be writing. The recording has the call as the request saw it (a timeout or a
-    /// cancellation, without candidates), and a replay takes the same path at once.
-    /// </remarks>
-    public async Task<CandidateSourceStatus> RetrieveAsync(ICandidateSource source, IoTarget target, int? timeoutMs, CandidateQuery query, CandidateBuffer buffer)
-    {
-        if (_state.Replay is { } replay)
-        {
-            var replayed = replay.Retrieve(NodeId, target.Name, query, buffer);
-            buffer.Close();
-            return replayed;
-        }
-
-        var recorder = _state.Recorder;
-        var sequence = recorder?.BeginCandidateCall(NodeId, target.Name, query.Limit, query.Values) ?? 0;
-        var result = await BoundedCall.RunAsync<CandidateSourceStatus, RetrieveCall>(
-            new RetrieveCall(source, query, buffer, recorder, sequence), Budget, _state.Memory, target, timeoutMs, query.RequestId, _state.Events)
-            .ConfigureAwait(false);
-        // Every end named, no default arm: a new kind of end does not compile until it is decided here (architecture audit).
-        return result.End switch
-        {
-            CallEnd.Answered => result.Value,
-            CallEnd.Threw or CallEnd.TimedOut => CandidateSourceStatus.Failed(result.Error ?? "failed"),
-            CallEnd.BudgetRanOut or CallEnd.Cancelled => throw result.Exception!, // the node's budget or the caller
-        };
-    }
-
-    /// <summary>
-    /// Calls a model for this node the way the framework calls every external dependency (through
+    /// Calls a service for this node the way the framework calls every external dependency (through
     /// <see cref="BoundedCall"/>): holds the request memory until the client completes (design 4.8), waits for it no
-    /// longer than <paramref name="timeoutMs"/> and the node's budget allow, records duration, errors, health and a span
-    /// through <paramref name="target"/>, and records the call or answers it from a recording when the request records or
-    /// replays (design 13.4).
+    /// longer than the binding's <c>timeout_ms</c> and the node's budget allow, records duration, errors, health and a span
+    /// through the service's <see cref="BoundService.Target"/> (design 13.1, 13.2), counts the tokens a generative client
+    /// reports, closes <paramref name="response"/>, and records the call or answers it from a recording when the request
+    /// records or replays (design 13.4). Custom operators that call services through it are bounded, measured, recorded
+    /// and replayed like the built-in ones.
     /// </summary>
-    /// <param name="rows">
-    /// Physical rows of the batch, one per entry of the leading dimension of row-wise inputs and outputs; a recording
-    /// keys each row's output by the row's entity id, so a replay matches outputs per entity even when the batches
-    /// differ. Empty for calls whose outputs are not per row; those are matched by their whole input.
+    /// <param name="call">
+    /// The call. One about rows gives the rows' <see cref="ServiceCall.Items"/> (<see cref="KeysOf"/>): the recording keys
+    /// each item's outputs by its entity and inputs, so a replay answers an item however the items were batched. Its
+    /// <see cref="ServiceCall.Outputs"/> name what the operator reads: only those are recorded and replayed.
     /// </param>
-    /// <param name="timeoutMs">The model's own timeout (its binding's <c>timeout_ms</c>), within the node's budget; null for none.</param>
+    /// <param name="response">Created for this call, with the call's <see cref="ServiceCall.Limit"/>; read it only after the call succeeded.</param>
     /// <returns>
-    /// The client's status. The model's own timeout and an exception the client throws become a failed status, with the
-    /// exception's message, as a candidate source's do; only the node's budget running out or the caller cancelling throws
+    /// The client's status. The service's own timeout and an exception the client throws become a failed status, with the
+    /// exception's message; only the node's budget running out or the caller cancelling throws
     /// (<see cref="OperationCanceledException"/>).
     /// </returns>
     /// <remarks>
-    /// <para>The wait ends at the earlier of the model's timeout and the node's deadline, or when the caller cancels, even
-    /// if the client ignores its token. A client still running then is abandoned: it keeps the request memory held until it
-    /// completes, so what it writes into <paramref name="outputs"/> afterwards lands in live buffers. Nothing reads them:
-    /// the call has failed, and an operator must not read the outputs of a call that did not succeed. The recording has
-    /// the call as the request saw it (a timeout or a cancellation, without outputs).</para>
+    /// <para>The wait ends at the earlier of the service's timeout and the node's deadline, or when the caller cancels,
+    /// even if the client ignores its token. A client still running then is abandoned: it keeps the request memory held
+    /// until it completes, and <paramref name="response"/> reads as empty from then on, so neither the operator nor the
+    /// recording reads a buffer the client may still be writing. The recording has the call as the request saw it (a
+    /// timeout or a cancellation, without outputs).</para>
     /// <para>A replay returns what the call returned in the recording, and throws <see cref="OperationCanceledException"/>
     /// where the recorded call was cut off by the budget or the caller. A client exception is a failed status, not a throw,
-    /// so a replay never has to recreate an exception type the recording saw (it used to, by reflection over the loaded
-    /// assemblies).</para>
+    /// so a replay never has to recreate an exception type the recording saw.</para>
     /// </remarks>
-    public async Task<ModelStatus> InvokeModelAsync(
-        IModelClient client, IoTarget target, ModelCall call, IModelOutputWriter outputs, ReadOnlyMemory<int> rows, int? timeoutMs)
+    public async Task<ServiceStatus> CallAsync(BoundService service, ServiceCall call, ServiceResponse response)
     {
+        ArgumentNullException.ThrowIfNull(service);
+        ArgumentNullException.ThrowIfNull(call);
+        ArgumentNullException.ThrowIfNull(response);
+        if (call.Limit != response.Limit)
+        {
+            throw new ArgumentException($"The call asks for {call.Limit} item(s) and the response keeps {response.Limit}: create the response with the call's limit.", nameof(response));
+        }
+
         if (_state.Replay is { } replay)
         {
-            return replay.InvokeModel(call, outputs, KeysOf(rows), NodeId);
+            try
+            {
+                return replay.Call(NodeId, service.Target, call, response);
+            }
+            finally
+            {
+                response.Close();
+            }
         }
 
         var recorder = _state.Recorder;
-        var sequence = recorder?.BeginModelCall(NodeId, call, KeysOf(rows)) ?? 0;
-        var recording = recorder is null ? null : new RecordingOutputWriter(outputs);
-        var result = await BoundedCall.RunAsync<ModelStatus, ModelInvocation>(
-            new ModelInvocation(client, call, (IModelOutputWriter?)recording ?? outputs, target, recorder, recording, sequence), Budget, _state.Memory, target,
-            timeoutMs, RequestId, _state.Events).ConfigureAwait(false);
+        var sequence = recorder?.BeginCall(NodeId, service.Target, call) ?? 0;
+        var result = await BoundedCall.RunAsync<ServiceStatus, ServiceInvocation>(
+            new ServiceInvocation(service.Client, call, response, service.Target, recorder, sequence), Budget, _state.Memory, service.Target,
+            service.TimeoutMs, RequestId, _state.Events).ConfigureAwait(false);
         // Every end named, no default arm: a new kind of end does not compile until it is decided here (architecture audit).
         return result.End switch
         {
             CallEnd.Answered => result.Value,
-            CallEnd.TimedOut or CallEnd.Threw => ModelStatus.Failed(result.Error ?? "failed"),
+            CallEnd.TimedOut or CallEnd.Threw => ServiceStatus.Failed(result.Error ?? "failed"),
             CallEnd.BudgetRanOut or CallEnd.Cancelled => Rethrow(result.Exception!), // the budget's or the caller's
         };
     }
 
+    /// <summary>
+    /// The entity of each of <paramref name="rows"/> (physical rows of the table), for a call's
+    /// <see cref="ServiceCall.Items"/>: in buffers rented from the request, valid until it ends.
+    /// </summary>
+    public ReadOnlyMemory<EntityKey> KeysOf(ReadOnlySpan<int> rows)
+    {
+        if (rows.IsEmpty)
+        {
+            return ReadOnlyMemory<EntityKey>.Empty;
+        }
+
+        var keys = _state.Memory.Rent<EntityKey>(rows.Length);
+        for (var i = 0; i < rows.Length; i++)
+        {
+            keys[i] = _state.Table.GetKey(rows[i]);
+        }
+
+        return keys.AsMemory(0, rows.Length);
+    }
+
     /// <summary>Throws <paramref name="exception"/> with the stack it was thrown with.</summary>
-    private static ModelStatus Rethrow(Exception exception)
+    private static ServiceStatus Rethrow(Exception exception)
     {
         ExceptionDispatchInfo.Throw(exception);
         return default;
@@ -440,24 +431,6 @@ public sealed class OperatorContext
     /// <summary>Fails the node without throwing; the engine applies <c>on_failure</c>.</summary>
     public void Fail(string reason) => FailureReason ??= reason;
 
-    /// <summary>Entity ids of a batch's rows; computed only for requests that record or replay (no per-row work otherwise).</summary>
-    private EntityKey[]? KeysOf(ReadOnlyMemory<int> rows)
-    {
-        if (rows.IsEmpty)
-        {
-            return null;
-        }
-
-        var span = rows.Span;
-        var keys = new EntityKey[span.Length];
-        for (var i = 0; i < span.Length; i++)
-        {
-            keys[i] = _state.Table.GetKey(span[i]);
-        }
-
-        return keys;
-    }
-
     private void Require(Effects effect, string operation)
     {
         if ((_effects & effect) == 0)
@@ -467,55 +440,38 @@ public sealed class OperatorContext
         }
     }
 
-    /// <summary>A candidate source call: closes or abandons the buffer when the call ends, and records what the request saw.</summary>
-    private readonly struct RetrieveCall(ICandidateSource source, CandidateQuery query, CandidateBuffer buffer, RunRecorder? recorder, int sequence)
-        : IBoundedCall<CandidateSourceStatus>
+    /// <summary>
+    /// A service call: closes or abandons the response when the call ends; counts what a generative client reported
+    /// (<see cref="StrataRecMetrics.IoOutputTokens"/>, <see cref="StrataRecMetrics.IoTruncated"/>) for every call that
+    /// answered, in this one place for every operator; and records what the request saw, with the outputs only of a call
+    /// that answered. A replay never gets here: it is answered from the recording before the call is sent, so it counts
+    /// nothing.
+    /// </summary>
+    private readonly struct ServiceInvocation(
+        IServiceClient client, ServiceCall call, ServiceResponse response, IoTarget target, RunRecorder? recorder, int sequence)
+        : IBoundedCall<ServiceStatus>
     {
-        public ValueTask<CandidateSourceStatus> Send(CancellationToken token) => source.RetrieveAsync(query, buffer, token);
+        public ValueTask<ServiceStatus> Send(CancellationToken token) => client.CallAsync(call, response, token);
 
-        public bool Succeeded(CandidateSourceStatus value, out string? error)
+        public bool Succeeded(ServiceStatus value, out string? error)
         {
             error = value.Error;
             return value.Succeeded;
         }
 
-        public void Ended(in CallResult<CandidateSourceStatus> result, TimeSpan duration)
+        public void Ended(in CallResult<ServiceStatus> result, TimeSpan duration)
         {
-            // Closed before the memory is released: a source adding after it completed cannot write into returned buffers.
-            // One still running may be in the middle of an add: its buffer reads as empty from now on.
+            // Closed before the memory is released: a client writing after it completed cannot write into returned buffers.
+            // One still running may be in the middle of a write: the response reads as empty from now on.
             if (result.Abandoned)
             {
-                buffer.Abandon();
+                response.Abandon();
             }
             else
             {
-                buffer.Close();
+                response.Close();
             }
 
-            recorder?.CandidateCall(sequence, result.Outcome, result.Error, duration, result.Outcome == IoOutcome.Ok ? buffer : null);
-        }
-    }
-
-    /// <summary>
-    /// A model call: counts what a generative client reported (<see cref="StrataRecMetrics.ModelOutputTokens"/>,
-    /// <see cref="StrataRecMetrics.ModelTruncated"/>) for every call that answered, in this one place for every model
-    /// operator, and records what the request saw, with the outputs only of a call that answered. A replay never gets here:
-    /// it is answered from the recording before the call is sent, so it counts nothing.
-    /// </summary>
-    private readonly struct ModelInvocation(
-        IModelClient client, ModelCall call, IModelOutputWriter outputs, IoTarget target, RunRecorder? recorder, RecordingOutputWriter? recording, int sequence)
-        : IBoundedCall<ModelStatus>
-    {
-        public ValueTask<ModelStatus> Send(CancellationToken token) => client.InvokeAsync(call, outputs, token);
-
-        public bool Succeeded(ModelStatus value, out string? error)
-        {
-            error = value.Error;
-            return value.Succeeded;
-        }
-
-        public void Ended(in CallResult<ModelStatus> result, TimeSpan duration)
-        {
             // Whether the operator is thrown cancellation, so a replay throws it too (a failure is a status, not a throw).
             var cutOff = result.End is CallEnd.BudgetRanOut or CallEnd.Cancelled;
             var answered = result.End == CallEnd.Answered;
@@ -524,19 +480,19 @@ public sealed class OperatorContext
                 CountGenerated(result.Value, target);
             }
 
-            recorder?.ModelCall(sequence, result.Outcome, result.Error, cutOff, duration, recording!, answered ? result.Value : default);
+            recorder?.EndCall(sequence, result.Outcome, result.Error, cutOff, duration, response, answered ? result.Value : default);
         }
 
-        private static void CountGenerated(in ModelStatus status, IoTarget target)
+        private static void CountGenerated(in ServiceStatus status, IoTarget target)
         {
-            if (status.OutputTokens is { } tokens && StrataRecMetrics.ModelOutputTokens.Enabled)
+            if (status.OutputTokens is { } tokens && StrataRecMetrics.IoOutputTokens.Enabled)
             {
-                StrataRecMetrics.ModelOutputTokens.Add(tokens, target.Tags);
+                StrataRecMetrics.IoOutputTokens.Add(tokens, target.Tags);
             }
 
-            if (status.Truncated && StrataRecMetrics.ModelTruncated.Enabled)
+            if (status.Truncated && StrataRecMetrics.IoTruncated.Enabled)
             {
-                StrataRecMetrics.ModelTruncated.Add(1, target.Tags);
+                StrataRecMetrics.IoTruncated.Add(1, target.Tags);
             }
         }
     }

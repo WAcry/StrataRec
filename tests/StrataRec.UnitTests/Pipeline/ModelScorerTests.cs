@@ -5,9 +5,9 @@ using StrataRec.Core.Memory;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting.Workspace;
-using StrataRec.Models;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Pipeline;
 
@@ -51,7 +51,7 @@ public sealed class ModelScorerTests
         """;
 
     /// <summary>The mapping: each reference's declared type, a list&lt;E,N&gt; with a trailing N.</summary>
-    private static readonly ModelSignature AllKindsSignature = new(
+    private static readonly ServiceSignature AllKindsSignature = new(
         new[]
         {
             new TensorSpec("id", TensorElementType.Int64, Rows), new TensorSpec("code", TensorElementType.Int64, Rows),
@@ -173,7 +173,7 @@ public sealed class ModelScorerTests
     [Fact]
     public void AnIntColumnMappedToAFloat32Input_IsAMismatch_WithTheFix()
     {
-        var models = new CapturingModels(new ModelSignature(new[] { new TensorSpec("id", TensorElementType.Float32, Rows) }, AllKindsSignature.Outputs));
+        var models = new CapturingModels(new ServiceSignature(new[] { new TensorSpec("id", TensorElementType.Float32, Rows) }, AllKindsSignature.Outputs));
 
         var compilation = TryCompile(models, """{ "id": "col.entity_id" }""", batchSize: 2);
 
@@ -199,7 +199,7 @@ public sealed class ModelScorerTests
     public void ABoolColumnMappedToAFloat32Input_IsAMismatch_WithTheFix()
     {
         // A bool goes to the model as a bool: not converted to a number of either kind.
-        var models = new CapturingModels(new ModelSignature(new[] { new TensorSpec("safe", TensorElementType.Float32, Rows) }, AllKindsSignature.Outputs));
+        var models = new CapturingModels(new ServiceSignature(new[] { new TensorSpec("safe", TensorElementType.Float32, Rows) }, AllKindsSignature.Outputs));
 
         var compilation = TryCompile(models, """{ "safe": "col.item.safe" }""", batchSize: 2);
 
@@ -214,7 +214,7 @@ public sealed class ModelScorerTests
     [Fact]
     public async Task EachOutput_IsReadAsTheTypeOfItsColumn_AndWrittenAsReturned()
     {
-        var signature = new ModelSignature(new[] { new TensorSpec("id", TensorElementType.Int64, Rows) }, new[]
+        var signature = new ServiceSignature(new[] { new TensorSpec("id", TensorElementType.Int64, Rows) }, new[]
         {
             new TensorSpec("p", TensorElementType.Float32, Rows), new TensorSpec("n", TensorElementType.Int64, Rows),
             new TensorSpec("label", TensorElementType.String, Rows), new TensorSpec("v", TensorElementType.Float32, RowsOf2),
@@ -272,7 +272,7 @@ public sealed class ModelScorerTests
     [InlineData("v", 2)]
     public async Task AnOutputLongerThanItsShape_FailsTheNode_NotSlicedIntoOtherRows(string output, int width)
     {
-        var signature = new ModelSignature(new[] { new TensorSpec("id", TensorElementType.Int64, Rows) },
+        var signature = new ServiceSignature(new[] { new TensorSpec("id", TensorElementType.Int64, Rows) },
             new[] { new TensorSpec("p", TensorElementType.Float32, Rows), new TensorSpec("v", TensorElementType.Float32, RowsOf2) });
         var models = new CapturingModels(signature, (call, outputs) =>
         {
@@ -303,7 +303,7 @@ public sealed class ModelScorerTests
     [Fact]
     public async Task AStringOutputWithAnElementLeftUnwritten_FailsTheNode()
     {
-        var signature = new ModelSignature(new[] { new TensorSpec("id", TensorElementType.Int64, Rows) },
+        var signature = new ServiceSignature(new[] { new TensorSpec("id", TensorElementType.Int64, Rows) },
             new[] { new TensorSpec("p", TensorElementType.Float32, Rows), new TensorSpec("label", TensorElementType.String, Rows) });
         var models = new CapturingModels(signature, (call, outputs) =>
         {
@@ -375,8 +375,7 @@ public sealed class ModelScorerTests
             { "environment": "local",
               "sources": { "items": { "connector": "memory@1", "data_file": "fixtures/items.json", "timeout_ms": 30000 },
                            "users": { "connector": "memory@1", "data_file": "fixtures/users.json", "timeout_ms": 30000 } },
-              "models": { "m": { "client": "{{CapturingModels.TypeName}}" } },
-              "candidate_sources": { "s": { "client": "memory_list@1", "data_file": "fixtures/ids.json" } } }
+              "services": { "m": { "client": "{{CapturingModels.TypeName}}" }, "s": { "client": "memory_list@1", "data_file": "fixtures/ids.json" } } }
             """);
         Write(root, "pipelines/p.jsonc", $$"""
             { "pipeline_id": "p", "entity_key_type": "int64",
@@ -434,15 +433,13 @@ public sealed class ModelScorerTests
     /// <c>capture@1</c>: declares a fixed signature, keeps a copy of every call, and scores every row 0.5 (or writes what
     /// <paramref name="write"/> writes).
     /// </summary>
-    private sealed class CapturingModels(ModelSignature signature, Action<ModelCall, IModelOutputWriter>? write = null) : IBindingFactory<IModelClient>, IModelClient
+    private sealed class CapturingModels(ServiceSignature signature, Action<ServiceCall, IServiceResponse>? write = null) : IBindingFactory<IServiceClient>, IServiceClient
     {
         public const string TypeName = "capture@1";
 
         private readonly List<CapturedCall> _calls = new();
 
         public string Type => TypeName;
-
-        public string ClientType => TypeName;
 
         public Type SettingsType => typeof(NoSettings);
 
@@ -457,11 +454,11 @@ public sealed class ModelScorerTests
             }
         }
 
-        public IModelClient Create(BindingContext context) => this;
+        public IServiceClient Create(BindingContext context) => this;
 
-        public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) => ValueTask.FromResult(signature);
+        public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken) => ValueTask.FromResult(signature);
 
-        public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
+        public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse outputs, CancellationToken cancellationToken)
         {
             var inputs = new List<CapturedInput>();
             foreach (var input in call.Inputs.Span)
@@ -493,7 +490,7 @@ public sealed class ModelScorerTests
                 write(call, outputs);
             }
 
-            return ValueTask.FromResult(ModelStatus.Ok);
+            return ValueTask.FromResult(ServiceStatus.Ok);
         }
     }
 }

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using StrataRec.Core.Bindings;
 using StrataRec.Models;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Models;
 
@@ -16,7 +17,7 @@ public sealed class LinearModelClientTests
     [Fact]
     public async Task TheSignature_IsFloat32Rows()
     {
-        var signature = await Create().GetSignatureAsync("m", null, CancellationToken.None);
+        var signature = await Create().DescribeAsync("m", null, CancellationToken.None);
 
         Assert.Equal(new[] { ("x", TensorElementType.Float32, "-1") }, signature.Inputs.Select(s => (s.Name, s.ElementType, string.Join(",", s.Shape))));
         Assert.Equal(new[] { ("p", TensorElementType.Float32, "-1") }, signature.Outputs.Select(s => (s.Name, s.ElementType, string.Join(",", s.Shape))));
@@ -27,7 +28,7 @@ public sealed class LinearModelClientTests
     {
         var outputs = new Outputs();
 
-        var status = await Create().InvokeAsync(Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new[] { 0.5f, -1f })), outputs, CancellationToken.None);
+        var status = await Create().CallAsync(Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new[] { 0.5f, -1f })), outputs, CancellationToken.None);
 
         Assert.True(status.Succeeded, status.Error);
         Assert.Equal(new[] { 2f, -1f }, outputs.Values["p"]);
@@ -41,9 +42,9 @@ public sealed class LinearModelClientTests
         var vector = Call(2, NamedInput.FromFloat32("x", new[] { 2, 2 }, new float[4])); // enough floats, two per row
         var shortInput = Call(3, NamedInput.FromFloat32("x", new[] { 2 }, new float[2]));
 
-        Assert.Equal(ModelStatus.Failed("Input 'x' must be float32 with one value per row (2)."), await client.InvokeAsync(int64, new Outputs(), CancellationToken.None));
-        Assert.Equal(ModelStatus.Failed("Input 'x' must be float32 with one value per row (2)."), await client.InvokeAsync(vector, new Outputs(), CancellationToken.None));
-        Assert.Equal(ModelStatus.Failed("Input 'x' must be float32 with one value per row (3)."), await client.InvokeAsync(shortInput, new Outputs(), CancellationToken.None));
+        Assert.Equal(ServiceStatus.Failed("Input 'x' must be float32 with one value per row (2)."), await client.CallAsync(int64, new Outputs(), CancellationToken.None));
+        Assert.Equal(ServiceStatus.Failed("Input 'x' must be float32 with one value per row (2)."), await client.CallAsync(vector, new Outputs(), CancellationToken.None));
+        Assert.Equal(ServiceStatus.Failed("Input 'x' must be float32 with one value per row (3)."), await client.CallAsync(shortInput, new Outputs(), CancellationToken.None));
     }
 
     [Fact]
@@ -53,8 +54,8 @@ public sealed class LinearModelClientTests
         var longer = Call(2, NamedInput.FromFloat32("x", new[] { 3 }, new float[3])); // three rows' worth for a batch of two
         var shorter = Call(2, NamedInput.FromFloat32("x", new[] { 1 }, new float[2]));
 
-        Assert.Equal(ModelStatus.Failed("Input 'x' must be float32 with one value per row (2)."), await client.InvokeAsync(longer, new Outputs(), CancellationToken.None));
-        Assert.Equal(ModelStatus.Failed("Input 'x' must be float32 with one value per row (2)."), await client.InvokeAsync(shorter, new Outputs(), CancellationToken.None));
+        Assert.Equal(ServiceStatus.Failed("Input 'x' must be float32 with one value per row (2)."), await client.CallAsync(longer, new Outputs(), CancellationToken.None));
+        Assert.Equal(ServiceStatus.Failed("Input 'x' must be float32 with one value per row (2)."), await client.CallAsync(shorter, new Outputs(), CancellationToken.None));
     }
 
     [Fact]
@@ -62,7 +63,7 @@ public sealed class LinearModelClientTests
     {
         var outputs = new Outputs();
 
-        var status = await Create().InvokeAsync(Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new[] { 0.5f, -1f, 99f, 99f })), outputs, CancellationToken.None);
+        var status = await Create().CallAsync(Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new[] { 0.5f, -1f, 99f, 99f })), outputs, CancellationToken.None);
 
         Assert.True(status.Succeeded, status.Error);
         Assert.Equal(new[] { 2f, -1f }, outputs.Values["p"]);
@@ -71,18 +72,22 @@ public sealed class LinearModelClientTests
     [Fact]
     public async Task ANegativeBatchSize_FailsTheCall()
     {
-        var status = await Create().InvokeAsync(Call(-1, NamedInput.FromFloat32("x", new[] { -1 }, new float[1])), new Outputs(), CancellationToken.None);
+        var status = await Create().CallAsync(Call(-1, NamedInput.FromFloat32("x", new[] { -1 }, new float[1])), new Outputs(), CancellationToken.None);
 
-        Assert.Equal(ModelStatus.Failed("The call's batch size is -1; it must not be negative."), status);
+        Assert.Equal(ServiceStatus.Failed("The call's batch size is -1; it must not be negative."), status);
     }
 
-    private static IModelClient Create() =>
+    private static IServiceClient Create() =>
         new LinearModelClientFactory().Create(new BindingContext("m", JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(Settings)!, AppContext.BaseDirectory, null));
 
-    private static ModelCall Call(int rows, NamedInput input) => new() { Model = "m", BatchSize = rows, Inputs = new[] { input } };
+    private static ServiceCall Call(int rows, NamedInput input) => new() { Service = "m", BatchSize = rows, Inputs = new[] { input } };
 
-    private sealed class Outputs : IModelOutputWriter
+    private sealed class Outputs : IServiceResponse
     {
+        public void AddItem(long entityId, double score) => throw new NotSupportedException("a model answers with outputs");
+
+        public void AddItem(string entityId, double score) => throw new NotSupportedException("a model answers with outputs");
+
         public Dictionary<string, float[]> Values { get; } = new();
 
         public Memory<T> GetValues<T>(string name, int elementCount)

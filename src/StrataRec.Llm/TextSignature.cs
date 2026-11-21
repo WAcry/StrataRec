@@ -1,7 +1,7 @@
 using System.Text;
 using StrataRec.Artifacts.Json;
-using StrataRec.Models;
 using StrataRec.Pipeline.Operators;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Llm;
 
@@ -26,7 +26,7 @@ public static class TextSignature
     /// <param name="outputs">The model text outputs the operator reads, each with its config key.</param>
     public static List<Problem> Check(
         string label, string operatorId, IReadOnlyList<(string Name, string ConfigKey)> prompts, IReadOnlyList<(string Name, string ConfigKey)> outputs,
-        ModelSignature signature)
+        ServiceSignature signature)
     {
         ArgumentNullException.ThrowIfNull(prompts);
         ArgumentNullException.ThrowIfNull(outputs);
@@ -38,7 +38,7 @@ public static class TextSignature
             mapped.Add(name);
             if (signature.FindInput(name) is not { } spec)
             {
-                problems.Add(new Problem(key, "MODEL_SIGNATURE", $"{label} has no input '{name}'.", "the model's inputs are: " + Names(signature.Inputs)));
+                problems.Add(new Problem(key, "SERVICE_SIGNATURE", $"{label} has no input '{name}'.", "the model's inputs are: " + Names(signature.Inputs)));
             }
             else if (spec.ElementType != TensorElementType.Text)
             {
@@ -62,7 +62,7 @@ public static class TextSignature
         {
             if (signature.FindOutput(name) is not { } spec)
             {
-                problems.Add(new Problem(key, "MODEL_SIGNATURE", $"{label} has no output '{name}'.", "the model's outputs are: " + Names(signature.Outputs)));
+                problems.Add(new Problem(key, "SERVICE_SIGNATURE", $"{label} has no output '{name}'.", "the model's outputs are: " + Names(signature.Outputs)));
             }
             else if (spec.ElementType != TensorElementType.Text)
             {

@@ -8,7 +8,7 @@ using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Features.Connectors;
 using StrataRec.Logging;
-using StrataRec.Models;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Pipeline.Replay;
 
@@ -134,7 +134,7 @@ internal static class ReplayJson
     }
 
     /// <summary>A model's tensor output as a bundle records it: its element type, and its values in the log encoding.</summary>
-    public static ReplayModelOutput Tensor(in TensorValues values)
+    public static ReplayOutput Tensor(in TensorValues values)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var json = new Utf8JsonWriter(buffer))
@@ -190,11 +190,11 @@ internal static class ReplayJson
             json.WriteEndArray();
         }
 
-        return new ReplayModelOutput { Type = TensorValues.Name(values.ElementType), Values = Parse(buffer) };
+        return new ReplayOutput { Type = TensorValues.Name(values.ElementType), Values = Parse(buffer) };
     }
 
     /// <summary>A recorded tensor output: its element type and its values (a <c>bool[]</c>, <c>int[]</c>, <c>long[]</c>, <c>float[]</c>, <c>double[]</c> or <c>string?[]</c>).</summary>
-    public static ReplayTensor Tensor(ReplayModelOutput output, string pointer)
+    public static ReplayTensor Tensor(ReplayOutput output, string pointer)
     {
         if (!TensorValues.TryParse(output.Type, out var type) || type == TensorElementType.Text)
         {

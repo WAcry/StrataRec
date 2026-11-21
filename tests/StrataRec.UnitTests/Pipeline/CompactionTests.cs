@@ -58,7 +58,7 @@ public sealed class CompactionTests
             """);
         Write(root, "bindings/local.jsonc", $$"""
             { "environment": "local",
-              "candidate_sources": {
+              "services": {
                 "main":  { "client": "memory_list@1", "items": {{Ids(1, 2, 3, 4)}} },
                 "later": { "client": "memory_list@1", "items": {{Ids(1, 5)}} } } }
             """);

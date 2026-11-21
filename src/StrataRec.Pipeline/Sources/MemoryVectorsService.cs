@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Text.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
+using StrataRec.Core.Services;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Features.Connectors;
@@ -18,12 +19,12 @@ namespace StrataRec.Pipeline.Sources;
 /// <remarks>
 /// <para>A request whose query vector is missing (a user without an embedding and no default) gets no candidates: the
 /// node's other sources answer it; so does an index without items. A query without the configured value, a value whose
-/// type is not a list of floats, a vector of another length than the items', or a score that is not finite (vectors too
-/// large for a float64 dot product) is a failed call, naming them.</para>
+/// type is not a list of float64s (the type of a float list in an expression), a vector of another length than the
+/// items', or a score that is not finite (vectors too large for a float64 dot product) is a failed call, naming them.</para>
 /// <para>An exhaustive scan, for the few thousand items of a fixture: its scratch is rented from the shared pool, so a
 /// request allocates nothing for it.</para>
 /// </remarks>
-public sealed class MemoryVectorsCandidateSource : ICandidateSource
+public sealed class MemoryVectorsService : IServiceClient
 {
     private readonly long[] _int64Ids;
     private readonly string?[] _stringIds;
@@ -34,16 +35,14 @@ public sealed class MemoryVectorsCandidateSource : ICandidateSource
     private readonly int _latencyMs;
     private readonly bool _fail;
 
-    private MemoryVectorsCandidateSource(
+    private MemoryVectorsService(
         long[] int64Ids, string?[] stringIds, double[] vectors, int dimensions, string query, double? minScore, int latencyMs, bool fail)
     {
         (_int64Ids, _stringIds, _vectors, _dimensions) = (int64Ids, stringIds, vectors, dimensions);
         (_query, _minScore, _latencyMs, _fail) = (query, minScore, latencyMs, fail);
     }
 
-    public string ClientType => MemoryVectorsCandidateSourceFactory.TypeName;
-
-    public async ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken)
+    public async ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken)
     {
         if (_latencyMs > 0)
         {
@@ -52,42 +51,43 @@ public sealed class MemoryVectorsCandidateSource : ICandidateSource
 
         if (_fail)
         {
-            return CandidateSourceStatus.Failed(MemoryVectorsCandidateSourceFactory.TypeName + " source is configured to fail.");
+            return ServiceStatus.Failed(MemoryVectorsServiceFactory.TypeName + " source is configured to fail.");
         }
 
-        if (!query.Values.TryGet(_query, out var type, out var value))
+        if (!call.TryGetInput(_query, out var input))
         {
-            return CandidateSourceStatus.Failed(
-                $"{MemoryVectorsCandidateSourceFactory.TypeName} reads the query vector '{_query}', and the query of '{query.SourceName}' has no such value; " +
-                $"give it one in the recall node's queries, e.g. \"queries\": {{ \"{query.SourceName}\": {{ \"{_query}\": \"ctx.user.embedding\" }} }}.");
+            return ServiceStatus.Failed(
+                $"{MemoryVectorsServiceFactory.TypeName} reads the query vector '{_query}', and the query of '{call.Service}' has no such value; " +
+                $"give it one in the recall node's queries, e.g. \"queries\": {{ \"{call.Service}\": {{ \"{_query}\": \"ctx.user.embedding\" }} }}.");
         }
 
         // The query's type first, so a wrong one fails whether or not this request has a value (review 80).
-        if (type.Kind != StorageKind.List || type.Element != StorageKind.Float64)
+        if (input.ElementType != TensorElementType.Float64 || input.Shape.Length != 1)
         {
-            return CandidateSourceStatus.Failed($"The query vector '{_query}' must be a list of floats; its expression is of type {type}.");
+            return ServiceStatus.Failed(
+                $"The query vector '{_query}' must be a list of floats; it is {TensorValues.Name(input.ElementType)} of shape [{string.Join(", ", input.Shape)}].");
         }
 
-        if (type.FixedLength > 0 && _dimensions > 0 && type.FixedLength != _dimensions)
+        if (input.Shape[0] > 0 && _dimensions > 0 && input.Shape[0] != _dimensions)
         {
-            return CandidateSourceStatus.Failed($"The query vector '{_query}' is of type {type}; the items' vectors have {_dimensions} elements.");
+            return ServiceStatus.Failed($"The query vector '{_query}' has {input.Shape[0]} elements; the items' vectors have {_dimensions}.");
         }
 
-        if (value.IsMissing || _dimensions == 0)
+        if (input.IsMissing || _dimensions == 0)
         {
-            return CandidateSourceStatus.Ok; // nothing to search with, or nothing to find: the node's other sources answer
+            return ServiceStatus.Ok; // nothing to search with, or nothing to find: the node's other sources answer
         }
 
-        var vector = value.AsFloat64List();
+        var vector = input.Float64.Span;
         if (vector.Length != _dimensions)
         {
-            return CandidateSourceStatus.Failed($"The query vector '{_query}' has {vector.Length} elements; the items' vectors have {_dimensions}.");
+            return ServiceStatus.Failed($"The query vector '{_query}' has {vector.Length} elements; the items' vectors have {_dimensions}.");
         }
 
-        return Search(vector, query.Limit, sink);
+        return Search(vector, call.Limit, response);
     }
 
-    private CandidateSourceStatus Search(ReadOnlySpan<double> vector, int limit, ICandidateSink sink)
+    private ServiceStatus Search(ReadOnlySpan<double> vector, int limit, IServiceResponse sink)
     {
         var count = _int64Ids.Length;
         var scores = ArrayPool<double>.Shared.Rent(Math.Max(1, count));
@@ -107,7 +107,7 @@ public sealed class MemoryVectorsCandidateSource : ICandidateSource
                 if (!double.IsFinite(score))
                 {
                     // A product overflowed: the order (and min_score) would be decided by NaN or infinity (review 80).
-                    return CandidateSourceStatus.Failed(
+                    return ServiceStatus.Failed(
                         $"The dot product of item {(_stringIds[i] ?? _int64Ids[i].ToString(System.Globalization.CultureInfo.InvariantCulture))} with the query vector " +
                         $"'{_query}' is not finite; scale the vectors so it fits a float64.");
                 }
@@ -129,15 +129,15 @@ public sealed class MemoryVectorsCandidateSource : ICandidateSource
                 var i = ranked[r];
                 if (_stringIds[i] is { } id)
                 {
-                    sink.Add(id, scores[i]);
+                    sink.AddItem(id, scores[i]);
                 }
                 else
                 {
-                    sink.Add(_int64Ids[i], scores[i]);
+                    sink.AddItem(_int64Ids[i], scores[i]);
                 }
             }
 
-            return CandidateSourceStatus.Ok;
+            return ServiceStatus.Ok;
         }
         finally
         {
@@ -146,7 +146,7 @@ public sealed class MemoryVectorsCandidateSource : ICandidateSource
         }
     }
 
-    internal static MemoryVectorsCandidateSource Create(
+    internal static MemoryVectorsService Create(
         long[] int64Ids, string?[] stringIds, double[] vectors, int dimensions, string query, double? minScore, int latencyMs, bool fail) =>
         new(int64Ids, stringIds, vectors, dimensions, query, minScore, latencyMs, fail);
 
@@ -215,7 +215,7 @@ public sealed class MemoryVectorsItem
 }
 
 /// <summary>Factory for <c>memory_vectors@1</c>.</summary>
-public sealed class MemoryVectorsCandidateSourceFactory : BindingFactory<ICandidateSource, MemoryVectorsSettings>
+public sealed class MemoryVectorsServiceFactory : BindingFactory<IServiceClient, MemoryVectorsSettings>
 {
     public const string TypeName = "memory_vectors@1";
 
@@ -224,7 +224,7 @@ public sealed class MemoryVectorsCandidateSourceFactory : BindingFactory<ICandid
     /// <remarks>A test fixture: it reads its data file here, at create time, so it needs no load.</remarks>
     /// <exception cref="BindingException">A setting or an item is invalid: at the setting, or at <c>/data_file</c> naming
     /// the place in the file, with a hint.</exception>
-    protected override ICandidateSource Create(MemoryVectorsSettings settings, BindingContext context)
+    protected override IServiceClient Create(MemoryVectorsSettings settings, BindingContext context)
     {
         if (settings.Query.Length == 0)
         {
@@ -258,7 +258,7 @@ public sealed class MemoryVectorsCandidateSourceFactory : BindingFactory<ICandid
         return Read(file, () => Index(settings, data.Items ?? []));
     }
 
-    private static MemoryVectorsCandidateSource Index(MemoryVectorsSettings settings, List<MemoryVectorsItem> items)
+    private static MemoryVectorsService Index(MemoryVectorsSettings settings, List<MemoryVectorsItem> items)
     {
         const string pointer = "/items";
         var dimensions = items.Count == 0 ? 0 : items[0].Vector.Count; // no items: every query finds nothing
@@ -299,7 +299,7 @@ public sealed class MemoryVectorsCandidateSourceFactory : BindingFactory<ICandid
             }
         }
 
-        return MemoryVectorsCandidateSource.Create(
+        return MemoryVectorsService.Create(
             int64Ids, stringIds, vectors, dimensions, settings.Query, settings.MinScore, settings.LatencyMs ?? 0, settings.Fail ?? false);
     }
 

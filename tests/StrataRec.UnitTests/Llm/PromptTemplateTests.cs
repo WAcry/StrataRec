@@ -1,8 +1,8 @@
 using StrataRec.Llm;
 using StrataRec.Llm.Templates;
-using StrataRec.Models;
 using StrataRec.Pipeline.Operators;
 using static StrataRec.UnitTests.Llm.LlmFixture;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Llm;
 
@@ -52,7 +52,7 @@ public sealed class PromptTemplateTests
     [Fact]
     public async Task EveryPrompt_IsRenderedOnce_WithTheFirstWindowRows_AndSentInNameOrder()
     {
-        var models = new TextModels(_ => ("[30]", ModelStatus.Ok), _ => TextModels.Text("system", "user"));
+        var models = new TextModels(_ => ("[30]", ServiceStatus.Ok), _ => TextModels.Text("system", "user"));
         const string Config = """
             { "model": "llm", "output": "answer", "answer": "entity_id", "window": 2,
               "prompts": { "user": "{{#rows}}{{col.entity_id}}={{col.item.title}};{{/rows}}", "system": "You rank {{param.tone}}ly." } }
@@ -142,7 +142,7 @@ public sealed class PromptTemplateTests
     [Fact]
     public void EveryError_OfEveryPrompt_IsReported()
     {
-        var models = new TextModels(_ => ("[1]", ModelStatus.Ok), _ => TextModels.Text("system", "user"));
+        var models = new TextModels(_ => ("[1]", ServiceStatus.Ok), _ => TextModels.Text("system", "user"));
         const string Config = """
             { "model": "llm", "output": "answer", "answer": "rank",
               "prompts": { "user": "{{ctx.nope}} {{col.item.title}}", "system": "{{ctx.user.name}}", "extra~/": "" } }

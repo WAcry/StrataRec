@@ -20,12 +20,8 @@ internal static class SampleBindings
         Replace(root, "sources", source, replacement);
     }
 
-    /// <summary>Replaces the binding of model <paramref name="model"/> in <c>bindings/local.jsonc</c>.</summary>
-    public static void RebindModel(string root, string model, string binding) => Replace(root, "models", model, JsonNode.Parse(binding)!);
-
-    /// <summary>Replaces the binding of candidate source <paramref name="source"/> in <c>bindings/local.jsonc</c>.</summary>
-    public static void RebindCandidateSource(string root, string source, string binding) =>
-        Replace(root, "candidate_sources", source, JsonNode.Parse(binding)!);
+    /// <summary>Replaces the binding of service <paramref name="service"/> (a model, a recall source) in <c>bindings/local.jsonc</c>.</summary>
+    public static void RebindService(string root, string service, string binding) => Replace(root, "services", service, JsonNode.Parse(binding)!);
 
     private static void Replace(string root, string section, string name, JsonNode binding)
     {

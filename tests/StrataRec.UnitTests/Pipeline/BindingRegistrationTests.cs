@@ -1,9 +1,10 @@
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Features.Bindings;
-using StrataRec.Models;
+using StrataRec.Features.Connectors;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Pipeline.Sources;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Pipeline;
 
@@ -13,12 +14,12 @@ public sealed class BindingRegistrationTests
     [Fact]
     public void AFactoryOfTwoContracts_IsDescribedForEachKind_WithTheSettingsItBindsForIt()
     {
-        var environment = new PlanEnvironment { Bindings = new BindingRegistry().Add((IBindingFactory<IModelClient>)new Dual()) };
+        var environment = new PlanEnvironment { Bindings = new BindingRegistry().Add((IBindingFactory<IServiceClient>)new Dual()) };
 
         var sources = environment.BindingSchemaSources();
 
         Assert.Equal(
-            new[] { new BindingSchemaSource(BindingKind.Model, "dual@1", typeof(ModelSettings)), new BindingSchemaSource(BindingKind.CandidateSource, "dual@1", typeof(RecallSettings)) },
+            new[] { new BindingSchemaSource(BindingKind.Service, "dual@1", typeof(ServiceSettings)), new BindingSchemaSource(BindingKind.Connector, "dual@1", typeof(ConnectorSettings)) },
             sources);
         Assert.Equal(["dual@1"], environment.Capabilities().FindAll(c => c == "dual@1")); // one capability
     }
@@ -59,28 +60,28 @@ public sealed class BindingRegistrationTests
         var bindings = new SourceBindingArtifact
         {
             Environment = "test",
-            Models = new() { ["ctr_model"] = new ClientBinding { Client = Rejecting.TypeName } },
+            Services = new() { ["ctr_model"] = new ClientBinding { Client = Rejecting.TypeName } },
         };
         var instances = new UnloadedBindings();
         var resolver = new ClientResolver(bindings, new BindingResolver(new BindingRegistry().Add(factory), instances, null, "bindings:test", diagnostics), instances);
 
         for (var node = 0; node < 3; node++)
         {
-            Assert.False(resolver.TryGetModel("ctr_model", out _, out _, out var error, out _));
+            Assert.False(resolver.TryGetService("ctr_model", out _, out _, out var error, out _));
             Assert.Null(error); // reported at the binding, not again at the node
         }
 
         Assert.Equal(1, factory.Created);
         var reported = Assert.Single(diagnostics.Items);
-        Assert.Equal(("BINDING_SETTINGS", "/models/ctr_model/uri"), (reported.Code, reported.Pointer));
-        Assert.Empty(resolver.BoundModels);
+        Assert.Equal(("BINDING_SETTINGS", "/services/ctr_model/uri"), (reported.Code, reported.Pointer));
+        Assert.Empty(resolver.BoundServices);
     }
 
     [Fact]
     public void MergingAnotherCompilationsDiagnostics_KeepsOneOfEach()
     {
         var bag = new DiagnosticBag();
-        var shared = new ConfigDiagnostic(DiagnosticSeverity.Error, "BINDING_TYPE_UNKNOWN", "bindings:local", "/models/ctr_model/client", "Model 'ctr_model' names type 'x@1'.");
+        var shared = new ConfigDiagnostic(DiagnosticSeverity.Error, "BINDING_TYPE_UNKNOWN", "bindings:local", "/services/ctr_model/client", "Model 'ctr_model' names type 'x@1'.");
         var own = new ConfigDiagnostic(DiagnosticSeverity.Error, "EXPR_UNKNOWN_NAME", "pipeline:b", "/nodes/n/config/expr", "Unknown name.");
 
         bag.AddRange([shared]);
@@ -89,28 +90,28 @@ public sealed class BindingRegistrationTests
         Assert.Equal(new[] { shared, own }, bag.Items);
     }
 
-    private sealed class ModelSettings
+    private sealed class ServiceSettings
     {
-        public required string ModelEndpoint { get; init; }
+        public required string ServiceEndpoint { get; init; }
     }
 
-    private sealed class RecallSettings
+    private sealed class ConnectorSettings
     {
-        public required string RecallEndpoint { get; init; }
+        public required string StoreEndpoint { get; init; }
     }
 
     /// <summary>One type of two kinds, each bound with settings of its own.</summary>
-    private sealed class Dual : IBindingFactory<IModelClient>, IBindingFactory<ICandidateSource>
+    private sealed class Dual : IBindingFactory<IServiceClient>, IBindingFactory<IFeatureSourceConnector>
     {
         public string Type => "dual@1";
 
-        Type IBindingFactory<IModelClient>.SettingsType => typeof(ModelSettings);
+        Type IBindingFactory<IServiceClient>.SettingsType => typeof(ServiceSettings);
 
-        Type IBindingFactory<ICandidateSource>.SettingsType => typeof(RecallSettings);
+        Type IBindingFactory<IFeatureSourceConnector>.SettingsType => typeof(ConnectorSettings);
 
-        IModelClient IBindingFactory<IModelClient>.Create(BindingContext context) => throw new NotSupportedException();
+        IServiceClient IBindingFactory<IServiceClient>.Create(BindingContext context) => throw new NotSupportedException();
 
-        ICandidateSource IBindingFactory<ICandidateSource>.Create(BindingContext context) => throw new NotSupportedException();
+        IFeatureSourceConnector IBindingFactory<IFeatureSourceConnector>.Create(BindingContext context) => throw new NotSupportedException();
     }
 
     private sealed class Unusable : IBindingFactory<object>
@@ -122,25 +123,25 @@ public sealed class BindingRegistrationTests
         public object Create(BindingContext context) => new();
     }
 
-    private sealed class Named(string type) : IBindingFactory<IModelClient>
+    private sealed class Named(string type) : IBindingFactory<IServiceClient>
     {
         public string Type => type;
 
         public Type SettingsType => typeof(NoSettings);
 
-        public IModelClient Create(BindingContext context) => throw new NotSupportedException();
+        public IServiceClient Create(BindingContext context) => throw new NotSupportedException();
     }
 
-    private sealed class LazySettings : IBindingFactory<IModelClient>
+    private sealed class LazySettings : IBindingFactory<IServiceClient>
     {
         public string Type => "lazy@1";
 
         public Type SettingsType => throw new FileNotFoundException("the optional settings assembly is not deployed");
 
-        public IModelClient Create(BindingContext context) => throw new NotSupportedException();
+        public IServiceClient Create(BindingContext context) => throw new NotSupportedException();
     }
 
-    private sealed class Rejecting : IBindingFactory<IModelClient>
+    private sealed class Rejecting : IBindingFactory<IServiceClient>
     {
         public const string TypeName = "rejecting@1";
 
@@ -150,7 +151,7 @@ public sealed class BindingRegistrationTests
 
         public Type SettingsType => typeof(NoSettings);
 
-        public IModelClient Create(BindingContext context)
+        public IServiceClient Create(BindingContext context)
         {
             Created++;
             throw new BindingException("/uri", "'uri' cannot be read.", "give a readable file");

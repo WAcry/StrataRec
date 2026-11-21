@@ -1,7 +1,7 @@
 namespace StrataRec.Core.Bindings;
 
 /// <summary>
-/// An instance created from a binding (model client, candidate source, feature connector) that must do I/O before it can
+/// An instance created from a binding (service client, feature connector) that must do I/O before it can
 /// serve: read a model file, open a connection, resolve its credentials. The engine calls <see cref="LoadAsync"/> at most
 /// once per instance, on the thread pool (a load may block), when it loads the first plan that uses the instance, and
 /// serves that plan only after it completed; plans that share the instance later find it loaded. An instance without

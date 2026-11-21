@@ -146,9 +146,9 @@ internal interface IBoundedCall<T>
 }
 
 /// <summary>
-/// The framework's I/O boundary for candidate sources and models (design 4.8, 5.6, 13.1): one external call, bounded on
-/// its own whether or not the client honours cancellation. Both <see cref="OperatorContext.RetrieveAsync"/> and
-/// <see cref="OperatorContext.InvokeModelAsync"/> go through it; they only translate the result.
+/// The framework's I/O boundary for services (design 4.8, 5.6, 13.1): one external call, bounded on its own whether or
+/// not the client honours cancellation. <see cref="OperatorContext.CallAsync"/> goes through it, and only translates the
+/// result.
 /// </summary>
 /// <remarks>
 /// <para>Rules, each locked by tests: (1) the call's bound is the earlier of its own timeout and the node's deadline, or

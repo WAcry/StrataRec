@@ -3,6 +3,7 @@ using StrataRec.Core.Bindings;
 using StrataRec.Features.Connectors;
 using StrataRec.Models;
 using StrataRec.Pipeline.Sources;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Core;
 
@@ -106,6 +107,6 @@ public sealed class BuiltInClientSettingsTests
         "memory@1" => new MemoryFeatureConnectorFactory().Create(context),
         "random@1" => new RandomModelClientFactory().Create(context),
         "fixed_text@1" => new FixedTextModelClientFactory().Create(context),
-        _ => new MemoryListCandidateSourceFactory().Create(context),
+        _ => new MemoryListServiceFactory().Create(context),
     };
 }

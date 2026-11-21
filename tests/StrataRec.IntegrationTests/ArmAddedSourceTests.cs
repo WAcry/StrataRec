@@ -86,7 +86,7 @@ public sealed class ArmAddedSourceTests
     {
         var bindings = Path.Combine(root, "bindings", "local.jsonc");
         var text = File.ReadAllText(bindings);
-        const string anchor = "\"candidate_sources\": {";
+        const string anchor = "\"services\": {";
         Assert.Contains(anchor, text, StringComparison.Ordinal);
         File.WriteAllText(bindings, text.Replace(anchor, anchor + """
              "aaa": { "client": "memory_list@1", "data_file": "fixtures/recall_popular.json" },

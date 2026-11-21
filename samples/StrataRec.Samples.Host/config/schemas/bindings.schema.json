@@ -252,19 +252,23 @@
         ]
       }
     },
-    "models": {
+    "services": {
+      "description": "The services the pipeline calls (design 6.9), by logical name: model servers, recall sources, any external service. A model operator's model and a recall's sources name them.",
       "type": "object",
       "additionalProperties": {
         "type": "object",
         "properties": {
           "client": {
-            "description": "Required: client type and version, e.g. 'linear@1' or 'random@1' for a model, 'memory_list@1' for a candidate source. The other members are the client's own settings, which the schema describes for each type of the binary that wrote it.",
+            "description": "Required: client type and version, e.g. 'linear@1' or 'random@1' for a model, 'memory_list@1' for a recall source. The other members are the client's own settings, which the schema describes for each type of the binary that wrote it.",
             "type": "string",
             "examples": [
               "fixed_text@1",
               "linear@1",
               "logistic@1",
-              "random@1"
+              "memory_list@1",
+              "memory_vectors@1",
+              "random@1",
+              "trending@1"
             ]
           },
           "timeout_ms": {
@@ -431,71 +435,6 @@
             "if": {
               "properties": {
                 "client": {
-                  "const": "random@1"
-                }
-              },
-              "required": [
-                "client"
-              ]
-            },
-            "then": {
-              "properties": {
-                "client": {},
-                "timeout_ms": {},
-                "inputs": {
-                  "description": "The inputs of the model it stands in for, as the model declares them: their names, each a float32 tensor of shape [-1] ([\"smoothed_ctr\", \"log_followers\"]), or each name mapped to its tensor ({ \"item_id\": { \"type\": \"int64\", \"shape\": [-1, 2] } }). At least one, each once."
-                },
-                "outputs": {
-                  "description": "The outputs, as the model declares them: their names, each a float32 tensor of shape [-1] ([\"p_click\"]), or each name mapped to its shape and, for a float64 score, its type ({ \"p_first\": { \"shape\": [-1] }, \"p_like\": { \"type\": \"float64\", \"shape\": [-1] } }). At least one, each once."
-                },
-                "seed": {
-                  "description": "A fixed seed instead of the call's (ctx.request.seed): every request gets the same scores.",
-                  "type": [
-                    "integer",
-                    "null"
-                  ]
-                }
-              },
-              "required": [
-                "inputs",
-                "outputs"
-              ],
-              "additionalProperties": false
-            }
-          }
-        ]
-      }
-    },
-    "candidate_sources": {
-      "type": "object",
-      "additionalProperties": {
-        "type": "object",
-        "properties": {
-          "client": {
-            "description": "Required: client type and version, e.g. 'linear@1' or 'random@1' for a model, 'memory_list@1' for a candidate source. The other members are the client's own settings, which the schema describes for each type of the binary that wrote it.",
-            "type": "string",
-            "examples": [
-              "memory_list@1",
-              "memory_vectors@1",
-              "trending@1"
-            ]
-          },
-          "timeout_ms": {
-            "description": "Time limit of one call to the client, in milliseconds. The node's deadline bounds the call too, and alone without it.",
-            "type": [
-              "integer",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "client"
-        ],
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "client": {
                   "const": "memory_list@1"
                 }
               },
@@ -635,6 +574,42 @@
               },
               "required": [
                 "query"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "client": {
+                  "const": "random@1"
+                }
+              },
+              "required": [
+                "client"
+              ]
+            },
+            "then": {
+              "properties": {
+                "client": {},
+                "timeout_ms": {},
+                "inputs": {
+                  "description": "The inputs of the model it stands in for, as the model declares them: their names, each a float32 tensor of shape [-1] ([\"smoothed_ctr\", \"log_followers\"]), or each name mapped to its tensor ({ \"item_id\": { \"type\": \"int64\", \"shape\": [-1, 2] } }). At least one, each once."
+                },
+                "outputs": {
+                  "description": "The outputs, as the model declares them: their names, each a float32 tensor of shape [-1] ([\"p_click\"]), or each name mapped to its shape and, for a float64 score, its type ({ \"p_first\": { \"shape\": [-1] }, \"p_like\": { \"type\": \"float64\", \"shape\": [-1] } }). At least one, each once."
+                },
+                "seed": {
+                  "description": "A fixed seed instead of the call's (ctx.request.seed): every request gets the same scores.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "inputs",
+                "outputs"
               ],
               "additionalProperties": false
             }

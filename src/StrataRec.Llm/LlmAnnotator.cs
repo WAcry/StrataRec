@@ -6,9 +6,9 @@ using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Types;
 using StrataRec.Llm.Templates;
-using StrataRec.Models;
 using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Replay;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Llm;
 
@@ -207,6 +207,8 @@ public sealed class LlmAnnotatorFactory : IOperatorFactory
         int maxOutputTokens)
         : Operator
     {
+        private readonly string[] _read = [output]; // the one output it reads, recorded and replayed
+
         private readonly KeyValuePair<string, object?>[] _used = LlmNode.Tags(model, "used");
         private readonly KeyValuePair<string, object?>[] _unusable = LlmNode.Tags(model, "unusable");
         private readonly KeyValuePair<string, object?>[] _failed = LlmNode.Tags(model, "failed");
@@ -237,18 +239,18 @@ public sealed class LlmAnnotatorFactory : IOperatorFactory
             }
 
             var version = model.Version(context);
-            var writers = new ModelOutputWriter[n];
-            var calls = new Task<ModelStatus>[n];
+            var writers = new ServiceResponse[n];
+            var calls = new Task<ServiceStatus>[n];
             for (var i = 0; i < n; i++)
             {
-                writers[i] = new ModelOutputWriter(memory);
-                calls[i] = model.InvokeAsync(context, version, inputs[i], 1, writers[i], rows.AsMemory(i, 1), maxOutputTokens);
+                writers[i] = new ServiceResponse(memory);
+                calls[i] = model.InvokeAsync(context, version, inputs[i], 1, writers[i], rows.AsSpan(i, 1), _read, maxOutputTokens);
             }
 
             // Each wait is bounded by the model's timeout and the node's budget. A call that failed (a client that threw is a
             // failed status) is that row's failure; the budget running out or the caller cancelling cuts every call off, and
             // fails the node once all ended.
-            var statuses = new ModelStatus[n];
+            var statuses = new ServiceStatus[n];
             OperationCanceledException? cutOff = null;
             for (var i = 0; i < n; i++)
             {
@@ -271,7 +273,7 @@ public sealed class LlmAnnotatorFactory : IOperatorFactory
         }
 
         /// <summary>Writes every usable answer; fails the node when every call failed, and degrades it when some rows have no value.</summary>
-        private void Apply(OperatorContext context, ReadOnlySpan<int> rows, ModelStatus[] statuses, ModelOutputWriter[] writers)
+        private void Apply(OperatorContext context, ReadOnlySpan<int> rows, ServiceStatus[] statuses, ServiceResponse[] writers)
         {
             int used = 0, unusable = 0, failed = 0;
             string? firstFailure = null;

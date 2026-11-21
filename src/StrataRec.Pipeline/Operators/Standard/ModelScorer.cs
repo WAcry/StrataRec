@@ -3,7 +3,7 @@ using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Types;
-using StrataRec.Models;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Pipeline.Operators.Standard;
 
@@ -18,7 +18,7 @@ public sealed class ModelScorerConfig : ModelCallConfig
 }
 
 /// <summary>
-/// <c>ModelScorer@1</c> (ColumnWriter): pointwise scoring through <see cref="IModelClient"/>. Rows are split into
+/// <c>ModelScorer@1</c> (ColumnWriter): pointwise scoring through <see cref="IServiceClient"/>. Rows are split into
 /// batches called concurrently; outputs commit only when every batch succeeds (design 4.6, 6.9).
 /// </summary>
 /// <remarks>
@@ -124,8 +124,8 @@ public sealed class ModelScorerFactory : IOperatorFactory
 
             var version = call.Version(context);
             var batches = Batching.Count(n, stride);
-            var writers = new ModelOutputWriter[batches];
-            var calls = new Task<ModelStatus>[batches];
+            var writers = new ServiceResponse[batches];
+            var calls = new Task<ServiceStatus>[batches];
             for (var b = 0; b < batches; b++)
             {
                 var offset = b * stride;
@@ -136,8 +136,8 @@ public sealed class ModelScorerFactory : IOperatorFactory
                     named[i] = inputs[i].Batch(values[i], TensorLayout.Rows, offset, count);
                 }
 
-                writers[b] = new ModelOutputWriter(memory);
-                calls[b] = call.InvokeAsync(context, version, named, count, writers[b], rows.AsMemory(offset, count));
+                writers[b] = new ServiceResponse(memory);
+                calls[b] = call.InvokeAsync(context, version, named, count, writers[b], rows.AsSpan(offset, count));
             }
 
             // Each wait is bounded by the model's timeout and the node's budget; a batch that failed or was cut off is never
@@ -155,7 +155,7 @@ public sealed class ModelScorerFactory : IOperatorFactory
             WriteOutputs(context, rows.AsSpan(0, n), writers);
         }
 
-        private void WriteOutputs(OperatorContext context, ReadOnlySpan<int> rows, ModelOutputWriter[] writers)
+        private void WriteOutputs(OperatorContext context, ReadOnlySpan<int> rows, ServiceResponse[] writers)
         {
             var stride = Batching.Size(rows.Length, batchSize); // as the batches were sent
             foreach (var (name, column) in outputs)
@@ -167,7 +167,7 @@ public sealed class ModelScorerFactory : IOperatorFactory
                 {
                     var offset = b * stride;
                     var count = Math.Min(stride, rows.Length - offset);
-                    if (!writers[b].TryGet(name, out var values))
+                    if (!writers[b].TryGetValues(name, out var values))
                     {
                         context.Fail($"model '{call.Model}' did not return output '{name}' for every row");
                         return;

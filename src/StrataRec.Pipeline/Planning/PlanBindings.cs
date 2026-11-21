@@ -3,7 +3,7 @@ using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Features.Bindings;
 using StrataRec.Features.Local;
-using StrataRec.Models;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Pipeline.Planning;
 
@@ -30,7 +30,7 @@ public enum SignatureStatus : byte
 }
 
 /// <summary>A model signature as a compile sees it (design 6.9).</summary>
-public readonly record struct SignatureLookup(SignatureStatus Status, ModelSignature? Signature = null, string? Error = null, string? Hint = null)
+public readonly record struct SignatureLookup(SignatureStatus Status, ServiceSignature? Signature = null, string? Error = null, string? Hint = null)
 {
     public static SignatureLookup Unchecked => new(SignatureStatus.Unchecked);
 
@@ -41,10 +41,10 @@ public readonly record struct SignatureLookup(SignatureStatus Status, ModelSigna
     public static SignatureLookup Pending => new(SignatureStatus.Pending);
 
     /// <summary>The lookup of a completed answer: its signature, or the error it failed with.</summary>
-    public static SignatureLookup Of(Task<ModelSignature> answered) =>
+    public static SignatureLookup Of(Task<ServiceSignature> answered) =>
         answered.IsCompletedSuccessfully ? new(SignatureStatus.Known, answered.Result) : Failure(answered.Exception?.InnerException ?? new TaskCanceledException(answered));
 
-    /// <summary>The one mapping of what a client's <see cref="IModelClient.GetSignatureAsync"/> threw to a node error.</summary>
+    /// <summary>The one mapping of what a client's <see cref="IServiceClient.DescribeAsync"/> threw to a node error.</summary>
     public static SignatureLookup Failure(Exception exception) => exception switch
     {
         BindingException binding => new(SignatureStatus.Failed, null, binding.Reason, binding.Hint),
@@ -67,7 +67,7 @@ public interface IPlanBindings : ILocalTableProvider, IBindingInstances
     /// answers <see cref="SignatureStatus.Pending"/>: it then compiles the plan again once the answers are in.
     /// </summary>
     /// <param name="client">An instance this provider handed out.</param>
-    SignatureLookup Signature(IModelClient client, string model, string? version);
+    SignatureLookup Signature(IServiceClient client, string model, string? version);
 }
 
 /// <summary>
@@ -108,17 +108,17 @@ public sealed class UnloadedBindings : IPlanBindings
         return (T)instance;
     }
 
-    public SignatureLookup Signature(IModelClient client, string model, string? version)
+    public SignatureLookup Signature(IServiceClient client, string model, string? version)
     {
         if (client is ILoadable)
         {
             return SignatureLookup.Unchecked; // it could only answer after its load, which needs what validate does not have
         }
 
-        ValueTask<ModelSignature> answer;
+        ValueTask<ServiceSignature> answer;
         try
         {
-            answer = client.GetSignatureAsync(model, version, CancellationToken.None);
+            answer = client.DescribeAsync(model, version, CancellationToken.None);
         }
         catch (Exception ex)
         {

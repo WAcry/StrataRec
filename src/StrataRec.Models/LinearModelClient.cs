@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Models;
 
@@ -23,7 +24,7 @@ namespace StrataRec.Models;
 ///   "fail": false }                  // optional: always fail (fault injection)
 /// </code>
 /// </remarks>
-public sealed class LinearModelClient : IModelClient
+public sealed class LinearModelClient : IServiceClient
 {
     private readonly string _modelName;
     private readonly IReadOnlyList<LinearOutput> _outputs;
@@ -51,26 +52,24 @@ public sealed class LinearModelClient : IModelClient
         _fail = fail;
     }
 
-    public string ClientType => LinearModelClientFactory.TypeName;
-
     /// <summary>Answers at once: the signature follows from the settings.</summary>
-    public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken)
+    public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken)
     {
         if (!string.Equals(model, _modelName, StringComparison.Ordinal))
         {
-            return ValueTask.FromException<ModelSignature>(new ArgumentException($"This client serves model '{_modelName}', not '{model}'.", nameof(model)));
+            return ValueTask.FromException<ServiceSignature>(new ArgumentException($"This client serves model '{_modelName}', not '{model}'.", nameof(model)));
         }
 
         if (version is not null && _versions is not null && !_versions.Contains(version))
         {
-            return ValueTask.FromException<ModelSignature>(
+            return ValueTask.FromException<ServiceSignature>(
                 new ArgumentException($"Model '{model}' has no version '{version}'. Known: {string.Join(", ", _versions)}.", nameof(version)));
         }
 
-        return new ValueTask<ModelSignature>(Signature());
+        return new ValueTask<ServiceSignature>(Signature());
     }
 
-    private ModelSignature Signature()
+    private ServiceSignature Signature()
     {
         var dyn = new[] { -1 };
         var inputSpecs = new TensorSpec[_inputs.Count];
@@ -85,10 +84,10 @@ public sealed class LinearModelClient : IModelClient
             outputSpecs[i] = new TensorSpec(_outputs[i].Name, TensorElementType.Float32, dyn);
         }
 
-        return new ModelSignature(inputSpecs, outputSpecs);
+        return new ServiceSignature(inputSpecs, outputSpecs);
     }
 
-    public async ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
+    public async ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken)
     {
         if (_latencyMs > 0)
         {
@@ -97,18 +96,18 @@ public sealed class LinearModelClient : IModelClient
 
         if (_fail)
         {
-            return ModelStatus.Failed($"Model '{_modelName}' is configured to fail.");
+            return ServiceStatus.Failed($"Model '{_modelName}' is configured to fail.");
         }
 
-        return Compute(call, outputs);
+        return Compute(call, response);
     }
 
-    private ModelStatus Compute(ModelCall call, IModelOutputWriter outputs)
+    private ServiceStatus Compute(ServiceCall call, IServiceResponse outputs)
     {
         var batch = call.BatchSize;
         if (batch < 0)
         {
-            return ModelStatus.Failed($"The call's batch size is {batch}; it must not be negative.");
+            return ServiceStatus.Failed($"The call's batch size is {batch}; it must not be negative.");
         }
 
         var inputs = call.Inputs.Span;
@@ -121,13 +120,13 @@ public sealed class LinearModelClient : IModelClient
                 var input = FindInput(inputs, name);
                 if (input is null)
                 {
-                    return ModelStatus.Failed($"Missing input '{name}'.");
+                    return ServiceStatus.Failed($"Missing input '{name}'.");
                 }
 
                 // [batch] exactly: its data may be a longer buffer, but its shape says how many rows it holds.
                 if (input.Value.ElementType != TensorElementType.Float32 || input.Value.Shape is not [var rows] || rows != batch || input.Value.Float32.Length < batch)
                 {
-                    return ModelStatus.Failed($"Input '{name}' must be float32 with one value per row ({batch}).");
+                    return ServiceStatus.Failed($"Input '{name}' must be float32 with one value per row ({batch}).");
                 }
 
                 var data = input.Value.Float32.Span;
@@ -146,7 +145,7 @@ public sealed class LinearModelClient : IModelClient
             }
         }
 
-        return ModelStatus.Ok;
+        return ServiceStatus.Ok;
     }
 
     private static NamedInput? FindInput(ReadOnlySpan<NamedInput> inputs, string name)
@@ -200,13 +199,13 @@ public sealed class LinearOutputSettings
 }
 
 /// <summary>Factory for <c>linear@1</c>.</summary>
-public sealed class LinearModelClientFactory : BindingFactory<IModelClient, LinearSettings>
+public sealed class LinearModelClientFactory : BindingFactory<IServiceClient, LinearSettings>
 {
     public const string TypeName = "linear@1";
 
     public override string Type => TypeName;
 
-    protected override IModelClient Create(LinearSettings settings, BindingContext context)
+    protected override IServiceClient Create(LinearSettings settings, BindingContext context)
     {
         var outputs = new List<LinearOutput>(settings.Outputs.Count);
         foreach (var (name, output) in settings.Outputs)

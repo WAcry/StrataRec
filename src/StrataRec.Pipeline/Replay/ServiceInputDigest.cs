@@ -1,26 +1,29 @@
 using StrataRec.Core.Hashing;
-using StrataRec.Models;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Pipeline.Replay;
 
 /// <summary>
-/// Digests of model inputs, so a replay serves a recorded output only for the inputs it was computed from: a changed
-/// feature definition or model input changes the digest, and the output becomes a reported gap instead of a stale value.
+/// Digests of a service call's inputs, so a replay serves a recorded answer only for the inputs it was computed from: a
+/// changed feature definition, model input or recall query changes the digest, and the answer becomes a reported gap
+/// instead of a stale value.
 /// </summary>
 /// <remarks>
-/// An input is row-wise when its leading dimension is the batch size (<c>Shape[0] == BatchSize</c>, the tensor contract of
-/// <see cref="ModelCall.BatchSize"/>); a row's digest covers its slice of each row-wise input and every other input whole,
-/// since a shared input (a user vector, a text prompt) affects every row. Each input contributes its name, element type
-/// and shape, so the same values in another layout do not collide; the batch dimension of a row-wise input is left out,
-/// so the same row in a differently sized batch has the same digest. A call's <see cref="ModelCallOptions.MaxOutputTokens"/>
-/// is part of every digest when it is set: a generative model answers differently under another limit, so a recorded
-/// answer is not served to a call with another one. The seed is not: it is the request's, which the bundle replays.
-/// Calls without a limit hash as before, so older recordings keep matching.
+/// An input is row-wise when its leading dimension is the batch size (<c>Shape[0] == BatchSize</c>, the tensor contract
+/// of <see cref="ServiceCall.BatchSize"/>); a row's digest covers its slice of each row-wise input and every other input
+/// whole, since a shared input (a user vector, a text prompt) affects every row. Each input contributes its name, element
+/// type and shape, so the same values in another layout do not collide; the batch dimension of a row-wise input is left
+/// out, so the same row in a differently sized batch has the same digest. A missing input contributes its name, element
+/// type and declared shape, and that it is missing: it is neither a zero nor an absent input. A call's
+/// <see cref="ServiceCallOptions.MaxOutputTokens"/> is part of every digest when it is set: a generative model answers
+/// differently under another limit, so a recorded answer is not served to a call with another one. The seed and the
+/// request's inputs are not: they are the request's, which the bundle replays. Nor is the call's
+/// <see cref="ServiceCall.Limit"/>: a recorded list answers a call asking for fewer items.
 /// </remarks>
-internal static class ModelInputDigest
+internal static class ServiceInputDigest
 {
     /// <summary>Digest of row <paramref name="row"/>: every input in name order (see the remarks).</summary>
-    public static ulong Row(ModelCall call, int[] order, int row)
+    public static ulong Row(ServiceCall call, int[] order, int row)
     {
         var builder = default(StableHash.Builder);
         try
@@ -40,8 +43,8 @@ internal static class ModelInputDigest
         }
     }
 
-    /// <summary>Digest of the whole call, for calls whose outputs are not per row: the batch size and every input whole.</summary>
-    public static ulong Call(ModelCall call, int[] order)
+    /// <summary>Digest of the whole call, for calls about no items: the batch size and every input whole.</summary>
+    public static ulong Call(ServiceCall call, int[] order)
     {
         var builder = default(StableHash.Builder);
         try
@@ -63,7 +66,7 @@ internal static class ModelInputDigest
     }
 
     /// <summary>Input indices in ordinal name order, so the digest does not depend on the order an operator lists them.</summary>
-    public static int[] NameOrder(ModelCall call)
+    public static int[] NameOrder(ServiceCall call)
     {
         var inputs = call.Inputs.Span;
         var names = new string[inputs.Length];
@@ -80,10 +83,10 @@ internal static class ModelInputDigest
 
     /// <summary>The input's leading dimension is the batch: each row has its own slice.</summary>
     public static bool IsRowWise(in NamedInput input, int batch) =>
-        batch > 0 && input.ElementType != TensorElementType.Text && input.Shape is { Length: > 0 } shape && shape[0] == batch;
+        batch > 0 && !input.IsMissing && input.ElementType != TensorElementType.Text && input.Shape is { Length: > 0 } shape && shape[0] == batch;
 
     /// <summary>The options that change what a model answers for the same inputs; nothing for a call that sets none.</summary>
-    private static void AddOptions(ref StableHash.Builder builder, in ModelCallOptions options)
+    private static void AddOptions(ref StableHash.Builder builder, in ServiceCallOptions options)
     {
         if (options.MaxOutputTokens is { } max)
         {
@@ -106,6 +109,12 @@ internal static class ModelInputDigest
         for (var d = 0; d < shape.Length; d++)
         {
             builder.AddIndex(sliced && d == 0 ? -1 : shape[d]); // the batch dimension, normalized
+        }
+
+        if (input.IsMissing)
+        {
+            builder.Add("missing"); // after the shape: a missing value is not an empty one
+            return;
         }
 
         if (input.ElementType == TensorElementType.Text)
@@ -163,78 +172,5 @@ internal static class ModelInputDigest
 
                 break;
         }
-    }
-}
-
-/// <summary>
-/// Forwards a model's outputs to the operator's writer and remembers them, so a recorded call can copy what the model
-/// returned. Used only for requests that record.
-/// </summary>
-internal sealed class RecordingOutputWriter(IModelOutputWriter inner) : IModelOutputWriter
-{
-    private readonly object _gate = new();
-    private readonly List<(string Name, TensorValues Values)> _tensors = new();
-    private readonly List<(string Name, string Text)> _texts = new();
-
-    public Memory<T> GetValues<T>(string name, int elementCount)
-    {
-        var buffer = inner.GetValues<T>(name, elementCount);
-        lock (_gate)
-        {
-            _tensors.Add((name, TensorValues.Of<T>(buffer)));
-        }
-
-        return buffer;
-    }
-
-    public void SetText(string name, string text)
-    {
-        inner.SetText(name, text);
-        lock (_gate)
-        {
-            _texts.Add((name, text));
-        }
-    }
-
-    /// <summary>The outputs by name; a name requested twice keeps its last buffer, as the operator's writer does.</summary>
-    public List<(string Name, TensorValues Values)> Tensors()
-    {
-        lock (_gate)
-        {
-            return LastByName(_tensors);
-        }
-    }
-
-    public List<(string Name, string Text)> Texts()
-    {
-        lock (_gate)
-        {
-            return LastByName(_texts);
-        }
-    }
-
-    private static List<(string Name, T Value)> LastByName<T>(List<(string Name, T Value)> entries)
-    {
-        var result = new List<(string Name, T Value)>(entries.Count);
-        for (var i = 0; i < entries.Count; i++)
-        {
-            var replaced = false;
-            for (var j = 0; j < result.Count; j++)
-            {
-                if (string.Equals(result[j].Name, entries[i].Name, StringComparison.Ordinal))
-                {
-                    result[j] = entries[i];
-                    replaced = true;
-                    break;
-                }
-            }
-
-            if (!replaced)
-            {
-                result.Add(entries[i]);
-            }
-        }
-
-        return result;
     }
 }

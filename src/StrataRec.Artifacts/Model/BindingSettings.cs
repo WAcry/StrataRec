@@ -285,7 +285,7 @@ public static class BindingSettings
 /// it (<see cref="BindingSettings"/>), so the type the schema describes is the type that binds, and the factory
 /// parses no JSON.
 /// </summary>
-/// <typeparam name="TInstance">The contract the factory's instances serve, e.g. a model client.</typeparam>
+/// <typeparam name="TInstance">The contract the factory's instances serve, e.g. a service client.</typeparam>
 /// <typeparam name="TSettings">The settings type: snake_case members, documented for the schema, required ones
 /// <c>required</c>; <see cref="LocalFile"/> and <see cref="SecretReference"/> for files and credentials.</typeparam>
 public abstract class BindingFactory<TInstance, TSettings> : IBindingFactory<TInstance>

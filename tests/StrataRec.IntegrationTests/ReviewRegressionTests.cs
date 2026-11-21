@@ -265,7 +265,7 @@ public sealed class ReviewRegressionTests
         File.WriteAllText(Path.Combine(root, "catalog", "c.jsonc"), """{ "catalog_id": "c" }""");
         File.WriteAllText(Path.Combine(root, "bindings", "local.jsonc"), $$"""
             { "environment": "local",
-              "candidate_sources": {
+              "services": {
                 "broken":  { "client": "memory_list@1", "items": [1, 2, 3], "fail": true, "latency_ms": {{brokenLatencyMs}} },
                 "popular": { "client": "memory_list@1", "data_file": "fixtures/recall_popular.json", "latency_ms": {{backupLatencyMs}} } } }
             """);

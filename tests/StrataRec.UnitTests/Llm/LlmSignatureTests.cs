@@ -1,5 +1,5 @@
-using StrataRec.Models;
 using static StrataRec.UnitTests.Llm.LlmFixture;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Llm;
 
@@ -18,9 +18,9 @@ public sealed class LlmSignatureTests
                 $"Model 'llm' version 'v2' declares input 'user' as float32 [-1], but {op} sends a rendered prompt, which is text.");
             data.Add(op, "extra_input", "/nodes/rank/config/model", "MODEL_INPUT_MISSING",
                 "Model 'llm' version 'v2' requires input 'system', which 'prompts' does not supply.");
-            data.Add(op, "no_input", "/nodes/rank/config/prompts/user", "MODEL_SIGNATURE", "Model 'llm' version 'v2' has no input 'user'.");
+            data.Add(op, "no_input", "/nodes/rank/config/prompts/user", "SERVICE_SIGNATURE", "Model 'llm' version 'v2' has no input 'user'.");
             data.Add(op, "float_output", "/nodes/rank/config/output", "MODEL_TENSOR_UNSUPPORTED", "Model 'llm' version 'v2' declares output 'answer' as float32 [-1].");
-            data.Add(op, "no_output", "/nodes/rank/config/output", "MODEL_SIGNATURE", "Model 'llm' version 'v2' has no output 'answer'.");
+            data.Add(op, "no_output", "/nodes/rank/config/output", "SERVICE_SIGNATURE", "Model 'llm' version 'v2' has no output 'answer'.");
         }
 
         return data;
@@ -34,13 +34,13 @@ public sealed class LlmSignatureTests
         var answer = new TensorSpec("answer", TensorElementType.Text, new[] { 1 }); // a text's shape is not checked
         var signature = v2 switch
         {
-            "float_input" => new ModelSignature(new[] { new TensorSpec("user", TensorElementType.Float32, new[] { -1 }) }, new[] { answer }),
-            "extra_input" => new ModelSignature(new[] { text, new TensorSpec("system", TensorElementType.Text, Array.Empty<int>()) }, new[] { answer }),
-            "no_input" => new ModelSignature(Array.Empty<TensorSpec>(), new[] { answer }),
-            "float_output" => new ModelSignature(new[] { text }, new[] { new TensorSpec("answer", TensorElementType.Float32, new[] { -1 }) }),
-            _ => new ModelSignature(new[] { text }, new[] { new TensorSpec("reply", TensorElementType.Text, Array.Empty<int>()) }),
+            "float_input" => new ServiceSignature(new[] { new TensorSpec("user", TensorElementType.Float32, new[] { -1 }) }, new[] { answer }),
+            "extra_input" => new ServiceSignature(new[] { text, new TensorSpec("system", TensorElementType.Text, Array.Empty<int>()) }, new[] { answer }),
+            "no_input" => new ServiceSignature(Array.Empty<TensorSpec>(), new[] { answer }),
+            "float_output" => new ServiceSignature(new[] { text }, new[] { new TensorSpec("answer", TensorElementType.Float32, new[] { -1 }) }),
+            _ => new ServiceSignature(new[] { text }, new[] { new TensorSpec("reply", TensorElementType.Text, Array.Empty<int>()) }),
         };
-        var models = new TextModels(_ => ("[]", ModelStatus.Ok), version => version == "v2" ? signature : new ModelSignature(new[] { text }, new[] { answer }));
+        var models = new TextModels(_ => ("[]", ServiceStatus.Ok), version => version == "v2" ? signature : new ServiceSignature(new[] { text }, new[] { answer }));
         const string Extra = """, "version_param": "llm_version" """;
         var config = op == "LlmAnnotator@1" ? Annotate("{{col.entity_id}}", extra: Extra) : Retrieve("ids", extra: Extra);
 
@@ -55,7 +55,7 @@ public sealed class LlmSignatureTests
     [InlineData("GenerativeRetriever@1")]
     public void MatchingVersions_Load(string op)
     {
-        var models = new TextModels(_ => ("[]", ModelStatus.Ok), _ => TextModels.Text("user"));
+        var models = new TextModels(_ => ("[]", ServiceStatus.Ok), _ => TextModels.Text("user"));
         const string Extra = """, "version_param": "llm_version" """;
         var config = op == "LlmAnnotator@1" ? Annotate("{{col.entity_id}}", extra: Extra) : Retrieve("ids", extra: Extra);
 

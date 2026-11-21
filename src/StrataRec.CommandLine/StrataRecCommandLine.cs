@@ -34,7 +34,7 @@ public static class StrataRecCommandLine
     /// </summary>
     /// <param name="args">The command line after the program's name, e.g. <c>["validate", "-c", "config"]</c>.</param>
     /// <param name="environment">
-    /// What the calling binary provides to plans: its operators, connectors, clients, candidate sources, update sources and
+    /// What the calling binary provides to plans: its operators, connectors, service clients, update sources and
     /// cache stores. Each command places it in the workspace it reads (<c>environment with { BaseDirectory = … }</c>: the
     /// <c>-c</c> directory, or none for a release manifest, whose relative paths resolve against the current directory),
     /// so the environment's own <see cref="PlanEnvironment.BaseDirectory"/> is not used.

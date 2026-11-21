@@ -9,6 +9,7 @@ using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Pipeline.Replay;
 using StrataRec.Pipeline.Sources;
+using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
@@ -148,7 +149,7 @@ public sealed class CustomPlacementTests
 
     public sealed class SlotInjectorConfig
     {
-        /// <summary>The candidate source to inject from (a binding's <c>candidate_sources</c> entry).</summary>
+        /// <summary>The recall service to inject from (a binding's <c>services</c> entry).</summary>
         public required string Source { get; init; }
 
         /// <summary>1-based positions in the ranking, one per injected candidate, in any order.</summary>
@@ -159,7 +160,7 @@ public sealed class CustomPlacementTests
     }
 
     /// <summary>
-    /// <c>SlotInjector@1</c> (RowSource | RowOrder): calls a candidate source, appends the candidates that are not in the
+    /// <c>SlotInjector@1</c> (RowSource | RowOrder): calls a recall service, appends the candidates that are not in the
     /// table yet, at most one per slot, writes their score, and moves them to the slots; the other rows keep their order.
     /// </summary>
     private sealed class SlotInjectorFactory : IOperatorFactory
@@ -170,7 +171,7 @@ public sealed class CustomPlacementTests
         public Operator? Compile(OperatorCompileContext context)
         {
             var config = context.BindConfig<SlotInjectorConfig>()!;
-            var bound = context.CandidateSource(config.Source, "/source");
+            var bound = context.Service(config.Source, "/source", IoRoles.Recall);
             if (bound is null || !context.TryWriteColumn(config.ScoreCol, "/score_col", null, out var score))
             {
                 return null;
@@ -178,24 +179,22 @@ public sealed class CustomPlacementTests
 
             var slots = (int[])config.Slots.Clone();
             Array.Sort(slots);
-            return new SlotInjector(config.Source, bound.Value.Source, bound.Value.TimeoutMs, slots, score);
+            return new SlotInjector(bound, slots, score);
         }
 
-        private sealed class SlotInjector(string name, ICandidateSource source, int? timeoutMs, int[] slots, OutputColumn score) : Operator
+        private sealed class SlotInjector(BoundService source, int[] slots, OutputColumn score) : Operator
         {
-            private readonly IoTarget _target = new(IoRoles.Recall, name);
-
             public override int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => slots.Length;
 
             public override async ValueTask ExecuteAsync(OperatorContext context)
             {
                 // Ask for more than the slots: some candidates may be in the table already.
-                var buffer = new CandidateBuffer(2 * slots.Length, context.Memory);
-                var query = new CandidateQuery { SourceName = name, Limit = buffer.Limit, Inputs = context.Inputs, RequestId = context.RequestId, Seed = context.Seed };
-                var status = await context.RetrieveAsync(source, _target, timeoutMs, query, buffer);
+                var buffer = new ServiceResponse(context.Memory, 2 * slots.Length);
+                var call = new ServiceCall { Service = source.Name, Limit = buffer.Limit, Request = context.Inputs, RequestId = context.RequestId };
+                var status = await context.CallAsync(source, call, buffer);
                 if (!status.Succeeded)
                 {
-                    context.ReportDegraded($"source '{name}' failed: {status.Error}; nothing injected");
+                    context.ReportDegraded($"source '{source.Name}' failed: {status.Error}; nothing injected");
                     return;
                 }
 
@@ -317,20 +316,18 @@ public sealed class CustomPlacementTests
     }
 
     /// <summary><c>failing@1</c>: a candidate source that always fails.</summary>
-    private sealed class FailingSourceFactory : IBindingFactory<ICandidateSource>
+    private sealed class FailingSourceFactory : IBindingFactory<IServiceClient>
     {
         public string Type => "failing@1";
 
         public Type SettingsType => typeof(Core.Bindings.NoSettings);
 
-        public ICandidateSource Create(Core.Bindings.BindingContext context) => new Failing();
+        public IServiceClient Create(Core.Bindings.BindingContext context) => new Failing();
 
-        private sealed class Failing : ICandidateSource
+        private sealed class Failing : IServiceClient
         {
-            public string ClientType => "failing@1";
-
-            public ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken) =>
-                ValueTask.FromResult(CandidateSourceStatus.Failed("unavailable"));
+            public ValueTask<ServiceStatus> CallAsync(ServiceCall query, IServiceResponse sink, CancellationToken cancellationToken) =>
+                ValueTask.FromResult(ServiceStatus.Failed("unavailable"));
         }
     }
 }

@@ -6,10 +6,10 @@ namespace StrataRec.IntegrationTests;
 public sealed class BindingTypeTests
 {
     [Theory]
-    [InlineData("models", "ctr_model", """{ "client": "lineer@1" }""",
-        "/models/ctr_model/client", "Model 'ctr_model' names type 'lineer@1', which this binary does not register.", "did you mean 'linear@1'?")]
-    [InlineData("candidate_sources", "popular", """{ "client": "memory_lst@1", "data_file": "fixtures/recall_popular.json" }""",
-        "/candidate_sources/popular/client", "Candidate source 'popular' names type 'memory_lst@1', which this binary does not register.",
+    [InlineData("services", "ctr_model", """{ "client": "lineer@1" }""",
+        "/services/ctr_model/client", "Service 'ctr_model' names type 'lineer@1', which this binary does not register.", "did you mean 'linear@1'?")]
+    [InlineData("services", "popular", """{ "client": "memory_lst@1", "data_file": "fixtures/recall_popular.json" }""",
+        "/services/popular/client", "Service 'popular' names type 'memory_lst@1', which this binary does not register.",
         "did you mean 'memory_list@1'?")]
     [InlineData("sources", "item_store", """{ "connector": "memry@1", "timeout_ms": 1000 }""",
         "/sources/item_store/connector", "Feature source 'item_store' names type 'memry@1', which this binary does not register.", "did you mean 'memory@1'?")]
@@ -17,8 +17,9 @@ public sealed class BindingTypeTests
         "/sources/author_store/bootstrap/source", "Update source of feature source 'author_store' names type 'snapshot_file@1', which this binary does not register.",
         "did you mean 'snapshot_files@1'?")]
     // A type of another kind is not one of this kind: the hint lists those that are.
-    [InlineData("models", "ctr_model", """{ "client": "memory_list@1" }""",
-        "/models/ctr_model/client", "Model 'ctr_model' names type 'memory_list@1', which is not a model client.", "registered: fixed_text@1, linear@1, random@1")]
+    [InlineData("services", "ctr_model", """{ "client": "memory@1" }""",
+        "/services/ctr_model/client", "Service 'ctr_model' names type 'memory@1', which is not a service client.",
+        "registered: fixed_text@1, linear@1, memory_list@1, memory_vectors@1, random@1")]
     public void ATypeThisBinaryDoesNotHave_IsOneError_AtTheSelector(string section, string name, string binding, string pointer, string message, string hint)
     {
         var host = HomeFeedTestHost.LoadModified(root => Rebind(root, section, name, binding));
@@ -38,7 +39,7 @@ public sealed class BindingTypeTests
     [Fact]
     public async Task LoadingTheSameBadWorkspaceTwice_FailsTwice()
     {
-        var host = HomeFeedTestHost.LoadModified(root => SampleBindings.RebindModel(root, "ctr_model", """{ "client": "lineer@1" }"""));
+        var host = HomeFeedTestHost.LoadModified(root => SampleBindings.RebindService(root, "ctr_model", """{ "client": "lineer@1" }"""));
         var config = StrataRec.CommandLine.Commands.ConfigRef.Workspace(host.Root, host.Environment);
         var diagnostics = new StrataRec.Artifacts.Model.DiagnosticBag();
         await using var engine = config.CreateReplayEngine();
@@ -50,17 +51,13 @@ public sealed class BindingTypeTests
 
     private static void Rebind(string root, string section, string name, string binding)
     {
-        switch (section)
+        if (section == "services")
         {
-            case "models":
-                SampleBindings.RebindModel(root, name, binding);
-                break;
-            case "candidate_sources":
-                SampleBindings.RebindCandidateSource(root, name, binding);
-                break;
-            default:
-                SampleBindings.Rebind(root, name, binding);
-                break;
+            SampleBindings.RebindService(root, name, binding);
+        }
+        else
+        {
+            SampleBindings.Rebind(root, name, binding);
         }
     }
 }

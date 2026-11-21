@@ -167,7 +167,7 @@ public sealed class ManifestRefCliTests
             using var report = JsonDocument.Parse(output.ToString());
             var bundle = report.RootElement.GetProperty("bundles")[0];
             Assert.Equal(manifests[0].Id, bundle.GetProperty("manifest").GetProperty("replayed").GetString());
-            Assert.Contains(bundle.GetProperty("gaps").EnumerateArray(), g => g.GetProperty("kind").GetString() == "candidate_source" && g.GetProperty("source").GetString() == "broken");
+            Assert.Contains(bundle.GetProperty("gaps").EnumerateArray(), g => g.GetProperty("kind").GetString() == "recall" && g.GetProperty("source").GetString() == "broken");
         }
 
         // A store without the fallback's manifest: not replayed, naming the pipeline, its manifest and why.

@@ -9,7 +9,7 @@ namespace StrataRec.UnitTests.Features;
 public sealed class BindingResolverTests
 {
     [Theory]
-    [InlineData(BindingKind.Model, "/models/b", "Model 'b' names no 'client'.", "this binary registers no model client")]
+    [InlineData(BindingKind.Service, "/services/b", "Service 'b' names no 'client'.", "this binary registers no service client")]
     [InlineData(BindingKind.UpdateSource, "/sources/b/bootstrap", "Update source of feature source 'b' names no 'source'.", "this binary registers no update source")]
     [InlineData(BindingKind.CacheStore, "/sources/b/cache/distributed", "Distributed cache of feature source 'b' names no 'store'.",
         "this binary registers no distributed cache store")]

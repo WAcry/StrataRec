@@ -159,10 +159,10 @@ public sealed class BindingSettingsTests
     [Fact]
     public void TheSchemaOfASettingsType_IsWhatBinds()
     {
-        var schema = ArtifactSchemas.Artifact("bindings", [], [new BindingSchemaSource(BindingKind.Model, "test@1", typeof(ServerSettings))]);
-        var then = schema["properties"]!["models"]!["additionalProperties"]!["allOf"]![0]!["then"]!;
+        var schema = ArtifactSchemas.Artifact("bindings", [], [new BindingSchemaSource(BindingKind.Service, "test@1", typeof(ServerSettings))]);
+        var then = schema["properties"]!["services"]!["additionalProperties"]!["allOf"]![0]!["then"]!;
 
-        Assert.Equal("test@1", schema["properties"]!["models"]!["additionalProperties"]!["allOf"]![0]!["if"]!["properties"]!["client"]!["const"]!.GetValue<string>());
+        Assert.Equal("test@1", schema["properties"]!["services"]!["additionalProperties"]!["allOf"]![0]!["if"]!["properties"]!["client"]!["const"]!.GetValue<string>());
         Assert.False(then["additionalProperties"]!.GetValue<bool>());
         Assert.Equal(["endpoint"], then["required"]!.AsArray().Select(n => n!.GetValue<string>()));
         Assert.Equal("The server to call, host:port.", then["properties"]!["endpoint"]!["description"]!.GetValue<string>());
@@ -175,7 +175,7 @@ public sealed class BindingSettingsTests
     public void ASettingNamedLikeAFrameworkMember_IsRejectedWhenTheSchemaIsMade()
     {
         var error = Assert.Throws<InvalidOperationException>(() =>
-            ArtifactSchemas.Artifact("bindings", [], [new BindingSchemaSource(BindingKind.Model, "bad@1", typeof(Clashing))]));
+            ArtifactSchemas.Artifact("bindings", [], [new BindingSchemaSource(BindingKind.Service, "bad@1", typeof(Clashing))]));
 
         Assert.Contains("timeout_ms", error.Message, StringComparison.Ordinal);
     }

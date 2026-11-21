@@ -29,7 +29,7 @@ internal sealed class ReleaseFixture : IDisposable
         File.WriteAllText(Path.Combine(Root, "catalog", "c.jsonc"), """{ "catalog_id": "c" }""");
         File.WriteAllText(Path.Combine(Root, "fixtures", "ids.json"), """{ "items": [7, 8, 9] }""");
         File.WriteAllText(Path.Combine(Root, "bindings", "local.jsonc"),
-            """{ "environment": "local", "candidate_sources": { "s": { "client": "memory_list@1", "data_file": "fixtures/ids.json" } } }""");
+            """{ "environment": "local", "services": { "s": { "client": "memory_list@1", "data_file": "fixtures/ids.json" } } }""");
     }
 
     /// <summary>The workspace; relative paths in its bindings resolve against it.</summary>

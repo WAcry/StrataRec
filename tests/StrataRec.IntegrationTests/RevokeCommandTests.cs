@@ -13,6 +13,7 @@ using StrataRec.Hosting.Manifests;
 using StrataRec.Models;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Pipeline.Sources;
+using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
@@ -353,7 +354,7 @@ public sealed class RevokeCommandTests
             // A model of another client type, and a source behind a distributed cache store: only exp_future uses them.
             PlanFeatureClosureTests.EditJson(root, "bindings/local.jsonc", bindings =>
             {
-                bindings["models"]!["random_model"] = JsonNode.Parse("""{ "client": "random@1", "inputs": ["smoothed_ctr", "log_followers"], "outputs": ["p_click"] }""");
+                bindings["services"]!["random_model"] = JsonNode.Parse("""{ "client": "random@1", "inputs": ["smoothed_ctr", "log_followers"], "outputs": ["p_click"] }""");
                 bindings["sources"]!["extra_store"] = JsonNode.Parse("""
                     { "connector": "memory@1", "data": { }, "mode": "cache", "max_bytes": "1MiB",
                       "cache": { "ttl_ms": 1000, "distributed": { "store": "redis@1", "endpoint": "r:6379" } } }
@@ -389,8 +390,8 @@ public sealed class RevokeCommandTests
         {
             Bindings = new BindingRegistry()
                 .Add(new LinearModelClientFactory())
-                .Add(new MemoryListCandidateSourceFactory())
-                .Add(new MemoryVectorsCandidateSourceFactory())
+                .Add(new MemoryListServiceFactory())
+                .Add(new MemoryVectorsServiceFactory())
                 .Add(new MemoryFeatureConnectorFactory())
                 .Add(new SnapshotFilesUpdateSourceFactory()),
         };

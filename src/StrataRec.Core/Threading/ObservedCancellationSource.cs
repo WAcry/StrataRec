@@ -14,7 +14,7 @@ public enum CancellationSite : byte
     /// <summary>A node attempt's token, held by its operator and its clients: cancelled at the node's budget.</summary>
     Node,
 
-    /// <summary>A candidate source or model call's token: cancelled at the call's own timeout.</summary>
+    /// <summary>A service call's token: cancelled at the call's own timeout.</summary>
     Call,
 
     /// <summary>
@@ -49,8 +49,8 @@ public enum CancellationSite : byte
 }
 
 /// <summary>
-/// A token source whose token the framework hands to code it does not own (an operator, a connector, a model client, a
-/// candidate source, an assignment provider, a cache store, a log sink). Cancelling a token runs the callbacks
+/// A token source whose token the framework hands to code it does not own (an operator, a connector, a service client,
+/// an assignment provider, a cache store, a log sink). Cancelling a token runs the callbacks
 /// registered on it synchronously, on the cancelling thread, and what they throw comes out of the cancellation: out of
 /// the timer behind <see cref="CancellationTokenSource.CancelAfter(TimeSpan)"/>, that ends the process. Every
 /// cancellation of this token goes through <see cref="CancelObservedAsync"/> instead, whether the framework cancels it

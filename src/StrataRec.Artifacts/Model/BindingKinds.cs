@@ -5,11 +5,8 @@ namespace StrataRec.Artifacts.Model;
 /// <summary>The kinds of instance a bindings artifact names (design 6.4): each is one contract, named by one selector in one place.</summary>
 public enum BindingKind : byte
 {
-    /// <summary><c>models.*.client</c>: a model client; the settings are the entry's other members.</summary>
-    Model = 1,
-
-    /// <summary><c>candidate_sources.*.client</c>: a candidate source.</summary>
-    CandidateSource,
+    /// <summary><c>services.*.client</c>: a service client (a model, a recall source, any service); the settings are the entry's other members.</summary>
+    Service = 1,
 
     /// <summary><c>sources.*.connector</c>: a feature connector.</summary>
     Connector,
@@ -30,8 +27,7 @@ public static class BindingKinds
     private static readonly Info[] Table =
     [
         default,
-        new("models", string.Empty, "client", "model", "model client"),
-        new("candidate_sources", string.Empty, "client", "candidate source", "candidate source"),
+        new("services", string.Empty, "client", "service", "service client"),
         new("sources", string.Empty, "connector", "feature source", "feature connector"),
         new("sources", "/bootstrap", "source", "update source of feature source", "update source"),
         new("sources", "/cache/distributed", "store", "distributed cache of feature source", "distributed cache store"),
@@ -39,9 +35,9 @@ public static class BindingKinds
 
     /// <summary>Every kind, in declaration order.</summary>
     public static IReadOnlyList<BindingKind> All { get; } =
-        [BindingKind.Model, BindingKind.CandidateSource, BindingKind.Connector, BindingKind.UpdateSource, BindingKind.CacheStore];
+        [BindingKind.Service, BindingKind.Connector, BindingKind.UpdateSource, BindingKind.CacheStore];
 
-    /// <summary>The artifact's member holding the entries, e.g. <c>models</c>.</summary>
+    /// <summary>The artifact's member holding the entries, e.g. <c>services</c>.</summary>
     public static string Section(this BindingKind kind) => Of(kind).Section;
 
     /// <summary>Where the instance's settings are within an entry: the entry itself (empty), or a member such as <c>/cache/distributed</c>.</summary>
@@ -50,10 +46,10 @@ public static class BindingKinds
     /// <summary>The member naming the type, e.g. <c>client</c>.</summary>
     public static string Selector(this BindingKind kind) => Of(kind).Selector;
 
-    /// <summary>How messages name a binding of the kind, e.g. <c>model</c>.</summary>
+    /// <summary>How messages name a binding of the kind, e.g. <c>service</c>.</summary>
     public static string Noun(this BindingKind kind) => Of(kind).Noun;
 
-    /// <summary>How messages name what a type of the kind implements, e.g. <c>model client</c>.</summary>
+    /// <summary>How messages name what a type of the kind implements, e.g. <c>service client</c>.</summary>
     public static string TypeNoun(this BindingKind kind) => Of(kind).TypeNoun;
 
     /// <summary>The pointer of entry <paramref name="name"/>'s settings, e.g. <c>/sources/item_store/cache/distributed</c>.</summary>

@@ -40,10 +40,10 @@ public sealed class RandomRankerModelTests
         var run = Assert.Single(recorded.Recording!.Runs);
         Assert.Equal("succeeded", Assert.Single(run.Nodes, n => n.Node == "listwise_rerank").Outcome); // not skipped: the stand-in answered
         Assert.Equal("succeeded", Assert.Single(run.Nodes, n => n.Node == "pairwise_rerank").Outcome);
-        var pairCalls = run.ModelCalls.Where(c => c.Model == "pair_ranker").ToList();
+        var pairCalls = run.ServiceCalls.FindAll(c => c.Role == "model").Where(c => c.Service == "pair_ranker").ToList();
         Assert.Equal(new[] { 3, 4, 4, 4 }, pairCalls.Select(c => c.BatchSize).Order()); // window 6: 15 pairs in batches of 4
         Assert.All(pairCalls, c => Assert.Equal("ok", c.Status));
-        var listCall = Assert.Single(run.ModelCalls, c => c.Model == "list_ranker");
+        var listCall = Assert.Single(run.ServiceCalls.FindAll(c => c.Role == "model"), c => c.Service == "list_ranker");
         Assert.Equal(("ok", 1), (listCall.Status, listCall.BatchSize));
 
         // The top 6 in the pairwise order (expected wins: each pair gives its two rows 1 in all), then the rest of the listwise window.
@@ -119,9 +119,9 @@ public sealed class RandomRankerModelTests
             """);
         ReplayTests.Edit(root, Pipeline, "\"primary_source\": \"col.recall.primary_source\"",
             "\"primary_source\": \"col.recall.primary_source\", \"pairwise\": \"col.score.pairwise\", \"listwise\": \"col.score.listwise\"");
-        ReplayTests.Edit(root, "bindings/local.jsonc", "\"models\": {",
+        ReplayTests.Edit(root, "bindings/local.jsonc", "\"services\": {",
             $$"""
-            "models": {
+            "services": {
                 "pair_ranker": {{pairBinding}},
                 "list_ranker": {{listBinding}},
             """);

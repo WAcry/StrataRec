@@ -2,12 +2,15 @@ using System.Text.Json;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
+using StrataRec.Core.Memory;
+using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Sources;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary><c>memory_vectors@1</c>, the two-tower service's stand-in: a dot-product scan over its items with the query vector.</summary>
-public sealed class MemoryVectorsCandidateSourceTests
+public sealed class MemoryVectorsServiceTests
 {
     private const string Items = """
         "items": [
@@ -58,7 +61,7 @@ public sealed class MemoryVectorsCandidateSourceTests
     {
         var source = Create($$"""{ "query": "user_embedding", {{Items}} }""");
 
-        var (absent, _) = await RetrieveAsync(source, CandidateQueryValues.Empty);
+        var (absent, _) = await RetrieveAsync(source, []);
         Assert.False(absent.Succeeded);
         Assert.Contains("reads the query vector 'user_embedding', and the query of 'two_tower' has no such value", absent.Error, StringComparison.Ordinal);
         Assert.Contains("\"queries\": { \"two_tower\": { \"user_embedding\": \"ctx.user.embedding\" } }", absent.Error, StringComparison.Ordinal);
@@ -89,10 +92,10 @@ public sealed class MemoryVectorsCandidateSourceTests
 
         // A missing value of a wrong type was taken as nothing to search with (review 80).
         var (wrongType, _) = await RetrieveAsync(source, Values(ScalarValue.Missing, ColumnType.Int64.AsNullable()));
-        Assert.Equal("The query vector 'user_embedding' must be a list of floats; its expression is of type int64?.", wrongType.Error);
+        Assert.Equal("The query vector 'user_embedding' must be a list of floats; it is int64 of shape [].", wrongType.Error);
 
         var (wrongLength, _) = await RetrieveAsync(source, Values(ScalarValue.Missing, ColumnType.List(StorageKind.Float64, nullable: true, fixedLength: 3)));
-        Assert.Equal("The query vector 'user_embedding' is of type list<float64,3>?; the items' vectors have 2 elements.", wrongLength.Error);
+        Assert.Equal("The query vector 'user_embedding' has 3 elements; the items' vectors have 2.", wrongLength.Error);
     }
 
     [Fact]
@@ -144,27 +147,32 @@ public sealed class MemoryVectorsCandidateSourceTests
         Assert.Equal(pointer, error.Pointer);
     }
 
-    private static ICandidateSource Create(string settings, string? directory = null) =>
-        new MemoryVectorsCandidateSourceFactory().Create(
+    private static IServiceClient Create(string settings, string? directory = null) =>
+        new MemoryVectorsServiceFactory().Create(
             new BindingContext("two_tower", JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(settings)!, directory ?? Path.GetTempPath(), null));
 
-    private static CandidateQueryValues Values(ScalarValue value, ColumnType? type = null) =>
-        new(["user_embedding"], [type ?? ColumnType.List(StorageKind.Float64, nullable: true, fixedLength: 2)], [value]);
+    /// <summary>The query as a recall node sends it (<see cref="ServiceInputs.Create"/>).</summary>
+    private static NamedInput[] Values(ScalarValue value, ColumnType? type = null) =>
+        [ServiceInputs.Create("user_embedding", type ?? ColumnType.List(StorageKind.Float64, nullable: true, fixedLength: 2), value, new RequestMemory())];
 
-    private static async Task<(CandidateSourceStatus Status, List<string> Found)> RetrieveAsync(ICandidateSource source, CandidateQueryValues values, int limit = 10)
+    private static async Task<(ServiceStatus Status, List<string> Found)> RetrieveAsync(IServiceClient source, NamedInput[] values, int limit = 10)
     {
         var sink = new Sink();
-        var query = new CandidateQuery { SourceName = "two_tower", Limit = limit, Inputs = new RequestInputs(), Values = values, RequestId = "r" };
-        var status = await source.RetrieveAsync(query, sink, CancellationToken.None);
+        var call = new ServiceCall { Service = "two_tower", Limit = limit, Inputs = values, RequestId = "r" };
+        var status = await source.CallAsync(call, sink, CancellationToken.None);
         return (status, sink.Found);
     }
 
-    private sealed class Sink : ICandidateSink
+    private sealed class Sink : IServiceResponse
     {
+        public Memory<T> GetValues<T>(string name, int elementCount) => throw new NotSupportedException("a recall answers with items");
+
+        public void SetText(string name, string text) => throw new NotSupportedException("a recall answers with items");
+
         public List<string> Found { get; } = new();
 
-        public void Add(long entityId, double score) => Found.Add(FormattableString.Invariant($"{entityId}:{score}"));
+        public void AddItem(long entityId, double score) => Found.Add(FormattableString.Invariant($"{entityId}:{score}"));
 
-        public void Add(string entityId, double score) => Found.Add(FormattableString.Invariant($"{entityId}:{score}"));
+        public void AddItem(string entityId, double score) => Found.Add(FormattableString.Invariant($"{entityId}:{score}"));
     }
 }

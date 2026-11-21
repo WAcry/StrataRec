@@ -1,5 +1,6 @@
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Models;
 
@@ -19,16 +20,16 @@ namespace StrataRec.Models;
 /// <para>Its signature declares every input and output as text (one string, shape <c>[]</c>), for any version, so the
 /// calling operator's load-time signature check passes as against the real model. A call fails unless it sends every
 /// declared input as text, as a real model's would; it then sets every output to its fixed text and reports no token
-/// count (<see cref="ModelStatus.OutputTokens"/> null) and no truncation. It is deterministic: the answer depends on
+/// count (<see cref="ServiceStatus.OutputTokens"/> null) and no truncation. It is deterministic: the answer depends on
 /// neither the prompts nor the seed, so a test chooses the answer it needs. A call allocates nothing; the client is
 /// immutable, needs no load and holds nothing to release.</para>
 /// </remarks>
-public sealed class FixedTextModelClient : IModelClient
+public sealed class FixedTextModelClient : IServiceClient
 {
     private readonly string _modelName;
     private readonly string[] _inputs;
     private readonly (string Name, string Text)[] _outputs;
-    private readonly ModelSignature _signature;
+    private readonly ServiceSignature _signature;
 
     /// <param name="inputs">Distinct, non-empty names.</param>
     /// <param name="outputs">Distinct, non-empty names, each with its fixed text.</param>
@@ -49,21 +50,19 @@ public sealed class FixedTextModelClient : IModelClient
             outputSpecs[o] = new TensorSpec(_outputs[o].Name, TensorElementType.Text, Array.Empty<int>());
         }
 
-        _signature = new ModelSignature(inputSpecs, outputSpecs);
+        _signature = new ServiceSignature(inputSpecs, outputSpecs);
     }
 
-    public string ClientType => FixedTextModelClientFactory.TypeName;
-
     /// <summary>Answers at once with the signature the settings declare, for any version.</summary>
-    public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
+    public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken) =>
         string.Equals(model, _modelName, StringComparison.Ordinal)
-            ? new ValueTask<ModelSignature>(_signature)
-            : ValueTask.FromException<ModelSignature>(new ArgumentException($"This client serves model '{_modelName}', not '{model}'.", nameof(model)));
+            ? new ValueTask<ServiceSignature>(_signature)
+            : ValueTask.FromException<ServiceSignature>(new ArgumentException($"This client serves model '{_modelName}', not '{model}'.", nameof(model)));
 
-    public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
+    public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(call);
-        ArgumentNullException.ThrowIfNull(outputs);
+        ArgumentNullException.ThrowIfNull(response);
         var inputs = call.Inputs.Span;
         foreach (var name in _inputs)
         {
@@ -74,7 +73,7 @@ public sealed class FixedTextModelClient : IModelClient
                 {
                     if (input.ElementType != TensorElementType.Text || input.Text is null)
                     {
-                        return new ValueTask<ModelStatus>(ModelStatus.Failed($"Input '{name}' must be text."));
+                        return new ValueTask<ServiceStatus>(ServiceStatus.Failed($"Input '{name}' must be text."));
                     }
 
                     found = true;
@@ -84,16 +83,16 @@ public sealed class FixedTextModelClient : IModelClient
 
             if (!found)
             {
-                return new ValueTask<ModelStatus>(ModelStatus.Failed($"Missing input '{name}'."));
+                return new ValueTask<ServiceStatus>(ServiceStatus.Failed($"Missing input '{name}'."));
             }
         }
 
         foreach (var (name, text) in _outputs)
         {
-            outputs.SetText(name, text);
+            response.SetText(name, text);
         }
 
-        return new ValueTask<ModelStatus>(ModelStatus.Ok);
+        return new ValueTask<ServiceStatus>(ServiceStatus.Ok);
     }
 }
 
@@ -111,13 +110,13 @@ public sealed class FixedTextSettings
 }
 
 /// <summary>Creates <see cref="FixedTextModelClient"/>s from binding settings.</summary>
-public sealed class FixedTextModelClientFactory : BindingFactory<IModelClient, FixedTextSettings>
+public sealed class FixedTextModelClientFactory : BindingFactory<IServiceClient, FixedTextSettings>
 {
     public const string TypeName = "fixed_text@1";
 
     public override string Type => TypeName;
 
-    protected override IModelClient Create(FixedTextSettings settings, BindingContext context)
+    protected override IServiceClient Create(FixedTextSettings settings, BindingContext context)
     {
         const string InputHint = "list the model's text input names, e.g. \"inputs\": [\"system\", \"user\"]: the prompts the operator renders";
         const string OutputHint = "map each text output to the text every call answers, e.g. \"outputs\": { \"answer\": \"[3, 1, 2]\" }";

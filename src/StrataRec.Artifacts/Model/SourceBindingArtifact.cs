@@ -6,8 +6,8 @@ using System.Text.Json.Serialization;
 namespace StrataRec.Artifacts.Model;
 
 /// <summary>
-/// Per-environment bindings of logical feature sources, models and candidate sources to concrete clients
-/// (design 6.4). Experiments cannot patch this artifact.
+/// Per-environment bindings of logical feature sources and services to concrete clients (design 6.4). Experiments cannot
+/// patch this artifact.
 /// </summary>
 public sealed class SourceBindingArtifact
 {
@@ -15,9 +15,11 @@ public sealed class SourceBindingArtifact
 
     public Dictionary<string, FeatureSourceBinding> Sources { get; init; } = new();
 
-    public Dictionary<string, ClientBinding> Models { get; init; } = new();
-
-    public Dictionary<string, ClientBinding> CandidateSources { get; init; } = new();
+    /// <summary>
+    /// The services the pipeline calls (design 6.9), by logical name: model servers, recall sources, any external
+    /// service. A model operator's <c>model</c> and a recall's sources name them.
+    /// </summary>
+    public Dictionary<string, ClientBinding> Services { get; init; } = new();
 
     /// <summary>
     /// Adds to <paramref name="types"/> the client, connector, update-source and cache-store types the named bindings use
@@ -25,9 +27,8 @@ public sealed class SourceBindingArtifact
     /// type, so a new kind of setting is added here. A name without a binding adds nothing (it is an error where it is used).
     /// </summary>
     /// <param name="featureSources">Feature sources a plan reads: their connector, bootstrap source and distributed store.</param>
-    /// <param name="models">Models a plan binds: their client.</param>
-    /// <param name="candidateSources">Candidate sources a plan binds: their client.</param>
-    public void AddTypes(ISet<string> types, IEnumerable<string> featureSources, IEnumerable<string> models, IEnumerable<string> candidateSources)
+    /// <param name="services">Services a plan binds: their client.</param>
+    public void AddTypes(ISet<string> types, IEnumerable<string> featureSources, IEnumerable<string> services)
     {
         ArgumentNullException.ThrowIfNull(types);
         foreach (var name in featureSources)
@@ -53,19 +54,11 @@ public sealed class SourceBindingArtifact
             }
         }
 
-        foreach (var name in models)
+        foreach (var name in services)
         {
-            if (Models.TryGetValue(name, out var model))
+            if (Services.TryGetValue(name, out var service))
             {
-                types.Add(model.Client);
-            }
-        }
-
-        foreach (var name in candidateSources)
-        {
-            if (CandidateSources.TryGetValue(name, out var source))
-            {
-                types.Add(source.Client);
+                types.Add(service.Client);
             }
         }
     }
@@ -182,10 +175,10 @@ public sealed class DistributedCacheBinding
     public Dictionary<string, JsonElement> Settings { get; init; } = new();
 }
 
-/// <summary>Binding of a model or candidate source to a client implementation.</summary>
+/// <summary>Binding of a service to a client implementation.</summary>
 public sealed class ClientBinding
 {
-    [Description("Required: client type and version, e.g. 'linear@1' or 'random@1' for a model, 'memory_list@1' for a candidate source. " +
+    [Description("Required: client type and version, e.g. 'linear@1' or 'random@1' for a model, 'memory_list@1' for a recall source. " +
         "The other members are the client's own settings, which the schema describes for each type of the binary that wrote it.")]
     public required string Client { get; init; }
 

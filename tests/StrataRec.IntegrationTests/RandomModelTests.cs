@@ -51,11 +51,11 @@ public sealed class RandomModelTests
     /// <summary>What <c>stratarec validate</c> finds without loading anything: the stand-in answers its signature at once.</summary>
     [Theory]
     [InlineData("""{ "client": "random@1", "inputs": ["smoothed_ctr"], "outputs": ["p_click"] }""",
-        "MODEL_SIGNATURE", "pipeline:home_feed", "/nodes/ctr_ranker/config/inputs/log_followers")]
+        "SERVICE_SIGNATURE", "pipeline:home_feed", "/nodes/ctr_ranker/config/inputs/log_followers")]
     [InlineData("""{ "client": "random@1", "inputs": ["smoothed_ctr", "log_followers"], "outputs": ["p_like"] }""",
-        "MODEL_SIGNATURE", "pipeline:home_feed", "/nodes/ctr_ranker/config/outputs/p_click")]
+        "SERVICE_SIGNATURE", "pipeline:home_feed", "/nodes/ctr_ranker/config/outputs/p_click")]
     [InlineData("""{ "client": "random@1", "inputs": ["smoothed_ctr", "log_followers"], "outputs": ["p_click"], "seed": "42" }""",
-        "BINDING_SETTINGS", "bindings:local", "/models/ctr_model/seed")]
+        "BINDING_SETTINGS", "bindings:local", "/services/ctr_model/seed")]
     public void ABindingThatDoesNotFit_IsAnError_AtTheNodeOrTheSetting(string binding, string code, string artifact, string pointer)
     {
         var host = Host(binding);
@@ -69,13 +69,13 @@ public sealed class RandomModelTests
     }
 
     private static HomeFeedTestHost Host(string binding) =>
-        HomeFeedTestHost.LoadModified(root => SampleBindings.RebindModel(root, "ctr_model", binding));
+        HomeFeedTestHost.LoadModified(root => SampleBindings.RebindService(root, "ctr_model", binding));
 
     /// <summary>The recorded <c>p_click</c> of the run's one model call, by candidate id.</summary>
     private static Dictionary<long, double> Scores(ReplayRunRecord run)
     {
-        var call = Assert.Single(run.ModelCalls);
-        Assert.Equal(("ctr_model", "ok"), (call.Model, call.Status));
+        var call = Assert.Single(run.ServiceCalls, c => c.Role == "model");
+        Assert.Equal(("ctr_model", "ok"), (call.Service, call.Status));
         var keys = call.Keys!.Value.EnumerateArray().Select(k => k.GetInt64()).ToArray();
         var values = call.Outputs["p_click"].Values.EnumerateArray().Select(v => v.GetDouble()).ToArray();
         Assert.Equal(keys.Length, values.Length);

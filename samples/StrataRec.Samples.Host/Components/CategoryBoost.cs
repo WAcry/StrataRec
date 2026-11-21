@@ -48,9 +48,9 @@ public sealed class CategoryBoostConfig
 /// score; that is this operator's stated rule, not a default value standing in for the category.</item>
 /// <item>Budget and cancellation: it does no I/O and takes microseconds, so it has nothing to cancel; an attempt that
 /// returns after the node's budget has timed out all the same. A long CPU loop would check
-/// <see cref="OperatorContext.CancellationToken"/> between chunks. An operator that calls a model or a source does it
-/// through <see cref="OperatorContext.InvokeModelAsync"/> or <see cref="OperatorContext.RetrieveAsync"/>, which bound,
-/// record and replay the call.</item>
+/// <see cref="OperatorContext.CancellationToken"/> between chunks. An operator that calls a service (a model, a recall
+/// source, any other) does it through <see cref="OperatorContext.CallAsync"/>, which bounds, records and replays the
+/// call.</item>
 /// </list>
 /// </remarks>
 public sealed class CategoryBoostFactory : IOperatorFactory

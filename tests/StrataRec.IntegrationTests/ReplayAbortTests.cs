@@ -10,6 +10,7 @@ using StrataRec.Models;
 using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Operators.Standard;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
@@ -46,8 +47,8 @@ public sealed class ReplayAbortTests
         var run = Assert.Single(delivered.Runs);
         Assert.True(run.Result.Aborted);
         Assert.Equal(("ctr_ranker", "aborted"), (run.Nodes[^1].Node, run.Nodes[^1].Outcome));
-        Assert.NotEmpty(run.ModelCalls);
-        Assert.All(run.ModelCalls, call => Assert.Equal("cancelled", call.Status)); // the client honoured the cancellation
+        Assert.Contains(run.ServiceCalls, c => c.Role == "model");
+        Assert.All(run.ServiceCalls.FindAll(c => c.Role == "model"), call => Assert.Equal("cancelled", call.Status)); // the client honoured the cancellation
 
         var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(delivered)), cancellationToken: TestContext.Current.CancellationToken);
 
@@ -60,7 +61,7 @@ public sealed class ReplayAbortTests
         Assert.Empty(outcome.Report.FieldStats);
         Assert.Empty(outcome.Report.Params);
         Assert.Null(outcome.Result.Trace);
-        Assert.Equal(run.ModelCalls.Count, models.Calls);
+        Assert.Equal(run.ServiceCalls.FindAll(c => c.Role == "model").Count, models.Calls);
 
         // A placeholder, not a result: it reproduces nothing.
         Assert.Equal((false, 0), (outcome.Result.Succeeded, outcome.Result.Items.Count));
@@ -147,7 +148,7 @@ public sealed class ReplayAbortTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken));
         Assert.False(stuck.Answered.Task.IsCompleted);
-        var call = Assert.Single(delivered!.Runs[0].ModelCalls);
+        var call = Assert.Single(delivered!.Runs[0].ServiceCalls, c => c.Role == "model");
         Assert.Equal(("cancelled", true), (call.Status, call.Threw));
         Assert.Equal(30, call.Keys!.Value.GetArrayLength()); // the coarse top 30, known when the call began
         Assert.Equal(30, call.InputDigests.Count);
@@ -155,8 +156,8 @@ public sealed class ReplayAbortTests
         // The client answers after the abort; its answer is recorded nowhere.
         stuck.Release.SetResult();
         await stuck.Answered.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
-        Assert.Equal("cancelled", delivered.Runs[0].ModelCalls[0].Status);
-        Assert.Empty(delivered.Runs[0].ModelCalls[0].Outputs);
+        Assert.Equal("cancelled", delivered.Runs[0].ServiceCalls.FindAll(c => c.Role == "model")[0].Status);
+        Assert.Empty(delivered.Runs[0].ServiceCalls.FindAll(c => c.Role == "model")[0].Outputs);
     }
 
     [Fact]
@@ -171,15 +172,15 @@ public sealed class ReplayAbortTests
             .AsTask().WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
 
         Assert.Equal("node 'ctr_ranker' failed: left non-nullable column 'score.ctr' without a value on 30 of 30 live rows", recorded.Error);
-        var call = Assert.Single(recorded.Recording!.Runs[0].ModelCalls);
+        var call = Assert.Single(recorded.Recording!.Runs[0].ServiceCalls, c => c.Role == "model");
         Assert.Equal(("outstanding", false), (call.Status, call.Threw));
         Assert.Equal(30, call.InputDigests.Count);
 
         // The call completes after the snapshot; its answer is recorded nowhere.
         stuck.Release.SetResult();
         Assert.True((await stuck.Invocation!.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken)).Succeeded);
-        Assert.Equal("outstanding", recorded.Recording.Runs[0].ModelCalls[0].Status);
-        Assert.Empty(recorded.Recording.Runs[0].ModelCalls[0].Outputs);
+        Assert.Equal("outstanding", recorded.Recording.Runs[0].ServiceCalls.FindAll(c => c.Role == "model")[0].Status);
+        Assert.Empty(recorded.Recording.Runs[0].ServiceCalls.FindAll(c => c.Role == "model")[0].Outputs);
     }
 
     [Fact]
@@ -273,7 +274,7 @@ public sealed class ReplayAbortTests
         Assert.Contains("aborted (the position running", run.GetProperty("nodes").GetProperty("items").GetProperty("properties").GetProperty("outcome")
             .GetProperty("description").GetString());
         Assert.False(run.GetProperty("nodes").GetProperty("items").GetProperty("properties").TryGetProperty("triggered", out _)); // nothing replays an aborted node
-        var threw = run.GetProperty("model_calls").GetProperty("items").GetProperty("properties").GetProperty("threw");
+        var threw = run.GetProperty("service_calls").GetProperty("items").GetProperty("properties").GetProperty("threw");
         Assert.Contains("cut the call off", threw.GetProperty("description").GetString());
     }
 
@@ -340,7 +341,7 @@ public sealed class ReplayAbortTests
     }
 
     /// <summary>Linear model clients that block until cancelled, honouring the cancellation.</summary>
-    private sealed class BlockingModels : IBindingFactory<IModelClient>
+    private sealed class BlockingModels : IBindingFactory<IServiceClient>
     {
         private readonly LinearModelClientFactory _inner = new();
         private int _calls;
@@ -353,27 +354,25 @@ public sealed class ReplayAbortTests
 
         public Type SettingsType => _inner.SettingsType;
 
-        public IModelClient Create(BindingContext context) => new Client(_inner.Create(context), this);
+        public IServiceClient Create(BindingContext context) => new Client(_inner.Create(context), this);
 
-        private sealed class Client(IModelClient inner, BlockingModels owner) : IModelClient
+        private sealed class Client(IServiceClient inner, BlockingModels owner) : IServiceClient
         {
-            public string ClientType => inner.ClientType;
+            public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken) =>
+                inner.DescribeAsync(model, version, cancellationToken);
 
-            public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
-                inner.GetSignatureAsync(model, version, cancellationToken);
-
-            public async ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
+            public async ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse outputs, CancellationToken cancellationToken)
             {
                 Interlocked.Increment(ref owner._calls);
                 owner.Started.TrySetResult();
                 await Task.Delay(Timeout.Infinite, cancellationToken);
-                return ModelStatus.Ok;
+                return ServiceStatus.Ok;
             }
         }
     }
 
     /// <summary>A model client that ignores cancellation and answers only when released.</summary>
-    private sealed class StuckClient : IModelClient
+    private sealed class StuckClient : IServiceClient
     {
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -383,20 +382,18 @@ public sealed class ReplayAbortTests
         public TaskCompletionSource Answered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         /// <summary>The framework's call of the client, as the operator started it.</summary>
-        public Task<ModelStatus>? Invocation { get; set; }
+        public Task<ServiceStatus>? Invocation { get; set; }
 
-        public string ClientType => "stuck";
+        public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new ServiceSignature(Array.Empty<TensorSpec>(), Array.Empty<TensorSpec>()));
 
-        public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
-            ValueTask.FromResult(new ModelSignature(Array.Empty<TensorSpec>(), Array.Empty<TensorSpec>()));
-
-        public async ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
+        public async ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse outputs, CancellationToken cancellationToken)
         {
             Started.TrySetResult();
             await Release.Task;
             outputs.GetValues<float>("score", call.BatchSize).Span.Fill(0.5f);
             Answered.TrySetResult();
-            return ModelStatus.Ok;
+            return ServiceStatus.Ok;
         }
     }
 
@@ -415,21 +412,12 @@ public sealed class ReplayAbortTests
             public override async ValueTask ExecuteAsync(OperatorContext context)
             {
                 var rows = context.LiveRows.ToArray();
-                var call = new ModelCall { Model = "stuck", Inputs = Array.Empty<NamedInput>(), BatchSize = rows.Length };
-                client.Invocation = context.InvokeModelAsync(client, new IoTarget(IoRoles.Model, "stuck"), call, new ArrayWriter(), rows, timeoutMs: null);
+                var call = new ServiceCall { Service = "stuck", Inputs = Array.Empty<NamedInput>(), BatchSize = rows.Length, Items = context.KeysOf(rows) };
+                client.Invocation = context.CallAsync(new BoundService("stuck", client, IoRoles.Model, null), call, new ServiceResponse(context.Memory));
                 if (awaitCall)
                 {
                     await client.Invocation;
                 }
-            }
-        }
-
-        private sealed class ArrayWriter : IModelOutputWriter
-        {
-            public Memory<T> GetValues<T>(string name, int elementCount) => new T[elementCount];
-
-            public void SetText(string name, string text)
-            {
             }
         }
     }

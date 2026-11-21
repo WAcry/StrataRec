@@ -1,8 +1,8 @@
 using StrataRec.Core.Bindings;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Replay;
-using StrataRec.Models;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
@@ -26,7 +26,7 @@ public sealed class ModelTensorReplayTests
                 + "\n    \"item.emb_or_zero\": { \"type\": \"list<float32,4>\", \"source\": \"item_store\", \"field\": \"i_emb\", \"default\": [0, 0, 0, 0] },");
             ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"log_followers\": \"col.author.log_followers\" }",
                 "\"log_followers\": \"col.author.log_followers\", \"item_id\": \"col.entity_id\", \"item_emb\": \"col.item.emb_or_zero\" }");
-            SampleBindings.RebindModel(root, "ctr_model", $$"""{ "client": "{{TensorModels.TypeName}}" }""");
+            SampleBindings.RebindService(root, "ctr_model", $$"""{ "client": "{{TensorModels.TypeName}}" }""");
         });
         var recording = new TensorModels();
         var engine = Load(host, recording);
@@ -36,8 +36,8 @@ public sealed class ModelTensorReplayTests
         Assert.True(recorded.Succeeded, recorded.Error);
         var run = Assert.Single(recorded.Recording!.Runs);
         Assert.Equal("succeeded", Assert.Single(run.Nodes, n => n.Node == "ctr_ranker").Outcome); // the model answered: no fallback
-        var call = Assert.Single(run.ModelCalls);
-        Assert.Equal(("ctr_model", "ok", 30), (call.Model, call.Status, call.Keys!.Value.GetArrayLength()));
+        var call = Assert.Single(run.ServiceCalls, c => c.Role == "model");
+        Assert.Equal(("ctr_model", "ok", 30), (call.Service, call.Status, call.Keys!.Value.GetArrayLength()));
         Assert.Equal(new[] { "item_emb float32 [30, 4]", "item_id int64 [30]", "log_followers float32 [30]", "smoothed_ctr float32 [30]" }, recording.Seen);
 
         // Through JSON, on a fresh engine whose model would answer differently: every output must come from the recording.
@@ -53,6 +53,27 @@ public sealed class ModelTensorReplayTests
         Assert.Empty(replaying.Seen);
     }
 
+    [Fact]
+    public async Task OnlyTheOutputsTheNodeReads_AreRecorded_AndTheReplayIsIdentical()
+    {
+        // ctr_model computes a second output no node maps: the call asks for p_click only, and only it is recorded.
+        var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "bindings/local.jsonc",
+            "\"outputs\": { \"p_click\": {", "\"outputs\": { \"p_extra\": { \"bias\": 0.5 }, \"p_click\": {"));
+        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root });
+        var load = engine.Load(host.Request);
+        Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
+
+        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-outputs", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
+
+        Assert.True(recorded.Succeeded, recorded.Error);
+        var call = Assert.Single(Assert.Single(recorded.Recording!.Runs).ServiceCalls, c => c.Role == "model");
+        Assert.Equal(["p_click"], call.Outputs.Keys);
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording)),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(outcome.Report.Diff.Identical, ReplayTests.Describe(outcome.Report));
+        Assert.Empty(outcome.Report.Gaps);
+    }
+
     private static RecEngine Load(HomeFeedTestHost host, TensorModels models)
     {
         var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Bindings = PlanEnvironment.DefaultBindings().Add(models) });
@@ -65,7 +86,7 @@ public sealed class ModelTensorReplayTests
     /// A model taking the sample's two float32 inputs, an int64 id and a 4-vector, scoring each row from all four (so a
     /// replay that served another row's output would differ), and noting the tensors it was sent.
     /// </summary>
-    private sealed class TensorModels(float bias = 0f) : IBindingFactory<IModelClient>, IModelClient
+    private sealed class TensorModels(float bias = 0f) : IBindingFactory<IServiceClient>, IServiceClient
     {
         public const string TypeName = "tensor_test@1";
 
@@ -74,8 +95,6 @@ public sealed class ModelTensorReplayTests
         private readonly List<string> _seen = new();
 
         public string Type => TypeName;
-
-        public string ClientType => TypeName;
 
         public Type SettingsType => typeof(NoSettings);
 
@@ -91,10 +110,10 @@ public sealed class ModelTensorReplayTests
             }
         }
 
-        public IModelClient Create(BindingContext context) => this;
+        public IServiceClient Create(BindingContext context) => this;
 
-        public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
-            ValueTask.FromResult(new ModelSignature(
+        public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new ServiceSignature(
                 new[]
                 {
                     new TensorSpec("item_emb", TensorElementType.Float32, new[] { -1, 4 }), new TensorSpec("item_id", TensorElementType.Int64, Rows),
@@ -102,7 +121,7 @@ public sealed class ModelTensorReplayTests
                 },
                 new[] { new TensorSpec("p_click", TensorElementType.Float32, Rows) }));
 
-        public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
+        public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse outputs, CancellationToken cancellationToken)
         {
             var inputs = call.Inputs.Span;
             lock (_seen)
@@ -124,7 +143,7 @@ public sealed class ModelTensorReplayTests
                 scores[r] = 1f / (1f + MathF.Exp(-logit));
             }
 
-            return ValueTask.FromResult(ModelStatus.Ok);
+            return ValueTask.FromResult(ServiceStatus.Ok);
         }
 
         private static NamedInput Find(ReadOnlySpan<NamedInput> inputs, string name)

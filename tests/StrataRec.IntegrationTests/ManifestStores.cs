@@ -19,7 +19,7 @@ internal static class ManifestStores
     {
         var path = Path.Combine(root, "bindings", "local.jsonc");
         var document = (JsonObject)Jsonc.Parse(File.ReadAllBytes(path), path)!;
-        foreach (var section in new[] { "sources", "candidate_sources" })
+        foreach (var section in new[] { "sources", "services" })
         {
             foreach (var (_, binding) in (JsonObject)document[section]!)
             {

@@ -11,7 +11,7 @@ namespace StrataRec.Experiments.Assignment;
 /// <para>The engine asks only for requests that do not carry the platform's answer already (<c>RecRequest.Assignment</c>)
 /// and are not forced (<c>DebugOptions.ForceArms</c>). It keeps no mapping between the platform's ids and the plan's: the
 /// provider translates, using the plan's metadata in <see cref="AssignmentContext"/>.</para>
-/// <para>The call runs inline on the request's thread, as calls to connectors, candidate sources and models do; the
+/// <para>The call runs inline on the request's thread, as calls to connectors and services do; the
 /// engine does not move it to the thread pool. What the provider does before it returns its <see cref="ValueTask{T}"/> is
 /// therefore not bounded: the request waits for it however long it takes. Do the platform's I/O asynchronously, or answer
 /// quickly from a local SDK. The asynchronous part shares the request's deadline: its token is cancelled at the deadline,

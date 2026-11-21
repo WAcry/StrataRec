@@ -7,6 +7,7 @@ using StrataRec.Pipeline.Sources;
 using StrataRec.UnitTests.Features;
 using StrataRec.UnitTests.Features.Cache;
 using StrataRec.Testing;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Pipeline;
 
@@ -800,13 +801,13 @@ public sealed class CandidateBufferTests
     public void AnAbandonedBuffer_ReadsAsEmpty_AndIgnoresLateAdds()
     {
         var memory = new RequestMemory();
-        var buffer = new CandidateBuffer(2, memory);
-        buffer.Add(1, 0.9);
-        buffer.Add(2, 0.8);
-        buffer.Add(3, 0.7); // over the limit
+        var buffer = new ServiceResponse(memory, 2);
+        buffer.AddItem(1, 0.9);
+        buffer.AddItem(2, 0.8);
+        buffer.AddItem(3, 0.7); // over the limit
 
         buffer.Abandon();
-        buffer.Add(4, 0.6);
+        buffer.AddItem(4, 0.6);
 
         Assert.Equal((0, 0, 0, 0), (buffer.Count, buffer.Keys.Length, buffer.Scores.Length, buffer.Truncated));
         memory.Release();
@@ -816,11 +817,11 @@ public sealed class CandidateBufferTests
     public void AClosedBuffer_KeepsWhatItHolds_AndIgnoresLateAdds()
     {
         var memory = new RequestMemory();
-        var buffer = new CandidateBuffer(3, memory);
-        buffer.Add(1, 0.9);
+        var buffer = new ServiceResponse(memory, 3);
+        buffer.AddItem(1, 0.9);
 
         buffer.Close();
-        buffer.Add(2, 0.8);
+        buffer.AddItem(2, 0.8);
 
         Assert.Equal(1, buffer.Count);
         Assert.Equal(1, buffer.Keys[0].Int64Value);

@@ -1,6 +1,6 @@
 using StrataRec.Core.Types;
-using StrataRec.Models;
 using StrataRec.Pipeline.Operators.Standard;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Pipeline;
 
@@ -245,7 +245,7 @@ public sealed class ModelTensorRuleTests
         var problems = ModelTensorRule.Check("Model 'm' version 'default'", TensorLayout.Rows, inputs, outputs,
             Signature(new[] { Float("followers"), Float("ctr") }, new[] { Float("p_click") }));
 
-        Assert.Equal(new[] { ("/inputs/user~1emb", "MODEL_SIGNATURE"), ("/outputs/p_like", "MODEL_SIGNATURE") }, problems.Select(p => (p.ConfigKey, p.Code)));
+        Assert.Equal(new[] { ("/inputs/user~1emb", "SERVICE_SIGNATURE"), ("/outputs/p_like", "SERVICE_SIGNATURE") }, problems.Select(p => (p.ConfigKey, p.Code)));
         Assert.Equal("the model's inputs are: ctr, followers", problems[0].Hint);
         Assert.Equal("the model's outputs are: p_click", problems[1].Hint);
     }
@@ -432,5 +432,5 @@ public sealed class ModelTensorRuleTests
 
     private static TensorSpec Spec(string name, TensorElementType type, params int[] shape) => new(name, type, shape);
 
-    private static ModelSignature Signature(TensorSpec[] inputs, TensorSpec[] outputs) => new(inputs, outputs);
+    private static ServiceSignature Signature(TensorSpec[] inputs, TensorSpec[] outputs) => new(inputs, outputs);
 }

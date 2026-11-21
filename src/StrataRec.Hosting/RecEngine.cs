@@ -355,8 +355,8 @@ public sealed record PlanLoadResult(
 /// In-flight requests keep the plan they started with; a plan that fails to compile never replaces the current one.
 /// </summary>
 /// <remarks>
-/// <para>What plans bind belongs to <see cref="Bindings"/> (design 6.4, 6.6): local feature tables, model clients,
-/// candidate sources and connectors. A plan is served only once every table it reads has completed its first load and
+/// <para>What plans bind belongs to <see cref="Bindings"/> (design 6.4, 6.6): local feature tables, service clients and
+/// connectors. A plan is served only once every table it reads has completed its first load and
 /// every instance it uses has loaded; what a new plan shares by identity with the served one is taken over, not loaded
 /// again. Disposing the engine stops the tables' update sources and disposes the instances once no request can call
 /// them.</para>
@@ -434,8 +434,8 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// <summary>Operators, connectors and clients this binary provides.</summary>
     public PlanEnvironment Environment { get; }
 
-    /// <summary>What the served plans bind: local feature tables (design 6.6), model clients, candidate sources and
-    /// connectors (design 6.4).</summary>
+    /// <summary>What the served plans bind: local feature tables (design 6.6), service clients and connectors (design
+    /// 6.4).</summary>
     public BindingHost Bindings { get; }
 
     /// <inheritdoc/>

@@ -130,7 +130,7 @@ public class FixedLengthListEndToEndTests
             """);
         File.WriteAllText(Path.Combine(root, "bindings", "local.jsonc"), """
             { "environment": "local",
-              "candidate_sources": { "pool": { "client": "memory_list@1", "items": [1, 2, 3] } } }
+              "services": { "pool": { "client": "memory_list@1", "items": [1, 2, 3] } } }
             """);
         File.WriteAllText(Path.Combine(root, "pipelines", "p.jsonc"), $$"""
             { "pipeline_id": "p",

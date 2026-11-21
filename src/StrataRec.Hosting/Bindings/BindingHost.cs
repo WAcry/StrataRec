@@ -44,8 +44,8 @@ public sealed class BindingHostOptions
 }
 
 /// <summary>
-/// Owns what the engine's plans bind (design 6.4, 6.6): the local feature tables, and the instances bindings name (model
-/// clients, candidate sources, feature connectors). Each is created once per key and shared with every plan whose spec
+/// Owns what the engine's plans bind (design 6.4, 6.6): the local feature tables, and the instances bindings name
+/// (service clients, feature connectors). Each is created once per key and shared with every plan whose spec
 /// has the same key (<see cref="LocalTableSpec.Key"/>, <see cref="BindingSpec.Key"/>: the identity of the configuration,
 /// and the factory or connector object the data comes from, so engines with different registries never share), so a
 /// plan swap takes over what is loaded instead of loading it again; each is loaded off the request path before a plan
@@ -121,7 +121,7 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
         }
     }
 
-    /// <summary>Instances (model clients, candidate sources, connectors) some lease holds.</summary>
+    /// <summary>Instances (service clients, connectors) some lease holds.</summary>
     public int InstanceCount
     {
         get

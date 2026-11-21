@@ -2,8 +2,8 @@ using System.Text.Json.Serialization;
 using StrataRec.Artifacts.Json;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Expressions;
-using StrataRec.Models;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Pipeline.Operators.Standard;
 
@@ -144,21 +144,34 @@ internal sealed class ModelCallCompiler
             }
         }
 
-        return ok ? new CompiledModelCall(_model, _inputs) : null;
+        if (!ok)
+        {
+            return null;
+        }
+
+        var names = new string[outputs.Count];
+        for (var i = 0; i < names.Length; i++)
+        {
+            names[i] = outputs[i].Name;
+        }
+
+        return new CompiledModelCall(_model, _inputs, names);
     }
 }
 
 /// <summary>
 /// The model a tensor operator calls, compiled: the bound model (its client, and the version fixed or chosen per request
-/// by a parameter) and the inputs. Immutable and shared by every request of the node.
+/// by a parameter), the inputs, and the outputs the operator reads. Immutable and shared by every request of the node.
 /// </summary>
 internal sealed class CompiledModelCall
 {
     private readonly BoundModel _model;
+    private readonly string[] _outputs;
 
-    public CompiledModelCall(BoundModel model, ModelInput[] inputs)
+    public CompiledModelCall(BoundModel model, ModelInput[] inputs, string[] outputs)
     {
         _model = model;
+        _outputs = outputs;
         Inputs = inputs;
         var named = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var input in inputs)
@@ -185,10 +198,11 @@ internal sealed class CompiledModelCall
     public string? Version(OperatorContext context) => _model.Version(context);
 
     /// <summary>
-    /// Sends one call through <see cref="OperatorContext.InvokeModelAsync"/>, with the request's seed. <paramref name="rows"/>
-    /// are the physical rows of the batch for a call whose outputs are per row, or empty (see that method).
+    /// Sends one call through <see cref="OperatorContext.CallAsync"/>, with the request's seed and the outputs the operator
+    /// reads. <paramref name="rows"/> are the physical rows of the batch for a call whose outputs are per row (its items),
+    /// or empty for a call answered as a whole (see that method).
     /// </summary>
-    public Task<ModelStatus> InvokeAsync(
-        OperatorContext context, string? version, NamedInput[] inputs, int batchSize, IModelOutputWriter outputs, ReadOnlyMemory<int> rows) =>
-        _model.InvokeAsync(context, version, inputs, batchSize, outputs, rows);
+    public Task<ServiceStatus> InvokeAsync(
+        OperatorContext context, string? version, NamedInput[] inputs, int batchSize, ServiceResponse response, ReadOnlySpan<int> rows) =>
+        _model.InvokeAsync(context, version, inputs, batchSize, response, rows, _outputs);
 }

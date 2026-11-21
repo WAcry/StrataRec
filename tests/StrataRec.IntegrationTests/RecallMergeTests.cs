@@ -71,7 +71,7 @@ public sealed class RecallMergeTests
         }
 
         File.WriteAllText(Path.Combine(root, "catalog", "c.jsonc"), """{ "catalog_id": "c" }""");
-        File.WriteAllText(Path.Combine(root, "bindings", "local.jsonc"), $$"""{ "environment": "local", "candidate_sources": { {{sources}} } }""");
+        File.WriteAllText(Path.Combine(root, "bindings", "local.jsonc"), $$"""{ "environment": "local", "services": { {{sources}} } }""");
         File.WriteAllText(Path.Combine(root, "pipelines", "recall.jsonc"), $$"""
             { "pipeline_id": "recall", "entity_key_type": "{{keyType}}",
               "param_schema": { "recall_quotas": { "type": "map<string,int64>" }, "k": { "type": "int64" } },

@@ -1,12 +1,12 @@
 using System.Diagnostics.Metrics;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Llm;
-using StrataRec.Models;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Pipeline.Replay;
 using StrataRec.UnitTests.Features.Cache;
 using static StrataRec.UnitTests.Llm.LlmFixture;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Llm;
 
@@ -154,7 +154,7 @@ public sealed class LlmRerankerTests
     [Fact]
     public async Task ATruncatedAnswer_FailsTheNode_SayingItWasCutAtTheLimit()
     {
-        var models = new TextModels(_ => ("[2, 3, 1", ModelStatus.Ok with { OutputTokens = 8, Truncated = true }));
+        var models = new TextModels(_ => ("[2, 3, 1", ServiceStatus.Ok with { OutputTokens = 8, Truncated = true }));
 
         var result = await Run(Compile(models, Rerank(Ranks, extra: """, "max_output_tokens": 8"""), onFailure: "skip"));
 
@@ -168,7 +168,7 @@ public sealed class LlmRerankerTests
     [Fact]
     public async Task ATruncatedAnswerThatStillParses_IsApplied()
     {
-        var models = new TextModels(_ => ("[2]", ModelStatus.Ok with { Truncated = true }));
+        var models = new TextModels(_ => ("[2]", ServiceStatus.Ok with { Truncated = true }));
 
         var result = await Run(Compile(models, Rerank(Ranks)));
 
@@ -189,8 +189,8 @@ public sealed class LlmRerankerTests
     [Fact]
     public async Task AFailedCall_OrNoTextOutput_FailsTheNode_LeavingTheOrder()
     {
-        var failed = await Run(Compile(new TextModels(_ => (null, ModelStatus.Failed("overloaded"))), Rerank(Ranks), onFailure: "skip"));
-        var silent = await Run(Compile(new TextModels(_ => (null, ModelStatus.Ok)), Rerank(Ranks), onFailure: "skip"));
+        var failed = await Run(Compile(new TextModels(_ => (null, ServiceStatus.Failed("overloaded"))), Rerank(Ranks), onFailure: "skip"));
+        var silent = await Run(Compile(new TextModels(_ => (null, ServiceStatus.Ok)), Rerank(Ranks), onFailure: "skip"));
 
         Assert.Equal("model 'llm' failed: overloaded (skipped)", Rank(failed).Detail);
         Assert.Equal("model 'llm' did not return text output 'answer' (skipped)", Rank(silent).Detail);
@@ -228,9 +228,9 @@ public sealed class LlmRerankerTests
     [InlineData("""{ "model": "llm", "output": "answer", "prompts": { "user": "x" } }""", "", "NODE_BAD_CONFIG")]
     [InlineData("""{ "model": "llm", "output": "answer", "answer": "rank", "prompts": { } }""", "/prompts", "LLM_PROMPTS")]
     [InlineData("""{ "model": "llm", "output": "", "answer": "rank", "prompts": { "user": "x" } }""", "/output", "MODEL_OUTPUT")]
-    [InlineData("""{ "model": "nope", "output": "answer", "answer": "rank", "prompts": { "user": "x" } }""", "/model", "MODEL_UNBOUND")]
+    [InlineData("""{ "model": "nope", "output": "answer", "answer": "rank", "prompts": { "user": "x" } }""", "/model", "SERVICE_UNBOUND")]
     [InlineData("""{ "model": null, "output": "answer", "answer": "rank", "prompts": { "user": "x" } }""", "/model", "NODE_BAD_CONFIG")] // threw (review 29)
-    [InlineData("""{ "model": "", "output": "answer", "answer": "rank", "prompts": { "user": "x" } }""", "/model", "MODEL_UNBOUND")]
+    [InlineData("""{ "model": "", "output": "answer", "answer": "rank", "prompts": { "user": "x" } }""", "/model", "SERVICE_UNBOUND")]
     public void TheAnswerKind_ThePrompts_TheOutput_AndTheModel_AreRequired(string config, string key, string code)
     {
         var error = Error(TryCompile(new TextModels("[1]"), config));
@@ -244,22 +244,22 @@ public sealed class LlmRerankerTests
     [InlineData("float_input", "/nodes/rank/config/prompts/user", "MODEL_TENSOR_MISMATCH",
         "Model 'llm' version 'v2' declares input 'user' as float32 [-1], but LlmReranker@1 sends a rendered prompt, which is text.")]
     [InlineData("extra_input", "/nodes/rank/config/model", "MODEL_INPUT_MISSING", "Model 'llm' version 'v2' requires input 'system', which 'prompts' does not supply.")]
-    [InlineData("no_input", "/nodes/rank/config/prompts/user", "MODEL_SIGNATURE", "Model 'llm' version 'v2' has no input 'user'.")]
+    [InlineData("no_input", "/nodes/rank/config/prompts/user", "SERVICE_SIGNATURE", "Model 'llm' version 'v2' has no input 'user'.")]
     [InlineData("float_output", "/nodes/rank/config/output", "MODEL_TENSOR_UNSUPPORTED", "Model 'llm' version 'v2' declares output 'answer' as float32 [-1].")]
-    [InlineData("no_output", "/nodes/rank/config/output", "MODEL_SIGNATURE", "Model 'llm' version 'v2' has no output 'answer'.")]
+    [InlineData("no_output", "/nodes/rank/config/output", "SERVICE_SIGNATURE", "Model 'llm' version 'v2' has no output 'answer'.")]
     public void EveryVersionsSignature_IsCheckedAtLoad(string v2, string pointer, string code, string message)
     {
         var text = new TensorSpec("user", TensorElementType.Text, Array.Empty<int>());
         var answer = new TensorSpec("answer", TensorElementType.Text, new[] { 1 }); // a text's shape is not checked
         var signature = v2 switch
         {
-            "float_input" => new ModelSignature(new[] { new TensorSpec("user", TensorElementType.Float32, new[] { -1 }) }, new[] { answer }),
-            "extra_input" => new ModelSignature(new[] { text, new TensorSpec("system", TensorElementType.Text, Array.Empty<int>()) }, new[] { answer }),
-            "no_input" => new ModelSignature(Array.Empty<TensorSpec>(), new[] { answer }),
-            "float_output" => new ModelSignature(new[] { text }, new[] { new TensorSpec("answer", TensorElementType.Float32, new[] { -1 }) }),
-            _ => new ModelSignature(new[] { text }, new[] { new TensorSpec("reply", TensorElementType.Text, Array.Empty<int>()) }),
+            "float_input" => new ServiceSignature(new[] { new TensorSpec("user", TensorElementType.Float32, new[] { -1 }) }, new[] { answer }),
+            "extra_input" => new ServiceSignature(new[] { text, new TensorSpec("system", TensorElementType.Text, Array.Empty<int>()) }, new[] { answer }),
+            "no_input" => new ServiceSignature(Array.Empty<TensorSpec>(), new[] { answer }),
+            "float_output" => new ServiceSignature(new[] { text }, new[] { new TensorSpec("answer", TensorElementType.Float32, new[] { -1 }) }),
+            _ => new ServiceSignature(new[] { text }, new[] { new TensorSpec("reply", TensorElementType.Text, Array.Empty<int>()) }),
         };
-        var models = new TextModels(_ => ("[1]", ModelStatus.Ok), version => version == "v2" ? signature : new ModelSignature(new[] { text }, new[] { answer }));
+        var models = new TextModels(_ => ("[1]", ServiceStatus.Ok), version => version == "v2" ? signature : new ServiceSignature(new[] { text }, new[] { answer }));
 
         var error = Error(TryCompile(models, Rerank(Ranks, extra: """, "version_param": "llm_version" """)));
 
@@ -283,8 +283,8 @@ public sealed class LlmMetricsTests
     {
         var truncated = false;
         var models = new TextModels(_ => truncated
-            ? ("[2, 3", ModelStatus.Ok with { OutputTokens = 64, Truncated = true })
-            : ("""[2, "x", 2, 9, 1]""", ModelStatus.Ok with { OutputTokens = 42 }));
+            ? ("[2, 3", ServiceStatus.Ok with { OutputTokens = 64, Truncated = true })
+            : ("""[2, "x", 2, 9, 1]""", ServiceStatus.Ok with { OutputTokens = 42 }));
         var plan = Compile(models, Rerank(Template, extra: """, "max_output_tokens": 64"""), onFailure: "skip");
         using var metrics = new Measurements();
 
@@ -294,16 +294,16 @@ public sealed class LlmMetricsTests
 
         Assert.Equal(new long[] { 10, 30, 50, 20, 40, 70, 60 }, IdsOf(answered));
         Assert.Equal(Incoming, IdsOf(cut));
-        Assert.Equal(new[] { (42L, "llm", (string?)null), (64L, "llm", null) }, metrics.Of(StrataRecMetrics.Names.ModelOutputTokens).Select(m => (m.Value, m.Model!, m.Outcome)));
-        Assert.Equal(new[] { (1L, "llm", (string?)null) }, metrics.Of(StrataRecMetrics.Names.ModelTruncated).Select(m => (m.Value, m.Model!, m.Outcome)));
+        Assert.Equal(new[] { (42L, "llm", (string?)null), (64L, "llm", null) }, metrics.Of(StrataRecMetrics.Names.IoOutputTokens).Select(m => (m.Value, m.Model!, m.Outcome)));
+        Assert.Equal(new[] { (1L, "llm", (string?)null) }, metrics.Of(StrataRecMetrics.Names.IoTruncated).Select(m => (m.Value, m.Model!, m.Outcome)));
         Assert.Equal(new[] { ("used", 2L), ("unknown", 2L), ("repeated", 1L) },
             metrics.Of(StrataRecMetrics.Names.ModelAnswerIds).Select(m => (m.Outcome!, m.Value)));
         Assert.All(metrics.Of(StrataRecMetrics.Names.ModelAnswerIds), m => Assert.Equal("llm", m.Model));
 
         // The recording has the answers and the status details; a replay serves them without calling the model.
-        var recorded = Assert.Single(cut.Recording!.ModelCalls);
+        var recorded = Assert.Single(cut.Recording!.ServiceCalls, c => c.Role == "model");
         Assert.Equal(("[2, 3", 64, (bool?)true), (recorded.Texts["answer"], recorded.OutputTokens, recorded.Truncated));
-        Assert.Equal((42, (bool?)null), (Assert.Single(answered.Recording!.ModelCalls).OutputTokens, answered.Recording.ModelCalls[0].Truncated));
+        Assert.Equal((42, (bool?)null), (Assert.Single(answered.Recording!.ServiceCalls, c => c.Role == "model").OutputTokens, answered.Recording.ServiceCalls.FindAll(c => c.Role == "model")[0].Truncated));
         metrics.Clear();
         var calls = models.Calls.Count;
 
@@ -330,7 +330,7 @@ public sealed class LlmMetricsTests
 
         Assert.Equal(new long[] { 50, 30, 10, 20, 40, 70, 60 }, IdsOf(recorded));
         Assert.Equal(Incoming, IdsOf(replayed));
-        Assert.Contains(replay.Gaps, g => g is { Kind: "model", Source: "llm", Reason: "not_recorded" });
+        Assert.Contains(replay.Gaps, g => g is { Kind: "model", Source: "llm", Reason: "inputs_changed" });
         Assert.Single(models.Calls);
     }
 
@@ -340,9 +340,9 @@ public sealed class LlmMetricsTests
     {
         var models = new TextModels(call => call.Prompts["user"] switch
         {
-            "30" => ("true", ModelStatus.Ok),
-            "10" => ("maybe", ModelStatus.Ok),
-            _ => (null, ModelStatus.Failed("overloaded")),
+            "30" => ("true", ServiceStatus.Ok),
+            "10" => ("maybe", ServiceStatus.Ok),
+            _ => (null, ServiceStatus.Failed("overloaded")),
         });
         var plan = Compile(models, Annotate("{{col.entity_id}}", window: 4), op: "LlmAnnotator@1", columns: """ "llm.note": { "type": "bool?" } """);
         using var metrics = new Measurements();
@@ -398,7 +398,7 @@ public sealed class LlmMetricsTests
     {
         private static readonly HashSet<string> Names = new()
         {
-            StrataRecMetrics.Names.ModelOutputTokens, StrataRecMetrics.Names.ModelTruncated, StrataRecMetrics.Names.ModelAnswerIds,
+            StrataRecMetrics.Names.IoOutputTokens, StrataRecMetrics.Names.IoTruncated, StrataRecMetrics.Names.ModelAnswerIds,
             StrataRecMetrics.Names.ModelAnswers,
         };
 

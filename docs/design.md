@@ -65,9 +65,10 @@ StrataRec 取两者之长：执行方式接近手写代码，变更方式像配�
 
 | 能力 | 对接接口 |
 | :--- | :--- |
-| 召回索引与向量检索 | `ICandidateSource` |
+| 召回索引与向量检索 | `IServiceClient`（召回节点调用的服务） |
 | 特征的离线、近线计算与存储 | `IFeatureSourceConnector`（请求期拉取）、`IFeatureUpdateSource`（后台推送） |
-| 模型训练与模型服务 | `IModelClient` |
+| 模型训练与模型服务 | `IServiceClient`（模型算子调用的服务） |
+| 过滤、业务规则等其他外部服务 | `IServiceClient`（算子经 `OperatorContext.CallAsync` 调用，第 6.9 节） |
 | 实验效果的统计分析 | 引擎输出分配与触发记录 |
 | 实验流量分配（外部实验平台） | 请求携带分配结果（`RecRequest.Assignment`），或宿主实现 `IAssignmentProvider` |
 | 产物存储与配置分发 | `IArtifactStore`、`IManifestSource` |
@@ -558,7 +559,7 @@ internal sealed class RequestMemory
 
 `ColumnWriter` 节点发起的远程模型调用，在输入就绪后发起。执行器继续执行后面不依赖其输出的节点，最迟在第一个读取其输出的节点或下一个拉取屏障之前等待它完成。
 
-**召回源的查询。** 召回服务常常要请求输入以外的数据才能检索，双塔召回要用户特征或用户塔算出的嵌入。`MultiSourceRecall@1` 的 `queries` 给召回源声明查询值，值名对应一个请求级表达式（只读 `ctx.*` 和 `param.*`），例如 `"queries": { "two_tower": { "user_embedding": "ctx.user.embedding" } }`。召回源随调用收到这些值（`CandidateQuery.Values`，按值名排序，类型是表达式的类型）。值来自特征目录，所以拉取、缓存、录制和回放与其他特征相同，实验也能用补丁改变某一路召回读哪些特征。
+**召回源的查询。** 召回服务常常要请求输入以外的数据才能检索，双塔召回要用户特征或用户塔算出的嵌入。`MultiSourceRecall@1` 的 `queries` 给召回源声明查询值，值名对应一个请求级表达式（只读 `ctx.*` 和 `param.*`），例如 `"queries": { "two_tower": { "user_embedding": "ctx.user.embedding" } }`。召回服务随调用收到这些值（调用的命名输入，类型是表达式的类型，缺失的值作为缺失的输入发送）。值来自特征目录，所以拉取、缓存、录制和回放与其他特征相同，实验也能用补丁改变某一路召回读哪些特征。
 
 查询读的上下文特征在请求开始时随上下文预取发起，但节点开始前不等待它们。没有查询的召回源在节点开始时立即发出；有查询的召回源在它自己的查询读到的特征存好之后发出（查询读的衍生特征在输入存好后立即算出，不等整个预取），一个慢的用户特征只推迟读它的那一路；几路的特征同时存好时，按 `source_order` 的顺序发出。这段等待计入节点的时间预算：预算从节点开始计算，到期时整个节点被截断，和仍在途的召回调用一样。要让慢的特征源只影响读它的那一路，给这个特征源设一个比召回节点预算短的 `timeout_ms`，特征就会在预算内失败，只有读它的那一路失败。
 
@@ -629,7 +630,7 @@ internal sealed class RequestMemory
 
 1. **候选表与实体无关。** 行可以是物品、创作者、商家或一整页结果；主键可以是 `int64` 或 `string`（例如语义 ID）。
 2. **效果集合描述算子对行集合的影响。** 打分、淘汰、重排和生成新候选都是效果的组合（第 5.2 节）。
-3. **模型接口是命名张量和命名文本。** `IModelClient` 的输入和输出都按名字组织，形状由算子决定；算子负责把列映射到模型输入，再把模型输出映射回列或顺序（第 6.9 节）。
+3. **服务接口是命名张量和命名文本。** `IServiceClient` 的输入和输出都按名字组织，形状由算子决定；算子负责把列映射到模型输入，再把模型输出映射回列或顺序（第 6.9 节）。
 4. **类型系统包含 `list`。** 提示词、生成的文本（`string` 列）和用户行为序列都是普通的列或请求输入（第 4.3 节）。
 
 因此，新的推荐范式都能表达为一个新算子，不需要修改框架：
@@ -757,11 +758,9 @@ internal sealed class RequestMemory
       "credentials": "secret://interaction-store-token"
     }
   },
-  "models": {
-    "ctr_ranker": { "client": "grpc_tensor@1", "endpoint": "dns:///ctr-ranker:8500", "timeout_ms": 40 },
-    "ctr_backup": { "client": "grpc_tensor@1", "endpoint": "dns:///ctr-backup:8500", "timeout_ms": 10 }
-  },
-  "candidate_sources": {
+  "services": {
+    "ctr_ranker": { "client": "grpc_tensor@1",    "endpoint": "dns:///ctr-ranker:8500",     "timeout_ms": 40 },
+    "ctr_backup": { "client": "grpc_tensor@1",    "endpoint": "dns:///ctr-backup:8500",     "timeout_ms": 10 },
     "two_tower": { "client": "grpc_ann@1",       "endpoint": "dns:///two-tower-ann:50051", "timeout_ms": 30 },
     "cf":        { "client": "grpc_retrieval@1", "endpoint": "dns:///cf-retrieval:50051",  "timeout_ms": 25 },
     "following": { "client": "grpc_retrieval@1", "endpoint": "dns:///following:50051",     "timeout_ms": 20 },
@@ -772,7 +771,7 @@ internal sealed class RequestMemory
 }
 ```
 
-`sources` 绑定特征数据源，`models` 绑定模型，`candidate_sources` 绑定召回源（`ICandidateSource` 的实现）。流水线和特征目录只使用逻辑名（`item_store`、`ctr_ranker`、`two_tower`），物理地址只出现在这里。`MultiSourceRecall@1` 按参数 `recall_quotas` 的键查找召回源；实验在 `recall_quotas` 中新增一路召回时，这个名字必须已经在绑定中存在，否则校验失败。拆分有四个好处：
+`sources` 绑定特征数据源，`services` 绑定外部服务（`IServiceClient` 的实现：模型、召回和其他服务，第 6.9 节）。流水线和特征目录只使用逻辑名（`item_store`、`ctr_ranker`、`two_tower`），物理地址只出现在这里。`MultiSourceRecall@1` 按参数 `recall_quotas` 的键查找召回服务；实验在 `recall_quotas` 中新增一路召回时，这个名字必须已经在绑定中存在，否则校验失败。拆分有四个好处：
 
 1. 同一份特征目录和流水线可以在开发、预发和生产环境中复用，测试环境可以把模型绑定到一个返回固定值的本地客户端；
 2. 实验补丁无法修改连接地址和凭据；
@@ -1009,35 +1008,40 @@ flowchart LR
 
 这套规则有可预期的少量多拉：上下文预取会覆盖之后因为 `when`、截止时间或失败而被跳过的节点；后备节点的特征和主节点一起拉取，主节点成功时这些特征没有用到；非屏障过滤节点之前发起的拉取会包含它随后淘汰的行。这三种多拉换来的是更少的串行往返，规模由配置显式控制。
 
-### 6.9 模型调用与训练-服务一致性
+### 6.9 服务调用与训练-服务一致性
 
-模型调用分两层。`IModelClient` 只负责“命名输入 → 命名输出”：输入是若干命名张量或文本，输出也是。它不知道候选、行或列。把列绑定成模型输入、把模型输出写回列，是算子的职责。
+外部服务的调用分两层。`IServiceClient` 只负责“命名输入 → 命名输出”：输入是若干命名张量、文本或缺失的值，输出也是张量或文本，召回类的服务还按排名追加项。它不知道候选、行或列。把列绑定成服务的输入、把输出写回列或行，是算子的职责。模型、召回和过滤都是这一个契约：模型送行的张量、读每行的输出；召回送查询的值、读追加的项（第 5.4 节）；过滤服务送候选作 `Items`、读每项一个 bool。
 
 ```csharp
-public interface IModelClient
+public interface IServiceClient
 {
-    string ClientType { get; }                                   // 例如 "linear@1"
-    ValueTask<ModelSignature> GetSignatureAsync(                 // 加载期使用：输入输出的名字、元素类型和形状
-        string model, string? version, CancellationToken cancellationToken);
+    ValueTask<ServiceSignature> DescribeAsync(          // 加载期使用，可选：输入输出的名字、元素类型和形状
+        string service, string? version, CancellationToken cancellationToken);
 
-    ValueTask<ModelStatus> InvokeAsync(
-        ModelCall call,                 // 模型名、版本、命名输入、调用选项
-        IModelOutputWriter outputs,     // 按输出名写入张量或文本
+    ValueTask<ServiceStatus> CallAsync(
+        ServiceCall call,               // 服务名、版本、命名输入、逐项键、要读的输出、项数上限、选项
+        IServiceResponse response,      // 按输出名写张量或文本，或按排名追加项
         CancellationToken cancellationToken);
 }
 
-public sealed class ModelCall
+public sealed class ServiceCall
 {
-    public required string Model { get; init; }
+    public required string Service { get; init; }
     public string? Version { get; init; }
-    public required ReadOnlyMemory<NamedInput> Inputs { get; init; }  // 张量（元素类型 + 形状 + 连续数据）或文本
-    public ModelCallOptions Options { get; init; }                    // 例如 seed、max_output_tokens
+    public ReadOnlyMemory<NamedInput> Inputs { get; init; }   // 张量（元素类型 + 形状 + 连续数据）、文本或缺失
+    public int BatchSize { get; init; }                       // 按行张量的首维
+    public ReadOnlyMemory<EntityKey> Items { get; init; }     // 调用关于哪些项（打分的行、过滤的候选），可以为空
+    public ReadOnlyMemory<string> Outputs { get; init; }      // 调用方读的输出，只录制和回放这些
+    public int Limit { get; init; }                           // 最多追加几项（召回）
+    public ServiceCallOptions Options { get; init; }          // 例如 seed、max_output_tokens
 }
 ```
 
+带 `Items` 的调用，每个张量输出都是逐项的（`BatchSize × k`），所以回放可以按项从任何一次录制的调用里取，分批变了也一样；不带的调用按整次调用回答（第 13.4 节）。算子经 `OperatorContext.CallAsync` 调用服务，有界等待（第 4.8 节）、遥测、录制和回放都在这一处，自定义算子和内置算子走同一条路。
+
 张量的元素类型是 `bool`、`int32`、`int64`、`float32`、`float64` 和 `string`，与列的类型一一对应；文本（提示词、生成的回答）是整次调用的一个值，不属于某一行，所以单独一类：回放按整次调用匹配它，而张量按行切分（第 13.4 节）。
 
-逐点打分使用通用算子 `ModelScorer@1`。远程模型和本地模型用同一个算子，区别只在 `SourceBindingArtifact` 的 `models` 绑定到哪种客户端：
+逐点打分使用通用算子 `ModelScorer@1`。远程模型和本地模型用同一个算子，区别只在 `SourceBindingArtifact` 的 `services` 把它绑定到哪种客户端：
 
 ```json
 "ctr_ranker": {
@@ -1083,12 +1087,12 @@ public sealed class ModelCall
 
    框架不做转换：bool 不变成 0/1，整数不变成浮点，float64 不舍入成 float32（`development.md` 第 6 节）。使用者的特征存储、模型服务和特征日志都按声明的类型工作，中间不经过别的类型。可空的值和变长列表不能作为输入（张量要求每行都有值、形状确定），编译时提示消解缺失或声明长度。模型要的类型不同时，改模型的签名，或映射一个那种类型的衍生特征，转换只有一份定义。输出同样按声明：每个映射输出的张量，元素类型是它写入的列的类型，形状 `[batch]`，`list<E,N>` 列是 `[batch, N]`。`PairwiseRanker@1` 和 `ListwiseReranker@1` 用同一条规则，只是前导维换成 `[P, 2]` 或 `[1, N]`（第 5.9 节），它们读 float32 或 float64 的分数。这样回放和不加载客户端的校验构造的张量与线上一致（理由见 `decisions.md`）。
 2. **`inputs` 就是模型的特征契约。** 它是模型输入名到列的映射，引擎按原值传给模型。归一化、分桶这类变换要么放在模型内部，要么显式定义为衍生特征，保证训练和服务只有一份定义。所有输入都必须是非可空类型；可空特征需要先用衍生特征或默认值消解。
-3. **版本与签名。** 模型版本由参数 `ctr_model_version` 决定，换版本的实验只需要一个参数补丁；输入特征不同的新模型通过节点补丁上线。参数 Schema 用枚举列出允许的版本，加载期对每个版本调用 `GetSignatureAsync`，检查它的输入输出与 `inputs`、`outputs` 一致，包括每个输入的元素类型和形状。签名可能要等客户端加载（读模型文件）或询问模型服务，所以是异步的：引擎加载计划时并发地取所有签名，取到之后再检查，只在加载时做，不在请求路径上（取舍见 `decisions.md`“绑定的实例”）。
+3. **版本与签名。** 模型版本由参数 `ctr_model_version` 决定，换版本的实验只需要一个参数补丁；输入特征不同的新模型通过节点补丁上线。参数 Schema 用枚举列出允许的版本，加载期对每个版本调用 `DescribeAsync`，检查它的输入输出与 `inputs`、`outputs` 一致，包括每个输入的元素类型和形状。签名可能要等客户端加载（读模型文件）或询问模型服务，所以是异步的：引擎加载计划时并发地取所有签名，取到之后再检查，只在加载时做，不在请求路径上（取舍见 `decisions.md`“绑定的实例”）。
 4. **后备模型。** `ctr_backup` 是 `role: fallback` 的节点，绑定到一个更小、更快的模型服务，产出相同的列。主节点的预算和后备预留见第 5.6 节；后备节点的特征和主节点一起拉取（第 6.8 节），失败时不需要额外的往返。
 5. **训练-服务一致性。** 探针可以写 `"columns_from": "ctr_ranker.inputs"`，记录的正好是送进模型的那些值（第 8.3 节）。训练数据从这份日志生成时，训练和服务使用同一份特征值。两种情况会打破这一点：主节点失败、由后备模型打分；或者日志在投递中丢失。探针信封中的 `column_producers` 记录每个分数列实际由哪个节点产出，持久投递的批次带连续序号（第 8.6 节），训练管道可以据此过滤后备样本、发现丢失。
-6. **同一个接口支持其他范式。** 成对排序、列表级重排、生成式召回和大模型重排使用同一个 `IModelClient`，区别只在算子如何构造输入、如何解释输出（第 5.9 节）。
+6. **同一个接口支持其他范式。** 成对排序、列表级重排、生成式召回和大模型重排使用同一个 `IServiceClient`，区别只在算子如何构造输入、如何解释输出（第 5.9 节）。
 
-模型客户端位于 `StrataRec.Models`，`ModelScorer@1` 和其他标准算子一样在 `StrataRec.Pipeline`。新的模型协议（例如另一种推理服务的 RPC 格式）是一个新的 `IModelClient` 实现，随二进制发布；之后哪个模型使用它，由绑定产物决定。
+契约在 `StrataRec.Core`，内置的模型客户端位于 `StrataRec.Models`，`ModelScorer@1` 和其他标准算子一样在 `StrataRec.Pipeline`。新的协议（例如另一种推理服务的 RPC 格式、公司内部的过滤服务）是一个新的 `IServiceClient` 实现，随二进制发布；之后哪个模型使用它，由绑定产物决定。
 
 ### 6.10 特征治理
 
@@ -2301,7 +2305,7 @@ trace 和解释只在调试请求中生成，内容不做屏蔽（第 8.9 节）
 6. 每个漏斗组和探针实际生效的采样率；
 7. 生成类算子使用的 seed 和实际生成的输出（文本或实体 ID）。
 
-回放时，引擎用记录的数据和完成状态代替真实的网络和计时：原本超时的调用在回放中仍然超时，节点因此做出同样的跳过或降级决定；大模型的输出直接取自记录，生成结果的随机性不影响回放。在修改后的配置上回放时，录制的分配按新配置重新解析，和请求现在的分配方式相同：平台的分配（录制了平台发来的全部 ID，生效的和被忽略的）按平台的规则处理未知和层冲突，强制的桶严格解析（同层的两个桶拒绝回放，新配置没有的桶去掉并写说明），最后按让出关系解析；如果新配置需要回放包中没有的外部数据，这些数据按缺失处理，并在对比报告中逐项列出；召回调用的查询值和录制时不同（查询改了，或它读的特征回放出不同的值）时，召回源仍按录制的结果回答（录制的是失败就仍然失败），因为回放包里没有别的答案，报告把它列为 `query_changed`；录制里没有这个节点的调用时（例如配置新增的节点），优先借用查询值相同的调用的候选，借用查询值不同的也列为 `query_changed`；需要真实数据时改用草稿预览（第 10.7 节）。批量回放可以离线评估一组配置改动，也是合并前回放对比（第 10.8 节）的基础。回放包含有请求输入和特征值，保留期限和访问权限遵守第 8.9 节的规则。
+回放时，引擎用记录的数据和完成状态代替真实的网络和计时：原本超时的调用在回放中仍然超时，节点因此做出同样的跳过或降级决定；大模型的输出直接取自记录，生成结果的随机性不影响回放。在修改后的配置上回放时，录制的分配按新配置重新解析，和请求现在的分配方式相同：平台的分配（录制了平台发来的全部 ID，生效的和被忽略的）按平台的规则处理未知和层冲突，强制的桶严格解析（同层的两个桶拒绝回放，新配置没有的桶去掉并写说明），最后按让出关系解析；如果新配置需要回放包中没有的外部数据，这些数据按缺失处理，并在对比报告中逐项列出；服务调用按输入的摘要回答：输入和录制时不同（召回的查询改了，或模型读的特征回放出不同的值）的调用或项不回答，报告列为 `inputs_changed`，因为回放包里没有对新输入的答案；配置新增的节点可以用别的节点输入相同的录制调用；需要真实数据时改用草稿预览（第 10.7 节）。批量回放可以离线评估一组配置改动，也是合并前回放对比（第 10.8 节）的基础。回放包含有请求输入和特征值，保留期限和访问权限遵守第 8.9 节的规则。
 
 调用方取消或因缺陷中止的请求也有回放包（经 `OnRecording` 交付，内容是中止那一刻的快照），但它只用来查看：没有结果可以重现，回放不执行它，只报告录制的中止原因、正在执行的节点和各节点的决定；批量对比把这类包单独计数，不计入两边的统计。
 
@@ -2355,11 +2359,11 @@ trace 和解释只在调试请求中生成，内容不做屏蔽（第 8.9 节）
 ```text
 stratarec/
 ├── src/
-│   ├── StrataRec.Core/          # 类型系统、ColumnKey、CandidateTable、RowSelection、OutputBindings、RequestMemory 与数组池
+│   ├── StrataRec.Core/          # 类型系统、ColumnKey、CandidateTable、RowSelection、OutputBindings、RequestMemory 与数组池、服务契约（IServiceClient）
 │   ├── StrataRec.Expressions/   # ColumnExpr：解析、类型检查、IR 优化、向量化后端、可选融合后端
 │   ├── StrataRec.Features/      # 特征目录、实体键、拉取规划、IFeatureSourceConnector、暂存区与回填、本地特征表、IFeatureUpdateSource、snapshot_files@1、衍生特征
 │   ├── StrataRec.Pipeline/      # 节点模型、效果类别、调度、截止时间与降级、标准算子（含 ModelScorer 与签名检查）
-│   ├── StrataRec.Models/        # IModelClient 契约、模型签名、内置客户端（linear@1、random@1、fixed_text@1）
+│   ├── StrataRec.Models/        # 内置的模型客户端（linear@1、random@1、fixed_text@1），IServiceClient 的实现
 │   ├── StrataRec.Experiments/   # 分配映射、补丁合并、足迹与冲突检测、联合计划、参数快照、触发记录
 │   ├── StrataRec.Logging/       # 漏斗组、探针编译、协调采样、异步管道、编码器、ILogSink
 │   ├── StrataRec.Artifacts/     # RFC 8785 规范化、JSON Schema 生成、产物存储与加载、manifest、能力匹配
@@ -2373,7 +2377,7 @@ stratarec/
 │   ├── StrataRec.Connectors.Kafka/    # kafka@1 更新流来源（第 6.6 节）
 │   └── StrataRec.Metrics.VictoriaMetrics/ # VictoriaMetrics 对数分桶（vmrange）指标导出（第 13.1 节）
 ├── control-plane/               # 发布控制器、manifest 校验、草稿服务的参考实现
-├── samples/                     # home_feed：演示全部功能的工作区；StrataRec.Samples.Host：在 ASP.NET Core 服务里嵌入引擎、四个扩展点各一个自定义组件
+├── samples/                     # home_feed：演示全部功能的工作区；StrataRec.Samples.Host：在 ASP.NET Core 服务里嵌入引擎、三个扩展点共四个自定义组件
 └── tests/
     ├── UnitTests/
     ├── DifferentialTests/       # 联合计划 vs 逐组合朴素执行；向量化后端 vs 融合后端
@@ -2396,7 +2400,7 @@ stratarec/
 | 阶段 | 内容 | 完成标准 |
 | :--- | :--- | :--- |
 | M0 核心内核 | 类型系统、候选表、行集合、填充位图、输出提交、流动列、`ColumnExpr` 前端与向量化后端 | 组件基准达到第 15 节的目标；表达式差分测试通过 |
-| M1 单流水线 | 节点模型、效果类别、调度与拉取时机、截止时间与后备、特征系统（`fetch`、`cache`、`local` 三种供给方式）、`IModelClient` 与 `ModelScorer`、标准算子、宿主 API | 公开数据集示例端到端运行；回放结果确定；本地特征表在持续写入和压实下的并发读取测试通过 |
+| M1 单流水线 | 节点模型、效果类别、调度与拉取时机、截止时间与后备、特征系统（`fetch`、`cache`、`local` 三种供给方式）、`IServiceClient` 与 `ModelScorer`、标准算子、宿主 API | 公开数据集示例端到端运行；回放结果确定；本地特征表在持续写入和压实下的并发读取测试通过 |
 | M2 实验 | 补丁合并、可补丁视图、足迹与冲突检测、联合计划、参数快照、触发记录、外部分配映射 | 10 层 × 10 桶的合成配置通常 200 ms 内编译完成；联合计划差分测试通过 |
 | M3 日志 | 漏斗组、探针、协调采样、两种投递等级、编码器、血缘 | 合成数据上的无偏性测试通过；捕获开销达标；进程崩溃和滚动发布的故障注入下，持久日志的丢失能通过序号缺口检测到 |
 | M4 控制面 | 构建、manifest 与 manifest 校验、节点加载、last-known-good、能力匹配、草稿服务、回放 CI | 控制面不可用、坏 manifest、被撤销的 manifest、不兼容二进制的故障注入均不影响服务 |

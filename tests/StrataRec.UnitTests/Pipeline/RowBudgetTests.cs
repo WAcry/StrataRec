@@ -59,7 +59,7 @@ public sealed class RowBudgetTests
         var root = Directory.CreateTempSubdirectory("stratarec-budget-").FullName;
         Write(root, "catalog/c.jsonc", """{ "catalog_id": "c" }""");
         Write(root, "bindings/local.jsonc", """
-            { "environment": "local", "candidate_sources": { "main": { "client": "memory_list@1", "items": [1, 2, 3] } } }
+            { "environment": "local", "services": { "main": { "client": "memory_list@1", "items": [1, 2, 3] } } }
             """);
         Write(root, "pipelines/p.jsonc", """
             { "pipeline_id": "p",

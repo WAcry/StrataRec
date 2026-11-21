@@ -3,8 +3,8 @@ using System.Text.Json;
 namespace StrataRec.Core.Bindings;
 
 /// <summary>
-/// What a factory gets to create the instance one binding names (design 6.4): a model client, a candidate source, a
-/// feature connector, a distributed cache store or an update source, built in or written by the user. The remarks are the
+/// What a factory gets to create the instance one binding names (design 6.4): a service client, a feature connector, a
+/// distributed cache store or an update source, built in or written by the user. The remarks are the
 /// lifetime contract of every such instance but an update source: what the engine guarantees, and what the
 /// implementation must do.
 /// </summary>
@@ -21,7 +21,7 @@ namespace StrataRec.Core.Bindings;
 /// failed its load, and by every compile that does not serve (<c>stratarec validate</c>, <c>build</c>,
 /// <c>explain-plan</c>), whose instances are never loaded, get no request call and are never disposed (one without a load
 /// may be asked for a model signature, on the compile's thread, and the answer is used only if it is immediate; see
-/// <c>IModelClient.GetSignatureAsync</c>). Two plans loading at once
+/// <c>IServiceClient.DescribeAsync</c>). Two plans loading at once
 /// may both create one; the extra one is disposed without being loaded or called. So <c>Create</c> only reads and checks
 /// the settings: no I/O, no connections, threads or anything else that needs releasing. It may run on several threads at
 /// once. The settings reach it bound to the type its factory declares, as strictly as an operator's config (an unknown,

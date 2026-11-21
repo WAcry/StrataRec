@@ -10,7 +10,7 @@ namespace StrataRec.IntegrationTests;
 /// <summary>A workspace of one pipeline with only candidate sources bound, written to a temp directory and compiled.</summary>
 internal static class MiniWorkspace
 {
-    /// <param name="candidateSources">The members of the bindings' <c>candidate_sources</c> object.</param>
+    /// <param name="candidateSources">The members of the bindings' <c>services</c> object.</param>
     /// <param name="pipeline">The pipeline artifact; its id must be <c>p</c>.</param>
     /// <param name="files">Other files (e.g. a source's <c>data_file</c>) by path relative to the workspace root.</param>
     /// <param name="operators">The operators available; the standard library by default.</param>
@@ -35,7 +35,7 @@ internal static class MiniWorkspace
         }
 
         File.WriteAllText(Path.Combine(root, "catalog", "c.jsonc"), """{ "catalog_id": "c" }""");
-        File.WriteAllText(Path.Combine(root, "bindings", "local.jsonc"), $$"""{ "environment": "local", "candidate_sources": { {{candidateSources}} } }""");
+        File.WriteAllText(Path.Combine(root, "bindings", "local.jsonc"), $$"""{ "environment": "local", "services": { {{candidateSources}} } }""");
         File.WriteAllText(Path.Combine(root, "pipelines", "p.jsonc"), pipeline);
         foreach (var (path, content) in files ?? new Dictionary<string, string>())
         {

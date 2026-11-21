@@ -10,6 +10,7 @@ using StrataRec.Models;
 using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Operators.Standard;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
@@ -46,7 +47,7 @@ public sealed class ReplayClientFailureTests
         var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-catch", 1001, "home", arms: null), TestContext.Current.CancellationToken);
         Assert.True(recorded.Succeeded, recorded.Error);
         Assert.Equal(10, recorded.Items.Count);
-        var call = Assert.Single(recorded.Recording!.Runs[0].ModelCalls);
+        var call = Assert.Single(recorded.Recording!.Runs[0].ServiceCalls, c => c.Role == "model");
         Assert.Equal(("error", false, "threw TransientModelException: the model is warming up"), (call.Status, call.Threw, call.Error));
 
         var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording)), cancellationToken: TestContext.Current.CancellationToken);
@@ -100,9 +101,8 @@ public sealed class ReplayClientFailureTests
             public override async ValueTask ExecuteAsync(OperatorContext context)
             {
                 var rows = context.LiveRows.ToArray();
-                var call = new ModelCall { Model = "flaky", Inputs = Array.Empty<NamedInput>(), BatchSize = rows.Length };
-                var status = await context.InvokeModelAsync(new FlakyClient(), new IoTarget(IoRoles.Model, "flaky"), call, new DiscardingWriter(), rows,
-                    timeoutMs: null);
+                var call = new ServiceCall { Service = "flaky", Inputs = Array.Empty<NamedInput>(), BatchSize = rows.Length, Items = context.KeysOf(rows) };
+                var status = await context.CallAsync(new BoundService("flaky", new FlakyClient(), IoRoles.Model, null), call, new ServiceResponse(context.Memory));
                 lock (errors)
                 {
                     errors.Add(status.Error);
@@ -115,28 +115,17 @@ public sealed class ReplayClientFailureTests
             }
         }
 
-        private sealed class FlakyClient : IModelClient
+        private sealed class FlakyClient : IServiceClient
         {
-            public string ClientType => "flaky";
+            public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new ServiceSignature(Array.Empty<TensorSpec>(), Array.Empty<TensorSpec>()));
 
-            public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
-            ValueTask.FromResult(new ModelSignature(Array.Empty<TensorSpec>(), Array.Empty<TensorSpec>()));
-
-            public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
+            public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken) =>
                 throw new TransientModelException("the model is warming up");
-        }
-
-        private sealed class DiscardingWriter : IModelOutputWriter
-        {
-            public Memory<T> GetValues<T>(string name, int elementCount) => new T[elementCount];
-
-            public void SetText(string name, string text)
-            {
-            }
         }
     }
 
-    private sealed class ThrowingModels(Func<Exception> exception) : IBindingFactory<IModelClient>
+    private sealed class ThrowingModels(Func<Exception> exception) : IBindingFactory<IServiceClient>
     {
         private readonly LinearModelClientFactory _inner = new();
 
@@ -144,16 +133,14 @@ public sealed class ReplayClientFailureTests
 
         public Type SettingsType => _inner.SettingsType;
 
-        public IModelClient Create(BindingContext context) => new Client(_inner.Create(context), exception);
+        public IServiceClient Create(BindingContext context) => new Client(_inner.Create(context), exception);
 
-        private sealed class Client(IModelClient inner, Func<Exception> exception) : IModelClient
+        private sealed class Client(IServiceClient inner, Func<Exception> exception) : IServiceClient
         {
-            public string ClientType => inner.ClientType;
+            public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken) =>
+                inner.DescribeAsync(model, version, cancellationToken);
 
-            public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
-                inner.GetSignatureAsync(model, version, cancellationToken);
-
-            public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) => throw exception();
+            public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken) => throw exception();
         }
     }
 }

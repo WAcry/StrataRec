@@ -29,7 +29,7 @@ public sealed class SharedArrayBufferPool : IBufferPool
 /// <summary>
 /// Told once that a request and every external call it started have ended: its <see cref="RequestMemory"/> has returned
 /// its buffers. Until then a call the request abandoned (a timeout) may still be running inside a client, so whatever the
-/// request borrowed from its plan (the plan's model clients, sources and connectors) must stay usable.
+/// request borrowed from its plan (the plan's service clients and connectors) must stay usable.
 /// </summary>
 public interface IRequestEndObserver
 {

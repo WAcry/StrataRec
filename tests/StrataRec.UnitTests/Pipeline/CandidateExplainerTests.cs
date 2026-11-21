@@ -315,7 +315,7 @@ public sealed class CandidateExplainerTests
         Write(root, "bindings/local.jsonc", $$"""
             { "environment": "local",
               "sources": { "items": { "connector": "memory@1", "data_file": "fixtures/items.json", "timeout_ms": 30000 } },
-              "candidate_sources": {
+              "services": {
                 "main":   { "client": "memory_list@1", "items": {{Ids(1, 2, 3, 4, 5, 6)}} },
                 "backup": { "client": "memory_list@1", "items": {{Ids(2, 3, 7)}} } } }
             """);

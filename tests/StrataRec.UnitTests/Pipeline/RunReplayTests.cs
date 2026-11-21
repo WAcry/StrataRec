@@ -6,9 +6,11 @@ using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Features.Connectors;
 using StrataRec.Features.Runtime;
-using StrataRec.Models;
+using StrataRec.Core.Diagnostics;
+using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Replay;
 using StrataRec.UnitTests.Features;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Pipeline;
 
@@ -105,44 +107,24 @@ public sealed class RunReplayTests
     }
 
     [Fact]
-    public void ANodeWithoutARecordedCall_GetsACopy_WithoutTakingAnotherNodesCall()
+    public void AnOutputTheRecordedCallDidNotAskFor_IsAGapOfThatOutput()
     {
+        // Only the outputs a call asks for are recorded: a configuration that reads another one finds none in the bundle.
         var run = Run();
-        run.CandidateCalls.Add(new ReplayCandidateCall
-        {
-            Seq = 0, Node = "recall", Source = "s", Limit = 2, Status = "ok", Ids = Json("[1, 2]"), Scores = new List<double> { 2, 1 },
-        });
+        var recorded = Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new float[] { 1, 2 }));
+        run.ServiceCalls.Add(ModelCallOf(0, recorded, new long[] { 1, 2 }, 10, 20));
         var replay = RunReplay.Create(run, "/runs/0");
+        var asking = new ServiceCall { Service = "m", Inputs = recorded.Inputs, BatchSize = 2, Outputs = new[] { "score", "p_extra" } };
+        var writer = new ArrayOutputWriter();
 
-        // Added nodes ask first, with a smaller and a larger quota; then the recorded node asks for its own call.
-        var (one, oneStatus) = Retrieve(replay, "added_small", 1);
-        var (three, threeStatus) = Retrieve(replay, "added_large", 3);
-        var (own, ownStatus) = Retrieve(replay, "recall", 2);
+        var status = replay.InvokeModel(asking, writer, new[] { EntityKey.FromInt64(1), EntityKey.FromInt64(2) });
 
-        Assert.True(oneStatus.Succeeded && threeStatus.Succeeded && ownStatus.Succeeded);
-        Assert.Equal(new long[] { 1 }, one);
-        Assert.Equal(new long[] { 1, 2 }, three);
-        Assert.Equal(new long[] { 1, 2 }, own);
-        var shortfall = Assert.Single(replay.Gaps); // the recording stopped at its limit of 2; the source may have had a third
-        Assert.Equal(("candidate_source", "s", "limit_exceeds_recording", 1), (shortfall.Kind, shortfall.Source, shortfall.Reason, shortfall.Count));
-        Assert.Equal(new[] { "added_large" }, shortfall.Examples);
-    }
-
-    [Fact]
-    public void ANodeWithoutARecordedCall_OfASourceThatOnlyFailed_IsAGap()
-    {
-        var run = Run();
-        run.CandidateCalls.Add(new ReplayCandidateCall { Seq = 0, Node = "recall", Source = "s", Limit = 2, Status = "timeout", Error = "timed out" });
-        var replay = RunReplay.Create(run, "/runs/0");
-
-        var (added, addedStatus) = Retrieve(replay, "added", 2);
-        var (_, ownStatus) = Retrieve(replay, "recall", 2);
-
-        Assert.True(addedStatus.Succeeded);
-        Assert.Empty(added);
-        Assert.False(ownStatus.Succeeded); // the recorded timeout is replayed for the node that had it
+        Assert.True(status.Succeeded); // the operator reports the output it lacks, as for a model that does not return it
+        Assert.Equal(new float[] { 10, 20 }, writer.Floats["score"]);
+        Assert.False(writer.Arrays.ContainsKey("p_extra"));
         var gap = Assert.Single(replay.Gaps);
-        Assert.Equal(("candidate_source", "not_recorded", "added"), (gap.Kind, gap.Reason, Assert.Single(gap.Examples)));
+        Assert.Equal(("model", "m", "p_extra", "not_recorded", 2, "ranker"), (gap.Kind, gap.Source, gap.Field, gap.Reason, gap.Count, gap.Examples.Single()));
+        Assert.Equal("model m: output 'p_extra' is not in the recording for 2 item(s) or call(s)", gap.Description);
     }
 
     [Fact]
@@ -151,7 +133,7 @@ public sealed class RunReplayTests
         // Batch of 2 with a shared tensor of 4 values: its length divides by the batch size, but its leading dimension is
         // not the batch, so it is not split into rows. Changing half of it changes both rows' inputs.
         var run = Run();
-        run.ModelCalls.Add(ModelCallOf(0, Call(2, NamedInput.FromFloat32("global", new[] { 4 }, new float[] { 10, 20, 30, 40 })), new long[] { 1, 2 }, 100, 101));
+        run.ServiceCalls.Add(ModelCallOf(0, Call(2, NamedInput.FromFloat32("global", new[] { 4 }, new float[] { 10, 20, 30, 40 })), new long[] { 1, 2 }, 100, 101));
         var replay = RunReplay.Create(run, "/runs/0");
 
         var (status, scores) = Invoke(replay, Call(2, NamedInput.FromFloat32("global", new[] { 4 }, new float[] { 10, 20, 300, 400 })), 1, 2);
@@ -182,9 +164,9 @@ public sealed class RunReplayTests
     {
         // Entity 1 was scored twice with different inputs; the later recording is the one with the inputs the replay has.
         var run = Run();
-        run.ModelCalls.Add(ModelCallOf(0, Call(1, NamedInput.FromFloat32("x", new[] { 1 }, new float[] { 10 })), new long[] { 1 }, 100));
-        run.ModelCalls.Add(ModelCallOf(1, Call(1, NamedInput.FromFloat32("x", new[] { 1 }, new float[] { 20 })), new long[] { 1 }, 200));
-        run.ModelCalls.Add(ModelCallOf(2, Call(1, NamedInput.FromFloat32("x", new[] { 1 }, new float[] { 30 })), new long[] { 2 }, 300));
+        run.ServiceCalls.Add(ModelCallOf(0, Call(1, NamedInput.FromFloat32("x", new[] { 1 }, new float[] { 10 })), new long[] { 1 }, 100));
+        run.ServiceCalls.Add(ModelCallOf(1, Call(1, NamedInput.FromFloat32("x", new[] { 1 }, new float[] { 20 })), new long[] { 1 }, 200));
+        run.ServiceCalls.Add(ModelCallOf(2, Call(1, NamedInput.FromFloat32("x", new[] { 1 }, new float[] { 30 })), new long[] { 2 }, 300));
         var replay = RunReplay.Create(run, "/runs/0");
 
         var (status, scores) = Invoke(replay, Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new float[] { 20, 30 })), 1, 2);
@@ -207,10 +189,10 @@ public sealed class RunReplayTests
         const long Big = 9007199254740993L;
         var recorded = Call(2, NamedInput.FromInt64("x", new[] { 2 }, new long[] { 1, 2 }));
         var run = Run();
-        run.ModelCalls.Add(new ReplayModelCall
+        run.ServiceCalls.Add(new ReplayServiceCall
         {
-            Seq = 0, Node = "scorer", Model = "m", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(recorded).ToList(),
-            Outputs = new Dictionary<string, ReplayModelOutput>
+            Seq = 0, Node = "scorer", Service = "m", Role = "model", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(recorded).ToList(),
+            Outputs = new Dictionary<string, ReplayOutput>
             {
                 ["n"] = ReplayJson.Tensor(TensorValues.Of<long>(new long[] { Big, -Big })),
                 ["d"] = ReplayJson.Tensor(TensorValues.Of<double>(new[] { 0.1, 1e300 })),
@@ -254,15 +236,15 @@ public sealed class RunReplayTests
         var narrow = Call(2, NamedInput.FromInt32("x", new[] { 2, 2 }, new[] { 1, 2, 3, 4 }));
         var wide = Call(2, NamedInput.FromInt32("x", new[] { 2, 3 }, new[] { 1, 2, 3, 4, 5, 6 }));
         var run = Run();
-        run.ModelCalls.Add(new ReplayModelCall
+        run.ServiceCalls.Add(new ReplayServiceCall
         {
-            Seq = 0, Node = "a", Model = "m", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(narrow).ToList(),
-            Outputs = new Dictionary<string, ReplayModelOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4 })) },
+            Seq = 0, Node = "a", Service = "m", Role = "model", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(narrow).ToList(),
+            Outputs = new Dictionary<string, ReplayOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4 })) },
         });
-        run.ModelCalls.Add(new ReplayModelCall
+        run.ServiceCalls.Add(new ReplayServiceCall
         {
-            Seq = 1, Node = "b", Model = "m", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(wide).ToList(),
-            Outputs = new Dictionary<string, ReplayModelOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4, 5, 6 })) },
+            Seq = 1, Node = "b", Service = "m", Role = "model", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(wide).ToList(),
+            Outputs = new Dictionary<string, ReplayOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4, 5, 6 })) },
         });
         var replay = RunReplay.Create(run, "/runs/0");
 
@@ -284,15 +266,15 @@ public sealed class RunReplayTests
         var narrow = Call(2, NamedInput.FromInt32("x", new[] { 2, 2 }, new[] { 1, 2, 3, 4 }));
         var wide = Call(2, NamedInput.FromInt32("x", new[] { 2, 3 }, new[] { 1, 2, 3, 4, 5, 6 }));
         var run = Run();
-        run.ModelCalls.Add(new ReplayModelCall
+        run.ServiceCalls.Add(new ReplayServiceCall
         {
-            Seq = 0, Node = "a", Model = "m", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(narrow).ToList(),
-            Outputs = new Dictionary<string, ReplayModelOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4 })) },
+            Seq = 0, Node = "a", Service = "m", Role = "model", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(narrow).ToList(),
+            Outputs = new Dictionary<string, ReplayOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4 })) },
         });
-        run.ModelCalls.Add(new ReplayModelCall
+        run.ServiceCalls.Add(new ReplayServiceCall
         {
-            Seq = 1, Node = "b", Model = "m", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(wide).ToList(),
-            Outputs = new Dictionary<string, ReplayModelOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4, 5, 6 })) },
+            Seq = 1, Node = "b", Service = "m", Role = "model", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(wide).ToList(),
+            Outputs = new Dictionary<string, ReplayOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4, 5, 6 })) },
         });
         var replay = RunReplay.Create(run, "/runs/0");
 
@@ -314,10 +296,10 @@ public sealed class RunReplayTests
     {
         var recorded = Call(2, NamedInput.FromInt32("x", new[] { 2, 2 }, new[] { 1, 2, 3, 4 }));
         var run = Run();
-        run.ModelCalls.Add(new ReplayModelCall
+        run.ServiceCalls.Add(new ReplayServiceCall
         {
-            Seq = 0, Node = "a", Model = "m", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(recorded).ToList(),
-            Outputs = new Dictionary<string, ReplayModelOutput>
+            Seq = 0, Node = "a", Service = "m", Role = "model", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(recorded).ToList(),
+            Outputs = new Dictionary<string, ReplayOutput>
             {
                 ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4, 5 })),
                 ["w"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4 })),
@@ -340,7 +322,7 @@ public sealed class RunReplayTests
     public void AFloat64InputThatChangedBeyondFloatPrecision_IsAnInputsChangedGap()
     {
         var run = Run();
-        run.ModelCalls.Add(ModelCallOf(0, Call(1, NamedInput.FromFloat64("x", new[] { 1 }, new[] { 0.1 })), new long[] { 1 }, 100));
+        run.ServiceCalls.Add(ModelCallOf(0, Call(1, NamedInput.FromFloat64("x", new[] { 1 }, new[] { 0.1 })), new long[] { 1 }, 100));
         var replay = RunReplay.Create(run, "/runs/0");
 
         var (same, scores) = Invoke(replay, Call(1, NamedInput.FromFloat64("x", new[] { 1 }, new[] { 0.1 })), 1);
@@ -362,8 +344,8 @@ public sealed class RunReplayTests
     public void ASingleRowTextCall_IsAnsweredAsTheRecordedCallOfThatEntityAloneWithTheSameInputs()
     {
         var run = Run();
-        run.ModelCalls.Add(TextCallOf(0, TextCall("a"), new long[] { 1 }, "A"));
-        run.ModelCalls.Add(TextCallOf(1, TextCall("b"), new long[] { 1 }, "B", outputTokens: 3, truncated: true));
+        run.ServiceCalls.Add(TextCallOf(0, TextCall("a"), new long[] { 1 }, "A"));
+        run.ServiceCalls.Add(TextCallOf(1, TextCall("b"), new long[] { 1 }, "B", outputTokens: 3, truncated: true));
         var replay = RunReplay.Create(run, "/runs/0");
 
         var writer = new ArrayOutputWriter();
@@ -384,9 +366,9 @@ public sealed class RunReplayTests
     public void ARecordedFailure_AnswersOnlyTheCallWithItsInputs_NotAnotherCallOfTheSameEntity()
     {
         var run = Run();
-        run.ModelCalls.Add(FailedTextCallOf(0, TextCall("note 50"), new long[] { 50 }, "note-service-overloaded"));
-        run.ModelCalls.Add(TextCallOf(1, TextCall("why 50"), new long[] { 50 }, "WHY 50"));
-        run.ModelCalls.Add(FailedTextCallOf(2, TextCall("note 60"), new long[] { 60 }, "note-service-overloaded"));
+        run.ServiceCalls.Add(FailedTextCallOf(0, TextCall("note 50"), new long[] { 50 }, "note-service-overloaded"));
+        run.ServiceCalls.Add(TextCallOf(1, TextCall("why 50"), new long[] { 50 }, "WHY 50"));
+        run.ServiceCalls.Add(FailedTextCallOf(2, TextCall("note 60"), new long[] { 60 }, "note-service-overloaded"));
         var replay = RunReplay.Create(run, "/runs/0");
 
         var why = new ArrayOutputWriter();
@@ -405,7 +387,7 @@ public sealed class RunReplayTests
     public void ARecordedFailure_WhoseInputsChanged_IsAGap_NotTheRecordedFailure()
     {
         var run = Run();
-        run.ModelCalls.Add(FailedTextCallOf(0, TextCall("note 50"), new long[] { 50 }, "note-service-overloaded"));
+        run.ServiceCalls.Add(FailedTextCallOf(0, TextCall("note 50"), new long[] { 50 }, "note-service-overloaded"));
         var replay = RunReplay.Create(run, "/runs/0");
 
         var status = replay.InvokeModel(TextCall("note 50, revised"), new ArrayOutputWriter(), new[] { EntityKey.FromInt64(50) });
@@ -423,8 +405,8 @@ public sealed class RunReplayTests
     public void AMultiRowCallsText_IsNotSplitByRow_AndAnEntityAnsweredOnlyWithOtherInputs_HasChangedInputs()
     {
         var run = Run();
-        run.ModelCalls.Add(TextCallOf(0, TextCall("a", batch: 2), new long[] { 1, 2 }, "AB"));
-        run.ModelCalls.Add(TextCallOf(1, TextCall("a"), new long[] { 3 }, "C"));
+        run.ServiceCalls.Add(TextCallOf(0, TextCall("a", batch: 2), new long[] { 1, 2 }, "AB"));
+        run.ServiceCalls.Add(TextCallOf(1, TextCall("a"), new long[] { 3 }, "C"));
         var replay = RunReplay.Create(run, "/runs/0");
 
         var first = new ArrayOutputWriter();
@@ -454,9 +436,9 @@ public sealed class RunReplayTests
         var call = Call(1, NamedInput.FromFloat32("x", new[] { 1 }, new float[] { 10 }));
         var recorded = ModelCallOf(0, call, new long[] { 1 });
         var run = Run();
-        run.ModelCalls.Add(new ReplayModelCall
+        run.ServiceCalls.Add(new ReplayServiceCall
         {
-            Seq = 0, Node = recorded.Node, Model = "m", BatchSize = 1, Status = status, Error = error ?? "the node's budget ran out", Threw = cutOff,
+            Seq = 0, Node = recorded.Node, Service = "m", Role = "model", BatchSize = 1, Status = status, Error = error ?? "the node's budget ran out", Threw = cutOff,
             Keys = recorded.Keys, InputDigests = recorded.InputDigests,
         });
         var replay = RunReplay.Create(run, "/runs/0");
@@ -472,39 +454,41 @@ public sealed class RunReplayTests
         }
     }
 
-    internal static ModelCall Call(int batch, params NamedInput[] inputs) => new() { Model = "m", Inputs = inputs, BatchSize = batch };
+    internal static ServiceCall Call(int batch, params NamedInput[] inputs) => new() { Service = "m", Inputs = inputs, BatchSize = batch };
 
-    internal static string[] RowDigests(ModelCall call)
+    internal static string[] RowDigests(ServiceCall call)
     {
-        var order = ModelInputDigest.NameOrder(call);
-        return Enumerable.Range(0, call.BatchSize).Select(r => ReplayJson.Hex(ModelInputDigest.Row(call, order, r))).ToArray();
+        var order = ServiceInputDigest.NameOrder(call);
+        return Enumerable.Range(0, call.BatchSize).Select(r => ReplayJson.Hex(ServiceInputDigest.Row(call, order, r))).ToArray();
     }
 
     /// <summary>A successful recorded call of model <c>m</c> scoring <paramref name="keys"/>, one <c>score</c> per row.</summary>
-    internal static ReplayModelCall ModelCallOf(int seq, ModelCall call, long[] keys, params float[] scores) => new()
+    internal static ReplayServiceCall ModelCallOf(int seq, ServiceCall call, long[] keys, params float[] scores) => new()
     {
         Seq = seq,
         Node = "ranker",
-        Model = "m",
+        Service = "m",
+        Role = "model",
         BatchSize = call.BatchSize,
         Status = "ok",
         Keys = Json("[" + string.Join(",", keys) + "]"),
         InputDigests = RowDigests(call).ToList(),
-        Outputs = new Dictionary<string, ReplayModelOutput> { ["score"] = new() { Type = "float32", Values = JsonSerializer.SerializeToElement(scores) } },
+        Outputs = new Dictionary<string, ReplayOutput> { ["score"] = new() { Type = "float32", Values = JsonSerializer.SerializeToElement(scores) } },
     };
 
     /// <summary>A generative call of model <c>m</c>: one prompt, <c>user</c>, and a token limit.</summary>
-    internal static ModelCall TextCall(string prompt, int batch = 1) => new()
+    internal static ServiceCall TextCall(string prompt, int batch = 1) => new()
     {
-        Model = "m", Inputs = new[] { NamedInput.FromText("user", prompt) }, BatchSize = batch, Options = new ModelCallOptions(MaxOutputTokens: 64),
+        Service = "m", Inputs = new[] { NamedInput.FromText("user", prompt) }, BatchSize = batch, Options = new ServiceCallOptions(MaxOutputTokens: 64),
     };
 
     /// <summary>A successful recorded generative call of model <c>m</c> for <paramref name="keys"/>, answering <paramref name="text"/>.</summary>
-    internal static ReplayModelCall TextCallOf(int seq, ModelCall call, long[] keys, string text, int? outputTokens = null, bool? truncated = null) => new()
+    internal static ReplayServiceCall TextCallOf(int seq, ServiceCall call, long[] keys, string text, int? outputTokens = null, bool? truncated = null) => new()
     {
         Seq = seq,
         Node = "annotator",
-        Model = "m",
+        Service = "m",
+        Role = "model",
         BatchSize = call.BatchSize,
         Status = "ok",
         Keys = Json("[" + string.Join(",", keys) + "]"),
@@ -515,11 +499,12 @@ public sealed class RunReplayTests
     };
 
     /// <summary>A recorded generative call of model <c>m</c> for <paramref name="keys"/> that failed with <paramref name="error"/>.</summary>
-    internal static ReplayModelCall FailedTextCallOf(int seq, ModelCall call, long[] keys, string error) => new()
+    internal static ReplayServiceCall FailedTextCallOf(int seq, ServiceCall call, long[] keys, string error) => new()
     {
         Seq = seq,
         Node = "notes",
-        Model = "m",
+        Service = "m",
+        Role = "model",
         BatchSize = call.BatchSize,
         Status = "error",
         Error = error,
@@ -527,15 +512,19 @@ public sealed class RunReplayTests
         InputDigests = RowDigests(call).ToList(),
     };
 
-    internal static (ModelStatus Status, float[] Scores) Invoke(RunReplay replay, ModelCall call, params long[] keys)
+    internal static (ServiceStatus Status, float[] Scores) Invoke(RunReplay replay, ServiceCall call, params long[] keys)
     {
         var writer = new ArrayOutputWriter();
         var status = replay.InvokeModel(call, writer, keys.Select(EntityKey.FromInt64).ToArray());
         return (status, writer.Floats.TryGetValue("score", out var scores) ? scores : Array.Empty<float>());
     }
 
-    internal sealed class ArrayOutputWriter : IModelOutputWriter
+    internal sealed class ArrayOutputWriter : IServiceResponse
     {
+        public void AddItem(long entityId, double score) => throw new NotSupportedException("a model answers with outputs");
+
+        public void AddItem(string entityId, double score) => throw new NotSupportedException("a model answers with outputs");
+
         public Dictionary<string, float[]> Floats { get; } = new();
 
         public Dictionary<string, string> Texts { get; } = new();
@@ -556,14 +545,6 @@ public sealed class RunReplayTests
         }
 
         public void SetText(string name, string text) => Texts[name] = text;
-    }
-
-    internal static (long[] Ids, StrataRec.Pipeline.Sources.CandidateSourceStatus Status) Retrieve(RunReplay replay, string node, int limit)
-    {
-        var buffer = new StrataRec.Pipeline.Sources.CandidateBuffer(limit, new RequestMemory());
-        var query = new StrataRec.Pipeline.Sources.CandidateQuery { SourceName = "s", Limit = limit, Inputs = new RequestInputs(), RequestId = "r" };
-        var status = replay.Retrieve(node, "s", query, buffer);
-        return (buffer.Keys.ToArray().Select(k => k.Int64Value).ToArray(), status);
     }
 
     internal static ReplayRunRecord Run() => new()
@@ -620,4 +601,43 @@ public sealed class RunReplayTests
 
     internal static double?[] Values(StagingBuffer staging, int field, int keys) =>
         Enumerable.Range(0, keys).Select(k => staging.Get(field, k) is { IsMissing: false } v ? v.AsFloat64() : (double?)null).ToArray();
+}
+
+/// <summary>A model call answered by a replay as an operator would send it: its rows' entities as its items, read back into a writer.</summary>
+internal static class ReplayModelCalls
+{
+    public static ServiceStatus InvokeModel(this RunReplay replay, ServiceCall call, RunReplayTests.ArrayOutputWriter writer, EntityKey[]? keys, string node = "ranker")
+    {
+        var keyed = new ServiceCall
+        {
+            Service = call.Service,
+            Version = call.Version,
+            Inputs = call.Inputs,
+            BatchSize = call.BatchSize,
+            Items = keys ?? [],
+            Outputs = call.Outputs,
+            Options = call.Options,
+        };
+        var response = new ServiceResponse(new RequestMemory());
+        var status = replay.Call(node, new IoTarget(IoRoles.Model, call.Service), keyed, response);
+        foreach (var (name, values) in response.Tensors)
+        {
+            switch (values.ElementType)
+            {
+                case TensorElementType.Bool: values.Bool.CopyTo(writer.GetValues<bool>(name, values.Length)); break;
+                case TensorElementType.Int32: values.Int32.CopyTo(writer.GetValues<int>(name, values.Length)); break;
+                case TensorElementType.Int64: values.Int64.CopyTo(writer.GetValues<long>(name, values.Length)); break;
+                case TensorElementType.Float32: values.Float32.CopyTo(writer.GetValues<float>(name, values.Length)); break;
+                case TensorElementType.Float64: values.Float64.CopyTo(writer.GetValues<double>(name, values.Length)); break;
+                default: values.String.CopyTo(writer.GetValues<string>(name, values.Length)); break;
+            }
+        }
+
+        foreach (var (name, text) in response.Texts)
+        {
+            writer.SetText(name, text);
+        }
+
+        return status;
+    }
 }

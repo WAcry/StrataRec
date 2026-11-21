@@ -5,6 +5,7 @@ using StrataRec.Hosting;
 using StrataRec.Logging;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Pipeline.Sources;
+using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
@@ -100,7 +101,7 @@ public sealed class FallbackCaptureTests
         File.WriteAllText(Path.Combine(root, "catalog", "c.jsonc"), """{ "catalog_id": "c" }""");
         File.WriteAllText(Path.Combine(root, "bindings", "local.jsonc"), $$"""
             { "environment": "local",
-              "candidate_sources": {
+              "services": {
                 "broken":  { "client": "memory_list@1", "items": [1, 2, 3], "fail": true },
                 "popular": { "client": "memory_list@1", "data_file": "fixtures/recall_popular.json" },
                 "backup":  { "client": "{{backupSource}}", "data_file": "fixtures/recall_popular.json" } } }
@@ -129,11 +130,11 @@ public sealed class FallbackCaptureTests
     }
 
     /// <summary>A list source that says it started and then waits until its call is cancelled.</summary>
-    private sealed class BlockingSources : IBindingFactory<ICandidateSource>
+    private sealed class BlockingSources : IBindingFactory<IServiceClient>
     {
         public const string TypeName = "blocking_list@1";
 
-        private readonly MemoryListCandidateSourceFactory _inner = new();
+        private readonly MemoryListServiceFactory _inner = new();
 
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -141,17 +142,15 @@ public sealed class FallbackCaptureTests
 
         public Type SettingsType => _inner.SettingsType;
 
-        public ICandidateSource Create(BindingContext context) => new Source(this);
+        public IServiceClient Create(BindingContext context) => new Source(this);
 
-        private sealed class Source(BlockingSources owner) : ICandidateSource
+        private sealed class Source(BlockingSources owner) : IServiceClient
         {
-            public string ClientType => TypeName;
-
-            public async ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken)
+            public async ValueTask<ServiceStatus> CallAsync(ServiceCall query, IServiceResponse sink, CancellationToken cancellationToken)
             {
                 owner.Started.TrySetResult();
                 await Task.Delay(Timeout.Infinite, cancellationToken);
-                return CandidateSourceStatus.Ok;
+                return ServiceStatus.Ok;
             }
         }
     }

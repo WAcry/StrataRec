@@ -2,6 +2,7 @@ using System.Text.Json;
 using StrataRec.Core.Bindings;
 using StrataRec.Llm;
 using StrataRec.Models;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Models;
 
@@ -18,18 +19,17 @@ public sealed class FixedTextModelClientTests
     {
         var client = Create(Settings);
 
-        var lookup = client.GetSignatureAsync("llm", "v7", CancellationToken.None);
+        var lookup = client.DescribeAsync("llm", "v7", CancellationToken.None);
 
         Assert.True(lookup.IsCompletedSuccessfully);
         var signature = await lookup;
         Assert.Equal(new[] { "system text []", "user text []" }, signature.Inputs.Select(Describe));
         Assert.Equal(new[] { "answer text []", "note text []" }, signature.Outputs.Select(Describe));
-        Assert.Equal(signature, await client.GetSignatureAsync("llm", null, CancellationToken.None));
-        Assert.Equal("fixed_text@1", client.ClientType);
+        Assert.Equal(signature, await client.DescribeAsync("llm", null, CancellationToken.None));
 
         // What LlmReranker@1 checks at load: the stand-in passes as the real model would.
         Assert.Empty(TextSignature.Check("Model 'llm' version 'v7'", "LlmReranker@1", [("system", "/prompts/system"), ("user", "/prompts/user")], [("answer", "/output")], signature));
-        await Assert.ThrowsAsync<ArgumentException>(async () => await client.GetSignatureAsync("other", null, CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(async () => await client.DescribeAsync("other", null, CancellationToken.None));
     }
 
     [Fact]
@@ -42,7 +42,7 @@ public sealed class FixedTextModelClientTests
 
         Assert.Equal((first.Status, first.Texts), (second.Status, second.Texts), (a, b) => a.Status == b.Status && a.Texts.SequenceEqual(b.Texts));
         Assert.Equal(new Dictionary<string, string> { ["answer"] = "[3, 1, 2]", ["note"] = "" }, first.Texts);
-        Assert.Equal(ModelStatus.Ok, first.Status);
+        Assert.Equal(ServiceStatus.Ok, first.Status);
         Assert.Null(first.Status.OutputTokens);
         Assert.False(first.Status.Truncated);
     }
@@ -54,22 +54,22 @@ public sealed class FixedTextModelClientTests
 
         var missing = Invoke(client, seed: 1, ("user", "x"));
         var outputs = new Outputs();
-        var call = new ModelCall
+        var call = new ServiceCall
         {
-            Model = "llm",
+            Service = "llm",
             Inputs = new[] { NamedInput.FromText("user", "x"), NamedInput.FromFloat32("system", new[] { 1 }, new[] { 1f }) },
             BatchSize = 1,
         };
-        var wrongType = await client.InvokeAsync(call, outputs, CancellationToken.None);
+        var wrongType = await client.CallAsync(call, outputs, CancellationToken.None);
 
-        Assert.Equal((ModelStatus.Failed("Missing input 'system'."), 0), (missing.Status, missing.Texts.Count));
-        Assert.Equal((ModelStatus.Failed("Input 'system' must be text."), 0), (wrongType, outputs.Texts.Count));
+        Assert.Equal((ServiceStatus.Failed("Missing input 'system'."), 0), (missing.Status, missing.Texts.Count));
+        Assert.Equal((ServiceStatus.Failed("Input 'system' must be text."), 0), (wrongType, outputs.Texts.Count));
     }
 
     [Fact]
     public void ItIsInTheDefaultRegistry()
     {
-        Assert.True(StrataRec.Pipeline.Planning.PlanEnvironment.DefaultBindings().TryGet<IModelClient>("fixed_text@1", out var factory));
+        Assert.True(StrataRec.Pipeline.Planning.PlanEnvironment.DefaultBindings().TryGet<IServiceClient>("fixed_text@1", out var factory));
         Assert.IsType<FixedTextModelClient>(factory.Create(Context(Settings)));
     }
 
@@ -95,7 +95,7 @@ public sealed class FixedTextModelClientTests
         Assert.False(string.IsNullOrWhiteSpace(error.Hint));
     }
 
-    private static IModelClient Create(string settings) => new FixedTextModelClientFactory().Create(Context(settings));
+    private static IServiceClient Create(string settings) => new FixedTextModelClientFactory().Create(Context(settings));
 
     private static BindingContext Context(string settings) =>
         new("llm", ParseSettings(settings), AppContext.BaseDirectory, null);
@@ -112,25 +112,29 @@ public sealed class FixedTextModelClientTests
         return members;
     }
 
-    private static (ModelStatus Status, Dictionary<string, string> Texts) Invoke(IModelClient client, long seed, params (string Name, string Text)[] prompts)
+    private static (ServiceStatus Status, Dictionary<string, string> Texts) Invoke(IServiceClient client, long seed, params (string Name, string Text)[] prompts)
     {
         var outputs = new Outputs();
-        var call = new ModelCall
+        var call = new ServiceCall
         {
-            Model = "llm",
+            Service = "llm",
             Inputs = prompts.Select(p => NamedInput.FromText(p.Name, p.Text)).ToArray(),
             BatchSize = 1,
-            Options = new ModelCallOptions(Seed: seed, MaxOutputTokens: 16),
+            Options = new ServiceCallOptions(Seed: seed, MaxOutputTokens: 16),
         };
-        var pending = client.InvokeAsync(call, outputs, CancellationToken.None);
+        var pending = client.CallAsync(call, outputs, CancellationToken.None);
         Assert.True(pending.IsCompletedSuccessfully);
         return (pending.Result, outputs.Texts);
     }
 
     private static string Describe(TensorSpec spec) => $"{spec.Name} {spec.ElementType.ToString().ToLowerInvariant()} [{string.Join(", ", spec.Shape)}]";
 
-    private sealed class Outputs : IModelOutputWriter
+    private sealed class Outputs : IServiceResponse
     {
+        public void AddItem(long entityId, double score) => throw new NotSupportedException("a model answers with outputs");
+
+        public void AddItem(string entityId, double score) => throw new NotSupportedException("a model answers with outputs");
+
         public Dictionary<string, string> Texts { get; } = new();
 
         public Memory<T> GetValues<T>(string name, int elementCount) => throw new InvalidOperationException("a text model writes no tensor output");

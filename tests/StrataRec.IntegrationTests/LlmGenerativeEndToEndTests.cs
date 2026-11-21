@@ -48,9 +48,9 @@ public sealed class LlmGenerativeEndToEndTests
         var run = Assert.Single(recorded.Recording!.Runs);
         Assert.Equal("succeeded", Assert.Single(run.Nodes, n => n.Node == "llm_retrieve").Outcome);
         Assert.Equal("succeeded", Assert.Single(run.Nodes, n => n.Node == "llm_annotate").Outcome);
-        var retrieval = Assert.Single(run.ModelCalls, c => c.Model == "llm_retriever");
+        var retrieval = Assert.Single(run.ServiceCalls.FindAll(c => c.Role == "model"), c => c.Service == "llm_retriever");
         Assert.Equal(("ok", 1, false, 1, Ids), (retrieval.Status, retrieval.BatchSize, retrieval.Keys.HasValue, retrieval.InputDigests.Count, retrieval.Texts["answer"]));
-        var annotations = run.ModelCalls.Where(c => c.Model == "llm_annotator").ToList();
+        var annotations = run.ServiceCalls.FindAll(c => c.Role == "model").Where(c => c.Service == "llm_annotator").ToList();
         Assert.Equal(3, annotations.Count);
         Assert.Equal(recorded.Items.Take(3).Select(i => i.Id.Int64Value).Order(),
             annotations.Select(c => Assert.Single(c.Keys!.Value.EnumerateArray()).GetInt64()).Order()); // each keyed by its row's entity
@@ -103,9 +103,9 @@ public sealed class LlmGenerativeEndToEndTests
         Assert.StartsWith("model 'llm_annotator' annotated 3 of 5 rows; 2 call(s) failed", node.ReplayedDetail);
     }
 
-    /// <summary>The retriever's call is recorded whole: after its prompt changes, it is not recorded, and the node is skipped.</summary>
+    /// <summary>The retriever's call is recorded whole: after its prompt changes, its inputs are reported as changed, and the node is skipped.</summary>
     [Fact]
-    public async Task AfterTheRetrieversPromptChanges_ItsCallIsNotRecorded_AndTheNodeIsSkipped()
+    public async Task AfterTheRetrieversPromptChanges_ItsInputsAreReportedAsChanged_AndTheNodeIsSkipped()
     {
         var recorded = await NewEngine(HomeFeedTestHost.LoadModified(root => AddLlm(root, Ids, Reason)))
             .ExecuteAsync(ReplayTests.Request("req-llm-prompt", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
@@ -120,7 +120,7 @@ public sealed class LlmGenerativeEndToEndTests
 
         var report = outcome.Report;
         Assert.True(outcome.Result.Succeeded, outcome.Result.Error); // on_failure: skip
-        Assert.Contains(report.Gaps, g => g is { Kind: "model", Source: "llm_retriever", Reason: "not_recorded" });
+        Assert.Contains(report.Gaps, g => g is { Kind: "model", Source: "llm_retriever", Reason: "inputs_changed" });
         var node = Assert.Single(report.Nodes, n => n.Node == "llm_retrieve");
         Assert.Equal(("succeeded", "failed"), (node.Recorded, node.Replayed));
         Assert.StartsWith("model 'llm_retriever' failed: ", node.ReplayedDetail);
@@ -151,9 +151,9 @@ public sealed class LlmGenerativeEndToEndTests
             CancellationToken.None, recordPath: bundle));
         using (var recorded = JsonDocument.Parse(File.ReadAllText(bundle)))
         {
-            var calls = recorded.RootElement.GetProperty("runs")[0].GetProperty("model_calls").EnumerateArray().ToList();
-            Assert.Contains(calls, c => c.GetProperty("model").GetString() == "llm_retriever" && c.GetProperty("texts").GetProperty("answer").GetString() == Ids);
-            Assert.Contains(calls, c => c.GetProperty("model").GetString() == "llm_annotator" && c.GetProperty("texts").GetProperty("answer").GetString() == Reason);
+            var calls = recorded.RootElement.GetProperty("runs")[0].GetProperty("service_calls").EnumerateArray().ToList();
+            Assert.Contains(calls, c => c.GetProperty("service").GetString() == "llm_retriever" && c.GetProperty("texts").GetProperty("answer").GetString() == Ids);
+            Assert.Contains(calls, c => c.GetProperty("service").GetString() == "llm_annotator" && c.GetProperty("texts").GetProperty("answer").GetString() == Reason);
         }
 
         var replay = new StringWriter();
@@ -199,9 +199,9 @@ public sealed class LlmGenerativeEndToEndTests
             """);
         ReplayTests.Edit(root, Pipeline, "\"primary_source\": \"col.recall.primary_source\"",
             "\"primary_source\": \"col.recall.primary_source\", \"reason\": \"col.llm.reason\", \"gen_rank\": \"col.llm.gen_rank\"");
-        ReplayTests.Edit(root, "bindings/local.jsonc", "\"models\": {",
+        ReplayTests.Edit(root, "bindings/local.jsonc", "\"services\": {",
             $$"""
-            "models": {
+            "services": {
                 "llm_retriever": { "client": "fixed_text@1", "inputs": ["user"], "outputs": { "answer": {{JsonSerializer.Serialize(ids)}} } },
                 "llm_annotator": { "client": "fixed_text@1", "inputs": ["user"], "outputs": { "answer": {{JsonSerializer.Serialize(reason)}} } },
             """);

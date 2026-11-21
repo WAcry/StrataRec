@@ -78,20 +78,17 @@ public sealed class ReplayTests
 
         // Candidate calls with the returned candidates, feature calls with the values per key, model outputs per row.
         // popular is sent at once; two_tower once the user's embedding its query reads is stored (design 5.4), with it.
-        Assert.Equal(new[] { ("popular", 19), ("two_tower", 40) }, run.CandidateCalls.Select(c => (c.Source, c.Ids!.Value.GetArrayLength())));
-        Assert.Null(run.CandidateCalls[0].Query);
-        var embedding = Assert.Single(run.CandidateCalls[1].Query!);
-        // The expression's type: the catalog's float32 list promoted, as expressions see it.
-        Assert.Equal(("user_embedding", "list<float64,3>", "[1,0,0]"), (embedding.Key, embedding.Value.Type, embedding.Value.Value!.Value.GetRawText()));
-        Assert.All(run.CandidateCalls, c => Assert.Equal("ok", c.Status));
+        var recalls = run.ServiceCalls.FindAll(c => c.Role == "recall");
+        Assert.Equal(new[] { ("popular", 19), ("two_tower", 40) }, recalls.Select(c => (c.Service, c.Ids!.Value.GetArrayLength())));
+        Assert.All(recalls, c => Assert.Equal(("ok", 1, null), (c.Status, c.InputDigests.Count, c.Keys))); // a query is its digest; no items sent
         var items = run.FeatureCalls.Where(c => c.Source == "item_store").ToList();
         Assert.True(items.Count >= 3, "max_batch 25 splits the 59 recalled items into chunks");
         Assert.All(items, c => Assert.InRange(c.Keys.GetArrayLength(), 1, 25));
         Assert.All(items, c => Assert.All(c.Values!, v => Assert.Equal(c.Keys.GetArrayLength(), v.Value.GetArrayLength())));
-        Assert.Equal(Enumerable.Range(0, run.FeatureCalls.Count + run.CandidateCalls.Count + run.ModelCalls.Count),
-            run.FeatureCalls.Select(c => c.Seq).Concat(run.CandidateCalls.Select(c => c.Seq)).Concat(run.ModelCalls.Select(c => c.Seq)).Order());
-        var model = Assert.Single(run.ModelCalls);
-        Assert.Equal(("ctr_model", "ok", 30, 30), (model.Model, model.Status, model.Keys!.Value.GetArrayLength(), model.InputDigests.Count));
+        Assert.Equal(Enumerable.Range(0, run.FeatureCalls.Count + run.ServiceCalls.Count),
+            run.FeatureCalls.Select(c => c.Seq).Concat(run.ServiceCalls.Select(c => c.Seq)).Order());
+        var model = Assert.Single(run.ServiceCalls, c => c.Role == "model");
+        Assert.Equal(("ctr_model", "ok", 30, 30), (model.Service, model.Status, model.Keys!.Value.GetArrayLength(), model.InputDigests.Count));
         Assert.Equal(("float32", 30), (model.Outputs["p_click"].Type, model.Outputs["p_click"].Values.GetArrayLength()));
 
         Assert.Equal("captured", run.Sampling.Logs);
@@ -262,9 +259,9 @@ public sealed class ReplayTests
         Assert.True(recorded.Succeeded, recorded.Error);
 
         var run = recorded.Recording!.Runs[0];
-        var popular = run.CandidateCalls.Single(c => c.Source == "popular");
+        var popular = run.ServiceCalls.FindAll(c => c.Role == "recall").Single(c => c.Service == "popular");
         Assert.Equal(("timeout", 0), (popular.Status, popular.Ids?.GetArrayLength() ?? 0));
-        var model = Assert.Single(run.ModelCalls);
+        var model = Assert.Single(run.ServiceCalls, c => c.Role == "model");
         Assert.Equal(("timeout", true), (model.Status, model.Threw));
         var ranker = run.Nodes.Single(n => n.Node == "ctr_ranker");
         Assert.Equal("fallback", ranker.Outcome);
@@ -318,7 +315,7 @@ public sealed class ReplayTests
 
         var bundle = recorded.Recording!;
         Assert.Equal(new[] { ("primary", "primary"), ("backup", "fallback_pipeline") }, bundle.Runs.Select(r => (r.PipelineId, r.Role)));
-        Assert.Equal("error", bundle.Runs[0].CandidateCalls.Single().Status);
+        Assert.Equal("error", bundle.Runs[0].ServiceCalls.FindAll(c => c.Role == "recall").Single().Status);
         Assert.Equal(("backup", true), (bundle.Result.ServedBy, bundle.Result.Degraded));
 
         var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(bundle)), cancellationToken: TestContext.Current.CancellationToken);
@@ -354,7 +351,7 @@ public sealed class ReplayTests
         Assert.Contains(new ValueChange("coarse_k", "30", "40"), report.Params);
         Assert.Contains(new ValueChange("recall_quotas.two_tower", "40", "50"), report.Params);
 
-        Assert.Equal(10, Gap(report, "candidate_source", "two_tower", null, "limit_exceeds_recording").Count);
+        Assert.Equal(10, Gap(report, "recall", "two_tower", null, "limit_exceeds_recording").Count);
         Assert.Equal(10, Gap(report, "model", "ctr_model", null, "not_recorded").Count);
         var age = Gap(report, "feature", "item_store", "i_age_h", "not_recorded");
         Assert.True(age.Count >= outcome.Result.Items.Count);

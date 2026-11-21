@@ -211,7 +211,7 @@ public class OutputFeatureRowsTests
             { "environment": "local",
               "sources": {
                 "item_store": { "connector": "{{CountingConnectors.TypeName}}", "data": { "1": { "base": {{baseOf1}} }, "2": { "base": {{baseOf2}} } }, "timeout_ms": 60000 } },
-              "candidate_sources": {{candidateSources}} }
+              "services": {{candidateSources}} }
             """);
         File.WriteAllText(Path.Combine(root, "pipelines", "p.jsonc"), pipeline);
 

@@ -11,11 +11,11 @@ using StrataRec.Features.Connectors;
 using StrataRec.Features.Runtime;
 using StrataRec.Hosting;
 using StrataRec.Logging;
-using StrataRec.Models;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Pipeline.Sources;
 using StrataRec.Testing;
+using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
@@ -378,7 +378,7 @@ internal static class TimerFaultChild
         ListLoggerFactory loggers, int? popularTimeoutMs, int deadlineMs, int? callerTimeoutMs = null)
     {
         var timeout = popularTimeoutMs is { } ms ? $", \"timeout_ms\": {ms}" : string.Empty;
-        var host = HomeFeedTestHost.LoadModified(root => SampleBindings.RebindCandidateSource(root, "popular",
+        var host = HomeFeedTestHost.LoadModified(root => SampleBindings.RebindService(root, "popular",
             $$"""{ "client": "{{HangingSources.TypeName}}", "data_file": "fixtures/recall_popular.json"{{timeout}} }"""));
         var events = new RequestEventLog(loggers.CreateLogger("events"), autoFlush: false);
         var (result, elapsed) = Execute(host, events, deadlineMs, sources: new HangingSources(), callerTimeoutMs: callerTimeoutMs);
@@ -404,7 +404,7 @@ internal static class TimerFaultChild
 
     /// <returns>The result, or null when the caller's token (cancelled after <paramref name="callerTimeoutMs"/>) ended the request.</returns>
     private static (RecResult? Result, long ElapsedMs) Execute(HomeFeedTestHost host, RequestEventLog events, int deadlineMs,
-        IBindingFactory<ICandidateSource>? sources = null, IBindingFactory<IFeatureSourceConnector>? connectors = null, int? callerTimeoutMs = null)
+        IBindingFactory<IServiceClient>? sources = null, IBindingFactory<IFeatureSourceConnector>? connectors = null, int? callerTimeoutMs = null)
     {
         var environment = new PlanEnvironment
         {
@@ -493,24 +493,26 @@ internal static class TimerFaultChild
         return ended.Task;
     }
 
-    private sealed class HangingSources : IBindingFactory<ICandidateSource>
+    private sealed class HangingSources : IBindingFactory<IServiceClient>
     {
         public const string TypeName = "hanging_list@1";
 
-        private readonly MemoryListCandidateSourceFactory _inner = new();
+        private readonly MemoryListServiceFactory _inner = new();
 
         public string Type => TypeName;
 
         public Type SettingsType => _inner.SettingsType;
 
-        public ICandidateSource Create(BindingContext context) => new Source(_inner.Create(context));
-
-        private sealed class Source(ICandidateSource inner) : ICandidateSource
+        public IServiceClient Create(BindingContext context)
         {
-            public string ClientType => inner.ClientType;
+            _ = _inner.Create(context); // its settings, checked as the source's
+            return new Source();
+        }
 
-            public ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken) =>
-                new(Hang<CandidateSourceStatus>(cancellationToken));
+        private sealed class Source : IServiceClient
+        {
+            public ValueTask<ServiceStatus> CallAsync(ServiceCall query, IServiceResponse sink, CancellationToken cancellationToken) =>
+                new(Hang<ServiceStatus>(cancellationToken));
         }
     }
 

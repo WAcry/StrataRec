@@ -8,6 +8,7 @@ using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Operators.Standard;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Pipeline.Sources;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Hosting;
 
@@ -194,20 +195,18 @@ public sealed class StrataRecStartupTests : IDisposable
     }
 
     /// <summary><c>memory_list@1</c> whose load takes 300 ms.</summary>
-    private sealed class SlowListFactory : IBindingFactory<ICandidateSource>
+    private sealed class SlowListFactory : IBindingFactory<IServiceClient>
     {
         public string Type => "slow_list@1";
 
         public Type SettingsType => typeof(MemoryListSettings);
 
-        public ICandidateSource Create(BindingContext context) => new SlowList(new MemoryListCandidateSourceFactory().Create(context));
+        public IServiceClient Create(BindingContext context) => new SlowList(new MemoryListServiceFactory().Create(context));
 
-        private sealed class SlowList(ICandidateSource inner) : ICandidateSource, ILoadable
+        private sealed class SlowList(IServiceClient inner) : IServiceClient, ILoadable
         {
-            public string ClientType => "slow_list@1";
-
-            public ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken) =>
-                inner.RetrieveAsync(query, sink, cancellationToken);
+            public ValueTask<ServiceStatus> CallAsync(ServiceCall query, IServiceResponse sink, CancellationToken cancellationToken) =>
+                inner.CallAsync(query, sink, cancellationToken);
 
             public async ValueTask LoadAsync(CancellationToken cancellationToken) => await Task.Delay(300, cancellationToken);
         }
@@ -234,7 +233,7 @@ public sealed class StrataRecStartupTests : IDisposable
         File.WriteAllText(Path.Combine(root, "catalog", "c.jsonc"), """{ "catalog_id": "c" }""");
         File.WriteAllText(Path.Combine(root, "fixtures", "ids.json"), data);
         File.WriteAllText(Path.Combine(root, "bindings", "local.jsonc"), """
-            { "environment": "local", "candidate_sources": { "s": { "client": "{{client}}", "data_file": "fixtures/ids.json" } } }
+            { "environment": "local", "services": { "s": { "client": "{{client}}", "data_file": "fixtures/ids.json" } } }
             """.Replace("{{client}}", client, StringComparison.Ordinal));
         File.WriteAllText(Path.Combine(root, "pipelines", "p.jsonc"), $$"""
             { "pipeline_id": "p", "entity_key_type": "int64",

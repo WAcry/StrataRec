@@ -1,6 +1,6 @@
-using StrataRec.Models;
 using StrataRec.Pipeline.Execution;
 using static StrataRec.UnitTests.Llm.LlmFixture;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Llm;
 
@@ -124,7 +124,7 @@ public sealed class GenerativeRetrieverTests
     [Fact]
     public async Task ATruncatedAnswer_FailsTheNode_SayingItWasCutAtTheLimit()
     {
-        var models = new TextModels(_ => ("[20, 40, 6", ModelStatus.Ok with { Truncated = true }));
+        var models = new TextModels(_ => ("[20, 40, 6", ServiceStatus.Ok with { Truncated = true }));
 
         var result = await Run(Compile(models, Retrieve("x", maxItems: 1, extra: """, "max_output_tokens": 8"""), op: Op, onFailure: "skip", recall: Recalled,
             columns: NullableRecallColumns));
@@ -139,9 +139,9 @@ public sealed class GenerativeRetrieverTests
     [Fact]
     public async Task AFailedCall_OrNoTextOutput_FailsTheNode_AppendingNothing()
     {
-        var failed = await Run(Compile(new TextModels(_ => (null, ModelStatus.Failed("overloaded"))), Retrieve("x"), op: Op, onFailure: "skip", recall: Recalled,
+        var failed = await Run(Compile(new TextModels(_ => (null, ServiceStatus.Failed("overloaded"))), Retrieve("x"), op: Op, onFailure: "skip", recall: Recalled,
             columns: NullableRecallColumns));
-        var silent = await Run(Compile(new TextModels(_ => (null, ModelStatus.Ok)), Retrieve("x"), op: Op, onFailure: "skip", recall: Recalled,
+        var silent = await Run(Compile(new TextModels(_ => (null, ServiceStatus.Ok)), Retrieve("x"), op: Op, onFailure: "skip", recall: Recalled,
             columns: NullableRecallColumns));
 
         Assert.Equal("model 'llm' failed: overloaded (skipped)", Rank(failed).Detail);
@@ -170,7 +170,7 @@ public sealed class GenerativeRetrieverTests
         "GenerativeRetriever@1 needs 'output': the name of the model's text output holding the answer.")]
     [InlineData("""{ "model": "llm", "output": "answer", "max_items": 3, "prompts": { } }""", "", "/prompts", "LLM_PROMPTS",
         "'prompts' is empty: the model needs at least one prompt.")]
-    [InlineData("""{ "model": "nope", "output": "answer", "max_items": 3, "prompts": { "user": "x" } }""", "", "/model", "MODEL_UNBOUND", null)]
+    [InlineData("""{ "model": "nope", "output": "answer", "max_items": 3, "prompts": { "user": "x" } }""", "", "/model", "SERVICE_UNBOUND", null)]
     [InlineData("""{ "model": "llm", "output": "answer", "max_items": 3, "rank_col": "llm.rank", "prompts": { "user": "x" } }""",
         """ "llm.rank": { "type": "int64", "default": 0 } """, "/rank_col", "COLUMN_TYPE_MISMATCH",
         "Rank column 'llm.rank' is int64, but GenerativeRetriever@1 writes it only for the rows it appends: it must be int64? or int32?.")]
@@ -223,13 +223,13 @@ public sealed class GenerativeRetrieverTests
         Assert.Contains("declare the column nullable", error.Hint);
     }
 
-    /// <summary>The call is recorded and replayed whole, by its digest: the same prompt replays it; another is not recorded.</summary>
+    /// <summary>The call is recorded and replayed whole, by its digest: the same prompt replays it; another is reported as changed inputs.</summary>
     [Fact]
-    public async Task AReplay_AnswersTheCallFromItsRecording_AndAnotherPromptIsNotRecorded()
+    public async Task AReplay_AnswersTheCallFromItsRecording_AndAnotherPromptIsNotAnswered()
     {
         var models = new TextModels("[20, 40]");
         var recorded = await Run(Compile(models, Retrieve(Prompt), op: Op, recall: Recalled, columns: NullableRecallColumns), record: true);
-        var call = Assert.Single(recorded.Recording!.ModelCalls);
+        var call = Assert.Single(recorded.Recording!.ServiceCalls, c => c.Role == "model");
         Assert.Equal((false, 1, "[20, 40]"), (call.Keys.HasValue, call.InputDigests.Count, call.Texts["answer"]));
 
         var (same, sameReplay) = await Replay(Compile(new TextModels("[60]"), Retrieve(Prompt), op: Op, recall: Recalled, columns: NullableRecallColumns), recorded);
@@ -239,7 +239,7 @@ public sealed class GenerativeRetrieverTests
         Assert.Equal(IdsOf(recorded), IdsOf(same));
         Assert.Empty(sameReplay.Gaps);
         Assert.Equal(Recalled, IdsOf(changed));
-        Assert.Contains(changedReplay.Gaps, g => g is { Kind: "model", Source: "llm", Reason: "not_recorded" });
+        Assert.Contains(changedReplay.Gaps, g => g is { Kind: "model", Source: "llm", Reason: "inputs_changed" });
         Assert.Equal(NodeOutcomeKind.Failed, Rank(changed).Kind);
         Assert.Single(models.Calls);
     }

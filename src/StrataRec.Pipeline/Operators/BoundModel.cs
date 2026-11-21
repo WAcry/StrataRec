@@ -1,21 +1,20 @@
-using System.Runtime.CompilerServices;
 using StrataRec.Core.Diagnostics;
-using StrataRec.Core.Memory;
 using StrataRec.Core.Types;
-using StrataRec.Models;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Pipeline.Operators;
 
 /// <summary>
 /// The model a node calls, bound at compile time from the config keys every model operator shares (design 6.9):
-/// <c>model</c>, the logical name bound per environment, and <c>version</c> or <c>version_param</c>, a string parameter
-/// whose <c>enum</c> lists the versions a request may choose. Immutable and shared by every request of the node.
+/// <c>model</c>, the logical name of the service bound per environment, and <c>version</c> or <c>version_param</c>, a
+/// string parameter whose <c>enum</c> lists the versions a request may choose. Immutable and shared by every request of
+/// the node.
 /// </summary>
 /// <remarks>
 /// <para>Every version a request may use is in <see cref="Versions"/>, so the operator checks each one's signature at
 /// load (<see cref="Signature"/>): a version that does not fit would load cleanly and then fail on every request that
-/// chose it. Calls go through <see cref="OperatorContext.InvokeModelAsync"/> with the request's seed
+/// chose it. Calls go through <see cref="OperatorContext.CallAsync"/> with the request's seed
 /// (<c>ctx.request.seed</c>, design 5.9 rule 5), so they are bounded, measured, recorded and replayed like every other
 /// model call.</para>
 /// <para>Public so that operators outside this assembly (the generative ones in StrataRec.Llm) bind and call models with
@@ -25,26 +24,24 @@ public sealed class BoundModel
 {
     private readonly string? _version;
     private readonly ParamRef? _versionParam;
-    private readonly IModelClient _client;
-    private readonly int? _timeoutMs;
     private readonly string?[] _versions;
 
-    private BoundModel(string model, string? version, ParamRef? versionParam, IModelClient client, int? timeoutMs, string?[] versions)
+    private BoundModel(BoundService service, string? version, ParamRef? versionParam, string?[] versions)
     {
-        Model = model;
+        Service = service;
         _version = version;
         _versionParam = versionParam;
-        _client = client;
-        _timeoutMs = timeoutMs;
         _versions = versions;
-        Target = new IoTarget(IoRoles.Model, model);
     }
 
-    /// <summary>The logical model name.</summary>
-    public string Model { get; }
+    /// <summary>The service the model is, called in the <c>model</c> role.</summary>
+    public BoundService Service { get; }
+
+    /// <summary>The logical model name: the service's.</summary>
+    public string Model => Service.Name;
 
     /// <summary>The model's telemetry target: its duration, errors and fallbacks are tagged with the model's name.</summary>
-    public IoTarget Target { get; }
+    public IoTarget Target => Service.Target;
 
     /// <summary>
     /// Every version a request may call, each checked at load: the fixed <c>version</c> (null for the client's default),
@@ -59,7 +56,7 @@ public sealed class BoundModel
     public static BoundModel? Resolve(OperatorCompileContext context, string model, string? version, string? versionParam)
     {
         ArgumentNullException.ThrowIfNull(context);
-        var bound = context.Model(model, "/model");
+        var bound = context.Service(model, "/model", IoRoles.Model);
         if (bound is null)
         {
             return null;
@@ -100,7 +97,7 @@ public sealed class BoundModel
             versions = [version];
         }
 
-        return new BoundModel(model, version, parameter, bound.Value.Client, bound.Value.TimeoutMs, versions);
+        return new BoundModel(bound, version, parameter, versions);
     }
 
     /// <summary>A version as messages name it: <c>Model 'ctr_model' version 'v2'</c> (or <c>'default'</c>).</summary>
@@ -109,12 +106,12 @@ public sealed class BoundModel
     /// <summary>
     /// The signature of <paramref name="version"/> (one of <see cref="Versions"/>), for checking the node's config against
     /// it when it is known; a failed lookup is reported at <c>/model</c> (see
-    /// <see cref="OperatorCompileContext.ModelSignature"/>).
+    /// <see cref="OperatorCompileContext.Signature"/>).
     /// </summary>
     public SignatureLookup Signature(OperatorCompileContext context, string? version)
     {
         ArgumentNullException.ThrowIfNull(context);
-        return context.ModelSignature(_client, Model, version, "/model");
+        return context.Signature(Service, version, "/model");
     }
 
     /// <summary>The version this request calls.</summary>
@@ -125,84 +122,27 @@ public sealed class BoundModel
     }
 
     /// <summary>
-    /// Sends one call through <see cref="OperatorContext.InvokeModelAsync"/> with the request's seed and, for a generative
-    /// call, <paramref name="maxOutputTokens"/>. <paramref name="rows"/> are the physical rows of the batch for a call whose
-    /// outputs are per row, or empty for a call recorded and replayed by the digest of its whole input (see that method).
+    /// Sends one call through <see cref="OperatorContext.CallAsync"/> with the request's seed and, for a generative call,
+    /// <paramref name="maxOutputTokens"/>. <paramref name="rows"/> are the physical rows of the batch for a call whose
+    /// outputs are per row (its items), or empty for a call recorded and replayed by the digest of its whole input;
+    /// <paramref name="outputs"/> name the outputs the operator reads.
     /// </summary>
-    public Task<ModelStatus> InvokeAsync(
-        OperatorContext context, string? version, NamedInput[] inputs, int batchSize, IModelOutputWriter outputs, ReadOnlyMemory<int> rows,
-        int? maxOutputTokens = null)
+    public Task<ServiceStatus> InvokeAsync(
+        OperatorContext context, string? version, NamedInput[] inputs, int batchSize, ServiceResponse response, ReadOnlySpan<int> rows,
+        ReadOnlyMemory<string> outputs, int? maxOutputTokens = null)
     {
         ArgumentNullException.ThrowIfNull(context);
-        var call = new ModelCall
+        var call = new ServiceCall
         {
-            Model = Model,
+            Service = Model,
             Version = version,
             Inputs = inputs,
             BatchSize = batchSize,
-            Options = new ModelCallOptions(Seed: context.Seed, MaxOutputTokens: maxOutputTokens),
+            Items = context.KeysOf(rows),
+            Outputs = outputs,
+            RequestId = context.RequestId,
+            Options = new ServiceCallOptions(Seed: context.Seed, MaxOutputTokens: maxOutputTokens),
         };
-        return context.InvokeModelAsync(_client, Target, call, outputs, rows, _timeoutMs);
-    }
-}
-
-/// <summary>
-/// Receives one call's outputs: tensors into buffers rented from the request, of the element type the client asks for,
-/// and text outputs as the strings the client sets. A call's writer is read only after the call succeeded: an abandoned
-/// client may still be writing it.
-/// </summary>
-/// <remarks>Public so that model operators outside this assembly read outputs the way the built-in ones do.</remarks>
-public sealed class ModelOutputWriter(RequestMemory memory) : IModelOutputWriter
-{
-    private readonly Dictionary<string, TensorValues> _outputs = new(StringComparer.Ordinal);
-    private readonly object _gate = new();
-    private Dictionary<string, string>? _texts;
-
-    public Memory<T> GetValues<T>(string name, int elementCount)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(elementCount);
-        _ = TensorValues.TypeOf<T>(); // an element type, before anything is rented
-        // A string buffer starts cleared, so an element the client left unwritten reads as null, not as another call's string.
-        var array = RuntimeHelpers.IsReferenceOrContainsReferences<T>() ? memory.RentCleared<T>(Math.Max(1, elementCount)) : memory.Rent<T>(Math.Max(1, elementCount));
-        var buffer = array.AsMemory(0, elementCount);
-        lock (_gate)
-        {
-            _outputs[name] = TensorValues.Of<T>(buffer);
-        }
-
-        return buffer;
-    }
-
-    /// <summary>Keeps the text; a name set twice keeps the last.</summary>
-    public void SetText(string name, string text)
-    {
-        lock (_gate)
-        {
-            (_texts ??= new Dictionary<string, string>(StringComparer.Ordinal))[name] = text;
-        }
-    }
-
-    /// <summary>The output the client wrote under <paramref name="name"/>, of the element type it chose; a name asked for twice keeps the last buffer.</summary>
-    public bool TryGet(string name, out TensorValues values)
-    {
-        lock (_gate)
-        {
-            return _outputs.TryGetValue(name, out values);
-        }
-    }
-
-    public bool TryGetText(string name, out string text)
-    {
-        lock (_gate)
-        {
-            if (_texts is not null && _texts.TryGetValue(name, out var value))
-            {
-                text = value;
-                return true;
-            }
-        }
-
-        text = string.Empty;
-        return false;
+        return context.CallAsync(Service, call, response);
     }
 }

@@ -22,11 +22,11 @@ dotnet run --project src/StrataRec.Cli -- --help
 
 | 项目 | 职责 |
 | --- | --- |
-| `StrataRec.Core` | 类型系统、`CandidateTable`、`RowSelection`、列缓冲、位图、`OutputBindings`、`RequestMemory`、稳定哈希 |
+| `StrataRec.Core` | 类型系统、`CandidateTable`、`RowSelection`、列缓冲、位图、`OutputBindings`、`RequestMemory`、稳定哈希、服务契约 `IServiceClient` |
 | `StrataRec.Artifacts` | JSON 标准（JSONC、RFC 8785、RFC 7396、RFC 6901）、产物模型、内容寻址存储 |
 | `StrataRec.Expressions` | `ColumnExpr`：解析、类型与可空性检查、IR、向量化后端 |
 | `StrataRec.Features` | 特征目录、拉取规划、连接器、暂存与回填 |
-| `StrataRec.Models` | `IModelClient` 契约与内置客户端 |
+| `StrataRec.Models` | 内置的模型客户端（`IServiceClient` 的实现） |
 | `StrataRec.Logging` | 漏斗组、探针、协调采样、异步日志管道 |
 | `StrataRec.Pipeline` | 节点模型、效果、算子、执行器 |
 | `StrataRec.Experiments` | 外部分配的映射、补丁校验、足迹、联合计划、触发 |
@@ -38,7 +38,7 @@ dotnet run --project src/StrataRec.Cli -- --help
 
 依赖关系按表格自上而下，不允许引入循环引用。
 
-`samples/` 下有两个示例：`home_feed` 是演示全部功能的工作区（CLI 和集成测试都用它）；`StrataRec.Samples.Host` 是在 ASP.NET Core 服务里嵌入引擎、四个扩展点各一个自定义组件的宿主示例，属于解决方案，改动引擎公开 API 时要一起改。
+`samples/` 下有两个示例：`home_feed` 是演示全部功能的工作区（CLI 和集成测试都用它）；`StrataRec.Samples.Host` 是在 ASP.NET Core 服务里嵌入引擎、三个扩展点共四个自定义组件的宿主示例，属于解决方案，改动引擎公开 API 时要一起改。
 
 ## 约定
 

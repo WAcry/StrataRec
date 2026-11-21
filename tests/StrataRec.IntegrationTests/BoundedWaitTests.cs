@@ -10,6 +10,7 @@ using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Pipeline.Replay;
 using StrataRec.Pipeline.Sources;
+using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
@@ -54,7 +55,7 @@ public sealed class BoundedWaitTests
         Assert.Equal(1, Assert.Single(capture.Of(StrataRecMetrics.Names.AbandonedIo)).Value); // ...and is counted once
         Assert.Equal("timeout", Tag(Assert.Single(capture.Of(StrataRecMetrics.Names.IoErrors), m => Tag(m, StrataRecTags.IoRole) == "model"), StrataRecTags.Outcome));
         var run = result.Recording!.Runs[0];
-        var call = Assert.Single(run.ModelCalls);
+        var call = Assert.Single(run.ServiceCalls, c => c.Role == "model");
         Assert.Equal(("timeout", true), (call.Status, call.Threw)); // as the request saw it
         Assert.Empty(call.Outputs);
         Assert.Equal(ReplayTiming.TimedOut, Assert.Single(run.Nodes.Single(n => n.Node == "ctr_ranker").Attempts, a => a.Node == "ctr_ranker").Timing);
@@ -68,7 +69,7 @@ public sealed class BoundedWaitTests
         models.Open();
         Assert.True((await models.Answered.Task.WaitAsync(Patience, TestContext.Current.CancellationToken)).Succeeded);
         Assert.True(SpinWait.SpinUntil(() => pool.Outstanding == 0, Patience));
-        Assert.Empty(run.ModelCalls[0].Outputs);
+        Assert.Empty(run.ServiceCalls.FindAll(c => c.Role == "model")[0].Outputs);
 
         await AssertReplaysAtOnce(engine, result.Recording, "ctr_ranker", "fallback", ranker.Detail);
         Assert.Equal(1, models.Calls); // the replay called nothing
@@ -115,7 +116,7 @@ public sealed class BoundedWaitTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(Patience, TestContext.Current.CancellationToken));
         Assert.False(models.Answered.Task.IsCompleted);
-        Assert.Equal("cancelled", Assert.Single(delivered!.Runs[0].ModelCalls).Status);
+        Assert.Equal("cancelled", Assert.Single(delivered!.Runs[0].ServiceCalls, c => c.Role == "model").Status);
         Assert.DoesNotContain(capture.Of(StrataRecMetrics.Names.IoErrors), m => Tag(m, StrataRecTags.IoRole) == "model"); // the caller giving up is not the model's fault
         Assert.DoesNotContain(capture.Of(StrataRecMetrics.Names.IoDuration), m => Tag(m, StrataRecTags.IoRole) == "model");
         Assert.Equal(1, Assert.Single(capture.Of(StrataRecMetrics.Names.AbandonedIo)).Value);
@@ -124,7 +125,7 @@ public sealed class BoundedWaitTests
         models.Open();
         Assert.True((await models.Answered.Task.WaitAsync(Patience, TestContext.Current.CancellationToken)).Succeeded);
         Assert.True(SpinWait.SpinUntil(() => pool.Outstanding == 0, Patience));
-        Assert.Equal("cancelled", delivered.Runs[0].ModelCalls[0].Status);
+        Assert.Equal("cancelled", delivered.Runs[0].ServiceCalls.FindAll(c => c.Role == "model")[0].Status);
     }
 
     [Fact]
@@ -132,7 +133,7 @@ public sealed class BoundedWaitTests
     {
         // What recall appends when popular answers, for comparison: popular adds rows two_tower does not have.
         var baseline = await Engine(HomeFeedTestHost.Load(), new CountingPool()).ExecuteAsync(Request("req-source-baseline"), TestContext.Current.CancellationToken);
-        var twoTower = baseline.Recording!.Runs[0].CandidateCalls.Single(c => c.Source == "two_tower").Ids!.Value.EnumerateArray()
+        var twoTower = baseline.Recording!.Runs[0].ServiceCalls.FindAll(c => c.Role == "recall").Single(c => c.Service == "two_tower").Ids!.Value.EnumerateArray()
             .Select(id => id.GetInt64()).Distinct().Count();
         Assert.True(baseline.Trace!.Single(n => n.NodeId == "recall").RowsOut > twoTower);
 
@@ -153,7 +154,7 @@ public sealed class BoundedWaitTests
         // popular had added every candidate before it hung; its abandoned buffer was not read.
         Assert.Equal(twoTower, recall.RowsOut);
         Assert.DoesNotContain(result.Items, item => item.Columns["primary_source"].AsString() == "popular");
-        var popular = result.Recording!.Runs[0].CandidateCalls.Single(c => c.Source == "popular");
+        var popular = result.Recording!.Runs[0].ServiceCalls.FindAll(c => c.Role == "recall").Single(c => c.Service == "popular");
         Assert.Equal(("timeout", null), (popular.Status, popular.Ids));
         Assert.True(pool.Outstanding > 0);
         Assert.Equal(1, Assert.Single(capture.Of(StrataRecMetrics.Names.AbandonedIo)).Value);
@@ -181,7 +182,7 @@ public sealed class BoundedWaitTests
         var ranker = result.Trace!.Single(n => n.NodeId == "ctr_ranker");
         Assert.Equal(("ctr_backup", "timed out after 50 ms; served by fallback 'ctr_backup'"), (ranker.ProducedBy, ranker.Detail));
         var run = result.Recording!.Runs[0];
-        var call = Assert.Single(run.ModelCalls);
+        var call = Assert.Single(run.ServiceCalls, c => c.Role == "model");
         Assert.Equal(("timeout", true), (call.Status, call.Threw));
         Assert.Empty(call.Outputs);
         Assert.Equal(ReplayTiming.TimedOut, run.Nodes.Single(n => n.Node == "ctr_ranker").Attempts[0].Timing);
@@ -218,7 +219,7 @@ public sealed class BoundedWaitTests
     };
 
     private static RecEngine Engine(
-        HomeFeedTestHost host, IBufferPool pool, IBindingFactory<IModelClient>? models = null, IBindingFactory<ICandidateSource>? sources = null, RequestEventLog? events = null)
+        HomeFeedTestHost host, IBufferPool pool, IBindingFactory<IServiceClient>? models = null, IBindingFactory<IServiceClient>? sources = null, RequestEventLog? events = null)
     {
         var engine = new RecEngine(
             new PlanEnvironment
@@ -305,7 +306,7 @@ public sealed class BoundedWaitTests
     }
 
     /// <summary>linear@1 models that answer only once the gate opens, writing their outputs then.</summary>
-    private sealed class GatedModels : Gated, IBindingFactory<IModelClient>
+    private sealed class GatedModels : Gated, IBindingFactory<IServiceClient>
     {
         private readonly LinearModelClientFactory _inner = new();
 
@@ -313,17 +314,15 @@ public sealed class BoundedWaitTests
 
         public Type SettingsType => _inner.SettingsType;
 
-        public IModelClient Create(BindingContext context) => new Client(_inner.Create(context), this);
+        public IServiceClient Create(BindingContext context) => new Client(_inner.Create(context), this);
 
-        private sealed class Client(IModelClient inner, GatedModels owner) : IModelClient
+        private sealed class Client(IServiceClient inner, GatedModels owner) : IServiceClient
         {
-            public string ClientType => inner.ClientType;
+            public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken) =>
+                inner.DescribeAsync(model, version, cancellationToken);
 
-            public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
-                inner.GetSignatureAsync(model, version, cancellationToken);
-
-            public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
-                owner.Later(() => inner.InvokeAsync(call, outputs, CancellationToken.None).AsTask().GetAwaiter().GetResult(), s => (s.Succeeded, s.Error));
+            public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken) =>
+                owner.Later(() => inner.CallAsync(call, response, CancellationToken.None).AsTask().GetAwaiter().GetResult(), s => (s.Succeeded, s.Error));
         }
     }
 
@@ -331,34 +330,32 @@ public sealed class BoundedWaitTests
     /// memory_list@1 sources where <paramref name="gated"/> adds all its candidates at once and then answers only once the
     /// gate opens, adding them again then.
     /// </summary>
-    private sealed class GatedSources(string gated) : Gated, IBindingFactory<ICandidateSource>
+    private sealed class GatedSources(string gated) : Gated, IBindingFactory<IServiceClient>
     {
-        private readonly MemoryListCandidateSourceFactory _inner = new();
+        private readonly MemoryListServiceFactory _inner = new();
 
         public string Type => _inner.Type;
 
         public Type SettingsType => _inner.SettingsType;
 
-        public ICandidateSource Create(BindingContext context)
+        public IServiceClient Create(BindingContext context)
         {
             var source = _inner.Create(context);
             return context.Name == gated ? new Source(source, this) : source;
         }
 
-        private sealed class Source(ICandidateSource inner, GatedSources owner) : ICandidateSource
+        private sealed class Source(IServiceClient inner, GatedSources owner) : IServiceClient
         {
-            public string ClientType => inner.ClientType;
-
-            public ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken)
+            public ValueTask<ServiceStatus> CallAsync(ServiceCall query, IServiceResponse sink, CancellationToken cancellationToken)
             {
-                _ = inner.RetrieveAsync(query, sink, CancellationToken.None).AsTask().GetAwaiter().GetResult();
-                return owner.Later(() => inner.RetrieveAsync(query, sink, CancellationToken.None).AsTask().GetAwaiter().GetResult(), s => (s.Succeeded, s.Error));
+                _ = inner.CallAsync(query, sink, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+                return owner.Later(() => inner.CallAsync(query, sink, CancellationToken.None).AsTask().GetAwaiter().GetResult(), s => (s.Succeeded, s.Error));
             }
         }
     }
 
     /// <summary>linear@1 models that answer synchronously, but only once their token has been cancelled.</summary>
-    private sealed class LateModels : IBindingFactory<IModelClient>
+    private sealed class LateModels : IBindingFactory<IServiceClient>
     {
         private readonly LinearModelClientFactory _inner = new();
 
@@ -366,23 +363,21 @@ public sealed class BoundedWaitTests
 
         public Type SettingsType => _inner.SettingsType;
 
-        public IModelClient Create(BindingContext context) => new Client(_inner.Create(context));
+        public IServiceClient Create(BindingContext context) => new Client(_inner.Create(context));
 
-        private sealed class Client(IModelClient inner) : IModelClient
+        private sealed class Client(IServiceClient inner) : IServiceClient
         {
-            public string ClientType => inner.ClientType;
+            public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken) =>
+                inner.DescribeAsync(model, version, cancellationToken);
 
-            public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
-                inner.GetSignatureAsync(model, version, cancellationToken);
-
-            public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
+            public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken)
             {
                 if (!cancellationToken.WaitHandle.WaitOne(Patience))
                 {
                     throw new TimeoutException("the node's budget never ran out");
                 }
 
-                return inner.InvokeAsync(call, outputs, CancellationToken.None);
+                return inner.CallAsync(call, response, CancellationToken.None);
             }
         }
     }

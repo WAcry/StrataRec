@@ -384,7 +384,7 @@ public sealed class CatalogFeatureRegistrationTests
                 "user_store":   { "connector": "memory@1", "data": { "7": { "u_age": 30.0 } }, "timeout_ms": 30000 },
                 "item_store":   {{itemStore ?? """{ "connector": "memory@1", "data": { "1": { "i_score": 0.5, "i_author": 10 } }, "timeout_ms": 30000 }"""}},
                 "author_store": {{authorStore ?? """{ "connector": "memory@1", "data": { "10": { "a_followers": 100.0 } }, "timeout_ms": 30000 }"""}} },
-              "candidate_sources": { "s": { "client": "memory_list@1", "items": [1, 2, 3] } } }
+              "services": { "s": { "client": "memory_list@1", "items": [1, 2, 3] } } }
             """);
         Write(root, "fixtures/author_snapshot/snapshot.json", """{ "format": "jsonl", "files": ["part-0000.jsonl"] }""");
         Write(root, "fixtures/author_snapshot/part-0000.jsonl", """{"key": 10, "version": 1, "fields": {"a_followers": 100.0}}""" + "\n");

@@ -3,8 +3,8 @@ using System.Globalization;
 using System.Text.Json.Serialization;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Llm.Templates;
-using StrataRec.Models;
 using StrataRec.Pipeline.Operators;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Llm;
 
@@ -145,6 +145,8 @@ public sealed class LlmRerankerFactory : IOperatorFactory
         BoundModel model, (string Name, PromptTemplate Template)[] prompts, string output, int window, AnswerKind answer, bool drop, int maxOutputTokens)
         : Operator
     {
+        private readonly string[] _read = [output]; // the one output it reads, recorded and replayed
+
         private readonly KeyValuePair<string, object?>[] _used = LlmNode.Tags(model, "used");
         private readonly KeyValuePair<string, object?>[] _unknown = LlmNode.Tags(model, "unknown");
         private readonly KeyValuePair<string, object?>[] _repeated = LlmNode.Tags(model, "repeated");
@@ -170,8 +172,8 @@ public sealed class LlmRerankerFactory : IOperatorFactory
                 inputs[i] = NamedInput.FromText(prompts[i].Name, prompts[i].Template.Render(context, rows.AsSpan(0, n)));
             }
 
-            var writer = new ModelOutputWriter(memory);
-            var status = await model.InvokeAsync(context, model.Version(context), inputs, 1, writer, ReadOnlyMemory<int>.Empty, maxOutputTokens)
+            var writer = new ServiceResponse(memory);
+            var status = await model.InvokeAsync(context, model.Version(context), inputs, 1, writer, ReadOnlySpan<int>.Empty, _read, maxOutputTokens)
                 .ConfigureAwait(false);
             if (!status.Succeeded)
             {
@@ -190,7 +192,7 @@ public sealed class LlmRerankerFactory : IOperatorFactory
 
         /// <summary>Parses the answer and sets the new order; fails the node, changing nothing, when the answer names no window row.</summary>
         /// <param name="rows">The live rows as of the call, in rank order; the first <paramref name="n"/> are the window.</param>
-        private void Apply(OperatorContext context, ReadOnlySpan<int> rows, int n, string text, in ModelStatus status)
+        private void Apply(OperatorContext context, ReadOnlySpan<int> rows, int n, string text, in ServiceStatus status)
         {
             var memory = context.Memory;
             var shown = rows[..n];
@@ -240,7 +242,7 @@ public sealed class LlmRerankerFactory : IOperatorFactory
             : "entity ids of the window's rows";
 
         /// <summary>The hint for an answer the client says it cut at the limit; empty otherwise.</summary>
-        private string Cut(in ModelStatus status) => LlmNode.Cut(status, maxOutputTokens, "shorten the window");
+        private string Cut(in ServiceStatus status) => LlmNode.Cut(status, maxOutputTokens, "shorten the window");
 
         private void Count(OperatorContext context, in AnswerCounts counts)
         {

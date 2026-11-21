@@ -4,6 +4,7 @@ using StrataRec.Core.Hashing;
 using StrataRec.Core.Types;
 using StrataRec.Models;
 using StrataRec.Pipeline.Operators.Standard;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Models;
 
@@ -21,14 +22,14 @@ public sealed class RandomModelClientTests
     {
         var client = Create("""{ "inputs": ["smoothed_ctr", "log_followers"], "outputs": ["p_click", "p_like"] }""");
 
-        var lookup = client.GetSignatureAsync("ctr_model", "v13", CancellationToken.None);
+        var lookup = client.DescribeAsync("ctr_model", "v13", CancellationToken.None);
 
         Assert.True(lookup.IsCompletedSuccessfully);
         var signature = await lookup;
         Assert.Equal(new[] { "log_followers", "smoothed_ctr" }, signature.Inputs.Select(s => s.Name));
         Assert.Equal(new[] { "p_click", "p_like" }, signature.Outputs.Select(s => s.Name));
         Assert.All(signature.Inputs.Concat(signature.Outputs), s => Assert.True(ModelTensorRule.AcceptsScore(TensorLayout.Rows, s), s.ToString()));
-        Assert.Equal(signature, await client.GetSignatureAsync("ctr_model", null, CancellationToken.None));
+        Assert.Equal(signature, await client.DescribeAsync("ctr_model", null, CancellationToken.None));
 
         // What ModelScorer@1 checks at load for the sample's ctr_ranker node: the stand-in passes as the real model would.
         var inputs = new ModelTensorRule.MappedInput[]
@@ -36,7 +37,7 @@ public sealed class RandomModelClientTests
             new("smoothed_ctr", "col.item.smoothed_ctr", ColumnType.Float32), new("log_followers", "col.author.log_followers", ColumnType.Float32),
         };
         Assert.Empty(ModelTensorRule.Check("Model 'ctr_model' version 'v13'", TensorLayout.Rows, inputs, new ModelTensorRule.MappedOutput[] { new("p_click", "/outputs/p_click") }, signature));
-        await Assert.ThrowsAsync<ArgumentException>(async () => await client.GetSignatureAsync("other_model", null, CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(async () => await client.DescribeAsync("other_model", null, CancellationToken.None));
     }
 
     [Fact]
@@ -123,39 +124,39 @@ public sealed class RandomModelClientTests
     public async Task AMissingOrMalformedInput_FailsTheCall()
     {
         var client = Create(SampleSettings);
-        var missing = new ModelCall
+        var missing = new ServiceCall
         {
-            Model = "ctr_model",
+            Service = "ctr_model",
             BatchSize = 2,
             Inputs = new[] { NamedInput.FromFloat32("smoothed_ctr", new[] { 2 }, new float[2]) },
-            Options = new ModelCallOptions(Seed: 1),
+            Options = new ServiceCallOptions(Seed: 1),
         };
-        var shortInput = new ModelCall
+        var shortInput = new ServiceCall
         {
-            Model = "ctr_model",
+            Service = "ctr_model",
             BatchSize = 3,
             Inputs = new[] { NamedInput.FromFloat32("smoothed_ctr", new[] { 3 }, new float[3]), NamedInput.FromFloat32("log_followers", new[] { 2 }, new float[2]) },
-            Options = new ModelCallOptions(Seed: 1),
+            Options = new ServiceCallOptions(Seed: 1),
         };
-        var int64Input = new ModelCall
+        var int64Input = new ServiceCall
         {
-            Model = "ctr_model",
+            Service = "ctr_model",
             BatchSize = 1,
             Inputs = new[] { NamedInput.FromFloat32("smoothed_ctr", new[] { 1 }, new float[1]), NamedInput.FromInt64("log_followers", new[] { 1 }, new long[1]) },
-            Options = new ModelCallOptions(Seed: 1),
+            Options = new ServiceCallOptions(Seed: 1),
         };
-        var vectorInput = new ModelCall // what ModelScorer@1 sends for a list<float32,2> column: enough floats, but two per row
+        var vectorInput = new ServiceCall // what ModelScorer@1 sends for a list<float32,2> column: enough floats, but two per row
         {
-            Model = "ctr_model",
+            Service = "ctr_model",
             BatchSize = 1,
             Inputs = new[] { NamedInput.FromFloat32("smoothed_ctr", new[] { 1 }, new float[1]), NamedInput.FromFloat32("log_followers", new[] { 1, 2 }, new float[2]) },
-            Options = new ModelCallOptions(Seed: 1),
+            Options = new ServiceCallOptions(Seed: 1),
         };
 
-        Assert.Equal(ModelStatus.Failed("Missing input 'log_followers'."), await client.InvokeAsync(missing, new Outputs(), CancellationToken.None));
-        Assert.Equal(ModelStatus.Failed("Input 'log_followers' must be float32 with one value per row (3)."), await client.InvokeAsync(shortInput, new Outputs(), CancellationToken.None));
-        Assert.Equal(ModelStatus.Failed("Input 'log_followers' must be float32 with one value per row (1)."), await client.InvokeAsync(int64Input, new Outputs(), CancellationToken.None));
-        Assert.Equal(ModelStatus.Failed("Input 'log_followers' must be float32 with one value per row (1)."), await client.InvokeAsync(vectorInput, new Outputs(), CancellationToken.None));
+        Assert.Equal(ServiceStatus.Failed("Missing input 'log_followers'."), await client.CallAsync(missing, new Outputs(), CancellationToken.None));
+        Assert.Equal(ServiceStatus.Failed("Input 'log_followers' must be float32 with one value per row (3)."), await client.CallAsync(shortInput, new Outputs(), CancellationToken.None));
+        Assert.Equal(ServiceStatus.Failed("Input 'log_followers' must be float32 with one value per row (1)."), await client.CallAsync(int64Input, new Outputs(), CancellationToken.None));
+        Assert.Equal(ServiceStatus.Failed("Input 'log_followers' must be float32 with one value per row (1)."), await client.CallAsync(vectorInput, new Outputs(), CancellationToken.None));
     }
 
     [Fact]
@@ -163,22 +164,22 @@ public sealed class RandomModelClientTests
     {
         var client = Create(SampleSettings);
 
-        ModelCall Call(int batch, int rows, int floats) => new()
+        ServiceCall Call(int batch, int rows, int floats) => new()
         {
-            Model = "ctr_model",
+            Service = "ctr_model",
             BatchSize = batch,
             Inputs = new[] { NamedInput.FromFloat32("log_followers", new[] { rows }, new float[floats]), NamedInput.FromFloat32("smoothed_ctr", new[] { rows }, new float[floats]) },
-            Options = new ModelCallOptions(Seed: 1),
+            Options = new ServiceCallOptions(Seed: 1),
         };
 
-        Assert.Equal(ModelStatus.Failed("Input 'log_followers' must be float32 with one value per row (2)."),
-            await client.InvokeAsync(Call(batch: 2, rows: 3, floats: 3), new Outputs(), CancellationToken.None)); // enough data, but three rows
-        Assert.Equal(ModelStatus.Failed("Input 'log_followers' must be float32 with one value per row (2)."),
-            await client.InvokeAsync(Call(batch: 2, rows: 1, floats: 2), new Outputs(), CancellationToken.None));
-        Assert.Equal(ModelStatus.Failed("The call's batch size is -1; it must not be negative."),
-            await client.InvokeAsync(Call(batch: -1, rows: -1, floats: 1), new Outputs(), CancellationToken.None));
+        Assert.Equal(ServiceStatus.Failed("Input 'log_followers' must be float32 with one value per row (2)."),
+            await client.CallAsync(Call(batch: 2, rows: 3, floats: 3), new Outputs(), CancellationToken.None)); // enough data, but three rows
+        Assert.Equal(ServiceStatus.Failed("Input 'log_followers' must be float32 with one value per row (2)."),
+            await client.CallAsync(Call(batch: 2, rows: 1, floats: 2), new Outputs(), CancellationToken.None));
+        Assert.Equal(ServiceStatus.Failed("The call's batch size is -1; it must not be negative."),
+            await client.CallAsync(Call(batch: -1, rows: -1, floats: 1), new Outputs(), CancellationToken.None));
         var outputs = new Outputs();
-        Assert.Equal(ModelStatus.Ok, await client.InvokeAsync(Call(batch: 2, rows: 2, floats: 5), outputs, CancellationToken.None));
+        Assert.Equal(ServiceStatus.Ok, await client.CallAsync(Call(batch: 2, rows: 2, floats: 5), outputs, CancellationToken.None));
         Assert.Equal(2, outputs.Values["p_click"].Length);
     }
 
@@ -259,14 +260,14 @@ public sealed class RandomModelClientTests
     [Fact]
     public async Task TheFullForm_DeclaresEachTensorAsGiven_SoEachModelOperatorsLoadTimeCheckPasses()
     {
-        var point = await Create(PointSettings).GetSignatureAsync("ctr_model", "v1", CancellationToken.None);
+        var point = await Create(PointSettings).DescribeAsync("ctr_model", "v1", CancellationToken.None);
         Assert.Equal(new[] { "ctr float32 [-1]", "emb float32 [-1, 3]", "item_id int64 [-1]" }, point.Inputs.Select(Describe));
         Assert.Equal(new[] { "p_click float32 [-1]" }, point.Outputs.Select(Describe));
         Assert.Empty(ModelTensorRule.Check("m", TensorLayout.Rows,
             new ModelTensorRule.MappedInput[] { new("item_id", "col.entity_id", ColumnType.Int64), new("emb", "col.item.emb", ColumnType.List(StorageKind.Float32, fixedLength: 3)), new("ctr", "col.item.ctr", ColumnType.Float32) },
             new ModelTensorRule.MappedOutput[] { new("p_click", "/outputs/p_click") }, point));
 
-        var pair = await Create(PairSettings).GetSignatureAsync("ctr_model", null, CancellationToken.None);
+        var pair = await Create(PairSettings).DescribeAsync("ctr_model", null, CancellationToken.None);
         Assert.Equal(new[] { "final float32 [-1, 2]", "item_id int64 [-1, 2]", "quality float32 [-1]" }, pair.Inputs.Select(Describe));
         Assert.Equal(new[] { "p_first float32 [-1]" }, pair.Outputs.Select(Describe));
         Assert.Empty(ModelTensorRule.Check("m", TensorLayout.Pairs,
@@ -276,7 +277,7 @@ public sealed class RandomModelClientTests
             },
             new ModelTensorRule.MappedOutput[] { new("p_first", "/output") }, pair));
 
-        var list = await Create(ListSettings).GetSignatureAsync("ctr_model", null, CancellationToken.None);
+        var list = await Create(ListSettings).DescribeAsync("ctr_model", null, CancellationToken.None);
         Assert.Equal(new[] { "emb float32 [1, -1, 2]", "final float32 [1, -1]", "seed int64 [1]", "user float32 [1, 3]" }, list.Inputs.Select(Describe));
         Assert.Equal(new[] { "scores float32 [1, -1]" }, list.Outputs.Select(Describe));
         Assert.Empty(ModelTensorRule.Check("m", TensorLayout.List,
@@ -342,7 +343,7 @@ public sealed class RandomModelClientTests
     [Fact]
     public void EveryElementType_IsAnInput_AndTheSameValuesAtAnotherWidth_ScoreTheSame()
     {
-        static IModelClient Of(string type) => Create($$"""{ "inputs": { "x": { "type": "{{type}}", "shape": [-1] } }, "outputs": ["p"] }""");
+        static IServiceClient Of(string type) => Create($$"""{ "inputs": { "x": { "type": "{{type}}", "shape": [-1] } }, "outputs": ["p"] }""");
         var ints = new[] { int.MinValue, -1, 0, 7, int.MaxValue };
 
         var asInt64 = Call(Of("int64"), 5, 3, NamedInput.FromInt64("x", new[] { 5 }, ints.Select(i => (long)i).ToArray()))["p"];
@@ -374,7 +375,7 @@ public sealed class RandomModelClientTests
         var x = NamedInput.FromInt64("x", new[] { 4 }, new long[] { 1, 2, 3, 4 });
         var outputs = new Outputs();
 
-        var status = await wide.InvokeAsync(new ModelCall { Model = "ctr_model", BatchSize = 4, Inputs = new[] { x }, Options = new ModelCallOptions(Seed: 3) }, outputs,
+        var status = await wide.CallAsync(new ServiceCall { Service = "ctr_model", BatchSize = 4, Inputs = new[] { x }, Options = new ServiceCallOptions(Seed: 3) }, outputs,
             TestContext.Current.CancellationToken);
 
         Assert.True(status.Succeeded, status.Error);
@@ -457,39 +458,39 @@ public sealed class RandomModelClientTests
         NamedInput Final(int[] shape, int values) => F("final", shape, new float[values]);
         NamedInput Ids(int pairs) => L("item_id", new[] { pairs, 2 }, new long[2 * pairs]);
         NamedInput Quality(int pairs) => F("quality", new[] { pairs }, new float[pairs]);
-        ModelStatus Pair(int batch, params NamedInput[] inputs) => TryCall(pair, batch, 1, inputs).Status;
+        ServiceStatus Pair(int batch, params NamedInput[] inputs) => TryCall(pair, batch, 1, inputs).Status;
 
         Assert.True(Pair(3, Final(new[] { 3, 2 }, 6), Ids(3), Quality(3)).Succeeded);
         Assert.True(Pair(3, Final(new[] { 3, 2 }, 7), Ids(3), Quality(3)).Succeeded); // a longer backing buffer
         Assert.Empty(TryCall(pair, 0, 1, Final(new[] { 0, 2 }, 0), Ids(0), Quality(0)).Outputs["p_first"]);
-        Assert.Equal(ModelStatus.Failed("Missing input 'item_id'."), Pair(3, Final(new[] { 3, 2 }, 6), Quality(3)));
-        Assert.Equal(ModelStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends int64 [3, 2] with 6 values."),
+        Assert.Equal(ServiceStatus.Failed("Missing input 'item_id'."), Pair(3, Final(new[] { 3, 2 }, 6), Quality(3)));
+        Assert.Equal(ServiceStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends int64 [3, 2] with 6 values."),
             Pair(3, L("final", new[] { 3, 2 }, new long[6]), Ids(3), Quality(3)));
-        Assert.Equal(ModelStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends float32 [6] with 6 values."),
+        Assert.Equal(ServiceStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends float32 [6] with 6 values."),
             Pair(3, Final(new[] { 6 }, 6), Ids(3), Quality(3)));
-        Assert.Equal(ModelStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends float32 [3, 3] with 9 values."),
+        Assert.Equal(ServiceStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends float32 [3, 3] with 9 values."),
             Pair(3, Final(new[] { 3, 3 }, 9), Ids(3), Quality(3)));
-        Assert.Equal(ModelStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends float32 [2, 2] with 4 values."),
+        Assert.Equal(ServiceStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends float32 [2, 2] with 4 values."),
             Pair(3, Final(new[] { 2, 2 }, 4), Ids(3), Quality(3)));
-        Assert.Equal(ModelStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends float32 [3, 2] with 5 values."),
+        Assert.Equal(ServiceStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends float32 [3, 2] with 5 values."),
             Pair(3, Final(new[] { 3, 2 }, 5), Ids(3), Quality(3)));
-        Assert.Equal(ModelStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends float32 [3, -2] with 6 values."),
+        Assert.Equal(ServiceStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends float32 [3, -2] with 6 values."),
             Pair(3, Final(new[] { 3, -2 }, 6), Ids(3), Quality(3)));
-        Assert.Equal(ModelStatus.Failed("Input 'quality' must be float32 with one value per row (3)."), Pair(3, Final(new[] { 3, 2 }, 6), Ids(3), Quality(2)));
+        Assert.Equal(ServiceStatus.Failed("Input 'quality' must be float32 with one value per row (3)."), Pair(3, Final(new[] { 3, 2 }, 6), Ids(3), Quality(2)));
 
         var list = Create(ListSettings);
-        ModelStatus List(int batch, int rows, int embRows, int[]? user = null, int userValues = 3) => TryCall(list, batch, 1,
+        ServiceStatus List(int batch, int rows, int embRows, int[]? user = null, int userValues = 3) => TryCall(list, batch, 1,
             F("final", new[] { 1, rows }, new float[rows]), F("emb", new[] { 1, embRows, 2 }, new float[2 * embRows]), L("seed", new[] { 1 }, new long[1]),
             F("user", user ?? new[] { 1, 3 }, new float[userValues])).Status;
 
         Assert.True(List(1, 4, 4).Succeeded);
-        Assert.Equal(ModelStatus.Failed("Inputs 'emb' and 'final' give output 'scores' (float32 [1, -1]) different shapes, [1, 3] and [1, 4]: the inputs scored per element " +
+        Assert.Equal(ServiceStatus.Failed("Inputs 'emb' and 'final' give output 'scores' (float32 [1, -1]) different shapes, [1, 3] and [1, 4]: the inputs scored per element " +
             "of an output must agree on its dimensions."), List(1, 4, 3));
-        Assert.Equal(ModelStatus.Failed("Input 'emb' must be float32 [1, -1, 2] with the call's batch size (2) as its first dimension; the call sends float32 [1, 4, 2] with 8 values."),
+        Assert.Equal(ServiceStatus.Failed("Input 'emb' must be float32 [1, -1, 2] with the call's batch size (2) as its first dimension; the call sends float32 [1, 4, 2] with 8 values."),
             List(2, 4, 4));
-        Assert.Equal(ModelStatus.Failed("Input 'user' must be float32 [1, 3]; the call sends float32 [1, 2] with 3 values."), List(1, 4, 4, user: new[] { 1, 2 }));
-        Assert.Equal(ModelStatus.Failed("Input 'user' must be float32 [1, 3]; the call sends float32 [1, 3] with 2 values."), List(1, 4, 4, userValues: 2));
-        Assert.Equal(ModelStatus.Failed("Input 'id' must be int64 with one value per row (2)."),
+        Assert.Equal(ServiceStatus.Failed("Input 'user' must be float32 [1, 3]; the call sends float32 [1, 2] with 3 values."), List(1, 4, 4, user: new[] { 1, 2 }));
+        Assert.Equal(ServiceStatus.Failed("Input 'user' must be float32 [1, 3]; the call sends float32 [1, 3] with 2 values."), List(1, 4, 4, userValues: 2));
+        Assert.Equal(ServiceStatus.Failed("Input 'id' must be int64 with one value per row (2)."),
             TryCall(Create("""{ "inputs": { "id": { "type": "int64", "shape": [-1] } }, "outputs": ["p"] }"""), 2, 1, L("id", new[] { 1 }, new long[1])).Status);
     }
 
@@ -536,11 +537,11 @@ public sealed class RandomModelClientTests
     [Fact]
     public void TheDefaultRegistry_HasIt()
     {
-        Assert.True(StrataRec.Pipeline.Planning.PlanEnvironment.DefaultBindings().TryGet<IModelClient>("random@1", out var factory));
-        Assert.Equal("random@1", factory.Create(Context(SampleSettings, "ctr_model")).ClientType);
+        Assert.True(StrataRec.Pipeline.Planning.PlanEnvironment.DefaultBindings().TryGet<IServiceClient>("random@1", out var factory));
+        Assert.IsType<RandomModelClient>(factory.Create(Context(SampleSettings, "ctr_model")));
     }
 
-    internal static IModelClient Create(string settings, string model = "ctr_model") => new RandomModelClientFactory().Create(Context(settings, model));
+    internal static IServiceClient Create(string settings, string model = "ctr_model") => new RandomModelClientFactory().Create(Context(settings, model));
 
     internal static (float SmoothedCtr, float LogFollowers)[] Rows(int count)
     {
@@ -599,31 +600,31 @@ public sealed class RandomModelClientTests
         return score;
     }
 
-    private static Dictionary<string, float[]> Call(IModelClient client, int batch, long? seed, params NamedInput[] inputs)
+    private static Dictionary<string, float[]> Call(IServiceClient client, int batch, long? seed, params NamedInput[] inputs)
     {
         var (status, outputs) = TryCall(client, batch, seed, inputs);
         Assert.True(status.Succeeded, status.Error);
         return outputs;
     }
 
-    private static (ModelStatus Status, Dictionary<string, float[]> Outputs) TryCall(IModelClient client, int batch, long? seed, params NamedInput[] inputs)
+    private static (ServiceStatus Status, Dictionary<string, float[]> Outputs) TryCall(IServiceClient client, int batch, long? seed, params NamedInput[] inputs)
     {
         var outputs = new Outputs();
-        var call = new ModelCall { Model = "ctr_model", BatchSize = batch, Inputs = inputs, Options = new ModelCallOptions(Seed: seed) };
-        var pending = client.InvokeAsync(call, outputs, CancellationToken.None);
+        var call = new ServiceCall { Service = "ctr_model", BatchSize = batch, Inputs = inputs, Options = new ServiceCallOptions(Seed: seed) };
+        var pending = client.CallAsync(call, outputs, CancellationToken.None);
         Assert.True(pending.IsCompletedSuccessfully, "random@1 answers synchronously");
         return (pending.Result, outputs.Values);
     }
 
-    private static Dictionary<string, float[]> Invoke(IModelClient client, (float SmoothedCtr, float LogFollowers)[] rows, long? seed, string[]? inputOrder = null)
+    private static Dictionary<string, float[]> Invoke(IServiceClient client, (float SmoothedCtr, float LogFollowers)[] rows, long? seed, string[]? inputOrder = null)
     {
         var (status, outputs) = TryInvoke(client, rows, seed, inputOrder);
         Assert.True(status.Succeeded, status.Error);
         return outputs;
     }
 
-    private static (ModelStatus Status, Dictionary<string, float[]> Outputs) TryInvoke(
-        IModelClient client, (float SmoothedCtr, float LogFollowers)[] rows, long? seed, string[]? inputOrder = null)
+    private static (ServiceStatus Status, Dictionary<string, float[]> Outputs) TryInvoke(
+        IServiceClient client, (float SmoothedCtr, float LogFollowers)[] rows, long? seed, string[]? inputOrder = null)
     {
         var columns = new Dictionary<string, float[]>
         {
@@ -631,21 +632,25 @@ public sealed class RandomModelClientTests
             ["log_followers"] = rows.Select(r => r.LogFollowers).ToArray(),
         };
         var order = inputOrder ?? new[] { "log_followers", "smoothed_ctr" }; // ModelScorer@1 sends them in ordinal order
-        var call = new ModelCall
+        var call = new ServiceCall
         {
-            Model = "ctr_model",
+            Service = "ctr_model",
             BatchSize = rows.Length,
             Inputs = order.Select(name => NamedInput.FromFloat32(name, new[] { rows.Length }, columns[name])).ToArray(),
-            Options = new ModelCallOptions(Seed: seed),
+            Options = new ServiceCallOptions(Seed: seed),
         };
         var outputs = new Outputs();
-        var pending = client.InvokeAsync(call, outputs, CancellationToken.None);
+        var pending = client.CallAsync(call, outputs, CancellationToken.None);
         Assert.True(pending.IsCompletedSuccessfully, "random@1 answers synchronously");
         return (pending.Result, outputs.Values);
     }
 
-    private sealed class Outputs : IModelOutputWriter
+    private sealed class Outputs : IServiceResponse
     {
+        public void AddItem(long entityId, double score) => throw new NotSupportedException("a model answers with outputs");
+
+        public void AddItem(string entityId, double score) => throw new NotSupportedException("a model answers with outputs");
+
         public Dictionary<string, float[]> Values { get; } = new();
 
         /// <summary>Every output as written, of any element type.</summary>
@@ -699,9 +704,9 @@ public sealed class RandomModelClientAllocationTests
             { "inputs": { "final": { "type": "float32", "shape": [-1, 2] }, "item_id": { "type": "int64", "shape": [-1, 2] }, "quality": { "type": "float32", "shape": [-1] } },
               "outputs": { "p_first": { "shape": [-1] } } }
             """);
-        var pairCall = new ModelCall
+        var pairCall = new ServiceCall
         {
-            Model = "ctr_model",
+            Service = "ctr_model",
             BatchSize = 256,
             Inputs = new[]
             {
@@ -709,15 +714,15 @@ public sealed class RandomModelClientAllocationTests
                 NamedInput.FromInt64("item_id", new[] { 256, 2 }, Enumerable.Range(0, 512).Select(i => (long)i).ToArray()),
                 NamedInput.FromFloat32("quality", new[] { 256 }, new float[256]),
             },
-            Options = new ModelCallOptions(Seed: 3),
+            Options = new ServiceCallOptions(Seed: 3),
         };
         var list = RandomModelClientTests.Create("""
             { "inputs": { "final": { "type": "float32", "shape": [1, -1] }, "emb": { "type": "float32", "shape": [1, -1, 4] }, "seed": { "type": "int64", "shape": [1] } },
               "outputs": { "scores": { "shape": [1, -1] } } }
             """);
-        var listCall = new ModelCall
+        var listCall = new ServiceCall
         {
-            Model = "ctr_model",
+            Service = "ctr_model",
             BatchSize = 1,
             Inputs = new[]
             {
@@ -725,16 +730,16 @@ public sealed class RandomModelClientAllocationTests
                 NamedInput.FromFloat32("emb", new[] { 1, 50, 4 }, Enumerable.Range(0, 200).Select(i => i * 0.01f).ToArray()),
                 NamedInput.FromInt64("seed", new[] { 1 }, new[] { 7L }),
             },
-            Options = new ModelCallOptions(Seed: 3),
+            Options = new ServiceCallOptions(Seed: 3),
         };
         var names = Enumerable.Range(0, 40).Select(i => $"x{i:D2}").ToArray();
         var wide = RandomModelClientTests.Create($$"""{ "inputs": [{{string.Join(", ", names.Select(n => $"\"{n}\""))}}], "outputs": ["p_click"] }""");
-        var wideCall = new ModelCall
+        var wideCall = new ServiceCall
         {
-            Model = "ctr_model",
+            Service = "ctr_model",
             BatchSize = 64,
             Inputs = names.Select(n => NamedInput.FromFloat32(n, new[] { 64 }, new float[64])).ToArray(),
-            Options = new ModelCallOptions(Seed: 3),
+            Options = new ServiceCallOptions(Seed: 3),
         };
 
         Assert.Equal(0, BytesPerCall(pair, pairCall, new PreallocatedOutputs(256, "p_first"), calls: 100));
@@ -743,40 +748,40 @@ public sealed class RandomModelClientAllocationTests
     }
 
     /// <summary>The average bytes one call allocates on this thread, after warming up; the call and its buffers are reused.</summary>
-    private static double BytesPerCall(IModelClient client, int rows, int calls)
+    private static double BytesPerCall(IServiceClient client, int rows, int calls)
     {
         var data = RandomModelClientTests.Rows(rows);
-        var call = new ModelCall
+        var call = new ServiceCall
         {
-            Model = "ctr_model",
+            Service = "ctr_model",
             BatchSize = rows,
             Inputs = new[]
             {
                 NamedInput.FromFloat32("log_followers", new[] { rows }, data.Select(r => r.LogFollowers).ToArray()),
                 NamedInput.FromFloat32("smoothed_ctr", new[] { rows }, data.Select(r => r.SmoothedCtr).ToArray()),
             },
-            Options = new ModelCallOptions(Seed: 3),
+            Options = new ServiceCallOptions(Seed: 3),
         };
         return BytesPerCall(client, call, new PreallocatedOutputs(rows, "p_click", "p_like"), calls);
     }
 
-    private static double BytesPerCall(IModelClient client, ModelCall call, IModelOutputWriter outputs, int calls)
+    private static double BytesPerCall(IServiceClient client, ServiceCall call, IServiceResponse outputs, int calls)
     {
         for (var i = 0; i < 20; i++)
         {
-            Consume(client.InvokeAsync(call, outputs, CancellationToken.None));
+            Consume(client.CallAsync(call, outputs, CancellationToken.None));
         }
 
         var before = GC.GetAllocatedBytesForCurrentThread();
         for (var i = 0; i < calls; i++)
         {
-            Consume(client.InvokeAsync(call, outputs, CancellationToken.None));
+            Consume(client.CallAsync(call, outputs, CancellationToken.None));
         }
 
         return (double)(GC.GetAllocatedBytesForCurrentThread() - before) / calls;
     }
 
-    private static void Consume(ValueTask<ModelStatus> pending)
+    private static void Consume(ValueTask<ServiceStatus> pending)
     {
         if (!pending.IsCompletedSuccessfully || !pending.Result.Succeeded)
         {
@@ -784,8 +789,12 @@ public sealed class RandomModelClientAllocationTests
         }
     }
 
-    private sealed class PreallocatedOutputs : IModelOutputWriter
+    private sealed class PreallocatedOutputs : IServiceResponse
     {
+        public void AddItem(long entityId, double score) => throw new NotSupportedException("a model answers with outputs");
+
+        public void AddItem(string entityId, double score) => throw new NotSupportedException("a model answers with outputs");
+
         private readonly Dictionary<string, float[]> _buffers = new(StringComparer.Ordinal);
 
         public PreallocatedOutputs(int rows, params string[] names)

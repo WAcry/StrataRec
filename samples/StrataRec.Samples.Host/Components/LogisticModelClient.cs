@@ -1,6 +1,6 @@
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
-using StrataRec.Models;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Samples.Host.Components;
 
@@ -27,7 +27,7 @@ namespace StrataRec.Samples.Host.Components;
 /// node's budget either way.</item>
 /// </list>
 /// </remarks>
-public sealed class LogisticModelClient : IModelClient
+public sealed class LogisticModelClient : IServiceClient
 {
     private readonly string _model;
     private readonly string _version;
@@ -35,7 +35,7 @@ public sealed class LogisticModelClient : IModelClient
     private readonly double _bias;
     private readonly string[] _inputs; // ordinal order
     private readonly double[] _weights;
-    private readonly ModelSignature _signature;
+    private readonly ServiceSignature _signature;
 
     public LogisticModelClient(string model, string version, string output, double bias, string[] inputs, double[] weights)
     {
@@ -52,37 +52,35 @@ public sealed class LogisticModelClient : IModelClient
             specs[i] = new TensorSpec(inputs[i], TensorElementType.Float32, batch);
         }
 
-        _signature = new ModelSignature(specs, new[] { new TensorSpec(output, TensorElementType.Float32, batch) });
+        _signature = new ServiceSignature(specs, new[] { new TensorSpec(output, TensorElementType.Float32, batch) });
     }
 
-    public string ClientType => LogisticModelClientFactory.TypeName;
-
-    public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken)
+    public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken)
     {
         if (model != _model)
         {
-            return ValueTask.FromException<ModelSignature>(new ArgumentException($"This client serves model '{_model}', not '{model}'.", nameof(model)));
+            return ValueTask.FromException<ServiceSignature>(new ArgumentException($"This client serves model '{_model}', not '{model}'.", nameof(model)));
         }
 
         if (version is not null && version != _version)
         {
-            return ValueTask.FromException<ModelSignature>(new BindingException("/version", $"Model '{model}' has no version '{version}'; this binding serves '{_version}'.",
+            return ValueTask.FromException<ServiceSignature>(new BindingException("/version", $"Model '{model}' has no version '{version}'; this binding serves '{_version}'.",
                 $"call version '{_version}', or bind a client that serves '{version}'"));
         }
 
-        return new ValueTask<ModelSignature>(_signature);
+        return new ValueTask<ServiceSignature>(_signature);
     }
 
-    public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
+    public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken)
     {
         if (cancellationToken.IsCancellationRequested)
         {
-            return ValueTask.FromCanceled<ModelStatus>(cancellationToken);
+            return ValueTask.FromCanceled<ServiceStatus>(cancellationToken);
         }
 
         if (call.Version is { } version && version != _version)
         {
-            return new ValueTask<ModelStatus>(ModelStatus.Failed($"Model '{_model}' has no version '{version}'."));
+            return new ValueTask<ServiceStatus>(ServiceStatus.Failed($"Model '{_model}' has no version '{version}'."));
         }
 
         // Each weight's input, checked once: [batch] exactly; its data may be a longer pooled buffer, but its shape says how
@@ -104,20 +102,20 @@ public sealed class LogisticModelClient : IModelClient
 
             if (inputOf[w] < 0)
             {
-                return new ValueTask<ModelStatus>(ModelStatus.Failed($"Missing input '{_inputs[w]}'."));
+                return new ValueTask<ServiceStatus>(ServiceStatus.Failed($"Missing input '{_inputs[w]}'."));
             }
 
             var input = inputs[inputOf[w]];
             if (input.ElementType != TensorElementType.Float32 || input.Shape is not [var rows] || rows != batch || input.Float32.Length < batch)
             {
-                return new ValueTask<ModelStatus>(ModelStatus.Failed($"Input '{input.Name}' must be float32 [{batch}]."));
+                return new ValueTask<ServiceStatus>(ServiceStatus.Failed($"Input '{input.Name}' must be float32 [{batch}]."));
             }
         }
 
         // In double, as the coefficients were checked: in float a large weight and bias that cancel (1e40 and -1e40) would
         // overflow to infinities and give NaN. A logit that is not a number even so (weights that overflow double) is a
         // failed call, never a score: the node's on_failure decides, not a NaN passed on as a probability.
-        var probabilities = outputs.GetValues<float>(_output, batch).Span[..batch];
+        var probabilities = response.GetValues<float>(_output, batch).Span[..batch];
         for (var r = 0; r < batch; r++)
         {
             var logit = _bias;
@@ -128,13 +126,13 @@ public sealed class LogisticModelClient : IModelClient
 
             if (double.IsNaN(logit))
             {
-                return new ValueTask<ModelStatus>(ModelStatus.Failed($"The logit of row {r} is not a number: the weights overflow."));
+                return new ValueTask<ServiceStatus>(ServiceStatus.Failed($"The logit of row {r} is not a number: the weights overflow."));
             }
 
             probabilities[r] = (float)(1.0 / (1.0 + Math.Exp(-logit)));
         }
 
-        return new ValueTask<ModelStatus>(ModelStatus.Ok);
+        return new ValueTask<ServiceStatus>(ServiceStatus.Ok);
     }
 }
 
@@ -159,14 +157,14 @@ public sealed class LogisticSettings
 }
 
 /// <summary>Creates <c>logistic@1</c> clients; registered in <see cref="SampleEnvironment"/>.</summary>
-public sealed class LogisticModelClientFactory : BindingFactory<IModelClient, LogisticSettings>
+public sealed class LogisticModelClientFactory : BindingFactory<IServiceClient, LogisticSettings>
 {
     public const string TypeName = "logistic@1";
 
     public override string Type => TypeName;
 
     /// <summary>Checks what the settings type cannot say; a wrong setting is a <see cref="BindingException"/> at its pointer, with a hint.</summary>
-    protected override IModelClient Create(LogisticSettings settings, BindingContext context)
+    protected override IServiceClient Create(LogisticSettings settings, BindingContext context)
     {
         if (settings.Version.Length == 0)
         {

@@ -2,9 +2,9 @@ using System.Diagnostics.Metrics;
 using System.Globalization;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Llm.Templates;
-using StrataRec.Models;
 using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Llm;
 
@@ -109,7 +109,7 @@ internal static class LlmNode
     /// answer is the likely cause, with <paramref name="remedy"/>; otherwise empty.
     /// </summary>
     /// <param name="remedy">What else shortens the answer, e.g. <c>shorten the window</c>.</param>
-    public static string Cut(in ModelStatus status, int maxOutputTokens, string remedy) => status.Truncated
+    public static string Cut(in ServiceStatus status, int maxOutputTokens, string remedy) => status.Truncated
         ? $"; the answer was cut at max_output_tokens ({maxOutputTokens.ToString(CultureInfo.InvariantCulture)}): raise max_output_tokens or {remedy}"
         : string.Empty;
 

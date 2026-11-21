@@ -323,7 +323,7 @@ public sealed class GroupAggregateTests
         var root = Directory.CreateTempSubdirectory("stratarec-text-groups-").FullName;
         Write(root, "catalog/c.jsonc", """{ "catalog_id": "c" }""");
         Write(root, "bindings/local.jsonc", """
-            { "environment": "local", "candidate_sources": { "r": { "client": "memory_list@1", "items": ["a", "b", "c"] } } }
+            { "environment": "local", "services": { "r": { "client": "memory_list@1", "items": ["a", "b", "c"] } } }
             """);
         Write(root, "pipelines/p.jsonc", $$"""
             { "pipeline_id": "p", "entity_key_type": "string",
@@ -394,7 +394,7 @@ public sealed class GroupAggregateTests
         Write(root, "bindings/local.jsonc", """
             { "environment": "local",
               "sources": { "items": { "connector": "memory@1", "data_file": "fixtures/items.json", "timeout_ms": 30000 } },
-              "candidate_sources": { "s": { "client": "memory_list@1", "data_file": "fixtures/ids.json" } } }
+              "services": { "s": { "client": "memory_list@1", "data_file": "fixtures/ids.json" } } }
             """);
         var named = nodes.Select(n => $"\"{n.Name}\": {n.Node}");
 

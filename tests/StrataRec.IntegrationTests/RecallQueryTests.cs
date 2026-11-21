@@ -12,6 +12,7 @@ using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Pipeline.Replay;
 using StrataRec.Pipeline.Sources;
+using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
@@ -49,11 +50,10 @@ public sealed class RecallQueryTests
         var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
-        var query = sources.Query("two_tower");
-        Assert.Equal(1, query.Count);
-        Assert.Equal(("user_embedding", "list<float64,3>"), (query.Name(0), query.Type(0).ToString()));
-        Assert.Equal([1.0, 0.0, 0.0], query["user_embedding"].AsFloat64List().ToArray()); // users.json: 1001
-        Assert.Equal(0, sources.Query("popular").Count);
+        var embedding = Assert.Single(sources.Query("two_tower"));
+        Assert.Equal(("user_embedding", TensorElementType.Float64, "3"), (embedding.Name, embedding.Type, string.Join(",", embedding.Shape)));
+        Assert.Equal([1.0, 0.0, 0.0], embedding.Float64); // users.json: 1001
+        Assert.Empty(sources.Query("popular"));
         Assert.Equal(Items(baseline), Items(result));
     }
 
@@ -79,15 +79,15 @@ public sealed class RecallQueryTests
         // regional's features were stored while user_store's fetch was held: it did not wait for two_tower's.
         Assert.False(sources.Called("two_tower").IsCompleted);
         var regional = sources.Query("regional");
-        Assert.Equal(("boost", "surface"), (regional.Name(0), regional.Name(1))); // in name order, whatever the JSON's
+        Assert.Equal(("boost", "surface"), (regional[0].Name, regional[1].Name)); // in name order, whatever the JSON's
         Assert.False(regional["boost"].IsMissing);
-        Assert.Equal("home", regional["surface"].AsString());
+        Assert.Equal("home", regional["surface"].String);
         users.Open();
         var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal(NodeOutcomeKind.Succeeded, result.Trace!.Single(n => n.NodeId == "recall").Kind);
-        Assert.Equal([1.0, 0.0, 0.0], sources.Query("two_tower")["user_embedding"].AsFloat64List().ToArray());
+        Assert.Equal([1.0, 0.0, 0.0], sources.Query("two_tower")["user_embedding"].Float64);
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public sealed class RecallQueryTests
         Assert.Equal(NodeOutcomeKind.Degraded, recall.Kind);
         Assert.StartsWith("recall sources failed: two_tower: its query reads a context feature that failed (", recall.Detail, StringComparison.Ordinal);
         Assert.All(result.Items, item => Assert.Equal("popular", item.Columns["primary_source"].AsString()));
-        Assert.Equal(new[] { "popular" }, result.Recording!.Runs[0].CandidateCalls.Select(c => c.Source)); // nothing sent, nothing recorded
+        Assert.Equal(new[] { "popular" }, result.Recording!.Runs[0].ServiceCalls.FindAll(c => c.Role == "recall").Select(c => c.Service)); // nothing sent, nothing recorded
 
         // With popular failing too, every source failed: the node fails, naming both.
         var none = HomeFeedTestHost.LoadModified(root =>
@@ -130,7 +130,7 @@ public sealed class RecallQueryTests
         var result = await Engine(HomeFeedTestHost.Load(), sources, users).ExecuteAsync(Request("req-users-partial"), TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
-        Assert.Equal([1.0, 0.0, 0.0], sources.Query("two_tower")["user_embedding"].AsFloat64List().ToArray());
+        Assert.Equal([1.0, 0.0, 0.0], sources.Query("two_tower")["user_embedding"].Float64);
         var recall = result.Trace!.Single(n => n.NodeId == "recall");
         Assert.Equal(NodeOutcomeKind.Degraded, recall.Kind);
         Assert.StartsWith("the query of recall source 'two_tower' reads a degraded context feature", recall.Detail, StringComparison.Ordinal);
@@ -153,7 +153,7 @@ public sealed class RecallQueryTests
         var recall = timedOut.Trace!.Single(n => n.NodeId == "recall");
         Assert.Equal("timed out after 300 ms", recall.Detail);
         Assert.False(sources.Called("two_tower").IsCompleted);
-        Assert.Equal(new[] { "popular" }, timedOut.Recording!.Runs[0].CandidateCalls.Select(c => c.Source));
+        Assert.Equal(new[] { "popular" }, timedOut.Recording!.Runs[0].ServiceCalls.FindAll(c => c.Role == "recall").Select(c => c.Service));
 
         // With user_store's own timeout below the node's budget, the feature fails in time: only two_tower fails.
         var bounded = HomeFeedTestHost.LoadModified(root =>
@@ -183,21 +183,20 @@ public sealed class RecallQueryTests
 
         Assert.True(result.Succeeded, result.Error);
         var query = sources.Query("two_tower");
-        Assert.True(query.TryGet("user_embedding", out var type, out var value));
-        Assert.Equal(("list<float64,3>?", true), (type.ToString(), value.IsMissing));
-        Assert.True(query["no_such_value"].IsMissing);
-        Assert.False(query.TryGet("no_such_value", out _, out _));
+        Assert.True(query.TryGet("user_embedding", out var sent)); // sent as missing, with its declared element type and length
+        Assert.Equal((TensorElementType.Float64, "3", true), (sent.Type, string.Join(",", sent.Shape), sent.IsMissing));
+        Assert.False(query.TryGet("no_such_value", out _));
         Assert.Equal(NodeOutcomeKind.Succeeded, result.Trace!.Single(n => n.NodeId == "recall").Kind);
         Assert.All(result.Items, item => Assert.Equal("popular", item.Columns["primary_source"].AsString()));
-        var call = result.Recording!.Runs[0].CandidateCalls.Single(c => c.Source == "two_tower");
-        Assert.Equal(("list<float64,3>?", null), (call.Query!["user_embedding"].Type, call.Query["user_embedding"].Value));
+        var call = result.Recording!.Runs[0].ServiceCalls.Single(c => c.Service == "two_tower");
+        Assert.Equal(("recall", "ok", 1), (call.Role, call.Status, call.InputDigests.Count)); // the query is recorded as its digest
     }
 
     [Fact]
-    public async Task AReplayWhoseQueryDiffers_ReportsIt_AndAnswersWithTheRecordedCandidates()
+    public async Task AReplayWhoseQueryDiffers_ReportsIt_AndTheSourceIsNotAnswered()
     {
         var recorded = await Engine(HomeFeedTestHost.Load(), new ProbeSources()).ExecuteAsync(Request("req-recorded"), TestContext.Current.CancellationToken);
-        Assert.Equal("[1,0,0]", recorded.Recording!.Runs[0].CandidateCalls.Single(c => c.Source == "two_tower").Query!["user_embedding"].Value!.Value.GetRawText());
+        Assert.Single(recorded.Recording!.Runs[0].ServiceCalls, c => c.Service == "two_tower");
 
         // The same configuration replays the same query: no gap.
         var (same, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
@@ -205,8 +204,8 @@ public sealed class RecallQueryTests
         Assert.Empty(replayed.Report.Gaps);
         Assert.True(replayed.Report.Diff.Identical, ReplayTests.Describe(replayed.Report));
 
-        // The query now reads another user feature: two_tower is answered from the recording, and the replay says it
-        // answered another query.
+        // The query now reads another user feature: the recording has no answer to it, so two_tower is not answered (the
+        // node degrades on popular alone), and the replay says why. A recorded answer answers only the inputs it was for.
         var changed = HomeFeedTestHost.LoadModified(root =>
         {
             ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "{ \"user_embedding\": \"ctx.user.embedding\" }",
@@ -216,10 +215,10 @@ public sealed class RecallQueryTests
         var outcome = await candidate.ReplayAsync(recorded.Recording, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(outcome.Result.Succeeded, outcome.Result.Error);
-        var gap = Assert.Single(outcome.Report.Gaps, g => g.Reason == "query_changed");
-        Assert.Equal(("candidate_source", "two_tower", "tenure", 1, "recall"), (gap.Kind, gap.Source, gap.Field, gap.Count, gap.Examples.Single()));
-        Assert.Equal("candidate source two_tower: its query value 'tenure' differs from the recorded one in 1 call(s), which were answered as recorded", gap.Description);
-        Assert.Equal(Items(recorded), Items(outcome.Result));
+        var gap = Assert.Single(outcome.Report.Gaps, g => g.Reason == "inputs_changed");
+        Assert.Equal(("recall", "two_tower", null, 1, "recall"), (gap.Kind, gap.Source, gap.Field, gap.Count, gap.Examples.Single()));
+        Assert.Equal("recall two_tower: 1 item(s) or call(s) have other inputs than recorded; not answered", gap.Description);
+        Assert.All(outcome.Result.Items, item => Assert.Equal("popular", item.Columns["primary_source"].AsString()));
     }
 
     [Fact]
@@ -242,7 +241,7 @@ public sealed class RecallQueryTests
             await geo.Started.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
             await sources.Called("two_tower").WaitAsync(Patience, TestContext.Current.CancellationToken);
 
-            Assert.Equal([1.0, 0.0, 0.0], sources.Query("two_tower")["user_embedding"].AsFloat64List().ToArray());
+            Assert.Equal([1.0, 0.0, 0.0], sources.Query("two_tower")["user_embedding"].Float64);
         }
         finally
         {
@@ -299,7 +298,7 @@ public sealed class RecallQueryTests
 
             var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
-            Assert.Equal(["two_tower", "popular"], result.Recording!.Runs[0].CandidateCalls.OrderBy(c => c.Seq).Select(c => c.Source));
+            Assert.Equal(["two_tower", "popular"], result.Recording!.Runs[0].ServiceCalls.FindAll(c => c.Role == "recall").OrderBy(c => c.Seq).Select(c => c.Service));
         }
     }
 
@@ -321,7 +320,7 @@ public sealed class RecallQueryTests
         {
             BeforeRetrieve = (query, token) =>
             {
-                if (query.SourceName != "popular")
+                if (query.Service != "popular")
                 {
                     return ValueTask.CompletedTask;
                 }
@@ -383,7 +382,7 @@ public sealed class RecallQueryTests
         {
             BeforeRetrieve = (query, _) =>
             {
-                if (query.SourceName == "popular")
+                if (query.Service == "popular")
                 {
                     connectors.OpenGeo.TrySetResult();
                     connectors.RegionStarted.Task.WaitAsync(Patience).GetAwaiter().GetResult(); // the country's region is stored
@@ -416,8 +415,8 @@ public sealed class RecallQueryTests
 
         var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.True(result.Succeeded, result.Error);
-        Assert.Equal("eu", sources.Query("two_tower")["country_region"].AsString());
-        Assert.Equal(["popular", "two_tower", "regional"], result.Recording!.Runs[0].CandidateCalls.OrderBy(c => c.Seq).Select(c => c.Source));
+        Assert.Equal("eu", sources.Query("two_tower")["country_region"].String);
+        Assert.Equal(["popular", "two_tower", "regional"], result.Recording!.Runs[0].ServiceCalls.FindAll(c => c.Role == "recall").OrderBy(c => c.Seq).Select(c => c.Service));
     }
 
     [Theory]
@@ -603,50 +602,49 @@ public sealed class RecallQueryTests
     /// <summary>The built-in lists and vector index, noting each call's query when it is sent.</summary>
     internal sealed class ProbeSources
     {
-        private readonly ConcurrentDictionary<string, (TaskCompletionSource Called, CandidateQuery? Query)> _calls = new(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, (TaskCompletionSource Called, SentQuery? Query)> _calls = new(StringComparer.Ordinal);
 
         public ProbeSources()
         {
-            Lists = new Factory(new MemoryListCandidateSourceFactory(), this);
-            Vectors = new Factory(new MemoryVectorsCandidateSourceFactory(), this);
+            Lists = new Factory(new MemoryListServiceFactory(), this);
+            Vectors = new Factory(new MemoryVectorsServiceFactory(), this);
         }
 
-        public IBindingFactory<ICandidateSource> Lists { get; }
+        public IBindingFactory<IServiceClient> Lists { get; }
 
-        public IBindingFactory<ICandidateSource> Vectors { get; }
+        public IBindingFactory<IServiceClient> Vectors { get; }
 
         /// <summary>Runs when a source is sent, before it answers, with the call's token.</summary>
-        public Func<CandidateQuery, CancellationToken, ValueTask>? BeforeRetrieve { get; init; }
+        public Func<ServiceCall, CancellationToken, ValueTask>? BeforeRetrieve { get; init; }
 
         /// <summary>Completes when <paramref name="source"/> is sent.</summary>
         public Task Called(string source) => Entry(source).Called.Task;
 
-        public CandidateQueryValues Query(string source) => Entry(source).Query?.Values ?? throw new InvalidOperationException($"{source} was not sent");
+        /// <summary>The inputs <paramref name="source"/> was sent, copied when it was (their buffers are the request's).</summary>
+        public SentQuery Query(string source) => Entry(source).Query ?? throw new InvalidOperationException($"{source} was not sent");
 
-        private (TaskCompletionSource Called, CandidateQuery? Query) Entry(string source) =>
+        private (TaskCompletionSource Called, SentQuery? Query) Entry(string source) =>
             _calls.GetOrAdd(source, _ => (new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously), null));
 
-        private void Sent(CandidateQuery query)
+        private void Sent(ServiceCall call)
         {
-            var entry = Entry(query.SourceName);
-            _calls[query.SourceName] = (entry.Called, query);
+            var entry = Entry(call.Service);
+            _calls[call.Service] = (entry.Called, new SentQuery(call.Inputs.Span));
             entry.Called.TrySetResult();
         }
 
-        private sealed class Factory(IBindingFactory<ICandidateSource> inner, ProbeSources owner) : IBindingFactory<ICandidateSource>
+        private sealed class Factory(IBindingFactory<IServiceClient> inner, ProbeSources owner) : IBindingFactory<IServiceClient>
         {
             public string Type => inner.Type;
 
             public Type SettingsType => inner.SettingsType;
 
-            public ICandidateSource Create(BindingContext context) => new Source(inner.Create(context), owner);
+            public IServiceClient Create(BindingContext context) => new Source(inner.Create(context), owner);
         }
 
-        private sealed class Source(ICandidateSource inner, ProbeSources owner) : ICandidateSource
+        private sealed class Source(IServiceClient inner, ProbeSources owner) : IServiceClient
         {
-            public string ClientType => inner.ClientType;
-
-            public async ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken)
+            public async ValueTask<ServiceStatus> CallAsync(ServiceCall query, IServiceResponse sink, CancellationToken cancellationToken)
             {
                 owner.Sent(query);
                 if (owner.BeforeRetrieve is { } before)
@@ -654,8 +652,37 @@ public sealed class RecallQueryTests
                     await before(query, cancellationToken).ConfigureAwait(false);
                 }
 
-                return await inner.RetrieveAsync(query, sink, cancellationToken).ConfigureAwait(false);
+                return await inner.CallAsync(query, sink, cancellationToken).ConfigureAwait(false);
             }
+        }
+    }
+
+    /// <summary>One input a source was sent, copied.</summary>
+    internal sealed record SentValue(string Name, TensorElementType Type, int[] Shape, bool IsMissing, double[] Float64, string[] Strings)
+    {
+        public string String => Strings[0];
+    }
+
+    /// <summary>The inputs a source was sent, in the order it got them.</summary>
+    internal sealed class SentQuery : List<SentValue>
+    {
+        public SentQuery(ReadOnlySpan<NamedInput> inputs)
+        {
+            foreach (var input in inputs)
+            {
+                Add(new SentValue(
+                    input.Name, input.ElementType, input.Shape, input.IsMissing,
+                    !input.IsMissing && input.ElementType == TensorElementType.Float64 ? input.Float64.ToArray() : [],
+                    !input.IsMissing && input.ElementType == TensorElementType.String ? input.String.ToArray() : []));
+            }
+        }
+
+        public SentValue this[string name] => TryGet(name, out var value) ? value : throw new KeyNotFoundException(name);
+
+        public bool TryGet(string name, out SentValue value)
+        {
+            value = Find(v => v.Name == name)!;
+            return value is not null;
         }
     }
 

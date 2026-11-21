@@ -3,13 +3,13 @@
 一个最小的 Web 服务，演示两件事：
 
 1. 怎样把引擎放进服务：`AddStrataRec` 在宿主启动时加载本目录下的工作区 `config/`，`POST /recommend/{pipeline}` 只做传输：请求体用 `RecRequestJson` 按流水线的 `RequestSchema` 读出，宿主补上截止时间组成 `RecRequest`，`RecResult` 用 `RecResultJson` 写回，按 `RecResult.ErrorKind` 映射状态码。请求文档和结果文档都是引擎的，换一个宿主也是同样的文档。
-2. 怎样写并注册自己的组件：四个扩展点各有一个小实现，在 `SampleEnvironment.cs` 里和内置组件一起注册，工作区按类型名引用它们。
+2. 怎样写并注册自己的组件：三个扩展点有四个小实现（外部服务的召回和模型两种用法各一个），在 `SampleEnvironment.cs` 里和内置组件一起注册，工作区按类型名引用它们。
 
 | 组件 | 类型名 | 契约 | 演示什么 |
 | --- | --- | --- | --- |
 | `Components/KeyValueFeatureConnector.cs` | `kv_store@1` | `IFeatureSourceConnector` | `Create` 只读设置、`ILoadable` 里做 I/O；按列解码，取数时不按行分配；缺失值不写，类型不符就让这次拉取失败 |
-| `Components/TrendingCandidateSource.cs` | `trending@1` | `ICandidateSource` | 创建时排好序（平分按 id 升序）；按请求输入 `region` 选列表，没有 region 就用总榜；同步返回 |
-| `Components/LogisticModelClient.cs` | `logistic@1` | `IModelClient` | 自己的签名（加载期校验节点的输入输出）；不会看到缺失值；输入不对返回失败状态，由节点的 `on_failure` 兜底 |
+| `Components/TrendingService.cs` | `trending@1` | `IServiceClient` | 召回节点调用的服务：创建时排好序（平分按 id 升序）；按请求输入 `region` 选列表，没有 region 就用总榜；同步返回 |
+| `Components/LogisticModelClient.cs` | `logistic@1` | `IServiceClient` | 模型算子调用的服务：自己的签名（加载期校验节点的输入输出）；不会看到缺失值；输入不对返回失败状态，由节点的 `on_failure` 兜底 |
 | `Components/CategoryBoost.cs` | `CategoryBoost@1` | `IOperatorFactory` | 配置类即 JSON Schema；只声明 `ColumnWriter`；检查都在编译期；执行时从 `RequestMemory` 租缓冲，不按行分配 |
 
 每个文件的注释写了契约的规则（取消、预算、分配、缺失值）以及这个实现为什么这样写。

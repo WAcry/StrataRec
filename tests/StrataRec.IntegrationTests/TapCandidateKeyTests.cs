@@ -798,7 +798,7 @@ public sealed class TapCandidateKeyTests
               "sources": {
                 "item_store": { "connector": "memory@1", "data": { "1": { "base": 10 }, "10": { "base": 7 } }, "timeout_ms": 60000 },
                 "user_store": { "connector": "memory@1", "data": { "5": { "w": 3 } }, "timeout_ms": 60000 } },
-              "candidate_sources": { "first": { "client": "memory_list@1", "items": [1] } } }
+              "services": { "first": { "client": "memory_list@1", "items": [1] } } }
             """);
         File.WriteAllText(Path.Combine(root, "pipelines", "p.jsonc"), pipeline);
 

@@ -16,6 +16,7 @@ using StrataRec.Models;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Pipeline.Sources;
+using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
@@ -99,7 +100,7 @@ public sealed class BindingLifetimeTests
 
         Assert.False(load.Applied);
         var error = Assert.Single(load.Diagnostics, d => d.IsError);
-        Assert.Equal(("BINDING_LOAD_FAILED", "bindings:local", "/models/ctr_model/model_file", "check the path"),
+        Assert.Equal(("BINDING_LOAD_FAILED", "bindings:local", "/services/ctr_model/model_file", "check the path"),
             (error.Code, error.Artifact, error.Pointer, error.Hint));
         var failed = Assert.Single(models.Created, c => c != served);
         await failed.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken); // the rejected plan's lease is returned
@@ -119,7 +120,7 @@ public sealed class BindingLifetimeTests
 
         Assert.False(load.Applied);
         var error = Assert.Single(load.Diagnostics, d => d.IsError);
-        Assert.Equal(("BINDING_LOAD_FAILED", "bindings:local", "/models/ctr_model"), (error.Code, error.Artifact, error.Pointer));
+        Assert.Equal(("BINDING_LOAD_FAILED", "bindings:local", "/services/ctr_model"), (error.Code, error.Artifact, error.Pointer));
         Assert.Contains(typeof(UnreadableException).FullName!, error.Message, StringComparison.Ordinal);
         Assert.False((await engine.ExecuteAsync(Request("req-never-served"), TestContext.Current.CancellationToken)).Succeeded);
         var client = Assert.Single(models.Created);
@@ -183,7 +184,7 @@ public sealed class BindingLifetimeTests
         {
             Signature = (client, _, _) => client.Loads == 0
                 ? throw new InvalidOperationException("asked before the load")
-                : new ModelSignature(
+                : new ServiceSignature(
                     [new TensorSpec("smoothed_ctr", TensorElementType.Float32, [-1])],
                     [new TensorSpec("p_click", TensorElementType.Float32, [-1])]),
         };
@@ -193,7 +194,7 @@ public sealed class BindingLifetimeTests
         var load = await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(load.Applied);
-        var error = Assert.Single(load.Diagnostics, d => d.Code == "MODEL_SIGNATURE"); // and the tap that reads the node's inputs
+        var error = Assert.Single(load.Diagnostics, d => d.Code == "SERVICE_SIGNATURE"); // and the tap that reads the node's inputs
         Assert.Equal(("pipeline:home_feed", "/nodes/ctr_ranker/config/inputs/log_followers"), (error.Artifact, error.Pointer));
         Assert.Contains("has no input 'log_followers'", error.Message, StringComparison.Ordinal);
         Assert.Equal(1, Assert.Single(models.Created).Loads);
@@ -214,7 +215,7 @@ public sealed class BindingLifetimeTests
 
         Assert.False(load.Applied);
         var error = Assert.Single(load.Diagnostics, d => d.IsError);
-        Assert.Equal(("BINDING_LOAD_FAILED", "bindings:local", "/models/ctr_model/credentials"), (error.Code, error.Artifact, error.Pointer));
+        Assert.Equal(("BINDING_LOAD_FAILED", "bindings:local", "/services/ctr_model/credentials"), (error.Code, error.Artifact, error.Pointer));
         Assert.Contains("no secret 'ctr-token'", error.Message, StringComparison.Ordinal);
         Assert.Contains("add the secret 'ctr-token'", error.Hint, StringComparison.Ordinal);
     }
@@ -256,7 +257,7 @@ public sealed class BindingLifetimeTests
 
         Assert.False(load.Applied);
         var error = Assert.Single(load.Diagnostics, d => d.Code == "BINDING_SETTINGS"); // and the tap that reads the node's inputs
-        Assert.Equal(("BINDING_SETTINGS", "bindings:local", "/models/ctr_model/credentials"), (error.Code, error.Artifact, error.Pointer));
+        Assert.Equal(("BINDING_SETTINGS", "bindings:local", "/services/ctr_model/credentials"), (error.Code, error.Artifact, error.Pointer));
         Assert.DoesNotContain(Pasted, string.Join("\n", load.Diagnostics) + string.Join("\n", logs.Entries.Select(e => e.Message)), StringComparison.Ordinal);
     }
 
@@ -368,7 +369,7 @@ public sealed class BindingLifetimeTests
     public async Task ASignatureOnlyTheModelServerKnows_IsAwaitedWhenTheEngineLoads_AndLeftToTheEngineByValidate()
     {
         var root = Workspace(generation: 1);
-        SampleBindings.RebindModel(root, "ctr_model", $$"""
+        SampleBindings.RebindService(root, "ctr_model", $$"""
             {
               "client": "{{RemoteSignatureModels.TypeName}}",
               "outputs": { "p_click": { "bias": -1.5, "weights": { "smoothed_ctr": 12.0, "log_followers": 0.05 }, "activation": "sigmoid" } }
@@ -387,14 +388,14 @@ public sealed class BindingLifetimeTests
         // The server's model has no input the node maps: the plan is rejected at the node, before it is served...
         var renamed = new RemoteSignatureModels
         {
-            Answer = new ModelSignature(
+            Answer = new ServiceSignature(
                 [new TensorSpec("smoothed_ctr", TensorElementType.Float32, [-1])],
                 [new TensorSpec("p_click", TensorElementType.Float32, [-1])]),
         };
         await using var rejecting = new RecEngine(Environment(root, renamed));
         var rejected = await rejecting.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken);
         Assert.False(rejected.Applied);
-        var error = Assert.Single(rejected.Diagnostics, d => d.Code == "MODEL_SIGNATURE");
+        var error = Assert.Single(rejected.Diagnostics, d => d.Code == "SERVICE_SIGNATURE");
         Assert.Equal(("pipeline:home_feed", "/nodes/ctr_ranker/config/inputs/log_followers"), (error.Artifact, error.Pointer));
 
         // ...while static validation does not wait for a model server: the check is the engine's.
@@ -428,7 +429,7 @@ public sealed class BindingLifetimeTests
     public async Task ACompileThatWaitedForASignature_ReadsTheOverrideAsItWasChecked(bool wrapped)
     {
         var root = Workspace(generation: 1);
-        SampleBindings.RebindModel(root, "ctr_model", $$"""
+        SampleBindings.RebindService(root, "ctr_model", $$"""
             {
               "client": "{{RemoteSignatureModels.TypeName}}",
               "outputs": { "p_click": { "bias": -1.5, "weights": { "smoothed_ctr": 12.0, "log_followers": 0.05 }, "activation": "sigmoid" } }
@@ -479,7 +480,7 @@ public sealed class BindingLifetimeTests
 
     /// <summary>Binds <c>ctr_model</c> to <see cref="ScriptedModels"/> with the sample's linear weights; the generation makes the identity.</summary>
     private static void Rebind(string root, int generation, string? credentials = null) =>
-        SampleBindings.RebindModel(root, "ctr_model", $$"""
+        SampleBindings.RebindService(root, "ctr_model", $$"""
             {
               "client": "{{ScriptedModels.TypeName}}", "generation": {{generation}},
               {{(credentials is null ? string.Empty : $"\"credentials\": \"{credentials}\",")}}
@@ -499,11 +500,11 @@ public sealed class BindingLifetimeTests
         SampleBindings.Rebind(root, "item_store",
             $$"""{ "connector": "{{CountingConnectors.TypeName}}", "data_file": "fixtures/items.json", "timeout_ms": {{HomeFeedTestHost.UntimedMs}}, "max_batch": 25{{latency}} }""");
         // A list in place of the sample's vector index: the lifetimes, not the candidates, are tested.
-        SampleBindings.RebindCandidateSource(root, "two_tower", $$"""{ "client": "{{CountingSources.TypeName}}", "data_file": "fixtures/recall_popular.json" }""");
-        SampleBindings.RebindCandidateSource(root, "popular", $$"""{ "client": "{{CountingSources.TypeName}}", "data_file": "fixtures/recall_popular.json"{{latency}} }""");
+        SampleBindings.RebindService(root, "two_tower", $$"""{ "client": "{{CountingSources.TypeName}}", "data_file": "fixtures/recall_popular.json" }""");
+        SampleBindings.RebindService(root, "popular", $$"""{ "client": "{{CountingSources.TypeName}}", "data_file": "fixtures/recall_popular.json"{{latency}} }""");
     }
 
-    private static PlanEnvironment Environment(string root, IBindingFactory<IModelClient> models, IBindingFactory<IFeatureSourceConnector>? connectors = null, IBindingFactory<ICandidateSource>? sources = null) => new()
+    private static PlanEnvironment Environment(string root, IBindingFactory<IServiceClient> models, IBindingFactory<IFeatureSourceConnector>? connectors = null, IBindingFactory<IServiceClient>? sources = null) => new()
     {
         BaseDirectory = root,
         Bindings = TestBindings.With(models, connectors, sources),
@@ -553,7 +554,7 @@ public sealed class BindingLifetimeTests
     /// <c>credentials</c> reference), answers <see cref="Signature"/> when set, and holds its calls while
     /// <see cref="HoldCalls"/> is in effect, ignoring their cancellation like a client stuck in I/O.
     /// </summary>
-    private sealed class ScriptedModels : IBindingFactory<IModelClient>
+    private sealed class ScriptedModels : IBindingFactory<IServiceClient>
     {
         public const string TypeName = "scripted@1";
 
@@ -569,7 +570,7 @@ public sealed class BindingLifetimeTests
 
         public Func<Client, CancellationToken, Task>? Load { get; set; }
 
-        public Func<Client, string, string?, ModelSignature>? Signature { get; init; }
+        public Func<Client, string, string?, ServiceSignature>? Signature { get; init; }
 
         public TaskCompletionSource CallStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -577,7 +578,7 @@ public sealed class BindingLifetimeTests
 
         public void ReleaseCalls() => _gate!.TrySetResult();
 
-        public IModelClient Create(BindingContext context)
+        public IServiceClient Create(BindingContext context)
         {
             var credentials = context.Settings.TryGetValue("credentials", out var reference) ? context.SecretReference(reference, "/credentials") : null;
             var client = new Client(this, _linear.Create(Only(context, LinearSettings)), credentials);
@@ -585,11 +586,9 @@ public sealed class BindingLifetimeTests
             return client;
         }
 
-        public sealed class Client(ScriptedModels owner, IModelClient inner, SecretReference? credentials) : Counted, IModelClient, ILoadable
+        public sealed class Client(ScriptedModels owner, IServiceClient inner, SecretReference? credentials) : Counted, IServiceClient, ILoadable
         {
             private int _loads;
-
-            public string ClientType => TypeName;
 
             public int Loads => Volatile.Read(ref _loads);
 
@@ -610,10 +609,10 @@ public sealed class BindingLifetimeTests
                 Interlocked.Increment(ref _loads);
             }
 
-            public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
-                owner.Signature is { } signature ? ValueTask.FromResult(signature(this, model, version)) : inner.GetSignatureAsync(model, version, cancellationToken);
+            public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken) =>
+                owner.Signature is { } signature ? ValueTask.FromResult(signature(this, model, version)) : inner.DescribeAsync(model, version, cancellationToken);
 
-            public async ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
+            public async ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken)
             {
                 BeginCall();
                 try
@@ -624,7 +623,7 @@ public sealed class BindingLifetimeTests
                         await gate.Task.ConfigureAwait(false); // ignores cancellation
                     }
 
-                    return await inner.InvokeAsync(call, outputs, CancellationToken.None).ConfigureAwait(false);
+                    return await inner.CallAsync(call, response, CancellationToken.None).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -731,11 +730,11 @@ public sealed class BindingLifetimeTests
     }
 
     /// <summary><c>counting_list@1</c>: <c>memory_list@1</c> candidate sources that count what the engine does with them.</summary>
-    private sealed class CountingSources : IBindingFactory<ICandidateSource>
+    private sealed class CountingSources : IBindingFactory<IServiceClient>
     {
         public const string TypeName = "counting_list@1";
 
-        private readonly MemoryListCandidateSourceFactory _list = new();
+        private readonly MemoryListServiceFactory _list = new();
         private readonly ConcurrentQueue<Source> _created = new();
 
         public string Type => TypeName;
@@ -746,25 +745,23 @@ public sealed class BindingLifetimeTests
 
         public Source Last(string name) => Created.Last(s => s.Name == name);
 
-        public ICandidateSource Create(BindingContext context)
+        public IServiceClient Create(BindingContext context)
         {
             var source = new Source(context.Name, _list.Create(Only(context, "data_file", "items", "by_input", "lists", "latency_ms", "fail")));
             _created.Enqueue(source);
             return source;
         }
 
-        public sealed class Source(string name, ICandidateSource inner) : Counted, ICandidateSource
+        public sealed class Source(string name, IServiceClient inner) : Counted, IServiceClient
         {
             public string Name { get; } = name;
 
-            public string ClientType => TypeName;
-
-            public async ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken)
+            public async ValueTask<ServiceStatus> CallAsync(ServiceCall query, IServiceResponse sink, CancellationToken cancellationToken)
             {
                 BeginCall();
                 try
                 {
-                    return await inner.RetrieveAsync(query, sink, cancellationToken).ConfigureAwait(false);
+                    return await inner.CallAsync(query, sink, cancellationToken).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -778,7 +775,7 @@ public sealed class BindingLifetimeTests
     /// <c>remote_signature@1</c>: linear@1 models whose signature only a model server knows. The client needs no load, and
     /// every answer takes a round trip; <see cref="Answer"/> stands in for a server whose model differs from the binding.
     /// </summary>
-    private sealed class RemoteSignatureModels : IBindingFactory<IModelClient>
+    private sealed class RemoteSignatureModels : IBindingFactory<IServiceClient>
     {
         public const string TypeName = "remote_signature@1";
 
@@ -789,29 +786,27 @@ public sealed class BindingLifetimeTests
 
         public Type SettingsType => _linear.SettingsType;
 
-        public ModelSignature? Answer { get; init; }
+        public ServiceSignature? Answer { get; init; }
 
         /// <summary>Runs when a lookup answers, before the compile that waited for it runs again.</summary>
         public Action? OnLookup { get; set; }
 
         public int Lookups => Volatile.Read(ref _lookups);
 
-        public IModelClient Create(BindingContext context) => new Client(this, _linear.Create(Only(context, LinearSettings)));
+        public IServiceClient Create(BindingContext context) => new Client(this, _linear.Create(Only(context, LinearSettings)));
 
-        private sealed class Client(RemoteSignatureModels owner, IModelClient inner) : IModelClient
+        private sealed class Client(RemoteSignatureModels owner, IServiceClient inner) : IServiceClient
         {
-            public string ClientType => TypeName;
-
-            public async ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken)
+            public async ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken)
             {
                 Interlocked.Increment(ref owner._lookups);
                 await Task.Delay(20, cancellationToken).ConfigureAwait(false); // the round trip
                 owner.OnLookup?.Invoke();
-                return owner.Answer ?? await inner.GetSignatureAsync(model, version, cancellationToken).ConfigureAwait(false);
+                return owner.Answer ?? await inner.DescribeAsync(model, version, cancellationToken).ConfigureAwait(false);
             }
 
-            public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
-                inner.InvokeAsync(call, outputs, cancellationToken);
+            public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken) =>
+                inner.CallAsync(call, response, cancellationToken);
         }
     }
 

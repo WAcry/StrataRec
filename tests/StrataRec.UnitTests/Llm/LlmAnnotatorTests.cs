@@ -1,8 +1,8 @@
 using StrataRec.Core.Types;
-using StrataRec.Models;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
 using static StrataRec.UnitTests.Llm.LlmFixture;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Llm;
 
@@ -23,7 +23,7 @@ public sealed class LlmAnnotatorTests
     [Fact]
     public async Task OneCallPerWindowRow_BatchOfOne_WithTheRequestSeed_AndMaxOutputTokens_EachPromptShowingItsRow()
     {
-        var models = new TextModels(call => ("Note on " + call.Prompts["user"], ModelStatus.Ok));
+        var models = new TextModels(call => ("Note on " + call.Prompts["user"], ServiceStatus.Ok));
         var plan = Compile(models, Annotate("{{col.entity_id}}: {{col.item.title}} ({{param.tone}})", extra: """, "max_output_tokens": 16"""), op: Op, output: Note);
 
         var result = await Run(plan, seed: 99);
@@ -45,7 +45,7 @@ public sealed class LlmAnnotatorTests
     [Fact]
     public async Task TheDefaults_AreAWindowOf20_AtMost64Tokens_AndATextColumn()
     {
-        var models = new TextModels(call => (call.Prompts["user"], ModelStatus.Ok));
+        var models = new TextModels(call => (call.Prompts["user"], ServiceStatus.Ok));
         const string Config = """{ "model": "llm", "output": "answer", "column": "llm.note", "prompts": { "user": "{{col.item.extra}}" } }""";
         var plan = Compile(models, Config, op: Op, output: Note);
 
@@ -124,7 +124,7 @@ public sealed class LlmAnnotatorTests
     public async Task Categories_AreTheOnlyAnswersAStringColumnTakes_ComparedExactly_AndMakeAnUndeclaredColumnAString()
     {
         var answers = new Dictionary<string, string> { ["30"] = "music", ["10"] = "Music", ["50"] = " sports\n" };
-        var plan = Compile(new TextModels(call => (answers[call.Prompts["user"]], ModelStatus.Ok)),
+        var plan = Compile(new TextModels(call => (answers[call.Prompts["user"]], ServiceStatus.Ok)),
             Annotate(ById, extra: """, "categories": ["sports", "music"]"""), op: Op, output: Note);
 
         var result = await Run(plan);
@@ -143,12 +143,12 @@ public sealed class LlmAnnotatorTests
     {
         var models = new TextModels(call => call.Prompts["user"] switch
         {
-            "30" => ("Fine", ModelStatus.Ok),
-            "10" => (null, ModelStatus.Failed("overloaded")),
-            "50" => (" ", ModelStatus.Ok with { Truncated = true }),
+            "30" => ("Fine", ServiceStatus.Ok),
+            "10" => (null, ServiceStatus.Failed("overloaded")),
+            "50" => (" ", ServiceStatus.Ok with { Truncated = true }),
             "20" => throw new InvalidOperationException("boom"),
-            "40" => (null, ModelStatus.Ok),
-            _ => ("", ModelStatus.Ok),
+            "40" => (null, ServiceStatus.Ok),
+            _ => ("", ServiceStatus.Ok),
         });
         var plan = Compile(models, Annotate(ById, window: 5), op: Op, output: Note);
 
@@ -168,9 +168,9 @@ public sealed class LlmAnnotatorTests
     [Fact]
     public async Task AThrowingOrSilentCall_IsAFailedRow_NamedInTheReason()
     {
-        var thrown = await Run(Compile(new TextModels(call => call.Prompts["user"] == "30" ? throw new InvalidOperationException("boom") : ("ok", ModelStatus.Ok)),
+        var thrown = await Run(Compile(new TextModels(call => call.Prompts["user"] == "30" ? throw new InvalidOperationException("boom") : ("ok", ServiceStatus.Ok)),
             Annotate(ById), op: Op, output: Note));
-        var silent = await Run(Compile(new TextModels(call => (call.Prompts["user"] == "30" ? null : "ok", ModelStatus.Ok)), Annotate(ById), op: Op, output: Note));
+        var silent = await Run(Compile(new TextModels(call => (call.Prompts["user"] == "30" ? null : "ok", ServiceStatus.Ok)), Annotate(ById), op: Op, output: Note));
 
         Assert.Equal("model 'llm' annotated 2 of 3 rows; 1 call(s) failed, the first: threw InvalidOperationException: boom", Rank(thrown).Detail);
         Assert.Equal("model 'llm' annotated 2 of 3 rows; 1 call(s) failed, the first: did not return text output 'answer'", Rank(silent).Detail);
@@ -179,7 +179,7 @@ public sealed class LlmAnnotatorTests
     [Fact]
     public async Task EveryCallFailing_FailsTheNode_WritingNothing()
     {
-        var models = new TextModels(call => call.Prompts["user"] == "10" ? throw new InvalidOperationException("boom") : (null, ModelStatus.Failed("overloaded")));
+        var models = new TextModels(call => call.Prompts["user"] == "10" ? throw new InvalidOperationException("boom") : (null, ServiceStatus.Failed("overloaded")));
         var plan = Compile(models, Annotate(ById), op: Op, onFailure: "skip", output: Note);
 
         var result = await Run(plan);
@@ -282,10 +282,10 @@ public sealed class LlmAnnotatorTests
     [Fact]
     public async Task AReplay_AnswersEachEntityFromItsRecordedCall_WhateverWindowItIsIn()
     {
-        var models = new TextModels(call => ("Note " + call.Prompts["user"], ModelStatus.Ok));
+        var models = new TextModels(call => ("Note " + call.Prompts["user"], ServiceStatus.Ok));
         var recorded = await Run(Compile(models, Annotate(ById), op: Op, output: Note), record: true);
-        Assert.Equal(3, recorded.Recording!.ModelCalls.Count);
-        Assert.All(recorded.Recording.ModelCalls, c => Assert.Equal((1, 1), (c.Keys!.Value.GetArrayLength(), c.InputDigests.Count)));
+        Assert.Equal(3, recorded.Recording!.ServiceCalls.FindAll(c => c.Role == "model").Count);
+        Assert.All(recorded.Recording.ServiceCalls.FindAll(c => c.Role == "model"), c => Assert.Equal((1, 1), (c.Keys!.Value.GetArrayLength(), c.InputDigests.Count)));
         var calls = models.Calls.Count;
 
         var (same, sameReplay) = await Replay(Compile(models, Annotate(ById), op: Op, output: Note), recorded);
@@ -314,7 +314,7 @@ public sealed class LlmAnnotatorTests
     [Fact]
     public async Task AReplayAfterThePromptChanged_ReportsEachRowsInputsAsChanged()
     {
-        var models = new TextModels(call => ("Note " + call.Prompts["user"], ModelStatus.Ok));
+        var models = new TextModels(call => ("Note " + call.Prompts["user"], ServiceStatus.Ok));
         var recorded = await Run(Compile(models, Annotate(ById), op: Op, output: Note), record: true);
 
         var (replayed, replay) = await Replay(Compile(models, Annotate("#" + ById), op: Op, onFailure: "skip", output: Note), recorded);
@@ -333,14 +333,14 @@ public sealed class LlmAnnotatorTests
     [Fact]
     public async Task ARowsTextIsSynthesizedFromTheRecordedCallOfThatEntityAlone_WhenAnotherNodesCallTookItsPlace()
     {
-        var models = new TextModels(call => (call.Prompts["user"].ToUpperInvariant(), ModelStatus.Ok));
+        var models = new TextModels(call => (call.Prompts["user"].ToUpperInvariant(), ServiceStatus.Ok));
         const string Second = """
             "reason": { "order": 300, "op": "LlmAnnotator@1", "config": { "model": "llm", "output": "answer", "column": "llm.reason", "window": 3,
               "prompts": { "user": "why {{col.entity_id}}" } } }
             """;
         const string Output = Note + ", \"reason\": \"col.llm.reason\"";
         var recorded = await Run(Compile(models, Annotate("note {{col.entity_id}}"), op: Op, output: Output, nodes: Second), record: true);
-        Assert.Equal(6, recorded.Recording!.ModelCalls.Count);
+        Assert.Equal(6, recorded.Recording!.ServiceCalls.FindAll(c => c.Role == "model").Count);
         var calls = models.Calls.Count;
 
         var (replayed, replay) = await Replay(Compile(models, Annotate("note {{col.entity_id}}", window: 2), op: Op, output: Output, nodes: Second), recorded);

@@ -78,7 +78,7 @@ internal static class InitTemplates
         """;
 
     private const string Bindings = """
-        // The "local" environment: what each source, model and candidate source the catalog and pipeline name is here. Point
+        // The "local" environment: what each source and service the catalog and pipeline name is here. Point
         // them at your data: here they read fixtures/ or run in process, so the workspace runs offline. Another environment
         // binds the same names in bindings/<env>.jsonc, used by releases/<pipeline>.<env>.jsonc.
         {
@@ -88,14 +88,12 @@ internal static class InitTemplates
             // A fixture answers at once; the timeout only allows for the first request of a process, which compiles code (JIT).
             "item_store": { "connector": "memory@1", "data_file": "fixtures/items.jsonc", "timeout_ms": 1000 }
           },
-          "models": {
+          "services": {
             // A stand-in for your model: p_click = sigmoid(bias + weight · smoothed_ctr).
             "ctr_model": {
               "client": "linear@1",
               "outputs": { "p_click": { "bias": -2.5, "weights": { "smoothed_ctr": 12.0 }, "activation": "sigmoid" } }
-            }
-          },
-          "candidate_sources": {
+            },
             "popular": { "client": "memory_list@1", "data_file": "fixtures/recall.jsonc" }
           }
         }
@@ -217,7 +215,7 @@ internal static class InitTemplates
         """;
 
     private const string Recall = """
-        // The candidates the memory_list@1 candidate source "popular" returns, best first (bindings/local.jsonc).
+        // The candidates the memory_list@1 service "popular" returns, best first (bindings/local.jsonc).
         {
           "items": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
         }

@@ -333,7 +333,7 @@ public sealed class RecErrorKindTests : IDisposable
         File.WriteAllText(Path.Combine(root, "catalog", "c.jsonc"), """{ "catalog_id": "c" }""");
         File.WriteAllText(Path.Combine(root, "bindings", "local.jsonc"), """
             { "environment": "local",
-              "candidate_sources": {
+              "services": {
                 "good":   { "client": "memory_list@1", "items": [7, 8, 9] },
                 "failing": { "client": "memory_list@1", "items": [1, 2, 3], "fail": true } } }
             """);

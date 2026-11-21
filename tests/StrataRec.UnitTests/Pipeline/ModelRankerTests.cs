@@ -6,10 +6,10 @@ using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting.Workspace;
-using StrataRec.Models;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
 using StrataRec.UnitTests.Features.Cache;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Pipeline;
 
@@ -49,19 +49,19 @@ public sealed class ModelRankerTests
 
     private const string Ids = """{ "id": "col.entity_id" }""";
 
-    private static readonly ModelSignature PairAll = Signature(
+    private static readonly ServiceSignature PairAll = Signature(
         ("id", TensorElementType.Int64, [-1, 2]), ("code", TensorElementType.Int64, [-1, 2]), ("ctr", TensorElementType.Float64, [-1, 2]),
         ("emb", TensorElementType.Float32, [-1, 2, 3]), ("user_emb", TensorElementType.Float32, [-1, 3]), ("user_id", TensorElementType.Int64, [-1]),
         ("weight", TensorElementType.Float64, [-1]), ("p", TensorElementType.Float32, [-1]));
 
-    private static readonly ModelSignature PairIds = Signature(("id", TensorElementType.Int64, [-1, 2]), ("p", TensorElementType.Float32, [-1]));
+    private static readonly ServiceSignature PairIds = Signature(("id", TensorElementType.Int64, [-1, 2]), ("p", TensorElementType.Float32, [-1]));
 
-    private static readonly ModelSignature ListAll = Signature(
+    private static readonly ServiceSignature ListAll = Signature(
         ("id", TensorElementType.Int64, [1, -1]), ("code", TensorElementType.Int64, [1, -1]), ("ctr", TensorElementType.Float64, [1, -1]),
         ("emb", TensorElementType.Float32, [1, -1, 3]), ("user_emb", TensorElementType.Float32, [1, 3]), ("user_id", TensorElementType.Int64, [1]),
         ("weight", TensorElementType.Float64, [1]), ("s", TensorElementType.Float32, [1, -1]));
 
-    private static readonly ModelSignature ListIds = Signature(("id", TensorElementType.Int64, [1, -1]), ("s", TensorElementType.Float32, [1, -1]));
+    private static readonly ServiceSignature ListIds = Signature(("id", TensorElementType.Int64, [1, -1]), ("s", TensorElementType.Float32, [1, -1]));
 
     /// <summary>Strengths giving the window of five a known result: 10 first, 20 and 50 tied, 30 and 40 tied.</summary>
     private static readonly Dictionary<long, int> Strengths = new() { [30] = 0, [10] = 3, [50] = 1, [20] = 1, [40] = 0, [60] = 0, [70] = 0 };
@@ -449,7 +449,7 @@ public sealed class ModelRankerTests
     {
         var pairwise = op == "PairwiseRanker@1";
         var good = pairwise ? new[] { -1, 2 } : new[] { 1, -1 };
-        ModelSignature Version(string? version) => Signature(
+        ServiceSignature Version(string? version) => Signature(
             ("id", TensorElementType.Int64, good), ("ctr", TensorElementType.Float64, version == "v2" ? v2Shape : good),
             (pairwise ? "p" : "s", TensorElementType.Float32, pairwise ? [-1] : [1, -1]));
         var config = $$"""{ "model": "m", "version_param": "m_version", "inputs": { "id": "col.entity_id", "ctr": "col.item.ctr" }, "output": "{{(pairwise ? "p" : "s")}}" }""";
@@ -541,7 +541,7 @@ public sealed class ModelRankerTests
         Assert.Equal(type == TensorElementType.Int64 ? elements : 0, input.Int64.Length);
     }
 
-    private static ModelSignature Signature(params (string Name, TensorElementType Type, int[] Shape)[] specs) => new(
+    private static ServiceSignature Signature(params (string Name, TensorElementType Type, int[] Shape)[] specs) => new(
         specs[..^1].Select(s => new TensorSpec(s.Name, s.Type, s.Shape)).ToArray(),
         new[] { new TensorSpec(specs[^1].Name, specs[^1].Type, specs[^1].Shape) });
 
@@ -580,8 +580,7 @@ public sealed class ModelRankerTests
         Write(root, "bindings/local.jsonc", $$"""
             { "environment": "local",
               "sources": { "items": { "connector": "memory@1", "data_file": "fixtures/items.json", "timeout_ms": 30000 } },
-              "models": { "m": { "client": "{{TestModels.TypeName}}" } },
-              "candidate_sources": { "s": { "client": "memory_list@1", "items": [{{string.Join(", ", recall ?? Incoming)}}] } } }
+              "services": { "m": { "client": "{{TestModels.TypeName}}" }, "s": { "client": "memory_list@1", "items": [{{string.Join(", ", recall ?? Incoming)}}] } } }
             """);
         Write(root, "pipelines/p.jsonc", $$"""
             { "pipeline_id": "p", "entity_key_type": "int64",
@@ -631,16 +630,14 @@ public sealed class ModelRankerTests
     /// <param name="exact">The float64 answer itself, for scores a float cannot hold (with <paramref name="answerType"/> float64).</param>
     /// <param name="extra">Elements written beyond the answer: a client that writes more than the output's shape holds.</param>
     internal sealed class TestModels(
-        Func<string?, ModelSignature> signature, Func<CapturedCall, float[]?> answer, TensorElementType answerType = TensorElementType.Float32,
-        Func<CapturedCall, double[]>? exact = null, int extra = 0) : IBindingFactory<IModelClient>, IModelClient
+        Func<string?, ServiceSignature> signature, Func<CapturedCall, float[]?> answer, TensorElementType answerType = TensorElementType.Float32,
+        Func<CapturedCall, double[]>? exact = null, int extra = 0) : IBindingFactory<IServiceClient>, IServiceClient
     {
         public const string TypeName = "ranker_test@1";
 
         private readonly List<CapturedCall> _calls = new();
 
         public string Type => TypeName;
-
-        public string ClientType => TypeName;
 
         public Type SettingsType => typeof(NoSettings);
 
@@ -655,12 +652,12 @@ public sealed class ModelRankerTests
             }
         }
 
-        public IModelClient Create(BindingContext context) => this;
+        public IServiceClient Create(BindingContext context) => this;
 
-        public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
+        public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken) =>
             ValueTask.FromResult(signature(version));
 
-        public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
+        public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse outputs, CancellationToken cancellationToken)
         {
             var inputs = new List<CapturedInput>();
             foreach (var input in call.Inputs.Span)
@@ -679,7 +676,7 @@ public sealed class ModelRankerTests
 
             if (answer(captured) is not { } values)
             {
-                return ValueTask.FromResult(ModelStatus.Failed("refused"));
+                return ValueTask.FromResult(ServiceStatus.Failed("refused"));
             }
 
             var name = signature(call.Version).Outputs[0].Name;
@@ -701,7 +698,7 @@ public sealed class ModelRankerTests
                     values.CopyTo(outputs.GetValues<float>(name, values.Length + extra).Span);
                     break;
             }
-            return ValueTask.FromResult(ModelStatus.Ok);
+            return ValueTask.FromResult(ServiceStatus.Ok);
         }
     }
 }
@@ -714,7 +711,7 @@ public sealed class ModelPairsMetricTests
     public async Task ThePairsSent_AreCounted_OncePerRun_TaggedWithTheModel()
     {
         var plan = ModelRankerTests.Compile(new ModelRankerTests.TestModels(
-                _ => new ModelSignature(new[] { new TensorSpec("id", TensorElementType.Int64, new[] { -1, 2 }) }, new[] { new TensorSpec("p", TensorElementType.Float32, new[] { -1 }) }),
+                _ => new ServiceSignature(new[] { new TensorSpec("id", TensorElementType.Int64, new[] { -1, 2 }) }, new[] { new TensorSpec("p", TensorElementType.Float32, new[] { -1 }) }),
                 _ => null),
             "PairwiseRanker@1", """{ "model": "m", "inputs": { "id": "col.entity_id" }, "output": "p", "window": 5, "batch_size": 3 }""", onFailure: "skip");
         var measured = new List<(long Value, string? Model)>();

@@ -38,7 +38,7 @@ public sealed class LlmRerankerEndToEndTests
         Assert.Equal(new[] { before[2], before[0], before[1], before[3] }.Concat(before.Skip(4)), recorded.Items.Select(i => i.Id.Int64Value));
         var run = Assert.Single(recorded.Recording!.Runs);
         Assert.Equal("succeeded", Assert.Single(run.Nodes, n => n.Node == "llm_rerank").Outcome);
-        var call = Assert.Single(run.ModelCalls, c => c.Model == "llm_ranker");
+        var call = Assert.Single(run.ServiceCalls.FindAll(c => c.Role == "model"), c => c.Service == "llm_ranker");
         Assert.Equal(("ok", 1, false, 1), (call.Status, call.BatchSize, call.Keys.HasValue, call.InputDigests.Count)); // one digest for the whole call
         Assert.Equal(new Dictionary<string, string> { ["answer"] = Answer }, call.Texts);
         Assert.Equal((null, null), (call.OutputTokens, call.Truncated)); // fixed_text@1 counts no tokens
@@ -61,7 +61,7 @@ public sealed class LlmRerankerEndToEndTests
     [Theory]
     [InlineData("template")]
     [InlineData("feature")]
-    public async Task AfterThePromptChanges_TheReplayReportsTheCallAsNotRecorded_AndTheNodeIsSkipped(string change)
+    public async Task AfterThePromptChanges_TheReplayReportsTheInputsAsChanged_AndTheNodeIsSkipped(string change)
     {
         var baseline = await NewEngine(HomeFeedTestHost.Load()).ExecuteAsync(ReplayTests.Request("req-llm-changed", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         var recorded = await NewEngine(HomeFeedTestHost.LoadModified(root => AddLlm(root, Answer)))
@@ -85,7 +85,7 @@ public sealed class LlmRerankerEndToEndTests
 
         var report = outcome.Report;
         Assert.True(outcome.Result.Succeeded, outcome.Result.Error); // on_failure: skip
-        Assert.Contains(report.Gaps, g => g is { Kind: "model", Source: "llm_ranker", Reason: "not_recorded" });
+        Assert.Contains(report.Gaps, g => g is { Kind: "model", Source: "llm_ranker", Reason: "inputs_changed" });
         Assert.DoesNotContain(report.Gaps, g => g.Source == "ctr_model"); // its inputs did not change
         var node = Assert.Single(report.Nodes, n => n.Node == "llm_rerank");
         Assert.Equal(("succeeded", "failed"), (node.Recorded, node.Replayed));
@@ -110,8 +110,8 @@ public sealed class LlmRerankerEndToEndTests
             CancellationToken.None, recordPath: bundle));
         using (var recorded = JsonDocument.Parse(File.ReadAllText(bundle)))
         {
-            var calls = recorded.RootElement.GetProperty("runs")[0].GetProperty("model_calls").EnumerateArray();
-            Assert.Contains(calls, c => c.GetProperty("model").GetString() == "llm_ranker" && c.GetProperty("texts").GetProperty("answer").GetString() == Answer);
+            var calls = recorded.RootElement.GetProperty("runs")[0].GetProperty("service_calls").EnumerateArray();
+            Assert.Contains(calls, c => c.GetProperty("service").GetString() == "llm_ranker" && c.GetProperty("texts").GetProperty("answer").GetString() == Answer);
         }
 
         var replay = new StringWriter();
@@ -144,9 +144,9 @@ public sealed class LlmRerankerEndToEndTests
                 },
                 "diversity_cap": {
             """);
-        ReplayTests.Edit(root, "bindings/local.jsonc", "\"models\": {",
+        ReplayTests.Edit(root, "bindings/local.jsonc", "\"services\": {",
             $$"""
-            "models": {
+            "services": {
                 "llm_ranker": { "client": "fixed_text@1", "inputs": ["system", "user"], "outputs": { "answer": {{JsonSerializer.Serialize(answer)}} } },
             """);
     }

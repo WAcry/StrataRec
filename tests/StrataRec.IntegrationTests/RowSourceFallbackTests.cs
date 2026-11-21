@@ -91,7 +91,7 @@ public sealed class RowSourceFallbackTests
         // The premise: the prefetch was sent before the failed attempt, for the rows that existed then; the fallback's rows
         // were fetched afterwards, and the failed primary's own row never.
         var run = failing.Recording!.Runs[0];
-        var attempt = run.CandidateCalls.Single(c => c.Source == "extra_primary").Seq;
+        var attempt = run.ServiceCalls.FindAll(c => c.Role == "recall").Single(c => c.Service == "extra_primary").Seq;
         var items = run.FeatureCalls.Where(c => c.Source == "item_store").ToList();
         var prefetched = items.Where(c => c.Seq < attempt).SelectMany(c => c.Keys.EnumerateArray().Select(k => k.GetInt64())).ToList();
         var after = items.Where(c => c.Seq > attempt).SelectMany(c => c.Keys.EnumerateArray().Select(k => k.GetInt64())).ToList();
@@ -112,8 +112,8 @@ public sealed class RowSourceFallbackTests
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             const string pipeline = "pipelines/home_feed.jsonc";
-            ReplayTests.Edit(root, "bindings/local.jsonc", "\"candidate_sources\": {", """
-                "candidate_sources": {
+            ReplayTests.Edit(root, "bindings/local.jsonc", "\"services\": {", """
+                "services": {
                   "extra_primary": { "client": "memory_list@1", "items": [42, 43] },
                   "extra_backup": { "client": "memory_list@1", "items": [43, 45, 48, 49] },
                 """);

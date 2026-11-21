@@ -4,6 +4,7 @@ using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting.Workspace;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Pipeline.Sources;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Experiments;
 
@@ -23,7 +24,7 @@ public sealed class ReleaseRequirementsTests
         Write(root, "catalog/c.jsonc", """{ "catalog_id": "c" }""");
         Write(root, "bindings/local.jsonc", """
             { "environment": "local",
-              "candidate_sources": { "r": { "client": "memory_list@1", "items": [1] }, "future": { "client": "future@1", "items": [99] } } }
+              "services": { "r": { "client": "memory_list@1", "items": [1] }, "future": { "client": "future@1", "items": [99] } } }
             """);
         Write(root, "pipelines/p.jsonc", """
             { "pipeline_id": "p", "entity_key_type": "int64",
@@ -148,7 +149,7 @@ public sealed class ReleaseRequirementsTests
         Write(root, "catalog/c.jsonc", """{ "catalog_id": "c" }""");
         Write(root, "bindings/local.jsonc", """
             { "environment": "local",
-              "candidate_sources": { "r": { "client": "memory_list@1", "items": [1] }, "future": { "client": "future@1", "items": [99] } } }
+              "services": { "r": { "client": "memory_list@1", "items": [1] }, "future": { "client": "future@1", "items": [99] } } }
             """);
         Write(root, "pipelines/p.jsonc", """
             { "pipeline_id": "p", "entity_key_type": "int64",
@@ -193,12 +194,12 @@ public sealed class ReleaseRequirementsTests
     }
 
     /// <summary>A client type this binary would not have: the memory list under another name.</summary>
-    private sealed class AliasFactory : IBindingFactory<ICandidateSource>
+    private sealed class AliasFactory : IBindingFactory<IServiceClient>
     {
         public string Type => "future@1";
 
         public Type SettingsType => typeof(MemoryListSettings);
 
-        public ICandidateSource Create(BindingContext context) => new MemoryListCandidateSourceFactory().Create(context);
+        public IServiceClient Create(BindingContext context) => new MemoryListServiceFactory().Create(context);
     }
 }

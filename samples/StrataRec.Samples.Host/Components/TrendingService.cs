@@ -1,13 +1,13 @@
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
+using StrataRec.Core.Services;
 using StrataRec.Core.Types;
-using StrataRec.Pipeline.Sources;
 
 namespace StrataRec.Samples.Host.Components;
 
 /// <summary>
-/// <c>trending@1</c>: what is trending, overall or in the request's region, from an in-memory list. A production source
-/// would refresh the list from a stream job in the background; the request path would stay the same.
+/// <c>trending@1</c>: a recall service of what is trending, overall or in the request's region, from an in-memory list. A
+/// production service would refresh the list from a stream job in the background; the request path would stay the same.
 /// </summary>
 /// <remarks>
 /// <para>Binding settings: <see cref="TrendingSettings"/>, the items and optionally the request input that picks a region's
@@ -17,57 +17,55 @@ namespace StrataRec.Samples.Host.Components;
 /// <list type="bullet">
 /// <item>The lists are built and sorted once, from the settings, when the source is created (CPU only, no I/O, so no
 /// <see cref="ILoadable"/> is needed). Ties rank by id ascending, so the order is deterministic.</item>
-/// <item>A retrieval is called concurrently by every request: it reads immutable arrays and adds candidates to the sink in
-/// rank order, at most <see cref="CandidateQuery.Limit"/>, with no allocation. It answers synchronously, so the engine's
-/// bounded wait allocates no task either.</item>
-/// <item>The sink belongs to this call only: nothing may keep it or add to it after returning.</item>
-/// <item>A failure is a <see cref="CandidateSourceStatus.Failed"/> with a reason; the recall node then reports the source
-/// failed (and degrades, or fails if every source failed).</item>
+/// <item>A call comes concurrently from every request: it reads immutable arrays and adds items to the response in rank
+/// order, at most <see cref="ServiceCall.Limit"/>, with no allocation. It answers synchronously, so the engine's bounded
+/// wait allocates no task either.</item>
+/// <item>The response belongs to this call only: nothing may keep it or add to it after returning.</item>
+/// <item>A failure is a <see cref="ServiceStatus.Failed"/> with a reason; the recall node then reports the source failed
+/// (and degrades, or fails if every source failed).</item>
 /// </list>
 /// </remarks>
-public sealed class TrendingCandidateSource : ICandidateSource
+public sealed class TrendingService : IServiceClient
 {
     private readonly Entry[] _overall;
     private readonly Dictionary<string, Entry[]> _byRegion;
     private readonly string? _regionInput;
 
-    private TrendingCandidateSource(Entry[] overall, Dictionary<string, Entry[]> byRegion, string? regionInput)
+    private TrendingService(Entry[] overall, Dictionary<string, Entry[]> byRegion, string? regionInput)
     {
         _overall = overall;
         _byRegion = byRegion;
         _regionInput = regionInput;
     }
 
-    public string ClientType => TrendingCandidateSourceFactory.TypeName;
-
-    public ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken)
+    public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken)
     {
-        // A request already cut off gets nothing; a source doing I/O would pass the token to it instead.
+        // A request already cut off gets nothing; a service doing I/O would pass the token to it instead.
         if (cancellationToken.IsCancellationRequested)
         {
-            return ValueTask.FromCanceled<CandidateSourceStatus>(cancellationToken);
+            return ValueTask.FromCanceled<ServiceStatus>(cancellationToken);
         }
 
         var list = _overall;
         if (_regionInput is not null)
         {
-            var region = query.Inputs[_regionInput]; // ScalarValue.Missing when the request has no region
+            var region = call.Request[_regionInput]; // ScalarValue.Missing when the request has no region
             if (region.Kind == StorageKind.String && _byRegion.TryGetValue(region.AsString(), out var regional))
             {
                 list = regional;
             }
         }
 
-        var count = Math.Min(query.Limit, list.Length);
+        var count = Math.Min(call.Limit, list.Length);
         for (var i = 0; i < count; i++)
         {
-            sink.Add(list[i].Id, list[i].Score);
+            response.AddItem(list[i].Id, list[i].Score);
         }
 
-        return new ValueTask<CandidateSourceStatus>(CandidateSourceStatus.Ok);
+        return new ValueTask<ServiceStatus>(ServiceStatus.Ok);
     }
 
-    internal static TrendingCandidateSource Create(List<(long Id, double Score, string? Region)> items, string? regionInput)
+    internal static TrendingService Create(List<(long Id, double Score, string? Region)> items, string? regionInput)
     {
         var overall = new List<Entry>(items.Count);
         var regional = new Dictionary<string, List<Entry>>(StringComparer.Ordinal);
@@ -91,7 +89,7 @@ public sealed class TrendingCandidateSource : ICandidateSource
             byRegion[region] = Ranked(list);
         }
 
-        return new TrendingCandidateSource(Ranked(overall), byRegion, regionInput);
+        return new TrendingService(Ranked(overall), byRegion, regionInput);
     }
 
     private static Entry[] Ranked(List<Entry> entries)
@@ -128,14 +126,14 @@ public sealed class TrendingItem
 }
 
 /// <summary>Creates <c>trending@1</c> sources; registered in <see cref="SampleEnvironment"/>.</summary>
-public sealed class TrendingCandidateSourceFactory : BindingFactory<ICandidateSource, TrendingSettings>
+public sealed class TrendingServiceFactory : BindingFactory<IServiceClient, TrendingSettings>
 {
     public const string TypeName = "trending@1";
 
     public override string Type => TypeName;
 
     /// <summary>Checks what the settings type cannot say; a wrong setting is a <see cref="BindingException"/> at its pointer, with a hint.</summary>
-    protected override ICandidateSource Create(TrendingSettings settings, BindingContext context)
+    protected override IServiceClient Create(TrendingSettings settings, BindingContext context)
     {
         if (settings.RegionInput is { Length: 0 })
         {
@@ -148,6 +146,6 @@ public sealed class TrendingCandidateSourceFactory : BindingFactory<ICandidateSo
             items.Add((item.Id, item.Score, item.Region));
         }
 
-        return TrendingCandidateSource.Create(items, settings.RegionInput);
+        return TrendingService.Create(items, settings.RegionInput);
     }
 }

@@ -5,8 +5,8 @@ using StrataRec.Core.Memory;
 using StrataRec.Core.Threading;
 using StrataRec.Features.Bindings;
 using StrataRec.Features.Local;
-using StrataRec.Models;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Hosting.Bindings;
 
@@ -29,7 +29,7 @@ public sealed record BindingLoadFailure(string Code, string Artifact, string Poi
 /// <see cref="TryEnter"/> and leaves with <see cref="RequestEnded"/>; each run of it joins, and its request memory leaves
 /// once the run and every call it started have ended, so a call abandoned at a timeout keeps its client alive until it
 /// returns. A signature lookup is a user too, from the moment it is asked until the client answered, so retiring the
-/// lease (which cancels the lookup) never disposes a client inside its <see cref="IModelClient.GetSignatureAsync"/>. One
+/// lease (which cancels the lookup) never disposes a client inside its <see cref="IServiceClient.DescribeAsync"/>. One
 /// count holds them all, so no order of these events releases an instance a user still holds.</para>
 /// <para><b>Model signatures</b> (design 6.9). <see cref="Signature"/> asks a client once per (model, version) and keeps
 /// the answer for the lease's compiles. An answer that needs the client loaded or I/O is pending during the first compile;
@@ -48,7 +48,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
     private readonly List<BindingHost.ClientEntry> _clients = new();
     private readonly Dictionary<BindingKey, BindingHost.ClientEntry> _clientsByKey = new();
     private readonly Dictionary<object, BindingHost.ClientEntry> _clientsByInstance = new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<IModelClient, Dictionary<(string Model, string? Version), Task<SignatureLookup>>> _signatures =
+    private readonly Dictionary<IServiceClient, Dictionary<(string Model, string? Version), Task<SignatureLookup>>> _signatures =
         new(ReferenceEqualityComparer.Instance);
     private readonly ObservedCancellationSource _lookups = new(CancellationSite.SignatureLookup); // cancels the signature lookups; never disposed (see TableEntry)
     private bool _lookupsWaited;
@@ -152,7 +152,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
         return (T)entry.Instance;
     }
 
-    public SignatureLookup Signature(IModelClient client, string model, string? version)
+    public SignatureLookup Signature(IServiceClient client, string model, string? version)
     {
         ArgumentNullException.ThrowIfNull(client);
         if (!_host.Options.Load && client is ILoadable)
@@ -408,7 +408,6 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
         }
     }
 
-
     /// <summary>
     /// Retires the lease: no request enters any more; its tables are released now, its instances once its last request has
     /// ended (now, when none runs). Pending signature lookups are cancelled.
@@ -533,7 +532,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
     /// bounded wait for the answers (<see cref="CompileAsync{T}"/>); its answer is then pending, and late. The caller
     /// entered the lease for the lookup, and this ends that entry once the client returned.
     /// </summary>
-    private async Task<SignatureLookup> LookupAsync(BindingHost.ClientEntry entry, IModelClient client, string model, string? version)
+    private async Task<SignatureLookup> LookupAsync(BindingHost.ClientEntry entry, IServiceClient client, string model, string? version)
     {
         try
         {
@@ -561,7 +560,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
 
             try
             {
-                var signature = await Task.Run(() => client.GetSignatureAsync(model, version, token).AsTask(), CancellationToken.None).ConfigureAwait(false);
+                var signature = await Task.Run(() => client.DescribeAsync(model, version, token).AsTask(), CancellationToken.None).ConfigureAwait(false);
                 return new SignatureLookup(SignatureStatus.Known, signature);
             }
             catch (Exception ex)

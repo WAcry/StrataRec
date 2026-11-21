@@ -134,10 +134,9 @@ public class DeclaredWidthEndToEndTests
     {
         var root = Workspace();
         var bindings = Path.Combine(root, "bindings", "local.jsonc");
-        File.WriteAllText(bindings, File.ReadAllText(bindings).Replace("\"candidate_sources\":", """
-            "models": { "m": { "client": "random@1", "seed": 1,
-                               "inputs": { "clicks": { "type": "int32", "shape": [-1] }, "uctr": { "type": "float32", "shape": [-1] } }, "outputs": ["p"] } },
-            "candidate_sources":
+        File.WriteAllText(bindings, File.ReadAllText(bindings).Replace("\"services\": {", """
+            "services": { "m": { "client": "random@1", "seed": 1,
+                               "inputs": { "clicks": { "type": "int32", "shape": [-1] }, "uctr": { "type": "float32", "shape": [-1] } }, "outputs": ["p"] },
             """, StringComparison.Ordinal));
         var pipeline = Path.Combine(root, "pipelines", "p.jsonc");
         File.WriteAllText(pipeline, File.ReadAllText(pipeline)
@@ -261,7 +260,7 @@ public class DeclaredWidthEndToEndTests
                 "items": { "connector": "memory@1", "timeout_ms": 10000,
                            "data": { "1": { "clicks": 2147483647, "ctr": 0.1, "emb": [0.1, 0.2] }, "2": { "clicks": -5, "ctr": 0.3, "emb": [0.3, 0.4] } } },
                 "users": { "connector": "memory@1", "timeout_ms": 10000, "data": { "7": { "ctr": 0.1 } } } },
-              "candidate_sources": { "pool": { "client": "memory_list@1", "items": [1, 2] } } }
+              "services": { "pool": { "client": "memory_list@1", "items": [1, 2] } } }
             """);
         File.WriteAllText(Path.Combine(root, "pipelines", "p.jsonc"), """
             { "pipeline_id": "p",

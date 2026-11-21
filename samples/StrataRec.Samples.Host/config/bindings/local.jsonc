@@ -1,6 +1,6 @@
 // Local bindings (design 6.4): the sample's own components, named by type like the built-in ones. Bindings for production
-// would name the same logical sources, model and candidate sources with production types, settings and budgets; the
-// pipeline would not change.
+// would name the same logical feature sources and services with production types, settings and budgets; the pipeline
+// would not change.
 {
   "$schema": "../schemas/bindings.schema.json",
   "environment": "local",
@@ -10,7 +10,7 @@
     "user_store": { "connector": "kv_store@1", "data_file": "data/users.jsonl", "timeout_ms": 1000 },
     "item_store": { "connector": "kv_store@1", "data_file": "data/items.jsonl", "timeout_ms": 1000, "max_batch": 50 }
   },
-  "models": {
+  "services": {
     // logistic@1 (Components/LogisticModelClient.cs): its inputs are the names of its weights.
     "engagement": {
       "client": "logistic@1",
@@ -18,11 +18,9 @@
       "bias": -3.0,
       "weights": { "ctr": 30.0, "freshness": 1.5, "affinity": 0.8 },
       "output": "p_engage"
-    }
-  },
-  "candidate_sources": {
-    // trending@1 (Components/TrendingCandidateSource.cs): the request input "region" picks a region's list; without it,
-    // the overall list.
+    },
+    // trending@1 (Components/TrendingService.cs), a recall service: the request input "region" picks a region's list;
+    // without it, the overall list.
     "trending": {
       "client": "trending@1",
       "region_input": "region",

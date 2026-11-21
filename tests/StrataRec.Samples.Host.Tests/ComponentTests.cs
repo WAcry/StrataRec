@@ -1,7 +1,7 @@
 using System.Text.Json;
 using StrataRec.Core.Bindings;
-using StrataRec.Models;
 using StrataRec.Samples.Host.Components;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Samples.Host.Tests;
 
@@ -16,7 +16,7 @@ public sealed class ComponentTests
         var client = new LogisticModelClient("m", "v1", "p", bias: -1e40, inputs: new[] { "x" }, weights: new[] { 1e40 });
         var outputs = new Outputs();
 
-        var status = await client.InvokeAsync(Call(("x", 1f)), outputs, CancellationToken.None);
+        var status = await client.CallAsync(Call(("x", 1f)), outputs, CancellationToken.None);
 
         Assert.True(status.Succeeded, status.Error);
         Assert.Equal(0.5f, outputs.Values[0]);
@@ -29,7 +29,7 @@ public sealed class ComponentTests
         var client = new LogisticModelClient("m", "v1", "p", bias: 0, inputs: new[] { "a", "b" }, weights: new[] { 1e308, -1e308 });
         var outputs = new Outputs();
 
-        var status = await client.InvokeAsync(Call(("a", 1e38f), ("b", 1e38f)), outputs, CancellationToken.None);
+        var status = await client.CallAsync(Call(("a", 1e38f), ("b", 1e38f)), outputs, CancellationToken.None);
 
         Assert.False(status.Succeeded);
         Assert.Contains("not a number", status.Error, StringComparison.Ordinal);
@@ -98,11 +98,11 @@ public sealed class ComponentTests
     private static object Create(string type, BindingContext context) => type switch
     {
         "logistic@1" => new LogisticModelClientFactory().Create(context),
-        "trending@1" => new TrendingCandidateSourceFactory().Create(context),
+        "trending@1" => new TrendingServiceFactory().Create(context),
         _ => new KeyValueFeatureConnectorFactory().Create(context),
     };
 
-    private static ModelCall Call(params (string Name, float Value)[] inputs)
+    private static ServiceCall Call(params (string Name, float Value)[] inputs)
     {
         var named = new NamedInput[inputs.Length];
         for (var i = 0; i < inputs.Length; i++)
@@ -110,11 +110,15 @@ public sealed class ComponentTests
             named[i] = NamedInput.FromFloat32(inputs[i].Name, new[] { 1 }, new[] { inputs[i].Value });
         }
 
-        return new ModelCall { Model = "m", Version = "v1", Inputs = named, BatchSize = 1 };
+        return new ServiceCall { Service = "m", Version = "v1", Inputs = named, BatchSize = 1 };
     }
 
-    private sealed class Outputs : IModelOutputWriter
+    private sealed class Outputs : IServiceResponse
     {
+        public void AddItem(long entityId, double score) => throw new NotSupportedException("a model answers with outputs");
+
+        public void AddItem(string entityId, double score) => throw new NotSupportedException("a model answers with outputs");
+
         public float[] Values { get; private set; } = Array.Empty<float>();
 
         public Memory<T> GetValues<T>(string name, int elementCount)

@@ -32,7 +32,7 @@ public sealed class BindingSpecTests
     {
         var spec = Spec("""{ "uri": "m.bin" }""");
 
-        Assert.NotEqual(spec.Identity, Spec("""{ "uri": "m.bin" }""", kind: BindingKind.CandidateSource).Identity);
+        Assert.NotEqual(spec.Identity, Spec("""{ "uri": "m.bin" }""", kind: BindingKind.Connector).Identity);
         Assert.NotEqual(spec.Identity, Spec("""{ "uri": "m.bin" }""", name: "ctr_other").Identity);
         Assert.NotEqual(spec.Identity, Spec("""{ "uri": "m.bin" }""", type: "my_ranker@2").Identity);
         Assert.NotEqual(spec.Identity, Spec("""{ "uri": "m.bin" }""", baseDirectory: Path.Combine(Root, "other")).Identity);
@@ -48,8 +48,7 @@ public sealed class BindingSpecTests
     }
 
     [Theory]
-    [InlineData(BindingKind.Model, "/models/ctr~1model", "model 'ctr/model' (my_ranker@1)")]
-    [InlineData(BindingKind.CandidateSource, "/candidate_sources/ctr~1model", "candidate source 'ctr/model' (my_ranker@1)")]
+    [InlineData(BindingKind.Service, "/services/ctr~1model", "service 'ctr/model' (my_ranker@1)")]
     [InlineData(BindingKind.Connector, "/sources/ctr~1model", "feature source 'ctr/model' (my_ranker@1)")]
     [InlineData(BindingKind.UpdateSource, "/sources/ctr~1model/bootstrap", "update source of feature source 'ctr/model' (my_ranker@1)")]
     [InlineData(BindingKind.CacheStore, "/sources/ctr~1model/cache/distributed", "distributed cache of feature source 'ctr/model' (my_ranker@1)")]
@@ -77,7 +76,7 @@ public sealed class BindingSpecTests
     }
 
     private static BindingSpec Spec(
-        string settings, BindingKind kind = BindingKind.Model, string name = "ctr_model", string type = "my_ranker@1", string? baseDirectory = null,
+        string settings, BindingKind kind = BindingKind.Service, string name = "ctr_model", string type = "my_ranker@1", string? baseDirectory = null,
         object? factory = null)
     {
         var values = new Dictionary<string, JsonElement>(StringComparer.Ordinal);

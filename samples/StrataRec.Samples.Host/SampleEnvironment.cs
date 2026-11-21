@@ -22,6 +22,6 @@ public static class SampleEnvironment
         Bindings = PlanEnvironment.DefaultBindings()
             .Add(new KeyValueFeatureConnectorFactory())
             .Add(new LogisticModelClientFactory())
-            .Add(new TrendingCandidateSourceFactory()),
+            .Add(new TrendingServiceFactory()),
     };
 }

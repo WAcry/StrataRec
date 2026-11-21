@@ -24,13 +24,11 @@
       "bootstrap": { "source": "snapshot_files@1", "uri": "fixtures/item_country_snapshot" }
     }
   },
-  "models": {
+  "services": {
     "ctr_model": {
       "client": "linear@1",
       "outputs": { "p_click": { "bias": -1.5, "weights": { "smoothed_ctr": 12.0, "log_followers": 0.05 }, "activation": "sigmoid" } }
-    }
-  },
-  "candidate_sources": {
+    },
     // The two-tower service's stand-in: an in-memory index scored by the dot product with the query's user_embedding
     // (the recall node's queries). Items below min_score are not returned.
     "two_tower": { "client": "memory_vectors@1", "data_file": "fixtures/recall_vectors.json", "query": "user_embedding", "min_score": 0.01 },

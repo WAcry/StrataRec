@@ -5,8 +5,8 @@ using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Features.Bindings;
 using StrataRec.Hosting.Bindings;
-using StrataRec.Models;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Hosting;
 
@@ -76,9 +76,9 @@ public sealed class BindingHostClientTests
 
         var failure = Assert.Single(await failed.WaitLoadedAsync(TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken));
 
-        Assert.Equal(("BINDING_LOAD_FAILED", "bindings:test", "/models/ctr_model/uri", "check the path"),
+        Assert.Equal(("BINDING_LOAD_FAILED", "bindings:test", "/services/ctr_model/uri", "check the path"),
             (failure.Code, failure.Artifact, failure.Pointer, failure.Hint));
-        Assert.Equal("The model 'ctr_model' (test@1) failed to load: The model file 'm.bin' does not exist.", failure.Message);
+        Assert.Equal("The service 'ctr_model' (test@1) failed to load: The model file 'm.bin' does not exist.", failure.Message);
         Assert.Contains(logs.Entries, e => e.EventId == 1208);
 
         using var retry = host.OpenLease();
@@ -604,7 +604,7 @@ public sealed class BindingHostClientTests
         // Stops early only with a failure to show.
         var failure = Assert.Single(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken));
 
-        Assert.Equal(("BINDING_LOAD_FAILED", "bindings:test", "/models/ctr_model"), (failure.Code, failure.Artifact, failure.Pointer));
+        Assert.Equal(("BINDING_LOAD_FAILED", "bindings:test", "/services/ctr_model"), (failure.Code, failure.Artifact, failure.Pointer));
         Assert.Contains(typeof(UnreadableException).FullName!, failure.Message, StringComparison.Ordinal);
         Assert.IsType<UnreadableException>(failure.Exception.InnerException);
     }
@@ -672,7 +672,7 @@ public sealed class BindingHostClientTests
             values[property.Name] = property.Value.Clone();
         }
 
-        return BindingSpec.Create(BindingKind.Model, "ctr_model", "test@1", values, Root, factory, "bindings:test");
+        return BindingSpec.Create(BindingKind.Service, "ctr_model", "test@1", values, Root, factory, "bindings:test");
     }
 
     private sealed class Factory
@@ -717,32 +717,30 @@ public sealed class BindingHostClientTests
     /// A client without a load whose signature only its model server knows: each lookup answers once
     /// <paramref name="answer"/> completes, or is cancelled. Its own factory (one instance).
     /// </summary>
-    private sealed class ModelServer(Task answer) : IModelClient
+    private sealed class ModelServer(Task answer) : IServiceClient
     {
         private int _lookups;
-
-        public string ClientType => "server@1";
 
         public int Lookups => Volatile.Read(ref _lookups);
 
         public ModelServer Create(BindingContext context) => this;
 
-        public async ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken)
+        public async ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _lookups);
             await answer.WaitAsync(cancellationToken);
             return Instance.Signature();
         }
 
-        public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
-            ValueTask.FromResult(ModelStatus.Ok);
+        public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(ServiceStatus.Ok);
     }
 
     /// <summary>
     /// A client without a load whose signature method blocks (synchronous I/O, say) before it returns its task, until
     /// <see cref="Gate"/> is set; disposable. Its own factory.
     /// </summary>
-    private sealed class BlockingServer : IModelClient, IDisposable
+    private sealed class BlockingServer : IServiceClient, IDisposable
     {
         private int _inside;
         private int _disposalsInside;
@@ -757,11 +755,9 @@ public sealed class BindingHostClientTests
 
         public int DisposalsInside => Volatile.Read(ref _disposalsInside);
 
-        public string ClientType => "blocking@1";
-
         public BlockingServer Create(BindingContext context) => this;
 
-        public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken)
+        public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _inside);
             try
@@ -776,8 +772,8 @@ public sealed class BindingHostClientTests
             }
         }
 
-        public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
-            ValueTask.FromResult(ModelStatus.Ok);
+        public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(ServiceStatus.Ok);
 
         public void Dispose()
         {
@@ -794,7 +790,7 @@ public sealed class BindingHostClientTests
     /// A client without a load whose signature lookup waits for its server; when the lookup is cancelled, its callback
     /// ends the lookup at once and then goes on cleaning up until <see cref="Gate"/> is set. Disposable; its own factory.
     /// </summary>
-    private sealed class CleaningServer : IModelClient, IDisposable
+    private sealed class CleaningServer : IServiceClient, IDisposable
     {
         private int _cleaningUp;
         private int _disposalsDuringCleanup;
@@ -809,13 +805,11 @@ public sealed class BindingHostClientTests
 
         public int DisposalsDuringCleanup => Volatile.Read(ref _disposalsDuringCleanup);
 
-        public string ClientType => "cleaning@1";
-
         public CleaningServer Create(BindingContext context) => this;
 
-        public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken)
+        public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken)
         {
-            var answer = new TaskCompletionSource<ModelSignature>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var answer = new TaskCompletionSource<ServiceSignature>(TaskCreationOptions.RunContinuationsAsynchronously);
             cancellationToken.Register(() =>
             {
                 Volatile.Write(ref _cleaningUp, 1);
@@ -831,11 +825,11 @@ public sealed class BindingHostClientTests
                 }
             });
             Entered.TrySetResult();
-            return new ValueTask<ModelSignature>(answer.Task);
+            return new ValueTask<ServiceSignature>(answer.Task);
         }
 
-        public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
-            ValueTask.FromResult(ModelStatus.Ok);
+        public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(ServiceStatus.Ok);
 
         public void Dispose()
         {
@@ -849,7 +843,7 @@ public sealed class BindingHostClientTests
     }
 
     /// <summary>A loadable, disposable model client whose load the test finishes or fails.</summary>
-    private sealed class Instance(BindingContext context) : IModelClient, ILoadable, IAsyncDisposable
+    private sealed class Instance(BindingContext context) : IServiceClient, ILoadable, IAsyncDisposable
     {
         private readonly TaskCompletionSource _load = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _loads;
@@ -869,8 +863,6 @@ public sealed class BindingHostClientTests
 
         /// <summary>Signature lookups that were running when the disposal began, or started after it: always 0.</summary>
         public int CallsAtOrAfterDispose => Volatile.Read(ref _callsAtOrAfterDispose);
-
-        public string ClientType => "test@1";
 
         public TaskCompletionSource LoadStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -943,7 +935,7 @@ public sealed class BindingHostClientTests
             }
         }
 
-        public async ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken)
+        public async ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _inFlight);
             try
@@ -968,8 +960,8 @@ public sealed class BindingHostClientTests
             }
         }
 
-        public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
-            ValueTask.FromResult(ModelStatus.Ok);
+        public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(ServiceStatus.Ok);
 
         public ValueTask DisposeAsync()
         {
@@ -988,7 +980,7 @@ public sealed class BindingHostClientTests
             return ThrowOnDispose ? ValueTask.FromException(new InvalidOperationException("dispose failed")) : ValueTask.CompletedTask;
         }
 
-        public static ModelSignature Signature() =>
+        public static ServiceSignature Signature() =>
             new([new TensorSpec("x", TensorElementType.Float32, [-1])], [new TensorSpec("p_click", TensorElementType.Float32, [-1])]);
     }
 

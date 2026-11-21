@@ -4,6 +4,7 @@ using StrataRec.Core.Bindings;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Models;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
@@ -87,11 +88,11 @@ public sealed class ModelSignatureTests
     /// <summary>The scorer's own errors; the log tap that reads ctr_ranker's inputs fails with it and reports its own.</summary>
     private static bool IsModelError(ConfigDiagnostic d) => d.IsError && d.Code.StartsWith("MODEL_", StringComparison.Ordinal);
 
-    private static PlanCompilation Compile(HomeFeedTestHost host, Func<string?, ModelSignature> signature) =>
+    private static PlanCompilation Compile(HomeFeedTestHost host, Func<string?, ServiceSignature> signature) =>
         PlanCompiler.Compile(host.Request, new PlanEnvironment { BaseDirectory = host.Root, Bindings = PlanEnvironment.DefaultBindings().Add(new SignatureModels(signature)) });
 
     /// <summary>The sample model's signature (what <c>linear@1</c> declares for it), with one tensor replaced or added.</summary>
-    private static ModelSignature Linear(TensorSpec? smoothedCtr = null, TensorSpec? logFollowers = null, TensorSpec? extra = null, TensorSpec? pClick = null)
+    private static ServiceSignature Linear(TensorSpec? smoothedCtr = null, TensorSpec? logFollowers = null, TensorSpec? extra = null, TensorSpec? pClick = null)
     {
         var inputs = new List<TensorSpec>
         {
@@ -103,26 +104,24 @@ public sealed class ModelSignatureTests
             inputs.Add(extra);
         }
 
-        return new ModelSignature(inputs, new[] { pClick ?? new TensorSpec("p_click", TensorElementType.Float32, Rows) });
+        return new ServiceSignature(inputs, new[] { pClick ?? new TensorSpec("p_click", TensorElementType.Float32, Rows) });
     }
 
     /// <summary>Stands in for <c>linear@1</c> with a signature per version; never called.</summary>
-    private sealed class SignatureModels(Func<string?, ModelSignature> signature) : IBindingFactory<IModelClient>
+    private sealed class SignatureModels(Func<string?, ServiceSignature> signature) : IBindingFactory<IServiceClient>
     {
         public string Type => LinearModelClientFactory.TypeName;
 
         public Type SettingsType => typeof(LinearSettings);
 
-        public IModelClient Create(BindingContext context) => new Client(signature);
+        public IServiceClient Create(BindingContext context) => new Client(signature);
 
-        private sealed class Client(Func<string?, ModelSignature> signature) : IModelClient
+        private sealed class Client(Func<string?, ServiceSignature> signature) : IServiceClient
         {
-            public string ClientType => LinearModelClientFactory.TypeName;
-
-            public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
+            public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken) =>
                 ValueTask.FromResult(signature(version));
 
-            public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
+            public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken) =>
                 throw new InvalidOperationException("not called at load time");
         }
     }

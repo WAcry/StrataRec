@@ -1,7 +1,7 @@
 using System.Text;
 using StrataRec.Artifacts.Json;
 using StrataRec.Core.Types;
-using StrataRec.Models;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Pipeline.Operators.Standard;
 
@@ -204,7 +204,7 @@ internal static class ModelTensorRule
     /// <param name="inputs">The config's <c>inputs</c>, with the declared type of each reference.</param>
     /// <param name="outputs">The model outputs the operator reads.</param>
     public static List<Problem> Check(
-        string label, TensorLayout layout, IReadOnlyList<MappedInput> inputs, IReadOnlyList<MappedOutput> outputs, ModelSignature signature)
+        string label, TensorLayout layout, IReadOnlyList<MappedInput> inputs, IReadOnlyList<MappedOutput> outputs, ServiceSignature signature)
     {
         var problems = new List<Problem>();
         var mapped = new HashSet<string>(StringComparer.Ordinal);
@@ -214,7 +214,7 @@ internal static class ModelTensorRule
             var pointer = "/inputs/" + JsonPointer.Escape(input.Name);
             if (signature.FindInput(input.Name) is not { } spec)
             {
-                problems.Add(new Problem(pointer, "MODEL_SIGNATURE", $"{label} has no input '{input.Name}'.", "the model's inputs are: " + Names(signature.Inputs)));
+                problems.Add(new Problem(pointer, "SERVICE_SIGNATURE", $"{label} has no input '{input.Name}'.", "the model's inputs are: " + Names(signature.Inputs)));
             }
             else if (!TryGetInputTensor(input.Type, out var tensor))
             {
@@ -242,7 +242,7 @@ internal static class ModelTensorRule
         {
             if (signature.FindOutput(output.Name) is not { } spec)
             {
-                problems.Add(new Problem(output.ConfigKey, "MODEL_SIGNATURE", $"{label} has no output '{output.Name}'.", "the model's outputs are: " + Names(signature.Outputs)));
+                problems.Add(new Problem(output.ConfigKey, "SERVICE_SIGNATURE", $"{label} has no output '{output.Name}'.", "the model's outputs are: " + Names(signature.Outputs)));
             }
             else if (output.Column is { } column)
             {

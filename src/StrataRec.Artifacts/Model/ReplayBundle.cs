@@ -38,10 +38,13 @@ public sealed class ReplayBundle
     /// bundle would replay to other values in a build before. 2026-11-21.3 records each request input at the type of the
     /// value the host gave (a fallback pipeline may declare it otherwise), and a computation the binder folds to a name
     /// (<c>max(col.x)</c>) is no longer a reference: result types and model input digests of a bundle before can differ.
+    /// 2026-11-21.4 records every call but a feature fetch as one service call (<c>service_calls</c>, design 6.9), a
+    /// model's and a recall's alike: a recall's query is a digest of its inputs, as a model's, and only the outputs the
+    /// operator reads are recorded.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.3";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.4";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.3\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.4\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -146,11 +149,10 @@ public sealed class ReplayRunRecord
     [Description("One entry per timeline position that had a node, in execution order.")]
     public List<ReplayNodeRecord> Nodes { get; init; } = new();
 
-    public List<ReplayCandidateCall> CandidateCalls { get; init; } = new();
+    [Description("Calls of services (models, recall sources, any other), in start order.")]
+    public List<ReplayServiceCall> ServiceCalls { get; init; } = new();
 
     public List<ReplayFeatureCall> FeatureCalls { get; init; } = new();
-
-    public List<ReplayModelCall> ModelCalls { get; init; } = new();
 
     public required ReplaySamplingRecord Sampling { get; init; }
 
@@ -194,37 +196,6 @@ public sealed class ReplayAttemptRecord
     public double? BudgetMs { get; init; }
 }
 
-/// <summary>One candidate source call.</summary>
-public sealed class ReplayCandidateCall
-{
-    [Description("Start order of the call within its run, across all call kinds.")]
-    public int Seq { get; init; }
-
-    public string? Node { get; init; }
-
-    public required string Source { get; init; }
-
-    [Description("Candidates requested (the source's quota).")]
-    public int Limit { get; init; }
-
-    [Description("The values of the source's query (MultiSourceRecall@1 queries) as sent, by name; absent when it had none.")]
-    public Dictionary<string, ReplayTypedValue>? Query { get; init; }
-
-    [Description("ok, timeout, error, cancelled, or outstanding (still in flight when the request was aborted).")]
-    public required string Status { get; init; }
-
-    public string? Error { get; init; }
-
-    public double DurationMs { get; init; }
-
-    [Description("Returned entity ids in rank order (int64 numbers or strings), as accepted (at most limit).")]
-    public JsonElement? Ids { get; init; }
-
-    [Description("Score of each returned id; NaN and ±∞ are the strings \"NaN\", \"Infinity\" and \"-Infinity\".")]
-    [JsonNumberHandling(JsonNumberHandling.AllowNamedFloatingPointLiterals)]
-    public List<double> Scores { get; init; } = new();
-}
-
 /// <summary>One feature connector call (one max_batch chunk).</summary>
 public sealed class ReplayFeatureCall
 {
@@ -264,55 +235,72 @@ public sealed class ReplayField
     public required string Type { get; init; }
 }
 
-/// <summary>One tensor output of a recorded model call.</summary>
-public sealed class ReplayModelOutput
+/// <summary>One tensor output of a recorded service call.</summary>
+public sealed class ReplayOutput
 {
-    [Description("Element type, as the model's signature declares it: bool, int32, int64, float32, float64 or string.")]
+    [Description("Element type, as the service wrote it: bool, int32, int64, float32, float64 or string.")]
     public required string Type { get; init; }
 
-    [Description("The elements, flat: batch_size × values per row. A bool is 0 or 1; NaN and ±∞ floats are the strings \"NaN\", \"Infinity\" and \"-Infinity\".")]
+    [Description("The elements, flat: batch_size × values per item for a call about items. A bool is 0 or 1; NaN and ±∞ floats are the strings \"NaN\", \"Infinity\" and \"-Infinity\".")]
     public required JsonElement Values { get; init; }
 }
 
-/// <summary>One model call (one batch).</summary>
-public sealed class ReplayModelCall
+/// <summary>One service call (one batch): a model's, a recall source's, any other service's (design 6.9).</summary>
+public sealed class ReplayServiceCall
 {
+    [Description("Start order of the call within its run, across all calls.")]
     public int Seq { get; init; }
 
     public string? Node { get; init; }
 
-    public required string Model { get; init; }
+    [Description("The service's logical name, as the bindings name it.")]
+    public required string Service { get; init; }
+
+    [Description("The role the node called it in: model, recall, or an operator's own.")]
+    public required string Role { get; init; }
 
     public string? Version { get; init; }
 
     public int BatchSize { get; init; }
+
+    [Description("The most items the call could add (a recall's quota); 0 for a call that adds none.")]
+    public int Limit { get; init; }
 
     [Description("ok, timeout, error, cancelled, or outstanding (still in flight when the request was aborted).")]
     public required string Status { get; init; }
 
     public string? Error { get; init; }
 
-    [Description("The node's budget or the caller cut the call off, which the operator saw as cancellation (an OperationCanceledException); replay throws it too. A client's own failure, thrown or returned, is a failed status.")]
+    [Description("The node's budget or the caller cut the call off, which the operator saw as cancellation (an OperationCanceledException); replay throws it too. " +
+                 "A client's own failure, thrown or returned, is a failed status, never this.")]
     public bool Threw { get; init; }
 
     public double DurationMs { get; init; }
 
-    [Description("Entity id of each batch row, when the operator scored rows; outputs are matched by it on replay.")]
+    [Description("Entity id of each item of a call about items (a model scoring rows): its outputs are matched per item on replay.")]
     public JsonElement? Keys { get; init; }
 
-    [Description("XXH3 of each row's inputs (one per key): the row's slice of inputs whose leading dimension is the batch size and every other input whole, each with its name, element type and shape (batch dimension left out); or of the whole call when there are no keys. Hex.")]
+    [Description("XXH3 of the inputs: one per item of a call about items (its slice of the inputs whose leading dimension is the batch size, and every other input whole), " +
+                 "else one of the whole call; each input with its name, element type and shape, and max_output_tokens when set.")]
     public List<string> InputDigests { get; init; } = new();
 
-    [Description("Output → the tensor the model returned: its element type and its values.")]
-    public Dictionary<string, ReplayModelOutput> Outputs { get; init; } = new();
+    [Description("Output → the tensor the service returned: only the outputs the operator read, or all it returned when the operator named none.")]
+    public Dictionary<string, ReplayOutput> Outputs { get; init; } = new();
 
-    [Description("Output → text, for models that generate text (a recorded answer is replayed as it was, design 13.4 item 7).")]
+    [Description("Output → text, for services that generate text (a recorded answer is replayed as it was, design 13.4 item 7).")]
     public Dictionary<string, string> Texts { get; init; } = new();
 
-    [Description("Tokens the model generated, when its client reported them; absent otherwise (and in bundles recorded before it was recorded).")]
+    [Description("Items the service added, in rank order (int64 numbers or strings), as accepted (at most limit).")]
+    public JsonElement? Ids { get; init; }
+
+    [Description("Score of each added item; NaN and ±∞ are the strings \"NaN\", \"Infinity\" and \"-Infinity\".")]
+    [JsonNumberHandling(JsonNumberHandling.AllowNamedFloatingPointLiterals)]
+    public List<double> Scores { get; init; } = new();
+
+    [Description("Tokens the service generated, when its client reported them; absent otherwise.")]
     public int? OutputTokens { get; init; }
 
-    [Description("True when the model stopped at the call's max_output_tokens, so its text may be cut short; absent otherwise.")]
+    [Description("True when the service stopped at the call's max_output_tokens, so its text may be cut short; absent otherwise.")]
     public bool? Truncated { get; init; }
 }
 

@@ -16,10 +16,10 @@ public static class IoRoles
     /// <summary>A read of the distributed cache of a feature source bound with mode <c>cache</c> (design 6.6), before its connector.</summary>
     public const string Cache = "cache";
 
-    /// <summary>Candidates from a candidate source, per recall call.</summary>
+    /// <summary>Candidates from a service, per recall call.</summary>
     public const string Recall = "recall";
 
-    /// <summary>A model client's answer, per batch.</summary>
+    /// <summary>A model's answer, per batch.</summary>
     public const string Model = "model";
 }
 

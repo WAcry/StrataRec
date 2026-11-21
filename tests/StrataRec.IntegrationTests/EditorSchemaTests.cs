@@ -165,17 +165,17 @@ public sealed class EditorSchemaTests
     /// sample's bindings is rejected by the schema at the pointer, and by 'stratarec validate' at the same one.
     /// </summary>
     [Theory]
-    [InlineData("misspelled setting", "/models/ctr_model/lantency_ms", "")]
-    [InlineData("misspelled nested setting", "/models/ctr_model/outputs/p_click/activaton", "")]
-    [InlineData("missing required", "/models/ctr_model", "required")]
+    [InlineData("misspelled setting", "/services/ctr_model/lantency_ms", "")]
+    [InlineData("misspelled nested setting", "/services/ctr_model/outputs/p_click/activaton", "")]
+    [InlineData("missing required", "/services/ctr_model", "required")]
     [InlineData("wrong type", "/sources/item_store/data_file", "type")]
     [InlineData("misspelled update source setting", "/sources/author_store/bootstrap/url", "")]
-    [InlineData("misspelled candidate source setting", "/candidate_sources/popular/itmes", "")]
+    [InlineData("misspelled recall service setting", "/services/popular/itmes", "")]
     public void TheBindingsSchema_RejectsASettingTheEngineRejects(string mistake, string at, string keyword)
     {
         var path = Path.Combine(Samples, "home_feed", "bindings", "local.jsonc");
         var bindings = Assert.IsType<JsonObject>(Jsonc.Parse(File.ReadAllText(path), path));
-        var model = bindings["models"]!["ctr_model"]!.AsObject();
+        var model = bindings["services"]!["ctr_model"]!.AsObject();
         switch (mistake)
         {
             case "misspelled setting":
@@ -197,8 +197,8 @@ public sealed class EditorSchemaTests
                 bootstrap["url"] = bootstrap["uri"]!.DeepClone();
                 bootstrap.Remove("uri");
                 break;
-            case "misspelled candidate source setting":
-                bindings["candidate_sources"]!["popular"]!["itmes"] = new JsonArray(1, 2);
+            case "misspelled recall service setting":
+                bindings["services"]!["popular"]!["itmes"] = new JsonArray(1, 2);
                 break;
         }
 
@@ -227,11 +227,11 @@ public sealed class EditorSchemaTests
         // A binding of a type the binary lacks is valid while no pipeline uses it (design 6.4): the types are suggestions.
         var path = Path.Combine(Samples, "home_feed", "bindings", "local.jsonc");
         var bindings = Assert.IsType<JsonObject>(Jsonc.Parse(File.ReadAllText(path), path));
-        bindings["models"]!["remote"] = new JsonObject { ["client"] = "triton@1", ["endpoint"] = "triton:8001" };
+        bindings["services"]!["remote"] = new JsonObject { ["client"] = "triton@1", ["endpoint"] = "triton:8001" };
 
         Assert.Empty(SchemaCheck.Errors(BindingsSchema.Value, bindings));
         var client = JsonNode.Parse(SchemaFiles.Generate(Tool.Environment).Single(f => f.Name == "bindings.schema.json").Text)!
-            ["properties"]!["models"]!["additionalProperties"]!["properties"]!["client"]!;
+            ["properties"]!["services"]!["additionalProperties"]!["properties"]!["client"]!;
         Assert.Contains("linear@1", client["examples"]!.AsArray().Select(e => e!.GetValue<string>()));
         Assert.Null(client["enum"]);
     }

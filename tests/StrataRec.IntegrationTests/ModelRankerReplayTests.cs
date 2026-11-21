@@ -2,8 +2,8 @@ using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Replay;
-using StrataRec.Models;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
@@ -31,10 +31,10 @@ public sealed class ModelRankerReplayTests
         var run = Assert.Single(recorded.Recording!.Runs);
         Assert.Equal("succeeded", Assert.Single(run.Nodes, n => n.Node == "pairwise_rerank").Outcome);
         Assert.Equal("succeeded", Assert.Single(run.Nodes, n => n.Node == "listwise_rerank").Outcome);
-        var pairCalls = run.ModelCalls.Where(c => c.Model == "pair_model").ToList();
+        var pairCalls = run.ServiceCalls.FindAll(c => c.Role == "model").Where(c => c.Service == "pair_model").ToList();
         Assert.Equal(new[] { 3, 4, 4, 4 }, pairCalls.Select(c => c.BatchSize).Order()); // window 6: 15 pairs in batches of 4
         Assert.All(pairCalls, c => Assert.Equal(("ok", false, 1), (c.Status, c.Keys.HasValue, c.InputDigests.Count))); // one digest per call
-        var listCall = Assert.Single(run.ModelCalls, c => c.Model == "list_model");
+        var listCall = Assert.Single(run.ServiceCalls.FindAll(c => c.Role == "model"), c => c.Service == "list_model");
         Assert.Equal(("ok", 1, false), (listCall.Status, listCall.BatchSize, listCall.Keys.HasValue));
         Assert.Equal(new[] { "final float32 [1, 8]", "seed int64 [1]", "smoothed_ctr float32 [1, 8]" }, lists.Seen);
         Assert.Equal(15.0, PairsCounted(metrics));
@@ -59,7 +59,7 @@ public sealed class ModelRankerReplayTests
     }
 
     [Fact]
-    public async Task AfterAnInputChanges_TheReplayReportsTheCallsAsNotRecorded_AndTheNodesFollowTheirOnFailure()
+    public async Task AfterAnInputChanges_TheReplayReportsTheInputsAsChanged_AndTheNodesFollowTheirOnFailure()
     {
         var host = HomeFeedTestHost.LoadModified(AddRankers);
         var recorded = await Load(host, new PairModels(), new ListModels())
@@ -78,8 +78,8 @@ public sealed class ModelRankerReplayTests
 
         var report = outcome.Report;
         Assert.True(outcome.Result.Succeeded, outcome.Result.Error); // on_failure: skip
-        Assert.Contains(report.Gaps, g => g is { Kind: "model", Source: "pair_model", Reason: "not_recorded" });
-        Assert.Contains(report.Gaps, g => g is { Kind: "model", Source: "list_model", Reason: "not_recorded" });
+        Assert.Contains(report.Gaps, g => g is { Kind: "model", Source: "pair_model", Reason: "inputs_changed" });
+        Assert.Contains(report.Gaps, g => g is { Kind: "model", Source: "list_model", Reason: "inputs_changed" });
         Assert.DoesNotContain(report.Gaps, g => g.Source == "ctr_model"); // its inputs did not change
         Assert.Contains(report.Nodes, n => n is { Node: "pairwise_rerank", Recorded: "succeeded", Replayed: "failed" });
         Assert.Contains(report.Nodes, n => n is { Node: "listwise_rerank", Recorded: "succeeded", Replayed: "failed" });
@@ -114,9 +114,9 @@ public sealed class ModelRankerReplayTests
             """);
         ReplayTests.Edit(root, Pipeline, "\"primary_source\": \"col.recall.primary_source\"",
             "\"primary_source\": \"col.recall.primary_source\", \"pairwise\": \"col.score.pairwise\", \"listwise\": \"col.score.listwise\"");
-        ReplayTests.Edit(root, "bindings/local.jsonc", "\"models\": {",
+        ReplayTests.Edit(root, "bindings/local.jsonc", "\"services\": {",
             $$"""
-            "models": {
+            "services": {
                 "pair_model": { "client": "{{PairModels.TypeName}}" },
                 "list_model": { "client": "{{ListModels.TypeName}}" },
             """);
@@ -152,15 +152,13 @@ public sealed class ModelRankerReplayTests
     /// A pairwise model over the final score, the ids and the quality weight: the first row is preferred by the logistic
     /// of their difference (so a replay that served another pair's answer would differ); <c>bias</c> shifts every answer.
     /// </summary>
-    private sealed class PairModels(float bias = 0f) : IBindingFactory<IModelClient>, IModelClient
+    private sealed class PairModels(float bias = 0f) : IBindingFactory<IServiceClient>, IServiceClient
     {
         public const string TypeName = "pair_test@1";
 
         private readonly List<string> _seen = new();
 
         public string Type => TypeName;
-
-        public string ClientType => TypeName;
 
         public Type SettingsType => typeof(NoSettings);
 
@@ -175,10 +173,10 @@ public sealed class ModelRankerReplayTests
             }
         }
 
-        public IModelClient Create(BindingContext context) => this;
+        public IServiceClient Create(BindingContext context) => this;
 
-        public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
-            ValueTask.FromResult(new ModelSignature(
+        public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new ServiceSignature(
                 new[]
                 {
                     new TensorSpec("final", TensorElementType.Float32, new[] { -1, 2 }), new TensorSpec("item_id", TensorElementType.Int64, new[] { -1, -1 }),
@@ -186,7 +184,7 @@ public sealed class ModelRankerReplayTests
                 },
                 new[] { new TensorSpec("p_first", TensorElementType.Float32, new[] { -1 }) }));
 
-        public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
+        public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse outputs, CancellationToken cancellationToken)
         {
             var inputs = call.Inputs.Span;
             lock (_seen)
@@ -207,20 +205,18 @@ public sealed class ModelRankerReplayTests
                 preferences[p] = 1f / (1f + MathF.Exp(-logit));
             }
 
-            return ValueTask.FromResult(ModelStatus.Ok);
+            return ValueTask.FromResult(ServiceStatus.Ok);
         }
     }
 
     /// <summary>A listwise model: each row's final score relative to the list's mean, plus a little of its CTR and the seed.</summary>
-    private sealed class ListModels(float bias = 0f) : IBindingFactory<IModelClient>, IModelClient
+    private sealed class ListModels(float bias = 0f) : IBindingFactory<IServiceClient>, IServiceClient
     {
         public const string TypeName = "list_test@1";
 
         private readonly List<string> _seen = new();
 
         public string Type => TypeName;
-
-        public string ClientType => TypeName;
 
         public Type SettingsType => typeof(NoSettings);
 
@@ -236,10 +232,10 @@ public sealed class ModelRankerReplayTests
             }
         }
 
-        public IModelClient Create(BindingContext context) => this;
+        public IServiceClient Create(BindingContext context) => this;
 
-        public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
-            ValueTask.FromResult(new ModelSignature(
+        public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new ServiceSignature(
                 new[]
                 {
                     new TensorSpec("final", TensorElementType.Float32, new[] { 1, -1 }), new TensorSpec("smoothed_ctr", TensorElementType.Float32, new[] { -1, -1 }),
@@ -247,7 +243,7 @@ public sealed class ModelRankerReplayTests
                 },
                 new[] { new TensorSpec("scores", TensorElementType.Float32, new[] { 1, -1 }) }));
 
-        public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken)
+        public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse outputs, CancellationToken cancellationToken)
         {
             var inputs = call.Inputs.Span;
             lock (_seen)
@@ -274,7 +270,7 @@ public sealed class ModelRankerReplayTests
                 scores[i] = bias + final[i] - mean + (0.5f * ctr[i]) + (0.001f * (seed % 3));
             }
 
-            return ValueTask.FromResult(ModelStatus.Ok);
+            return ValueTask.FromResult(ServiceStatus.Ok);
         }
     }
 }

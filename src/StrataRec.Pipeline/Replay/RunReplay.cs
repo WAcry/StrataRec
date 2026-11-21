@@ -10,13 +10,13 @@ using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Features.Connectors;
 using StrataRec.Features.Runtime;
-using StrataRec.Models;
-using StrataRec.Pipeline.Sources;
+using StrataRec.Core.Services;
+using StrataRec.Pipeline.Operators;
 
 namespace StrataRec.Pipeline.Replay;
 
 /// <summary>
-/// Replays one recorded pipeline run (design 13.4): answers feature, candidate and model calls from the recording and
+/// Replays one recorded pipeline run (design 13.4): answers feature and service calls from the recording and
 /// supplies the recorded timing facts (time left, budget timeouts) in place of the clock, so the run makes the same
 /// decisions without calling or waiting for anything.
 /// </summary>
@@ -32,8 +32,7 @@ internal sealed class RunReplay : IFeatureCallHook
     private readonly object _gate = new();
     private readonly Dictionary<ulong, List<FeatureEntry>> _featureCalls = new();
     private readonly Dictionary<(string Source, string Entity), Dictionary<RowKey, Dictionary<string, ScalarValue>>> _featureValues = new();
-    private readonly List<CandidateEntry> _candidateCalls = new();
-    private readonly Dictionary<(string Model, string? Version), List<ModelEntry>> _modelCalls = new();
+    private readonly Dictionary<(string Service, string? Version), List<ServiceEntry>> _serviceCalls = new();
     private readonly Dictionary<string, double> _remaining = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Queue<ReplayAttemptRecord>> _attempts = new(StringComparer.Ordinal);
     private readonly Dictionary<(string Kind, string Source, string? Field, string Reason), GapCounter> _gaps = new();
@@ -60,8 +59,7 @@ internal sealed class RunReplay : IFeatureCallHook
         var replay = new RunReplay(run);
         replay.IndexNodes(run, pointer);
         replay.IndexFeatures(run, pointer);
-        replay.IndexCandidates(run, pointer);
-        replay.IndexModels(run, pointer);
+        replay.IndexServices(run, pointer);
         return replay;
     }
 
@@ -167,184 +165,79 @@ internal sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// Answers a candidate source call; <paramref name="buffer"/> is filled up to its limit. The node's own recorded call
-    /// of the source is replayed exactly, status included, and consumed. A node the recording has no (unconsumed) call
-    /// for, such as a node the configuration added, gets a copy of the longest list the source returned to a call with the
-    /// same query values, or else to any call, and consumes nothing: another node's call stays that node's, whatever order
-    /// the nodes ask in. Either way, an answer recorded for other query values is reported (<c>query_changed</c>).
-    /// </summary>
-    internal CandidateSourceStatus Retrieve(string node, string source, CandidateQuery query, CandidateBuffer buffer)
-    {
-        lock (_gate)
-        {
-            CandidateEntry? exact = null;
-            foreach (var candidate in _candidateCalls)
-            {
-                if (!candidate.Consumed && candidate.Source == source && candidate.Node == node)
-                {
-                    exact = candidate;
-                    break;
-                }
-            }
-
-            var replayed = RunRecorder.Query(query.Values);
-            if (exact is not null)
-            {
-                exact.Consumed = true;
-                if (ChangedValue(exact.Query, replayed) is { } changed)
-                {
-                    // Answered as recorded all the same: the recording has no answer to the new values.
-                    AddGap("candidate_source", source, changed, "query_changed", 1, node);
-                }
-
-                if (exact.Outcome != IoOutcome.Ok)
-                {
-                    return CandidateSourceStatus.Failed(exact.Error ?? "timed out");
-                }
-
-                Copy(exact, node, query, buffer);
-                return CandidateSourceStatus.Ok;
-            }
-
-            // The data of a successful call; a failure belongs to the call that failed. One that answered the same query
-            // values first (review 80: a node the configuration added, querying with other values, got another query's
-            // answer silently).
-            CandidateEntry? longest = null, matching = null;
-            foreach (var candidate in _candidateCalls)
-            {
-                if (candidate.Source != source || candidate.Outcome != IoOutcome.Ok)
-                {
-                    continue;
-                }
-
-                if (longest is null || candidate.Ids.Length > longest.Ids.Length)
-                {
-                    longest = candidate;
-                }
-
-                if ((matching is null || candidate.Ids.Length > matching.Ids.Length) && ChangedValue(candidate.Query, replayed) is null)
-                {
-                    matching = candidate;
-                }
-            }
-
-            if (longest is null)
-            {
-                AddGap("candidate_source", source, null, "not_recorded", 1, node);
-                return CandidateSourceStatus.Ok;
-            }
-
-            if (matching is null && ChangedValue(longest.Query, replayed) is { } differs)
-            {
-                AddGap("candidate_source", source, differs, "query_changed", 1, node);
-            }
-
-            Copy(matching ?? longest, node, query, buffer);
-            return CandidateSourceStatus.Ok;
-        }
-    }
-
-    /// <summary>
-    /// The name of the first query value (in name order) whose type or value differs between a recorded call and its replay,
-    /// or that only one of them has; null when they agree. A query the configuration changed, or a feature it reads whose
-    /// replayed value differs, gets the recorded answer to other values, which the replay reports.
-    /// </summary>
-    private static string? ChangedValue(Dictionary<string, ReplayTypedValue>? recorded, Dictionary<string, ReplayTypedValue>? replayed)
-    {
-        var names = new SortedSet<string>(StringComparer.Ordinal);
-        if (recorded is not null)
-        {
-            names.UnionWith(recorded.Keys);
-        }
-
-        if (replayed is not null)
-        {
-            names.UnionWith(replayed.Keys);
-        }
-
-        foreach (var name in names)
-        {
-            ReplayTypedValue? before = null, after = null;
-            _ = recorded?.TryGetValue(name, out before);
-            _ = replayed?.TryGetValue(name, out after);
-            if (before is null || after is null || before.Type != after.Type || !SameJson(before.Value, after.Value))
-            {
-                return name;
-            }
-        }
-
-        return null;
-
-        static bool SameJson(JsonElement? a, JsonElement? b) =>
-            a is { } x ? b is { } y && JsonElement.DeepEquals(x, y) : b is null;
-    }
-
-    /// <summary>
-    /// Copies a recorded list up to the query's limit. Asking for more than the recording holds is a shortfall only when
-    /// the recorded call stopped at its own limit (the source might have had more); a source that returned fewer had none.
-    /// </summary>
-    private void Copy(CandidateEntry entry, string node, CandidateQuery query, CandidateBuffer buffer)
-    {
-        var count = Math.Min(entry.Ids.Length, query.Limit);
-        for (var i = 0; i < count; i++)
-        {
-            buffer.Add(entry.Ids[i], entry.Scores[i]);
-        }
-
-        if (query.Limit > entry.Ids.Length && entry.Ids.Length >= entry.Limit)
-        {
-            AddGap("candidate_source", entry.Source, null, "limit_exceeds_recording", query.Limit - entry.Ids.Length, node);
-        }
-    }
-
-    /// <summary>
-    /// Answers a model call. A call without keys is matched by the digest of its whole input. A keyed call
-    /// (<paramref name="keys"/>: the entity of each batch row) takes the next recorded call with the same keys and the same
-    /// inputs in every row, and replays it as recorded; otherwise each row's output comes from whichever successful call
-    /// scored that entity with the same inputs (<see cref="Synthesize"/>). A recorded failure is returned; a call the budget
-    /// or the caller cut off throws <see cref="OperationCanceledException"/> again, as the operator saw it.
+    /// Answers a service call from the recording. A call about no items is matched by the digest of its whole input: this
+    /// node's next recorded call with that digest is replayed as recorded, its failure included, and consumed; otherwise
+    /// any successful recorded call with that digest answers it, and nothing is consumed (a node the configuration added
+    /// asks what another node asked, whatever order the nodes ask in). A call about items takes the next recorded call with
+    /// the same items and the same inputs for each, and replays it as recorded; otherwise each item's outputs come from
+    /// whichever successful call had that item with the same inputs (<see cref="Synthesize"/>). A call the recording
+    /// cannot answer fails, and is a gap: <c>inputs_changed</c> when the recording has the node's call of the service with
+    /// other inputs, else <c>not_recorded</c>. A recorded call the budget or the caller cut off throws
+    /// <see cref="OperationCanceledException"/> again, as the operator saw it. An output the call asks for and the answer
+    /// lacks is a <c>not_recorded</c> gap of that output: only the outputs a call asked for are recorded, so a
+    /// configuration that reads another output of the same call (an experiment maps one more) finds none in the bundle.
     /// </summary>
     /// <remarks>
-    /// A recorded failure answers only the call it was: same entities, same inputs. Taken by entities alone, the failure of
-    /// another call of the same model and entity (another node, another prompt) answered this one, and hid the success the
-    /// recording has for its own inputs (review 30). A call whose inputs changed since a recorded failure is synthesized
-    /// like any other, so its rows are reported as gaps rather than failed for a reason that was about other inputs.
+    /// A recorded failure answers only the call it was: the same node, entities and inputs. Taken by entities alone, the
+    /// failure of another call of the same model and entity (another node, another prompt) answered this one, and hid the
+    /// success the recording has for its own inputs (review 30). A call whose inputs changed since a recorded failure is
+    /// synthesized like any other, so its items are reported as gaps rather than failed for a reason about other inputs.
     /// </remarks>
-    /// <param name="node">The calling node: a synthesized call whose rows all changed takes its outputs' widths from this
-    /// node's recorded calls before another node's.</param>
-    internal ModelStatus InvokeModel(ModelCall call, IModelOutputWriter outputs, EntityKey[]? keys, string? node = null)
+    /// <param name="node">The calling node: its own recorded calls answer it first, and a synthesized call whose items all
+    /// changed takes its outputs' widths from them before another node's.</param>
+    internal ServiceStatus Call(string node, IoTarget target, ServiceCall call, ServiceResponse response)
     {
         lock (_gate)
         {
-            var order = ModelInputDigest.NameOrder(call);
-            _modelCalls.TryGetValue((call.Model, call.Version), out var calls);
-            if (keys is null)
+            var kind = target.Role;
+            var order = ServiceInputDigest.NameOrder(call);
+            _serviceCalls.TryGetValue((call.Service, call.Version), out var calls);
+            var items = call.Items.Span;
+            if (items.IsEmpty)
             {
-                var digest = ReplayJson.Hex(ModelInputDigest.Call(call, order));
-                var unkeyed = Take(calls, entry => entry.Keys is null && entry.Digests.Length == 1 && entry.Digests[0] == digest);
-                if (unkeyed is null)
+                var digest = ReplayJson.Hex(ServiceInputDigest.Call(call, order));
+                var answer = Take(calls, entry => entry.Keys is null && entry.Node == node && entry.Digests[0] == digest)
+                    ?? Find(calls, entry => entry.Keys is null && entry.Outcome == IoOutcome.Ok && entry.Digests[0] == digest);
+                if (answer is null)
                 {
-                    AddGap("model", call.Model, null, "not_recorded", 1, null);
-                    return ModelStatus.Failed($"model '{call.Model}': this call is not in the replay bundle");
+                    var changed = Find(calls, entry => entry.Keys is null && entry.Node == node) is not null;
+                    AddGap(kind, call.Service, null, changed ? "inputs_changed" : "not_recorded", 1, node);
+                    return ServiceStatus.Failed($"{kind} '{call.Service}': this call is not in the replay bundle");
                 }
 
-                return Answer(unkeyed, outputs);
+                return Unanswered(call, response, Answer(answer, call, response, kind, node), kind, node, 1);
             }
 
+            var keys = items.ToArray();
             var digests = new string[keys.Length];
             for (var r = 0; r < keys.Length; r++)
             {
-                digests[r] = ReplayJson.Hex(ModelInputDigest.Row(call, order, r));
+                digests[r] = ReplayJson.Hex(ServiceInputDigest.Row(call, order, r));
             }
 
             var positional = Take(calls, entry => entry.Keys is not null && entry.Keys.AsSpan().SequenceEqual(keys) && entry.Digests.AsSpan().SequenceEqual(digests));
-            if (positional is not null)
-            {
-                return Answer(positional, outputs);
-            }
-
-            return Synthesize(call, calls, outputs, keys, digests, node);
+            var status = positional is not null
+                ? Answer(positional, call, response, kind, node)
+                : Synthesize(call, calls, response, keys, digests, node, kind);
+            return Unanswered(call, response, status, kind, node, keys.Length);
         }
+    }
+
+    /// <summary>Reports each output the call asks for that its successful answer lacks (see <see cref="Call"/>).</summary>
+    private ServiceStatus Unanswered(ServiceCall call, ServiceResponse response, ServiceStatus status, string kind, string node, int count)
+    {
+        if (status.Succeeded)
+        {
+            foreach (var name in call.Outputs.Span)
+            {
+                if (!response.TryGetValues(name, out _) && !response.TryGetText(name, out _))
+                {
+                    AddGap(kind, call.Service, name, "not_recorded", count, node);
+                }
+            }
+        }
+
+        return status;
     }
 
     /// <summary>Time left when the node passed its <c>when</c> in the recording; infinite for a node the recording lacks.</summary>
@@ -446,19 +339,21 @@ internal sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// Replays a recorded call as it was: its failure, or every output it returned, with the generation details its status
-    /// had (tokens, truncation), so the operator decides and reports as the request did.
+    /// Replays a recorded call as it was: its failure, or every output, text and item it returned (items up to the call's
+    /// limit), with the generation details its status had (tokens, truncation), so the operator decides and reports as the
+    /// request did. Asking for more items than the recording holds is a shortfall only when the recorded call stopped at
+    /// its own limit (the service might have had more); one that returned fewer had none.
     /// </summary>
-    private static ModelStatus Answer(ModelEntry entry, IModelOutputWriter outputs)
+    private ServiceStatus Answer(ServiceEntry entry, ServiceCall call, ServiceResponse response, string kind, string node)
     {
         if (entry.Outcome != IoOutcome.Ok)
         {
             if (entry.Threw)
             {
-                throw new OperationCanceledException(entry.Error ?? $"model '{entry.Model}' was cut off in the recording");
+                throw new OperationCanceledException(entry.Error ?? $"{kind} '{entry.Service}' was cut off in the recording");
             }
 
-            return ModelStatus.Failed(entry.Error ?? $"model '{entry.Model}' failed in the recording") with
+            return ServiceStatus.Failed(entry.Error ?? $"{kind} '{entry.Service}' failed in the recording") with
             {
                 OutputTokens = entry.OutputTokens,
                 Truncated = entry.Truncated,
@@ -467,19 +362,30 @@ internal sealed class RunReplay : IFeatureCallHook
 
         foreach (var (name, tensor) in entry.Outputs)
         {
-            Write(outputs, name, tensor);
+            Write(response, name, tensor);
         }
 
         foreach (var (name, text) in entry.Texts)
         {
-            outputs.SetText(name, text);
+            response.SetText(name, text);
         }
 
-        return ModelStatus.Ok with { OutputTokens = entry.OutputTokens, Truncated = entry.Truncated };
+        var count = Math.Min(entry.Ids.Length, call.Limit);
+        for (var i = 0; i < count; i++)
+        {
+            response.AddItem(entry.Ids[i], entry.Scores[i]);
+        }
+
+        if (call.Limit > entry.Ids.Length && entry.Limit > 0 && entry.Ids.Length >= entry.Limit)
+        {
+            AddGap(kind, entry.Service, null, "limit_exceeds_recording", call.Limit - entry.Ids.Length, node);
+        }
+
+        return ServiceStatus.Ok with { OutputTokens = entry.OutputTokens, Truncated = entry.Truncated };
     }
 
     /// <summary>Writes a recorded tensor output into the operator's writer, as the client wrote it.</summary>
-    private static void Write(IModelOutputWriter outputs, string name, in ReplayTensor tensor)
+    private static void Write(ServiceResponse outputs, string name, in ReplayTensor tensor)
     {
         switch (tensor.Values)
         {
@@ -517,12 +423,13 @@ internal sealed class RunReplay : IFeatureCallHook
     /// entity alone with the same inputs, it is answered as that call was, texts and generation details included (a
     /// per-row generative call, such as <c>LlmAnnotator@1</c>'s, whose recorded call another call of the same entity took).
     /// </remarks>
-    private ModelStatus Synthesize(ModelCall call, List<ModelEntry>? calls, IModelOutputWriter outputs, EntityKey[] keys, string[] digests, string? node)
+    private ServiceStatus Synthesize(
+        ServiceCall call, List<ServiceEntry>? calls, ServiceResponse outputs, EntityKey[] keys, string[] digests, string node, string kind)
     {
         // The rows by (entity, input digest), from the successful keyed calls of the same model and version. An entity can
         // be scored several times with different inputs.
         var layout = new List<(string Name, TensorElementType Type, int PerRow)>();
-        var rows = new Dictionary<(EntityKey Key, string Digest), List<(ModelEntry Entry, int Row)>>();
+        var rows = new Dictionary<(EntityKey Key, string Digest), List<(ServiceEntry Entry, int Row)>>();
         var scored = new HashSet<EntityKey>();
         if (calls is not null)
         {
@@ -537,7 +444,7 @@ internal sealed class RunReplay : IFeatureCallHook
                 {
                     if (!rows.TryGetValue((entry.Keys[r], entry.Digests[r]), out var list))
                     {
-                        list = new List<(ModelEntry Entry, int Row)>(1);
+                        list = new List<(ServiceEntry Entry, int Row)>(1);
                         rows[(entry.Keys[r], entry.Digests[r])] = list;
                     }
 
@@ -551,7 +458,7 @@ internal sealed class RunReplay : IFeatureCallHook
         // another node of the same model may write the same output at another width (a list<int32,2> column and a
         // list<int32,3> one); an output none of them has (every row's inputs changed), as this node's calls have it, then
         // as any call has it. Each recorded call is looked at once.
-        var seen = new HashSet<ModelEntry>(ReferenceEqualityComparer.Instance);
+        var seen = new HashSet<ServiceEntry>(ReferenceEqualityComparer.Instance);
         for (var r = 0; r < keys.Length; r++)
         {
             if (rows.TryGetValue((keys[r], digests[r]), out var matched))
@@ -560,7 +467,7 @@ internal sealed class RunReplay : IFeatureCallHook
                 {
                     if (seen.Add(entry))
                     {
-                        AddLayout(layout, entry);
+                        AddLayout(layout, entry, call.Outputs.Span);
                     }
                 }
             }
@@ -573,22 +480,22 @@ internal sealed class RunReplay : IFeatureCallHook
                 if (entry.Outcome == IoOutcome.Ok && entry.Keys is not null && (pass == 1 || string.Equals(entry.Node, node, StringComparison.Ordinal))
                     && seen.Add(entry))
                 {
-                    AddLayout(layout, entry);
+                    AddLayout(layout, entry, call.Outputs.Span);
                 }
             }
         }
 
         if (keys.Length == 1 && Alone(rows, keys[0], digests[0]) is { } alone)
         {
-            return Answer(alone, outputs);
+            return Answer(alone, call, outputs, kind, node);
         }
 
         var lacking = new bool[keys.Length];
         if (layout.Count == 0)
         {
             Array.Fill(lacking, true);
-            ReportLacking(call.Model, keys, digests, lacking, rows, scored);
-            return ModelStatus.Failed($"model '{call.Model}' has no recorded output in the replay bundle");
+            ReportLacking(kind, call.Service, keys, digests, lacking, rows, scored);
+            return ServiceStatus.Failed($"{kind} '{call.Service}' has no recorded output in the replay bundle");
         }
 
         foreach (var (name, type, perRow) in layout)
@@ -634,20 +541,26 @@ internal sealed class RunReplay : IFeatureCallHook
             }
         }
 
-        ReportLacking(call.Model, keys, digests, lacking, rows, scored);
-        return ModelStatus.Ok;
+        ReportLacking(kind, call.Service, keys, digests, lacking, rows, scored);
+        return ServiceStatus.Ok;
 
-        static int PerRow(ModelEntry entry, Array values) => entry.BatchSize > 0 ? values.Length / entry.BatchSize : 1;
+        static int PerRow(ServiceEntry entry, Array values) => entry.BatchSize > 0 ? values.Length / entry.BatchSize : 1;
 
         // Only an output of whole rows splits by row. One of no whole number a row is not synthesized: one the operator
         // reads was longer than its shape (the node failed on it when recorded, and fails on its absence now), and one it
         // does not read (a call-level value such as a loss) is not needed.
-        static bool ByRow(ModelEntry entry, Array values) => entry.BatchSize > 0 && values.Length % entry.BatchSize == 0;
+        static bool ByRow(ServiceEntry entry, Array values) => entry.BatchSize > 0 && values.Length % entry.BatchSize == 0;
 
-        static void AddLayout(List<(string Name, TensorElementType Type, int PerRow)> layout, ModelEntry entry)
+        // Only the outputs the call reads, when it names them (a call-level value such as a loss is not needed).
+        static void AddLayout(List<(string Name, TensorElementType Type, int PerRow)> layout, ServiceEntry entry, ReadOnlySpan<string> read)
         {
             foreach (var (name, values) in entry.Outputs)
             {
+                if (!read.IsEmpty && read.IndexOf(name) < 0)
+                {
+                    continue;
+                }
+
                 var known = false;
                 foreach (var output in layout)
                 {
@@ -662,7 +575,7 @@ internal sealed class RunReplay : IFeatureCallHook
         }
 
         // The first successful recorded call of this one entity alone, with these inputs, that answered text.
-        static ModelEntry? Alone(Dictionary<(EntityKey, string), List<(ModelEntry Entry, int Row)>> rows, EntityKey key, string digest)
+        static ServiceEntry? Alone(Dictionary<(EntityKey, string), List<(ServiceEntry Entry, int Row)>> rows, EntityKey key, string digest)
         {
             if (rows.TryGetValue((key, digest), out var list))
             {
@@ -680,7 +593,7 @@ internal sealed class RunReplay : IFeatureCallHook
 
         // The first recorded row of the entity with these inputs that has the output in the same layout and element type.
         static (Array Values, int Start)? Recorded(
-            Dictionary<(EntityKey, string), List<(ModelEntry Entry, int Row)>> rows, EntityKey key, string digest, string name, TensorElementType type, int perRow)
+            Dictionary<(EntityKey, string), List<(ServiceEntry Entry, int Row)>> rows, EntityKey key, string digest, string name, TensorElementType type, int perRow)
         {
             if (!rows.TryGetValue((key, digest), out var list))
             {
@@ -705,7 +618,7 @@ internal sealed class RunReplay : IFeatureCallHook
     /// only with other inputs, otherwise <c>not_recorded</c>.
     /// </summary>
     private void ReportLacking(
-        string model, EntityKey[] keys, string[] digests, bool[] lacking, Dictionary<(EntityKey Key, string Digest), List<(ModelEntry Entry, int Row)>> rows,
+        string kind, string service, EntityKey[] keys, string[] digests, bool[] lacking, Dictionary<(EntityKey Key, string Digest), List<(ServiceEntry Entry, int Row)>> rows,
         HashSet<EntityKey> scored)
     {
         GapCounter? missing = null;
@@ -719,16 +632,33 @@ internal sealed class RunReplay : IFeatureCallHook
 
             if (!rows.ContainsKey((keys[r], digests[r])) && scored.Contains(keys[r]))
             {
-                (changed ??= Gap("model", model, null, "inputs_changed")).Add(1, keys[r].ToString());
+                (changed ??= Gap(kind, service, null, "inputs_changed")).Add(1, keys[r].ToString());
             }
             else
             {
-                (missing ??= Gap("model", model, null, "not_recorded")).Add(1, keys[r].ToString());
+                (missing ??= Gap(kind, service, null, "not_recorded")).Add(1, keys[r].ToString());
             }
         }
     }
 
-    private static ModelEntry? Take(List<ModelEntry>? calls, Predicate<ModelEntry> match)
+    /// <summary>The first recorded call that matches, consumed or not; nothing is consumed.</summary>
+    private static ServiceEntry? Find(List<ServiceEntry>? calls, Predicate<ServiceEntry> match)
+    {
+        if (calls is not null)
+        {
+            foreach (var entry in calls)
+            {
+                if (match(entry))
+                {
+                    return entry;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static ServiceEntry? Take(List<ServiceEntry>? calls, Predicate<ServiceEntry> match)
     {
         if (calls is null)
         {
@@ -1024,55 +954,12 @@ internal sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    private void IndexCandidates(ReplayRunRecord run, string pointer)
+    private void IndexServices(ReplayRunRecord run, string pointer)
     {
-        for (var c = 0; c < run.CandidateCalls.Count; c++)
+        for (var c = 0; c < run.ServiceCalls.Count; c++)
         {
-            var call = run.CandidateCalls[c];
-            var at = $"{pointer}/candidate_calls/{c}";
-            var outcome = ReplayJson.Outcome(call.Status, at + "/status");
-            var ids = ReplayJson.Keys(call.Ids, at + "/ids");
-            if (ids.Length != call.Scores.Count)
-            {
-                throw new ReplayBundleException(at + "/scores", $"{call.Scores.Count} score(s) for {ids.Length} id(s)", "record one score per id");
-            }
-
-            // Each query value must be a value of its type, and is kept in the form a recording writes, which is what the
-            // replayed values are compared with: review 80 found a type of "nonsense" and an object indexed and reported as a
-            // changed query; review 82 a list of another length than its type's, and other spellings of a value (" bool "
-            // and 1 for true) taken as different from what they decode to.
-            Dictionary<string, ReplayTypedValue>? query = null;
-            foreach (var (name, typed) in call.Query ?? [])
-            {
-                var value = $"{at}/query/{JsonPointer.Escape(name)}";
-                if (typed is null)
-                {
-                    throw new ReplayBundleException(value, "a query value is null", "record each query value as { \"type\": …, \"value\": … }");
-                }
-
-                var type = ReplayJson.Type(typed.Type, value + "/type");
-                var decoded = ReplayJson.Value(typed.Value, type, value + "/value");
-                if (type.FixedLength > 0 && !decoded.IsMissing && decoded.ListLength != type.FixedLength)
-                {
-                    throw new ReplayBundleException(value + "/value", $"a list of {decoded.ListLength} element(s) for type {type}",
-                        $"record {type.FixedLength} elements, as the type says");
-                }
-
-                (query ??= new Dictionary<string, ReplayTypedValue>(StringComparer.Ordinal))[name] = ReplayJson.Typed(type, decoded);
-            }
-
-            _candidateCalls.Add(new CandidateEntry(call.Seq, call.Node, call.Source, call.Limit, query, outcome, call.Error, ids, call.Scores.ToArray()));
-        }
-
-        _candidateCalls.Sort(static (a, b) => a.Seq.CompareTo(b.Seq));
-    }
-
-    private void IndexModels(ReplayRunRecord run, string pointer)
-    {
-        for (var c = 0; c < run.ModelCalls.Count; c++)
-        {
-            var call = run.ModelCalls[c];
-            var at = $"{pointer}/model_calls/{c}";
+            var call = run.ServiceCalls[c];
+            var at = $"{pointer}/service_calls/{c}";
             var outcome = ReplayJson.Outcome(call.Status, at + "/status");
             EntityKey[]? keys = call.Keys is null ? null : ReplayJson.Keys(call.Keys, at + "/keys");
             var expectedDigests = keys?.Length ?? 1;
@@ -1082,24 +969,31 @@ internal sealed class RunReplay : IFeatureCallHook
                     "record one digest per key, or one for a call without keys");
             }
 
+            var ids = call.Ids is null ? [] : ReplayJson.Keys(call.Ids, at + "/ids");
+            if (ids.Length != call.Scores.Count)
+            {
+                throw new ReplayBundleException(at + "/scores", $"{call.Scores.Count} score(s) for {ids.Length} id(s)", "record one score per id");
+            }
+
             var outputs = new Dictionary<string, ReplayTensor>(StringComparer.Ordinal);
             foreach (var (name, values) in call.Outputs)
             {
                 outputs[name] = ReplayJson.Tensor(values, $"{at}/outputs/{JsonPointer.Escape(name)}");
             }
 
-            var entry = new ModelEntry(call.Seq, call.Node, call.Model, call.BatchSize, outcome, call.Error, call.Threw, keys, call.InputDigests.ToArray(), outputs,
-                new Dictionary<string, string>(call.Texts, StringComparer.Ordinal), call.OutputTokens, call.Truncated == true);
-            if (!_modelCalls.TryGetValue((call.Model, call.Version), out var list))
+            var entry = new ServiceEntry(call.Seq, call.Node, call.Service, call.BatchSize, call.Limit, outcome, call.Error, call.Threw, keys,
+                call.InputDigests.ToArray(), outputs, new Dictionary<string, string>(call.Texts, StringComparer.Ordinal), ids, call.Scores.ToArray(),
+                call.OutputTokens, call.Truncated == true);
+            if (!_serviceCalls.TryGetValue((call.Service, call.Version), out var list))
             {
-                list = new List<ModelEntry>();
-                _modelCalls[(call.Model, call.Version)] = list;
+                list = new List<ServiceEntry>();
+                _serviceCalls[(call.Service, call.Version)] = list;
             }
 
             list.Add(entry);
         }
 
-        foreach (var (_, list) in _modelCalls)
+        foreach (var (_, list) in _serviceCalls)
         {
             list.Sort(static (a, b) => a.Seq.CompareTo(b.Seq));
         }
@@ -1162,43 +1056,20 @@ internal sealed class RunReplay : IFeatureCallHook
         public bool Consumed { get; set; }
     }
 
-    private sealed class CandidateEntry(
-        int seq, string? node, string source, int limit, Dictionary<string, ReplayTypedValue>? query, IoOutcome outcome, string? error, EntityKey[] ids,
-        double[] scores)
-    {
-        public int Seq { get; } = seq;
-
-        /// <summary>The query's values as a recording writes them (checked and rewritten when indexed); null for a call that had none.</summary>
-        public Dictionary<string, ReplayTypedValue>? Query { get; } = query;
-
-        public string? Node { get; } = node;
-
-        public string Source { get; } = source;
-
-        public int Limit { get; } = limit;
-
-        public IoOutcome Outcome { get; } = outcome;
-
-        public string? Error { get; } = error;
-
-        public EntityKey[] Ids { get; } = ids;
-
-        public double[] Scores { get; } = scores;
-
-        public bool Consumed { get; set; }
-    }
-
-    private sealed class ModelEntry(
-        int seq, string? node, string model, int batchSize, IoOutcome outcome, string? error, bool threw, EntityKey[]? keys, string[] digests,
-        Dictionary<string, ReplayTensor> outputs, Dictionary<string, string> texts, int? outputTokens, bool truncated)
+    private sealed class ServiceEntry(
+        int seq, string? node, string service, int batchSize, int limit, IoOutcome outcome, string? error, bool threw, EntityKey[]? keys, string[] digests,
+        Dictionary<string, ReplayTensor> outputs, Dictionary<string, string> texts, EntityKey[] ids, double[] scores, int? outputTokens, bool truncated)
     {
         public int Seq { get; } = seq;
 
         public string? Node { get; } = node;
 
-        public string Model { get; } = model;
+        public string Service { get; } = service;
 
         public int BatchSize { get; } = batchSize;
+
+        /// <summary>The most items the call could add.</summary>
+        public int Limit { get; } = limit;
 
         public IoOutcome Outcome { get; } = outcome;
 
@@ -1213,6 +1084,11 @@ internal sealed class RunReplay : IFeatureCallHook
         public Dictionary<string, ReplayTensor> Outputs { get; } = outputs;
 
         public Dictionary<string, string> Texts { get; } = texts;
+
+        /// <summary>The items the call added, in rank order, and their scores.</summary>
+        public EntityKey[] Ids { get; } = ids;
+
+        public double[] Scores { get; } = scores;
 
         public int? OutputTokens { get; } = outputTokens;
 

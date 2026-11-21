@@ -3,7 +3,7 @@ using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Types;
-using StrataRec.Models;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Pipeline.Operators.Standard;
 
@@ -171,8 +171,8 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
 
             var version = call.Version(context);
             var batches = Batching.Count(pairs, stride);
-            var writers = new ModelOutputWriter[batches];
-            var calls = new Task<ModelStatus>[batches];
+            var writers = new ServiceResponse[batches];
+            var calls = new Task<ServiceStatus>[batches];
             for (var b = 0; b < batches; b++)
             {
                 var offset = b * stride;
@@ -183,8 +183,8 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
                     named[k] = inputs[k].Batch(values[k], TensorLayout.Pairs, offset, count);
                 }
 
-                writers[b] = new ModelOutputWriter(memory);
-                calls[b] = call.InvokeAsync(context, version, named, count, writers[b], ReadOnlyMemory<int>.Empty);
+                writers[b] = new ServiceResponse(memory);
+                calls[b] = call.InvokeAsync(context, version, named, count, writers[b], ReadOnlySpan<int>.Empty);
             }
 
             if (StrataRecMetrics.ModelPairs.Enabled && !context.Replays)
@@ -226,7 +226,7 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
         /// Adds each pair's preference to its rows' scores, walking the pairs in the order they were sent; false after
         /// failing the node on an output that is missing, short, or not a probability.
         /// </summary>
-        private bool Aggregate(OperatorContext context, int[] rows, int n, ModelOutputWriter[] writers, double[] scores)
+        private bool Aggregate(OperatorContext context, int[] rows, int n, ServiceResponse[] writers, double[] scores)
         {
             var pairs = PairCount(n);
             var stride = Batching.Size(pairs, batchSize); // as the batches were sent
@@ -362,8 +362,8 @@ public sealed class ListwiseRerankerFactory : IOperatorFactory
                 named[k] = inputs[k].Batch(gathered, TensorLayout.List, 0, n);
             }
 
-            var writer = new ModelOutputWriter(memory);
-            var status = await call.InvokeAsync(context, call.Version(context), named, 1, writer, ReadOnlyMemory<int>.Empty).ConfigureAwait(false);
+            var writer = new ServiceResponse(memory);
+            var status = await call.InvokeAsync(context, call.Version(context), named, 1, writer, ReadOnlySpan<int>.Empty).ConfigureAwait(false);
             if (!status.Succeeded)
             {
                 context.Fail($"model '{call.Model}' failed: {status.Error}");
@@ -473,13 +473,13 @@ internal static class ModelOutputs
     /// node when the client wrote none, another type or another number of them.
     /// </summary>
     public static bool TryReadScores(
-        OperatorContext context, string model, ModelOutputWriter writer, string name, int count, string entry,
+        OperatorContext context, string model, ServiceResponse writer, string name, int count, string entry,
         out bool single, out ReadOnlySpan<float> singles, out ReadOnlySpan<double> doubles)
     {
         single = false;
         singles = default;
         doubles = default;
-        if (!writer.TryGet(name, out var values))
+        if (!writer.TryGetValues(name, out var values))
         {
             context.Fail($"model '{model}' did not return output '{name}' for every {entry}");
             return false;

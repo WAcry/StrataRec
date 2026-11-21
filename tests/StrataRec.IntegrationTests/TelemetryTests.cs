@@ -11,6 +11,7 @@ using StrataRec.Models;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Pipeline.Sources;
+using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
@@ -287,7 +288,7 @@ public sealed class MetricsTests
             {
                 "model" => TestBindings.With(new TimingOutModels(new LinearModelClientFactory())),
                 "recall" => TestBindings.With(
-                    new TimingOutSources(new MemoryListCandidateSourceFactory()), new TimingOutSources(new MemoryVectorsCandidateSourceFactory())),
+                    new TimingOutSources(new MemoryListServiceFactory()), new TimingOutSources(new MemoryVectorsServiceFactory())),
                 _ => PlanEnvironment.DefaultBindings(),
             },
         };
@@ -301,40 +302,39 @@ public sealed class MetricsTests
         Assert.All(errors, m => Assert.Equal("timeout", Tag(m, StrataRecTags.Outcome)));
     }
 
-    private sealed class TimingOutModels(IBindingFactory<IModelClient> inner) : IBindingFactory<IModelClient>
+    private sealed class TimingOutModels(IBindingFactory<IServiceClient> inner) : IBindingFactory<IServiceClient>
     {
         public string Type => inner.Type;
 
         public Type SettingsType => inner.SettingsType;
 
-        public IModelClient Create(BindingContext context) => new Client(inner.Create(context));
+        public IServiceClient Create(BindingContext context) => new Client(inner.Create(context));
 
-        private sealed class Client(IModelClient inner) : IModelClient
+        private sealed class Client(IServiceClient inner) : IServiceClient
         {
-            public string ClientType => inner.ClientType;
+            public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken) =>
+                inner.DescribeAsync(model, version, cancellationToken);
 
-            public ValueTask<ModelSignature> GetSignatureAsync(string model, string? version, CancellationToken cancellationToken) =>
-                inner.GetSignatureAsync(model, version, cancellationToken);
-
-            public ValueTask<ModelStatus> InvokeAsync(ModelCall call, IModelOutputWriter outputs, CancellationToken cancellationToken) =>
+            public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken) =>
                 throw new TimeoutException("backend timed out");
         }
     }
 
-    private sealed class TimingOutSources(IBindingFactory<ICandidateSource> inner) : IBindingFactory<ICandidateSource>
+    private sealed class TimingOutSources(IBindingFactory<IServiceClient> inner) : IBindingFactory<IServiceClient>
     {
         public string Type => inner.Type;
 
         public Type SettingsType => inner.SettingsType;
 
-        public ICandidateSource Create(BindingContext context) =>
-            new Source(inner.Create(context));
-
-        private sealed class Source(ICandidateSource inner) : ICandidateSource
+        public IServiceClient Create(BindingContext context)
         {
-            public string ClientType => inner.ClientType;
+            _ = inner.Create(context); // its settings, checked as the source's
+            return new Source();
+        }
 
-            public ValueTask<CandidateSourceStatus> RetrieveAsync(CandidateQuery query, ICandidateSink sink, CancellationToken cancellationToken) =>
+        private sealed class Source : IServiceClient
+        {
+            public ValueTask<ServiceStatus> CallAsync(ServiceCall query, IServiceResponse sink, CancellationToken cancellationToken) =>
                 throw new TimeoutException("backend timed out");
         }
     }

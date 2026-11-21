@@ -4,9 +4,9 @@ using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Types;
 using StrataRec.Expressions;
-using StrataRec.Models;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Pipeline.Sources;
+using StrataRec.Core.Services;
 
 namespace StrataRec.Pipeline.Operators;
 
@@ -398,67 +398,55 @@ public sealed class OperatorCompileContext
         return result;
     }
 
-    /// <summary>The client bound to model <paramref name="name"/>, shared with every plan of the same binding (design 6.4).</summary>
-    public (IModelClient Client, int? TimeoutMs)? Model(string name, string configKey)
+    /// <summary>
+    /// The service bound to <paramref name="name"/>, shared with every plan of the same binding (design 6.4), for the node
+    /// to call in <paramref name="role"/> (<see cref="Core.Diagnostics.IoRoles"/>: <c>model</c>, <c>recall</c>, or a role of its own, which
+    /// its calls' telemetry is tagged with). Null after reporting an error at <paramref name="configKey"/>, or at the
+    /// binding when the binding is wrong.
+    /// </summary>
+    public BoundService? Service(string name, string configKey, string role)
     {
         // A config can bind null or "" to a required string; that is a config error at its key, not an exception (review 29).
         if (string.IsNullOrEmpty(name))
         {
-            Error(configKey, "MODEL_UNBOUND", $"'{configKey.TrimStart('/')}' must name a model.",
-                "set it to a model name that the bindings' 'models' declare");
+            Error(configKey, "SERVICE_UNBOUND", $"'{configKey.TrimStart('/')}' must name a service.",
+                "set it to a service name that the bindings' 'services' declare");
             return null;
         }
 
-        if (_clients.TryGetModel(name, out var client, out var timeout, out var error, out var hint))
+        if (_clients.TryGetService(name, out var client, out var timeout, out var error, out var hint))
         {
-            return (client, timeout);
+            return new BoundService(name, client, role, timeout);
         }
 
-        Unbound(configKey, "MODEL_UNBOUND", error, hint);
+        if (error is null)
+        {
+            HasErrors = true; // reported at the binding's setting already
+            return null;
+        }
+
+        Error(configKey, "SERVICE_UNBOUND", error, hint);
         return null;
     }
 
     /// <summary>
-    /// The signature of one version of a model the node calls (from <see cref="Model"/>), for checking the node's config
-    /// against it at load time (design 6.9). Check the node only when it is <see cref="SignatureStatus.Known"/>.
-    /// <see cref="SignatureStatus.Failed"/> (the client has no such version) is already reported at
-    /// <paramref name="configKey"/>: the node fails. <see cref="SignatureStatus.Pending"/> (the engine is still loading
-    /// the client; it compiles the plan again with the answer) and <see cref="SignatureStatus.Unchecked"/> (the plan is
-    /// compiled without loading its clients, as by <c>validate</c>) are no error: compile without the check.
+    /// The signature of one version of a service the node calls (from <see cref="Service"/>), for checking the node's
+    /// config against it at load time (design 6.9). Check the node only when it is <see cref="SignatureStatus.Known"/>.
+    /// <see cref="SignatureStatus.Failed"/> (the service has no such version, or does not describe itself) is already
+    /// reported at <paramref name="configKey"/>: the node fails. <see cref="SignatureStatus.Pending"/> (the engine is
+    /// still loading the client; it compiles the plan again with the answer) and <see cref="SignatureStatus.Unchecked"/>
+    /// (the plan is compiled without loading its clients, as by <c>validate</c>) are no error: compile without the check.
     /// </summary>
-    public SignatureLookup ModelSignature(IModelClient client, string model, string? version, string configKey)
+    public SignatureLookup Signature(BoundService service, string? version, string configKey)
     {
-        var lookup = _clients.Signature(client, model, version);
+        ArgumentNullException.ThrowIfNull(service);
+        var lookup = _clients.Signature(service.Client, service.Name, version);
         if (lookup.Status == SignatureStatus.Failed)
         {
-            Error(configKey, "MODEL_SIGNATURE", lookup.Error!, lookup.Hint);
+            Error(configKey, "SERVICE_SIGNATURE", lookup.Error!, lookup.Hint);
         }
 
         return lookup;
-    }
-
-    /// <summary>The source bound to candidate source <paramref name="name"/>, shared like <see cref="Model"/>.</summary>
-    public (ICandidateSource Source, int? TimeoutMs)? CandidateSource(string name, string configKey)
-    {
-        if (_clients.TryGetCandidateSource(name, out var source, out var timeout, out var error, out var hint))
-        {
-            return (source, timeout);
-        }
-
-        Unbound(configKey, "CANDIDATE_SOURCE_UNBOUND", error, hint);
-        return null;
-    }
-
-    /// <summary>A binding the node cannot use; a null error was reported at the binding's setting already.</summary>
-    private void Unbound(string configKey, string code, string? error, string? hint)
-    {
-        if (error is null)
-        {
-            HasErrors = true;
-            return;
-        }
-
-        Error(configKey, code, error, hint);
     }
 
     public void Error(string configKey, string code, string message, string? hint = null)
