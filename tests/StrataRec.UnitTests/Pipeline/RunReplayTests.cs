@@ -307,6 +307,7 @@ public sealed class RunReplayTests
     /// <summary>
     /// A call whose client wrote more values of an output than its rows hold succeeded, and its node failed on them. Its
     /// rows are not split out of that output: a rebatched call that took them would succeed, where the recording failed.
+    /// Its other outputs are: one of whole rows, and one the operator does not read (a call-level loss) is left out.
     /// </summary>
     [Fact]
     public void ARebatchedCall_DoesNotSplitRows_OutOfAnOutputLongerThanItsShape()
@@ -316,16 +317,22 @@ public sealed class RunReplayTests
         run.ModelCalls.Add(new ReplayModelCall
         {
             Seq = 0, Node = "a", Model = "m", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(recorded).ToList(),
-            Outputs = new Dictionary<string, ReplayModelOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4, 5 })) },
+            Outputs = new Dictionary<string, ReplayModelOutput>
+            {
+                ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4, 5 })),
+                ["w"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4 })),
+                ["loss"] = ReplayJson.Tensor(TensorValues.Of<float>(new[] { 0.5f })),
+            },
         });
         var replay = RunReplay.Create(run, "/runs/0");
 
         var writer = new ArrayOutputWriter();
         var status = replay.InvokeModel(Call(1, NamedInput.FromInt32("x", new[] { 1, 2 }, new[] { 3, 4 })), writer, new[] { EntityKey.FromInt64(2) }, "a");
 
-        Assert.False(status.Succeeded);
-        Assert.Contains("returned 5 values of output 'v' for the 2 rows of recorded call 0", status.Error);
-        Assert.Empty(replay.Gaps); // answered as recorded: a failure
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Equal(new[] { 3, 4 }, (int[])writer.Arrays["w"]);
+        Assert.Equal(["w"], writer.Arrays.Keys); // v is absent: a ModelScorer reading it fails, as it failed on the long one
+        Assert.Empty(replay.Gaps);
     }
 
     /// <summary>A float64 input is in the digest as itself: 0.1 and the float nearest it are other inputs.</summary>

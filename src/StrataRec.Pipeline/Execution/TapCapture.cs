@@ -264,6 +264,7 @@ internal static class TapCapture
                 // A request-level reference broadcast to the rows is narrowed to its declared type, which holds it.
                 var buffer = ColumnBuffer.Create(type, capacity, memory);
                 expression.Evaluate(eval, selectedRows, buffer);
+                MissWhereInputsAreInvalid(state, expression, selectedRows, buffer);
                 columns[c] = LogColumn.Capture(name, type, buffer, selectedRows); // non-finite values are missing in logs
             }
 
@@ -354,6 +355,32 @@ internal static class TapCapture
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Marks missing the rows where a non-nullable column the expression reads has no valid value. An expression reads such
+    /// a column without its validity (every live row has a value), but a tap of dropped rows sees rows a node dropped
+    /// unwritten, or marked missing: their slots hold whatever was there, which a plain reference never logs either.
+    /// </summary>
+    private static void MissWhereInputsAreInvalid(RequestState state, CompiledExpression expression, ReadOnlySpan<int> rows, ColumnBuffer buffer)
+    {
+        var reads = expression.Reads;
+        for (var i = 0; i < reads.Count; i++)
+        {
+            var symbol = reads[i];
+            if (symbol.Kind != SymbolKind.Column || symbol.Type.Nullable || state.ReadColumn(symbol.FixedSlot, symbol.Id) is not { } storage)
+            {
+                continue;
+            }
+
+            foreach (var row in rows)
+            {
+                if (!storage.IsValid(row))
+                {
+                    buffer.SetMissing(row);
+                }
+            }
+        }
     }
 
     private static ValueTask EnsureContextAsync(RequestState state, CompiledExpression expression, CancellationToken cancellationToken)

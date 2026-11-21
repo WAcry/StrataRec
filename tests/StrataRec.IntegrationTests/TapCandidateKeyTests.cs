@@ -224,6 +224,61 @@ public sealed class TapCandidateKeyTests
         Assert.Equal(new long[] { 10 }, (long[])Assert.Single(batch.Columns).Values);
     }
 
+    /// <summary>
+    /// A node takes its non-nullable column and drops every row without writing it (a filter that writes only the rows it
+    /// keeps, and keeps none). A tap of the dropped rows logs that column missing, as a reference and as a computation reading it: an expression reads a
+    /// non-nullable column without its validity, and the dropped rows' slots hold what the pool left there.
+    /// </summary>
+    [Fact]
+    public async Task ATapOfDroppedRows_LogsAComputationOverAColumnTheNodeDidNotWriteThere_AsMissing()
+    {
+        const string Dropping = """
+            { "pipeline_id": "p",
+              "request_schema": { "user_id": { "type": "int64" } },
+              "columns": { "score.t": { "type": "float64", "default": 0.0 } },
+              "param_schema": { "q": { "type": "map<string,int64>" }, "k": { "type": "int64" } },
+              "params": { "q": { "first": 1 }, "k": 1 },
+              "funnel_groups": { "all": { "key": ["ctx.request.id"], "rate": 1.0 } },
+              "log_taps": { "key": { "group": "all", "attach": { "after": "next" }, "rows": { "scope": "dropped" },
+                                     "columns": { "r": "col.score.t", "v": "max(col.score.t)", "w": "col.score.t + 1.0" } } },
+              "nodes": {
+                "recall": { "order": 100, "op": "MultiSourceRecall@1", "config": { "quotas_param": "q" } },
+                "next": { "order": 200, "op": "DropsAll@1", "config": { "output_col": "score.t" } } },
+              "output": { "limit_param": "k", "columns": { "score": "col.score.t" } } }
+            """;
+        var compilation = Compile(Dropping, OperatorRegistry.CreateDefault().Add(new DropsAllFactory()));
+        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
+
+        var result = await ExecuteAsync(compilation.Plan!, capture: true, write: false, pool: new DirtyPool());
+
+        Assert.True(result.Succeeded, result.Error);
+        var batch = Assert.Single(result.LogBatches, b => b.TapId == "key");
+        Assert.Equal(new long[] { 1 }, batch.Int64EntityIds);
+        Assert.All(batch.Columns, column => Assert.True(column.IsMissing(0), column.Name));
+    }
+
+    /// <summary>Takes its column's storage and drops every row, writing no value.</summary>
+    private sealed class DropsAllFactory : IOperatorFactory
+    {
+        public OperatorDescriptor Descriptor { get; } = new("DropsAll", 1, Effects.ColumnWriter | Effects.RowFilter, typeof(AppendingConfig), "Drops every row.");
+
+        public Operator? Compile(OperatorCompileContext context)
+        {
+            var config = context.BindConfig<AppendingConfig>()!;
+            return context.TryWriteColumn(config.OutputCol, "/output_col", null, out var output) ? new Drops(output) : null;
+        }
+
+        private sealed class Drops(OutputColumn output) : Operator
+        {
+            public override ValueTask ExecuteAsync(OperatorContext context)
+            {
+                _ = context.Output(output);
+                context.Truncate(0);
+                return ValueTask.CompletedTask;
+            }
+        }
+    }
+
     /// <summary>A row source after the node that read the feature: the hint names both.</summary>
     [Fact]
     public void RowsALaterRowSourceAppends_HaveNoValueForWhatAnEarlierNodeFilled()

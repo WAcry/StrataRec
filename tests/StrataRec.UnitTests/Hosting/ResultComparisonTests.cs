@@ -117,6 +117,22 @@ public sealed class ResultComparisonTests
         Assert.Equal(["before"], diff.RemovedColumns);
     }
 
+    /// <summary>
+    /// A failed result delivers no columns: the recording of one has the plan's types (to decode with), a live failure none,
+    /// and the same failure replayed is identical.
+    /// </summary>
+    [Fact]
+    public void Diff_OfTwoFailures_ComparesNoColumns()
+    {
+        var recorded = new ComparableResult { Succeeded = false, Ids = [], Columns = [], Types = new Dictionary<string, ColumnType> { ["source"] = ColumnType.String } };
+        var replayed = new ComparableResult { Succeeded = false, Ids = [], Columns = [], Types = new Dictionary<string, ColumnType>() };
+
+        var diff = ResultComparison.Diff(recorded, replayed);
+
+        Assert.True(diff.Identical);
+        Assert.Empty(diff.RemovedColumns);
+    }
+
     [Fact]
     public void Summarize_UsesNearestRankPercentiles()
     {

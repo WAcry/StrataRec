@@ -35,11 +35,13 @@ public sealed class ReplayBundle
     /// with its element type, and model inputs of every declared type (their digests include it): tensors follow the
     /// declared column types (design 6.9). 2026-11-21.2 records the result's columns at their declared types, and a
     /// float32 request input recorded as the host gave it now replays as the nearest float, as it is served: the same
-    /// bundle would replay to other values in a build before.
+    /// bundle would replay to other values in a build before. 2026-11-21.3 records each request input at the type of the
+    /// value the host gave (a fallback pipeline may declare it otherwise), and a computation the binder folds to a name
+    /// (<c>max(col.x)</c>) is no longer a reference: result types and model input digests of a bundle before can differ.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.2";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.3";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.2\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.3\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -69,7 +71,7 @@ public sealed class ReplayRequestRecord
     [Description("End-to-end deadline of the original request. Replay does not enforce it: recorded timing decisions are replayed instead.")]
     public required double DeadlineMs { get; init; }
 
-    [Description("Request inputs that were set, with their request_schema types.")]
+    [Description("Request inputs that were set, each with the type of the value the host gave (int64, float64, bool, string or a list of them), not a pipeline's declared type: each pipeline that binds it converts it as it was served.")]
     public Dictionary<string, ReplayTypedValue> Inputs { get; init; } = new();
 
     public required ReplayAssignmentRecord Assignment { get; init; }

@@ -347,7 +347,8 @@ internal static class ModelTensorRule
             }
         }
 
-        var element = spec.ElementType is TensorElementType.Text or 0 ? null : TensorValues.Name(spec.ElementType);
+        var element = spec.ElementType is TensorElementType.Bool or TensorElementType.Int32 or TensorElementType.Int64 or TensorElementType.Float32
+            or TensorElementType.Float64 or TensorElementType.String ? TensorValues.Name(spec.ElementType) : null; // a column's, not text or unknown
         if (shape.Count == leading.Length)
         {
             return element;

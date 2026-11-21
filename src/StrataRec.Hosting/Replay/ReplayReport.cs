@@ -319,10 +319,11 @@ public static class ResultComparison
         };
     }
 
-    // The declared columns too: a result of no rows still has its output's columns.
+    // The declared columns too: a result of no rows still has its output's columns. A failed result delivers none (its
+    // recording still has the plan's types, a live failure none).
     private static List<string> ColumnNames(ComparableResult result)
     {
-        var names = new SortedSet<string>(result.Types.Keys, StringComparer.Ordinal);
+        var names = new SortedSet<string>(result.Succeeded ? result.Types.Keys : [], StringComparer.Ordinal);
         foreach (var columns in result.Columns)
         {
             names.UnionWith(columns.Keys);

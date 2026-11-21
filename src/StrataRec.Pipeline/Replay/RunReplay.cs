@@ -558,23 +558,10 @@ internal sealed class RunReplay : IFeatureCallHook
             {
                 foreach (var (entry, _) in matched)
                 {
-                    if (!seen.Add(entry))
+                    if (seen.Add(entry))
                     {
-                        continue;
+                        AddLayout(layout, entry);
                     }
-
-                    // Values for no whole number of rows (the client wrote more than the shape holds, and the node failed
-                    // on them, after the call succeeded) have no row of this entity to take: the call fails as its node did.
-                    foreach (var (name, tensor) in entry.Outputs)
-                    {
-                        if (!ByRow(entry, tensor.Values))
-                        {
-                            return ModelStatus.Failed(
-                                $"model '{call.Model}' returned {tensor.Values.Length} values of output '{name}' for the {entry.BatchSize} rows of recorded call {entry.Seq}, not the same number for each row: its rows cannot be replayed in another batch");
-                        }
-                    }
-
-                    AddLayout(layout, entry);
                 }
             }
         }
@@ -652,7 +639,9 @@ internal sealed class RunReplay : IFeatureCallHook
 
         static int PerRow(ModelEntry entry, Array values) => entry.BatchSize > 0 ? values.Length / entry.BatchSize : 1;
 
-        // Only an output of whole rows splits by row (one longer than its shape has no row boundaries to take).
+        // Only an output of whole rows splits by row. One of no whole number a row is not synthesized: one the operator
+        // reads was longer than its shape (the node failed on it when recorded, and fails on its absence now), and one it
+        // does not read (a call-level value such as a loss) is not needed.
         static bool ByRow(ModelEntry entry, Array values) => entry.BatchSize > 0 && values.Length % entry.BatchSize == 0;
 
         static void AddLayout(List<(string Name, TensorElementType Type, int PerRow)> layout, ModelEntry entry)
@@ -700,7 +689,8 @@ internal sealed class RunReplay : IFeatureCallHook
 
             foreach (var (entry, row) in list)
             {
-                if (entry.Outputs.TryGetValue(name, out var tensor) && tensor.Type == type && PerRow(entry, tensor.Values) == perRow) // by row: matched
+                if (entry.Outputs.TryGetValue(name, out var tensor) && tensor.Type == type && ByRow(entry, tensor.Values)
+                    && PerRow(entry, tensor.Values) == perRow && tensor.Values.Length >= (row + 1) * perRow) // a malformed bundle may have more keys than rows
                 {
                     return (tensor.Values, row * perRow);
                 }
