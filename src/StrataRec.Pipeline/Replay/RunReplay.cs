@@ -278,7 +278,15 @@ internal sealed class RunReplay : IFeatureCallHook
     /// another call that had it).
     /// </summary>
     private static bool Has(ServiceEntry entry, ServiceCall call, string name) =>
-        entry.Limit == call.Limit && (entry.Outputs.ContainsKey(name) || entry.Texts.ContainsKey(name) || Array.IndexOf(entry.Requested, name) >= 0);
+        entry.Limit == call.Limit && (entry.Outputs.ContainsKey(name) || entry.Texts.ContainsKey(name) || LeftUnwritten(entry, call, name));
+
+    /// <summary>
+    /// Whether the service left output <paramref name="name"/> unwritten in a recorded call that is <paramref name="call"/>:
+    /// the same limit and outputs, which an answer may depend on. One that asked for other outputs says nothing of it
+    /// (review of da5cfe6: such an omission answered before a call of these outputs that had the value).
+    /// </summary>
+    private static bool LeftUnwritten(ServiceEntry entry, ServiceCall call, string name) =>
+        entry.Limit == call.Limit && entry.AskedFor(call) && !entry.Outputs.ContainsKey(name) && !entry.Texts.ContainsKey(name);
 
     /// <summary>
     /// How many more items <paramref name="call"/> asks for than the recorded call can tell: 0 when it has as many, or it
@@ -341,10 +349,10 @@ internal sealed class RunReplay : IFeatureCallHook
         {
             foreach (var name in call.Outputs.Span)
             {
-                if (!response.TryGetValues(name, out _) && !response.TryGetText(name, out _)
-                    && !(from.Limit == call.Limit && Array.IndexOf(from.Requested, name) >= 0)) // left unwritten, as recorded
+                if (!response.TryGetValues(name, out _) && !response.TryGetText(name, out _) && !LeftUnwritten(from, call, name)) // left unwritten, as recorded
                 {
-                    var recorded = from.Outputs.ContainsKey(name) || from.Texts.ContainsKey(name);
+                    // Asked for at another limit is recorded there, written or not (review of da5cfe6).
+                    var recorded = from.Outputs.ContainsKey(name) || from.Texts.ContainsKey(name) || Array.IndexOf(from.Requested, name) >= 0;
                     AddOutputGap(kind, call.Service, name, node, keys, null, recorded && from.Limit != call.Limit ? "limit_changed" : "not_recorded");
                 }
             }
@@ -560,7 +568,10 @@ internal sealed class RunReplay : IFeatureCallHook
     /// it reads comes from a successful recorded call that had the same entity with the same inputs and that output,
     /// whichever call and row that was. An entity the recording has only with other inputs is an <c>inputs_changed</c> gap,
     /// one it never had is <c>not_recorded</c>, and a row the recording has without an output the call reads is a
-    /// <c>not_recorded</c> gap of that output.
+    /// <c>not_recorded</c> gap of that output, unless the service left it unwritten in a recorded call of the row asking
+    /// for the same outputs: that is the row's answer, and an output no row has is left unwritten (review of da5cfe6: it
+    /// was a gap, and the call failed with no recorded output). A response holds an output for all its rows or none, so
+    /// a row whose output was left unwritten, in a call where another row has it, gets the gap value and is a gap.
     /// </summary>
     /// <remarks>
     /// Tensor outputs are split by row; a row the recording cannot answer gets NaN in a float output (which the column
@@ -618,6 +629,7 @@ internal sealed class RunReplay : IFeatureCallHook
             }
         }
 
+        var ofRows = layout.Count;
         for (var pass = 0; calls is not null && pass < 2; pass++)
         {
             foreach (var entry in calls)
@@ -637,19 +649,37 @@ internal sealed class RunReplay : IFeatureCallHook
             matched[r] = rows.ContainsKey((keys[r], digests[r]));
         }
 
+        // An output only other calls have, that the service left unwritten for a row this call matches: not written, the
+        // row's answer (below), rather than a gap value.
+        for (var o = layout.Count - 1; o >= ofRows; o--)
+        {
+            for (var r = 0; r < keys.Length; r++)
+            {
+                if (matched[r] && Omitted(rows[(keys[r], digests[r])], call, layout[o].Name))
+                {
+                    layout.RemoveAt(o);
+                    break;
+                }
+            }
+        }
+
         ReportUnmatched(kind, call.Service, keys, matched, scored);
 
         // An output the call reads that no recorded row of it has (a text, which belongs to a whole call, or one no call
         // was asked for): a gap of that output for every row the recording has, but one whose recorded value was not of
-        // whole rows (the node failed on it when recorded, and fails on its absence now).
+        // whole rows (the node failed on it when recorded, and fails on its absence now), or that the service left
+        // unwritten (its answer).
         var lacking = new bool[keys.Length];
+        var omitted = false;
         foreach (var name in call.Outputs.Span)
         {
             if (!Has(layout, name))
             {
                 for (var r = 0; r < keys.Length; r++)
                 {
-                    lacking[r] = matched[r] && !Unsplit(rows[(keys[r], digests[r])], name);
+                    var unwritten = matched[r] && Omitted(rows[(keys[r], digests[r])], call, name);
+                    omitted |= unwritten;
+                    lacking[r] = matched[r] && !unwritten && !Unsplit(rows[(keys[r], digests[r])], name);
                 }
 
                 if (Array.IndexOf(lacking, true) >= 0)
@@ -666,7 +696,7 @@ internal sealed class RunReplay : IFeatureCallHook
             return ServiceStatus.Failed($"{kind} '{call.Service}': none of the call's items is in the replay bundle with these inputs");
         }
 
-        if (layout.Count == 0 && !call.Outputs.IsEmpty)
+        if (layout.Count == 0 && !call.Outputs.IsEmpty && !omitted)
         {
             return ServiceStatus.Failed($"{kind} '{call.Service}' has no recorded output in the replay bundle");
         }
@@ -739,6 +769,20 @@ internal sealed class RunReplay : IFeatureCallHook
                     layout.Add((name, values.Type, PerRow(entry, values.Values)));
                 }
             }
+        }
+
+        // A recorded call of the item, asking for the same outputs, that the service left the output unwritten in.
+        static bool Omitted(List<(ServiceEntry Entry, int Row)> recorded, ServiceCall call, string name)
+        {
+            foreach (var (entry, _) in recorded)
+            {
+                if (LeftUnwritten(entry, call, name))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         // A recorded row of the item had the output, not of whole rows: the node failed on it when recorded.
@@ -1143,6 +1187,15 @@ internal sealed class RunReplay : IFeatureCallHook
         }
     }
 
+    private static void RequireAsked(ReplayServiceCall call, string name, string at)
+    {
+        if (!call.Requested.Contains(name))
+        {
+            throw new ReplayBundleException(at, $"output '{name}' was recorded, but the call did not ask for it (requested)",
+                "a call records only the outputs it asked for, and lists them in requested");
+        }
+    }
+
     private void IndexServices(ReplayRunRecord run, string pointer)
     {
         for (var c = 0; c < run.ServiceCalls.Count; c++)
@@ -1184,7 +1237,33 @@ internal sealed class RunReplay : IFeatureCallHook
                     "a node's call names its node, a feature source's its source");
             }
 
-            var entry = new ServiceEntry(call.Seq, ServiceCaller.KeyOf(call.Node, call.Source), call.Source is not null, call.Service, call.BatchSize, call.Limit, outcome, call.Error, call.Threw, keys,
+            if ((call.Source is null) != (call.Entity is null))
+            {
+                throw new ReplayBundleException(at + "/entity", call.Source is null ? "an entity without a feature source" : "a feature source's call without its entity",
+                    "a feature source's call names its source and the entity it computed; a node's names neither");
+            }
+
+            // The outputs it asked for, each once, and what it returned of them only: what the recorder writes (review of
+            // the step 5 fixes: any other list would answer a call it was not, or leave out what the service did write).
+            for (var r = 0; r < call.Requested.Count; r++)
+            {
+                if (call.Requested.IndexOf(call.Requested[r]) != r)
+                {
+                    throw new ReplayBundleException($"{at}/requested/{r}", $"output '{call.Requested[r]}' asked for twice", "name each output the call asked for once");
+                }
+            }
+
+            foreach (var name in call.Outputs.Keys)
+            {
+                RequireAsked(call, name, $"{at}/outputs/{JsonPointer.Escape(name)}");
+            }
+
+            foreach (var name in call.Texts.Keys)
+            {
+                RequireAsked(call, name, $"{at}/texts/{JsonPointer.Escape(name)}");
+            }
+
+            var entry = new ServiceEntry(call.Seq, ServiceCaller.KeyOf(call.Node, call.Source, call.Entity), call.Source is not null, call.Service, call.BatchSize, call.Limit, outcome, call.Error, call.Threw, keys,
                 call.InputDigests.ToArray(), outputs, new Dictionary<string, string>(call.Texts, StringComparer.Ordinal), ids, call.Scores.ToArray(),
                 call.OutputTokens, call.Truncated == true, call.Degraded, call.Dropped ?? 0, [.. call.Requested]);
             if (!_serviceCalls.TryGetValue((call.Service, call.Version), out var list))

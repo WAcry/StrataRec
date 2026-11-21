@@ -70,9 +70,12 @@ public sealed class ServiceCallAllocationTests
         }
     }
 
-    /// <summary>A cancellation while the call is checked is a cancelled task, as an async method's (review of the step 5 fixes).</summary>
+    /// <summary>
+    /// A cancellation while the call is checked is a cancelled task that throws it, as an async method's (reviews of the
+    /// step 5 fixes and of da5cfe6: the task was faulted, then cancelled with another exception).
+    /// </summary>
     [Fact]
-    public void ACancellationWhileTheCallIsChecked_IsACancelledTask()
+    public async Task ACancellationWhileTheCallIsChecked_IsACancelledTask_ThatThrowsIt()
     {
         var memory = new RequestMemory();
         var budget = new AttemptBudget(CancellationToken.None, long.MaxValue);
@@ -87,6 +90,7 @@ public sealed class ServiceCallAllocationTests
             var call = context.CallAsync(bound, new ServiceCall { Service = "x", Outputs = outputs.Memory }, new ServiceResponse(memory));
 
             Assert.True(call.IsCanceled);
+            Assert.Same(outputs.Thrown, await Assert.ThrowsAnyAsync<OperationCanceledException>(() => call));
         }
         finally
         {
@@ -109,8 +113,10 @@ public sealed class ServiceCallAllocationTests
                 return _names;
             }
 
-            throw new OperationCanceledException(token);
+            throw Thrown = new OperationCanceledException("the names were cancelled", token);
         }
+
+        public OperationCanceledException? Thrown { get; private set; }
 
         public override System.Buffers.MemoryHandle Pin(int elementIndex = 0) => throw new NotSupportedException();
 

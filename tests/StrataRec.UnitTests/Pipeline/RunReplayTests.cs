@@ -119,7 +119,7 @@ public sealed class RunReplayTests
         ReplayServiceCall Of(int seq, string node, string output, float[] values) => new()
         {
             Seq = seq, Node = node, Service = "m", Role = "model", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(call).ToList(),
-            Outputs = new Dictionary<string, ReplayOutput> { [output] = ReplayJson.Tensor(TensorValues.Of<float>(values)) },
+            Requested = [output], Outputs = new Dictionary<string, ReplayOutput> { [output] = ReplayJson.Tensor(TensorValues.Of<float>(values)) },
         };
         run.ServiceCalls.Add(Of(0, "click", "score", [10, 20]));
         run.ServiceCalls.Add(Of(1, "extra", "p_extra", [5, 6]));
@@ -214,6 +214,7 @@ public sealed class RunReplayTests
         var first = Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new float[] { 1, 2 }));
         var malformed = ModelCallOf(0, first, new long[] { 1, 2 }, 10, 20);
         malformed.Outputs["extra"] = new ReplayOutput { Type = "float32", Values = JsonSerializer.SerializeToElement(new float[] { 1, 2, 3 }) };
+        malformed.Requested.Add("extra");
         run.ServiceCalls.Add(malformed);
         run.ServiceCalls.Add(ModelCallOf(1, Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new float[] { 3, 4 })), new long[] { 3, 4 }, 30, 40));
         var replay = RunReplay.Create(run, "/runs/0");
@@ -332,7 +333,7 @@ public sealed class RunReplayTests
         run.ServiceCalls.Add(new ReplayServiceCall
         {
             Seq = 0, Node = "scorer", Service = "m", Role = "model", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(recorded).ToList(),
-            Outputs = new Dictionary<string, ReplayOutput>
+            Requested = ["n", "d", "label", "ok", "v"], Outputs = new Dictionary<string, ReplayOutput>
             {
                 ["n"] = ReplayJson.Tensor(TensorValues.Of<long>(new long[] { Big, -Big })),
                 ["d"] = ReplayJson.Tensor(TensorValues.Of<double>(new[] { 0.1, 1e300 })),
@@ -379,12 +380,12 @@ public sealed class RunReplayTests
         run.ServiceCalls.Add(new ReplayServiceCall
         {
             Seq = 0, Node = "a", Service = "m", Role = "model", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(narrow).ToList(),
-            Outputs = new Dictionary<string, ReplayOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4 })) },
+            Requested = ["v"], Outputs = new Dictionary<string, ReplayOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4 })) },
         });
         run.ServiceCalls.Add(new ReplayServiceCall
         {
             Seq = 1, Node = "b", Service = "m", Role = "model", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(wide).ToList(),
-            Outputs = new Dictionary<string, ReplayOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4, 5, 6 })) },
+            Requested = ["v"], Outputs = new Dictionary<string, ReplayOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4, 5, 6 })) },
         });
         var replay = RunReplay.Create(run, "/runs/0");
 
@@ -409,12 +410,12 @@ public sealed class RunReplayTests
         run.ServiceCalls.Add(new ReplayServiceCall
         {
             Seq = 0, Node = "a", Service = "m", Role = "model", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(narrow).ToList(),
-            Outputs = new Dictionary<string, ReplayOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4 })) },
+            Requested = ["v"], Outputs = new Dictionary<string, ReplayOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4 })) },
         });
         run.ServiceCalls.Add(new ReplayServiceCall
         {
             Seq = 1, Node = "b", Service = "m", Role = "model", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(wide).ToList(),
-            Outputs = new Dictionary<string, ReplayOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4, 5, 6 })) },
+            Requested = ["v"], Outputs = new Dictionary<string, ReplayOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4, 5, 6 })) },
         });
         var replay = RunReplay.Create(run, "/runs/0");
 
@@ -439,7 +440,7 @@ public sealed class RunReplayTests
         run.ServiceCalls.Add(new ReplayServiceCall
         {
             Seq = 0, Node = "a", Service = "m", Role = "model", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(recorded).ToList(),
-            Outputs = new Dictionary<string, ReplayOutput>
+            Requested = ["v", "w", "loss"], Outputs = new Dictionary<string, ReplayOutput>
             {
                 ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4, 5 })),
                 ["w"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4 })),
@@ -593,6 +594,67 @@ public sealed class RunReplayTests
             Assert.Equal((false, error), (replayed.Succeeded, replayed.Error));
         }
     }
+
+    /// <summary>
+    /// A rebatched call of rows whose recorded call, asking for the same outputs, the service left an output unwritten
+    /// in: the output is left unwritten, as recorded, not a gap nor a failure with no recorded output; an output no call
+    /// asked for is still a gap (review of da5cfe6).
+    /// </summary>
+    [Fact]
+    public void ARebatchedCall_LeavesUnwrittenAnOutputItsRowsRecordedCallLeftUnwritten_AndAnOutputNeverAskedForIsAGap()
+    {
+        var run = Run();
+        run.ServiceCalls.Add(Keyed(KeyedCall([1, 2], "score"), [1, 2], 0, "ranker"));
+        run.ServiceCalls.Add(Keyed(KeyedCall([3, 4], "score"), [3, 4], 1, "ranker", scores: [30, 40]));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var omitted = new ArrayOutputWriter();
+        var reordered = replay.InvokeModel(KeyedCall([2, 1], "score"), omitted, [EntityKey.FromInt64(2), EntityKey.FromInt64(1)]);
+        var added = new ArrayOutputWriter();
+        var withNew = replay.InvokeModel(KeyedCall([4, 3], "score", "new"), added, [EntityKey.FromInt64(4), EntityKey.FromInt64(3)]);
+
+        Assert.True(reordered.Succeeded, reordered.Error);
+        Assert.False(omitted.Floats.ContainsKey("score"));
+        Assert.True(withNew.Succeeded, withNew.Error);
+        Assert.Equal(new float[] { 40, 30 }, added.Floats["score"]);
+        var gap = Assert.Single(replay.Gaps);
+        Assert.Equal(("new", "not_recorded", 2), (gap.Field, gap.Reason, gap.Count));
+    }
+
+    /// <summary>
+    /// An output a recorded call of other outputs left unwritten does not answer a call of this output that another
+    /// recorded call wrote (review of da5cfe6: a node added by a reload read it as missing).
+    /// </summary>
+    [Fact]
+    public void AnOmissionOfAKeyedCallOfOtherOutputs_DoesNotAnswerOverARecordingThatWroteTheOutput()
+    {
+        var run = Run();
+        run.ServiceCalls.Add(Keyed(KeyedCall([1, 2], "score", "label"), [1, 2], 0, "a"));
+        run.ServiceCalls.Add(Keyed(KeyedCall([1, 2], "score"), [1, 2], 1, "b", scores: [70, 80]));
+        var replay = RunReplay.Create(run, "/runs/0");
+        var writer = new ArrayOutputWriter();
+
+        var status = replay.InvokeModel(KeyedCall([1, 2], "score"), writer, [EntityKey.FromInt64(1), EntityKey.FromInt64(2)], "added");
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Equal(new float[] { 70, 80 }, writer.Floats["score"]);
+        Assert.Empty(replay.Gaps);
+    }
+
+    private static ServiceCall KeyedCall(long[] keys, params string[] outputs) => new()
+    {
+        Service = "m",
+        BatchSize = keys.Length,
+        Inputs = new[] { NamedInput.FromFloat32("x", [keys.Length], keys.Select(key => (float)key).ToArray()) },
+        Outputs = outputs,
+    };
+
+    private static ReplayServiceCall Keyed(ServiceCall call, long[] keys, int seq, string node, float[]? scores = null) => new()
+    {
+        Seq = seq, Node = node, Service = call.Service, Role = "model", BatchSize = call.BatchSize, Status = "ok",
+        Keys = Json(JsonSerializer.Serialize(keys)), InputDigests = RowDigests(call).ToList(), Requested = [.. call.Outputs.ToArray()],
+        Outputs = scores is null ? [] : new Dictionary<string, ReplayOutput> { ["score"] = new() { Type = "float32", Values = JsonSerializer.SerializeToElement(scores) } },
+    };
 
     /// <summary>A call of model <c>m</c> that reads its output <c>score</c>, as a model operator names what it reads.</summary>
     internal static ServiceCall Call(int batch, params NamedInput[] inputs) => new() { Service = "m", Inputs = inputs, BatchSize = batch, Outputs = Score };

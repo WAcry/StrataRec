@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
@@ -374,8 +375,9 @@ public sealed class OperatorContext : IServiceCallScope
         }
         catch (OperationCanceledException ex)
         {
-            var cancelled = new TaskCompletionSource<ServiceStatus>();
-            cancelled.SetCanceled(ex.CancellationToken);
+            // An async method's builder: the task is cancelled and keeps the exception thrown (review of da5cfe6).
+            var cancelled = AsyncTaskMethodBuilder<ServiceStatus>.Create();
+            cancelled.SetException(ex);
             return cancelled.Task;
         }
         catch (Exception ex)

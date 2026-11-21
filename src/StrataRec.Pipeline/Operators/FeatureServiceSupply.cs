@@ -20,8 +20,6 @@ namespace StrataRec.Pipeline.Operators;
 /// </summary>
 internal sealed class FeatureServiceSupply(BoundService service, string source) : IServiceSupply
 {
-    private readonly ServiceCaller _caller = ServiceCaller.OfSource(source);
-
     /// <summary>The outputs of the last fields asked for: a group asks for the same fields every request.</summary>
     private OutputNames? _outputs;
 
@@ -36,7 +34,7 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
             inputs[a] = ServiceInputs.Create(arg.Name, arg.Type, arg.Value, call.Memory);
         }
 
-        var scope = new Scope(_caller, call);
+        var scope = new Scope(ServiceCaller.OfSource(source, call.Group.Entity.Name), call);
         var response = new ServiceResponse(call.Memory);
         var serviceCall = new ServiceCall
         {

@@ -329,6 +329,39 @@ public sealed class ComputedEntityEndToEndTests
     }
 
     /// <summary>
+    /// Two entities of one source whose calls are the same (arguments and outputs) are still each answered by its own in a
+    /// replay, made in whatever order: a source's call is recorded with its entity, as a node's with its node (review of
+    /// da5cfe6: the replay made them in another order, and the transient failure of one went to the other).
+    /// </summary>
+    [Fact]
+    public async Task TwoEntitiesOfOneSourceMakingTheSameCall_AreEachReplayedByItsOwn_WhateverTheOrder()
+    {
+        var service = new IntentService { FailFirst = true };
+        var plan = Compile(Workspace(
+            intent: """{ "args": { "q": "ctx.user.tag" } }""",
+            readInOutput: false,
+            users: """{ "connector": "memory@1", "data": { "7": { "tag": "shoes" } }, "latency_ms": 300, "timeout_ms": 5000 }""",
+            extraEntities: """, "other": { "args": { "q": "ctx.alt.tag" } }, "alt": { "key": "ctx.request.user_id" }""",
+            extraFeatures: """, "user.tag": { "type": "string", "source": "users", "field": "tag" }, "alt.tag": { "type": "string", "source": "fast_users", "field": "tag" }, "other.score": { "type": "float32", "source": "intent", "field": "score", "default": 0.5 }""",
+            extraSources: """, "fast_users": { "connector": "memory@1", "data": { "7": { "tag": "shoes" } }, "timeout_ms": 5000 }""",
+            extraNodes: """, "boost_other": { "order": 300, "op": "ExpressionScorer@1", "on_failure": "skip", "config": { "output_col": "out.o", "expr": "ctx.other.score * 2.0" } }""",
+            extraColumns: """, "out.o": { "type": "float32?" }"""), service);
+        var inputs = Inputs(user: 7, query: "shoes", recent: null);
+
+        var live = await Execute(plan, inputs, record: true);
+        var replay = RunReplay.Create(live.Recording!, "/runs/0");
+        var again = await Execute(plan, inputs, replay: replay);
+
+        Assert.True(live.Succeeded && again.Succeeded, live.Error ?? again.Error);
+        static (NodeOutcomeKind, NodeOutcomeKind) Boosts(PipelineResult r) =>
+            (r.Outcomes.Single(o => o.NodeId == "boost").Kind, r.Outcomes.Single(o => o.NodeId == "boost_other").Kind);
+        Assert.Equal((NodeOutcomeKind.Succeeded, NodeOutcomeKind.Failed), Boosts(live)); // other's call went first, and failed
+        Assert.Equal(Boosts(live), Boosts(again));
+        Assert.Empty(replay.Gaps);
+        Assert.Equal(2, service.Calls.Count); // the live run's
+    }
+
+    /// <summary>
     /// An output the service left unwritten is missing, live and in a replay of the same configuration, which neither
     /// reports it as a gap nor takes it from another call that has it (review of the step 5 fixes).
     /// </summary>
@@ -410,7 +443,7 @@ public sealed class ComputedEntityEndToEndTests
         var recorded = run.ServiceCalls[at];
         run.ServiceCalls[at] = new ReplayServiceCall
         {
-            Seq = recorded.Seq, Source = recorded.Source, Service = recorded.Service, Role = recorded.Role, Status = "cancelled", Threw = true,
+            Seq = recorded.Seq, Source = recorded.Source, Entity = recorded.Entity, Service = recorded.Service, Role = recorded.Role, Status = "cancelled", Threw = true,
             InputDigests = recorded.InputDigests, Requested = recorded.Requested,
         };
 
@@ -528,7 +561,9 @@ public sealed class ComputedEntityEndToEndTests
         string extraFeatures = "",
         string extraSources = "",
         string extraOutput = "",
-        string derived = "")
+        string derived = "",
+        string extraNodes = "",
+        string extraColumns = "")
     {
         if (intentTimeoutMs is { } timeout)
         {
@@ -568,10 +603,10 @@ public sealed class ComputedEntityEndToEndTests
               "request_schema": { "user_id": { "type": "int64?" }, "query": { "type": "string?" }, "recent": { "type": "list<int64>?" } },
               "param_schema": { "recall_quotas": { "type": "map<string,int64>" }, "k": { "type": "int64" } },
               "params": { "recall_quotas": { "pool": 10 }, "k": 5 },
-              "columns": { "out.s": { "type": "float32?" } },
+              "columns": { "out.s": { "type": "float32?" }{{extraColumns}} },
               "nodes": {
                 "recall": { "order": 100, "op": "MultiSourceRecall@1", "config": { "quotas_param": "recall_quotas" } },
-                "boost":  { "order": 200, "op": "ExpressionScorer@1", "on_failure": "skip", "config": { "output_col": "out.s", "expr": "ctx.intent.score * 2.0" } }
+                "boost":  { "order": 200, "op": "ExpressionScorer@1", "on_failure": "skip", "config": { "output_col": "out.s", "expr": "ctx.intent.score * 2.0" } }{{extraNodes}}
               },
               "output": { "limit_param": "k", "columns": {{output}} } }
             """);
@@ -601,6 +636,11 @@ public sealed class ComputedEntityEndToEndTests
 
         /// <summary><c>int32</c>, or two strings of which the second is left unwritten.</summary>
         public string Topics { get; init; } = "int32";
+
+        /// <summary>Fails the first call, as a service failing for a moment.</summary>
+        public bool FailFirst { get; init; }
+
+        private int _sent;
 
         /// <summary>Fails a call that asks for this output.</summary>
         public string? FailWhenAsked { get; init; }
@@ -656,7 +696,7 @@ public sealed class ComputedEntityEndToEndTests
                 await gate.Task.ConfigureAwait(false); // ignores the token
             }
 
-            if (Fail || (FailWhenAsked is { } failing && call.Outputs.Span.Contains(failing)))
+            if (Fail || (FailWhenAsked is { } failing && call.Outputs.Span.Contains(failing)) || (FailFirst && Interlocked.Increment(ref _sent) == 1))
             {
                 return ServiceStatus.Failed("the model is down");
             }

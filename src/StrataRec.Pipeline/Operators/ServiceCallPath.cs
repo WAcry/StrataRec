@@ -13,11 +13,11 @@ namespace StrataRec.Pipeline.Operators;
 /// </summary>
 internal readonly struct ServiceCaller
 {
-    private ServiceCaller(string? node, string? source, string key)
+    private ServiceCaller(string? node, string? source, string? entity)
     {
         Node = node;
         Source = source;
-        Key = key;
+        Entity = entity;
     }
 
     /// <summary>The calling node; null for a feature source's call.</summary>
@@ -26,17 +26,26 @@ internal readonly struct ServiceCaller
     /// <summary>The feature source whose features the call is for; null for a node's call.</summary>
     public string? Source { get; }
 
-    /// <summary>One string per caller, which a replay matches a recorded call's on, with whether it is a source's (a node
-    /// built without the plan compiler's checks may spell a source's key): the node id, or <c>source:&lt;name&gt;</c>.</summary>
-    public string Key { get; }
+    /// <summary>
+    /// The entity a source's call computes: a source may compute several, whose calls are each its own as two nodes' are
+    /// (review of the step 5 fixes: two entities' calls of the same arguments and outputs took each other's answers when
+    /// the prefetch made them in another order).
+    /// </summary>
+    public string? Entity { get; }
 
-    public static ServiceCaller OfNode(string node) => new(node, null, node);
+    /// <summary>
+    /// One string per caller, which a replay matches a recorded call's on, with whether it is a source's (a node built
+    /// without the plan compiler's checks may spell a source's key): the node id, or <c>source:&lt;source&gt;/&lt;entity&gt;</c>.
+    /// Made when read: only a replay reads it.
+    /// </summary>
+    public string Key => KeyOf(Node, Source, Entity);
 
-    /// <summary>A source's caller, made once per source (its key is a string of its own).</summary>
-    public static ServiceCaller OfSource(string source) => new(null, source, KeyOf(null, source));
+    public static ServiceCaller OfNode(string node) => new(node, null, null);
 
-    /// <summary>The key of a recorded call's caller (<see cref="Artifacts.Model.ReplayServiceCall"/>'s node or source).</summary>
-    public static string KeyOf(string? node, string? source) => node ?? "source:" + source;
+    public static ServiceCaller OfSource(string source, string entity) => new(null, source, entity);
+
+    /// <summary>The key of a recorded call's caller (<see cref="Artifacts.Model.ReplayServiceCall"/>'s node, or source and entity).</summary>
+    public static string KeyOf(string? node, string? source, string? entity) => node ?? "source:" + source + "/" + entity;
 }
 
 /// <summary>

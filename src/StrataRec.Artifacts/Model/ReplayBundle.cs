@@ -51,11 +51,12 @@ public sealed class ReplayBundle
     /// a feature source in mode <c>service</c> (IO step 5) with its source and no node. 2026-11-21.9 records the outputs each
     /// call asked for (an output the service left unwritten is replayed so, and a failure answers only a call asking for the
     /// same), and a feature source's call carries the request's seed: a bundle before replayed a source's failure for a
-    /// call asking for other outputs, and the answer of a call made without the seed.
+    /// call asking for other outputs, and the answer of a call made without the seed. 2026-11-21.10 records the entity a
+    /// source's call computed: a source's two entities of the same arguments and outputs took each other's answers.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.9";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.10";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.9\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.10\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -267,6 +268,9 @@ public sealed class ReplayServiceCall
 
     [Description("The feature source in mode 'service' whose features the call asked for (the request's prefetch made it); absent for a node's call.")]
     public string? Source { get; init; }
+
+    [Description("The entity a feature source's call computed (a source may compute several, each with calls of its own); absent for a node's call.")]
+    public string? Entity { get; init; }
 
     [Description("The service's logical name, as the bindings name it.")]
     public required string Service { get; init; }

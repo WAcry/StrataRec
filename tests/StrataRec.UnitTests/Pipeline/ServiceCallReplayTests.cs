@@ -412,14 +412,14 @@ public sealed class ServiceCallReplayTests
         var failed = Recorded("x", Query(1, limit: 0), "error");
         run.ServiceCalls.Add(new ReplayServiceCall
         {
-            Source = "x", Service = failed.Service, Role = IoRoles.Fetch, Limit = failed.Limit, Status = failed.Status, InputDigests = failed.InputDigests,
+            Source = "x", Entity = "e", Service = failed.Service, Role = IoRoles.Fetch, Limit = failed.Limit, Status = failed.Status, InputDigests = failed.InputDigests,
         });
         var replay = RunReplay.Create(run, "/runs/0");
         var response = new ServiceResponse(Memory, 0);
 
         Assert.False(replay.Call(ServiceCaller.OfNode("x"), new IoTarget(IoRoles.Recall, "s"), Query(1, limit: 0), response, out _).Succeeded);
         Assert.Equal("not_recorded", Assert.Single(replay.Gaps).Reason); // the node has no call of its own
-        Assert.False(replay.Call(ServiceCaller.OfSource("x"), new IoTarget(IoRoles.Fetch, "s"), Query(1, limit: 0), new ServiceResponse(Memory, 0), out _).Succeeded);
+        Assert.False(replay.Call(ServiceCaller.OfSource("x", "e"), new IoTarget(IoRoles.Fetch, "s"), Query(1, limit: 0), new ServiceResponse(Memory, 0), out _).Succeeded);
         Assert.Single(replay.Gaps); // the source's, as recorded
     }
 
@@ -431,20 +431,86 @@ public sealed class ServiceCallReplayTests
     public void ANodeWhoseIdSpellsASourcesKey_IsNotTheSource()
     {
         var run = RunReplayTests.Run();
-        var failed = Recorded("source:x", Query(1, limit: 0), "error");
+        var failed = Recorded("source:x/e", Query(1, limit: 0), "error");
         var answered = Recorded("x", Query(1, limit: 0), "ok");
         run.ServiceCalls.Add(failed);
         run.ServiceCalls.Add(new ReplayServiceCall
         {
-            Source = "x", Service = answered.Service, Role = IoRoles.Fetch, Limit = 0, Status = "ok", InputDigests = answered.InputDigests,
+            Source = "x", Entity = "e", Service = answered.Service, Role = IoRoles.Fetch, Limit = 0, Status = "ok", InputDigests = answered.InputDigests,
             Ids = answered.Ids, Scores = answered.Scores,
         });
         var replay = RunReplay.Create(run, "/runs/0");
 
-        var status = replay.Call(ServiceCaller.OfSource("x"), new IoTarget(IoRoles.Fetch, "s"), Query(1, limit: 0), new ServiceResponse(Memory, 0), out _);
+        var status = replay.Call(ServiceCaller.OfSource("x", "e"), new IoTarget(IoRoles.Fetch, "s"), Query(1, limit: 0), new ServiceResponse(Memory, 0), out _);
 
         Assert.True(status.Succeeded, status.Error);
         Assert.Empty(replay.Gaps);
+    }
+
+    /// <summary>
+    /// An output a recorded call asked for and the service left unwritten is that call's answer only: a call of other
+    /// outputs takes it from a recorded call that wrote it (review of da5cfe6: the omission answered first, as missing).
+    /// </summary>
+    [Fact]
+    public void AnOmissionOfACallOfOtherOutputs_DoesNotAnswerOverARecordingThatWroteTheOutput()
+    {
+        var run = RunReplayTests.Run();
+        run.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 0), "summary", "other"), "ok", texts: new() { ["other"] = "x" })); // summary unwritten
+        run.ServiceCalls.Add(Recorded("m", Reading(Query(1, limit: 0), "summary"), "ok", texts: new() { ["summary"] = "three" }));
+        var replay = RunReplay.Create(run, "/runs/0");
+        var response = new ServiceResponse(Memory, 0);
+
+        var status = replay.Call(ServiceCaller.OfNode("n"), new IoTarget(IoRoles.Recall, "s"), Reading(Query(1, limit: 0), "summary"), response, out _);
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.True(response.TryGetText("summary", out var text));
+        Assert.Equal("three", text);
+        Assert.Empty(replay.Gaps);
+    }
+
+    /// <summary>
+    /// An output asked for at another limit is recorded there, though the service left it unwritten: a call of this limit
+    /// has a <c>limit_changed</c> gap of it, not <c>not_recorded</c> (review of da5cfe6).
+    /// </summary>
+    [Fact]
+    public void AnOutputLeftUnwrittenAtAnotherLimit_IsALimitChangedGap()
+    {
+        var run = RunReplayTests.Run();
+        run.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 2), "summary"), "ok", 7)); // one item, summary unwritten
+        var replay = RunReplay.Create(run, "/runs/0");
+        var response = new ServiceResponse(Memory, 1);
+
+        var status = replay.Call(ServiceCaller.OfNode("n"), new IoTarget(IoRoles.Recall, "s"), Reading(Query(1, limit: 1), "summary"), response, out _);
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Equal([7L], response.Keys.ToArray().Select(k => k.Int64Value));
+        Assert.Equal(("summary", "limit_changed"), (Assert.Single(replay.Gaps).Field, replay.Gaps[0].Reason));
+    }
+
+    /// <summary>
+    /// A recorded call names each output it asked for once, and holds only those, as the recorder writes it; any other
+    /// is rejected at its pointer (review of da5cfe6).
+    /// </summary>
+    [Theory]
+    [InlineData("twice", "/runs/0/service_calls/0/requested/1")]
+    [InlineData("not asked", "/runs/0/service_calls/0/texts/summary")]
+    [InlineData("entity alone", "/runs/0/service_calls/0/entity")]
+    [InlineData("source alone", "/runs/0/service_calls/0/entity")]
+    public void ARecordedCallTheRecorderCouldNotWrite_IsRejectedAtItsPointer(string mistake, string pointer)
+    {
+        var run = RunReplayTests.Run();
+        var call = Recorded("n", Reading(Query(1, limit: 0), "summary"), "ok", texts: new() { ["summary"] = "three" });
+        run.ServiceCalls.Add(mistake switch
+        {
+            "twice" => new ReplayServiceCall { Node = "n", Service = call.Service, Role = call.Role, Status = "ok", InputDigests = call.InputDigests, Requested = ["summary", "summary"], Texts = call.Texts },
+            "not asked" => new ReplayServiceCall { Node = "n", Service = call.Service, Role = call.Role, Status = "ok", InputDigests = call.InputDigests, Requested = ["other"], Texts = call.Texts },
+            "entity alone" => new ReplayServiceCall { Node = "n", Entity = "e", Service = call.Service, Role = call.Role, Status = "ok", InputDigests = call.InputDigests },
+            _ => new ReplayServiceCall { Source = "x", Service = call.Service, Role = call.Role, Status = "ok", InputDigests = call.InputDigests },
+        });
+
+        var error = Assert.Throws<ReplayBundleException>(() => RunReplay.Create(run, "/runs/0"));
+
+        Assert.Equal(pointer, error.Pointer);
     }
 
     [Fact]
