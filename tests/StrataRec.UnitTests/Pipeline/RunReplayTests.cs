@@ -665,6 +665,99 @@ public sealed class RunReplayTests
         Assert.All(replay.Gaps, gap => Assert.Equal("2", Assert.Single(gap.Examples))); // only the item never recorded
     }
 
+    /// <summary>
+    /// The digests of a call's items read a shared input once for the call, not once an item (review of 43bdf97: a
+    /// recording of 2,048 items hashed a shared vector 2,048 times, and so did the replay): what an item saw of an input
+    /// enters its digest as a digest of its own. An item's digest is still its own, and a whole input (a scalar) is read
+    /// once too.
+    /// </summary>
+    [Fact]
+    public void ACallsItemDigests_ReadASharedInputOnce()
+    {
+        const int count = 64;
+        var shared = new ReadCountingMemory<float>([8, 9]);
+        var scalar = new ReadCountingMemory<float>([0.5f]);
+        var call = Call(
+            count, NamedInput.FromFloat32("x", [count], Enumerable.Range(0, count).Select(i => (float)i).ToArray()),
+            NamedInput.FromFloat32("u", [1, 2], shared.Memory), NamedInput.FromFloat32("t", [], scalar.Memory));
+
+        var digests = RowDigests(call);
+
+        Assert.InRange(shared.Reads, 1, 4); // a few (its length is read too), not one an item
+        Assert.InRange(scalar.Reads, 1, 4);
+        Assert.Equal(count, digests.Distinct().Count());
+    }
+
+    /// <summary>
+    /// A call made while another is being answered (an operator's code calls again, here from the getter of the outputs it
+    /// hands over) does not change what the first is answered with: each has its own epoch, and the first's is active again
+    /// after (review of 43bdf97: one counter, the first went on with the second's, took its comparison of another output
+    /// list for its own, and missed its recording).
+    /// </summary>
+    [Fact]
+    public void ACallMadeWhileAnotherIsAnswered_LeavesItsAnswer()
+    {
+        var run = Run();
+        var digest = ReplayJson.Hex(ServiceInputDigest.Call(new ServiceCall { Service = "m" }, []));
+        foreach (var (seq, output) in new[] { (0, "a"), (1, "b"), (2, "c") })
+        {
+            run.ServiceCalls.Add(new ReplayServiceCall
+            {
+                Seq = seq, Node = "node", Service = "m", Role = "model", Status = "error", Error = output + " failed", InputDigests = [digest], Requested = [output],
+            });
+        }
+
+        var replay = RunReplay.Create(run, "/runs/0");
+        var memory = new RequestMemory();
+        try
+        {
+            var target = new IoTarget(IoRoles.Model, "m");
+            ServiceStatus? inner = null;
+            using var names = new ReadingCalls(["b"], () => inner = replay.Call(
+                ServiceCaller.OfNode("node"), target, new ServiceCall { Service = "m", Outputs = new[] { "c" } }, new ServiceResponse(memory), out _));
+
+            var outer = replay.Call(ServiceCaller.OfNode("node"), target, new ServiceCall { Service = "m", Outputs = names.Names }, new ServiceResponse(memory), out _);
+
+            Assert.Equal((false, "c failed"), (inner!.Value.Succeeded, inner.Value.Error));
+            Assert.Equal((false, "b failed"), (outer.Succeeded, outer.Error));
+            Assert.Empty(replay.Gaps);
+        }
+        finally
+        {
+            memory.Release();
+        }
+    }
+
+    /// <summary>Output names whose first read makes another call.</summary>
+    private sealed class ReadingCalls(string[] names, Action call) : System.Buffers.MemoryManager<string>
+    {
+        private bool _called;
+
+        /// <summary>The names, as memory made without reading them (<see cref="System.Buffers.MemoryManager{T}.Memory"/> reads them).</summary>
+        public ReadOnlyMemory<string> Names => CreateMemory(names.Length);
+
+        public override Span<string> GetSpan()
+        {
+            if (!_called)
+            {
+                _called = true;
+                call();
+            }
+
+            return names;
+        }
+
+        public override System.Buffers.MemoryHandle Pin(int elementIndex = 0) => throw new NotSupportedException();
+
+        public override void Unpin()
+        {
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+        }
+    }
+
     private static ServiceCall KeyedCall(long[] keys, params string[] outputs) => new()
     {
         Service = "m",
@@ -692,7 +785,9 @@ public sealed class RunReplayTests
     internal static string[] RowDigests(ServiceCall call)
     {
         var order = ServiceInputDigest.NameOrder(call);
-        return Enumerable.Range(0, call.BatchSize).Select(r => ReplayJson.Hex(ServiceInputDigest.Row(call, order, r))).ToArray();
+        var rows = new ulong[call.BatchSize];
+        ServiceInputDigest.Rows(call, order, rows);
+        return rows.Select(ReplayJson.Hex).ToArray();
     }
 
     /// <summary>A successful recorded call of model <c>m</c> scoring <paramref name="keys"/>, one <c>score</c> per row.</summary>

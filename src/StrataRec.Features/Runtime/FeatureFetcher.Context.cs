@@ -330,21 +330,22 @@ public sealed partial class FeatureFetcher
     /// what reads context features before the prefetch has stored them all: a derived feature computed early, a group
     /// whose key or arguments read them.
     /// </summary>
-    private ValueTask<int> StoredOrFailedAsync(ReadOnlySpan<int> features)
+    internal ValueTask<int> StoredOrFailedAsync(ReadOnlySpan<int> features)
     {
-        // The common case, everything stored already (a synchronous source), without a state machine.
+        // The common case, everything stored already (a synchronous source), without a state machine or a closure: the
+        // wait is static, given what it reads (review of 43bdf97: a closure over them was allocated on every call).
         var ready = _contextReady!;
         foreach (var k in features)
         {
             if (ready[k] is { } stored && (!stored.IsCompletedSuccessfully || _state[k] == FeatureState.Failed))
             {
-                return new ValueTask<int>(WaitAsync(features.ToArray()));
+                return new ValueTask<int>(WaitAsync(ready, _state, features.ToArray()));
             }
         }
 
         return new ValueTask<int>(-1);
 
-        async Task<int> WaitAsync(int[] features)
+        static async Task<int> WaitAsync(Task?[] ready, FeatureState[] state, int[] features)
         {
             List<Task>? pending = null;
             while (true)
@@ -369,7 +370,7 @@ public sealed partial class FeatureFetcher
                     }
 
                     await stored.ConfigureAwait(false); // completed: observes a fault, without yielding
-                    if (_state[k] == FeatureState.Failed)
+                    if (state[k] == FeatureState.Failed)
                     {
                         return k;
                     }
@@ -454,7 +455,7 @@ public sealed partial class FeatureFetcher
         else
         {
             var fields = FieldBindings(group, features);
-            var budget = BudgetMs(group);
+            var deadline = DeadlineOf(group, out var budget);
             if (budget <= 0)
             {
                 fetch = new ContextFetch(group, budget, features, null, Answered(NoTimeLeft));
@@ -464,11 +465,14 @@ public sealed partial class FeatureFetcher
             {
                 // As a candidate chunk (FetchCandidates): a context fetch is not sent once the caller has cancelled, or its
                 // time is up (an earlier group's connector ran its synchronous part; review 49): BoundedCall's rule 8.
-                var bound = _hook is { Replays: true } ? null : CallBound.After(CancellationSite.Fetch, cancellationToken, budget, _events, _requestId);
-                var staging = new StagingBuffer(fields, 1, _memory);
+                // The bound ends at the deadline taken with the budget, and the staging is set up inside the try, as a
+                // candidate fetch's (review of 43bdf97).
+                var bound = _hook is { Replays: true } ? null : new CallBound(CancellationSite.Fetch, cancellationToken, deadline, _events, _requestId);
+                StagingBuffer staging;
                 ValueTask<CallResult<FetchStatus>> call;
                 try
                 {
+                    staging = new StagingBuffer(fields, 1, _memory);
                     call = CallAsync(group, batch, fields, staging, budget, bound, out _);
                 }
                 finally
@@ -543,7 +547,7 @@ public sealed partial class FeatureFetcher
         var fields = FieldBindings(group, features);
         var bound = _hook is { Replays: true }
             ? new CallBound(CancellationSite.Fetch, cancellationToken, long.MaxValue, _events, _requestId) // a replay is untimed
-            : CallBound.After(CancellationSite.Fetch, cancellationToken, BudgetMs(group), _events, _requestId);
+            : new CallBound(CancellationSite.Fetch, cancellationToken, DeadlineOf(group, out _), _events, _requestId);
         var call = new ServiceSupplyCall
         {
             Group = group, Args = args, Fields = fields, Values = new ScalarValue[fields.Length], Memory = _memory, Bound = bound, Hook = _hook,

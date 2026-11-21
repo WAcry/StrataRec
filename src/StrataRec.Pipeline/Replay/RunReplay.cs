@@ -201,60 +201,74 @@ internal sealed class RunReplay : IFeatureCallHook
         degraded = null;
         lock (_gate)
         {
-            _epoch.Value++; // what an entry remembers of a call is of this one only (ServiceEntry.AskedFor)
-            var kind = target.Role;
-            var order = ServiceInputDigest.NameOrder(call);
-            _serviceCalls.TryGetValue((call.Service, call.Version), out var calls);
-            var items = call.Items.Span;
-            if (items.IsEmpty)
+            // What an entry remembers of a call is of this one only (ServiceEntry.AskedFor): each call has an epoch of its
+            // own, never one used before, and one made while it is answered (an operator's code may call again, from a
+            // getter of what it hands over) ends with it, the epoch of the call it interrupted active again (review of
+            // 43bdf97: one counter, the interrupted call went on with the epoch of the one inside it, and answers that one's).
+            var interrupted = _epoch.Active;
+            _epoch.Active = ++_epoch.Last;
+            try
             {
-                var digest = ReplayJson.Hex(ServiceInputDigest.Call(call, order));
-                var own = TakeOwn(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest, call);
-                if (own is not null && (own.Outcome != IoOutcome.Ok || Answers(own, call)))
+                var kind = target.Role;
+                var order = ServiceInputDigest.NameOrder(call);
+                _serviceCalls.TryGetValue((call.Service, call.Version), out var calls);
+                var items = call.Items.Span;
+                if (items.IsEmpty)
                 {
-                    return Unanswered(call, response, Answer(own, call, response, kind, node, out degraded), kind, node, null, own);
+                    var digest = ReplayJson.Hex(ServiceInputDigest.Call(call, order));
+                    var own = TakeOwn(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest, call);
+                    if (own is not null && (own.Outcome != IoOutcome.Ok || Answers(own, call)))
+                    {
+                        return Unanswered(call, response, Answer(own, call, response, kind, node, out degraded), kind, node, null, own);
+                    }
+
+                    var answer = Best(calls, entry => entry.Keys is null && entry.Outcome == IoOutcome.Ok && entry.Digests[0] == digest, call);
+                    if (answer is null)
+                    {
+                        // Inputs changed when the node has the service's call only with other inputs; its calls with these
+                        // inputs used up (a recorded failure replayed already) is not a change.
+                        var changed = Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] != digest) is not null
+                            && Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest) is null;
+                        var otherLimit = !changed
+                            && Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest && entry.Limit == call.Limit) is null
+                            && Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest) is not null;
+                        var otherOutputs = !changed && !otherLimit
+                            && Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest && entry.Limit == call.Limit && entry.AskedFor(call)) is null
+                            && Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest && entry.Limit == call.Limit) is not null;
+                        AddGap(kind, call.Service, null, changed ? "inputs_changed" : otherLimit ? "limit_changed" : otherOutputs ? "outputs_changed" : "not_recorded", 1, node);
+                        return ServiceStatus.Failed($"{kind} '{call.Service}': this call is not in the replay bundle");
+                    }
+
+                    return Unanswered(call, response, Answer(answer, call, response, kind, node, out degraded), kind, node, null, answer);
                 }
 
-                var answer = Best(calls, entry => entry.Keys is null && entry.Outcome == IoOutcome.Ok && entry.Digests[0] == digest, call);
-                if (answer is null)
+                var keys = items.ToArray();
+                var digests = new string[keys.Length];
+                var rows = new ulong[keys.Length];
+                ServiceInputDigest.Rows(call, order, rows);
+                for (var r = 0; r < keys.Length; r++)
                 {
-                    // Inputs changed when the node has the service's call only with other inputs; its calls with these
-                    // inputs used up (a recorded failure replayed already) is not a change.
-                    var changed = Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] != digest) is not null
-                        && Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest) is null;
-                    var otherLimit = !changed
-                        && Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest && entry.Limit == call.Limit) is null
-                        && Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest) is not null;
-                    var otherOutputs = !changed && !otherLimit
-                        && Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest && entry.Limit == call.Limit && entry.AskedFor(call)) is null
-                        && Find(calls, entry => entry.Keys is null && entry.Is(node, fromSource) && entry.Digests[0] == digest && entry.Limit == call.Limit) is not null;
-                    AddGap(kind, call.Service, null, changed ? "inputs_changed" : otherLimit ? "limit_changed" : otherOutputs ? "outputs_changed" : "not_recorded", 1, node);
-                    return ServiceStatus.Failed($"{kind} '{call.Service}': this call is not in the replay bundle");
+                    digests[r] = ReplayJson.Hex(rows[r]);
                 }
 
-                return Unanswered(call, response, Answer(answer, call, response, kind, node, out degraded), kind, node, null, answer);
-            }
+                bool Same(ServiceEntry entry) => entry.Keys is not null && entry.Keys.AsSpan().SequenceEqual(keys) && entry.Digests.AsSpan().SequenceEqual(digests);
+                var ownCall = TakeOwn(calls, entry => entry.Is(node, fromSource) && Same(entry), call);
+                if (ownCall is not null && (ownCall.Outcome != IoOutcome.Ok || Answers(ownCall, call)))
+                {
+                    return Unanswered(call, response, Answer(ownCall, call, response, kind, node, out degraded), kind, node, keys, ownCall);
+                }
 
-            var keys = items.ToArray();
-            var digests = new string[keys.Length];
-            for (var r = 0; r < keys.Length; r++)
+                // A recorded call of these items and inputs answers as recorded, with gaps for what it lacks: synthesizing it item
+                // by item would lose its texts and the order of repeated items.
+                var same = Best(calls, entry => entry.Outcome == IoOutcome.Ok && Same(entry), call);
+                return same is not null
+                    ? Unanswered(call, response, Answer(same, call, response, kind, node, out degraded), kind, node, keys, same)
+                    : Synthesize(call, calls, response, keys, digests, node, fromSource, kind);
+            }
+            finally
             {
-                digests[r] = ReplayJson.Hex(ServiceInputDigest.Row(call, order, r));
+                _epoch.Active = interrupted;
             }
-
-            bool Same(ServiceEntry entry) => entry.Keys is not null && entry.Keys.AsSpan().SequenceEqual(keys) && entry.Digests.AsSpan().SequenceEqual(digests);
-            var ownCall = TakeOwn(calls, entry => entry.Is(node, fromSource) && Same(entry), call);
-            if (ownCall is not null && (ownCall.Outcome != IoOutcome.Ok || Answers(ownCall, call)))
-            {
-                return Unanswered(call, response, Answer(ownCall, call, response, kind, node, out degraded), kind, node, keys, ownCall);
-            }
-
-            // A recorded call of these items and inputs answers as recorded, with gaps for what it lacks: synthesizing it item
-            // by item would lose its texts and the order of repeated items.
-            var same = Best(calls, entry => entry.Outcome == IoOutcome.Ok && Same(entry), call);
-            return same is not null
-                ? Unanswered(call, response, Answer(same, call, response, kind, node, out degraded), kind, node, keys, same)
-                : Synthesize(call, calls, response, keys, digests, node, fromSource, kind);
         }
     }
 
@@ -1377,10 +1391,14 @@ internal sealed class RunReplay : IFeatureCallHook
         public bool Consumed { get; set; }
     }
 
-    /// <summary>Which replayed call is being answered: one more each <see cref="Call"/>.</summary>
+    /// <summary>Which replayed call is being answered: each <see cref="Call"/> one of its own (see there).</summary>
     private sealed class CallEpoch
     {
-        public int Value;
+        /// <summary>The epoch of the call being answered.</summary>
+        public int Active;
+
+        /// <summary>The last epoch given out.</summary>
+        public int Last;
     }
 
     private sealed class ServiceEntry(
@@ -1406,10 +1424,10 @@ internal sealed class RunReplay : IFeatureCallHook
         /// </summary>
         public bool AskedFor(ServiceCall call)
         {
-            if (_askedAt != epoch.Value)
+            if (_askedAt != epoch.Active)
             {
                 _asked = Same(call.Outputs.Span, Requested);
-                _askedAt = epoch.Value;
+                _askedAt = epoch.Active;
             }
 
             return _asked;

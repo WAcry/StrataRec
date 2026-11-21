@@ -471,6 +471,22 @@ public sealed class ComputedEntityEndToEndTests
     }
 
     /// <summary>
+    /// Two features reading one output as two types is a load error at the second's type, in name order: the service
+    /// answers the output once, and a feature takes only the type it is declared with (review of 43bdf97: the plan
+    /// loaded, and every call failed, whichever type the service answered).
+    /// </summary>
+    [Fact]
+    public void TwoFeaturesReadingOneOutputAsTwoTypes_IsALoadError()
+    {
+        var diagnostics = Diagnostics(Workspace(
+            extraFeatures: """, "intent.wide": { "type": "float64", "source": "intent", "field": "score" }""",
+            extraOutput: """, "wide": "ctx.intent.wide" """));
+
+        Assert.Contains(diagnostics, d => d.Code == "SERVICE_OUTPUT_TYPE_CONFLICT" && d.Pointer == "/features/intent.wide/type"
+            && d.Message.Contains("as float64, but feature 'intent.score' reads it as float32", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// An argument may read a derived feature of its own entity: what it reads is in its expression, not in the entity
     /// (review of IO step 5: the catalog reported a key cycle).
     /// </summary>

@@ -16,7 +16,11 @@ namespace StrataRec.Pipeline.Replay;
 /// shape, so the same values in another layout do not collide; the leading dimension of a row-wise or shared
 /// <c>[1, ...]</c> input is left out, so the same row in a differently sized batch has the same digest, a batch of one
 /// too, whose shared input is row-wise by its shape (review of the IO redesign: there its leading dimension was kept,
-/// and the row's digest changed with the batch). A missing input contributes its name, element
+/// and the row's digest changed with the batch). What a row saw of an input enters its digest as a 128-bit digest of its
+/// own, hashed once for the call when every row saw the same (a shared input, a scalar, a text) and once per row only for
+/// a slice: a shared input is not hashed again for every row (review of 43bdf97: a call of 2,048 rows hashed a shared
+/// vector of 4,096 values 2,048 times, which a full cache hit spent its node's budget on), and the same row has the same
+/// digest whether it saw a slice or all of a shared input. A missing input contributes its name, element
 /// type and declared shape, and that it is missing: it is neither a zero nor an absent input; its declared shape says
 /// whether it is row-wise, as a present one's does (missing on every row). A call's
 /// <see cref="ServiceCallOptions.MaxOutputTokens"/> is part of every digest when it is set: a generative model answers
@@ -29,24 +33,32 @@ namespace StrataRec.Pipeline.Replay;
 /// </remarks>
 internal static class ServiceInputDigest
 {
-    /// <summary>Digest of row <paramref name="row"/>: every input in name order (see the remarks).</summary>
-    public static ulong Row(ServiceCall call, int[] order, int row)
+    /// <summary>The digest of each row of a call about items, into <paramref name="digests"/>: every input in name order, as what the row saw of it (see the remarks).</summary>
+    public static void Rows(ServiceCall call, int[] order, Span<ulong> digests)
     {
+        var inputs = call.Inputs.Span;
+        Span<UInt128> seen = order.Length <= MaxStackInputs ? stackalloc UInt128[order.Length] : new UInt128[order.Length];
         var builder = default(StableHash.Builder);
+        var part = default(StableHash.Builder);
         try
         {
-            AddOptions(ref builder, call.Options);
-            var inputs = call.Inputs.Span;
-            foreach (var i in order)
+            var sliced = Shared(ref part, call, order, seen, all: true);
+            for (var row = 0; row < digests.Length; row++)
             {
-                AddInput(ref builder, inputs[i], call.BatchSize, row);
-            }
+                builder.Reset();
+                AddOptions(ref builder, call.Options);
+                for (var k = 0; k < order.Length; k++)
+                {
+                    Add(ref builder, sliced && PerRow(inputs[order[k]], call.BatchSize) ? Seen(ref part, inputs[order[k]], call.BatchSize, row) : seen[k]);
+                }
 
-            return builder.Finish();
+                digests[row] = builder.Finish();
+            }
         }
         finally
         {
             builder.Dispose();
+            part.Dispose();
         }
     }
 
@@ -76,7 +88,7 @@ internal static class ServiceInputDigest
     /// The format of service cache keys (docs/decisions.md, IO step 3). A change of what a record holds or of how a key is
     /// built changes it: the records another build wrote are then misses, never misread.
     /// </summary>
-    private const string CacheFormat = "stratarec.service_cache/2026-11-21.3";
+    private const string CacheFormat = "stratarec.service_cache/2026-11-21.4";
 
     /// <summary>
     /// The key of a call about no items in its service's cache: the format, the binding's answer identity, the service
@@ -116,12 +128,14 @@ internal static class ServiceInputDigest
     /// </summary>
     public static void CacheItemKeys(ServiceCall call, int[] order, string identity, Span<UInt128> keys)
     {
+        var inputs = call.Inputs.Span;
+        Span<UInt128> seen = order.Length <= MaxStackInputs ? stackalloc UInt128[order.Length] : new UInt128[order.Length];
         var builder = default(StableHash.Builder);
+        var part = default(StableHash.Builder);
         try
         {
             AddCachePrefix(ref builder, call, "item", identity);
             AddOptions(ref builder, call.Options);
-            var inputs = call.Inputs.Span;
             foreach (var i in order)
             {
                 if (!RowView(inputs[i], call.BatchSize))
@@ -131,6 +145,7 @@ internal static class ServiceInputDigest
             }
 
             var shared = builder.Finish128();
+            var sliced = Shared(ref part, call, order, seen, all: false);
             var items = call.Items.Span;
             for (var row = 0; row < keys.Length; row++)
             {
@@ -146,11 +161,12 @@ internal static class ServiceInputDigest
                     builder.Add(items[row].Int64Value);
                 }
 
-                foreach (var i in order)
+                for (var k = 0; k < order.Length; k++)
                 {
-                    if (RowView(inputs[i], call.BatchSize))
+                    var input = inputs[order[k]];
+                    if (RowView(input, call.BatchSize))
                     {
-                        AddInput(ref builder, inputs[i], call.BatchSize, row);
+                        Add(ref builder, sliced && PerRow(input, call.BatchSize) ? Seen(ref part, input, call.BatchSize, row) : seen[k]);
                     }
                 }
 
@@ -160,7 +176,53 @@ internal static class ServiceInputDigest
         finally
         {
             builder.Dispose();
+            part.Dispose();
         }
+    }
+
+    /// <summary>Inputs a row's digest or key takes on the stack (more take an array).</summary>
+    private const int MaxStackInputs = 32;
+
+    /// <summary>
+    /// What every row saw of each input that is the same for all of them, into <paramref name="seen"/> by name order: of
+    /// every input (<paramref name="all"/>), or of those with a leading dimension of rows. Returns whether any input is
+    /// one each row has a slice of, which <see cref="Seen"/> hashes per row.
+    /// </summary>
+    private static bool Shared(ref StableHash.Builder part, ServiceCall call, int[] order, scoped Span<UInt128> seen, bool all)
+    {
+        var inputs = call.Inputs.Span;
+        var sliced = false;
+        for (var k = 0; k < order.Length; k++)
+        {
+            var input = inputs[order[k]];
+            if (PerRow(input, call.BatchSize))
+            {
+                sliced = true;
+            }
+            else if (all || RowView(input, call.BatchSize))
+            {
+                seen[k] = Seen(ref part, input, call.BatchSize, 0); // the same for every row
+            }
+        }
+
+        return sliced;
+    }
+
+    /// <summary>Each row has a slice of its own of the input, which differs by row: row-wise in a batch of more than one, present, of whole rows.</summary>
+    private static bool PerRow(in NamedInput input, int batch) => batch > 1 && !input.IsMissing && Splits(input, batch);
+
+    /// <summary>What row <paramref name="row"/> saw of the input, as the 128-bit digest it adds to the row's (see the remarks).</summary>
+    private static UInt128 Seen(ref StableHash.Builder part, in NamedInput input, int batch, int row)
+    {
+        part.Reset();
+        AddInput(ref part, input, batch, row);
+        return part.Finish128();
+    }
+
+    private static void Add(ref StableHash.Builder builder, UInt128 digest)
+    {
+        builder.Add((long)(ulong)(digest >> 64));
+        builder.Add((long)(ulong)digest);
     }
 
     /// <summary>The input is split by row in a row's digest and key: row-wise, of whole rows.</summary>

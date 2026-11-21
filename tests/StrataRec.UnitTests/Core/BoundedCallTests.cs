@@ -387,6 +387,45 @@ public sealed class BoundedCallTests
         Assert.Equal(0, memory.Release()); // nothing holds the memory but the request
     }
 
+    /// <summary>
+    /// A client that cancels its own call, with none of the framework's tokens cancelled and its deadline ahead, threw: a
+    /// timeout of its own, said so without reading the exception's message (review of 43bdf97: the message, a getter an
+    /// exception may override, was read on the request's thread, and a cancellation's message does not say whose it was).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AClientsOwnCancellation_IsATimeoutItThrew_SaidWithoutItsMessage(bool synchronously)
+    {
+        var memory = new RequestMemory();
+        var budget = new AttemptBudget(CancellationToken.None, Deadline(600_000));
+        var site = new Site(memory);
+        var thrown = new MessageCountingCancellation();
+
+        var result = await Run(site.With(_ => synchronously ? throw thrown : ValueTask.FromException<int>(thrown)), budget, memory, timeoutMs: null);
+
+        Assert.Equal((CallEnd.Threw, IoOutcome.Timeout, "threw MessageCountingCancellation: it cancelled the call itself, before its deadline"),
+            (result.End, result.Outcome, result.Error));
+        Assert.Same(thrown, result.Exception);
+        Assert.Equal(0, thrown.MessageReads);
+        budget.Release();
+        Assert.Equal(0, memory.Release());
+    }
+
+    private sealed class MessageCountingCancellation() : OperationCanceledException(new CancellationToken(canceled: true))
+    {
+        public int MessageReads { get; private set; }
+
+        public override string Message
+        {
+            get
+            {
+                MessageReads++;
+                return "the client's own timeout";
+            }
+        }
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]

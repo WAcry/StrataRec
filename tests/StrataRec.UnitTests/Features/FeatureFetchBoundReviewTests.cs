@@ -9,11 +9,6 @@ namespace StrataRec.UnitTests.Features;
 public sealed class FeatureFetchBoundReviewTests
 {
     /// <summary>
-    /// A connector whose call the caller cancelled while its task was pending keeps the view it was handed bound to its
-    /// own chunk: the wait ended at once, but the connector may still write through it. The fetch pointed the view at the
-    /// next chunk (one key here), which it did not even send.
-    /// </summary>
-    /// <summary>
     /// A context feature whose connector call was abandoned fails without its staging being read: the connector may
     /// still be writing there (review of IO step 5: the value was read, and its list copied, before the failure was seen).
     /// </summary>
@@ -106,6 +101,11 @@ public sealed class FeatureFetchBoundReviewTests
         public void Return<T>(T[] array, bool clearArray) => SharedArrayBufferPool.Instance.Return(array, clearArray);
     }
 
+    /// <summary>
+    /// A connector whose call the caller cancelled while its task was pending keeps the view it was handed bound to its
+    /// own chunk: the wait ended at once, but the connector may still write through it. The fetch pointed the view at the
+    /// next chunk (one key here), which it did not even send.
+    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

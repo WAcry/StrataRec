@@ -24,7 +24,7 @@ public class ChainedContextKeyTests
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
 
     /// <summary>Keyed by the request's login key.</summary>
-    private static readonly EntityDefinition Identity = EntityDefinition.Of("identity", EntityKeyPartDefinition.RequestInput("user_key", EntityKeyType.String));
+    internal static readonly EntityDefinition Identity = EntityDefinition.Of("identity", EntityKeyPartDefinition.RequestInput("user_key", EntityKeyType.String));
 
     /// <summary>Keyed by the user id the identity source resolved: the chain's second level.</summary>
     private static readonly EntityDefinition Account = EntityDefinition.Of("account", EntityKeyPartDefinition.ContextFeature("identity.user_id", EntityKeyType.Int64));
@@ -46,7 +46,7 @@ public class ChainedContextKeyTests
     /// A connector that writes <paramref name="valueOf"/>(key part 0, field) for each key, after <paramref name="gate"/>
     /// when given (asynchronously then), and answers <paramref name="status"/>.
     /// </summary>
-    private static ScriptedConnector Answering(Func<EntityKey, string, object?> valueOf, Task? gate = null, FetchStatus? status = null) =>
+    internal static ScriptedConnector Answering(Func<EntityKey, string, object?> valueOf, Task? gate = null, FetchStatus? status = null) =>
         new(async (keys, fields, writer, _) =>
         {
             if (gate is not null)
@@ -66,7 +66,7 @@ public class ChainedContextKeyTests
         });
 
     /// <summary>Resolves login key k-&lt;n&gt; to user id n; any other key to nothing.</summary>
-    private static object? UserIdOf(EntityKey key, string field) =>
+    internal static object? UserIdOf(EntityKey key, string field) =>
         key.StringValue is { } text && text.StartsWith("k-", StringComparison.Ordinal)
             && long.TryParse(text.AsSpan(2), System.Globalization.CultureInfo.InvariantCulture, out var id) ? id : null;
 
@@ -82,7 +82,7 @@ public class ChainedContextKeyTests
         return (rig, userKey, userId, tier);
     }
 
-    private static TestRequest Request(FeatureTestRig rig, int userKey, string? key, IBufferPool? pool = null, IFeatureCallHook? hook = null)
+    internal static TestRequest Request(FeatureTestRig rig, int userKey, string? key, IBufferPool? pool = null, IFeatureCallHook? hook = null)
     {
         var request = rig.NewRequest(TwoItems, pool: pool, hook: hook);
         if (key is not null)

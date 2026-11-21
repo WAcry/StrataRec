@@ -615,7 +615,7 @@ internal static class BoundedCall
             return bound.Caller.IsCancellationRequested ? Cancelled<T>(bound, ex, abandoned: false)
                 : bound.Token.IsCancellationRequested ? RanOut<T>(bound, ex, abandoned: false)
                 : token.IsCancellationRequested || deadline.HasPassed ? TimedOut<T>(deadline, abandoned: false)
-                : new CallResult<T>(CallEnd.Threw, default, ex, IoOutcome.Timeout, $"threw {ex.GetType().Name}: {ExceptionText.Of(ex)}", false);
+                : new CallResult<T>(CallEnd.Threw, default, ex, IoOutcome.Timeout, $"threw {ex.GetType().Name}: it cancelled the call itself, before its deadline", false);
         }
         catch (Exception ex)
         {

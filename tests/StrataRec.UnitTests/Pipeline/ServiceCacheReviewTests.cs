@@ -138,6 +138,39 @@ public sealed class ServiceCacheReviewTests
     }
 
     /// <summary>
+    /// A call whose items share an input (a user vector, <c>[1, d]</c>) reads it once for their keys, not once for every
+    /// item (review of 43bdf97: a full hit of 2,048 items hashed a vector of 4,096 values 2,048 times, which used up its
+    /// node's budget). The per-item input is still read per item, and every item still hits.
+    /// </summary>
+    [Fact]
+    public async Task ASharedInput_IsHashedOnceForTheItemsKeys_NotOnceAnItem()
+    {
+        const int count = 64;
+        var rig = new ServiceCacheRig();
+        var ids = Enumerable.Range(1, count).Select(i => (long)i).ToArray();
+        var x = ids.Select(i => (float)i).ToArray();
+        var shared = new ReadCountingMemory<float>([8, 9, 10, 11]);
+        ServiceCall WithShared() => new()
+        {
+            Service = "m",
+            BatchSize = count,
+            Items = ids.Select(EntityKey.FromInt64).ToArray(),
+            Inputs = new[] { NamedInput.FromFloat32("x", new[] { count }, x), NamedInput.FromFloat32("u", new[] { 1, 4 }, shared.Memory) },
+            Outputs = new[] { "p" },
+        };
+
+        await rig.CallAsync(WithShared());
+        rig.Apply();
+        var before = shared.Reads;
+        var (status, response) = await rig.CallAsync(WithShared());
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Equal(x.Select(v => v * 10), Floats(response, "p")); // as the service answered them
+        Assert.Single(rig.Service.Calls); // the second call is a full hit
+        Assert.InRange(shared.Reads - before, 1, 4); // a few (its length is read too), not one an item
+    }
+
+    /// <summary>
     /// A store that cancels its own read, with the service's time left, leaves its rows to the service: only the service's
     /// deadline uses up its time (review of the IO redesign: the store's own cancellation was taken for that deadline, and
     /// a healthy service was not called).

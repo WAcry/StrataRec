@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Immutable;
 using System.Text.Json;
 using StrataRec.Artifacts.Model;
@@ -125,9 +126,18 @@ internal sealed class RunRecorder : IFeatureCallHook
         var digests = new List<string>(Math.Max(1, items.Length));
         if (!items.IsEmpty)
         {
-            for (var r = 0; r < items.Length; r++)
+            var rows = ArrayPool<ulong>.Shared.Rent(items.Length);
+            try
             {
-                digests.Add(ReplayJson.Hex(ServiceInputDigest.Row(call, order, r)));
+                ServiceInputDigest.Rows(call, order, rows.AsSpan(0, items.Length));
+                for (var r = 0; r < items.Length; r++)
+                {
+                    digests.Add(ReplayJson.Hex(rows[r]));
+                }
+            }
+            finally
+            {
+                ArrayPool<ulong>.Shared.Return(rows);
             }
         }
         else

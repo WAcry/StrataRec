@@ -697,7 +697,7 @@ public sealed partial class FeatureFetcher : IIoTracker
         var all = index.Batch(_memory);
         var calls = _memory.Rent<ValueTask<CallResult<FetchStatus>>>(chunkCount);
         var chunkFailed = _memory.RentCleared<bool>(chunkCount);
-        var budget = BudgetMs(group);
+        var deadline = DeadlineOf(group, out var budget);
         if (budget <= 0)
         {
             for (var c = 0; c < chunkCount; c++)
@@ -709,13 +709,16 @@ public sealed partial class FeatureFetcher : IIoTracker
             return new PendingFetch(group, features, scope, index, chunkSize, chunkCount, null, calls, chunkFailed, noSharedKey, budget);
         }
 
-        // The bound starts with the budget it is given, before the staging is set up, which takes its time too (review of
-        // the IO redesign: set up first, its time was added to the deadline, and a chunk was sent past it).
-        var bound = _hook is { Replays: true } ? null : CallBound.After(CancellationSite.Fetch, cancellationToken, budget, _events, _requestId);
-        var staging = new StagingArea(fields, keyCount, chunkSize, _memory);
+        // The bound ends at the deadline taken with the budget, so neither the staging's setup nor the hook delays it
+        // (reviews of the IO redesign and of 43bdf97: set up first, and then made from the budget, the time before the bound
+        // was added to it, and a chunk was sent past the deadline). The staging is set up inside the try: a pool that throws
+        // leaves no bound behind, with its timer and its registration on the caller's token (review of 43bdf97).
+        var bound = _hook is { Replays: true } ? null : new CallBound(CancellationSite.Fetch, cancellationToken, deadline, _events, _requestId);
+        StagingArea staging;
         StagingBuffer? writer = null;
         try
         {
+            staging = new StagingArea(fields, keyCount, chunkSize, _memory);
             for (var c = 0; c < chunkCount; c++)
             {
                 // A connector's synchronous part runs here, unbounded (see IFeatureSourceConnector.FetchAsync): once the
@@ -1429,12 +1432,17 @@ public sealed partial class FeatureFetcher : IIoTracker
     private static EntityKey ToKey(in ScalarValue value) =>
         value.Kind == StorageKind.Int64 ? EntityKey.FromInt64(value.AsInt64()) : EntityKey.FromString(value.AsString());
 
-    private int BudgetMs(FetchGroup group) => Math.Min(group.Supply.TimeoutMs, RemainingMs());
-
-    private int RemainingMs()
+    /// <summary>
+    /// The deadline of a call of <paramref name="group"/> sent now: the source's timeout from now or the request's deadline,
+    /// whichever is earlier, as a <see cref="Stopwatch"/> timestamp, and the time to it in whole milliseconds. A bound made
+    /// from the deadline ends then however late it is made; one made from the budget would start it again.
+    /// </summary>
+    private long DeadlineOf(FetchGroup group, out int budgetMs)
     {
-        var remaining = Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), _deadlineTimestamp);
-        return (int)Math.Clamp(remaining.TotalMilliseconds, 0, int.MaxValue);
+        var now = Stopwatch.GetTimestamp();
+        var deadline = Math.Min(_deadlineTimestamp, now + ((long)Math.Max(0, group.Supply.TimeoutMs) * Stopwatch.Frequency / 1000));
+        budgetMs = (int)Math.Clamp(Stopwatch.GetElapsedTime(now, deadline).TotalMilliseconds, 0, int.MaxValue);
+        return deadline;
     }
 
     private enum KeyLookup : byte
