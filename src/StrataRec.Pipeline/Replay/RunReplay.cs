@@ -351,8 +351,9 @@ internal sealed class RunReplay : IFeatureCallHook
             {
                 if (!response.TryGetValues(name, out _) && !response.TryGetText(name, out _) && !LeftUnwritten(from, call, name)) // left unwritten, as recorded
                 {
-                    // Asked for at another limit is recorded there, written or not (review of da5cfe6).
-                    var recorded = from.Outputs.ContainsKey(name) || from.Texts.ContainsKey(name) || Array.IndexOf(from.Requested, name) >= 0;
+                    // Asked for at another limit with the same outputs is recorded there, written or not (reviews of da5cfe6
+                    // and e5cd1c5: one asking for other outputs says nothing of it).
+                    var recorded = from.Outputs.ContainsKey(name) || from.Texts.ContainsKey(name) || from.AskedFor(call);
                     AddOutputGap(kind, call.Service, name, node, keys, null, recorded && from.Limit != call.Limit ? "limit_changed" : "not_recorded");
                 }
             }
@@ -1348,24 +1349,42 @@ internal sealed class RunReplay : IFeatureCallHook
         /// <summary>The outputs the call asked for: one not in <see cref="Outputs"/> or <see cref="Texts"/> the service left unwritten.</summary>
         public string[] Requested { get; } = requested;
 
-        /// <summary>Whether the call asked for the outputs <paramref name="call"/> asks for, no more and no fewer.</summary>
+        private ServiceCall? _askedOf;
+        private bool _asked;
+
+        /// <summary>
+        /// Whether the call asked for the outputs <paramref name="call"/> asks for, no more and no fewer. Kept for the last
+        /// call asked about, under the replay's lock: a replay asks once an output it looks at (review of e5cd1c5: a call
+        /// of many outputs the service left unwritten compared the two lists once an output, and a rebatched one once a row
+        /// and output too).
+        /// </summary>
         public bool AskedFor(ServiceCall call)
         {
-            var outputs = call.Outputs.Span;
-            if (outputs.Length != Requested.Length)
+            if (!ReferenceEquals(call, _askedOf))
             {
-                return false;
+                _asked = Same(call.Outputs.Span, Requested);
+                _askedOf = call;
             }
 
-            foreach (var name in outputs)
+            return _asked;
+
+            static bool Same(ReadOnlySpan<string> outputs, string[] requested)
             {
-                if (Array.IndexOf(Requested, name) < 0)
+                if (outputs.Length != requested.Length)
                 {
                     return false;
                 }
-            }
 
-            return true;
+                foreach (var name in outputs)
+                {
+                    if (Array.IndexOf(requested, name) < 0)
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
         }
 
         /// <summary>The caller's key (<see cref="ServiceCaller.Key"/>); with <see cref="FromSource"/>, which caller it is.</summary>

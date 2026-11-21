@@ -1,4 +1,5 @@
 using System.Runtime.ExceptionServices;
+using StrataRec.Artifacts.Json;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Services;
@@ -35,8 +36,9 @@ internal readonly struct ServiceCaller
 
     /// <summary>
     /// One string per caller, which a replay matches a recorded call's on, with whether it is a source's (a node built
-    /// without the plan compiler's checks may spell a source's key): the node id, or <c>source:&lt;source&gt;/&lt;entity&gt;</c>.
-    /// Made when read: only a replay reads it.
+    /// without the plan compiler's checks may spell a source's key): the node id, or <c>source:&lt;source&gt;/&lt;entity&gt;</c>
+    /// with each name escaped as a JSON pointer's token, since a name may hold a slash (review of e5cd1c5: source
+    /// <c>a/b</c>'s entity <c>c</c> was source <c>a</c>'s entity <c>b/c</c>). Made when read: only a replay reads it.
     /// </summary>
     public string Key => KeyOf(Node, Source, Entity);
 
@@ -45,7 +47,8 @@ internal readonly struct ServiceCaller
     public static ServiceCaller OfSource(string source, string entity) => new(null, source, entity);
 
     /// <summary>The key of a recorded call's caller (<see cref="Artifacts.Model.ReplayServiceCall"/>'s node, or source and entity).</summary>
-    public static string KeyOf(string? node, string? source, string? entity) => node ?? "source:" + source + "/" + entity;
+    public static string KeyOf(string? node, string? source, string? entity) =>
+        node ?? "source:" + JsonPointer.Escape(source ?? "") + "/" + JsonPointer.Escape(entity ?? "");
 }
 
 /// <summary>

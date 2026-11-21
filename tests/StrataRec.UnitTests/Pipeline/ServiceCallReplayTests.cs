@@ -448,6 +448,95 @@ public sealed class ServiceCallReplayTests
     }
 
     /// <summary>
+    /// A source's caller is its source and entity, each name as it is: source <c>a/b</c>'s entity <c>intent</c> is not
+    /// source <c>a</c>'s entity <c>b/intent</c> (review of e5cd1c5: the two joined by a slash were one key, and one took
+    /// the other's recorded failure).
+    /// </summary>
+    [Fact]
+    public void ASourceAndAnEntityWhoseNamesHoldASlash_AreNotAnotherSourcesEntity()
+    {
+        var run = RunReplayTests.Run();
+        var call = Recorded("x", Query(1, limit: 0), "ok");
+        run.ServiceCalls.Add(new ReplayServiceCall
+        {
+            Seq = 0, Source = "a/b", Entity = "intent", Service = call.Service, Role = IoRoles.Fetch, Status = "error", InputDigests = call.InputDigests,
+        });
+        run.ServiceCalls.Add(new ReplayServiceCall
+        {
+            Seq = 1, Source = "a", Entity = "b/intent", Service = call.Service, Role = IoRoles.Fetch, Status = "ok", InputDigests = call.InputDigests,
+        });
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var status = replay.Call(ServiceCaller.OfSource("a", "b/intent"), new IoTarget(IoRoles.Fetch, "s"), Query(1, limit: 0), new ServiceResponse(Memory, 0), out _);
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Empty(replay.Gaps);
+    }
+
+    /// <summary>
+    /// An output left unwritten by a call of another limit and other outputs says nothing of it: <c>not_recorded</c>, not
+    /// <c>limit_changed</c>, which the same outputs at another limit are (review of e5cd1c5).
+    /// </summary>
+    [Fact]
+    public void AnOutputLeftUnwrittenAtAnotherLimit_ByACallOfOtherOutputs_IsNotRecorded()
+    {
+        var run = RunReplayTests.Run();
+        run.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 2), "summary", "label"), "ok", 7)); // one item, neither written
+        var replay = RunReplay.Create(run, "/runs/0");
+        var response = new ServiceResponse(Memory, 1);
+
+        var status = replay.Call(ServiceCaller.OfNode("n"), new IoTarget(IoRoles.Recall, "s"), Reading(Query(1, limit: 1), "summary"), response, out _);
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Equal(("summary", "not_recorded"), (Assert.Single(replay.Gaps).Field, replay.Gaps[0].Reason));
+    }
+
+    /// <summary>
+    /// A call of many outputs, all left unwritten as recorded, compares the outputs with the recorded call's once, not once
+    /// an output (review of e5cd1c5: 512 outputs read the call's list 1,027 times, the replay of it took 359 ms).
+    /// </summary>
+    [Fact]
+    public void ACallOfManyOutputsLeftUnwritten_ComparesItsOutputsOnce()
+    {
+        var names = new CountingNames(512);
+        var call = new ServiceCall { Service = "s", Inputs = Query(1, limit: 0).Inputs, Outputs = names.Memory };
+        var run = RunReplayTests.Run();
+        run.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 0), names.Names), "ok"));
+        var replay = RunReplay.Create(run, "/runs/0");
+        names.Reads = 0;
+
+        var status = replay.Call(ServiceCaller.OfNode("n"), new IoTarget(IoRoles.Recall, "s"), call, new ServiceResponse(Memory, 0), out _);
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Empty(replay.Gaps);
+        Assert.InRange(names.Reads, 1, 16);
+    }
+
+    /// <summary>Output names that count how often their list is read.</summary>
+    private sealed class CountingNames(int count) : System.Buffers.MemoryManager<string>
+    {
+        public string[] Names { get; } = [.. Enumerable.Range(0, count).Select(i => "o" + i)];
+
+        public int Reads { get; set; }
+
+        public override Span<string> GetSpan()
+        {
+            Reads++;
+            return Names;
+        }
+
+        public override System.Buffers.MemoryHandle Pin(int elementIndex = 0) => throw new NotSupportedException();
+
+        public override void Unpin()
+        {
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+        }
+    }
+
+    /// <summary>
     /// An output a recorded call asked for and the service left unwritten is that call's answer only: a call of other
     /// outputs takes it from a recorded call that wrote it (review of da5cfe6: the omission answered first, as missing).
     /// </summary>
