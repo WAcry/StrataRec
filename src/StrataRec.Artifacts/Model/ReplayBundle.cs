@@ -42,11 +42,14 @@ public sealed class ReplayBundle
     /// model's and a recall's alike: a recall's query is a digest of its inputs, as a model's, and only the outputs the
     /// operator reads are recorded. 2026-11-21.5 has the same layout, but a service sees only its call's inputs: in a bundle
     /// before, a recall service could pick its answer by a request field that no digest covers, and a replay that no longer
-    /// sends it would still find that answer, and call the run identical.
+    /// sends it would still find that answer, and call the run identical. 2026-11-21.6 digests a call about no items that
+    /// reads named outputs with its limit, a missing input of a call about items by its rows when its shape is per item,
+    /// and records why a call left its node Degraded; a recall query of a negative zero or of a declared float32 is sent
+    /// as served since: a bundle before could replay identical to a run whose answers changed.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.5";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.6";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.5\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.6\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -304,6 +307,9 @@ public sealed class ReplayServiceCall
 
     [Description("True when the service stopped at the call's max_output_tokens, so its text may be cut short; absent otherwise.")]
     public bool? Truncated { get; init; }
+
+    [Description("Why the call left its node Degraded (its cache answered with values past their TTL after the service failed); absent otherwise.")]
+    public string? Degraded { get; init; }
 }
 
 /// <summary>Effective log sampling of the run (design 8.2, 8.4).</summary>

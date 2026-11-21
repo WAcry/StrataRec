@@ -185,8 +185,13 @@ internal sealed class RunReplay : IFeatureCallHook
     /// </remarks>
     /// <param name="node">The calling node: its own recorded calls answer it first, and a synthesized call whose items all
     /// changed takes its outputs' widths from them before another node's.</param>
-    internal ServiceStatus Call(string node, IoTarget target, ServiceCall call, ServiceResponse response)
+    /// <param name="degraded">
+    /// Why the recorded call that answers left its node Degraded (its cache answered with stale values), which the node
+    /// reports again; null for a synthesized call, whose values come from many calls.
+    /// </param>
+    internal ServiceStatus Call(string node, IoTarget target, ServiceCall call, ServiceResponse response, out string? degraded)
     {
+        degraded = null;
         lock (_gate)
         {
             var kind = target.Role;
@@ -199,7 +204,7 @@ internal sealed class RunReplay : IFeatureCallHook
                 var own = Take(calls, entry => entry.Keys is null && entry.Node == node && entry.Digests[0] == digest);
                 if (own is not null && (own.Outcome != IoOutcome.Ok || Answers(own, call)))
                 {
-                    return Unanswered(call, response, Answer(own, call, response, kind, node), kind, node, null);
+                    return Unanswered(call, response, Answer(own, call, response, kind, node, out degraded), kind, node, null);
                 }
 
                 var answer = Best(calls, entry => entry.Keys is null && entry.Outcome == IoOutcome.Ok && entry.Digests[0] == digest, call);
@@ -213,7 +218,7 @@ internal sealed class RunReplay : IFeatureCallHook
                     return ServiceStatus.Failed($"{kind} '{call.Service}': this call is not in the replay bundle");
                 }
 
-                return Unanswered(call, response, Answer(answer, call, response, kind, node), kind, node, null);
+                return Unanswered(call, response, Answer(answer, call, response, kind, node, out degraded), kind, node, null);
             }
 
             var keys = items.ToArray();
@@ -227,14 +232,14 @@ internal sealed class RunReplay : IFeatureCallHook
             var ownCall = Take(calls, entry => entry.Node == node && Same(entry));
             if (ownCall is not null && (ownCall.Outcome != IoOutcome.Ok || Answers(ownCall, call)))
             {
-                return Unanswered(call, response, Answer(ownCall, call, response, kind, node), kind, node, keys);
+                return Unanswered(call, response, Answer(ownCall, call, response, kind, node, out degraded), kind, node, keys);
             }
 
             // A recorded call of these items and inputs answers as recorded, with gaps for what it lacks: synthesizing it item
             // by item would lose its texts and the order of repeated items.
             var same = Best(calls, entry => entry.Outcome == IoOutcome.Ok && Same(entry), call);
             return same is not null
-                ? Unanswered(call, response, Answer(same, call, response, kind, node), kind, node, keys)
+                ? Unanswered(call, response, Answer(same, call, response, kind, node, out degraded), kind, node, keys)
                 : Synthesize(call, calls, response, keys, digests, node, kind);
         }
     }
@@ -449,8 +454,9 @@ internal sealed class RunReplay : IFeatureCallHook
     /// request did. Asking for more items than the recording holds is a shortfall only when the recorded call stopped at
     /// its own limit (the service might have had more); one that returned fewer had none.
     /// </summary>
-    private ServiceStatus Answer(ServiceEntry entry, ServiceCall call, ServiceResponse response, string kind, string node)
+    private ServiceStatus Answer(ServiceEntry entry, ServiceCall call, ServiceResponse response, string kind, string node, out string? degraded)
     {
+        degraded = entry.Outcome == IoOutcome.Ok ? entry.Degraded : null;
         if (entry.Outcome != IoOutcome.Ok)
         {
             if (entry.Threw)
@@ -1118,7 +1124,7 @@ internal sealed class RunReplay : IFeatureCallHook
 
             var entry = new ServiceEntry(call.Seq, call.Node, call.Service, call.BatchSize, call.Limit, outcome, call.Error, call.Threw, keys,
                 call.InputDigests.ToArray(), outputs, new Dictionary<string, string>(call.Texts, StringComparer.Ordinal), ids, call.Scores.ToArray(),
-                call.OutputTokens, call.Truncated == true);
+                call.OutputTokens, call.Truncated == true, call.Degraded);
             if (!_serviceCalls.TryGetValue((call.Service, call.Version), out var list))
             {
                 list = new List<ServiceEntry>();
@@ -1193,7 +1199,8 @@ internal sealed class RunReplay : IFeatureCallHook
 
     private sealed class ServiceEntry(
         int seq, string? node, string service, int batchSize, int limit, IoOutcome outcome, string? error, bool threw, EntityKey[]? keys, string[] digests,
-        Dictionary<string, ReplayTensor> outputs, Dictionary<string, string> texts, EntityKey[] ids, double[] scores, int? outputTokens, bool truncated)
+        Dictionary<string, ReplayTensor> outputs, Dictionary<string, string> texts, EntityKey[] ids, double[] scores, int? outputTokens, bool truncated,
+        string? degraded)
     {
         public int Seq { get; } = seq;
 
@@ -1228,6 +1235,9 @@ internal sealed class RunReplay : IFeatureCallHook
         public int? OutputTokens { get; } = outputTokens;
 
         public bool Truncated { get; } = truncated;
+
+        /// <summary>Why the call left its node Degraded when it was recorded; null when it did not.</summary>
+        public string? Degraded { get; } = degraded;
 
         public bool Consumed { get; set; }
     }

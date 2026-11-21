@@ -21,19 +21,22 @@ namespace StrataRec.Pipeline.Operators;
 /// </summary>
 /// <remarks>
 /// <para><b>A record's layout</b> (its <c>layout</c> list): <c>[kind, n, …]</c>, <c>n</c> the outputs the call reads, in
-/// its order. A call's answer (kind 1) goes on with <c>[items, id kind, limit asked, flags]</c> and an item's (kind 2) with
-/// nothing; then each output's <c>(type, elements)</c>. A call's item ids come first in the int64 or string list, its
+/// its order. A call's answer (kind 1) goes on with <c>[items, id kind, limit asked, flags, dropped]</c> (dropped: the items
+/// the service added past the limit) and an item's (kind 2) with nothing; then each output's <c>(type, elements)</c>. A call's item ids come first in the int64 or string list, its
 /// scores first in the float64 list; then each output's values, in order, in the list of its type (a text one string).
 /// The cache key's format (<see cref="ServiceInputDigest.CacheCallKey"/>) changes with this layout.</para>
 /// <para><b>Only what can be put back is written back</b>: an item's answer needs every output the call reads, of whole
-/// rows and no text (a text is the whole call's); a call's answer needs one kind of item id. Other answers are served and
-/// not cached, so their calls always go to the service.</para>
+/// rows and no text, and a call that was not cut short (a text and a truncated generation are the whole call's); a call's
+/// answer needs one kind of item id; neither may have a string slot the service left unwritten (a record has no null
+/// string). Other answers are served and not cached, so their calls always go to the service.</para>
+/// <para><b>A record is read only when it is well formed</b> (<see cref="WellFormed"/>): its layout is one this code
+/// writes and its lists hold exactly what the layout says. Records come from a store other processes write too.</para>
 /// </remarks>
 internal sealed class CachedServiceCall
 {
     private const int CallKind = 1;
     private const int ItemKind = 2;
-    private const int CallHeader = 6; // kind, n, items, id kind, limit asked, flags
+    private const int CallHeader = 7; // kind, n, items, id kind, limit asked, flags, dropped
     private const int ItemHeader = 2; // kind, n
     private const int NoIds = 0;
     private const int Int64Ids = 1;
@@ -62,7 +65,8 @@ internal sealed class CachedServiceCall
     private readonly Row[] _rows;
     private readonly TableVersion _version;
     private readonly long _nowMs;
-    private readonly long _started;
+    private readonly CallDeadline _deadline;
+    private bool _timeUsed; // the distributed tier's read was cut off at the service's own deadline
     private int[]? _layout; // a call about items: the layout every record it uses has
 
     private CachedServiceCall(OperatorContext context, BoundService service, ServiceCache cache, ServiceCall call, ServiceResponse response)
@@ -80,16 +84,16 @@ internal sealed class CachedServiceCall
         var order = ServiceInputDigest.NameOrder(call);
         if (_keyed)
         {
-            ServiceInputDigest.CacheItemKeys(call, order, _keys.AsSpan(0, _count));
+            ServiceInputDigest.CacheItemKeys(call, order, cache.AnswerIdentity, _keys.AsSpan(0, _count));
         }
         else
         {
-            _keys[0] = ServiceInputDigest.CacheCallKey(call, order);
+            _keys[0] = ServiceInputDigest.CacheCallKey(call, order, cache.AnswerIdentity);
         }
 
         _version = cache.Table.Pin();
         _nowMs = cache.Policy.NowMs();
-        _started = Stopwatch.GetTimestamp();
+        _deadline = CallDeadline.After(service.TimeoutMs); // the whole read's: the distributed tier and the service share it
     }
 
     private enum RowState : byte
@@ -109,7 +113,7 @@ internal sealed class CachedServiceCall
         var recorder = context.Recorder;
         var sequence = recorder?.BeginCall(context.NodeId, service.Target, call) ?? 0;
         var started = Stopwatch.GetTimestamp();
-        var result = new Result(ServiceStatus.Failed("the call did not complete"), IoOutcome.Error, null);
+        var result = new Result(ServiceStatus.Failed("the call did not complete"), IoOutcome.Error, null, false);
         try
         {
             result = await new CachedServiceCall(context, service, cache, call, response).ReadAsync().ConfigureAwait(false);
@@ -119,7 +123,7 @@ internal sealed class CachedServiceCall
             response.Close();
             recorder?.EndCall(
                 sequence, result.Outcome, result.CutOff?.Message ?? result.Status.Error, result.CutOff is not null, Stopwatch.GetElapsedTime(started), response,
-                result.Outcome == IoOutcome.Ok ? result.Status : default);
+                result.Answered ? result.Status : default, result.Degraded);
         }
 
         if (result.CutOff is { } cutOff)
@@ -132,12 +136,19 @@ internal sealed class CachedServiceCall
 
     private async Task<Result> ReadAsync()
     {
+        // A call the node could no longer send (its budget ran out, the caller cancelled) is not answered from the cache
+        // either: it ends as the call it stands for would (BoundedCall, rule 8), whatever the tiers hold.
+        if (BoundedCall.CutOff(_context.Budget) is { } before)
+        {
+            return new Result(default, before.Outcome, before.Exception, false);
+        }
+
         var misses = ReadLocal();
         if (misses > 0 && _cache.Distributed is { } tier)
         {
             if (await ReadDistributedAsync(tier, misses).ConfigureAwait(false) is { } cutOff)
             {
-                return new Result(default, cutOff.Outcome, cutOff.Exception);
+                return new Result(default, cutOff.Outcome, cutOff.Exception, false);
             }
 
             misses = Count(RowState.Fresh, negate: true);
@@ -145,7 +156,7 @@ internal sealed class CachedServiceCall
 
         if (misses == 0)
         {
-            return new Result(Assemble(null, null), IoOutcome.Ok, null);
+            return new Result(Assemble(null, null), IoOutcome.Ok, null, true);
         }
 
         return await CallServiceAsync(misses).ConfigureAwait(false);
@@ -166,7 +177,11 @@ internal sealed class CachedServiceCall
 
             var record = new LocalServiceRecord(_version, found);
             var freshness = _cache.Classify(record.WrittenMs, _keys[r], _nowMs);
-            if (freshness == CacheFreshness.Expired)
+            if (!WellFormed(record))
+            {
+                missing++; // never written by this code: a write-back copies only well-formed records
+            }
+            else if (freshness == CacheFreshness.Expired)
             {
                 expired++;
             }
@@ -195,8 +210,9 @@ internal sealed class CachedServiceCall
     /// <summary>
     /// The distributed tier, for the rows the local tier did not have fresh, in one read bounded by its <c>timeout_ms</c>
     /// within the service's: fresh records answer their rows and go to the local tier; a stale one is kept for a failure.
-    /// A read that fails or is late leaves its rows to the service. Returns the cut-off when the node's budget ran out or
-    /// the caller cancelled.
+    /// Records are judged when the read answered, by the cache's clock: one fresh when the call started may have expired
+    /// while the read took its time, as for a source's cache (review 80). A read that fails or is late leaves its rows to
+    /// the service. Returns the cut-off when the node's budget ran out or the caller cancelled.
     /// </summary>
     private async Task<(Exception Exception, IoOutcome Outcome)?> ReadDistributedAsync(DistributedCacheTier tier, int misses)
     {
@@ -212,9 +228,12 @@ internal sealed class CachedServiceCall
         }
 
         var records = new ReadOnlyMemory<byte>[misses];
+        var answeredAt = _memory.Rent<long>(1);
+        var tierDeadline = CallDeadline.After(_cache.DistributedTimeoutMs);
+        var serviceFirst = _deadline.IsSet && _deadline.Remaining <= tierDeadline.Remaining; // the read within the service's time
         var read = await BoundedCall.RunAsync<bool, StoreRead>(
-            new StoreRead(tier.Store, _cache.Policy.Keyspace, texts, records), _context.Budget, _memory, _cache.Io,
-            CallDeadline.After(Math.Min(_cache.DistributedTimeoutMs, RemainingMs()))).ConfigureAwait(false);
+            new StoreRead(tier.Store, _cache.Policy, texts, records, answeredAt), _context.Budget, _memory, _cache.Io,
+            serviceFirst ? _deadline : tierDeadline).ConfigureAwait(false);
         switch (read.End)
         {
             case CallEnd.BudgetRanOut or CallEnd.Cancelled:
@@ -222,12 +241,16 @@ internal sealed class CachedServiceCall
             case CallEnd.Answered:
                 break;
             default:
+                // Cut off at the service's own deadline, the read took all of its time: the service is not called. Said
+                // here, not left to the clock: a wait ends up to a millisecond before its deadline (BoundedCall).
+                _timeUsed = serviceFirst && read.End == CallEnd.TimedOut;
                 _cache.Policy.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Error, misses);
                 return null;
         }
 
         int hits = 0, missing = 0, expired = 0, mismatched = 0, broken = 0;
         List<(UInt128 Key, ReadOnlyMemory<byte> Bytes)>? copies = null;
+        var nowMs = answeredAt[0];
         for (var i = 0; i < misses; i++)
         {
             if (records[i].IsEmpty)
@@ -237,15 +260,15 @@ internal sealed class CachedServiceCall
             }
 
             var decoded = _cache.Decode(records[i], out var outcome);
-            if (decoded is null)
+            if (decoded is null || !WellFormed(decoded))
             {
-                broken += outcome == CacheKeyOutcome.Error ? 1 : 0;
-                mismatched += outcome == CacheKeyOutcome.Error ? 0 : 1; // another format or field set
+                broken += decoded is not null || outcome == CacheKeyOutcome.Error ? 1 : 0;
+                mismatched += decoded is null && outcome != CacheKeyOutcome.Error ? 1 : 0; // another format or field set
                 continue;
             }
 
             var r = rows[i];
-            var freshness = _cache.Classify(decoded.WrittenMs, _keys[r], _nowMs);
+            var freshness = _cache.Classify(decoded.WrittenMs, _keys[r], nowMs);
             if (freshness == CacheFreshness.Expired)
             {
                 expired++;
@@ -300,6 +323,11 @@ internal sealed class CachedServiceCall
     /// </summary>
     private async Task<Result> CallServiceAsync(int misses)
     {
+        if (_timeUsed)
+        {
+            return Failure(ServiceStatus.Failed($"timed out after {_service.TimeoutMs} ms"), IoOutcome.Timeout, answered: false);
+        }
+
         int[]? subRows = null; // the call's row of each row of the service's call; null when it is the whole call
         var call = _call;
         if (_keyed && misses < _count)
@@ -318,11 +346,12 @@ internal sealed class CachedServiceCall
 
         var writtenMs = _cache.Policy.NowMs();
         var answer = new ServiceResponse(_memory, call.Limit);
-        var remaining = RemainingMs();
-        var sent = await _context.SendAsync(_service, call, answer, _service.TimeoutMs is null ? null : remaining).ConfigureAwait(false);
+
+        // Within what is left of the service's timeout_ms: not sent at all once the distributed tier took all of it.
+        var sent = await _context.SendAsync(_service, call, answer, _deadline).ConfigureAwait(false);
         if (sent.End is CallEnd.BudgetRanOut or CallEnd.Cancelled)
         {
-            return new Result(default, sent.Outcome, sent.Exception);
+            return new Result(default, sent.Outcome, sent.Exception, false);
         }
 
         if (sent.End == CallEnd.Answered && sent.Value.Succeeded)
@@ -342,32 +371,56 @@ internal sealed class CachedServiceCall
                 status = status with { OutputTokens = sent.Value.OutputTokens, Truncated = sent.Value.Truncated };
             }
 
-            return new Result(status, status.Succeeded ? IoOutcome.Ok : IoOutcome.Error, null);
+            return new Result(status, status.Succeeded ? IoOutcome.Ok : IoOutcome.Error, null, true);
         }
 
+        // A failed answer is recorded as the service gave it (its generation details), as a call without a cache is.
         var failure = sent.End == CallEnd.Answered ? sent.Value : ServiceStatus.Failed(sent.Error ?? "failed");
-        if (Count(RowState.Fresh, negate: true) == Count(RowState.Stale, negate: false))
-        {
-            // Every row without a fresh record has a stale one within stale_if_error_ms: they answer, and the node is Degraded.
-            _cache.Policy.CountKeys(CacheTier.Local, CacheKeyOutcome.Stale, CountStale(wire: false));
-            _cache.Policy.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Stale, CountStale(wire: true));
-            _context.ReportDegraded($"{_service.Target.Role} '{_service.Name}' failed ({failure.Error}); its cache answered with values past their TTL");
-            return new Result(Assemble(null, null), IoOutcome.Ok, null);
-        }
-
-        return new Result(failure, sent.Outcome == IoOutcome.Ok ? IoOutcome.Error : sent.Outcome, null);
+        return Failure(failure, sent.Outcome == IoOutcome.Ok ? IoOutcome.Error : sent.Outcome, sent.End == CallEnd.Answered);
     }
 
-    /// <summary>Milliseconds left of the service's <c>timeout_ms</c> since the call started (at least 1); unbounded without one.</summary>
-    private int RemainingMs()
+    /// <summary>
+    /// The service did not answer the rows no tier had fresh: stale records answer them when every one has one, or the
+    /// call fails as the service did.
+    /// </summary>
+    /// <param name="answered">The service answered (a failed status): what it said is recorded.</param>
+    private Result Failure(in ServiceStatus failure, IoOutcome outcome, bool answered)
     {
-        if (_service.TimeoutMs is not { } timeout)
+        if (Count(RowState.Fresh, negate: true) == Count(RowState.Stale, negate: false) && StaleAnswer(_cache.Policy.NowMs()))
         {
-            return int.MaxValue;
+            // Every row without a fresh record has a stale one still within stale_if_error_ms now: they answer, and the
+            // node is Degraded, in a replay too (the reason is recorded with the call).
+            _cache.Policy.CountKeys(CacheTier.Local, CacheKeyOutcome.Stale, CountStale(wire: false));
+            _cache.Policy.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Stale, CountStale(wire: true));
+            var degraded = $"{_service.Target.Role} '{_service.Name}' failed ({failure.Error}); its cache answered with values past their TTL";
+            _context.ReportDegraded(degraded);
+            return new Result(Assemble(null, null), IoOutcome.Ok, null, true, degraded);
         }
 
-        var elapsed = (long)Stopwatch.GetElapsedTime(_started).TotalMilliseconds;
-        return (int)Math.Max(1, timeout - elapsed);
+        return new Result(failure, outcome, null, answered);
+    }
+
+    /// <summary>
+    /// Whether every stale row may still answer at <paramref name="nowMs"/>: its record is within <c>stale_if_error_ms</c>
+    /// now, not only when it was read (the service may have taken all its time to fail).
+    /// </summary>
+    private bool StaleAnswer(long nowMs)
+    {
+        for (var r = 0; r < _count; r++)
+        {
+            if (_rows[r].State != RowState.Stale)
+            {
+                continue;
+            }
+
+            var writtenMs = _rows[r].Wire is { } wire ? wire.WrittenMs : new LocalServiceRecord(_version, _rows[r].Local).WrittenMs;
+            if (_cache.Classify(writtenMs, _keys[r], nowMs) == CacheFreshness.Expired)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     // ------------------------------------------------------------------------------------------------------------------
@@ -415,6 +468,72 @@ internal sealed class CachedServiceCall
 
         _layout = layout.ToArray();
         return true;
+    }
+
+    /// <summary>
+    /// Whether a record is one this code writes (see the remarks): its kind and header, each output's type and element
+    /// count, and its lists holding exactly that many values of each type. A record that is not is never read: a type code
+    /// out of range, or a list shorter than its layout, would throw while the answer is put together, and a write-back
+    /// would copy it into the local tier (review of IO step 3).
+    /// </summary>
+    private static bool WellFormed<TRecord>(TRecord record)
+        where TRecord : IServiceRecord
+    {
+        var layout = record.Layout;
+        if (layout.Length < 2)
+        {
+            return false;
+        }
+
+        var (kind, outputs) = (layout[0], layout[1]);
+        var header = kind == CallKind ? CallHeader : kind == ItemKind ? ItemHeader : -1;
+        if (header < 0 || outputs < 0 || layout.Length != header + (2L * outputs))
+        {
+            return false;
+        }
+
+        Span<long> sizes = stackalloc long[StringType + 1]; // values in each list, by type code (a text in the string list)
+        sizes.Clear();
+        if (kind == CallKind)
+        {
+            var (items, ids, asked, flags, dropped) = (layout[2], layout[3], layout[4], layout[5], layout[6]);
+            if (items < 0 || asked < 0 || dropped < 0 || (flags & ~TruncatedFlag) != 0 || ids is < NoIds or > StringIds || (ids == NoIds) != (items == 0))
+            {
+                return false;
+            }
+
+            sizes[Float64Type] += items; // the scores
+            sizes[ids == StringIds ? StringType : Int64Type] += ids == NoIds ? 0 : items;
+        }
+
+        for (var o = 0; o < outputs; o++)
+        {
+            var (type, count) = (layout[header + (2 * o)], layout[header + (2 * o) + 1]);
+            switch (type)
+            {
+                case < 0 or > TextType:
+                    return false;
+                case Absent when kind == ItemKind || count != 0:
+                case TextType when kind == ItemKind || count != 1:
+                    return false;
+                case Absent:
+                    break;
+                case TextType:
+                    sizes[StringType]++;
+                    break;
+                default:
+                    if (count < 0)
+                    {
+                        return false;
+                    }
+
+                    sizes[type] += count;
+                    break;
+            }
+        }
+
+        return record.Bools.Length == sizes[BoolType] && record.Int32s.Length == sizes[Int32Type] && record.Int64s.Length == sizes[Int64Type]
+            && record.Float32s.Length == sizes[Float32Type] && record.Float64s.Length == sizes[Float64Type] && record.StringCount == sizes[StringType];
     }
 
     /// <summary>
@@ -558,7 +677,11 @@ internal sealed class CachedServiceCall
         }
     }
 
-    /// <summary>A call's answer from its record: outputs, texts, items up to the limit, and whether it was cut short.</summary>
+    /// <summary>
+    /// A call's answer from its record: outputs, texts, items up to the limit, and whether it was cut short. Every recorded
+    /// item is added, so the response counts those past a smaller limit as dropped, as it would the service's own, on top
+    /// of those the service had added past the recorded call's limit.
+    /// </summary>
     private ServiceStatus WriteCall<TRecord>(TRecord record)
         where TRecord : IServiceRecord
     {
@@ -605,13 +728,13 @@ internal sealed class CachedServiceCall
         }
 
         var scores = record.Float64s;
-        var add = Math.Min(items, _call.Limit);
-        for (var i = 0; i < add; i++)
+        for (var i = 0; i < items; i++)
         {
             var id = layout[3] == StringIds ? EntityKey.FromString(record.String(i)) : EntityKey.FromInt64(record.Int64s[i]);
             _response.AddItem(id, scores[i]);
         }
 
+        _response.AddDropped(layout[6]);
         return ServiceStatus.Ok with { Truncated = (layout[5] & TruncatedFlag) != 0 };
     }
 
@@ -636,7 +759,10 @@ internal sealed class CachedServiceCall
         return offsets;
     }
 
-    /// <summary>The service's whole answer into the caller's response: the outputs the call reads, its texts, its items.</summary>
+    /// <summary>
+    /// The service's whole answer into the caller's response: the outputs the call reads, its texts, its items, and how many
+    /// items it added past the limit.
+    /// </summary>
     private void CopyAnswer(ServiceResponse answer)
     {
         foreach (var name in _call.Outputs.Span)
@@ -665,6 +791,8 @@ internal sealed class CachedServiceCall
         {
             _response.AddItem(keys[i], scores[i]);
         }
+
+        _response.AddDropped(answer.Truncated);
     }
 
     // ------------------------------------------------------------------------------------------------------------------
@@ -687,7 +815,13 @@ internal sealed class CachedServiceCall
             return;
         }
 
-        // Every output a tensor of whole rows of the service's call: then each row is a record.
+        // A truncated generation is the whole call's, not any item's: served, not cached.
+        if (truncated)
+        {
+            return;
+        }
+
+        // Every output a tensor of whole rows of the service's call, with no unwritten string: then each row is a record.
         var batch = call.BatchSize;
         var layout = new int[ItemHeader + (2 * outputs.Length)];
         layout[0] = ItemKind;
@@ -695,9 +829,9 @@ internal sealed class CachedServiceCall
         var columns = new TensorValues[outputs.Length];
         for (var o = 0; o < outputs.Length; o++)
         {
-            if (!answer.TryGetValues(outputs[o], out var values) || batch == 0 || values.Length % batch != 0)
+            if (!answer.TryGetValues(outputs[o], out var values) || batch == 0 || values.Length % batch != 0 || HasNull(values))
             {
-                return; // a text, a missing output or one not of whole rows: served, not cached
+                return; // a text, a missing output, one not of whole rows or with a string slot left unwritten: served, not cached
             }
 
             columns[o] = values;
@@ -723,7 +857,8 @@ internal sealed class CachedServiceCall
 
     /// <summary>
     /// A call's answer as one record, with whether it was cut short (a generation's <c>max_output_tokens</c>, which is in
-    /// the key); false when it cannot be put back (item ids of both kinds).
+    /// the key) and how many items it dropped; false when it cannot be put back (item ids of both kinds, a string slot left
+    /// unwritten).
     /// </summary>
     private bool EncodeCall(ServiceResponse answer, ServiceRecordBuilder builder, bool truncated)
     {
@@ -738,7 +873,7 @@ internal sealed class CachedServiceCall
             }
         }
 
-        builder.Layout.AddRange([CallKind, outputs.Length, keys.Length, idKind, _call.Limit, truncated ? TruncatedFlag : 0]);
+        builder.Layout.AddRange([CallKind, outputs.Length, keys.Length, idKind, _call.Limit, truncated ? TruncatedFlag : 0, answer.Truncated]);
         foreach (var key in keys)
         {
             if (idKind == StringIds)
@@ -760,6 +895,11 @@ internal sealed class CachedServiceCall
         {
             if (answer.TryGetValues(name, out var values))
             {
+                if (HasNull(values))
+                {
+                    return false;
+                }
+
                 builder.Layout.Add(TypeCode(values.ElementType));
                 builder.Layout.Add(values.Length);
                 Add(builder, values, 0, values.Length);
@@ -779,6 +919,9 @@ internal sealed class CachedServiceCall
 
         return true;
     }
+
+    /// <summary>A string output with a slot the service left unwritten (null), which no record can hold.</summary>
+    private static bool HasNull(in TensorValues values) => values.ElementType == TensorElementType.String && values.String.Span.IndexOf((string?)null) >= 0;
 
     /// <summary>Values <c>[start, +count)</c> of a tensor, appended to the builder's list of their type.</summary>
     private static void Add(ServiceRecordBuilder builder, in TensorValues values, int start, int count)
@@ -809,7 +952,9 @@ internal sealed class CachedServiceCall
         for (var i = 0; i < inputs.Length; i++)
         {
             var input = inputs[i];
-            subset[i] = ServiceInputDigest.Splits(input, _call.BatchSize) ? input.ElementType switch
+            subset[i] = !ServiceInputDigest.Splits(input, _call.BatchSize) ? input
+                : input.IsMissing ? NamedInput.FromMissing(input.Name, input.ElementType, Resized(input.Shape, rows.Length)) // missing on every row
+                : input.ElementType switch
             {
                 TensorElementType.Bool => Rows(input, input.Bool.Span, rows),
                 TensorElementType.Int32 => Rows(input, input.Int32.Span, rows),
@@ -817,7 +962,7 @@ internal sealed class CachedServiceCall
                 TensorElementType.Float32 => Rows(input, input.Float32.Span, rows),
                 TensorElementType.Float64 => Rows(input, input.Float64.Span, rows),
                 _ => Rows(input, input.String.Span, rows),
-            } : input;
+            };
         }
 
         var items = _memory.Rent<EntityKey>(rows.Length);
@@ -852,9 +997,15 @@ internal sealed class CachedServiceCall
             values.Slice(rows[i] * width, width).CopyTo(data.AsSpan(i * width, width));
         }
 
-        var shape = input.Shape.ToArray();
-        shape[0] = rows.Length;
-        return NamedInput.FromValues(input.Name, shape, new ReadOnlyMemory<T>(data, 0, rows.Length * width));
+        return NamedInput.FromValues(input.Name, Resized(input.Shape, rows.Length), new ReadOnlyMemory<T>(data, 0, rows.Length * width));
+    }
+
+    /// <summary>A per-item input's shape for a batch of <paramref name="batch"/>.</summary>
+    private static int[] Resized(ReadOnlySpan<int> shape, int batch)
+    {
+        var resized = shape.ToArray();
+        resized[0] = batch;
+        return resized;
     }
 
     // ------------------------------------------------------------------------------------------------------------------
@@ -906,17 +1057,24 @@ internal sealed class CachedServiceCall
     /// <summary>Where one row's answer comes from: a record of the local tier or of the distributed one, or the service.</summary>
     private readonly record struct Row(RowState State, LocalRecordRef Local, DecodedServiceRecord? Wire);
 
-    /// <summary>How the call ended: its status and outcome, or the cut-off the operator is thrown.</summary>
-    private readonly record struct Result(ServiceStatus Status, IoOutcome Outcome, Exception? CutOff);
+    /// <summary>
+    /// How the call ended: its status and outcome, or the cut-off the operator is thrown; whether there is an answer to
+    /// record (the tiers', or the service's, a failure too); and why the node is Degraded, when the cache made it so.
+    /// </summary>
+    private readonly record struct Result(ServiceStatus Status, IoOutcome Outcome, Exception? CutOff, bool Answered, string? Degraded = null);
 
-    /// <summary>One read of the distributed tier, bounded like any external call.</summary>
-    private readonly struct StoreRead(ICacheStore store, CacheKeyspace keyspace, string[] keys, ReadOnlyMemory<byte>[] records) : IBoundedCall<bool>
+    /// <summary>
+    /// One read of the distributed tier, bounded like any external call. It notes the cache clock's time when the read is
+    /// seen to answer in time (<paramref name="answeredAt"/>), before the host's listeners hear of the call.
+    /// </summary>
+    private readonly struct StoreRead(ICacheStore store, LocalTableCache policy, string[] keys, ReadOnlyMemory<byte>[] records, long[] answeredAt)
+        : IBoundedCall<bool>
     {
         public int Keys => keys.Length;
 
         public ValueTask<bool> Send(CancellationToken token)
         {
-            var read = store.GetAsync(keyspace, keys, records, token);
+            var read = store.GetAsync(policy.Keyspace, keys, records, token);
             return read.IsCompletedSuccessfully ? new ValueTask<bool>(true) : Await(read);
 
             static async ValueTask<bool> Await(ValueTask read)
@@ -936,8 +1094,6 @@ internal sealed class CachedServiceCall
         {
         }
 
-        public void Ended(in CallResult<bool> result, TimeSpan duration)
-        {
-        }
+        public void Ended(in CallResult<bool> result, TimeSpan duration) => answeredAt[0] = policy.NowMs();
     }
 }

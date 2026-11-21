@@ -139,6 +139,15 @@ public sealed class ServiceResponse : IServiceResponse
         return false;
     }
 
+    /// <summary>Counts items a service added past the limit, which a cache's answer carries (<see cref="Truncated"/>).</summary>
+    internal void AddDropped(int count)
+    {
+        if (!Volatile.Read(ref _closed))
+        {
+            _truncated += count;
+        }
+    }
+
     internal void AddItem(EntityKey key, double score)
     {
         if (Volatile.Read(ref _closed))

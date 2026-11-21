@@ -1,3 +1,4 @@
+using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Services;
 using StrataRec.Features.Bindings;
@@ -139,8 +140,21 @@ public sealed class ClientResolver
         }
 
         // A distributed tier's timeout defaults to half the service's (which then exists: CacheSettings requires one or the other).
-        cache = new ServiceCache(name, table, distributed, distributedTimeoutMs ?? Math.Max(1, (binding.TimeoutMs ?? 2) / 2));
+        cache = new ServiceCache(name, table, distributed, distributedTimeoutMs ?? Math.Max(1, (binding.TimeoutMs ?? 2) / 2), AnswerIdentity(binding));
         return true;
+    }
+
+    /// <summary>
+    /// The content id of what a binding answers with: its client and settings, canonical (RFC 8785), so every instance
+    /// with the same configuration has the same one. Not its <c>timeout_ms</c> or <c>cache</c>, which change when an
+    /// answer arrives and how long it is kept, not what it is.
+    /// </summary>
+    private static string AnswerIdentity(ClientBinding binding)
+    {
+        var node = ArtifactSerializer.ToNode(binding).AsObject();
+        node.Remove("timeout_ms");
+        node.Remove("cache");
+        return ContentHash.Compute(node);
     }
 
     /// <summary>The signature of a version of a service this resolver handed out (see <see cref="IPlanBindings.Signature"/>).</summary>

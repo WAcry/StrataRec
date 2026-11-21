@@ -169,7 +169,9 @@ internal sealed class RunRecorder : IFeatureCallHook
     /// The status the client returned (default when it did not answer): its generation details are recorded, so a replay
     /// returns the same status and the operator reports the same (a truncated answer, design 13.4 item 7).
     /// </param>
-    public void EndCall(int sequence, IoOutcome outcome, string? error, bool cutOff, TimeSpan duration, ServiceResponse response, in ServiceStatus status)
+    /// <param name="degraded">Why the call left its node Degraded, which a replay reports again.</param>
+    public void EndCall(
+        int sequence, IoOutcome outcome, string? error, bool cutOff, TimeSpan duration, ServiceResponse response, in ServiceStatus status, string? degraded = null)
     {
         ReplayServiceCall? begun;
         string[]? requested;
@@ -233,6 +235,7 @@ internal sealed class RunRecorder : IFeatureCallHook
             Scores = scores,
             OutputTokens = status.OutputTokens,
             Truncated = status.Truncated ? true : null,
+            Degraded = degraded,
         };
         lock (_gate)
         {

@@ -1,7 +1,10 @@
+using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
+using StrataRec.Core.Services;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Replay;
+using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
@@ -84,7 +87,158 @@ public sealed class ServiceCacheEngineTests
         Assert.False(string.IsNullOrEmpty(error.Hint));
     }
 
+    /// <summary>
+    /// A hot reload that changes the model's settings (its bias) under the same name and version serves the new model's
+    /// scores at once, though the distributed tier still holds the earlier binding's answers: they are keyed by what the
+    /// binding answers with (review of IO step 3). The new plan read them, and served the old scores for their TTL.
+    /// </summary>
+    [Fact]
+    public async Task AReloadThatChangesTheModelsSettings_DoesNotReadTheEarlierAnswersFromTheDistributedTier()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var stores = new SharedStores();
+        var root = HomeFeedTestHost.LoadModified(path => Rebind(path, -1.5, cached: true)).Root;
+        await using var engine = await CacheEngineTests.Load(root, stores);
+        var before = await engine.ExecuteAsync(Recorded("req-before"), token);
+        await CacheEngineTests.Eventually(stores.HoldsEveryKeyRead, () => "the write-back of the first model's answers");
+
+        Rebind(root, 5.0, cached: true);
+        Assert.True((await engine.LoadAsync(CacheEngineTests.Compile(root), cancellationToken: token)).Applied);
+        var after = await engine.ExecuteAsync(Recorded("req-after"), token);
+        Rebind(root, 5.0, cached: false);
+        Assert.True((await engine.LoadAsync(CacheEngineTests.Compile(root), cancellationToken: token)).Applied);
+        var uncached = await engine.ExecuteAsync(Recorded("req-uncached"), token);
+
+        Assert.True(before.Succeeded && after.Succeeded && uncached.Succeeded, before.Error ?? after.Error ?? uncached.Error);
+        Assert.NotEqual(Scores(before), Scores(uncached));
+        Assert.Equal(Scores(uncached), Scores(after));
+
+        static void Rebind(string root, double bias, bool cached) => SampleBindings.RebindService(root, Service, FormattableString.Invariant($$"""
+            { "client": "linear@1", "outputs": { "p_click": { "bias": {{bias}}, "weights": { "smoothed_ctr": 12.0, "log_followers": 0.05 }, "activation": "sigmoid" } }{{(cached ? Distributed : string.Empty)}} }
+            """));
+
+        static string Scores(RecResult result) =>
+            string.Join(';', result.Recording!.Runs[0].ServiceCalls.Where(c => c.Service == Service).Select(c => c.Outputs["p_click"].Values.GetRawText()));
+    }
+
+    /// <summary>
+    /// A node its service's cache answered with stale values after the service failed is Degraded, and replays Degraded:
+    /// the recording has why. It replayed as succeeded, and the replay called a node changed that was not.
+    /// </summary>
+    [Fact]
+    public async Task ANodeTheCacheAnsweredWithStaleValues_ReplaysDegraded()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var model = new FlakyModel();
+        var clock = new MovableClock();
+        await using var engine = FlakyEngine(model, clock, cached: true);
+        await CacheEngineTests.Eventually(
+            () =>
+            {
+                var calls = model.Calls;
+                Assert.True(engine.ExecuteAsync(Recorded("req-warm"), token).AsTask().GetAwaiter().GetResult().Succeeded);
+                return model.Calls == calls; // answered from the cache
+            },
+            () => "a request answered from the model's cache");
+
+        clock.Advance(2_000); // past the TTL, within stale_if_error_ms
+        model.Fail = true;
+        var served = await engine.ExecuteAsync(Recorded("req-stale"), token);
+        var replay = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(served.Recording!)), cancellationToken: token);
+
+        Assert.True(served.Succeeded, served.Error);
+        Assert.Equal("degraded", Assert.Single(served.Recording!.Runs[0].Nodes, n => n.Node == "ctr_ranker").Outcome);
+        Assert.True(replay.Report.Diff.Identical, ReplayTests.Describe(replay.Report));
+        var ranker = Assert.Single(replay.Report.Nodes, n => n.Node == "ctr_ranker");
+        Assert.False(ranker.Changed, $"recorded {ranker.Recorded}, replayed {ranker.Replayed}");
+    }
+
+    /// <summary>
+    /// A failed answer of a cached service is recorded as the service gave it, its generation details too, as without a
+    /// cache. The cache recorded them only for an answer that succeeded.
+    /// </summary>
+    [Fact]
+    public async Task AFailedAnswer_IsRecordedWithItsGenerationDetails_WithOrWithoutACache()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var model = new FlakyModel { Fail = true };
+        await using var plain = FlakyEngine(model, TimeProvider.System, cached: false);
+        await using var cached = FlakyEngine(model, TimeProvider.System, cached: true);
+
+        var withoutCache = (await plain.ExecuteAsync(Recorded("req-plain"), token)).Recording!.Runs[0].ServiceCalls.Single(c => c.Service == Service);
+        var withCache = (await cached.ExecuteAsync(Recorded("req-cached"), token)).Recording!.Runs[0].ServiceCalls.Single(c => c.Service == Service);
+
+        Assert.Equal(("error", 11, (bool?)true), (withoutCache.Status, withoutCache.OutputTokens, withoutCache.Truncated));
+        Assert.Equal(("error", 11, (bool?)true), (withCache.Status, withCache.OutputTokens, withCache.Truncated));
+    }
+
+    private const string Distributed = """, "cache": { "ttl_ms": 600000, "max_bytes": "1MiB", "distributed": { "store": "shared_memory@1", "timeout_ms": 5000 } }""";
+
+    private static RecRequest Recorded(string id) => ReplayTests.Request(id, 1001, "home", ReplayTests.ControlArms);
+
+    private static RecEngine FlakyEngine(FlakyModel model, TimeProvider clock, bool cached)
+    {
+        var cache = cached ? """, "cache": { "ttl_ms": 1000, "max_bytes": "1MiB", "stale_if_error_ms": 60000 }""" : string.Empty;
+        var host = HomeFeedTestHost.LoadModified(root => SampleBindings.RebindService(root, Service, $$"""{ "client": "{{FlakyModel.TypeName}}"{{cache}} }"""));
+        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Bindings = PlanEnvironment.DefaultBindings().Add(model), Clock = clock });
+        var load = engine.Load(host.Request);
+        Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
+        return engine;
+    }
+
     private static HomeFeedTestHost Host(string binding) => HomeFeedTestHost.LoadModified(root => SampleBindings.RebindService(root, Service, binding));
+
+    /// <summary>
+    /// <c>ctr_model</c> as a model that answers 0.25 for every item, or fails reporting 11 generated tokens and a truncated
+    /// generation when <see cref="Fail"/>.
+    /// </summary>
+    private sealed class FlakyModel : IBindingFactory<IServiceClient>, IServiceClient
+    {
+        public const string TypeName = "flaky_model@1";
+
+        private static readonly int[] Rows = [-1];
+
+        private int _calls;
+
+        public string Type => TypeName;
+
+        public Type SettingsType => typeof(NoSettings);
+
+        public bool Fail { get; set; }
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        public IServiceClient Create(BindingContext context) => this;
+
+        public ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new ServiceSignature(
+                [new TensorSpec("log_followers", TensorElementType.Float32, Rows), new TensorSpec("smoothed_ctr", TensorElementType.Float32, Rows)],
+                [new TensorSpec("p_click", TensorElementType.Float32, Rows)]));
+
+        public ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _calls);
+            if (Fail)
+            {
+                return ValueTask.FromResult(ServiceStatus.Failed("model outage") with { OutputTokens = 11, Truncated = true });
+            }
+
+            response.GetValues<float>("p_click", call.BatchSize).Span.Fill(0.25f);
+            return ValueTask.FromResult(ServiceStatus.Ok);
+        }
+
+        private sealed class NoSettings;
+    }
+
+    /// <summary>A wall clock the test moves.</summary>
+    private sealed class MovableClock : TimeProvider
+    {
+        private long _timeMs = 1_720_000_000_000L;
+
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeMilliseconds(Volatile.Read(ref _timeMs));
+
+        public void Advance(long milliseconds) => Interlocked.Add(ref _timeMs, milliseconds);
+    }
 
     /// <summary>The model's cache keys by local outcome so far, and the keys of calls the model was sent.</summary>
     private static ModelKeysRead Keys(MetricCapture metrics)

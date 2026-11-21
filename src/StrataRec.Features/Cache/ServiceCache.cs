@@ -42,9 +42,16 @@ internal sealed class ServiceCache
     /// <summary>Every record's key: the high and the low 64 bits of its hash.</summary>
     private static readonly EntityKeyLayout KeyLayout = EntityKeyLayout.OfTypes(EntityKeyType.Int64, EntityKeyType.Int64);
 
-    public ServiceCache(string service, LocalFeatureTable table, DistributedCacheTier? distributed, int distributedTimeoutMs)
+    /// <param name="answerIdentity">
+    /// What the binding answers with, the same on every instance that has the same configuration: part of every key, so a
+    /// binding whose client or settings changed (a hot reload, another deployment sharing the store) does not read the
+    /// answers the earlier one left in the distributed tier, which outlive the local table (review of IO step 3).
+    /// </param>
+    public ServiceCache(string service, LocalFeatureTable table, DistributedCacheTier? distributed, int distributedTimeoutMs, string answerIdentity)
     {
+        ArgumentNullException.ThrowIfNull(answerIdentity);
         Service = service;
+        AnswerIdentity = answerIdentity;
         Table = table;
         Policy = table.Cache ?? throw new ArgumentException("A service's cache table is a cache table.", nameof(table));
         Distributed = distributed;
@@ -54,6 +61,9 @@ internal sealed class ServiceCache
 
     /// <summary>The service's binding name.</summary>
     public string Service { get; }
+
+    /// <summary>What the binding answers with (see the constructor): a digest of its client and settings.</summary>
+    public string AnswerIdentity { get; }
 
     public LocalFeatureTable Table { get; }
 

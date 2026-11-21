@@ -388,7 +388,13 @@ public sealed class OperatorContext
         {
             try
             {
-                return replay.Call(NodeId, service.Target, call, response);
+                var status = replay.Call(NodeId, service.Target, call, response, out var degraded);
+                if (degraded is not null)
+                {
+                    ReportDegraded(degraded); // the node was Degraded by this call when it was recorded
+                }
+
+                return status;
             }
             finally
             {
@@ -449,9 +455,11 @@ public sealed class OperatorContext
             throw new ArgumentException($"A call about items has one per row: {call.Items.Length} item(s) for a batch of {call.BatchSize}.", nameof(call));
         }
 
+        // A missing input too: it keeps its declared shape, which says whether it is per item (missing on every row, cut to
+        // the rows a cache sends) or shared (review of IO step 3).
         foreach (var input in call.Inputs.Span)
         {
-            if (!input.IsMissing && input.Shape is [var leading, ..] && leading != call.BatchSize && leading != 1)
+            if (input.Shape is [var leading, ..] && leading != call.BatchSize && leading != 1)
             {
                 throw new ArgumentException(
                     $"Input '{input.Name}' has shape [{string.Join(", ", input.Shape.ToArray())}] in a call about {call.BatchSize} item(s): an input is per item "
@@ -485,11 +493,12 @@ public sealed class OperatorContext
 
     /// <summary>
     /// Sends a call to the service's client, bounded and measured like every call, without recording it: the call of the
-    /// items a service's cache missed (<see cref="CachedServiceCall"/>), whose caller records the whole call.
+    /// items a service's cache missed (<see cref="CachedServiceCall"/>), whose caller records the whole call. The deadline
+    /// is what is left of the service's <c>timeout_ms</c>; a call whose deadline has passed is not sent.
     /// </summary>
-    internal ValueTask<CallResult<ServiceStatus>> SendAsync(BoundService service, ServiceCall call, ServiceResponse response, int? timeoutMs) =>
+    internal ValueTask<CallResult<ServiceStatus>> SendAsync(BoundService service, ServiceCall call, ServiceResponse response, in CallDeadline deadline) =>
         BoundedCall.RunAsync<ServiceStatus, ServiceInvocation>(
-            new ServiceInvocation(service.Client, call, response, service.Target, null, 0), Budget, _state.Memory, service.Target, CallDeadline.After(timeoutMs));
+            new ServiceInvocation(service.Client, call, response, service.Target, null, 0), Budget, _state.Memory, service.Target, deadline);
 
     /// <summary>Throws <paramref name="exception"/> with the stack it was thrown with.</summary>
     private static ServiceStatus Rethrow(Exception exception)

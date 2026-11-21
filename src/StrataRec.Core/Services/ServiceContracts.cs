@@ -206,8 +206,9 @@ public readonly struct NamedInput
     /// <c>list&lt;E,N&gt;</c>, <c>[-1]</c> for a list of any length. Read-only to the service: the input is the caller's,
     /// as its <see cref="Values"/> are, and other calls may share it.
     /// </summary>
-    /// <remarks>Neither the shape array nor the data a factory is given is copied: the caller does not change them while a
-    /// call of the input is under way (the factory's checks hold for what it was given).</remarks>
+    /// <remarks>Neither the shape array nor the data a factory is given is copied: the caller does not change them from the
+    /// moment it creates the input for as long as the input is used (the factory's checks hold for what it was given, and a
+    /// cache or a recording reads the input after the call too).</remarks>
     public ReadOnlySpan<int> Shape => _shape;
 
     /// <summary>
@@ -361,6 +362,12 @@ public sealed class ServiceCall
     /// The most items the call may add (<see cref="IServiceResponse.AddItem(long, double)"/>); 0 for a call that adds none,
     /// as every call with <see cref="Items"/> does.
     /// </summary>
+    /// <remarks>
+    /// A service's items for a smaller limit are the start of its items for a larger one, as a ranked list's are: a cache
+    /// and a replay answer a call that reads no named <see cref="Outputs"/> with the start of a longer list recorded for the
+    /// same inputs, or with a list the service could not fill. A call that reads named outputs is answered only by an
+    /// answer to its own limit: an output or a text may say how many items it was asked for.
+    /// </remarks>
     public int Limit { get; init; }
 
     /// <summary>The request's id, for a service that logs or traces calls by it; it does not change the answer.</summary>

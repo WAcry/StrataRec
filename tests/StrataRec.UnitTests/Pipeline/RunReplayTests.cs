@@ -767,7 +767,7 @@ internal static class ReplayModelCalls
             Options = call.Options,
         };
         var response = new ServiceResponse(new RequestMemory());
-        var status = replay.Call(node, new IoTarget(IoRoles.Model, call.Service), keyed, response);
+        var status = replay.Call(node, new IoTarget(IoRoles.Model, call.Service), keyed, response, out _);
         foreach (var (name, values) in response.Tensors)
         {
             switch (values.ElementType)

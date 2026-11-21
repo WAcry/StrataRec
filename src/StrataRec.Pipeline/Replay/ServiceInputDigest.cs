@@ -14,11 +14,13 @@ namespace StrataRec.Pipeline.Replay;
 /// whole, since a shared input (a user vector, a text prompt) affects every row. Each input contributes its name, element
 /// type and shape, so the same values in another layout do not collide; the batch dimension of a row-wise input is left
 /// out, so the same row in a differently sized batch has the same digest. A missing input contributes its name, element
-/// type and declared shape, and that it is missing: it is neither a zero nor an absent input. A call's
+/// type and declared shape, and that it is missing: it is neither a zero nor an absent input; its declared shape says
+/// whether it is row-wise, as a present one's does (missing on every row). A call's
 /// <see cref="ServiceCallOptions.MaxOutputTokens"/> is part of every digest when it is set: a generative model answers
 /// differently under another limit, so a recorded answer is not served to a call with another one. The seed is not:
-/// it is the request's, which the bundle replays. Nor is the call's
-/// <see cref="ServiceCall.Limit"/>: a recorded list answers a call asking for fewer items.
+/// it is the request's, which the bundle replays. The call's <see cref="ServiceCall.Limit"/> is only when the call reads
+/// named outputs: a recorded list answers a call asking for fewer items (a service's shorter list is the start of its
+/// longer one), but an output or a text may say how many it was asked for (review of IO step 3).
 /// </remarks>
 internal static class ServiceInputDigest
 {
@@ -43,13 +45,14 @@ internal static class ServiceInputDigest
         }
     }
 
-    /// <summary>Digest of the whole call, for calls about no items: the batch size and every input whole.</summary>
+    /// <summary>Digest of the whole call, for calls about no items: the batch size, the limit when it reads outputs, every input whole.</summary>
     public static ulong Call(ServiceCall call, int[] order)
     {
         var builder = default(StableHash.Builder);
         try
         {
             builder.Add(call.BatchSize);
+            AddLimit(ref builder, call);
             AddOptions(ref builder, call.Options);
             var inputs = call.Inputs.Span;
             foreach (var i in order)
@@ -69,20 +72,23 @@ internal static class ServiceInputDigest
     /// The format of service cache keys (docs/decisions.md, IO step 3). A change of what a record holds or of how a key is
     /// built changes it: the records another build wrote are then misses, never misread.
     /// </summary>
-    private const string CacheFormat = "stratarec.service_cache/2026-11-21";
+    private const string CacheFormat = "stratarec.service_cache/2026-11-21.2";
 
     /// <summary>
-    /// The key of a call about no items in its service's cache: the format, the service version, the outputs the call
-    /// reads in its order, and the call's digest (the batch size, the options that change an answer, every input whole);
-    /// 128 bits, so very many cached answers do not collide. Not the seed, the request id or the limit (see the decisions).
+    /// The key of a call about no items in its service's cache: the format, the binding's answer identity, the service
+    /// version, the outputs the call reads in its order, and the call's digest (the batch size, the limit when it reads
+    /// outputs, the options that change an answer, every input whole); 128 bits, so very many cached answers do not
+    /// collide. Not the seed or the request id (see the decisions).
     /// </summary>
-    public static UInt128 CacheCallKey(ServiceCall call, int[] order)
+    /// <param name="identity">What the binding answers with (<c>ServiceCache.AnswerIdentity</c>): another client or other settings are other answers.</param>
+    public static UInt128 CacheCallKey(ServiceCall call, int[] order, string identity)
     {
         var builder = default(StableHash.Builder);
         try
         {
-            AddCachePrefix(ref builder, call, "call");
+            AddCachePrefix(ref builder, call, "call", identity);
             builder.Add(call.BatchSize);
+            AddLimit(ref builder, call);
             AddOptions(ref builder, call.Options);
             var inputs = call.Inputs.Span;
             foreach (var i in order)
@@ -103,12 +109,12 @@ internal static class ServiceInputDigest
     /// <paramref name="keys"/>: what the items share (the format, the version, the outputs read, the options, every shared
     /// input whole) hashed once, then for each item that, its entity and its slice of every per-item input.
     /// </summary>
-    public static void CacheItemKeys(ServiceCall call, int[] order, Span<UInt128> keys)
+    public static void CacheItemKeys(ServiceCall call, int[] order, string identity, Span<UInt128> keys)
     {
         var builder = default(StableHash.Builder);
         try
         {
-            AddCachePrefix(ref builder, call, "item");
+            AddCachePrefix(ref builder, call, "item", identity);
             AddOptions(ref builder, call.Options);
             var inputs = call.Inputs.Span;
             foreach (var i in order)
@@ -155,9 +161,10 @@ internal static class ServiceInputDigest
     /// <summary>The input is split by row in a row's digest and key: row-wise, of whole rows.</summary>
     public static bool Splits(in NamedInput input, int batch) => IsRowWise(input, batch) && input.Values.Length % batch == 0;
 
-    private static void AddCachePrefix(ref StableHash.Builder builder, ServiceCall call, string unit)
+    private static void AddCachePrefix(ref StableHash.Builder builder, ServiceCall call, string unit, string identity)
     {
         builder.Add(CacheFormat);
+        builder.Add(identity);
         builder.Add(unit);
         builder.Add(call.Version is not null);
         if (call.Version is { } version)
@@ -189,9 +196,19 @@ internal static class ServiceInputDigest
         return order;
     }
 
-    /// <summary>The input's leading dimension is the batch: each row has its own slice.</summary>
+    /// <summary>The input's leading dimension is the batch: each row has its own slice (a missing one, missing on every row).</summary>
     public static bool IsRowWise(in NamedInput input, int batch) =>
-        batch > 0 && !input.IsMissing && input.ElementType != TensorElementType.Text && input.Shape is { Length: > 0 } shape && shape[0] == batch;
+        batch > 0 && input.ElementType != TensorElementType.Text && input.Shape is { Length: > 0 } shape && shape[0] == batch;
+
+    /// <summary>The limit of a call that reads named outputs (see the remarks); nothing for one that reads only its items.</summary>
+    private static void AddLimit(ref StableHash.Builder builder, ServiceCall call)
+    {
+        if (!call.Outputs.IsEmpty)
+        {
+            builder.Add("limit");
+            builder.Add(call.Limit);
+        }
+    }
 
     /// <summary>The options that change what a model answers for the same inputs; nothing for a call that sets none.</summary>
     private static void AddOptions(ref StableHash.Builder builder, in ServiceCallOptions options)

@@ -24,8 +24,10 @@ internal sealed class ServiceCacheRig
     private RequestMemory _memory = new();
 
     /// <param name="cached">False binds the service without its cache: the same calls, for comparison.</param>
+    /// <param name="identity">What the binding answers with (<see cref="ServiceCache.AnswerIdentity"/>): rigs sharing a store share records only with the same one.</param>
     public ServiceCacheRig(
-        long ttlMs = 60_000, long staleIfErrorMs = 0, FakeCacheStore? store = null, int? timeoutMs = null, int distributedTimeoutMs = 10_000, bool cached = true)
+        long ttlMs = 60_000, long staleIfErrorMs = 0, FakeCacheStore? store = null, int? timeoutMs = null, int distributedTimeoutMs = 10_000, bool cached = true,
+        string identity = "m@1")
     {
         var options = new LocalFeatureTableOptions
         {
@@ -33,9 +35,13 @@ internal sealed class ServiceCacheRig
             Cache = new CacheTableOptions { TtlMs = ttlMs, StaleIfErrorMs = staleIfErrorMs, Clock = Clock },
         };
         Table = new LocalFeatureTable(ServiceCache.Schema("m"), options);
-        Cache = new ServiceCache("m", Table, store is null ? null : new DistributedCacheTier(store), distributedTimeoutMs);
+        Cache = new ServiceCache("m", Table, store is null ? null : new DistributedCacheTier(store), distributedTimeoutMs, identity);
         Bound = new BoundService("m", Service, IoRoles.Model, timeoutMs, cached ? Cache : null);
+        Unbound = new BoundService("m", Service, IoRoles.Model, timeoutMs, null);
+        _timeoutMs = timeoutMs;
     }
+
+    private readonly int? _timeoutMs;
 
     public ManualClock Clock { get; } = new();
 
@@ -46,6 +52,12 @@ internal sealed class ServiceCacheRig
     public ServiceCache Cache { get; }
 
     public BoundService Bound { get; }
+
+    /// <summary>The same service without its cache, for comparison.</summary>
+    public BoundService Unbound { get; }
+
+    /// <summary><paramref name="client"/> as <c>m</c>, with this rig's cache.</summary>
+    public BoundService With(IServiceClient client) => new("m", client, IoRoles.Model, _timeoutMs, Cache);
 
     /// <summary>
     /// Each call is a request of its own: its memory is given back when the next call starts, as the engine gives it back

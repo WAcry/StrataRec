@@ -319,6 +319,21 @@ internal static class BoundedCall
     }
 
     /// <summary>
+    /// The end of a call whose bound has passed before it starts (rule 8), or null while it has not: for a call site that
+    /// may answer without sending (a cache holding the answer), which must not answer when the call it stands for would
+    /// not be sent. The cancellation is the one <see cref="RunAsync{T, TCall}"/> would throw to the operator.
+    /// </summary>
+    public static (OperationCanceledException Exception, IoOutcome Outcome)? CutOff(CallBound bound)
+    {
+        if (bound.Caller.IsCancellationRequested)
+        {
+            return ((OperationCanceledException)Cancelled<bool>(bound, null, abandoned: false).Exception!, IoOutcome.Cancelled);
+        }
+
+        return bound.Passed ? ((OperationCanceledException)RanOut<bool>(bound, null, abandoned: false).Exception!, IoOutcome.Timeout) : null;
+    }
+
+    /// <summary>
     /// The rest of a call whose client did not answer synchronously; <paramref name="lease"/> holds the memory and the
     /// bound already. Only what the decision after the wait needs lives across it: the state machine is allocated for
     /// every pending call, so the result, the memory and the client's token are not kept in it (IO step 4 measured

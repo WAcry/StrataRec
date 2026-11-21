@@ -150,18 +150,19 @@ public sealed class ServiceCallReplayTests
     /// Of two partial answers with as much of what a call reads, the one that can tell its items is borrowed: both answered
     /// text <c>a</c> and no items, the second asked for 3 (the service had none), the first for 0 (it says nothing). The
     /// first was borrowed and the replay reported 3 items it could not tell besides the missing <c>b</c> (verification 2 of
-    /// IO step 2).
+    /// IO step 2). Since the review of IO step 3 a call reading outputs is digested with its limit, so the first is not even
+    /// a candidate: its text may say it was asked for none.
     /// </summary>
     [Fact]
     public void OfPartialAnswersAsGood_TheOneThatCanTellItsItems_IsBorrowed()
     {
         var run = RunReplayTests.Run();
-        run.ServiceCalls.Add(Recorded("none", Query(1, limit: 0), "ok", texts: new() { ["a"] = "A" }));
-        run.ServiceCalls.Add(Recorded("three", Query(1, limit: 3), "ok", texts: new() { ["a"] = "A" }));
+        run.ServiceCalls.Add(Recorded("none", Reading(Query(1, limit: 0), "a"), "ok", texts: new() { ["a"] = "A" }));
+        run.ServiceCalls.Add(Recorded("three", Reading(Query(1, limit: 3), "a"), "ok", texts: new() { ["a"] = "A" }));
         var replay = RunReplay.Create(run, "/runs/0");
         var asked = Reading(Query(1, limit: 3), "a", "b");
 
-        var status = replay.Call("added", new IoTarget(IoRoles.Recall, "s"), asked, new ServiceResponse(Memory, asked.Limit));
+        var status = replay.Call("added", new IoTarget(IoRoles.Recall, "s"), asked, new ServiceResponse(Memory, asked.Limit), out _);
 
         Assert.True(status.Succeeded);
         var gap = Assert.Single(replay.Gaps);
@@ -174,12 +175,12 @@ public sealed class ServiceCallReplayTests
     {
         var run = RunReplayTests.Run();
         var asked = Query(1);
-        run.ServiceCalls.Add(Recorded("first", asked, "ok", texts: new() { ["a"] = "A" }));
-        run.ServiceCalls.Add(Recorded("second", asked, "ok", texts: new() { ["b"] = "B" }));
+        run.ServiceCalls.Add(Recorded("first", Reading(asked, "a"), "ok", texts: new() { ["a"] = "A" }));
+        run.ServiceCalls.Add(Recorded("second", Reading(asked, "b"), "ok", texts: new() { ["b"] = "B" }));
         var replay = RunReplay.Create(run, "/runs/0");
         var response = new ServiceResponse(Memory, asked.Limit);
 
-        var status = replay.Call("added", new IoTarget(IoRoles.Recall, "s"), Reading(asked, "b"), response);
+        var status = replay.Call("added", new IoTarget(IoRoles.Recall, "s"), Reading(asked, "b"), response, out _);
 
         Assert.True(status.Succeeded);
         Assert.True(response.TryGetText("b", out var text));
@@ -249,7 +250,7 @@ public sealed class ServiceCallReplayTests
     private static (string Ids, bool Succeeded) Retrieve(RunReplay replay, string node, ServiceCall call)
     {
         var response = new ServiceResponse(Memory, call.Limit);
-        var status = replay.Call(node, new IoTarget(IoRoles.Recall, "s"), call, response);
+        var status = replay.Call(node, new IoTarget(IoRoles.Recall, "s"), call, response, out _);
         return (string.Join(",", response.Keys.ToArray().Select(k => k.Int64Value)), status.Succeeded);
     }
 }
