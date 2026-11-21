@@ -75,6 +75,19 @@ public sealed class MemoryVectorsServiceTests
     }
 
     [Fact]
+    public async Task TheVectorsLength_IsItsShapes_NotItsBuffers()
+    {
+        // A longer buffer than the shape holds is allowed (a rented one): a vector of shape [0] with two values in its
+        // buffer has no elements. It searched with the two (review of IO step 2).
+        var source = Create($$"""{ "query": "user_embedding", {{Items}} }""");
+
+        var (status, found) = await RetrieveAsync(source, [NamedInput.FromFloat64("user_embedding", [0], new[] { 1.0, 0.5 })]);
+
+        Assert.Equal("The query vector 'user_embedding' has 0 elements; the items' vectors have 2.", status.Error);
+        Assert.Empty(found);
+    }
+
+    [Fact]
     public async Task AnIndexWithoutItems_FindsNothing_ForAnyVector()
     {
         var source = Create("""{ "query": "user_embedding", "items": [] }""");

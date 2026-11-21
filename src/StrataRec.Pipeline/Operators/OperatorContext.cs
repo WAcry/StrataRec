@@ -372,6 +372,16 @@ public sealed class OperatorContext
             throw new ArgumentException($"The call asks for {call.Limit} item(s) and the response keeps {response.Limit}: create the response with the call's limit.", nameof(response));
         }
 
+        if (!string.Equals(call.Service, service.Name, StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"The call names service '{call.Service}', but it is sent to the binding '{service.Name}': name the binding.", nameof(call));
+        }
+
+        if (!call.Items.IsEmpty && call.Limit != 0)
+        {
+            throw new ArgumentException("A call about items adds none: its outputs are per item. Send items or ask for a limit, not both.", nameof(call));
+        }
+
         if (_state.Replay is { } replay)
         {
             try
@@ -453,6 +463,8 @@ public sealed class OperatorContext
     {
         public ValueTask<ServiceStatus> Send(CancellationToken token) => client.CallAsync(call, response, token);
 
+        public int Keys => call.Items.IsEmpty ? -1 : call.Items.Length;
+
         public bool Succeeded(ServiceStatus value, out string? error)
         {
             error = value.Error;
@@ -483,16 +495,32 @@ public sealed class OperatorContext
             recorder?.EndCall(sequence, result.Outcome, result.Error, cutOff, duration, response, answered ? result.Value : default);
         }
 
+        // Each instrument has its own boundary, as the call's other metrics (IoCall.Complete): what a host's listener throws
+        // loses that one measurement, and never the call's record or its answer.
         private static void CountGenerated(in ServiceStatus status, IoTarget target)
         {
             if (status.OutputTokens is { } tokens && StrataRecMetrics.IoOutputTokens.Enabled)
             {
-                StrataRecMetrics.IoOutputTokens.Add(tokens, target.Tags);
+                try
+                {
+                    StrataRecMetrics.IoOutputTokens.Add(tokens, target.Tags);
+                }
+                catch (Exception)
+                {
+                    // A metric listener threw: see above.
+                }
             }
 
             if (status.Truncated && StrataRecMetrics.IoTruncated.Enabled)
             {
-                StrataRecMetrics.IoTruncated.Add(1, target.Tags);
+                try
+                {
+                    StrataRecMetrics.IoTruncated.Add(1, target.Tags);
+                }
+                catch (Exception)
+                {
+                    // As above.
+                }
             }
         }
     }

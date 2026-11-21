@@ -73,6 +73,8 @@ public sealed class BoundedCallCurrentChangedTests
             return true;
         }
 
+        public int Keys => -1;
+
         public void Ended(in CallResult<int> result, TimeSpan duration)
         {
             lock (observed)

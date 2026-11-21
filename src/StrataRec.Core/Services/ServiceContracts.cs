@@ -203,7 +203,10 @@ public readonly struct NamedInput
     /// <summary>The tensor's shape; empty for text. A missing value's is the declared one: <c>[]</c> for a scalar, <c>[N]</c> for a <c>list&lt;E,N&gt;</c>, <c>[-1]</c> for a list of any length.</summary>
     public int[] Shape { get; }
 
-    /// <summary>The tensor's elements; default (none) for text and for a missing value.</summary>
+    /// <summary>
+    /// The tensor's elements; default (none) for text and for a missing value. The data may be a longer buffer (one rented
+    /// from a pool): the tensor is its first <see cref="Shape"/>-many elements, the product of the dimensions.
+    /// </summary>
     public TensorValues Values { get; }
 
     /// <summary>The text value.</summary>
@@ -229,7 +232,28 @@ public readonly struct NamedInput
     public ReadOnlyMemory<string> String => Values.String;
 
     /// <summary>A tensor of <typeparamref name="T"/>'s element type (see <see cref="TensorValues.TypeOf{T}"/>).</summary>
-    public static NamedInput FromValues<T>(string name, int[] shape, ReadOnlyMemory<T> data) => new(name, shape, TensorValues.Of(data), null);
+    /// <exception cref="ArgumentException">A dimension is negative, or <paramref name="data"/> holds fewer elements than the shape.</exception>
+    public static NamedInput FromValues<T>(string name, int[] shape, ReadOnlyMemory<T> data)
+    {
+        ArgumentNullException.ThrowIfNull(shape);
+        long elements = 1;
+        foreach (var dimension in shape)
+        {
+            if (dimension < 0)
+            {
+                throw new ArgumentException($"Input '{name}' has shape [{string.Join(", ", shape)}]: a value's dimensions are 0 or more (-1 is only a missing value's declared length).", nameof(shape));
+            }
+
+            elements = Math.Min(elements * dimension, long.MaxValue / 2);
+        }
+
+        if (data.Length < elements)
+        {
+            throw new ArgumentException($"Input '{name}' has shape [{string.Join(", ", shape)}], of {elements} element(s), and {data.Length} value(s).", nameof(data));
+        }
+
+        return new(name, shape, TensorValues.Of(data), null);
+    }
 
     public static NamedInput FromBool(string name, int[] shape, ReadOnlyMemory<bool> data) => FromValues(name, shape, data);
 
@@ -279,9 +303,12 @@ public readonly record struct ServiceCallOptions(long? Seed = null, int? MaxOutp
 /// </summary>
 /// <remarks>
 /// <para>A call with <see cref="Items"/> is about those items: every tensor output is per item, <c>BatchSize ×
-/// k</c> elements, the <c>k</c> of item <c>i</c> at <c>i × k</c>. That is what lets a replay answer an item from any
-/// recorded call that had it with the same inputs, however the items were batched (design 13.4). A call without items is
-/// answered as a whole.</para>
+/// k</c> elements, the <c>k</c> of item <c>i</c> at <c>i × k</c>, and it adds no items (its <see cref="Limit"/> is 0).
+/// That is what lets a replay answer an item from any recorded call that had it with the same inputs, however the items
+/// were batched (design 13.4). A call without items is answered as a whole.</para>
+/// <para>A service sees only what the call sends: its inputs, not the request's. A value of the request it needs is an
+/// input the operator sends (a recall node's <c>queries</c>, e.g. <c>ctx.request.region</c>), so the digest a replay
+/// matches by covers everything the service saw.</para>
 /// <para>The instance and everything it holds are the caller's, valid only during the call.</para>
 /// </remarks>
 public sealed class ServiceCall
@@ -304,18 +331,18 @@ public sealed class ServiceCall
     public ReadOnlyMemory<Keys.EntityKey> Items { get; init; }
 
     /// <summary>
-    /// The outputs the caller reads; empty when it reads whatever the service returns. A service may compute only these.
-    /// Only these are recorded and replayed.
+    /// The named outputs the caller reads; empty when it reads none (a recall reads only the items it adds). A service may
+    /// compute only these. Only these are recorded and replayed.
     /// </summary>
     public ReadOnlyMemory<string> Outputs { get; init; }
 
-    /// <summary>The most items the call may add (<see cref="IServiceResponse.AddItem(long, double)"/>); 0 for a call that adds none.</summary>
+    /// <summary>
+    /// The most items the call may add (<see cref="IServiceResponse.AddItem(long, double)"/>); 0 for a call that adds none,
+    /// as every call with <see cref="Items"/> does.
+    /// </summary>
     public int Limit { get; init; }
 
-    /// <summary>The request's inputs as the caller passed them (a user id, a session id, a query text).</summary>
-    public Values.RequestInputs Request { get; init; } = Values.RequestInputs.Empty;
-
-    /// <summary>The request's id, for a service that logs or traces calls by it.</summary>
+    /// <summary>The request's id, for a service that logs or traces calls by it; it does not change the answer.</summary>
     public string RequestId { get; init; } = string.Empty;
 
     public ServiceCallOptions Options { get; init; }

@@ -70,9 +70,18 @@ public sealed class LinearModelClientTests
     }
 
     [Fact]
+    public async Task AMissingInput_FailsTheCall_NamingIt()
+    {
+        // It read the missing value's empty buffer and threw (review of IO step 2).
+        var status = await Create().CallAsync(Call(2, NamedInput.FromMissing("x", TensorElementType.Float32, [2])), new Outputs(), CancellationToken.None);
+
+        Assert.Equal(ServiceStatus.Failed("Input 'x' is missing; linear@1 needs a value per row."), status);
+    }
+
+    [Fact]
     public async Task ANegativeBatchSize_FailsTheCall()
     {
-        var status = await Create().CallAsync(Call(-1, NamedInput.FromFloat32("x", new[] { -1 }, new float[1])), new Outputs(), CancellationToken.None);
+        var status = await Create().CallAsync(Call(-1, NamedInput.FromFloat32("x", new[] { 1 }, new float[1])), new Outputs(), CancellationToken.None);
 
         Assert.Equal(ServiceStatus.Failed("The call's batch size is -1; it must not be negative."), status);
     }

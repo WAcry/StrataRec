@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
@@ -9,12 +10,12 @@ using StrataRec.Features.Connectors;
 namespace StrataRec.Pipeline.Sources;
 
 /// <summary>
-/// <c>memory_list@1</c>: a fixed candidate list, optionally per value of a request input. For local runs and tests.
+/// <c>memory_list@1</c>: a fixed candidate list, optionally per value of an input of the call. For local runs and tests.
 /// </summary>
 /// <remarks>
 /// Settings: <c>"items"</c> — array of ids or <c>{"id": …, "score": …}</c> objects (scores default to a descending
 /// ramp); or <c>"by_input": "user_id"</c> with <c>"lists": {"&lt;input value&gt;": [...], "*": [...]}</c>
-/// (<c>"*"</c> is the fallback). Also <c>"data_file"</c> to load the same object from a file (settings in the binding
+/// (<c>"*"</c> is the fallback, also of a missing value), the input sent by the recall node's <c>queries</c>. Also <c>"data_file"</c> to load the same object from a file (settings in the binding
 /// override the file's), plus <c>"latency_ms"</c> and <c>"fail"</c> for fault injection.
 /// </remarks>
 public sealed class MemoryListService : IServiceClient
@@ -49,9 +50,22 @@ public sealed class MemoryListService : IServiceClient
         var list = _items;
         if (_byInput is not null)
         {
-            var key = call.Request[_byInput];
-            var keyText = key.IsMissing ? null : key.Kind == Core.Types.StorageKind.String ? key.AsString() : key.ToString();
-            if (keyText is null || !_lists.TryGetValue(keyText, out list!))
+            if (!call.TryGetInput(_byInput, out var input))
+            {
+                return ServiceStatus.Failed(
+                    $"memory_list@1 picks its list by the input '{_byInput}', and the call of '{call.Service}' has none; send it from the recall node's " +
+                    $"queries, e.g. \"queries\": {{ \"{call.Service}\": {{ \"{_byInput}\": \"ctx.request.{_byInput}\" }} }}.");
+            }
+
+            if (KeyText(input, out var error) is { } keyText && _lists.TryGetValue(keyText, out var keyed))
+            {
+                list = keyed;
+            }
+            else if (error is not null)
+            {
+                return ServiceStatus.Failed(error);
+            }
+            else
             {
                 list = _lists.TryGetValue("*", out var fallback) ? fallback : Array.Empty<Entry>();
             }
@@ -73,6 +87,42 @@ public sealed class MemoryListService : IServiceClient
         return ServiceStatus.Ok;
     }
 
+    /// <summary>The list key a single value spells (null when it is missing), or why the input is not a single value.</summary>
+    private static string? KeyText(in NamedInput input, out string? error)
+    {
+        error = null;
+        if (input.ElementType == TensorElementType.Text)
+        {
+            return input.Text;
+        }
+
+        if (input.Shape.Length != 0)
+        {
+            error = $"The input '{input.Name}' must be a single value; it has shape [{string.Join(", ", input.Shape)}].";
+            return null;
+        }
+
+        if (input.IsMissing)
+        {
+            return null;
+        }
+
+        switch (input.ElementType)
+        {
+            case TensorElementType.String:
+                return input.String.Span[0];
+            case TensorElementType.Int64:
+                return input.Int64.Span[0].ToString(CultureInfo.InvariantCulture);
+            case TensorElementType.Int32:
+                return input.Int32.Span[0].ToString(CultureInfo.InvariantCulture);
+            case TensorElementType.Bool:
+                return input.Bool.Span[0] ? "true" : "false";
+            default:
+                error = $"The input '{input.Name}' must be a string, an integer or a bool; it is {TensorValues.Name(input.ElementType)}.";
+                return null;
+        }
+    }
+
     internal static MemoryListService Create(Entry[] items, string? byInput, Dictionary<string, Entry[]> lists, int latencyMs, bool fail) =>
         new(items, byInput, lists, latencyMs, fail);
 
@@ -88,7 +138,10 @@ public class MemoryListData
     /// </summary>
     public List<JsonElement>? Items { get; init; }
 
-    /// <summary>The request input whose value picks the list of <c>lists</c> a request gets.</summary>
+    /// <summary>
+    /// The input of the call whose value picks the list of <c>lists</c> a call gets: a value the recall node's
+    /// <c>queries</c> sends, e.g. <c>"queries": { "popular": { "user_id": "ctx.request.user_id" } }</c>.
+    /// </summary>
     public string? ByInput { get; init; }
 
     /// <summary>A list per value of <c>by_input</c>, each like <c>items</c>; <c>"*"</c> is the list of every other value.</summary>
@@ -143,8 +196,8 @@ public sealed class MemoryListServiceFactory : BindingFactory<IServiceClient, Me
         var byInput = settings.ByInput ?? data?.ByInput;
         if (byInput is { Length: 0 })
         {
-            throw In(settings.ByInput is null ? file : null, new BindingException("/by_input", "'by_input' must name a request input.",
-                "give the request input whose value picks the list, e.g. \"by_input\": \"user_id\""));
+            throw In(settings.ByInput is null ? file : null, new BindingException("/by_input", "'by_input' must name an input of the call.",
+                "give the input whose value picks the list, which the recall node's queries send, e.g. \"by_input\": \"user_id\""));
         }
 
         var lists = new Dictionary<string, MemoryListService.Entry[]>(StringComparer.Ordinal);

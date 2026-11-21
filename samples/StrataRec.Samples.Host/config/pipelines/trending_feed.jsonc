@@ -24,7 +24,11 @@
   "nodes": {
     "recall": {
       "order": 100, "op": "MultiSourceRecall@1",
-      "config": { "quotas_param": "recall_quotas", "source_order": ["trending", "editorial"] }
+      "config": {
+        "quotas_param": "recall_quotas", "source_order": ["trending", "editorial"],
+        // A service sees only what its call sends: trending@1 picks its list by the request's region.
+        "queries": { "trending": { "region": "ctx.request.region" } }
+      }
     },
     "engagement": {
       "order": 200, "op": "ModelScorer@1", "on_failure": "fallback", "fallback": "engagement_backup",

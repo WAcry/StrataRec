@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Text;
 using StrataRec.Core.Types;
-using StrataRec.Core.Values;
 using StrataRec.Expressions.Binding;
 
 namespace StrataRec.Expressions.Ir;

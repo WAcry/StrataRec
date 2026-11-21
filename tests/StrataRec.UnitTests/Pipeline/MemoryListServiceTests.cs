@@ -24,10 +24,10 @@ public sealed class MemoryListServiceTests
     private static Dictionary<string, JsonElement> Settings(string json) =>
         JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)!;
 
-    private static async Task<(ServiceStatus Status, List<long> Ids)> RetrieveAsync(IServiceClient source)
+    private static async Task<(ServiceStatus Status, List<long> Ids)> RetrieveAsync(IServiceClient source, params NamedInput[] inputs)
     {
         var sink = new Sink();
-        var call = new ServiceCall { Service = "s", Limit = 10, RequestId = "r" };
+        var call = new ServiceCall { Service = "s", Limit = 10, RequestId = "r", Inputs = inputs };
         var status = await source.CallAsync(call, sink, CancellationToken.None);
         return (status, sink.Ids);
     }
@@ -57,5 +57,31 @@ public sealed class MemoryListServiceTests
 
         Assert.False(status.Succeeded);
         Assert.Empty(ids);
+    }
+
+    /// <summary>
+    /// The list is picked by an input of the call, which the recall node's queries send: a service sees only what its call
+    /// sends, so the digest a replay matches by covers it (it read the request's inputs, which a replay could drop unseen).
+    /// </summary>
+    [Fact]
+    public async Task ByInput_PicksTheListByTheCallsInput_AMissingValueGetsTheFallback_AndAnAbsentInputFails()
+    {
+        var source = new MemoryListServiceFactory().Create(new BindingContext("s",
+            Settings("""{ "by_input": "segment", "lists": { "x": [7], "42": [8], "*": [9] } }"""), Path.GetTempPath(), null));
+        var memory = new StrataRec.Core.Memory.RequestMemory();
+        NamedInput Segment(StrataRec.Core.Types.ColumnType type, ScalarValue value) => StrataRec.Pipeline.Operators.ServiceInputs.Create("segment", type, value, memory);
+
+        Assert.Equal([7L], (await RetrieveAsync(source, Segment(StrataRec.Core.Types.ColumnType.String, ScalarValue.FromString("x")))).Ids);
+        Assert.Equal([8L], (await RetrieveAsync(source, Segment(StrataRec.Core.Types.ColumnType.Int64, ScalarValue.FromInt64(42)))).Ids);
+        Assert.Equal([9L], (await RetrieveAsync(source, Segment(StrataRec.Core.Types.ColumnType.String.AsNullable(), ScalarValue.Missing))).Ids);
+        Assert.Equal([9L], (await RetrieveAsync(source, Segment(StrataRec.Core.Types.ColumnType.String, ScalarValue.FromString("other")))).Ids);
+
+        var (absent, ids) = await RetrieveAsync(source);
+        Assert.Empty(ids);
+        Assert.StartsWith("memory_list@1 picks its list by the input 'segment', and the call of 's' has none", absent.Error, StringComparison.Ordinal);
+        Assert.Contains("\"queries\": { \"s\": { \"segment\": \"ctx.request.segment\" } }", absent.Error, StringComparison.Ordinal);
+
+        var (list, _) = await RetrieveAsync(source, Segment(StrataRec.Core.Types.ColumnType.List(StrataRec.Core.Types.StorageKind.Int64), ScalarValue.FromInt64List([1, 2])));
+        Assert.Equal("The input 'segment' must be a single value; it has shape [2].", list.Error);
     }
 }

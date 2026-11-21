@@ -78,13 +78,13 @@ public sealed class MemoryVectorsService : IServiceClient
             return ServiceStatus.Ok; // nothing to search with, or nothing to find: the node's other sources answer
         }
 
-        var vector = input.Float64.Span;
-        if (vector.Length != _dimensions)
+        // The shape says how many elements the vector has; its data may be a longer buffer.
+        if (input.Shape[0] != _dimensions)
         {
-            return ServiceStatus.Failed($"The query vector '{_query}' has {vector.Length} elements; the items' vectors have {_dimensions}.");
+            return ServiceStatus.Failed($"The query vector '{_query}' has {input.Shape[0]} elements; the items' vectors have {_dimensions}.");
         }
 
-        return Search(vector, call.Limit, response);
+        return Search(input.Float64.Span[.._dimensions], call.Limit, response);
     }
 
     private ServiceStatus Search(ReadOnlySpan<double> vector, int limit, IServiceResponse sink)

@@ -462,7 +462,7 @@
                   ]
                 },
                 "by_input": {
-                  "description": "The request input whose value picks the list of lists a request gets.",
+                  "description": "The input of the call whose value picks the list of lists a call gets: a value the recall node's queries sends, e.g. \"queries\": { \"popular\": { \"user_id\": \"ctx.request.user_id\" } }.",
                   "type": [
                     "string",
                     "null"
@@ -659,7 +659,7 @@
                   }
                 },
                 "region_input": {
-                  "description": "The request input whose value picks a region's list, e.g. region; without it, every request gets the overall list.",
+                  "description": "The input of the call whose value picks a region's list, e.g. region, which the recall node sends (\"queries\": { \"trending\": { \"region\": \"ctx.request.region\" } }); without it, every call gets the overall list.",
                   "type": [
                     "string",
                     "null"

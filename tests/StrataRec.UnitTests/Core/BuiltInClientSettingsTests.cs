@@ -45,7 +45,7 @@ public sealed class BuiltInClientSettingsTests
         { "memory_list@1", """{ "items": [{ "id": 1, "s/co~re": 1 }] }""", "/items/0/s~1co~0re", "Unknown key 's/co~re' in an item of memory_list@1.", null }, // review 41
         { "memory_list@1", """{ "items": [{ "score": 1 }] }""", "/items/0", "'id' is required in an item of memory_list@1.", "'id': " },
         { "memory_list@1", """{ "by_input": "user_id", "lists": { "7": 7 } }""", "/lists/7", "Entry '7' of 'lists' must be an array, got the number 7.", null },
-        { "memory_list@1", """{ "by_input": "", "lists": {} }""", "/by_input", "'by_input' must name a request input.", "e.g. \"by_input\": \"user_id\"" },
+        { "memory_list@1", """{ "by_input": "", "lists": {} }""", "/by_input", "'by_input' must name an input of the call.", "e.g. \"by_input\": \"user_id\"" },
         { "memory_list@1", """{ "data_file": "list.json" }""", "/data_file", "list.json' at /itemz: Unknown key 'itemz' in the file.", "did you mean 'items'?" },
         { "memory_list@1", """{ "data_file": "bad-item.json" }""", "/data_file", "bad-item.json' at /items/1: An id must be a string or an int64; got true.", null },
         { "memory_list@1", """{ "data_file": "missing.json" }""", "/data_file", "missing.json' cannot be read", "a relative path resolves against" },

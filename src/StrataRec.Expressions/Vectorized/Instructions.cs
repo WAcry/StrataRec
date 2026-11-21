@@ -1,7 +1,6 @@
 using System.Numerics.Tensors;
 using System.Runtime.InteropServices;
 using StrataRec.Core.Columns;
-using StrataRec.Core.Values;
 using StrataRec.Expressions.Binding;
 using StrataRec.Expressions.Ir;
 using StrataRec.Expressions.Runtime;

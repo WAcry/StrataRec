@@ -99,6 +99,12 @@ public sealed class ServiceResponse : IServiceResponse
     /// <summary>The output the client wrote under <paramref name="name"/>, of the element type it chose; a name asked for twice keeps the last buffer.</summary>
     public bool TryGetValues(string name, out TensorValues values)
     {
+        if (Volatile.Read(ref _abandoned))
+        {
+            values = default;
+            return false;
+        }
+
         lock (_gate)
         {
             if (!_abandoned && Find(_tensors, name) is >= 0 and var i)
@@ -114,6 +120,12 @@ public sealed class ServiceResponse : IServiceResponse
 
     public bool TryGetText(string name, out string text)
     {
+        if (Volatile.Read(ref _abandoned))
+        {
+            text = string.Empty;
+            return false;
+        }
+
         lock (_gate)
         {
             if (!_abandoned && Find(_texts, name) is >= 0 and var i)
@@ -159,14 +171,15 @@ public sealed class ServiceResponse : IServiceResponse
         }
     }
 
-    /// <summary>The call was abandoned with the client still running: closes the response and hides what it holds.</summary>
+    /// <summary>
+    /// The call was abandoned with the client still running: closes the response and hides what it holds, without waiting
+    /// for a write in progress (the wait it ends must not depend on one: renting from a host's buffer pool may block). A
+    /// write in progress completes into buffers the call keeps rented until the client completes, and nobody reads them.
+    /// </summary>
     internal void Abandon()
     {
-        lock (_gate)
-        {
-            Volatile.Write(ref _abandoned, true);
-            Volatile.Write(ref _closed, true);
-        }
+        Volatile.Write(ref _abandoned, true);
+        Volatile.Write(ref _closed, true);
     }
 
     private static void Set<T>(ref List<(string Name, T Value)>? entries, string name, T value)

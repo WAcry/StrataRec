@@ -190,7 +190,7 @@ public sealed class CustomPlacementTests
             {
                 // Ask for more than the slots: some candidates may be in the table already.
                 var buffer = new ServiceResponse(context.Memory, 2 * slots.Length);
-                var call = new ServiceCall { Service = source.Name, Limit = buffer.Limit, Request = context.Inputs, RequestId = context.RequestId };
+                var call = new ServiceCall { Service = source.Name, Limit = buffer.Limit, RequestId = context.RequestId };
                 var status = await context.CallAsync(source, call, buffer);
                 if (!status.Succeeded)
                 {

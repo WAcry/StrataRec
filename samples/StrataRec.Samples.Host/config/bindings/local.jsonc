@@ -19,8 +19,8 @@
       "weights": { "ctr": 30.0, "freshness": 1.5, "affinity": 0.8 },
       "output": "p_engage"
     },
-    // trending@1 (Components/TrendingService.cs), a recall service: the request input "region" picks a region's list;
-    // without it, the overall list.
+    // trending@1 (Components/TrendingService.cs), a recall service: the input "region" the recall node sends picks a
+    // region's list; without a region, the overall list.
     "trending": {
       "client": "trending@1",
       "region_input": "region",

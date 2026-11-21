@@ -88,6 +88,8 @@ public sealed class BoundedCallSpanTests
             return true;
         }
 
+        public int Keys => -1;
+
         public void Ended(in CallResult<int> result, TimeSpan duration)
         {
         }

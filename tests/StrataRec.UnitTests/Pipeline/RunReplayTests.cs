@@ -106,6 +106,58 @@ public sealed class RunReplayTests
         Assert.Equal((5L, 7L), (staging.Get(0, 0).AsInt64(), staging.Get(0, 1).AsInt64()));
     }
 
+    /// <summary>
+    /// Two nodes call one model with the same rows and inputs, each reading its own output. Swapped in the replay, the one
+    /// that asks first took the other's recording (matched by items and inputs alone) and lacked its own output (review of
+    /// IO step 2): a node's own recorded call answers it, another node's only when it has what the call reads.
+    /// </summary>
+    [Fact]
+    public void TwoNodesCallingOneModelWithTheSameRows_EachGetTheirOwnOutputs_InEitherOrder()
+    {
+        var run = Run();
+        var call = Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new float[] { 1, 2 }));
+        ReplayServiceCall Of(int seq, string node, string output, float[] values) => new()
+        {
+            Seq = seq, Node = node, Service = "m", Role = "model", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(call).ToList(),
+            Outputs = new Dictionary<string, ReplayOutput> { [output] = ReplayJson.Tensor(TensorValues.Of<float>(values)) },
+        };
+        run.ServiceCalls.Add(Of(0, "click", "score", [10, 20]));
+        run.ServiceCalls.Add(Of(1, "extra", "p_extra", [5, 6]));
+        var replay = RunReplay.Create(run, "/runs/0");
+        EntityKey[] keys = [EntityKey.FromInt64(1), EntityKey.FromInt64(2)];
+
+        var extraOut = new ArrayOutputWriter();
+        var clickOut = new ArrayOutputWriter();
+        var extraStatus = replay.InvokeModel(call.Reading("p_extra"), extraOut, keys, "extra");
+        var clickStatus = replay.InvokeModel(call, clickOut, keys, "click");
+        var addedOut = new ArrayOutputWriter();
+        var added = replay.InvokeModel(call.Reading("p_extra"), addedOut, keys, "added"); // borrows the call that has it
+
+        Assert.True(extraStatus.Succeeded && clickStatus.Succeeded && added.Succeeded);
+        Assert.Equal(new float[] { 5, 6 }, extraOut.Floats["p_extra"]);
+        Assert.Equal(new float[] { 10, 20 }, clickOut.Floats["score"]);
+        Assert.Equal(new float[] { 5, 6 }, addedOut.Floats["p_extra"]);
+        Assert.Empty(replay.Gaps);
+    }
+
+    /// <summary>
+    /// A rebatched call of an item the recording has, reading only an output no recorded call has: a gap of that output,
+    /// not of the item (it was reported without its output's name, review of IO step 2).
+    /// </summary>
+    [Fact]
+    public void ARebatchedCallReadingOnlyAnUnrecordedOutput_IsAGapOfThatOutput()
+    {
+        var run = Run();
+        run.ServiceCalls.Add(ModelCallOf(0, Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new float[] { 1, 2 })), new long[] { 1, 2 }, 10, 20));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var status = replay.InvokeModel(Call(1, NamedInput.FromFloat32("x", new[] { 1 }, new float[] { 2 })).Reading("p_extra"), new ArrayOutputWriter(), [EntityKey.FromInt64(2)]);
+
+        Assert.False(status.Succeeded);
+        var gap = Assert.Single(replay.Gaps);
+        Assert.Equal(("p_extra", "not_recorded", "2"), (gap.Field, gap.Reason, Assert.Single(gap.Examples)));
+    }
+
     [Fact]
     public void AnOutputTheRecordedCallDidNotAskFor_IsAGapOfThatOutput()
     {
@@ -123,7 +175,8 @@ public sealed class RunReplayTests
         Assert.Equal(new float[] { 10, 20 }, writer.Floats["score"]);
         Assert.False(writer.Arrays.ContainsKey("p_extra"));
         var gap = Assert.Single(replay.Gaps);
-        Assert.Equal(("model", "m", "p_extra", "not_recorded", 2, "ranker"), (gap.Kind, gap.Source, gap.Field, gap.Reason, gap.Count, gap.Examples.Single()));
+        Assert.Equal(("model", "m", "p_extra", "not_recorded", 2), (gap.Kind, gap.Source, gap.Field, gap.Reason, gap.Count));
+        Assert.Equal(["1", "2"], gap.Examples);
         Assert.Equal("model m: output 'p_extra' is not in the recording for 2 item(s) or call(s)", gap.Description);
     }
 
@@ -204,9 +257,9 @@ public sealed class RunReplayTests
         var replay = RunReplay.Create(run, "/runs/0");
 
         var exact = new ArrayOutputWriter();
-        var exactStatus = replay.InvokeModel(recorded, exact, new[] { EntityKey.FromInt64(1), EntityKey.FromInt64(2) });
+        var exactStatus = replay.InvokeModel(recorded.Reading(Typed), exact, new[] { EntityKey.FromInt64(1), EntityKey.FromInt64(2) });
         var rebatched = new ArrayOutputWriter();
-        var rebatchedStatus = replay.InvokeModel(Call(3, NamedInput.FromInt64("x", new[] { 3 }, new long[] { 2, 7, 1 })), rebatched,
+        var rebatchedStatus = replay.InvokeModel(Call(3, NamedInput.FromInt64("x", new[] { 3 }, new long[] { 2, 7, 1 })).Reading(Typed), rebatched,
             new[] { EntityKey.FromInt64(2), EntityKey.FromInt64(7), EntityKey.FromInt64(1) });
 
         Assert.True(exactStatus.Succeeded && rebatchedStatus.Succeeded);
@@ -249,7 +302,7 @@ public sealed class RunReplayTests
         var replay = RunReplay.Create(run, "/runs/0");
 
         var writer = new ArrayOutputWriter();
-        var status = replay.InvokeModel(Call(1, NamedInput.FromInt32("x", new[] { 1, 3 }, new[] { 4, 5, 6 })), writer, new[] { EntityKey.FromInt64(2) });
+        var status = replay.InvokeModel(Call(1, NamedInput.FromInt32("x", new[] { 1, 3 }, new[] { 4, 5, 6 })).Reading("v"), writer, new[] { EntityKey.FromInt64(2) });
 
         Assert.True(status.Succeeded, status.Error);
         Assert.Equal(new[] { 4, 5, 6 }, (int[])writer.Arrays["v"]);
@@ -279,7 +332,7 @@ public sealed class RunReplayTests
         var replay = RunReplay.Create(run, "/runs/0");
 
         var writer = new ArrayOutputWriter();
-        var status = replay.InvokeModel(Call(1, NamedInput.FromInt32("x", new[] { 1, 3 }, new[] { 4, 5, 7 })), writer, new[] { EntityKey.FromInt64(2) }, "b");
+        var status = replay.InvokeModel(Call(1, NamedInput.FromInt32("x", new[] { 1, 3 }, new[] { 4, 5, 7 })).Reading("v"), writer, new[] { EntityKey.FromInt64(2) }, "b");
 
         Assert.True(status.Succeeded, status.Error);
         Assert.Equal(new[] { 0, 0, 0 }, (int[])writer.Arrays["v"]);
@@ -309,12 +362,12 @@ public sealed class RunReplayTests
         var replay = RunReplay.Create(run, "/runs/0");
 
         var writer = new ArrayOutputWriter();
-        var status = replay.InvokeModel(Call(1, NamedInput.FromInt32("x", new[] { 1, 2 }, new[] { 3, 4 })), writer, new[] { EntityKey.FromInt64(2) }, "a");
+        var status = replay.InvokeModel(Call(1, NamedInput.FromInt32("x", new[] { 1, 2 }, new[] { 3, 4 })).Reading("v", "w"), writer, new[] { EntityKey.FromInt64(2) }, "a");
 
         Assert.True(status.Succeeded, status.Error);
         Assert.Equal(new[] { 3, 4 }, (int[])writer.Arrays["w"]);
         Assert.Equal(["w"], writer.Arrays.Keys); // v is absent: a ModelScorer reading it fails, as it failed on the long one
-        Assert.Empty(replay.Gaps);
+        Assert.Empty(replay.Gaps); // v was recorded, malformed: not a gap
     }
 
     /// <summary>A float64 input is in the digest as itself: 0.1 and the float nearest it are other inputs.</summary>
@@ -372,8 +425,8 @@ public sealed class RunReplayTests
         var replay = RunReplay.Create(run, "/runs/0");
 
         var why = new ArrayOutputWriter();
-        var answered = replay.InvokeModel(TextCall("why 50"), why, new[] { EntityKey.FromInt64(50) });
-        var note = replay.InvokeModel(TextCall("note 60"), new ArrayOutputWriter(), new[] { EntityKey.FromInt64(60) });
+        var answered = replay.InvokeModel(TextCall("why 50"), why, new[] { EntityKey.FromInt64(50) }, "annotator");
+        var note = replay.InvokeModel(TextCall("note 60"), new ArrayOutputWriter(), new[] { EntityKey.FromInt64(60) }, "notes");
 
         Assert.True(answered.Succeeded, answered.Error);
         Assert.Equal("WHY 50", Assert.Single(why.Texts).Value);
@@ -454,7 +507,14 @@ public sealed class RunReplayTests
         }
     }
 
-    internal static ServiceCall Call(int batch, params NamedInput[] inputs) => new() { Service = "m", Inputs = inputs, BatchSize = batch };
+    /// <summary>A call of model <c>m</c> that reads its output <c>score</c>, as a model operator names what it reads.</summary>
+    internal static ServiceCall Call(int batch, params NamedInput[] inputs) => new() { Service = "m", Inputs = inputs, BatchSize = batch, Outputs = Score };
+
+    private static readonly string[] Score = ["score"];
+
+    private static readonly string[] Answer = ["answer"];
+
+    private static readonly string[] Typed = ["n", "d", "label", "ok", "v"];
 
     internal static string[] RowDigests(ServiceCall call)
     {
@@ -480,6 +540,7 @@ public sealed class RunReplayTests
     internal static ServiceCall TextCall(string prompt, int batch = 1) => new()
     {
         Service = "m", Inputs = new[] { NamedInput.FromText("user", prompt) }, BatchSize = batch, Options = new ServiceCallOptions(MaxOutputTokens: 64),
+        Outputs = Answer,
     };
 
     /// <summary>A successful recorded generative call of model <c>m</c> for <paramref name="keys"/>, answering <paramref name="text"/>.</summary>
@@ -640,4 +701,14 @@ internal static class ReplayModelCalls
 
         return status;
     }
+}
+
+/// <summary>The same call, reading other outputs.</summary>
+internal static class ServiceCallReading
+{
+    public static ServiceCall Reading(this ServiceCall call, params string[] outputs) => new()
+    {
+        Service = call.Service, Version = call.Version, Inputs = call.Inputs, BatchSize = call.BatchSize, Items = call.Items, Outputs = outputs,
+        Limit = call.Limit, Options = call.Options,
+    };
 }

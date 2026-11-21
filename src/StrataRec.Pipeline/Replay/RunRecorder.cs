@@ -244,7 +244,8 @@ internal sealed class RunRecorder : IFeatureCallHook
             }
         }
 
-        static bool Reads(string[]? requested, string name) => requested is null || requested.Length == 0 || Array.IndexOf(requested, name) >= 0;
+        // Only the outputs the call reads: a recall reads none, only the items it adds.
+        static bool Reads(string[]? requested, string name) => requested is not null && Array.IndexOf(requested, name) >= 0;
     }
 
     /// <summary>The time left when the current position passed its <c>when</c>.</summary>

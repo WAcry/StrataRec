@@ -446,7 +446,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
             calls[i] = Send(context, sources[i], buffers[i]!);
         }
 
-        /// <summary>One source's call: its quota, the request's inputs and, when it has a query, the query's values now.</summary>
+        /// <summary>One source's call: its quota and, when it has a query, the query's values now.</summary>
         private static Task<ServiceStatus> Send(OperatorContext context, SourceEntry source, ServiceResponse response)
         {
             var call = new ServiceCall
@@ -454,7 +454,6 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 Service = source.Name,
                 Inputs = source.Query?.Evaluate(context) ?? [],
                 Limit = response.Limit,
-                Request = context.Inputs,
                 RequestId = context.RequestId,
                 Options = new ServiceCallOptions(Seed: context.Seed),
             };

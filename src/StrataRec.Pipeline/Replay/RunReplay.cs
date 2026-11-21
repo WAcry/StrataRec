@@ -165,23 +165,23 @@ internal sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// Answers a service call from the recording. A call about no items is matched by the digest of its whole input: this
-    /// node's next recorded call with that digest is replayed as recorded, its failure included, and consumed; otherwise
-    /// any successful recorded call with that digest answers it, and nothing is consumed (a node the configuration added
-    /// asks what another node asked, whatever order the nodes ask in). A call about items takes the next recorded call with
-    /// the same items and the same inputs for each, and replays it as recorded; otherwise each item's outputs come from
-    /// whichever successful call had that item with the same inputs (<see cref="Synthesize"/>). A call the recording
-    /// cannot answer fails, and is a gap: <c>inputs_changed</c> when the recording has the node's call of the service with
-    /// other inputs, else <c>not_recorded</c>. A recorded call the budget or the caller cut off throws
-    /// <see cref="OperationCanceledException"/> again, as the operator saw it. An output the call asks for and the answer
-    /// lacks is a <c>not_recorded</c> gap of that output: only the outputs a call asked for are recorded, so a
-    /// configuration that reads another output of the same call (an experiment maps one more) finds none in the bundle.
+    /// Answers a service call from the recording, by the digest of its inputs: a call about no items by that of its whole
+    /// input, a call about items by each item's. The node's own next recorded call with the same inputs (and the same items)
+    /// is consumed, and replayed as recorded when it failed or answers the call: it has every output the call reads and,
+    /// unless the service had no more, as many items as it asks for. Otherwise the successful recorded call with the same
+    /// inputs that answers it best does, whichever node made it, and nothing is consumed (a node the configuration added
+    /// asks what another node asked; the order nodes ask in changes nothing). A call about items the recording has in no
+    /// such call is synthesized item by item (<see cref="Synthesize"/>). What the recording cannot answer is a gap:
+    /// <c>inputs_changed</c> when it has the node's call of the service only with other inputs, else <c>not_recorded</c>;
+    /// an output the call reads and the answer lacks is a <c>not_recorded</c> gap of that output (only the outputs a call
+    /// asked for are recorded, so a configuration that reads another one finds none). A recorded call the budget or the
+    /// caller cut off throws <see cref="OperationCanceledException"/> again, as the operator saw it.
     /// </summary>
     /// <remarks>
     /// A recorded failure answers only the call it was: the same node, entities and inputs. Taken by entities alone, the
     /// failure of another call of the same model and entity (another node, another prompt) answered this one, and hid the
-    /// success the recording has for its own inputs (review 30). A call whose inputs changed since a recorded failure is
-    /// synthesized like any other, so its items are reported as gaps rather than failed for a reason about other inputs.
+    /// success the recording has for its own inputs (review 30). A node's own answer is consumed even when another answers
+    /// the call better, so its later calls still meet their own recorded calls in order.
     /// </remarks>
     /// <param name="node">The calling node: its own recorded calls answer it first, and a synthesized call whose items all
     /// changed takes its outputs' widths from them before another node's.</param>
@@ -196,16 +196,24 @@ internal sealed class RunReplay : IFeatureCallHook
             if (items.IsEmpty)
             {
                 var digest = ReplayJson.Hex(ServiceInputDigest.Call(call, order));
-                var answer = Take(calls, entry => entry.Keys is null && entry.Node == node && entry.Digests[0] == digest)
-                    ?? Find(calls, entry => entry.Keys is null && entry.Outcome == IoOutcome.Ok && entry.Digests[0] == digest);
+                var own = Take(calls, entry => entry.Keys is null && entry.Node == node && entry.Digests[0] == digest);
+                if (own is not null && (own.Outcome != IoOutcome.Ok || Answers(own, call)))
+                {
+                    return Unanswered(call, response, Answer(own, call, response, kind, node), kind, node, null);
+                }
+
+                var answer = Best(calls, entry => entry.Keys is null && entry.Outcome == IoOutcome.Ok && entry.Digests[0] == digest, call);
                 if (answer is null)
                 {
-                    var changed = Find(calls, entry => entry.Keys is null && entry.Node == node) is not null;
+                    // Inputs changed when the node has the service's call only with other inputs; its calls with these
+                    // inputs used up (a recorded failure replayed already) is not a change.
+                    var changed = Find(calls, entry => entry.Keys is null && entry.Node == node && entry.Digests[0] != digest) is not null
+                        && Find(calls, entry => entry.Keys is null && entry.Node == node && entry.Digests[0] == digest) is null;
                     AddGap(kind, call.Service, null, changed ? "inputs_changed" : "not_recorded", 1, node);
                     return ServiceStatus.Failed($"{kind} '{call.Service}': this call is not in the replay bundle");
                 }
 
-                return Unanswered(call, response, Answer(answer, call, response, kind, node), kind, node, 1);
+                return Unanswered(call, response, Answer(answer, call, response, kind, node), kind, node, null);
             }
 
             var keys = items.ToArray();
@@ -215,16 +223,83 @@ internal sealed class RunReplay : IFeatureCallHook
                 digests[r] = ReplayJson.Hex(ServiceInputDigest.Row(call, order, r));
             }
 
-            var positional = Take(calls, entry => entry.Keys is not null && entry.Keys.AsSpan().SequenceEqual(keys) && entry.Digests.AsSpan().SequenceEqual(digests));
-            var status = positional is not null
-                ? Answer(positional, call, response, kind, node)
+            bool Same(ServiceEntry entry) => entry.Keys is not null && entry.Keys.AsSpan().SequenceEqual(keys) && entry.Digests.AsSpan().SequenceEqual(digests);
+            var ownCall = Take(calls, entry => entry.Node == node && Same(entry));
+            if (ownCall is not null && (ownCall.Outcome != IoOutcome.Ok || Answers(ownCall, call)))
+            {
+                return Unanswered(call, response, Answer(ownCall, call, response, kind, node), kind, node, keys);
+            }
+
+            var same = Find(calls, entry => entry.Outcome == IoOutcome.Ok && Same(entry) && Answers(entry, call));
+            return same is not null
+                ? Unanswered(call, response, Answer(same, call, response, kind, node), kind, node, keys)
                 : Synthesize(call, calls, response, keys, digests, node, kind);
-            return Unanswered(call, response, status, kind, node, keys.Length);
         }
     }
 
-    /// <summary>Reports each output the call asks for that its successful answer lacks (see <see cref="Call"/>).</summary>
-    private ServiceStatus Unanswered(ServiceCall call, ServiceResponse response, ServiceStatus status, string kind, string node, int count)
+    /// <summary>
+    /// Whether a recorded call answers <paramref name="call"/> in full: it has every output the call reads, and the items it
+    /// asks for, unless the recorded call stopped short of its own limit (the service had no more).
+    /// </summary>
+    private static bool Answers(ServiceEntry entry, ServiceCall call)
+    {
+        foreach (var name in call.Outputs.Span)
+        {
+            if (!entry.Outputs.ContainsKey(name) && !entry.Texts.ContainsKey(name))
+            {
+                return false;
+            }
+        }
+
+        return call.Limit <= entry.Ids.Length || entry.Limit <= 0 || entry.Ids.Length < entry.Limit;
+    }
+
+    /// <summary>
+    /// The matching recorded call that answers <paramref name="call"/> (<see cref="Answers"/>), else the one with the most
+    /// of what it reads (outputs, then items); null when none matches. Nothing is consumed.
+    /// </summary>
+    private static ServiceEntry? Best(List<ServiceEntry>? calls, Predicate<ServiceEntry> match, ServiceCall call)
+    {
+        if (calls is null)
+        {
+            return null;
+        }
+
+        ServiceEntry? best = null;
+        (int Outputs, int Items) bestHas = (-1, -1);
+        foreach (var entry in calls)
+        {
+            if (!match(entry))
+            {
+                continue;
+            }
+
+            if (Answers(entry, call))
+            {
+                return entry;
+            }
+
+            var outputs = 0;
+            foreach (var name in call.Outputs.Span)
+            {
+                outputs += entry.Outputs.ContainsKey(name) || entry.Texts.ContainsKey(name) ? 1 : 0;
+            }
+
+            (int Outputs, int Items) has = (outputs, Math.Min(entry.Ids.Length, call.Limit));
+            if (has.CompareTo(bestHas) > 0)
+            {
+                (best, bestHas) = (entry, has);
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// Reports each output the call reads that its successful answer lacks, as a <c>not_recorded</c> gap of that output,
+    /// with the node (a call about no items) or the items as examples.
+    /// </summary>
+    private ServiceStatus Unanswered(ServiceCall call, ServiceResponse response, ServiceStatus status, string kind, string node, EntityKey[]? keys)
     {
         if (status.Succeeded)
         {
@@ -232,12 +307,31 @@ internal sealed class RunReplay : IFeatureCallHook
             {
                 if (!response.TryGetValues(name, out _) && !response.TryGetText(name, out _))
                 {
-                    AddGap(kind, call.Service, name, "not_recorded", count, node);
+                    AddOutputGap(kind, call.Service, name, node, keys, null);
                 }
             }
         }
 
         return status;
+    }
+
+    /// <summary>A <c>not_recorded</c> gap of one output: for the node's call, or for <paramref name="keys"/> (those <paramref name="only"/> marks, when given).</summary>
+    private void AddOutputGap(string kind, string service, string output, string node, EntityKey[]? keys, bool[]? only)
+    {
+        if (keys is null)
+        {
+            AddGap(kind, service, output, "not_recorded", 1, node);
+            return;
+        }
+
+        GapCounter? gap = null;
+        for (var r = 0; r < keys.Length; r++)
+        {
+            if (only is null || only[r])
+            {
+                (gap ??= Gap(kind, service, output, "not_recorded")).Add(1, keys[r].ToString());
+            }
+        }
     }
 
     /// <summary>Time left when the node passed its <c>when</c> in the recording; infinite for a node the recording lacks.</summary>
@@ -411,17 +505,17 @@ internal sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// A keyed call the recording does not have as such (other batches, or changed inputs): each row's output comes from
-    /// a successful recorded call that scored the same entity with the same inputs, whichever call and row that was. An
-    /// entity scored only with other inputs is an <c>inputs_changed</c> gap; one never scored is <c>not_recorded</c>.
+    /// A keyed call the recording does not have as such (other batches, or changed inputs): each row's value of each output
+    /// it reads comes from a successful recorded call that had the same entity with the same inputs and that output,
+    /// whichever call and row that was. An entity the recording has only with other inputs is an <c>inputs_changed</c> gap,
+    /// one it never had is <c>not_recorded</c>, and a row the recording has without an output the call reads is a
+    /// <c>not_recorded</c> gap of that output.
     /// </summary>
     /// <remarks>
     /// Tensor outputs are split by row; a row the recording cannot answer gets NaN in a float output (which the column
     /// writer replaces with its default, as any non-finite value) and the type's zero (false, 0, an empty string) in
-    /// another, and is reported as a gap either way. Text outputs are not split: a text belongs to its whole call, so a multi-row call's text is
-    /// replayed only with that call. A single-row call is the exception: when a successful recorded call answered that one
-    /// entity alone with the same inputs, it is answered as that call was, texts and generation details included (a
-    /// per-row generative call, such as <c>LlmAnnotator@1</c>'s, whose recorded call another call of the same entity took).
+    /// another, and is reported as a gap either way. Text outputs are not split: a text belongs to its whole call, so it is
+    /// replayed only with a recorded call of the same items (<see cref="Call"/>), and is a gap of that output here.
     /// </remarks>
     private ServiceStatus Synthesize(
         ServiceCall call, List<ServiceEntry>? calls, ServiceResponse outputs, EntityKey[] keys, string[] digests, string node, string kind)
@@ -459,15 +553,16 @@ internal sealed class RunReplay : IFeatureCallHook
         // list<int32,3> one); an output none of them has (every row's inputs changed), as this node's calls have it, then
         // as any call has it. Each recorded call is looked at once.
         var seen = new HashSet<ServiceEntry>(ReferenceEqualityComparer.Instance);
+        HashSet<string>? unsplit = null; // outputs the matched calls have, not of whole rows: the node fails on them as recorded
         for (var r = 0; r < keys.Length; r++)
         {
-            if (rows.TryGetValue((keys[r], digests[r]), out var matched))
+            if (rows.TryGetValue((keys[r], digests[r]), out var recorded))
             {
-                foreach (var (entry, _) in matched)
+                foreach (var (entry, _) in recorded)
                 {
                     if (seen.Add(entry))
                     {
-                        AddLayout(layout, entry, call.Outputs.Span);
+                        AddLayout(layout, entry, call.Outputs.Span, ref unsplit);
                     }
                 }
             }
@@ -480,23 +575,37 @@ internal sealed class RunReplay : IFeatureCallHook
                 if (entry.Outcome == IoOutcome.Ok && entry.Keys is not null && (pass == 1 || string.Equals(entry.Node, node, StringComparison.Ordinal))
                     && seen.Add(entry))
                 {
-                    AddLayout(layout, entry, call.Outputs.Span);
+                    HashSet<string>? ignored = null;
+                    AddLayout(layout, entry, call.Outputs.Span, ref ignored);
                 }
             }
         }
 
-        if (keys.Length == 1 && Alone(rows, keys[0], digests[0]) is { } alone)
+        // A row the recording has with these inputs; one it has not is a gap of the row, whatever the outputs.
+        var matched = new bool[keys.Length];
+        for (var r = 0; r < keys.Length; r++)
         {
-            return Answer(alone, call, outputs, kind, node);
+            matched[r] = rows.ContainsKey((keys[r], digests[r]));
+        }
+
+        ReportUnmatched(kind, call.Service, keys, matched, scored);
+
+        // An output the call reads that no recorded row of it has (a text, which belongs to a whole call, or one no call
+        // was asked for): a gap of that output for every row the recording has.
+        foreach (var name in call.Outputs.Span)
+        {
+            if (!Has(layout, name) && unsplit?.Contains(name) != true)
+            {
+                AddOutputGap(kind, call.Service, name, node, keys, matched);
+            }
+        }
+
+        if (layout.Count == 0 && !call.Outputs.IsEmpty)
+        {
+            return ServiceStatus.Failed($"{kind} '{call.Service}' has no recorded output in the replay bundle");
         }
 
         var lacking = new bool[keys.Length];
-        if (layout.Count == 0)
-        {
-            Array.Fill(lacking, true);
-            ReportLacking(kind, call.Service, keys, digests, lacking, rows, scored);
-            return ServiceStatus.Failed($"{kind} '{call.Service}' has no recorded output in the replay bundle");
-        }
 
         foreach (var (name, type, perRow) in layout)
         {
@@ -525,6 +634,7 @@ internal sealed class RunReplay : IFeatureCallHook
             // Each row from its recorded row, or the gap value.
             void Fill<T>(Span<T> destination, T gap)
             {
+                Array.Clear(lacking);
                 for (var r = 0; r < keys.Length; r++)
                 {
                     var slice = destination.Slice(r * perRow, perRow);
@@ -535,13 +645,17 @@ internal sealed class RunReplay : IFeatureCallHook
                     else
                     {
                         slice.Fill(gap);
-                        lacking[r] = true;
+                        lacking[r] = matched[r]; // an unmatched row is a gap of the row already
                     }
+                }
+
+                if (Array.IndexOf(lacking, true) >= 0)
+                {
+                    AddOutputGap(kind, call.Service, name, node, keys, lacking);
                 }
             }
         }
 
-        ReportLacking(kind, call.Service, keys, digests, lacking, rows, scored);
         return ServiceStatus.Ok;
 
         static int PerRow(ServiceEntry entry, Array values) => entry.BatchSize > 0 ? values.Length / entry.BatchSize : 1;
@@ -551,44 +665,38 @@ internal sealed class RunReplay : IFeatureCallHook
         // does not read (a call-level value such as a loss) is not needed.
         static bool ByRow(ServiceEntry entry, Array values) => entry.BatchSize > 0 && values.Length % entry.BatchSize == 0;
 
-        // Only the outputs the call reads, when it names them (a call-level value such as a loss is not needed).
-        static void AddLayout(List<(string Name, TensorElementType Type, int PerRow)> layout, ServiceEntry entry, ReadOnlySpan<string> read)
+        // Only the outputs the call reads (a call-level value such as a loss is not needed); one not of whole rows is noted.
+        static void AddLayout(List<(string Name, TensorElementType Type, int PerRow)> layout, ServiceEntry entry, ReadOnlySpan<string> read, ref HashSet<string>? unsplit)
         {
             foreach (var (name, values) in entry.Outputs)
             {
-                if (!read.IsEmpty && read.IndexOf(name) < 0)
+                if (read.IndexOf(name) < 0 || Has(layout, name))
                 {
                     continue;
                 }
 
-                var known = false;
-                foreach (var output in layout)
-                {
-                    known |= output.Name == name;
-                }
-
-                if (!known && ByRow(entry, values.Values))
+                if (ByRow(entry, values.Values))
                 {
                     layout.Add((name, values.Type, PerRow(entry, values.Values)));
+                }
+                else
+                {
+                    (unsplit ??= new HashSet<string>(StringComparer.Ordinal)).Add(name);
                 }
             }
         }
 
-        // The first successful recorded call of this one entity alone, with these inputs, that answered text.
-        static ServiceEntry? Alone(Dictionary<(EntityKey, string), List<(ServiceEntry Entry, int Row)>> rows, EntityKey key, string digest)
+        static bool Has(List<(string Name, TensorElementType Type, int PerRow)> layout, string name)
         {
-            if (rows.TryGetValue((key, digest), out var list))
+            foreach (var output in layout)
             {
-                foreach (var (entry, _) in list)
+                if (output.Name == name)
                 {
-                    if (entry.Keys!.Length == 1 && entry.Texts.Count > 0)
-                    {
-                        return entry;
-                    }
+                    return true;
                 }
             }
 
-            return null;
+            return false;
         }
 
         // The first recorded row of the entity with these inputs that has the output in the same layout and element type.
@@ -614,23 +722,21 @@ internal sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// The gaps of the rows a synthesized call could not answer: <c>inputs_changed</c> for an entity the recording answered
-    /// only with other inputs, otherwise <c>not_recorded</c>.
+    /// The gaps of the rows of a synthesized call the recording has not with these inputs: <c>inputs_changed</c> for an
+    /// entity the recording had only with other inputs, otherwise <c>not_recorded</c>.
     /// </summary>
-    private void ReportLacking(
-        string kind, string service, EntityKey[] keys, string[] digests, bool[] lacking, Dictionary<(EntityKey Key, string Digest), List<(ServiceEntry Entry, int Row)>> rows,
-        HashSet<EntityKey> scored)
+    private void ReportUnmatched(string kind, string service, EntityKey[] keys, bool[] matched, HashSet<EntityKey> scored)
     {
         GapCounter? missing = null;
         GapCounter? changed = null;
         for (var r = 0; r < keys.Length; r++)
         {
-            if (!lacking[r])
+            if (matched[r])
             {
                 continue;
             }
 
-            if (!rows.ContainsKey((keys[r], digests[r])) && scored.Contains(keys[r]))
+            if (scored.Contains(keys[r]))
             {
                 (changed ??= Gap(kind, service, null, "inputs_changed")).Add(1, keys[r].ToString());
             }

@@ -123,6 +123,11 @@ public sealed class LinearModelClient : IServiceClient
                     return ServiceStatus.Failed($"Missing input '{name}'.");
                 }
 
+                if (input.Value.IsMissing)
+                {
+                    return ServiceStatus.Failed($"Input '{name}' is missing; linear@1 needs a value per row.");
+                }
+
                 // [batch] exactly: its data may be a longer buffer, but its shape says how many rows it holds.
                 if (input.Value.ElementType != TensorElementType.Float32 || input.Value.Shape is not [var rows] || rows != batch || input.Value.Float32.Length < batch)
                 {

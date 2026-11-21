@@ -137,6 +137,9 @@ internal interface IBoundedCall<T>
     /// <summary>Whether an answer is a success; otherwise its error text.</summary>
     bool Succeeded(T value, out string? error);
 
+    /// <summary>The items the call is about, for <c>stratarec.io.keys</c>; -1 for a call about none.</summary>
+    int Keys { get; }
+
     /// <summary>
     /// Called exactly once, when the call has ended and before its hold on the request memory is released: the place to
     /// close what the client writes into and to record the call. Only an <see cref="CallEnd.Answered"/> call's data may be
@@ -301,7 +304,7 @@ internal static class BoundedCall
     private static void End<T, TCall>(TCall call, in IoCall io, in CallResult<T> result, string requestId, RequestEventLog? events)
         where TCall : struct, IBoundedCall<T>
     {
-        io.Complete(result.Outcome, -1, requestId, result.Error, events);
+        io.Complete(result.Outcome, call.Keys, requestId, result.Error, events);
         call.Ended(result, io.Elapsed);
     }
 

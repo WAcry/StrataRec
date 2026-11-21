@@ -278,6 +278,27 @@ public sealed class LlmMetricsTests
 {
     private const string Template = "{{#rows}}{{rank}}. {{col.item.title}}\n{{/rows}}";
 
+    /// <summary>
+    /// A host's listener that throws on the generation counts loses those measurements, not the answer or its record: the
+    /// counts ran before the call was recorded, without the boundary the call's other metrics have, so the node failed
+    /// and the call was left outstanding in the recording (review of IO step 2).
+    /// </summary>
+    [Fact]
+    public async Task AListenerThatThrowsOnTheGenerationCounts_LosesThoseMeasurements_NotTheAnswerOrItsRecord()
+    {
+        var models = new TextModels(_ => ("""[5, 3, 1]""", ServiceStatus.Ok with { OutputTokens = 4, Truncated = true }));
+        var plan = Compile(models, Rerank(Template, extra: """, "max_output_tokens": 64"""), onFailure: "skip");
+        using var tokens = MeasurementHook.Throwing(StrataRecMetrics.Names.IoOutputTokens);
+        using var truncations = MeasurementHook.Throwing(StrataRecMetrics.Names.IoTruncated);
+
+        var result = await Run(plan, record: true);
+
+        Assert.True(tokens.Calls > 0 && truncations.Calls > 0);
+        Assert.NotEqual(NodeOutcomeKind.Failed, Rank(result).Kind);
+        Assert.NotEqual(Incoming, IdsOf(result));
+        Assert.Equal("ok", Assert.Single(result.Recording!.ServiceCalls, c => c.Role == "model").Status);
+    }
+
     [Fact]
     public async Task TokensTruncationsAndAnswerElements_AreCounted_TaggedWithTheModel_AndNotInAReplay()
     {

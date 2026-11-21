@@ -530,6 +530,30 @@ public sealed class RecallQueryTests
         return request;
     }
 
+    /// <summary>
+    /// A recall reads only the items a service adds: what else it writes is not recorded. An empty list of outputs read
+    /// meant "all", so a service's extra tensor and text went into the recording (review of IO step 2).
+    /// </summary>
+    [Fact]
+    public async Task ARecall_RecordsTheItems_NotOutputsTheServiceWroteBesides()
+    {
+        var sources = new ProbeSources
+        {
+            AlsoWrites = (_, response) =>
+            {
+                response.GetValues<float>("unused", 1).Span[0] = 1;
+                response.SetText("unused_text", "x");
+            },
+        };
+
+        var result = await Engine(HomeFeedTestHost.Load(), sources).ExecuteAsync(Request("req-extra-outputs"), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded, result.Error);
+        var recalls = Assert.Single(result.Recording!.Runs).ServiceCalls.FindAll(c => c.Role == IoRoles.Recall);
+        Assert.NotEmpty(recalls);
+        Assert.All(recalls, c => Assert.Equal((0, 0, true), (c.Outputs.Count, c.Texts.Count, c.Ids!.Value.GetArrayLength() > 0)));
+    }
+
     internal static RecRequest Request(string requestId, long? userId = 1001) => new()
     {
         PipelineId = "home_feed",
@@ -617,6 +641,9 @@ public sealed class RecallQueryTests
         /// <summary>Runs when a source is sent, before it answers, with the call's token.</summary>
         public Func<ServiceCall, CancellationToken, ValueTask>? BeforeRetrieve { get; init; }
 
+        /// <summary>Writes into the response too, before the source answers.</summary>
+        public Action<ServiceCall, IServiceResponse>? AlsoWrites { get; init; }
+
         /// <summary>Completes when <paramref name="source"/> is sent.</summary>
         public Task Called(string source) => Entry(source).Called.Task;
 
@@ -651,6 +678,8 @@ public sealed class RecallQueryTests
                 {
                     await before(query, cancellationToken).ConfigureAwait(false);
                 }
+
+                owner.AlsoWrites?.Invoke(query, sink);
 
                 return await inner.CallAsync(query, sink, cancellationToken).ConfigureAwait(false);
             }

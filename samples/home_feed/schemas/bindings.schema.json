@@ -435,7 +435,7 @@
                   ]
                 },
                 "by_input": {
-                  "description": "The request input whose value picks the list of lists a request gets.",
+                  "description": "The input of the call whose value picks the list of lists a call gets: a value the recall node's queries sends, e.g. \"queries\": { \"popular\": { \"user_id\": \"ctx.request.user_id\" } }.",
                   "type": [
                     "string",
                     "null"

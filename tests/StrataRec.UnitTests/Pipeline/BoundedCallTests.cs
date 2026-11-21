@@ -599,6 +599,8 @@ public sealed class BoundedCallTests
             return value >= 0;
         }
 
+        public int Keys => -1;
+
         public void Ended(in CallResult<int> result, TimeSpan duration)
         {
             bool live;
@@ -710,6 +712,8 @@ public sealed class BoundedCallListenerTests
             return true;
         }
 
+        public int Keys => -1;
+
         public void Ended(in CallResult<int> result, TimeSpan duration)
         {
             lock (Results)
@@ -787,6 +791,8 @@ public sealed class BoundedCallAllocationTests
             error = null;
             return true;
         }
+
+        public int Keys => -1;
 
         public void Ended(in CallResult<int> result, TimeSpan duration)
         {

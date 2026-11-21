@@ -104,6 +104,55 @@ public sealed class ServiceCallReplayTests
         Assert.Equal(("recall", "limit_exceeds_recording", 1, "added"), (gap.Kind, gap.Reason, gap.Count, gap.Examples.Single()));
     }
 
+    /// <summary>
+    /// Two nodes asked the same query for 1 and 3 items; a node that replaces them asks for 3. It borrowed the first call
+    /// with that digest, the shorter one, and reported a shortfall the bundle could answer (review of IO step 2).
+    /// </summary>
+    [Fact]
+    public void ANodeWithoutACall_BorrowsTheSameInputsAnswerThatAnswersIt_NotTheFirst()
+    {
+        var run = RunReplayTests.Run();
+        run.ServiceCalls.Add(Recorded("one", Query(1, limit: 1), "ok", 7));
+        run.ServiceCalls.Add(Recorded("three", Query(1, limit: 3), "ok", 7, 8, 9));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        Assert.Equal(("7,8,9", true), Retrieve(replay, "added", Query(1, limit: 3)));
+        Assert.Empty(replay.Gaps);
+    }
+
+    /// <summary>The same for outputs: a node reading <c>b</c> borrows the call with the same inputs that has it.</summary>
+    [Fact]
+    public void ANodeWithoutACall_BorrowsTheSameInputsAnswerWithTheOutputItReads()
+    {
+        var run = RunReplayTests.Run();
+        var asked = Query(1);
+        run.ServiceCalls.Add(Recorded("first", asked, "ok", texts: new() { ["a"] = "A" }));
+        run.ServiceCalls.Add(Recorded("second", asked, "ok", texts: new() { ["b"] = "B" }));
+        var replay = RunReplay.Create(run, "/runs/0");
+        var response = new ServiceResponse(Memory, asked.Limit);
+
+        var status = replay.Call("added", new IoTarget(IoRoles.Recall, "s"), Reading(asked, "b"), response);
+
+        Assert.True(status.Succeeded);
+        Assert.True(response.TryGetText("b", out var text));
+        Assert.Equal("B", text);
+        Assert.Empty(replay.Gaps);
+    }
+
+    /// <summary>A node's recorded failure, replayed once, leaves its next call of the same inputs unrecorded: not "inputs changed".</summary>
+    [Fact]
+    public void ANodesCallsOfTheSameInputsUsedUp_AreNotRecorded_NotChanged()
+    {
+        var run = RunReplayTests.Run();
+        run.ServiceCalls.Add(Recorded("a", Query(1), "error"));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        Assert.False(Retrieve(replay, "a", Query(1)).Succeeded); // as recorded
+        Assert.False(Retrieve(replay, "a", Query(1)).Succeeded);
+
+        Assert.Equal(("not_recorded", 1), (Assert.Single(replay.Gaps).Reason, replay.Gaps[0].Count));
+    }
+
     [Fact]
     public void ScoresNotOnePerId_AreRejectedAtTheirPointer()
     {
@@ -128,8 +177,11 @@ public sealed class ServiceCallReplayTests
         Inputs = new[] { ServiceInputs.Create("q", ColumnType.Float64.AsNullable(), q is { } v ? ScalarValue.FromFloat64(v) : ScalarValue.Missing, Memory) },
     };
 
-    private static ReplayServiceCall Recorded(string node, ServiceCall call, string status, params long[] ids) => new()
+    private static ReplayServiceCall Recorded(string node, ServiceCall call, string status, params long[] ids) => Recorded(node, call, status, null, ids);
+
+    private static ReplayServiceCall Recorded(string node, ServiceCall call, string status, Dictionary<string, string>? texts, params long[] ids) => new()
     {
+        Texts = texts ?? new(),
         Node = node,
         Service = "s",
         Role = IoRoles.Recall,
@@ -138,6 +190,11 @@ public sealed class ServiceCallReplayTests
         InputDigests = [ReplayJson.Hex(ServiceInputDigest.Call(call, ServiceInputDigest.NameOrder(call)))],
         Ids = status == "ok" ? RunReplayTests.Json(JsonSerializer.Serialize(ids)) : null,
         Scores = status == "ok" ? [.. ids.Select(_ => 1.0)] : [],
+    };
+
+    private static ServiceCall Reading(ServiceCall call, params string[] outputs) => new()
+    {
+        Service = call.Service, Inputs = call.Inputs, Limit = call.Limit, Outputs = outputs,
     };
 
     /// <summary>The ids answered, comma-separated, and whether the call succeeded.</summary>

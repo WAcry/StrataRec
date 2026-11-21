@@ -1,18 +1,19 @@
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Bindings;
 using StrataRec.Core.Services;
-using StrataRec.Core.Types;
 
 namespace StrataRec.Samples.Host.Components;
 
 /// <summary>
-/// <c>trending@1</c>: a recall service of what is trending, overall or in the request's region, from an in-memory list. A
+/// <c>trending@1</c>: a recall service of what is trending, overall or in a region, from an in-memory list. A
 /// production service would refresh the list from a stream job in the background; the request path would stay the same.
 /// </summary>
 /// <remarks>
-/// <para>Binding settings: <see cref="TrendingSettings"/>, the items and optionally the request input that picks a region's
-/// list. A request without that input, or with a region that has no list, gets the overall list. That is the explicit
-/// meaning of a missing region; no region is ever made up.</para>
+/// <para>Binding settings: <see cref="TrendingSettings"/>, the items and optionally the input of the call that picks a
+/// region's list, which the recall node sends from its <c>queries</c> (a service sees only what the call sends). A call
+/// whose region is missing, or names a region that has no list, gets the overall list. That is the explicit meaning of a
+/// missing region; no region is ever made up. A call without the input at all is a configuration mistake: it fails, saying
+/// how to send it.</para>
 /// <para>The rules of the contract, and how this source keeps them:</para>
 /// <list type="bullet">
 /// <item>The lists are built and sorted once, from the settings, when the source is created (CPU only, no I/O, so no
@@ -49,8 +50,21 @@ public sealed class TrendingService : IServiceClient
         var list = _overall;
         if (_regionInput is not null)
         {
-            var region = call.Request[_regionInput]; // ScalarValue.Missing when the request has no region
-            if (region.Kind == StorageKind.String && _byRegion.TryGetValue(region.AsString(), out var regional))
+            if (!call.TryGetInput(_regionInput, out var region))
+            {
+                return new ValueTask<ServiceStatus>(ServiceStatus.Failed(
+                    $"trending@1 picks a region's list by the input '{_regionInput}', and the call of '{call.Service}' has none; send it from the " +
+                    $"recall node's queries, e.g. \"queries\": {{ \"{call.Service}\": {{ \"{_regionInput}\": \"ctx.request.region\" }} }}."));
+            }
+
+            // The type first, so a wrong one fails whether or not this request has a region.
+            if (region.ElementType != TensorElementType.String || region.Shape.Length != 0)
+            {
+                return new ValueTask<ServiceStatus>(ServiceStatus.Failed(
+                    $"The input '{_regionInput}' must be a string; it is {TensorValues.Name(region.ElementType)} of shape [{string.Join(", ", region.Shape)}]."));
+            }
+
+            if (!region.IsMissing && _byRegion.TryGetValue(region.String.Span[0], out var regional))
             {
                 list = regional;
             }
@@ -108,7 +122,10 @@ public sealed class TrendingSettings
     /// <summary>The trending items, e.g. <c>[{ "id": 7, "score": 0.9, "region": "us" }]</c>.</summary>
     public required List<TrendingItem> Items { get; init; }
 
-    /// <summary>The request input whose value picks a region's list, e.g. <c>region</c>; without it, every request gets the overall list.</summary>
+    /// <summary>
+    /// The input of the call whose value picks a region's list, e.g. <c>region</c>, which the recall node sends
+    /// (<c>"queries": { "trending": { "region": "ctx.request.region" } }</c>); without it, every call gets the overall list.
+    /// </summary>
     public string? RegionInput { get; init; }
 }
 
@@ -137,7 +154,7 @@ public sealed class TrendingServiceFactory : BindingFactory<IServiceClient, Tren
     {
         if (settings.RegionInput is { Length: 0 })
         {
-            throw new BindingException("/region_input", "'region_input' must name a request input.", "e.g. \"region\", a string input of the pipeline's request_schema");
+            throw new BindingException("/region_input", "'region_input' must name an input of the call.", "e.g. \"region\", which the recall node's queries send");
         }
 
         var items = new List<(long, double, string?)>(settings.Items.Count);

@@ -68,7 +68,7 @@ public sealed class ComponentTests
     [InlineData("logistic@1", """{ "version": "v3", "weights": {} }""", "/weights", "e.g. { \"ctr\": 20.0")]
     [InlineData("trending@1", """{ "items": [{ "id": 7 }] }""", "/items/0", "'score': ")]
     [InlineData("trending@1", """{ "items": [{ "id": "7", "score": 1 }] }""", "/items/0/id", "'stratarec schema bindings'")]
-    [InlineData("trending@1", """{ "items": [], "region_input": "" }""", "/region_input", "a string input of the pipeline's request_schema")]
+    [InlineData("trending@1", """{ "items": [], "region_input": "" }""", "/region_input", "which the recall node's queries send")]
     [InlineData("kv_store@1", """{ "data_file": "s3://bucket/users.jsonl" }""", "/data_file", "local directory")]
     [InlineData("kv_store@1", """{ "data_file": "users.jsonl", "key_feild": "id" }""", "/key_feild", "did you mean 'key_field'?")]
     [InlineData("kv_store@1", """{ "data_file": "users.jsonl", "latency_ms": -1 }""", "/latency_ms", "simulated round trip")]

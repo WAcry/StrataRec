@@ -84,7 +84,9 @@ public sealed class MetricsTests
         var itemKeys = capture.Of(StrataRecMetrics.Names.IoKeys).Where(m => Tag(m, StrataRecTags.IoTarget) == "item_store").ToList();
         Assert.NotEmpty(itemKeys);
         Assert.All(itemKeys, m => Assert.InRange(m.Value, 1, 25));
-        Assert.All(capture.Of(StrataRecMetrics.Names.IoKeys), m => Assert.Equal("fetch", Tag(m, StrataRecTags.IoRole))); // keyed calls only
+        // Keyed calls only: the fetches, and the model's calls about the candidates they score; a recall is about no items.
+        Assert.Equal(new HashSet<string?> { "fetch", "model" }, capture.Of(StrataRecMetrics.Names.IoKeys).Select(m => Tag(m, StrataRecTags.IoRole)).ToHashSet());
+        Assert.Equal(30, capture.Of(StrataRecMetrics.Names.IoKeys).Where(m => Tag(m, StrataRecTags.IoRole) == "model").Sum(m => m.Value));
         Assert.Empty(capture.Of(StrataRecMetrics.Names.IoErrors));
 
         // Missing ratio: what each feature source had of the values the request asked for, per feature. Some recalled items
