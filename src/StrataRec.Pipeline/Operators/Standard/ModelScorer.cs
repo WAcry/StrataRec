@@ -167,7 +167,7 @@ public sealed class ModelScorerFactory : IOperatorFactory
                 {
                     var offset = b * stride;
                     var count = Math.Min(stride, rows.Length - offset);
-                    if (!writers[b].TryGet(name, out var values) || values.Length < count * width)
+                    if (!writers[b].TryGet(name, out var values))
                     {
                         context.Fail($"model '{call.Model}' did not return output '{name}' for every row");
                         return;
@@ -177,6 +177,13 @@ public sealed class ModelScorerFactory : IOperatorFactory
                     {
                         context.Fail($"model '{call.Model}' returned output '{name}' as {TensorValues.Name(values.ElementType)}, but it is written to "
                             + $"'{column.Name}' ({column.Type}), which takes {TensorValues.Name(tensor.ElementType)} as the signature declares");
+                        return;
+                    }
+
+                    // Exactly the shape's elements: a longer output would be sliced at other row boundaries than its writer used.
+                    if (ModelOutputs.WrongLength(call.Model, name, values, count * width, "row") is { } wrong)
+                    {
+                        context.Fail(wrong);
                         return;
                     }
 

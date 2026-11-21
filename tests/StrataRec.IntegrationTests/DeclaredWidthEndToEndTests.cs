@@ -95,6 +95,38 @@ public class DeclaredWidthEndToEndTests
     }
 
     /// <summary>
+    /// A tap with <c>columns_from</c> logs a model node's inputs at the types the model was sent: an int32 feature and a
+    /// float32 context feature as int32 and float32, as random@1 (declaring them so) received them.
+    /// </summary>
+    [Fact]
+    public async Task ATapOfAModelsInputs_LogsThemAtTheTypesTheModelWasSent()
+    {
+        var root = Workspace();
+        var bindings = Path.Combine(root, "bindings", "local.jsonc");
+        File.WriteAllText(bindings, File.ReadAllText(bindings).Replace("\"candidate_sources\":", """
+            "models": { "m": { "client": "random@1", "seed": 1,
+                               "inputs": { "clicks": { "type": "int32", "shape": [-1] }, "uctr": { "type": "float32", "shape": [-1] } }, "outputs": ["p"] } },
+            "candidate_sources":
+            """, StringComparison.Ordinal));
+        var pipeline = Path.Combine(root, "pipelines", "p.jsonc");
+        File.WriteAllText(pipeline, File.ReadAllText(pipeline)
+            .Replace("\"columns\": { \"out.n32\"", "\"columns\": { \"score.p\": { \"type\": \"float32\", \"default\": 0.0 }, \"out.n32\"", StringComparison.Ordinal)
+            .Replace("\"n32n\": {", """
+                "scorer": { "order": 300, "op": "ModelScorer@1", "config": { "model": "m", "inputs": { "clicks": "col.item.clicks", "uctr": "ctx.user.ctr" }, "outputs": { "p": "score.p" } } },
+                "n32n": {
+                """, StringComparison.Ordinal)
+            .Replace("\"log_taps\": {", "\"log_taps\": { \"fed\": { \"group\": \"all\", \"attach\": { \"output\": true }, \"columns_from\": \"scorer.inputs\" },", StringComparison.Ordinal));
+
+        var result = await Run(Compile(root));
+
+        Assert.True(result.Succeeded, result.Error);
+        var batch = Assert.Single(result.LogBatches, b => b.TapId == "fed");
+        Assert.Equal(["clicks:int32", "uctr:float32"], batch.Schema.Columns.Select(f => $"{f.Name}:{f.Type}").Order(StringComparer.Ordinal));
+        Assert.IsType<int[]>(Column(batch, "clicks").Values);
+        Assert.Equal([0.1f, 0.1f], Assert.IsType<float[]>(Column(batch, "uctr").Values)); // a context feature broadcast, at its width
+    }
+
+    /// <summary>
     /// A float32 request input given 0.1 is 0.1f everywhere: an expression computes with the float a result or log of the
     /// field gets, not the double it was given.
     /// </summary>

@@ -165,15 +165,17 @@ public sealed class ModelTensorRuleTests
     }
 
     [Theory]
-    [InlineData("float32", TensorElementType.Int64, new[] { -1 }, "int64 [-1]", "float32 [-1]")]
-    [InlineData("float32", TensorElementType.Float64, new[] { -1 }, "float64 [-1]", "float32 [-1]")]
-    [InlineData("float32", TensorElementType.Float32, new[] { -1, 2 }, "float32 [-1, 2]", "float32 [-1]")]
-    [InlineData("float32", TensorElementType.Float32, new[] { 256 }, "float32 [256]", "float32 [-1]")]
-    [InlineData("float32", TensorElementType.Text, new int[0], "text []", "float32 [-1]")]
-    [InlineData("int64?", TensorElementType.Int32, new[] { -1 }, "int32 [-1]", "int64 [-1]")]
-    [InlineData("list<float32,4>", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "float32 [-1, 4]")]
+    [InlineData("float32", TensorElementType.Int64, new[] { -1 }, "int64 [-1]", "float32 [-1]", ", or write it to an int64 column, which takes what the model returns")]
+    [InlineData("float32", TensorElementType.Float64, new[] { -1 }, "float64 [-1]", "float32 [-1]", ", or write it to a float64 column, which takes what the model returns")]
+    [InlineData("float32", TensorElementType.Float32, new[] { -1, 2 }, "float32 [-1, 2]", "float32 [-1]", ", or write it to a list<float32,2> column, which takes what the model returns")]
+    [InlineData("float32", TensorElementType.Float32, new[] { -1, -1 }, "float32 [-1, -1]", "float32 [-1]", ", or write it to a list<float32,N> column, which takes what the model returns")]
+    [InlineData("float32", TensorElementType.Float32, new[] { 256 }, "float32 [256]", "float32 [-1]", "; no column takes float32 [256]")] // a fixed batch
+    [InlineData("float32", TensorElementType.Float32, new[] { -1, 2, 3 }, "float32 [-1, 2, 3]", "float32 [-1]", "; no column takes float32 [-1, 2, 3]")]
+    [InlineData("float32", TensorElementType.Text, new int[0], "text []", "float32 [-1]", "; no column takes text []")]
+    [InlineData("int64?", TensorElementType.Int32, new[] { -1 }, "int32 [-1]", "int64 [-1]", ", or write it to an int32 column, which takes what the model returns")]
+    [InlineData("list<float32,4>", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "float32 [-1, 4]", ", or write it to a float32 column, which takes what the model returns")]
     public void AScorerOutputDeclaredOtherwiseThanItsColumnTakes_IsAMismatch_SayingWhatIsReadAndHowToFixIt(
-        string column, TensorElementType type, int[] shape, string described, string read)
+        string column, TensorElementType type, int[] shape, string described, string read, string otherFix)
     {
         var outputs = new ModelTensorRule.MappedOutput[] { new("p_click", "/outputs/p_click", ColumnType.Parse(column)) };
 
@@ -184,7 +186,7 @@ public sealed class ModelTensorRuleTests
         Assert.Equal(("/outputs/p_click", "MODEL_TENSOR_MISMATCH"), (problem.ConfigKey, problem.Code));
         Assert.Equal($"Model 'm' version 'v2' declares output 'p_click' as {described}, but it is written to a {column} column, which ModelScorer@1 reads as {read}.",
             problem.Message);
-        Assert.Equal($"declare output 'p_click' as {read} in the model's signature, or write it to a column of the type the model returns", problem.Hint);
+        Assert.Equal($"declare output 'p_click' as {read} in the model's signature{otherFix}", problem.Hint);
     }
 
     [Theory]

@@ -243,9 +243,8 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
                     if (index == 0)
                     {
                         inBatch = Math.Min(stride, pairs - (batch * stride));
-                        if (!ModelScores.TryRead(writers[batch], output, inBatch, out single, out singles, out doubles))
+                        if (!ModelOutputs.TryReadScores(context, call.Model, writers[batch], output, inBatch, "pair", out single, out singles, out doubles))
                         {
-                            context.Fail(ModelScores.Missing(call.Model, output, writers[batch], "pair"));
                             return false;
                         }
                     }
@@ -371,9 +370,8 @@ public sealed class ListwiseRerankerFactory : IOperatorFactory
                 return;
             }
 
-            if (!ModelScores.TryRead(writer, output, n, out var single, out var singles, out var doubles))
+            if (!ModelOutputs.TryReadScores(context, call.Model, writer, output, n, "row of the list", out var single, out var singles, out var doubles))
             {
-                context.Fail(ModelScores.Missing(call.Model, output, writer, "row of the list"));
                 return;
             }
 
@@ -460,39 +458,66 @@ internal static class RankerColumns
 }
 
 /// <summary>
-/// A ranker's score output, which its signature declares float32 or float64 (<see cref="ModelTensorRule.AcceptsScore"/>):
-/// one check of what the client wrote, for both rankers.
+/// What the model operators accept of a tensor output the client wrote: for a ranker, a score
+/// (<see cref="ModelTensorRule.IsScore"/>), read at the width written; for every operator, exactly the elements of the
+/// output's shape.
 /// </summary>
-internal static class ModelScores
+/// <remarks>
+/// A ranker reads the width the client wrote, not the one its signature declares for the version: the load checks the
+/// signature, both widths rank correctly, and a replay, which loads no client, has only what was written.
+/// </remarks>
+internal static class ModelOutputs
 {
-    /// <summary>The first <paramref name="count"/> scores of output <paramref name="name"/>, float32 or float64; false when the client wrote fewer, or another type.</summary>
-    public static bool TryRead(ModelOutputWriter writer, string name, int count, out bool single, out ReadOnlySpan<float> singles, out ReadOnlySpan<double> doubles)
+    /// <summary>
+    /// The <paramref name="count"/> scores of output <paramref name="name"/>, float32 or float64; false after failing the
+    /// node when the client wrote none, another type or another number of them.
+    /// </summary>
+    public static bool TryReadScores(
+        OperatorContext context, string model, ModelOutputWriter writer, string name, int count, string entry,
+        out bool single, out ReadOnlySpan<float> singles, out ReadOnlySpan<double> doubles)
     {
         single = false;
         singles = default;
         doubles = default;
-        if (!writer.TryGet(name, out var values) || values.Length < count)
+        if (!writer.TryGet(name, out var values))
         {
+            context.Fail($"model '{model}' did not return output '{name}' for every {entry}");
             return false;
         }
 
-        switch (values.ElementType)
+        if (!ModelTensorRule.IsScore(values.ElementType))
         {
-            case TensorElementType.Float32:
-                single = true;
-                singles = values.Float32.Span[..count];
-                return true;
-            case TensorElementType.Float64:
-                doubles = values.Float64.Span[..count];
-                return true;
-            default:
-                return false;
+            context.Fail($"model '{model}' returned output '{name}' as {TensorValues.Name(values.ElementType)}; a score is float32 or float64, as the signature declares");
+            return false;
         }
+
+        if (WrongLength(model, name, values, count, entry) is { } wrong)
+        {
+            context.Fail(wrong);
+            return false;
+        }
+
+        single = values.ElementType == TensorElementType.Float32;
+        if (single)
+        {
+            singles = values.Float32.Span;
+        }
+        else
+        {
+            doubles = values.Float64.Span;
+        }
+
+        return true;
     }
 
-    /// <summary>Why <see cref="TryRead"/> failed, for the node's failure.</summary>
-    public static string Missing(string model, string name, ModelOutputWriter writer, string entry) =>
-        writer.TryGet(name, out var values) && values.ElementType is not (TensorElementType.Float32 or TensorElementType.Float64)
-            ? $"model '{model}' returned output '{name}' as {TensorValues.Name(values.ElementType)}; a score is float32 or float64, as the signature declares"
-            : $"model '{model}' did not return output '{name}' for every {entry}";
+    /// <summary>
+    /// The failure of an output that does not have exactly the <paramref name="expected"/> elements of its shape (one or a
+    /// list's width per <paramref name="entry"/>: row, pair, row of the list); null when it has.
+    /// </summary>
+    public static string? WrongLength(string model, string name, in TensorValues values, int expected, string entry) =>
+        values.Length == expected
+            ? null
+            : values.Length < expected
+                ? $"model '{model}' did not return output '{name}' for every {entry}"
+                : $"model '{model}' returned {values.Length} values of output '{name}', but its shape holds {expected}";
 }

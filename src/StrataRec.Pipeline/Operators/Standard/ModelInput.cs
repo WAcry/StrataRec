@@ -170,9 +170,9 @@ internal sealed class ModelInput(string name, CompiledExpression expression, Sym
             return declared.Kind switch
             {
                 StorageKind.Bool => new GatheredInput(Fill(memory, count, value.AsBool())),
-                StorageKind.Int32 => new GatheredInput(Fill(memory, count, checked((int)value.AsInt64()))),
+                StorageKind.Int32 => new GatheredInput(Fill(memory, count, value.AsInt32())),
                 StorageKind.Int64 => new GatheredInput(Fill(memory, count, value.AsInt64())),
-                StorageKind.Float32 => new GatheredInput(Fill(memory, count, (float)value.AsFloat64())),
+                StorageKind.Float32 => new GatheredInput(Fill(memory, count, value.AsFloat32())),
                 StorageKind.Float64 => new GatheredInput(Fill(memory, count, value.AsFloat64())),
                 _ => new GatheredInput(Fill(memory, count, value.AsString())),
             };
@@ -186,9 +186,9 @@ internal sealed class ModelInput(string name, CompiledExpression expression, Sym
         return declared.Element switch
         {
             StorageKind.Bool => new GatheredInput(Tile(memory, count, value.AsBoolList())),
-            StorageKind.Int32 => new GatheredInput(Tile(memory, count, Narrow(value.AsInt64List(), memory))),
+            StorageKind.Int32 => new GatheredInput(TileInt32(memory, count, value.AsInt64List())),
             StorageKind.Int64 => new GatheredInput(Tile(memory, count, value.AsInt64List())),
-            StorageKind.Float32 => new GatheredInput(Tile(memory, count, Narrow(value.AsFloat64List(), memory))),
+            StorageKind.Float32 => new GatheredInput(TileFloat32(memory, count, value.AsFloat64List())),
             StorageKind.Float64 => new GatheredInput(Tile(memory, count, value.AsFloat64List())),
             _ => new GatheredInput(Tile(memory, count, value.AsStringList())),
         };
@@ -204,37 +204,49 @@ internal sealed class ModelInput(string name, CompiledExpression expression, Sym
     /// <summary><paramref name="count"/> copies of <paramref name="list"/>, one after another.</summary>
     private static T[] Tile<T>(RequestMemory memory, int count, ReadOnlySpan<T> list)
     {
-        var width = list.Length;
-        var entries = memory.Rent<T>(checked(count * width));
-        for (var r = 0; r < count; r++)
+        var entries = memory.Rent<T>(checked(count * list.Length));
+        if (count > 0)
         {
-            list.CopyTo(entries.AsSpan(r * width, width));
+            list.CopyTo(entries);
+            RepeatFirst(entries, count, list.Length);
         }
 
         return entries;
     }
 
-    /// <summary>The elements of a <c>list&lt;int32&gt;</c> value, which hold int32 values promoted.</summary>
-    private static ReadOnlySpan<int> Narrow(ReadOnlySpan<long> elements, RequestMemory memory)
+    /// <summary><paramref name="count"/> copies of a <c>list&lt;int32&gt;</c> value's elements (int32 values held promoted), narrowed once.</summary>
+    private static int[] TileInt32(RequestMemory memory, int count, ReadOnlySpan<long> list)
     {
-        var narrow = memory.Rent<int>(elements.Length).AsSpan(0, elements.Length);
-        for (var e = 0; e < elements.Length; e++)
+        var entries = memory.Rent<int>(checked(count * list.Length));
+        if (count > 0)
         {
-            narrow[e] = checked((int)elements[e]);
+            Int32Range.Narrow(list, entries.AsSpan(0, list.Length));
+            RepeatFirst(entries, count, list.Length);
         }
 
-        return narrow;
+        return entries;
     }
 
-    /// <summary>The elements of a <c>list&lt;float32&gt;</c> value, which hold float32 values promoted.</summary>
-    private static ReadOnlySpan<float> Narrow(ReadOnlySpan<double> elements, RequestMemory memory)
+    /// <summary><paramref name="count"/> copies of a <c>list&lt;float32&gt;</c> value's elements (float32 values held promoted), narrowed once.</summary>
+    private static float[] TileFloat32(RequestMemory memory, int count, ReadOnlySpan<double> list)
     {
-        var narrow = memory.Rent<float>(elements.Length).AsSpan(0, elements.Length);
-        for (var e = 0; e < elements.Length; e++)
+        var entries = memory.Rent<float>(checked(count * list.Length));
+        if (count > 0)
         {
-            narrow[e] = (float)elements[e];
+            ColumnValues.NarrowFloats(list, entries.AsSpan(0, list.Length));
+            RepeatFirst(entries, count, list.Length);
         }
 
-        return narrow;
+        return entries;
+    }
+
+    /// <summary>Copies the first <paramref name="width"/> entries into the next <paramref name="count"/> − 1 slices.</summary>
+    private static void RepeatFirst<T>(T[] entries, int count, int width)
+    {
+        var first = entries.AsSpan(0, width);
+        for (var r = 1; r < count; r++)
+        {
+            first.CopyTo(entries.AsSpan(r * width, width));
+        }
     }
 }

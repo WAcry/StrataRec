@@ -200,6 +200,36 @@ public sealed class ModelRankerTests
         Assert.Equal(new long[] { 20, 50, 30, 10, 40, 70, 60 }, IdsOf(list));
     }
 
+    /// <summary>A float64 score ranks at its precision: 1 + 2^-30 is above 1, which as floats would tie.</summary>
+    [Fact]
+    public async Task AFloat64Score_RanksAtItsOwnPrecision()
+    {
+        var precise = new Dictionary<long, double> { [30] = 1, [10] = 1 + Math.Pow(2, -30), [50] = 1, [20] = 1 - Math.Pow(2, -30), [40] = 1 };
+        var wideList = Signature(("id", TensorElementType.Int64, [1, -1]), ("s", TensorElementType.Float64, [1, -1]));
+        var models = new TestModels(_ => wideList, call => new float[call["id"].Int64.Length], TensorElementType.Float64,
+            exact: call => call["id"].Int64.Select(id => precise[id]).ToArray());
+
+        var result = await Run(Compile(models, "ListwiseReranker@1", """{ "model": "m", "inputs": { "id": "col.entity_id" }, "output": "s", "window": 5 }"""));
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(new long[] { 10, 30, 40, 50, 20, 70, 60 }, IdsOf(result)); // the ties at 1 by entity_id
+    }
+
+    [Theory]
+    [InlineData("ListwiseReranker@1")]
+    [InlineData("PairwiseRanker@1")]
+    public async Task AScoreOutputLongerThanItsShape_FailsTheNode(string op)
+    {
+        var pairwise = op == "PairwiseRanker@1";
+        var models = new TestModels(_ => pairwise ? PairIds : ListIds, pairwise ? Prefer(Strengths) : Score(new Dictionary<long, float>()), extra: 1);
+        var config = $$"""{ "model": "m", "inputs": { "id": "col.entity_id" }, "output": "{{(pairwise ? "p" : "s")}}", "window": 5 }""";
+
+        var result = await Run(Compile(models, op, config));
+
+        Assert.False(result.Succeeded);
+        Assert.Contains(pairwise ? "values of output 'p', but its shape holds 10" : "returned 6 values of output 's', but its shape holds 5", result.Error);
+    }
+
     [Fact]
     public async Task AScoreOfAnotherTypeThanFloat_FailsTheNode_NamingWhatItGot()
     {
@@ -577,8 +607,11 @@ public sealed class ModelRankerTests
     /// </summary>
     /// <param name="answerType">The element type the answer is written as: float32, float64 (a model whose signature declares a
     /// float64 score), or int64 (a client that breaks its signature).</param>
+    /// <param name="exact">The float64 answer itself, for scores a float cannot hold (with <paramref name="answerType"/> float64).</param>
+    /// <param name="extra">Elements written beyond the answer: a client that writes more than the output's shape holds.</param>
     internal sealed class TestModels(
-        Func<string?, ModelSignature> signature, Func<CapturedCall, float[]?> answer, TensorElementType answerType = TensorElementType.Float32) : IModelClientFactory, IModelClient
+        Func<string?, ModelSignature> signature, Func<CapturedCall, float[]?> answer, TensorElementType answerType = TensorElementType.Float32,
+        Func<CapturedCall, double[]>? exact = null, int extra = 0) : IModelClientFactory, IModelClient
     {
         public const string Type = "ranker_test@1";
 
@@ -630,18 +663,19 @@ public sealed class ModelRankerTests
             switch (answerType)
             {
                 case TensorElementType.Float64:
-                    var doubles = outputs.GetValues<double>(name, values.Length).Span;
+                    var doubles = outputs.GetValues<double>(name, values.Length + extra).Span;
                     for (var i = 0; i < values.Length; i++)
                     {
                         doubles[i] = values[i];
                     }
 
+                    exact?.Invoke(captured).CopyTo(doubles);
                     break;
                 case TensorElementType.Int64:
                     outputs.GetValues<long>(name, values.Length).Span.Fill(1);
                     break;
                 default:
-                    values.CopyTo(outputs.GetValues<float>(name, values.Length).Span);
+                    values.CopyTo(outputs.GetValues<float>(name, values.Length + extra).Span);
                     break;
             }
             return ValueTask.FromResult(ModelStatus.Ok);

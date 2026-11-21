@@ -235,6 +235,17 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
             {
                 case StorageKind.Int32:
                     return Int32Range.AllFit(AsInt64List());
+                case StorageKind.String:
+                    // A list's elements are values (design 4.3): a host's string[] may hold a null, JSON cannot.
+                    foreach (var text in AsStringList())
+                    {
+                        if (text is null)
+                        {
+                            return false;
+                        }
+                    }
+
+                    return true;
                 case StorageKind.Float32:
                     if (!Float32Range.AllFit(AsFloat64List()))
                     {

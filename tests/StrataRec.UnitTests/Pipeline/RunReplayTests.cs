@@ -245,6 +245,54 @@ public sealed class RunReplayTests
     }
 
     /// <summary>
+    /// Two nodes call one model, writing its output <c>v</c> to a list&lt;int32,2&gt; and a list&lt;int32,3&gt; column. A
+    /// rebatched call of the second takes the width of the rows it matches, not of the first node's call.
+    /// </summary>
+    [Fact]
+    public void ARebatchedCall_TakesItsOutputsWidth_FromTheRowsItMatches_NotFromAnotherNodesCall()
+    {
+        var narrow = Call(2, NamedInput.FromInt32("x", new[] { 2, 2 }, new[] { 1, 2, 3, 4 }));
+        var wide = Call(2, NamedInput.FromInt32("x", new[] { 2, 3 }, new[] { 1, 2, 3, 4, 5, 6 }));
+        var run = Run();
+        run.ModelCalls.Add(new ReplayModelCall
+        {
+            Seq = 0, Node = "a", Model = "m", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(narrow).ToList(),
+            Outputs = new Dictionary<string, ReplayModelOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4 })) },
+        });
+        run.ModelCalls.Add(new ReplayModelCall
+        {
+            Seq = 1, Node = "b", Model = "m", BatchSize = 2, Status = "ok", Keys = Json("[1, 2]"), InputDigests = RowDigests(wide).ToList(),
+            Outputs = new Dictionary<string, ReplayModelOutput> { ["v"] = ReplayJson.Tensor(TensorValues.Of<int>(new[] { 1, 2, 3, 4, 5, 6 })) },
+        });
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var writer = new ArrayOutputWriter();
+        var status = replay.InvokeModel(Call(1, NamedInput.FromInt32("x", new[] { 1, 3 }, new[] { 4, 5, 6 })), writer, new[] { EntityKey.FromInt64(2) });
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Equal(new[] { 4, 5, 6 }, (int[])writer.Arrays["v"]);
+        Assert.Empty(replay.Gaps);
+    }
+
+    /// <summary>A float64 input is in the digest as itself: 0.1 and the float nearest it are other inputs.</summary>
+    [Fact]
+    public void AFloat64InputThatChangedBeyondFloatPrecision_IsAnInputsChangedGap()
+    {
+        var run = Run();
+        run.ModelCalls.Add(ModelCallOf(0, Call(1, NamedInput.FromFloat64("x", new[] { 1 }, new[] { 0.1 })), new long[] { 1 }, 100));
+        var replay = RunReplay.Create(run, "/runs/0");
+
+        var (same, scores) = Invoke(replay, Call(1, NamedInput.FromFloat64("x", new[] { 1 }, new[] { 0.1 })), 1);
+        var (_, changed) = Invoke(replay, Call(2, NamedInput.FromFloat64("x", new[] { 2 }, new[] { (double)0.1f, 0.1 })), 1, 1);
+
+        Assert.True(same.Succeeded);
+        Assert.Equal(new float[] { 100 }, scores);
+        Assert.True(float.IsNaN(changed[0]));
+        Assert.Equal(100, changed[1]);
+        Assert.Equal(("inputs_changed", "1"), (Assert.Single(replay.Gaps).Reason, Assert.Single(Assert.Single(replay.Gaps).Examples)));
+    }
+
+    /// <summary>
     /// Entity 1 was annotated alone twice, with two prompts. The replay's call with the second prompt first takes the call
     /// recorded with the first (same entity, other inputs) and is answered from the one recorded with its own inputs, as
     /// that call was: its text and its generation details.

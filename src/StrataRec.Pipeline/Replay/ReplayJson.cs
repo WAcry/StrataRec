@@ -230,11 +230,16 @@ internal static class ReplayJson
         var i = 0;
         foreach (var item in json.EnumerateArray())
         {
-            var at = $"{pointer}/values/{i.ToString(CultureInfo.InvariantCulture)}";
-            var value = Value(item, element, at);
+            // The element's pointer only for an error: a bundle's outputs hold a value per row.
+            if (!LogBatchJson.TryReadValue(item, element, out var value, out var error, nonFiniteAsStrings: true))
+            {
+                throw new ReplayBundleException(ElementPointer(pointer, i), error!,
+                    $"values use the log encoding of their recorded type ({output.Type}), with \"NaN\", \"Infinity\" and \"-Infinity\" for non-finite floats");
+            }
+
             if (value.IsMissing && type != TensorElementType.String)
             {
-                throw new ReplayBundleException(at, $"expected a {output.Type} value, got null", "every element of a tensor has a value");
+                throw new ReplayBundleException(ElementPointer(pointer, i), $"expected a {output.Type} value, got null", "every element of a tensor has a value");
             }
 
             switch (values)
@@ -263,6 +268,8 @@ internal static class ReplayJson
         }
 
         return new ReplayTensor(type, values);
+
+        static string ElementPointer(string pointer, int i) => $"{pointer}/values/{i.ToString(CultureInfo.InvariantCulture)}";
     }
 
     public static ReplayTypedValue Typed(ColumnType type, in ScalarValue value) =>

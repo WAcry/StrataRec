@@ -46,7 +46,8 @@ public sealed class ModelScorerTests
           "emb": "col.item.emb", "flags": "col.item.flags", "ids": "col.item.ids", "weights": "col.item.weights",
           "user_emb": "ctx.request.user_emb", "user_id": "ctx.request.user_id", "member": "ctx.request.member",
           "recent": "ctx.request.recent", "weight": "param.weight", "tag": "col.item.tag", "names": "col.item.names",
-          "surface": "ctx.request.surface", "boost": "ctx.request.boost", "slot": "ctx.request.slot", "affinity": "ctx.user.affinity" }
+          "surface": "ctx.request.surface", "boost": "ctx.request.boost", "slot": "ctx.request.slot", "affinity": "ctx.user.affinity",
+          "slots": "ctx.request.slots", "user_emb2": "ctx.request.user_emb" }
         """;
 
     /// <summary>The mapping: each reference's declared type, a list&lt;E,N&gt; with a trailing N.</summary>
@@ -63,7 +64,8 @@ public sealed class ModelScorerTests
             new TensorSpec("weight", TensorElementType.Float64, Rows), new TensorSpec("tag", TensorElementType.String, Rows),
             new TensorSpec("names", TensorElementType.String, RowsOf2), new TensorSpec("surface", TensorElementType.String, Rows),
             new TensorSpec("boost", TensorElementType.Float32, Rows), new TensorSpec("slot", TensorElementType.Int32, Rows),
-            new TensorSpec("affinity", TensorElementType.Float32, Rows),
+            new TensorSpec("affinity", TensorElementType.Float32, Rows), new TensorSpec("slots", TensorElementType.Int32, RowsOf2),
+            new TensorSpec("user_emb2", TensorElementType.Float32, RowsOf3),
         },
         new[] { new TensorSpec("p", TensorElementType.Float32, Rows) });
 
@@ -114,6 +116,8 @@ public sealed class ModelScorerTests
             AssertTensor(call["boost"], TensorElementType.Float32, n);
             AssertTensor(call["slot"], TensorElementType.Int32, n);
             AssertTensor(call["affinity"], TensorElementType.Float32, n); // a context feature's declared type, not the promoted one its symbol has
+            AssertTensor(call["slots"], TensorElementType.Int32, n, 2);
+            AssertTensor(call["user_emb2"], TensorElementType.Float32, n, 3);
             for (var r = 0; r < n; r++)
             {
                 var id = call["id"].Of<long>()[r];
@@ -138,6 +142,8 @@ public sealed class ModelScorerTests
                 Assert.Equal(0.1f, call["boost"].Of<float>()[r]); // a float32 request input, held promoted, narrowed back exactly
                 Assert.Equal(int.MinValue, call["slot"].Of<int>()[r]);
                 Assert.Equal(0.1f, call["affinity"].Of<float>()[r]);
+                Assert.Equal(new[] { int.MaxValue, int.MinValue }, call["slots"].Of<int>().AsSpan(r * 2, 2).ToArray()); // an int32 list in every row
+                Assert.Equal(UserEmb, call["user_emb2"].Of<float>().AsSpan(r * 3, 3).ToArray()); // the same value broadcast to two inputs
             }
         }
 
@@ -212,7 +218,8 @@ public sealed class ModelScorerTests
         {
             new TensorSpec("p", TensorElementType.Float32, Rows), new TensorSpec("n", TensorElementType.Int64, Rows),
             new TensorSpec("label", TensorElementType.String, Rows), new TensorSpec("v", TensorElementType.Float32, RowsOf2),
-            new TensorSpec("d", TensorElementType.Float64, Rows),
+            new TensorSpec("d", TensorElementType.Float64, Rows), new TensorSpec("odd", TensorElementType.Bool, Rows),
+            new TensorSpec("r", TensorElementType.Int32, Rows),
         });
         var models = new CapturingModels(signature, (call, outputs) =>
         {
@@ -223,8 +230,12 @@ public sealed class ModelScorerTests
             var labels = outputs.GetValues<string>("label", n).Span;
             var vectors = outputs.GetValues<float>("v", 2 * n).Span;
             var doubles = outputs.GetValues<double>("d", n).Span;
+            var odd = outputs.GetValues<bool>("odd", n).Span;
+            var ranks = outputs.GetValues<int>("r", n).Span;
             for (var r = 0; r < n; r++)
             {
+                odd[r] = ids[r] % 2 == 1;
+                ranks[r] = int.MinValue + (int)(ids[r] % 7);
                 codes[r] = ids[r] + 1;
                 labels[r] = "l" + ids[r].ToString(CultureInfo.InvariantCulture);
                 vectors[2 * r] = ids[r] % 7;
@@ -233,8 +244,8 @@ public sealed class ModelScorerTests
             }
         });
         var plan = Compile(models, """{ "id": "col.entity_id" }""", batchSize: 2,
-            outputs: """{ "p": "score.p", "n": "score.n", "label": "score.label", "v": "score.v", "d": "score.d" }""",
-            resultColumns: """{ "p": "col.score.p", "n": "col.score.n", "label": "col.score.label", "v": "col.score.v", "d": "col.score.d" }""");
+            outputs: """{ "p": "score.p", "n": "score.n", "label": "score.label", "v": "score.v", "d": "score.d", "odd": "score.odd", "r": "score.r" }""",
+            resultColumns: """{ "p": "col.score.p", "n": "col.score.n", "label": "col.score.label", "v": "col.score.v", "d": "col.score.d", "odd": "col.score.odd", "r": "col.score.r" }""");
 
         var result = await Run(plan);
 
@@ -247,7 +258,34 @@ public sealed class ModelScorerTests
             Assert.Equal("l" + id.ToString(CultureInfo.InvariantCulture), item.Columns["label"].AsString());
             Assert.Equal(new double[] { id % 7, -1 }, item.Columns["v"].AsFloat64List().ToArray());
             Assert.Equal(0.1 * (id % 3), item.Columns["d"].AsFloat64()); // a float64 output, not rounded through float32
+            Assert.Equal(id % 2 == 1, item.Columns["odd"].AsBool());
+            Assert.Equal(int.MinValue + (int)(id % 7), item.Columns["r"].AsInt32());
         }
+    }
+
+    /// <summary>
+    /// An output with more elements than its shape holds fails the node: sliced by the column's width, its rows would start
+    /// elsewhere than the client wrote them (a list&lt;float32,2&gt; column written 3 per row took the next row's values).
+    /// </summary>
+    [Theory]
+    [InlineData("p", 1)]
+    [InlineData("v", 2)]
+    public async Task AnOutputLongerThanItsShape_FailsTheNode_NotSlicedIntoOtherRows(string output, int width)
+    {
+        var signature = new ModelSignature(new[] { new TensorSpec("id", TensorElementType.Int64, Rows) },
+            new[] { new TensorSpec("p", TensorElementType.Float32, Rows), new TensorSpec("v", TensorElementType.Float32, RowsOf2) });
+        var models = new CapturingModels(signature, (call, outputs) =>
+        {
+            outputs.GetValues<float>("p", call.BatchSize * (output == "p" ? 2 : 1)).Span.Fill(0.5f);
+            outputs.GetValues<float>("v", call.BatchSize * (output == "v" ? 3 : 2)).Span.Fill(1f);
+        });
+        var plan = Compile(models, """{ "id": "col.entity_id" }""", batchSize: 8, outputs: """{ "p": "score.p", "v": "score.v" }""");
+
+        var result = await Run(plan);
+
+        Assert.False(result.Succeeded);
+        var expected = 5 * width;
+        Assert.Contains($"model 'm' returned {5 * (output == "p" ? 2 : 3)} values of output '{output}', but its shape holds {expected}", result.Error);
     }
 
     [Fact]
@@ -293,7 +331,7 @@ public sealed class ModelScorerTests
         RequestId = "r",
         Inputs = new RequestInputs().Set("user_emb", ScalarValue.FromFloat32List(UserEmb)).Set("user_id", Big).Set("surface", "home")
             .Set("member", ScalarValue.FromBool(true)).Set("recent", ScalarValue.FromInt64List(Recent)).Set("boost", ScalarValue.FromFloat32(0.1f))
-            .Set("slot", int.MinValue),
+            .Set("slot", int.MinValue).Set("slots", new long[] { int.MaxValue, int.MinValue }),
         Deadline = TimeSpan.FromSeconds(30),
     });
 
@@ -344,10 +382,12 @@ public sealed class ModelScorerTests
             { "pipeline_id": "p", "entity_key_type": "int64",
               "request_schema": {
                 "user_emb": { "type": "list<float32,3>" }, "user_id": { "type": "int64" }, "maybe_id": { "type": "int64?" }, "surface": { "type": "string" },
-                "member": { "type": "bool" }, "recent": { "type": "list<int64,2>" }, "boost": { "type": "float32" }, "slot": { "type": "int32" } },
+                "member": { "type": "bool" }, "recent": { "type": "list<int64,2>" }, "boost": { "type": "float32" }, "slot": { "type": "int32" },
+                "slots": { "type": "list<int32,2>" } },
               "columns": { "score.p": { "type": "float32", "default": 0.0 }, "score.n": { "type": "int64", "default": 0 },
                            "score.label": { "type": "string", "default": "" }, "score.v": { "type": "list<float32,2>", "default": [0, 0] },
-                           "score.d": { "type": "float64", "default": 0.0 } },
+                           "score.d": { "type": "float64", "default": 0.0 }, "score.odd": { "type": "bool", "default": false },
+                           "score.r": { "type": "int32", "default": 0 } },
               "param_schema": { "quotas": { "type": "map<string,int64>" }, "k": { "type": "int64" }, "weight": { "type": "float64" } },
               "params": { "quotas": { "s": 10 }, "k": 10, "weight": 0.75 },
               "nodes": {

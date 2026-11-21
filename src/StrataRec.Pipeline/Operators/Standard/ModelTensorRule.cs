@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using StrataRec.Artifacts.Json;
 using StrataRec.Core.Types;
@@ -253,7 +254,9 @@ internal static class ModelTensorRule
                 {
                     problems.Add(new Problem(output.ConfigKey, "MODEL_TENSOR_MISMATCH",
                         $"{label} declares output '{output.Name}' as {Describe(spec)}, but it is written to a {column} column, which {OperatorId(layout)} reads as {Describe(tensor.ElementType, shape)}.",
-                        $"declare output '{output.Name}' as {Describe(tensor.ElementType, shape)} in the model's signature, or write it to a column of the type the model returns"));
+                        ColumnTaking(spec) is { } other
+                            ? $"declare output '{output.Name}' as {Describe(tensor.ElementType, shape)} in the model's signature, or write it to {Article(other)} {other} column, which takes what the model returns"
+                            : $"declare output '{output.Name}' as {Describe(tensor.ElementType, shape)} in the model's signature; no column takes {Describe(spec)}"));
                 }
             }
             else if (!AcceptsScore(layout, spec))
@@ -265,9 +268,29 @@ internal static class ModelTensorRule
         return problems;
     }
 
+    /// <summary>
+    /// The column type a <c>ModelScorer@1</c> output declared as <paramref name="spec"/> could be written to (<c>int64</c>,
+    /// <c>list&lt;float32,4&gt;</c>, <c>list&lt;float32,N&gt;</c> for a trailing -1); null when no column takes it (text,
+    /// a fixed batch dimension, a rank above 2).
+    /// </summary>
+    private static string? ColumnTaking(TensorSpec spec)
+    {
+        if (spec.ElementType == TensorElementType.Text || spec.Shape is not { Count: 1 or 2 } || spec.Shape[0] != -1)
+        {
+            return null;
+        }
+
+        var element = TensorValues.Name(spec.ElementType);
+        return spec.Shape.Count == 1
+            ? element
+            : $"list<{element},{(spec.Shape[1] == -1 ? "N" : spec.Shape[1].ToString(CultureInfo.InvariantCulture))}>";
+    }
+
     /// <summary>A float32 or float64 tensor of the layout's output shape: a score per row, pair or list row, which the operator ranks by.</summary>
-    public static bool AcceptsScore(TensorLayout layout, TensorSpec spec) =>
-        Accepts(spec, TensorElementType.Float32, OutputShape(layout, -1)) || Accepts(spec, TensorElementType.Float64, OutputShape(layout, -1));
+    public static bool AcceptsScore(TensorLayout layout, TensorSpec spec) => IsScore(spec.ElementType) && Accepts(spec, spec.ElementType, OutputShape(layout, -1));
+
+    /// <summary>The element types a ranker's score has: float32 or float64, whichever the model's signature declares.</summary>
+    public static bool IsScore(TensorElementType type) => type is TensorElementType.Float32 or TensorElementType.Float64;
 
     /// <summary>
     /// True when <paramref name="spec"/> declares the element type and the shape built: the same rank, every dynamic

@@ -517,8 +517,8 @@ internal sealed class RunReplay : IFeatureCallHook
     /// </remarks>
     private ModelStatus Synthesize(ModelCall call, List<ModelEntry>? calls, IModelOutputWriter outputs, EntityKey[] keys, string[] digests)
     {
-        // Output layout (names and values per row) and the rows by (entity, input digest), from the successful keyed calls
-        // of the same model and version. An entity can be scored several times with different inputs.
+        // The rows by (entity, input digest), from the successful keyed calls of the same model and version. An entity can
+        // be scored several times with different inputs.
         var layout = new List<(string Name, TensorElementType Type, int PerRow)>();
         var rows = new Dictionary<(EntityKey Key, string Digest), List<(ModelEntry Entry, int Row)>>();
         var scored = new HashSet<EntityKey>();
@@ -542,13 +542,30 @@ internal sealed class RunReplay : IFeatureCallHook
                     list.Add((entry, r));
                     scored.Add(entry.Keys[r]);
                 }
+            }
+        }
 
-                foreach (var (name, values) in entry.Outputs)
+        // The output layout (each output's type and values per row): as the recorded rows this call matches have it, since
+        // another node of the same model may write the same output at another width (a list<int32,2> column and a
+        // list<int32,3> one); an output none of them has, as any call has it.
+        for (var r = 0; r < keys.Length; r++)
+        {
+            if (rows.TryGetValue((keys[r], digests[r]), out var matched))
+            {
+                foreach (var (entry, _) in matched)
                 {
-                    if (!layout.Exists(o => o.Name == name))
-                    {
-                        layout.Add((name, values.Type, PerRow(entry, values.Values)));
-                    }
+                    AddLayout(layout, entry);
+                }
+            }
+        }
+
+        if (calls is not null)
+        {
+            foreach (var entry in calls)
+            {
+                if (entry.Outcome == IoOutcome.Ok && entry.Keys is not null)
+                {
+                    AddLayout(layout, entry);
                 }
             }
         }
@@ -613,6 +630,17 @@ internal sealed class RunReplay : IFeatureCallHook
         return ModelStatus.Ok;
 
         static int PerRow(ModelEntry entry, Array values) => entry.BatchSize > 0 ? values.Length / entry.BatchSize : 1;
+
+        static void AddLayout(List<(string Name, TensorElementType Type, int PerRow)> layout, ModelEntry entry)
+        {
+            foreach (var (name, values) in entry.Outputs)
+            {
+                if (!layout.Exists(o => o.Name == name))
+                {
+                    layout.Add((name, values.Type, PerRow(entry, values.Values)));
+                }
+            }
+        }
 
         // The first successful recorded call of this one entity alone, with these inputs, that answered text.
         static ModelEntry? Alone(Dictionary<(EntityKey, string), List<(ModelEntry Entry, int Row)>> rows, EntityKey key, string digest)

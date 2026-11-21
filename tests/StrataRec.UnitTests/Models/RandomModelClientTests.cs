@@ -357,6 +357,10 @@ public sealed class RandomModelClientTests
         Assert.Equal(Call(Of("float32"), 3, 3, NamedInput.FromFloat32("x", new[] { 3 }, floats))["p"],
             Call(Of("float64"), 3, 3, NamedInput.FromFloat64("x", new[] { 3 }, floats.Select(f => (double)f).ToArray()))["p"]);
 
+        // A float64 is hashed as itself: 0.1 and the float nearest it are two values.
+        var precise = Call(Of("float64"), 2, 3, NamedInput.FromFloat64("x", new[] { 2 }, new[] { 0.1, (double)0.1f }))["p"];
+        Assert.NotEqual(precise[0], precise[1]);
+
         var words = Call(Of("string"), 3, 3, NamedInput.FromString("x", new[] { 3 }, new[] { "news", "sports", "news" }))["p"];
         Assert.Equal(words[0], words[2]);
         Assert.NotEqual(words[0], words[1]);

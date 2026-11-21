@@ -284,6 +284,18 @@ public static class ConfigValues
             case StorageKind.Float32 when value.Kind == StorageKind.Float64:
                 error = FloatOutOfRange(type, Words(value));
                 return false;
+            case StorageKind.List when type.Element == StorageKind.String && value.ListElement == StorageKind.String:
+                var strings = value.AsStringList();
+                for (var i = 0; i < strings.Length; i++)
+                {
+                    if (strings[i] is null)
+                    {
+                        error = Element(type, i, "null: a list's elements are values");
+                        return false;
+                    }
+                }
+
+                break;
             case StorageKind.List when type.Element == StorageKind.Float32 && value.ListElement == StorageKind.Float64:
                 var floats = value.AsFloat64List();
                 for (var i = 0; i < floats.Length; i++)

@@ -271,6 +271,9 @@ public class ConfigValuesTests
             Convert(ScalarValue.FromInt64List(new long[] { 3_000_000_000 }), "list<int32>"));
         Assert.Equal("must be an array of 4 numbers (list<float32,4>), got 1 element", Convert(ScalarValue.FromFloat32List(new float[] { 1 }), "list<float32,4>"));
         Assert.Equal("must be an array of 2 integers (list<int32,2>), got 3 elements", Convert(ScalarValue.FromInt64List(new long[] { 1, 2, 3_000_000_000 }), "list<int32,2>"));
+        // A host's string[] can hold a null, which JSON cannot: a list's elements are values, so a model is never sent one.
+        Assert.Equal("must be an array of 2 strings (list<string,2>); element 1 is null: a list's elements are values",
+            Convert(ScalarValue.FromStringList(new[] { "present", null! }), "list<string,2>"));
 
         static string Convert(ScalarValue value, string type)
         {
