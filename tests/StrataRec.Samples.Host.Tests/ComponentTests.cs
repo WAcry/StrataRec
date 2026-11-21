@@ -1,5 +1,6 @@
 using System.Text.Json;
 using StrataRec.Core.Bindings;
+using StrataRec.Core.Keys;
 using StrataRec.Samples.Host.Components;
 using StrataRec.Core.Services;
 
@@ -95,6 +96,25 @@ public sealed class ComponentTests
         Assert.Contains(Path.Combine(directory, "data", "missing.jsonl"), error.Reason, StringComparison.Ordinal);
     }
 
+    /// <summary>stock@1 answers a call about items, one bool per item; any other call fails, saying what it answers.</summary>
+    [Fact]
+    public async Task Stock_AnswersEachItem_AndFailsACallItCannotAnswer()
+    {
+        var service = new StockService([1, 22]);
+        var flags = new Flags();
+        static ServiceCall About(long[] ids, params string[] outputs) =>
+            new() { Service = "stock", BatchSize = ids.Length, Items = ids.Select(EntityKey.FromInt64).ToArray(), Outputs = outputs };
+
+        var answered = await service.CallAsync(About([1, 2, 22], "in_stock"), flags, CancellationToken.None);
+        var noItems = await service.CallAsync(new ServiceCall { Service = "stock", Outputs = new[] { "in_stock" } }, new Flags(), CancellationToken.None);
+        var other = await service.CallAsync(About([2], "available"), new Flags(), CancellationToken.None);
+
+        Assert.True(answered.Succeeded, answered.Error);
+        Assert.Equal([false, true, false], flags.Values);
+        Assert.Contains("send the candidates as its items", noItems.Error, StringComparison.Ordinal);
+        Assert.Contains("answers output 'in_stock' only", other.Error, StringComparison.Ordinal);
+    }
+
     private static object Create(string type, BindingContext context) => type switch
     {
         "logistic@1" => new LogisticModelClientFactory().Create(context),
@@ -111,6 +131,24 @@ public sealed class ComponentTests
         }
 
         return new ServiceCall { Service = "m", Version = "v1", Inputs = named, BatchSize = 1 };
+    }
+
+    private sealed class Flags : IServiceResponse
+    {
+        public bool[] Values { get; private set; } = [];
+
+        public void AddItem(long entityId, double score) => throw new NotSupportedException("a filter's service answers with outputs");
+
+        public void AddItem(string entityId, double score) => throw new NotSupportedException("a filter's service answers with outputs");
+
+        public Memory<T> GetValues<T>(string name, int elementCount)
+        {
+            var buffer = new T[elementCount];
+            Values = buffer as bool[] ?? throw new InvalidOperationException($"stock@1 wrote a {typeof(T).Name} output");
+            return buffer;
+        }
+
+        public void SetText(string name, string text) => throw new NotSupportedException();
     }
 
     private sealed class Outputs : IServiceResponse

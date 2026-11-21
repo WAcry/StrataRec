@@ -50,6 +50,14 @@
       ]
     },
     // A built-in source next to the custom one: the editors' picks, a fixed list.
-    "editorial": { "client": "memory_list@1", "items": [21, 22, 3, 23] }
+    "editorial": { "client": "memory_list@1", "items": [21, 22, 3, 23] },
+    // stock@1 (Components/StockService.cs), a business service the StockFilter@1 node asks about its candidates. A call
+    // about items is cached item by item: a candidate's answer is kept for 5 seconds, and a later request asks the
+    // service only about the candidates it has not answered since.
+    "stock": {
+      "client": "stock@1",
+      "cache": { "ttl_ms": 5000, "max_bytes": "1MiB" },
+      "out_of_stock": [1, 22]
+    }
   }
 }

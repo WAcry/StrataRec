@@ -130,11 +130,41 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Equal(0, code);
         var operators = listed["operators"]!.AsArray().Select(o => o!["id"]!.GetValue<string>()).ToList();
         Assert.Contains("CategoryBoost@1", operators);
+        Assert.Contains("StockFilter@1", operators);
         Assert.Contains("TopK@1", operators);
         var capabilities = listed["capabilities"]!.AsArray().Select(c => c!.GetValue<string>()).ToList();
         Assert.Contains("kv_store@1", capabilities);
         Assert.Contains("logistic@1", capabilities);
         Assert.Contains("trending@1", capabilities);
+        Assert.Contains("stock@1", capabilities);
+    }
+
+    /// <summary>
+    /// StockFilter@1 asks stock@1 about the candidates and drops the ones out of stock (items 1 and 22 in the bindings):
+    /// neither is served, and with everything in stock item 1, the top of the region's list, is.
+    /// </summary>
+    [Fact]
+    public async Task TheStockFilter_DropsWhatTheStockServiceSaysIsOutOfStock()
+    {
+        var body = await File.ReadAllTextAsync(Path.Combine(ConfigRoot, "requests", "user_1001.json"), TestContext.Current.CancellationToken);
+        var served = await Post(_host.CreateClient(), Pipeline, body);
+
+        Assert.Equal(HttpStatusCode.OK, served.Status);
+        Assert.DoesNotContain(Items(served.Json), i => i.Id is 1 or 22);
+
+        var copy = CopyOfTheWorkspace();
+        var bindings = Path.Combine(copy, "bindings", "local.jsonc");
+        var text = await File.ReadAllTextAsync(bindings, TestContext.Current.CancellationToken);
+        Assert.Contains("\"out_of_stock\": [1, 22]", text, StringComparison.Ordinal);
+        await File.WriteAllTextAsync(bindings, text.Replace("\"out_of_stock\": [1, 22]", "\"out_of_stock\": []", StringComparison.Ordinal), TestContext.Current.CancellationToken);
+        var file = JsonNode.Parse(body)!.AsObject();
+        file["pipeline_id"] = Pipeline;
+        var request = Path.Combine(copy, "requests", "user_1001.cli.json");
+        await File.WriteAllTextAsync(request, file.ToJsonString(), TestContext.Current.CancellationToken);
+        var (code, local, error) = await Stratarec("run", "-c", copy, "-r", request, "--deadline-ms", SampleBudgets.UntimedMs.ToString(CultureInfo.InvariantCulture));
+
+        Assert.True(code == 0, error);
+        Assert.Contains(Items(local), i => i.Id == 1);
     }
 
     [Fact]

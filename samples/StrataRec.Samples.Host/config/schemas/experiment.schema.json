@@ -150,6 +150,7 @@
                     "MultiSourceRecall@1",
                     "PairwiseRanker@1",
                     "SlidingWindowQuota@1",
+                    "StockFilter@1",
                     "TopK@1",
                     null
                   ],
@@ -165,6 +166,7 @@
                     "Concurrent multi-source retrieval with deterministic merge and entity_id dedup.",
                     "Reranks the leading rows by a model's pairwise preferences, aggregated into expected wins.",
                     "Limits rows per group within any sliding window of ranks; over-quota rows move down or drop.",
+                    "Drops the rows an external service says no to: it is sent the candidates and answers a bool per item.",
                     "Sorts rows by a score column (missing last, ties by entity_id) and keeps the first k."
                   ]
                 },
@@ -963,6 +965,48 @@
                             "description": "Maximum rows of one group in any window.",
                             "type": [
                               "integer",
+                              "null"
+                            ]
+                          }
+                        },
+                        "additionalProperties": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "StockFilter@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "Drops the rows an external service says no to: it is sent the candidates and answers a bool per item.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "service": {
+                            "description": "Service to ask, as the bindings' 'services' name it, e.g. stock. It is sent the candidates as the call's items and answers a bool per item.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "keep_output": {
+                            "description": "The service's output that keeps a row when true, e.g. in_stock.",
+                            "type": [
+                              "string",
                               "null"
                             ]
                           }

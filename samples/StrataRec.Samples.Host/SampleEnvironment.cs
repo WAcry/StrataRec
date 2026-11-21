@@ -6,8 +6,9 @@ namespace StrataRec.Samples.Host;
 
 /// <summary>
 /// What this binary provides to plans: the built-in operators and binding types, plus the sample's own. A workspace
-/// names each by its type (<c>"op": "CategoryBoost@1"</c>, <c>"connector": "kv_store@1"</c>, <c>"client": "logistic@1"</c>,
-/// <c>"client": "trending@1"</c>), so a binary without them rejects the workspace at load.
+/// names each by its type (<c>"op": "CategoryBoost@1"</c>, <c>"op": "StockFilter@1"</c>, <c>"connector": "kv_store@1"</c>,
+/// <c>"client": "logistic@1"</c>, <c>"client": "trending@1"</c>, <c>"client": "stock@1"</c>), so a binary without them rejects
+/// the workspace at load.
 /// </summary>
 /// <remarks>
 /// The service (<c>AddStrataRec</c>) and the configuration commands (<c>dotnet run -- stratarec …</c>) both start from
@@ -18,10 +19,11 @@ public static class SampleEnvironment
 {
     public static PlanEnvironment Create() => new()
     {
-        Operators = OperatorRegistry.CreateDefault().Add(new CategoryBoostFactory()),
+        Operators = OperatorRegistry.CreateDefault().Add(new CategoryBoostFactory()).Add(new StockFilterFactory()),
         Bindings = PlanEnvironment.DefaultBindings()
             .Add(new KeyValueFeatureConnectorFactory())
             .Add(new LogisticModelClientFactory())
-            .Add(new TrendingServiceFactory()),
+            .Add(new TrendingServiceFactory())
+            .Add(new StockServiceFactory()),
     };
 }

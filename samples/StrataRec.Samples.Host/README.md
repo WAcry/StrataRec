@@ -3,7 +3,7 @@
 一个最小的 Web 服务，演示两件事：
 
 1. 怎样把引擎放进服务：`AddStrataRec` 在宿主启动时加载本目录下的工作区 `config/`，`POST /recommend/{pipeline}` 只做传输：请求体用 `RecRequestJson` 按流水线的 `RequestSchema` 读出，宿主补上截止时间组成 `RecRequest`，`RecResult` 用 `RecResultJson` 写回，按 `RecResult.ErrorKind` 映射状态码。请求文档和结果文档都是引擎的，换一个宿主也是同样的文档。
-2. 怎样写并注册自己的组件：三个扩展点有四个小实现（外部服务的召回和模型两种用法各一个），在 `SampleEnvironment.cs` 里和内置组件一起注册，工作区按类型名引用它们。
+2. 怎样写并注册自己的组件：三个扩展点有六个小实现（外部服务的召回、模型和过滤三种用法），在 `SampleEnvironment.cs` 里和内置组件一起注册，工作区按类型名引用它们。
 
 | 组件 | 类型名 | 契约 | 演示什么 |
 | --- | --- | --- | --- |
@@ -11,6 +11,8 @@
 | `Components/TrendingService.cs` | `trending@1` | `IServiceClient` | 召回节点调用的服务：创建时排好序（平分按 id 升序）；按调用的输入 `region` 选列表（召回节点的 `queries` 把 `ctx.request.region` 送给它；服务只看到调用送的值），值缺失时用总榜；同步返回。绑定声明了 `cache`（设计 6.9），每个地区的回答在进程内缓存 30 秒 |
 | `Components/LogisticModelClient.cs` | `logistic@1` | `IServiceClient` | 模型算子调用的服务：自己的签名（加载期校验节点的输入输出）；不会看到缺失值；输入不对返回失败状态，由节点的 `on_failure` 兜底 |
 | `Components/CategoryBoost.cs` | `CategoryBoost@1` | `IOperatorFactory` | 配置类即 JSON Schema；只声明 `ColumnWriter`；检查都在编译期；执行时从 `RequestMemory` 租缓冲，不按行分配 |
+| `Components/StockService.cs` | `stock@1` | `IServiceClient` | 过滤节点调用的业务服务：回答关于物品的调用，每项一个 bool（`in_stock`）；一项的回答只取决于这一项，所以引擎可以随意分批、逐项缓存（绑定声明了 `cache`）和逐项回放；回答不了的调用返回失败状态并说明它回答什么 |
+| `Components/StockFilter.cs` | `StockFilter@1` | `IOperatorFactory` | 调用外部服务的自定义算子：编译期按绑定名取服务（`OperatorCompileContext.Service`），执行时把存活行作为调用的物品经 `OperatorContext.CallAsync` 发出（有界等待、缓存、录制和回放都由引擎做），按回答删行；调用失败交给节点的 `on_failure`（示例里 `skip`，保留全部候选），回答用不了也算失败，从不猜 |
 
 每个文件的注释写了契约的规则（取消、预算、分配、缺失值）以及这个实现为什么这样写。
 

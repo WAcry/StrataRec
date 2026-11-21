@@ -1,6 +1,7 @@
-// The trending feed: recall from a custom source (trending@1) and a built-in one → score with a custom model client
-// (logistic@1) → a business boost, a custom operator (CategoryBoost@1) → sort. Its features come from a custom connector
-// (kv_store@1, catalog/trending.jsonc).
+// The trending feed: recall from a custom source (trending@1) and a built-in one → drop what is out of stock, asking a
+// business service (stock@1) through a custom filter (StockFilter@1) → score with a custom model client (logistic@1) → a
+// business boost, a custom operator (CategoryBoost@1) → sort. Its features come from a custom connector (kv_store@1,
+// catalog/trending.jsonc).
 {
   "$schema": "../schemas/pipeline.schema.json",
   "pipeline_id": "trending_feed",
@@ -29,6 +30,12 @@
         // A service sees only what its call sends: trending@1 picks its list by the request's region.
         "queries": { "trending": { "region": "ctx.request.region" } }
       }
+    },
+    // An external filter: the stock service is sent the candidates and says which are in stock. If it fails, the feed
+    // keeps every candidate rather than failing the request ("skip").
+    "in_stock": {
+      "order": 150, "op": "StockFilter@1", "on_failure": "skip",
+      "config": { "service": "stock", "keep_output": "in_stock" }
     },
     "engagement": {
       "order": 200, "op": "ModelScorer@1", "on_failure": "fallback", "fallback": "engagement_backup",

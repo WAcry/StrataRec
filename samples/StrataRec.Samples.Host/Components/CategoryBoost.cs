@@ -50,7 +50,7 @@ public sealed class CategoryBoostConfig
 /// returns after the node's budget has timed out all the same. A long CPU loop would check
 /// <see cref="OperatorContext.CancellationToken"/> between chunks. An operator that calls a service (a model, a recall
 /// source, any other) does it through <see cref="OperatorContext.CallAsync"/>, which bounds, records and replays the
-/// call.</item>
+/// call (<c>StockFilter@1</c>, <see cref="StockFilterFactory"/>, is one).</item>
 /// </list>
 /// </remarks>
 public sealed class CategoryBoostFactory : IOperatorFactory

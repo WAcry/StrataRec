@@ -278,6 +278,7 @@
               "memory_list@1",
               "memory_vectors@1",
               "random@1",
+              "stock@1",
               "trending@1"
             ]
           },
@@ -681,6 +682,36 @@
               "required": [
                 "inputs",
                 "outputs"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "client": {
+                  "const": "stock@1"
+                }
+              },
+              "required": [
+                "client"
+              ]
+            },
+            "then": {
+              "properties": {
+                "client": {},
+                "timeout_ms": {},
+                "cache": {},
+                "out_of_stock": {
+                  "description": "The ids of the items out of stock, e.g. [1, 22]; every other item is in stock.",
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "required": [
+                "out_of_stock"
               ],
               "additionalProperties": false
             }
