@@ -282,19 +282,19 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>
-    /// A group whose key reads context features: started once each of them is stored. One whose store failed with an
-    /// exception is not started (the exception is the prefetch's failure); one whose key is stored after the request ended
-    /// is not sent, its features failed for anyone who looks.
+    /// A group whose key (or arguments) reads context features: started once each of them is stored, or failed as soon as
+    /// one of them failed, as its key state would fail it (review of the IO redesign: an entity whose argument had failed
+    /// waited for its other arguments). One whose store failed with an exception is not started (the exception is the
+    /// prefetch's failure); one whose key is stored after the request ended is not sent, its features failed for anyone
+    /// who looks.
     /// </summary>
     private async Task StartChainedContextGroupAsync(FetchGroup group, int[] features, CancellationToken cancellationToken)
     {
-        var ready = _contextReady!;
-        foreach (var k in group.ContextKeyFeatures)
+        if (await StoredOrFailedAsync(group.ContextKeyFeatures.AsSpan()) >= 0)
         {
-            if (ready[k] is { } stored)
-            {
-                await stored.ConfigureAwait(false); // completes without yielding when stored already (a synchronous source)
-            }
+            KeyState(group, out var error);
+            FailContext(features, error);
+            return;
         }
 
         if (_ended)
@@ -314,47 +314,75 @@ public sealed partial class FeatureFetcher
     /// </summary>
     private async Task ComputeEarlyDerivedAsync(FeatureRuntimeInfo info)
     {
-        var ready = _contextReady!;
-        List<Task>? pending = null;
-        while (true)
+        if (await StoredOrFailedAsync(info.Dependencies.AsSpan()) is var failed and >= 0)
         {
-            pending?.Clear();
-            foreach (var d in info.Dependencies)
-            {
-                if (ready[d] is not { } stored)
-                {
-                    continue;
-                }
-
-                if (!stored.IsCompleted)
-                {
-                    pending ??= new List<Task>();
-                    if (!pending.Contains(stored))
-                    {
-                        pending.Add(stored);
-                    }
-
-                    continue;
-                }
-
-                await stored.ConfigureAwait(false); // completed: observes a fault, without yielding
-                if (_state[d] == FeatureState.Failed)
-                {
-                    _state[info.Index] = FeatureState.Failed; // what WorstDependency gives, without waiting for the rest
-                    _errors[info.Index] = _errors[d];
-                    return;
-                }
-            }
-
-            if (pending is not { Count: > 0 })
-            {
-                break;
-            }
-
-            await Task.WhenAny(pending).ConfigureAwait(false); // never faults: the next pass observes what completed
+            _state[info.Index] = FeatureState.Failed; // what WorstDependency gives, without waiting for the rest
+            _errors[info.Index] = _errors[failed];
+            return;
         }
 
         ComputeContextDerived(info);
+    }
+
+    /// <summary>
+    /// Waits until each of <paramref name="features"/> the context prefetch stores is stored, or one of them has failed,
+    /// which the others cannot change: returns that one, or -1. A store that faulted throws, as awaiting it does. Used by
+    /// what reads context features before the prefetch has stored them all: a derived feature computed early, a group
+    /// whose key or arguments read them.
+    /// </summary>
+    private ValueTask<int> StoredOrFailedAsync(ReadOnlySpan<int> features)
+    {
+        // The common case, everything stored already (a synchronous source), without a state machine.
+        var ready = _contextReady!;
+        foreach (var k in features)
+        {
+            if (ready[k] is { } stored && (!stored.IsCompletedSuccessfully || _state[k] == FeatureState.Failed))
+            {
+                return new ValueTask<int>(WaitAsync(features.ToArray()));
+            }
+        }
+
+        return new ValueTask<int>(-1);
+
+        async Task<int> WaitAsync(int[] features)
+        {
+            List<Task>? pending = null;
+            while (true)
+            {
+                pending?.Clear();
+                foreach (var k in features)
+                {
+                    if (ready[k] is not { } stored)
+                    {
+                        continue;
+                    }
+
+                    if (!stored.IsCompleted)
+                    {
+                        pending ??= new List<Task>();
+                        if (!pending.Contains(stored))
+                        {
+                            pending.Add(stored);
+                        }
+
+                        continue;
+                    }
+
+                    await stored.ConfigureAwait(false); // completed: observes a fault, without yielding
+                    if (_state[k] == FeatureState.Failed)
+                    {
+                        return k;
+                    }
+                }
+
+                if (pending is not { Count: > 0 })
+                {
+                    return -1;
+                }
+
+                await Task.WhenAny(pending).ConfigureAwait(false); // never faults: the next pass observes what completed
+            }
+        }
     }
 
     /// <summary>Evaluates a derived context feature once what it reads is stored, with the state of the worst of its inputs.</summary>

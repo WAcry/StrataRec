@@ -449,6 +449,48 @@ public class ChainedContextKeyTests
         Assert.Equal(upstream == FetchOutcome.Failed ? FeatureState.Failed : FeatureState.Degraded, request.Fetcher.GetState(userId));
     }
 
+    /// <summary>
+    /// A group whose key reads two context features fails as soon as one of them failed, without waiting for the other:
+    /// it cannot change that, and what waits for the group's task (a recall's query values) learns it at once (review of
+    /// the IO redesign: an entity whose argument had failed waited for its other one). A fill waits for its whole closure,
+    /// whose worst state it returns, as for a derived feature computed early (review 82).
+    /// </summary>
+    [Fact]
+    public async Task AGroupWhoseKeyPartFailed_FailsAtOnce_WithoutWaitingForItsOtherPart()
+    {
+        var slow = new TaskCompletionSource();
+        var pairs = Answering((_, _) => 1.0);
+        var rig = new FeatureTestRig()
+            .Source("identity_store", Answering(UserIdOf, status: FetchStatus.Failed("identity service unavailable")))
+            .Source("session_store", Answering((_, _) => "eu", slow.Task))
+            .Source("pair_store", pairs);
+        var userKey = rig.RequestInput("user_key");
+        rig.Physical("identity.user_id", Identity, ColumnType.Int64, "identity_store");
+        rig.Physical("session.region", Session, ColumnType.String, "session_store");
+        var pair = rig.Physical(
+            "pair.score",
+            EntityDefinition.Of("pair", EntityKeyPartDefinition.ContextFeature("identity.user_id", EntityKeyType.Int64), EntityKeyPartDefinition.ContextFeature("session.region", EntityKeyType.String)),
+            ColumnType.Float64,
+            "pair_store");
+        rig.Build();
+        var request = Request(rig, userKey, "k-7");
+        try
+        {
+            request.Fetcher.StartContextFetch([pair], CancellationToken.None);
+            await request.Fetcher.ContextStoredTask(pair).WaitAsync(Timeout, TestContext.Current.CancellationToken);
+            var result = request.Fetcher.ContextStoredState(pair);
+
+            Assert.Equal(FeatureState.Failed, result.State);
+            Assert.Contains("identity service unavailable", result.Error, StringComparison.Ordinal);
+            Assert.Empty(pairs.Calls);
+        }
+        finally
+        {
+            slow.SetResult();
+            await request.Fetcher.WhenIoCompleteAsync();
+        }
+    }
+
     [Fact]
     public async Task AFailedSharedContextFeaturePart_FailsTheCandidateFeatures_WithoutACall()
     {

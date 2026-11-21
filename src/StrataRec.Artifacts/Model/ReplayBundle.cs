@@ -53,10 +53,12 @@ public sealed class ReplayBundle
     /// same), and a feature source's call carries the request's seed: a bundle before replayed a source's failure for a
     /// call asking for other outputs, and the answer of a call made without the seed. 2026-11-21.10 records the entity a
     /// source's call computed: a source's two entities of the same arguments and outputs took each other's answers.
+    /// 2026-11-21.11 digests an item by what it saw of each input: a shared <c>[1, d]</c> input left the digest of the
+    /// same item in a batch of one another.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.10";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.11";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.10\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.11\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }

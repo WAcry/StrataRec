@@ -8,6 +8,7 @@ namespace StrataRec.UnitTests.Features;
 /// decoding: one instance per distinct value from characters or UTF-8, a bounded table, and decoding as
 /// <see cref="Encoding.UTF8"/> decodes.
 /// </summary>
+[Collection(AllocationMeasurement.Name)]
 public sealed class StringDedupTests
 {
     [Fact]

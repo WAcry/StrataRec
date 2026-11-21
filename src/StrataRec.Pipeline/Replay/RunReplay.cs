@@ -30,6 +30,9 @@ namespace StrataRec.Pipeline.Replay;
 internal sealed class RunReplay : IFeatureCallHook
 {
     private readonly object _gate = new();
+    private readonly CallEpoch _epoch = new();
+    private readonly Dictionary<List<ServiceEntry>, (Dictionary<(EntityKey Key, string Digest), List<(ServiceEntry Entry, int Row)>> Rows, HashSet<EntityKey> Scored)> _rowsOf =
+        new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<ulong, List<FeatureEntry>> _featureCalls = new();
     private readonly Dictionary<(string Source, string Entity), Dictionary<RowKey, Dictionary<string, ScalarValue>>> _featureValues = new();
     private readonly Dictionary<(string Service, string? Version), List<ServiceEntry>> _serviceCalls = new();
@@ -198,6 +201,7 @@ internal sealed class RunReplay : IFeatureCallHook
         degraded = null;
         lock (_gate)
         {
+            _epoch.Value++; // what an entry remembers of a call is of this one only (ServiceEntry.AskedFor)
             var kind = target.Role;
             var order = ServiceInputDigest.NameOrder(call);
             _serviceCalls.TryGetValue((call.Service, call.Version), out var calls);
@@ -580,36 +584,55 @@ internal sealed class RunReplay : IFeatureCallHook
     /// another, and is reported as a gap either way. Text outputs are not split: a text belongs to its whole call, so it is
     /// replayed only with a recorded call of the same items (<see cref="Call"/>), and is a gap of that output here.
     /// </remarks>
+    /// <summary>
+    /// The recorded rows by (entity, input digest), from the successful keyed calls of a service and version, and the
+    /// entities they have; an entity can be scored several times with different inputs. Built once per service and
+    /// version, at its first synthesized call: a recording is read, never changed, and one consumed still has its rows
+    /// (review of the IO redesign: built at every call, a request rebatched into 64 calls allocated 93 MB).
+    /// </summary>
+    private (Dictionary<(EntityKey Key, string Digest), List<(ServiceEntry Entry, int Row)>> Rows, HashSet<EntityKey> Scored) RowsOf(List<ServiceEntry>? calls)
+    {
+        if (calls is null)
+        {
+            return (new(), new());
+        }
+
+        if (_rowsOf.TryGetValue(calls, out var built))
+        {
+            return built;
+        }
+
+        var rows = new Dictionary<(EntityKey Key, string Digest), List<(ServiceEntry Entry, int Row)>>();
+        var scored = new HashSet<EntityKey>();
+        foreach (var entry in calls)
+        {
+            if (entry.Outcome != IoOutcome.Ok || entry.Keys is null)
+            {
+                continue;
+            }
+
+            for (var r = 0; r < entry.Keys.Length; r++)
+            {
+                if (!rows.TryGetValue((entry.Keys[r], entry.Digests[r]), out var list))
+                {
+                    list = new List<(ServiceEntry Entry, int Row)>(1);
+                    rows[(entry.Keys[r], entry.Digests[r])] = list;
+                }
+
+                list.Add((entry, r));
+                scored.Add(entry.Keys[r]);
+            }
+        }
+
+        _rowsOf[calls] = (rows, scored);
+        return (rows, scored);
+    }
+
     private ServiceStatus Synthesize(
         ServiceCall call, List<ServiceEntry>? calls, ServiceResponse outputs, EntityKey[] keys, string[] digests, string node, bool fromSource, string kind)
     {
-        // The rows by (entity, input digest), from the successful keyed calls of the same model and version. An entity can
-        // be scored several times with different inputs.
+        var (rows, scored) = RowsOf(calls);
         var layout = new List<(string Name, TensorElementType Type, int PerRow)>();
-        var rows = new Dictionary<(EntityKey Key, string Digest), List<(ServiceEntry Entry, int Row)>>();
-        var scored = new HashSet<EntityKey>();
-        if (calls is not null)
-        {
-            foreach (var entry in calls)
-            {
-                if (entry.Outcome != IoOutcome.Ok || entry.Keys is null)
-                {
-                    continue;
-                }
-
-                for (var r = 0; r < entry.Keys.Length; r++)
-                {
-                    if (!rows.TryGetValue((entry.Keys[r], entry.Digests[r]), out var list))
-                    {
-                        list = new List<(ServiceEntry Entry, int Row)>(1);
-                        rows[(entry.Keys[r], entry.Digests[r])] = list;
-                    }
-
-                    list.Add((entry, r));
-                    scored.Add(entry.Keys[r]);
-                }
-            }
-        }
 
         // The output layout (each output's type and values per row): as the recorded rows this call matches have it, since
         // another node of the same model may write the same output at another width (a list<int32,2> column and a
@@ -1068,6 +1091,21 @@ internal sealed class RunReplay : IFeatureCallHook
     private void AddGap(string kind, string source, string? field, string reason, int count, string? example) =>
         Gap(kind, source, field, reason).Add(count, example);
 
+    /// <summary>
+    /// Counts the fields a feature source in mode <c>service</c> served (IO step 5) in <see cref="FieldStats"/>, as a
+    /// fetch's: each read once, missing when the call failed or the value is missing.
+    /// </summary>
+    internal void CountServed(string source, ReadOnlySpan<CompiledFieldBinding> fields, ReadOnlySpan<ScalarValue> values, bool failed)
+    {
+        lock (_gate)
+        {
+            for (var f = 0; f < fields.Length; f++)
+            {
+                AddStats(source, fields[f].Field, 1, failed || values[f].IsMissing ? 1 : 0);
+            }
+        }
+    }
+
     private void AddStats(string source, string field, long requested, long missing)
     {
         if (!_stats.TryGetValue((source, field), out var counts))
@@ -1266,7 +1304,7 @@ internal sealed class RunReplay : IFeatureCallHook
 
             var entry = new ServiceEntry(call.Seq, ServiceCaller.KeyOf(call.Node, call.Source, call.Entity), call.Source is not null, call.Service, call.BatchSize, call.Limit, outcome, call.Error, call.Threw, keys,
                 call.InputDigests.ToArray(), outputs, new Dictionary<string, string>(call.Texts, StringComparer.Ordinal), ids, call.Scores.ToArray(),
-                call.OutputTokens, call.Truncated == true, call.Degraded, call.Dropped ?? 0, [.. call.Requested]);
+                call.OutputTokens, call.Truncated == true, call.Degraded, call.Dropped ?? 0, [.. call.Requested], _epoch);
             if (!_serviceCalls.TryGetValue((call.Service, call.Version), out var list))
             {
                 list = new List<ServiceEntry>();
@@ -1339,31 +1377,39 @@ internal sealed class RunReplay : IFeatureCallHook
         public bool Consumed { get; set; }
     }
 
+    /// <summary>Which replayed call is being answered: one more each <see cref="Call"/>.</summary>
+    private sealed class CallEpoch
+    {
+        public int Value;
+    }
+
     private sealed class ServiceEntry(
         int seq, string? node, bool fromSource, string service, int batchSize, int limit, IoOutcome outcome, string? error, bool threw, EntityKey[]? keys, string[] digests,
         Dictionary<string, ReplayTensor> outputs, Dictionary<string, string> texts, EntityKey[] ids, double[] scores, int? outputTokens, bool truncated,
-        string? degraded, int dropped, string[] requested)
+        string? degraded, int dropped, string[] requested, CallEpoch epoch)
     {
         public int Seq { get; } = seq;
 
         /// <summary>The outputs the call asked for: one not in <see cref="Outputs"/> or <see cref="Texts"/> the service left unwritten.</summary>
         public string[] Requested { get; } = requested;
 
-        private ServiceCall? _askedOf;
+        private int _askedAt = -1;
         private bool _asked;
 
         /// <summary>
-        /// Whether the call asked for the outputs <paramref name="call"/> asks for, no more and no fewer. Kept for the last
-        /// call asked about, under the replay's lock: a replay asks once an output it looks at (review of e5cd1c5: a call
-        /// of many outputs the service left unwritten compared the two lists once an output, and a rebatched one once a row
-        /// and output too).
+        /// Whether the call asked for the outputs <paramref name="call"/> asks for, no more and no fewer. Kept for the
+        /// replay's call being answered, under its lock: a replay asks once an output it looks at (review of e5cd1c5: a
+        /// call of many outputs the service left unwritten compared the two lists once an output, and a rebatched one once
+        /// a row and output too). Not kept past it: a call's contents are its caller's, which may reuse the object and its
+        /// arrays for its next call (review of the IO redesign: kept by the call object, a reused one with other outputs
+        /// took the answer of the call before).
         /// </summary>
         public bool AskedFor(ServiceCall call)
         {
-            if (!ReferenceEquals(call, _askedOf))
+            if (_askedAt != epoch.Value)
             {
                 _asked = Same(call.Outputs.Span, Requested);
-                _askedOf = call;
+                _askedAt = epoch.Value;
             }
 
             return _asked;

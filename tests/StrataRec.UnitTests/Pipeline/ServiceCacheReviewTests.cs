@@ -107,6 +107,110 @@ public sealed class ServiceCacheReviewTests
     }
 
     /// <summary>
+    /// An item is cached by what it saw of each input: a shared <c>[1, d]</c> input is all of it, in a call of two items
+    /// and in a call of the item alone, whose record the other answers (review of the IO redesign: in a batch of one the
+    /// shared input was per item by its shape, and the item's key changed with the batch).
+    /// </summary>
+    [Fact]
+    public async Task AnItemWithASharedInput_HasOneKey_InABatchOfOneAndOfTwo()
+    {
+        var rig = new ServiceCacheRig();
+        static ServiceCall WithShared(long[] ids, float[] x) => new()
+        {
+            Service = "m",
+            BatchSize = ids.Length,
+            Items = ids.Select(EntityKey.FromInt64).ToArray(),
+            Inputs = new[] { NamedInput.FromFloat32("x", new[] { ids.Length }, x), NamedInput.FromFloat32("u", new[] { 1, 2 }, new float[] { 8, 9 }) },
+            Outputs = new[] { "p" },
+        };
+
+        await rig.CallAsync(WithShared([1, 2], [0.1f, 0.2f]));
+        rig.Apply();
+        var (status, response) = await rig.CallAsync(WithShared([1], [0.1f]));
+        await rig.CallAsync(WithShared([3], [0.3f]));
+        rig.Apply();
+        var (both, again) = await rig.CallAsync(WithShared([3, 2], [0.3f, 0.2f]));
+
+        Assert.True(status.Succeeded && both.Succeeded, status.Error ?? both.Error);
+        Assert.Equal([1f], Floats(response, "p"));
+        Assert.Equal([3f, 2f], Floats(again, "p"));
+        Assert.Equal(2, rig.Service.Calls.Count); // [1, 2] and [3]
+    }
+
+    /// <summary>
+    /// A store that cancels its own read, with the service's time left, leaves its rows to the service: only the service's
+    /// deadline uses up its time (review of the IO redesign: the store's own cancellation was taken for that deadline, and
+    /// a healthy service was not called).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AStoreThatCancelsItsOwnRead_LeavesTheServiceItsTime(bool pending)
+    {
+        var store = new FakeCacheStore();
+        var rig = new ServiceCacheRig(store: store, timeoutMs: 10_000, distributedTimeoutMs: 30_000);
+        store.BeforeGet = async _ =>
+        {
+            if (pending)
+            {
+                await Task.Yield();
+            }
+
+            throw new OperationCanceledException("the store's own timeout", new CancellationToken(canceled: true));
+        };
+
+        var (status, response) = await rig.CallAsync(Query(2, 2));
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Single(rig.Service.Calls);
+        Assert.Equal([1L, 2L], Ids(response));
+    }
+
+    /// <summary>
+    /// A store's read that completed at once is consumed once, as one that completed later: a store may pool what backs
+    /// it and take it back only then (review of the IO redesign: a service's cache read only its status).
+    /// </summary>
+    [Fact]
+    public async Task AStoreReadThatCompletedAtOnce_IsConsumed()
+    {
+        var store = new PooledStore();
+        var rig = new ServiceCacheRig(store: store);
+
+        await rig.CallAsync(Query(1, 2));
+        await rig.CallAsync(Query(2, 2));
+
+        Assert.Equal((2, 2), (store.Reads, store.Consumed));
+    }
+
+    /// <summary>A store whose reads complete at once on an <see cref="System.Threading.Tasks.Sources.IValueTaskSource"/>, consumed when its result is read.</summary>
+    private sealed class PooledStore : ICacheStore, System.Threading.Tasks.Sources.IValueTaskSource
+    {
+        private int _reads;
+        private int _consumed;
+
+        public int Reads => Volatile.Read(ref _reads);
+
+        public int Consumed => Volatile.Read(ref _consumed);
+
+        public string StoreType => TestCacheStoreFactory.TypeName;
+
+        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
+        {
+            var read = (short)Interlocked.Increment(ref _reads);
+            return new ValueTask(this, read);
+        }
+
+        public ValueTask SetAsync(CacheKeyspace keyspace, ReadOnlyMemory<CacheStoreEntry> entries, CancellationToken cancellationToken) => ValueTask.CompletedTask;
+
+        public void GetResult(short token) => Interlocked.Increment(ref _consumed);
+
+        public System.Threading.Tasks.Sources.ValueTaskSourceStatus GetStatus(short token) => System.Threading.Tasks.Sources.ValueTaskSourceStatus.Succeeded;
+
+        public void OnCompleted(Action<object?> continuation, object? state, short token, System.Threading.Tasks.Sources.ValueTaskSourceOnCompletedFlags flags) =>
+            continuation(state);
+    }
+
+    /// <summary>
     /// A distributed record is judged when the read answers: one fresh when the call started that expired while the read
     /// took its time is not a hit, and the service answers. It was judged by the time the call started.
     /// </summary>

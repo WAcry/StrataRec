@@ -641,6 +641,30 @@ public sealed class RunReplayTests
         Assert.Empty(replay.Gaps);
     }
 
+    /// <summary>
+    /// An item is answered by what it saw of each input, however it is batched: a shared <c>[1, d]</c> input, all of it,
+    /// in a batch of two and in a batch of the item alone (review of the IO redesign: in a batch of one the shared input
+    /// was per item by its shape, the item's digest changed, and its score was the gap value).
+    /// </summary>
+    [Theory]
+    [InlineData(new long[] { 1, 2 }, new long[] { 1 })]
+    [InlineData(new long[] { 1 }, new long[] { 2, 1 })]
+    public void AnItemWithASharedInput_IsAnsweredInABatchOfOneAndOfTwo(long[] recorded, long[] replayed)
+    {
+        static ServiceCall WithShared(long[] keys) => Call(
+            keys.Length, NamedInput.FromFloat32("x", [keys.Length], keys.Select(k => (float)k).ToArray()), NamedInput.FromFloat32("u", [1, 2], new float[] { 8, 9 }));
+        var run = Run();
+        run.ServiceCalls.Add(ModelCallOf(0, WithShared(recorded), recorded, recorded.Select(k => (float)k).ToArray()));
+        var replay = RunReplay.Create(run, "/runs/0");
+        var writer = new ArrayOutputWriter();
+
+        var status = replay.InvokeModel(WithShared(replayed), writer, replayed.Select(EntityKey.FromInt64).ToArray());
+
+        Assert.True(status.Succeeded, status.Error);
+        Assert.Equal(1f, writer.Floats["score"][Array.IndexOf(replayed, 1L)]);
+        Assert.All(replay.Gaps, gap => Assert.Equal("2", Assert.Single(gap.Examples))); // only the item never recorded
+    }
+
     private static ServiceCall KeyedCall(long[] keys, params string[] outputs) => new()
     {
         Service = "m",

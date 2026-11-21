@@ -191,6 +191,31 @@ public sealed class FetchGroup
     /// <inheritdoc cref="FeatureIndexArray"/>
     internal CompiledFieldBinding[] FieldArray => ImmutableCollectionsMarshal.AsArray(Fields)!;
 
+    /// <summary>
+    /// The names of <see cref="Fields"/>, each once, in field order (two features may read one field): what a source in
+    /// mode <c>service</c> asks its service for when it fetches the whole group. Built once per plan on first use, for each
+    /// group: a source of several entities asks for each one's (review of the IO redesign: one kept for the last group
+    /// was built again at each entity's call).
+    /// </summary>
+    internal string[] FieldNames => _fieldNames ?? Interlocked.CompareExchange(ref _fieldNames, DistinctNames(FieldArray), null) ?? _fieldNames!;
+
+    private string[]? _fieldNames;
+
+    /// <summary>The names of <paramref name="fields"/>, each once, in order.</summary>
+    internal static string[] DistinctNames(ReadOnlySpan<CompiledFieldBinding> fields)
+    {
+        var names = new List<string>(fields.Length);
+        foreach (var field in fields)
+        {
+            if (!names.Contains(field.Field))
+            {
+                names.Add(field.Field);
+            }
+        }
+
+        return [.. names];
+    }
+
     public int Wave { get; internal set; }
 
     /// <summary>Metric tags and span name of this source (design 13.1), built once per plan on first use.</summary>

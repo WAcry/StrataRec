@@ -177,7 +177,9 @@ internal enum CallEnd : byte
 
     /// <summary>
     /// The call's own deadline: the call was cut off at it (the wait ended, or the client completed only after it), or the
-    /// client honoured it (or cancelled on its own).
+    /// client honoured it. A client that cancels on its own, with none of the framework's tokens cancelled, has
+    /// <see cref="Threw"/> (review of the IO redesign: a cache store that cancelled itself was taken for the service's
+    /// deadline, and the service, with its time left, was not called).
     /// </summary>
     TimedOut,
 
@@ -376,8 +378,9 @@ internal static class BoundedCall
     /// <summary>
     /// The rest of a call whose client did not answer synchronously; <paramref name="lease"/> holds the memory and the
     /// bound already. Only what the decision after the wait needs lives across it: the state machine is allocated for
-    /// every pending call, so the result, the memory and the client's token are not kept in it (IO step 4 measured
-    /// about 170 B a call more when they were).
+    /// every pending call, so the result and the memory are not kept in it (IO step 4 measured about 170 B a call more
+    /// when they were, with a copy of the token besides). The token, a parameter, is: the decision reads whether it was
+    /// cancelled, to tell the call's own deadline from a client that cancelled on its own.
     /// </summary>
     /// <param name="token">
     /// The client's token, read before the call was sent: the lease disposes <paramref name="own"/> as soon as the client
@@ -416,7 +419,7 @@ internal static class BoundedCall
         // or the caller gone.)
         var ownSet = own is not null;
         await wait.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-        return EndWaited(call, client, wait, io, bound, lease, ownSet, deadline);
+        return EndWaited(call, client, wait, io, bound, lease, ownSet, token, deadline);
     }
 
     /// <summary>A pending client that completed before its wait was set up, observed now (rule 1), and the call ended.</summary>
@@ -437,7 +440,7 @@ internal static class BoundedCall
 
     /// <summary>A pending client's call decided by its wait (rule 1), and ended.</summary>
     private static CallResult<T> EndWaited<T, TCall>(
-        TCall call, Task<T> client, Task wait, in IoCall io, CallBound bound, Lease lease, bool ownSet, in CallDeadline deadline)
+        TCall call, Task<T> client, Task wait, in IoCall io, CallBound bound, Lease lease, bool ownSet, CancellationToken token, in CallDeadline deadline)
         where TCall : struct, IBoundedCall<T>
     {
         var result = Defect<T>();
@@ -445,7 +448,7 @@ internal static class BoundedCall
         {
             var winner = Waited(wait, client, bound.Caller);
             return result = winner == Winner.Client
-                ? Completed(call, new ValueTask<T>(client), bound, deadline)
+                ? Completed(call, new ValueTask<T>(client), bound, token, deadline)
                 : CutOff<T>(winner, null, ownSet, bound, deadline, abandoned: true);
         }
         finally
@@ -556,7 +559,7 @@ internal static class BoundedCall
             : token.IsCancellationRequested || bound.Passed || deadline.HasPassed ? Winner.Bound
             : Winner.Client;
         return winner == Winner.Client
-            ? Completed(call, completed, bound, deadline)
+            ? Completed(call, completed, bound, token, deadline)
             : CutOff<T>(winner, Discard(completed), own is not null, bound, deadline, abandoned: false);
     }
 
@@ -591,8 +594,13 @@ internal static class BoundedCall
         return false;
     }
 
-    /// <summary>A client that completed in time: its answer, what it threw, or the cancellation it honoured.</summary>
-    private static CallResult<T> Completed<T, TCall>(TCall call, ValueTask<T> pending, CallBound bound, in CallDeadline deadline)
+    /// <summary>
+    /// A client that completed in time: its answer, what it threw, or the cancellation it honoured. One it threw with none
+    /// of the framework's tokens cancelled and its deadline ahead is its own, as a transport timeout of its own is: the
+    /// call threw, a timeout (an HTTP client's timeout is a cancellation, say).
+    /// </summary>
+    /// <param name="token">The token the client got, read before it was sent.</param>
+    private static CallResult<T> Completed<T, TCall>(TCall call, ValueTask<T> pending, CallBound bound, CancellationToken token, in CallDeadline deadline)
         where TCall : struct, IBoundedCall<T>
     {
         try
@@ -603,10 +611,11 @@ internal static class BoundedCall
         }
         catch (OperationCanceledException ex)
         {
-            // It honoured a token (or cancelled on its own) in time: the tokens say whose, the caller's first.
+            // It honoured a token in time, or cancelled on its own: the tokens say whose, the caller's first.
             return bound.Caller.IsCancellationRequested ? Cancelled<T>(bound, ex, abandoned: false)
                 : bound.Token.IsCancellationRequested ? RanOut<T>(bound, ex, abandoned: false)
-                : TimedOut<T>(deadline, abandoned: false);
+                : token.IsCancellationRequested || deadline.HasPassed ? TimedOut<T>(deadline, abandoned: false)
+                : new CallResult<T>(CallEnd.Threw, default, ex, IoOutcome.Timeout, $"threw {ex.GetType().Name}: {ExceptionText.Of(ex)}", false);
         }
         catch (Exception ex)
         {

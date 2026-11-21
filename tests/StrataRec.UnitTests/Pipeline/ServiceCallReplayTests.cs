@@ -512,6 +512,34 @@ public sealed class ServiceCallReplayTests
         Assert.InRange(names.Reads, 1, 16);
     }
 
+    /// <summary>
+    /// A caller may reuse its call object and its arrays for its next call (the call's contents are its own): each call is
+    /// answered by what it asks for then (review of the IO redesign: the comparison of outputs was kept by the call object,
+    /// and a reused one asking for other outputs took the answer of the call before).
+    /// </summary>
+    [Fact]
+    public void ACallObjectReusedForOtherOutputs_IsAnsweredByWhatItAsksForThen()
+    {
+        var run = RunReplayTests.Run();
+        var failed = Recorded("n", Reading(Query(1, limit: 0), "a"), "error");
+        run.ServiceCalls.Add(new ReplayServiceCall
+        {
+            Seq = 0, Node = "n", Service = failed.Service, Role = failed.Role, Status = "error", Error = "a failed", InputDigests = failed.InputDigests, Requested = ["a"],
+        });
+        run.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 0), "b"), "ok")); // b left unwritten
+        var replay = RunReplay.Create(run, "/runs/0");
+        var outputs = new[] { "b" };
+        var call = new ServiceCall { Service = "s", Inputs = Query(1, limit: 0).Inputs, Outputs = outputs };
+
+        var b = replay.Call(ServiceCaller.OfNode("n"), new IoTarget(IoRoles.Recall, "s"), call, new ServiceResponse(Memory, 0), out _);
+        outputs[0] = "a";
+        var a = replay.Call(ServiceCaller.OfNode("n"), new IoTarget(IoRoles.Recall, "s"), call, new ServiceResponse(Memory, 0), out _);
+
+        Assert.True(b.Succeeded, b.Error);
+        Assert.Equal((false, "a failed"), (a.Succeeded, a.Error));
+        Assert.Empty(replay.Gaps);
+    }
+
     /// <summary>Output names that count how often their list is read.</summary>
     private sealed class CountingNames(int count) : System.Buffers.MemoryManager<string>
     {

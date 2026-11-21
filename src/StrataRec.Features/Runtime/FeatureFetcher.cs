@@ -709,8 +709,10 @@ public sealed partial class FeatureFetcher : IIoTracker
             return new PendingFetch(group, features, scope, index, chunkSize, chunkCount, null, calls, chunkFailed, noSharedKey, budget);
         }
 
-        var staging = new StagingArea(fields, keyCount, chunkSize, _memory);
+        // The bound starts with the budget it is given, before the staging is set up, which takes its time too (review of
+        // the IO redesign: set up first, its time was added to the deadline, and a chunk was sent past it).
         var bound = _hook is { Replays: true } ? null : CallBound.After(CancellationSite.Fetch, cancellationToken, budget, _events, _requestId);
+        var staging = new StagingArea(fields, keyCount, chunkSize, _memory);
         StagingBuffer? writer = null;
         try
         {

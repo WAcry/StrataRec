@@ -320,8 +320,11 @@ public readonly record struct ServiceCallOptions(long? Seed = null, int? MaxOutp
 /// <remarks>
 /// <para>A call with <see cref="Items"/> is about those items: every tensor output is per item, <c>BatchSize ×
 /// k</c> elements, the <c>k</c> of item <c>i</c> at <c>i × k</c>, and it adds no items (its <see cref="Limit"/> is 0).
-/// That is what lets a replay answer an item from any recorded call that had it with the same inputs, however the items
-/// were batched (design 13.4). A call without items is answered as a whole.</para>
+/// Each input is per item (its leading dimension the batch size) or shared by them (leading dimension 1, a scalar, a
+/// text), and a service answers an item from its slice of each per-item input and all of each shared one: a shared
+/// <c>[1, d]</c> vector is that vector sent with every item, and in a batch of one the two are the same. That is what
+/// lets a replay answer an item from any recorded call that had it with the same inputs, however the items were batched
+/// (design 13.4), and a cache answer it from another call's record. A call without items is answered as a whole.</para>
 /// <para>A service sees only what the call sends: its inputs, not the request's. A value of the request it needs is an
 /// input the operator sends (a recall node's <c>queries</c>, e.g. <c>ctx.request.region</c>), so the digest a replay
 /// matches by covers everything the service saw.</para>

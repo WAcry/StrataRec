@@ -53,6 +53,29 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
     public ICacheStore Store { get; }
 
     /// <summary>
+    /// One read of the store (<see cref="ICacheStore.GetAsync"/>), for a bounded call's send: true once it answered, its
+    /// failure thrown. The store's task is consumed once, also when it completed at once: a store may pool what backs it
+    /// and take it back only then (review of the IO redesign: a service's cache read a completed one's status only).
+    /// </summary>
+    internal ValueTask<bool> ReadAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
+    {
+        var get = Store.GetAsync(keyspace, keys, records, cancellationToken);
+        if (get.IsCompleted)
+        {
+            get.GetAwaiter().GetResult(); // a failure is the call's: BoundedCall catches what Send throws
+            return new ValueTask<bool>(true);
+        }
+
+        return Await(get);
+
+        static async ValueTask<bool> Await(ValueTask get)
+        {
+            await get.ConfigureAwait(false);
+            return true;
+        }
+    }
+
+    /// <summary>
     /// The most bytes waiting to be written (records, entries and key texts); a write past it is dropped, but for one
     /// larger than the whole limit handed to an empty queue, which takes it.
     /// </summary>

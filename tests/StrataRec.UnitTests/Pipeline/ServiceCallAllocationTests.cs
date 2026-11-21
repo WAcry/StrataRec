@@ -1,10 +1,12 @@
 using StrataRec.Core.Diagnostics;
+using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Services;
 using StrataRec.Core.Values;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Planning;
+using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.UnitTests.Pipeline;
 
@@ -100,6 +102,42 @@ public sealed class ServiceCallAllocationTests
     }
 
     /// <summary>Output names whose memory throws a cancellation when read (after the memory over it is made).</summary>
+    /// <summary>
+    /// A rebatched replay builds the index of the recorded rows once, not at each call: a call of 32 items allocates for
+    /// its 32, however many rows the recording has (review of the IO redesign: 4,096 recorded rows replayed in batches of
+    /// 32 allocated 187 MB).
+    /// </summary>
+    [Fact]
+    public void ARebatchedReplay_IndexesTheRecordedRowsOnce()
+    {
+        var run = RunReplayTests.Run();
+        for (var c = 0; c < 8; c++)
+        {
+            var keys = Enumerable.Range((c * 128) + 1, 128).Select(k => (long)k).ToArray();
+            run.ServiceCalls.Add(RunReplayTests.ModelCallOf(c, Batch(keys), keys, keys.Select(k => (float)k).ToArray()));
+        }
+
+        var replay = RunReplay.Create(run, "/runs/0");
+        var calls = Enumerable.Range(0, 32).Select(b =>
+        {
+            var keys = Enumerable.Range((b * 32) + 1, 32).Select(k => (long)k).ToArray();
+            return (Call: Batch(keys), Keys: keys.Select(EntityKey.FromInt64).ToArray(), Writer: new RunReplayTests.ArrayOutputWriter());
+        }).ToArray();
+        replay.InvokeModel(calls[0].Call, calls[0].Writer, calls[0].Keys); // the first builds the index
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var b = 1; b < calls.Length; b++)
+        {
+            Assert.True(replay.InvokeModel(calls[b].Call, calls[b].Writer, calls[b].Keys).Succeeded);
+        }
+
+        var perCall = (GC.GetAllocatedBytesForCurrentThread() - before) / (calls.Length - 1);
+        Assert.Empty(replay.Gaps);
+        Assert.True(perCall < 48 * 1024, $"{perCall} B a call of 32 items");
+
+        static ServiceCall Batch(long[] keys) => RunReplayTests.Call(keys.Length, NamedInput.FromFloat32("x", [keys.Length], keys.Select(k => (float)k).ToArray()));
+    }
+
     private sealed class CancellingNames(CancellationToken token) : System.Buffers.MemoryManager<string>
     {
         private readonly string[] _names = ["p"];

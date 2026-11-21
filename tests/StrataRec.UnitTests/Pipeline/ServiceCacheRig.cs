@@ -26,7 +26,7 @@ internal sealed class ServiceCacheRig
     /// <param name="cached">False binds the service without its cache: the same calls, for comparison.</param>
     /// <param name="identity">What the binding answers with (<see cref="ServiceCache.AnswerIdentity"/>): rigs sharing a store share records only with the same one.</param>
     public ServiceCacheRig(
-        long ttlMs = 60_000, long staleIfErrorMs = 0, FakeCacheStore? store = null, int? timeoutMs = null, int distributedTimeoutMs = 10_000, bool cached = true,
+        long ttlMs = 60_000, long staleIfErrorMs = 0, ICacheStore? store = null, int? timeoutMs = null, int distributedTimeoutMs = 10_000, bool cached = true,
         string identity = "m@1")
     {
         var options = new LocalFeatureTableOptions

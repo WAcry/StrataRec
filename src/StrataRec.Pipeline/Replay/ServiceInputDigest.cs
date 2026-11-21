@@ -9,11 +9,14 @@ namespace StrataRec.Pipeline.Replay;
 /// instead of a stale value.
 /// </summary>
 /// <remarks>
-/// An input is row-wise when its leading dimension is the batch size (<c>Shape[0] == BatchSize</c>, the tensor contract
-/// of <see cref="ServiceCall.BatchSize"/>); a row's digest covers its slice of each row-wise input and every other input
-/// whole, since a shared input (a user vector, a text prompt) affects every row. Each input contributes its name, element
-/// type and shape, so the same values in another layout do not collide; the batch dimension of a row-wise input is left
-/// out, so the same row in a differently sized batch has the same digest. A missing input contributes its name, element
+/// A row's digest covers what the row saw of each input. An input is row-wise when its leading dimension is the batch
+/// size (<c>Shape[0] == BatchSize</c>, the tensor contract of <see cref="ServiceCall.BatchSize"/>): the row saw its slice.
+/// A shared input of leading dimension 1 (a user vector sent as <c>[1, d]</c>) is the same for every row, which saw all
+/// of it; any other input (a scalar, a text prompt) is whole too. Each input contributes its name, element type and
+/// shape, so the same values in another layout do not collide; the leading dimension of a row-wise or shared
+/// <c>[1, ...]</c> input is left out, so the same row in a differently sized batch has the same digest, a batch of one
+/// too, whose shared input is row-wise by its shape (review of the IO redesign: there its leading dimension was kept,
+/// and the row's digest changed with the batch). A missing input contributes its name, element
 /// type and declared shape, and that it is missing: it is neither a zero nor an absent input; its declared shape says
 /// whether it is row-wise, as a present one's does (missing on every row). A call's
 /// <see cref="ServiceCallOptions.MaxOutputTokens"/> is part of every digest when it is set: a generative model answers
@@ -73,7 +76,7 @@ internal static class ServiceInputDigest
     /// The format of service cache keys (docs/decisions.md, IO step 3). A change of what a record holds or of how a key is
     /// built changes it: the records another build wrote are then misses, never misread.
     /// </summary>
-    private const string CacheFormat = "stratarec.service_cache/2026-11-21.2";
+    private const string CacheFormat = "stratarec.service_cache/2026-11-21.3";
 
     /// <summary>
     /// The key of a call about no items in its service's cache: the format, the binding's answer identity, the service
@@ -107,8 +110,9 @@ internal static class ServiceInputDigest
 
     /// <summary>
     /// The key of each item of a call about items (<see cref="ServiceCall.Items"/>) in its service's cache, into
-    /// <paramref name="keys"/>: what the items share (the format, the version, the outputs read, the options, every shared
-    /// input whole) hashed once, then for each item that, its entity and its slice of every per-item input.
+    /// <paramref name="keys"/>: what the items share (the format, the version, the outputs read, the options, every input
+    /// with no leading dimension of rows) hashed once, then for each item that, its entity and what it saw of every input
+    /// with one (<see cref="RowView"/>), as a row's digest has it.
     /// </summary>
     public static void CacheItemKeys(ServiceCall call, int[] order, string identity, Span<UInt128> keys)
     {
@@ -120,7 +124,7 @@ internal static class ServiceInputDigest
             var inputs = call.Inputs.Span;
             foreach (var i in order)
             {
-                if (!Splits(inputs[i], call.BatchSize))
+                if (!RowView(inputs[i], call.BatchSize))
                 {
                     AddInput(ref builder, inputs[i], call.BatchSize, -1);
                 }
@@ -144,7 +148,7 @@ internal static class ServiceInputDigest
 
                 foreach (var i in order)
                 {
-                    if (Splits(inputs[i], call.BatchSize))
+                    if (RowView(inputs[i], call.BatchSize))
                     {
                         AddInput(ref builder, inputs[i], call.BatchSize, row);
                     }
@@ -201,6 +205,13 @@ internal static class ServiceInputDigest
     public static bool IsRowWise(in NamedInput input, int batch) =>
         batch > 0 && input.ElementType != TensorElementType.Text && input.Shape is { Length: > 0 } shape && shape[0] == batch;
 
+    /// <summary>
+    /// The input has a leading dimension of rows: its batch's (each row its slice) or 1 (shared, each row all of it). A
+    /// row's digest has what the row saw of it, without that dimension (see the remarks).
+    /// </summary>
+    private static bool RowView(in NamedInput input, int batch) =>
+        batch > 0 && input.ElementType != TensorElementType.Text && input.Shape is { Length: > 0 } shape && (shape[0] == batch || shape[0] == 1);
+
     /// <summary>The limit of a call that reads named outputs, in a cache key (see the remarks); nothing for one that reads only its items.</summary>
     private static void AddLimit(ref StableHash.Builder builder, ServiceCall call)
     {
@@ -227,14 +238,16 @@ internal static class ServiceInputDigest
         var length = input.ElementType == TensorElementType.Text ? 0 : input.Values.Length;
 
         // Row-wise data that does not split evenly into rows is malformed; it is hashed whole, which can only miss a match.
+        // A shared [1, ...] input is what every row saw, all of it (in a batch of one, it is row-wise and its slice is all).
         var sliced = row >= 0 && IsRowWise(input, batch) && length % batch == 0;
+        var shared = row >= 0 && !sliced && RowView(input, batch) && input.Shape[0] == 1;
         builder.Add(input.Name);
         builder.AddIndex((int)input.ElementType);
         var shape = input.Shape;
         builder.AddIndex(shape.Length);
         for (var d = 0; d < shape.Length; d++)
         {
-            builder.AddIndex(sliced && d == 0 ? -1 : shape[d]); // the batch dimension, normalized
+            builder.AddIndex((sliced || shared) && d == 0 ? -1 : shape[d]); // the rows' dimension, normalized
         }
 
         if (input.IsMissing)

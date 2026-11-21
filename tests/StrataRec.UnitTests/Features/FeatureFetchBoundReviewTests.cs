@@ -1,3 +1,4 @@
+using StrataRec.Core.Memory;
 using StrataRec.Core.Types;
 using StrataRec.Features.Connectors;
 using StrataRec.Features.Runtime;
@@ -51,6 +52,58 @@ public sealed class FeatureFetchBoundReviewTests
             await request.Fetcher.WhenIoCompleteAsync();
             request.Memory.Release();
         }
+    }
+
+    /// <summary>
+    /// The fetch's time starts before its staging is set up: a staging that takes the time left leaves the chunk unsent
+    /// (review of the IO redesign: the bound started after it, so the chunk was sent past the request's deadline and its
+    /// late answer was taken).
+    /// </summary>
+    [Fact]
+    public async Task AStagingThatTakesTheTimeLeft_LeavesTheChunkUnsent()
+    {
+        var pool = new StallingPool();
+        var connector = new ScriptedConnector((_, _, writer, _) =>
+        {
+            writer.GetValues<double>(0).Span[0] = 7;
+            writer.SetValid(0, 0);
+            return new ValueTask<FetchStatus>(FetchStatus.Ok);
+        });
+        var rig = new FeatureTestRig().Source("test", connector);
+        var feature = rig.Physical("item.pop", FeatureTestRig.Item, ColumnType.Float64, "test");
+        rig.Build();
+        var request = rig.NewRequest([7], pool: pool, deadlineMs: 250);
+        try
+        {
+            pool.StallMs = 500; // the staging's first buffer
+            await request.Fetcher.EnsureAsync([feature], TestContext.Current.CancellationToken);
+
+            Assert.Empty(connector.Calls);
+        }
+        finally
+        {
+            await request.Fetcher.WhenIoCompleteAsync();
+            request.Memory.Release();
+        }
+    }
+
+    /// <summary>The shared pool, but the first rent of <c>double</c> buffers after <see cref="StallMs"/> is set (the staging's column) takes that long.</summary>
+    private sealed class StallingPool : IBufferPool
+    {
+        public int StallMs { get; set; }
+
+        public T[] Rent<T>(int minimumLength)
+        {
+            if (typeof(T) == typeof(double) && StallMs > 0)
+            {
+                Thread.Sleep(StallMs);
+                StallMs = 0;
+            }
+
+            return SharedArrayBufferPool.Instance.Rent<T>(minimumLength);
+        }
+
+        public void Return<T>(T[] array, bool clearArray) => SharedArrayBufferPool.Instance.Return(array, clearArray);
     }
 
     [Theory]

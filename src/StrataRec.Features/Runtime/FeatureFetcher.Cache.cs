@@ -416,20 +416,7 @@ public sealed partial class FeatureFetcher
 
         public ValueTask<bool> Send(CancellationToken token)
         {
-            var get = tier.Store.GetAsync(read.Cache.Keyspace, read.MissTexts!.AsMemory(offset, count), read.Stored.AsMemory(offset, count), token);
-            if (get.IsCompleted)
-            {
-                get.GetAwaiter().GetResult(); // a failure is the call's: BoundedCall catches what Send throws
-                return new ValueTask<bool>(true);
-            }
-
-            return Await(get);
-
-            static async ValueTask<bool> Await(ValueTask get)
-            {
-                await get.ConfigureAwait(false);
-                return true;
-            }
+            return tier.ReadAsync(read.Cache.Keyspace, read.MissTexts!.AsMemory(offset, count), read.Stored.AsMemory(offset, count), token);
         }
 
         public IoOutcome Judge(bool value, out string? error)

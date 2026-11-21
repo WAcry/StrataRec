@@ -41,9 +41,9 @@ public sealed class ComputedEntityEndToEndTests
             call.Inputs.Order(StringComparer.Ordinal));
         Assert.All(result.Items, item =>
         {
-            Assert.Equal(0.75, item.Columns["score"].AsFloat64(), 6); // a float64 output, stored as the float32 feature holds it
+            Assert.Equal(0.75, item.Columns["score"].AsFloat64(), 6); // a float32 output for the float32 feature
             Assert.Equal("sporty", item.Columns["label"].AsString()); // a text output
-            Assert.Equal([3L, 4L], item.Columns["topics"].AsInt64List().ToArray()); // int32 elements, widened
+            Assert.Equal([3L, 4L], item.Columns["topics"].AsInt64List().ToArray());
         });
     }
 
@@ -105,8 +105,14 @@ public sealed class ComputedEntityEndToEndTests
         Assert.Contains("source 'intent' timed out", boost.Detail);
     }
 
+    /// <summary>
+    /// An output of another type than the feature's, or of several values for a scalar, fails the call, saying what the
+    /// feature takes: no number is widened or rounded (review of the IO redesign: a float64 output was rounded to the
+    /// float32 feature, and an int32 list widened to an int64 one).
+    /// </summary>
     [Theory]
-    [InlineData("string", "output 'score' of String values, which a float32 feature cannot take")]
+    [InlineData("string", "output 'score' as string, which a float32 feature cannot take: it takes float32, the type it is declared with")]
+    [InlineData("float64", "output 'score' as float64, which a float32 feature cannot take: it takes float32, the type it is declared with")]
     [InlineData("two", "output 'score' with 2 values; a float32 feature takes one")]
     public async Task AnOutputTheFeatureCannotTake_FailsTheCall(string answer, string error)
     {
@@ -118,6 +124,19 @@ public sealed class ComputedEntityEndToEndTests
         var boost = Assert.Single(result.Outcomes, n => n.NodeId == "boost");
         Assert.Equal(NodeOutcomeKind.Failed, boost.Kind);
         Assert.Contains(error, boost.Detail);
+    }
+
+    /// <summary>A list's elements are of the feature's element type too: int32 elements are not widened to an int64 list.</summary>
+    [Fact]
+    public async Task AListOfAnotherElementType_FailsTheCall()
+    {
+        var service = new IntentService { Topics = "int32" };
+        var plan = Compile(Workspace(), service);
+
+        var result = await Execute(plan, Inputs(user: 7, query: "shoes", recent: null));
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("output 'topics' as int32, which a list<int64>? feature cannot take: it takes int64, the type it is declared with", result.Error);
     }
 
     /// <summary>A service's cache keys the answer by the arguments: requests with the same ones share it.</summary>
@@ -362,6 +381,57 @@ public sealed class ComputedEntityEndToEndTests
     }
 
     /// <summary>
+    /// A replay counts a service source's fields in its feature stats, as a fetch's: read once, missing when the service
+    /// left the output unwritten or the call failed (review of the IO redesign: a comparison's missing rate left them out).
+    /// </summary>
+    [Theory]
+    [InlineData("answered", 0)]
+    [InlineData("omitted", 1)]
+    [InlineData("failed", 1)]
+    public async Task AServiceSourcesFields_AreCountedInTheReplaysFeatureStats(string answer, long missing)
+    {
+        var service = new IntentService { Omit = answer == "omitted" ? "score" : null, Fail = answer == "failed" };
+        var plan = Compile(Workspace(), service);
+        var inputs = Inputs(user: 7, query: "shoes", recent: null);
+
+        var live = await Execute(plan, inputs, record: true);
+        var replay = RunReplay.Create(live.Recording!, "/runs/0");
+        await Execute(plan, inputs, replay: replay);
+
+        var stats = Assert.Single(replay.FieldStats, s => s.Source == "intent" && s.Field == "score");
+        Assert.Equal((1L, missing), (stats.Requested, stats.Missing));
+    }
+
+    /// <summary>
+    /// Two entities of one source each ask with the names their group built once, request after request: they were kept
+    /// for the last group only, and built again at every entity's call (review of the IO redesign).
+    /// </summary>
+    [Fact]
+    public async Task TwoEntitiesOfOneSource_AskWithTheNamesTheirGroupBuiltOnce()
+    {
+        var service = new IntentService();
+        var plan = Compile(Workspace(
+            readInOutput: false,
+            extraEntities: """, "other": { "args": { "query": "ctx.request.query", "ctr": "ctx.user.ctr", "recent": "ctx.request.recent" } }""",
+            extraFeatures: """, "other.label": { "type": "string", "source": "intent", "field": "label" }""",
+            extraOutput: """, "label": "ctx.other.label" """), service);
+        var inputs = Inputs(user: 7, query: "shoes", recent: null);
+
+        await Execute(plan, inputs);
+        await Execute(plan, inputs);
+
+        var calls = service.Calls;
+        Assert.Equal(4, calls.Count);
+        foreach (var output in new[] { "score", "label" })
+        {
+            var asked = calls.Where(c => c.Outputs.Contains(output)).ToArray();
+            Assert.Equal(2, asked.Length);
+            Assert.NotNull(asked[0].Names);
+            Assert.Same(asked[0].Names, asked[1].Names);
+        }
+    }
+
+    /// <summary>
     /// An output the service left unwritten is missing, live and in a replay of the same configuration, which neither
     /// reports it as a gap nor takes it from another call that has it (review of the step 5 fixes).
     /// </summary>
@@ -381,13 +451,16 @@ public sealed class ComputedEntityEndToEndTests
         Assert.Empty(replay.Gaps);
     }
 
-    /// <summary>Two features of one field ask the service for it once, and both take its answer (review of IO step 5).</summary>
+    /// <summary>
+    /// Two features of one field ask the service for it once, and both take its answer (review of IO step 5), of the one
+    /// type both are declared with: an output has one type.
+    /// </summary>
     [Fact]
     public async Task TwoFeaturesOfOneField_AskForItOnce()
     {
         var service = new IntentService();
         var plan = Compile(Workspace(
-            extraFeatures: """, "intent.alias": { "type": "float64", "source": "intent", "field": "score" }""",
+            extraFeatures: """, "intent.alias": { "type": "float32", "source": "intent", "field": "score" }""",
             extraOutput: """, "alias": "ctx.intent.alias" """), service);
 
         var result = await Execute(plan, Inputs(user: 7, query: "shoes", recent: null));
@@ -635,7 +708,7 @@ public sealed class ComputedEntityEndToEndTests
         public string Score { get; init; } = "number";
 
         /// <summary><c>int32</c>, or two strings of which the second is left unwritten.</summary>
-        public string Topics { get; init; } = "int32";
+        public string Topics { get; init; } = "int64";
 
         /// <summary>Fails the first call, as a service failing for a moment.</summary>
         public bool FailFirst { get; init; }
@@ -683,7 +756,9 @@ public sealed class ComputedEntityEndToEndTests
 
             lock (_calls)
             {
-                _calls.Add(new Received(call.BatchSize, call.Limit, call.Outputs.ToArray(), [.. inputs], call.RequestId, call.Options.Seed));
+                _calls.Add(new Received(
+                    call.BatchSize, call.Limit, call.Outputs.ToArray(), [.. inputs], call.RequestId, call.Options.Seed,
+                    System.Runtime.InteropServices.MemoryMarshal.TryGetArray(call.Outputs, out var names) ? names.Array : null));
             }
 
             if (DelayMs > 0)
@@ -709,15 +784,24 @@ public sealed class ComputedEntityEndToEndTests
                     response.GetValues<string>("score", 1).Span[0] = "high";
                     break;
                 case "two":
-                    response.GetValues<double>("score", 2).Span.Fill(0.75);
+                    response.GetValues<float>("score", 2).Span.Fill(0.75f);
+                    break;
+                case "float64":
+                    response.GetValues<double>("score", 1).Span[0] = 0.75;
                     break;
                 default:
-                    response.GetValues<double>("score", 1).Span[0] = 0.75;
+                    response.GetValues<float>("score", 1).Span[0] = 0.75f;
                     break;
             }
 
             response.SetText("label", "sporty");
-            if (Topics == "int32")
+            if (Topics == "int64")
+            {
+                var topics = response.GetValues<long>("topics", 2).Span;
+                topics[0] = 3;
+                topics[1] = 4;
+            }
+            else if (Topics == "int32")
             {
                 var topics = response.GetValues<int>("topics", 2).Span;
                 topics[0] = 3;
@@ -755,7 +839,8 @@ public sealed class ComputedEntityEndToEndTests
 
     private sealed class NoSettings;
 
-    private sealed record Received(int BatchSize, int Limit, string[] Outputs, string[] Inputs, string RequestId, long? Seed);
+    /// <param name="Names">The array the outputs' names were sent in.</param>
+    private sealed record Received(int BatchSize, int Limit, string[] Outputs, string[] Inputs, string RequestId, long? Seed, string[]? Names = null);
 
     private sealed class MovableClock : TimeProvider
     {

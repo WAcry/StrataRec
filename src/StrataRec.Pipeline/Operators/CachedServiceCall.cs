@@ -239,7 +239,7 @@ internal sealed class CachedServiceCall
         var tierDeadline = CallDeadline.After(_cache.DistributedTimeoutMs);
         var serviceFirst = _deadline.IsSet && _deadline.Remaining <= tierDeadline.Remaining; // the read within the service's time
         var read = await BoundedCall.RunAsync<bool, StoreRead>(
-            new StoreRead(_scope, tier.Store, _cache.Policy, texts, records, answeredAt), _scope.Budget, _memory, _cache.Io,
+            new StoreRead(_scope, tier, _cache.Policy, texts, records, answeredAt), _scope.Budget, _memory, _cache.Io,
             serviceFirst ? _deadline : tierDeadline).ConfigureAwait(false);
         switch (read.End)
         {
@@ -1092,22 +1092,12 @@ internal sealed class CachedServiceCall
     /// One read of the distributed tier, bounded like any external call. It notes the cache clock's time when the read is
     /// seen to answer in time (<paramref name="answeredAt"/>), before the host's listeners hear of the call.
     /// </summary>
-    private readonly struct StoreRead(IServiceCallScope scope, ICacheStore store, LocalTableCache policy, string[] keys, ReadOnlyMemory<byte>[] records, long[] answeredAt)
+    private readonly struct StoreRead(IServiceCallScope scope, DistributedCacheTier tier, LocalTableCache policy, string[] keys, ReadOnlyMemory<byte>[] records, long[] answeredAt)
         : IBoundedCall<bool>
     {
         public int Keys => keys.Length;
 
-        public ValueTask<bool> Send(CancellationToken token)
-        {
-            var read = store.GetAsync(policy.Keyspace, keys, records, token);
-            return read.IsCompletedSuccessfully ? new ValueTask<bool>(true) : Await(read);
-
-            static async ValueTask<bool> Await(ValueTask read)
-            {
-                await read.ConfigureAwait(false);
-                return true;
-            }
-        }
+        public ValueTask<bool> Send(CancellationToken token) => tier.ReadAsync(policy.Keyspace, keys, records, token);
 
         public IoOutcome Judge(bool value, out string? error)
         {
