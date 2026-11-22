@@ -451,6 +451,15 @@ public readonly record struct ServiceStatus(bool Succeeded, string? Error = null
 /// to inputs, and outputs and items to columns and rows. Thread-safe: every request of every plan that binds it calls the
 /// one instance concurrently (the lifetime contract is on <see cref="Bindings.BindingContext"/>).
 /// </summary>
+/// <remarks>
+/// A call only reads (design 5.8): it must not change what a later call, request or anyone else sees (no write, no counter,
+/// no message), because the engine decides whether a call is made and whether its answer is used. A cache hit or a replay
+/// makes no call; a call past its deadline is no longer waited for, and the service may still carry it out; a failed node's
+/// fallback may call again; a preview, a replay comparison, a debug request with forced arms, a node whose output nothing
+/// reads and a primary pipeline that fails over to its fallback make calls whose answers serve no end user. A write would be
+/// missed, repeated or made for a response nobody saw. What a request writes goes through the log pipeline (a durable
+/// tap, consumed downstream and read back as features), or the host writes it after the response.
+/// </remarks>
 public interface IServiceClient
 {
     /// <summary>
