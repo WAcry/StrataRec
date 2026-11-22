@@ -118,6 +118,43 @@
               }
             }
           },
+          "request_columns": {
+            "description": "Request columns nodes write, one value per request, read as req.<name> wherever a request-level value is read: in a later node's expressions and when, a log tap's context, the output's values. A count or a threshold over the candidates (GroupAggregate@1's request_outputs), or what a custom operator decided for the request. Declared as candidate columns are; a value a node did not write is missing.",
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "type": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "flow": {
+                  "description": "Flow columns may be rewritten by later nodes on the same path.",
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "default": {
+                  "description": "Replacement for non-finite numeric writes; required for non-nullable numeric columns."
+                },
+                "description": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": {
+                "type": "null"
+              }
+            }
+          },
           "nodes": {
             "type": "object",
             "additionalProperties": {

@@ -861,6 +861,7 @@ internal sealed partial class UnifiedCompilation
         }
 
         var columns = ReadAdditions<ColumnSpec>("columns");
+        var requestColumns = ReadAdditions<ColumnSpec>("request_columns");
         var paramSchema = ReadAdditions<ParamSpec>("param_schema");
         var features = new Dictionary<string, FeatureSpec>(_view.Catalog.Features, StringComparer.Ordinal);
         foreach (var (name, spec) in ReadAdditions<FeatureSpec>("features"))
@@ -899,6 +900,7 @@ internal sealed partial class UnifiedCompilation
             Bindings = _request.Bindings,
             Tables = _request.Tables,
             ExtraColumns = columns,
+            ExtraRequestColumns = requestColumns,
             ExtraParamSchema = paramSchema,
             ExtraParamLeaves = extraLeaves,
             ExtraFunnelGroups = funnelGroups,

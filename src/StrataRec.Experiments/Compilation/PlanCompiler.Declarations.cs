@@ -182,6 +182,16 @@ internal sealed partial class UnifiedCompilation
                 why = AddingArms(section, feature.Name, null);
                 hint = Declare(reader);
                 break;
+            case SymbolKind.Context when schema.ContextFields[name.Id] is { Kind: ContextFieldKind.RequestColumn } requestColumn:
+                if (!IsAddition("request_columns", requestColumn.Name) || AddedBy("request_columns", requestColumn.Name, assigned))
+                {
+                    return;
+                }
+
+                written = "req." + requestColumn.Name;
+                why = AddingArms("request_columns", requestColumn.Name, null);
+                hint = Declare(reader);
+                break;
             case SymbolKind.Context when schema.ContextFields[name.Id] is { FeatureIndex: >= 0 } field:
                 if (FeatureSection(field.Name) is not { } contextSection || AddedBy(contextSection, field.Name, assigned))
                 {
@@ -278,7 +288,8 @@ internal sealed partial class UnifiedCompilation
         {
             SymbolKind.Column => schema.Columns[name.Id] is var column
                 && (column.Kind == ColumnKind.Output ? column.Implicit || IsAddition("columns", column.Name) : column.Kind == ColumnKind.Feature && FeatureSection(column.Name) is not null),
-            SymbolKind.Context => schema.ContextFields[name.Id] is { FeatureIndex: >= 0 } field && FeatureSection(field.Name) is not null,
+            SymbolKind.Context => schema.ContextFields[name.Id] is var field
+                && (field.Kind == ContextFieldKind.RequestColumn ? IsAddition("request_columns", field.Name) : field.FeatureIndex >= 0 && FeatureSection(field.Name) is not null),
             SymbolKind.Param => IsExtraLeaf(schema.Params[name.Id]),
             _ => false,
         };

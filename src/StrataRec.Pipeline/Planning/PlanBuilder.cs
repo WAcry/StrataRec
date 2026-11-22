@@ -142,6 +142,9 @@ public sealed class SchemaSources
     /// <summary>Columns declared by arms (add-only), in addition to <c>Pipeline.Columns</c>.</summary>
     public IReadOnlyDictionary<string, ColumnSpec> ExtraColumns { get; init; } = new Dictionary<string, ColumnSpec>();
 
+    /// <summary>Request columns declared by arms (add-only), in addition to <c>Pipeline.RequestColumns</c>.</summary>
+    public IReadOnlyDictionary<string, ColumnSpec> ExtraRequestColumns { get; init; } = new Dictionary<string, ColumnSpec>();
+
     /// <summary>Parameter schema entries declared by arms (add-only).</summary>
     public IReadOnlyDictionary<string, ParamSpec> ExtraParamSchema { get; init; } = new Dictionary<string, ParamSpec>();
 
@@ -269,6 +272,7 @@ public sealed class PlanBuilder
         DefineColumns(pipeline.Columns, "/columns/", PipelineLabel, request: false);
         DefineColumns(sources.ExtraColumns, "/columns/", "arms", request: false);
         DefineColumns(pipeline.RequestColumns, "/request_columns/", PipelineLabel, request: true);
+        DefineColumns(sources.ExtraRequestColumns, "/request_columns/", "arms", request: true);
         DefineParams(pipeline, sources);
 
         DefineFunnelGroups(pipeline.FunnelGroups, PipelineLabel);

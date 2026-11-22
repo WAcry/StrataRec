@@ -1996,7 +1996,7 @@ RFC 7396 有三个容易出错的地方，引擎都用明确的规则处理：
 | :--- | :--- | :--- |
 | `/params` | `PipelineArtifact` | 覆盖已声明参数的值 |
 | `/nodes`、`/log_taps` | `PipelineArtifact` | 新增、删除、移动，修改字段 |
-| `/columns`、`/param_schema`、`/funnel_groups` | `PipelineArtifact` | 只能新增条目 |
+| `/columns`、`/request_columns`、`/param_schema`、`/funnel_groups` | `PipelineArtifact` | 只能新增条目 |
 | `/features`、`/derived_features` | `FeatureCatalogArtifact` | 只能新增条目 |
 
 视图之外的部分，包括 `pipeline_id`、`entity_key_type`、`request_schema`、`output` 和整个 `SourceBindingArtifact`，实验都不能修改。这张表是引擎的规则，每个仓库都一样，不可配置。

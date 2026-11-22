@@ -1,7 +1,9 @@
 using StrataRec.Artifacts.Model;
+using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Replay;
 using StrataRec.Pipeline.Execution;
+using static StrataRec.IntegrationTests.CombinationLimitTests;
 
 namespace StrataRec.IntegrationTests;
 
@@ -94,6 +96,82 @@ public sealed class RequestColumnEndToEndTests
             Assert.True(result.Succeeded, result.Error);
             Assert.Contains("exp_req_when", result.TriggeredExperiments);
         }
+    }
+
+    /// <summary>
+    /// An arm may declare a request column of its own, as it declares a column (design 11.4: add-only), and its nodes
+    /// write and read it: in a request of the arm the count gates author_cap on explore; the control has neither.
+    /// </summary>
+    [Fact]
+    public async Task AnArm_DeclaresARequestColumn_ItsNodesWriteAndRead()
+    {
+        var host = HomeFeedTestHost.Load();
+        var request = With(host.Request,
+        [
+            Treatment("a", """
+                { "request_columns": { "cand.n": { "type": "int64", "description": "the candidates after the safety filter" } },
+                  "nodes": { "count_all": { "order": 210, "op": "RequestAggregate@1", "config": { "values": { "cand.n": { "fn": "count" } } } },
+                             "author_cap": { "when": "req.cand.n >= 10" } } }
+                """),
+        ]);
+        var compilation = host.Compile(request);
+        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
+        var plan = compilation.Plan!;
+
+        var treated = await new PipelineExecutor().ExecuteAsync(plan,
+            HomeFeedTestHost.NewRequest(surface: "explore", arms: plan.ArmsFromIds(["a/t"])), TestContext.Current.CancellationToken);
+        var control = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(surface: "explore"), TestContext.Current.CancellationToken);
+
+        Assert.True(treated.Succeeded, treated.Error);
+        Assert.Equal(NodeOutcomeKind.Succeeded, treated.Outcomes.Single(o => o.NodeId == "count_all").Kind);
+        Assert.Equal(NodeOutcomeKind.Succeeded, treated.Outcomes.Single(o => o.NodeId == "author_cap").Kind);
+        Assert.True(control.Succeeded, control.Error);
+        Assert.DoesNotContain(control.Outcomes, o => o.NodeId == "count_all");
+        Assert.Equal(NodeOutcomeKind.SkippedWhen, control.Outcomes.Single(o => o.NodeId == "author_cap").Kind);
+    }
+
+    /// <summary>
+    /// A request column an arm declares exists only where the arm is assigned: a node of another layer's arm reading it is
+    /// refused for the combination without the declaring arm, as that combination's own compile refuses it (design 11.5
+    /// check 3).
+    /// </summary>
+    [Fact]
+    public void AReaderOfARequestColumnAnotherLayersArmDeclares_IsRejected_WhereThatArmIsNotAssigned()
+    {
+        var host = HomeFeedTestHost.Load();
+        var request = With(host.Request,
+        [
+            Treatment("a", """
+                { "request_columns": { "cand.n": { "type": "int64?" } },
+                  "nodes": { "count_all": { "order": 210, "op": "RequestAggregate@1", "config": { "values": { "cand.n": { "fn": "count" } } } } } }
+                """),
+            Treatment("b", """{ "nodes": { "author_cap": { "when": "(req.cand.n ?? 0) >= 10" } } }"""),
+        ]);
+        Assert.True(PlanCompiler.CompileMerged(request, ["a/t", "b/t"], host.Environment).Succeeded);
+        Assert.Contains(PlanCompiler.CompileMerged(request, ["b/t"], host.Environment).Diagnostics, d => d.IsError && d.Code == "EXPR_UNKNOWN_NAME");
+
+        var unified = PlanCompiler.Compile(request, host.Environment);
+
+        var error = Assert.Single(unified.Diagnostics, d => d.IsError);
+        Assert.Equal(("NAME_NOT_DECLARED", "experiment:b", "/arms/t/nodes/author_cap"), (error.Code, error.Artifact, error.Pointer));
+        Assert.Contains("'req.cand.n'", error.Message, StringComparison.Ordinal);
+        Assert.Contains("only 'a/t' declares it, and it is not assigned with it here", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>A request column the baseline declares is the same in every arm: an arm may not change or delete it.</summary>
+    [Theory]
+    [InlineData("""{ "type": "int64?" }""")]
+    [InlineData("null")]
+    public void AnArm_MayNotChangeABaselineRequestColumn(string change)
+    {
+        var host = HomeFeedTestHost.Load();
+        var request = With(host.Request, [Treatment("a", $$"""{ "request_columns": { "candidates.recalled": {{change}} } }""")]);
+
+        var unified = PlanCompiler.Compile(request, host.Environment);
+
+        var error = Assert.Single(unified.Diagnostics, d => d.IsError);
+        Assert.Equal(("PATCH_ADD_ONLY", "experiment:a"), (error.Code, error.Artifact));
+        Assert.StartsWith("/arms/t/request_columns/candidates.recalled", error.Pointer, StringComparison.Ordinal);
     }
 
     /// <summary>The home feed with <c>cand.n</c> declared and exp_req_when in its own layer: control, and t changing <paramref name="nodes"/>.</summary>

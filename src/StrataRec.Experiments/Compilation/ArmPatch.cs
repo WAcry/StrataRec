@@ -154,7 +154,7 @@ internal static class ArmAnalyzer
                     continue;
                 }
 
-                if (!IsValidId(tokens[1]) && tokens[0] is "columns" or "param_schema")
+                if (!IsValidId(tokens[1]) && tokens[0] is "columns" or "request_columns" or "param_schema")
                 {
                     diagnostics.Error("BAD_ID", arm.Artifact, pointer, $"'{tokens[1]}' is not a valid name.",
                         "names start with a letter or '_' and contain letters, digits, '_', '.' or '-'");
@@ -203,7 +203,7 @@ internal static class ArmAnalyzer
                     break;
                 default:
                     diagnostics.Error("PATCH_NOT_ALLOWED", arm.Artifact, pointer, $"'{op.Path}' is not part of the patchable view.",
-                        "experiments patch /params, /nodes, /log_taps and add to /columns, /param_schema, /features, /derived_features, /funnel_groups");
+                        "experiments patch /params, /nodes, /log_taps and add to /columns, /request_columns, /param_schema, /features, /derived_features, /funnel_groups");
                     arm.Valid = false;
                     break;
             }
@@ -213,7 +213,7 @@ internal static class ArmAnalyzer
     }
 
     /// <summary>Sections compiled once into the shared plan schema; experiments may only add to them.</summary>
-    internal static readonly string[] SchemaSections = { "columns", "param_schema", "features", "derived_features", "funnel_groups" };
+    internal static readonly string[] SchemaSections = { "columns", "request_columns", "param_schema", "features", "derived_features", "funnel_groups" };
 
     /// <summary>Re-adding an entry identical to the baseline is a no-op (design 11.4), e.g. after a graduation.</summary>
     private static bool IsNoOp(PatchOperation op, PatchableView view) =>

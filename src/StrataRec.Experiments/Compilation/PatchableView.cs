@@ -47,6 +47,7 @@ public sealed class PatchableView
             ["params"] = pipeline.Params.DeepClone(),
             ["param_schema"] = ArtifactSerializer.ToNode(pipeline.ParamSchema),
             ["columns"] = ArtifactSerializer.ToNode(pipeline.Columns),
+            ["request_columns"] = ArtifactSerializer.ToNode(pipeline.RequestColumns),
             ["nodes"] = ArtifactSerializer.ToNode(pipeline.Nodes),
             ["funnel_groups"] = ArtifactSerializer.ToNode(pipeline.FunnelGroups),
             ["log_taps"] = ArtifactSerializer.ToNode(pipeline.LogTaps),
@@ -80,6 +81,7 @@ public sealed class PatchableView
 
         var ok = true;
         var columns = Read<Dictionary<string, ColumnSpec>>(merged, "columns", diagnostics, artifact, pointerPrefix, ref ok);
+        var requestColumns = Read<Dictionary<string, ColumnSpec>>(merged, "request_columns", diagnostics, artifact, pointerPrefix, ref ok);
         var paramSchema = Read<Dictionary<string, ParamSpec>>(merged, "param_schema", diagnostics, artifact, pointerPrefix, ref ok);
         var funnelGroups = Read<Dictionary<string, FunnelGroupSpec>>(merged, "funnel_groups", diagnostics, artifact, pointerPrefix, ref ok);
         var features = Read<Dictionary<string, FeatureSpec>>(merged, "features", diagnostics, artifact, pointerPrefix, ref ok);
@@ -97,7 +99,7 @@ public sealed class PatchableView
             EntityKeyType = p.EntityKeyType,
             RequestSchema = p.RequestSchema,
             Columns = columns!,
-            RequestColumns = p.RequestColumns,
+            RequestColumns = requestColumns!,
             ParamSchema = paramSchema!,
             Params = (JsonObject)merged["params"]!,
             Nodes = new Dictionary<string, NodeSpec>(), // read from Document (see remarks)
